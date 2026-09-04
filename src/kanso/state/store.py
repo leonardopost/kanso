@@ -58,6 +58,7 @@ TABLES: Final = (
     "events",
     "hypotheses",
     "plans",
+    "queue",
     "runs",
     "sessions",
     "snapshots",

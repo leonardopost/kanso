@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,9 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from kanso.cli import app
+from kanso.models import reset_mock
+
+from . import mocked
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +32,14 @@ def no_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """No `KANSO_` variable of the developer's shell reaches a test."""
     for name in [name for name in os.environ if name.startswith("KANSO_")]:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def fresh_cursors() -> Iterator[None]:
+    """The mock protocol's cursors live for the process, so every test reads from the start."""
+    reset_mock()
+    yield
+    reset_mock()
 
 
 @pytest.fixture
@@ -271,15 +283,80 @@ def write_instruments(root: Path) -> Path:
     return path
 
 
-def write_hypothesis(root: Path, strategy: str = FLAT, **changes: Any) -> Path:
-    """The three scoped files of the demo hypothesis; returns its `hypothesis.yaml`."""
-    document = {**HYPOTHESIS, **changes}
+def write_hypothesis(
+    root: Path, strategy: str = FLAT, *, base: dict[str, Any] | None = None, **changes: Any
+) -> Path:
+    """The three scoped files of the demo hypothesis; returns its `hypothesis.yaml`.
+
+    `base` replaces the document the changes are applied to, so a caller can write the
+    same idea with fewer keys than the classified one — a draft is not the classified
+    document with three keys overwritten, it is a document those keys are absent from.
+    """
+    document = {**(HYPOTHESIS if base is None else base), **changes}
     directory = root / "hypotheses" / str(document["id"])
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "hypothesis.yaml"
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     (directory / "program.md").write_text("# program\n\nEdit strategy.py, run a card.\n")
     (directory / "strategy.py").write_text(strategy, encoding="utf-8")
+    return path
+
+
+HOST_ID = "demo_host"
+"""A composed strategy standing in the workspace, so a construct that needs a host has one."""
+
+
+def certify(root: Path, strategy_id: str = HOST_ID) -> Path:
+    """Write a composed `strategies/<id>/strategy.yaml`, as composition later will.
+
+    Classification reads what a certified strategy trades, never how well it traded, so
+    the fields that matter here are its id and the sleeve it names; the rest is the
+    smallest document the schema accepts.
+    """
+    from kanso.schemas import Expectation, Pins, StrategyFile, resolve_venue_model, write_yaml
+
+    document = StrategyFile.model_validate(
+        {
+            "schema": 1,
+            "id": strategy_id,
+            "versions": [
+                {
+                    "version": 1,
+                    "sleeve": {"hyp_id": strategy_id, "strategy_sha": "b" * 64},
+                    "attached": [],
+                    "config": {},
+                    "pins": Pins.model_validate(
+                        {
+                            "kanso_version": "0.1.0",
+                            "nautilus_version": "1.231.0",
+                            "criteria_version": "0.1.0",
+                            "plan_version": 1,
+                            "snapshot_id": "snap1",
+                            "venue_model": resolve_venue_model(VENUE, max_leverage=1.0),
+                        }
+                    ),
+                    "expectation": Expectation.model_validate(
+                        {
+                            "objective_id": "net_edge_bps",
+                            "value": 1.0,
+                            "ci90": [0.2, 1.8],
+                            "mdd_p95": 5.0,
+                            "window": {
+                                "start": str(CERTIFICATION[0]),
+                                "end": str(CERTIFICATION[1]),
+                            },
+                        }
+                    ),
+                    "state": "composed",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ],
+        }
+    )
+    directory = root / "strategies" / strategy_id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "strategy.yaml"
+    write_yaml(document, path)
     return path
 
 
@@ -344,3 +421,26 @@ def edit(root: Path, source: str, hyp_id: str = HYP_ID) -> Path:
     path = lane(root, hyp_id) / "strategy.py"
     path.write_text(source, encoding="utf-8")
     return path
+
+
+DRAFT: dict[str, Any] = {
+    key: value
+    for key, value in HYPOTHESIS.items()
+    if key not in ("construct", "objective", "constraints")
+}
+"""The same idea with nothing decided about it: what `kanso classify` is given."""
+
+
+@pytest.fixture
+def mocked_ws(runner: CliRunner, loaded: Path) -> Path:
+    """The loaded workspace with a mock-only register and a classified, steerable hypothesis.
+
+    Nothing here can reach a network: the register lists the `mock` protocol on all three
+    tiers, and the strategy the scripts steer is the one this slice calibrated its keep,
+    discard and crash on.
+    """
+    path = write_hypothesis(loaded, mocked.SEED)
+    assert at(runner, loaded, "hyp", "add", path).exit_code == 0
+    classify(loaded)
+    mocked.scripted(loaded)
+    return loaded

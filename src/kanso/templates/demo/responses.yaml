@@ -1,8 +1,13 @@
 # mock/responses.yaml — scripted responses for the shipped `mock` model protocol.
 # The mock client answers each task class from its list in order and wraps around; unlisted task classes
 # return `{}`. `diff` values are unified diffs against strategy.py: the first against the stub rendered by
-# `kanso init --demo`, the later ones against the state after the previous keep. The shipped diffs make
-# card 1 trade and keep, card 2 discard, card 3 crash.
+# `kanso init --demo`, the second and third against the state that first one leaves behind — which is what
+# the lane holds again after each of them, since a discard and a crash both restore the run's best.
+# So `kanso research run demo_mr --cards 3` in a freshly initialised demo is a keep, a discard and a crash,
+# in that order. Past the third the script wraps, and a diff that does not fit the file in hand is invalid
+# output like any other: the router retries, the cursor moves on, and the demo keeps going on whichever
+# scripted answer does fit. That is the point at which the demo has shown what it can and you want a real
+# model in models.yaml.
 classify:
   - {construct: {id: sleeve}, objective_params: {min_delta: 0.0, k_se: 1.0}, constraints: [{id: strategy_integrity, params: {}}, {id: min_trades, params: {min: 30}}, {id: max_drawdown, params: {}}], rationale: "A complete signal-to-trade thesis with nothing deployed to attach to: a sleeve."}
 certify_plan:
@@ -19,6 +24,78 @@ certify_plan:
 align_check:
   - {aligned: true, reason: "Same universe, resolution and mean-reversion mechanism."}
 propose:
-  - {desc: "fade 2-sigma deviations from a 60-bar mean", diff: "<unified diff: implement entry/exit>"}
-  - {desc: "widen threshold to 3 sigma", diff: "<unified diff: change threshold>"}
-  - {desc: "use an undefined helper (intentional crash)", diff: "<unified diff: introduce NameError>"}
+  - desc: "fade a 2-sigma deviation from a 60-bar rolling mean"
+    diff: |2
+      --- a/strategy.py
+      +++ b/strategy.py
+      @@ -15,17 +15,37 @@
+       class Config(KansoConfig):
+           """Numeric fields here are the parameters the param_plateau gate perturbs."""
+       
+      -    lookback: int = 20
+      +    lookback: int = 60
+      +    entry_z: float = 2.0
+      +    exit_z: float = 0.5
+      +    notional: float = 10_000.0
+       
+       
+       class Strategy(KansoStrategy):
+           config_cls = Config
+       
+           def on_start(self) -> None:
+      -        # kanso has already subscribed to the hypothesis's data_requirements at `resolution`
+      -        # for every instrument in `universe`. Initialise indicators/state here.
+      -        pass
+      +        self.closes: list[float] = []
+      +        self.long = False
+       
+      -    def on_bar(self, bar) -> None:  # or on_quote_tick / on_trade_tick per `resolution`
+      -        # Baseline stub: no trades. The first card that trades and passes the constraints becomes `best`.
+      -        pass
+      +    def on_bar(self, bar) -> None:
+      +        window = self.kanso_config.lookback
+      +        self.closes.append(float(bar.close))
+      +        if len(self.closes) > window:
+      +            self.closes.pop(0)
+      +        if len(self.closes) < window:
+      +            return
+      +        mean = sum(self.closes) / window
+      +        spread = sum((close - mean) ** 2 for close in self.closes) / window
+      +        sigma = spread ** 0.5
+      +        if sigma <= 0.0:
+      +            return
+      +        z = (self.closes[-1] - mean) / sigma
+      +        if z < -self.kanso_config.entry_z and not self.long:
+      +            self.submit_entry(
+      +                bar.bar_type.instrument_id, "BUY", notional=self.kanso_config.notional
+      +            )
+      +            self.long = True
+      +        elif z > -self.kanso_config.exit_z and self.long:
+      +            self.submit_exit(bar.bar_type.instrument_id)
+      +            self.long = False
+  - desc: "narrow the entry threshold to 1 sigma"
+    diff: |2
+      --- a/strategy.py
+      +++ b/strategy.py
+      @@ -16,7 +16,7 @@
+           """Numeric fields here are the parameters the param_plateau gate perturbs."""
+       
+           lookback: int = 60
+      -    entry_z: float = 2.0
+      +    entry_z: float = 1.0
+           exit_z: float = 0.5
+           notional: float = 10_000.0
+       
+  - desc: "scale by a rolling sigma helper that does not exist (intentional crash)"
+    diff: |2
+      --- a/strategy.py
+      +++ b/strategy.py
+      @@ -40,7 +40,7 @@
+               sigma = spread ** 0.5
+               if sigma <= 0.0:
+                   return
+      -        z = (self.closes[-1] - mean) / sigma
+      +        z = (self.closes[-1] - mean) / rolling_sigma
+               if z < -self.kanso_config.entry_z and not self.long:
+                   self.submit_entry(
+                       bar.bar_type.instrument_id, "BUY", notional=self.kanso_config.notional

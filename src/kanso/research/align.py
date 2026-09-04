@@ -19,6 +19,14 @@ returns "probably". Only a source that passes it is worth a model's opinion, whi
 other half of the check and costs a call. A literal the checks cannot read — a symbol
 built at runtime, a step read from the config — is not evidence of drift and is passed
 over: this is a detector of stated intent, not a proof of its absence.
+
+`check` is the whole check: the syntax tree first, the model only if it passed, and the
+recovery if either says no. Recovery is the point. A drifted run is not stopped — research
+is indefinite and stopping it on a judgement call would hand the model a veto — it is
+*rewound*: the lane copy and `best` go back to the last keep this run made while it was
+still aligned, or to the bytes the run began with when it made none, the cards since the
+last check are marked not aligned so no later reader trusts them, and the operator is told.
+The run then carries on from ground that was checked.
 """
 
 from __future__ import annotations
@@ -26,11 +34,37 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass
-from typing import Final
+from hashlib import sha256
+from pathlib import Path
+from typing import TYPE_CHECKING, Final
 
-from kanso.schemas import Hypothesis, is_duration
+from kanso.hyp import HYPOTHESIS_FILE, STRATEGY_FILE, hypothesis_dir
+from kanso.inbox import escalate
+from kanso.models import CallInputs, route
+from kanso.research import diff as diffs
+from kanso.research import lanes, records
+from kanso.schemas import Hypothesis, RunRecord, is_duration, parse_yaml
 
-__all__ = ["BAR_TYPE_PATTERN", "HANDLERS", "REASON_LIMIT", "align_static", "problems"]
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from kanso.state import StateStore
+    from kanso.workspace import Workspace
+
+__all__ = [
+    "ALIGNED",
+    "BAR_TYPE_PATTERN",
+    "DRIFTED",
+    "HANDLERS",
+    "MISALIGNED",
+    "REASON_LIMIT",
+    "TASK",
+    "Checkpoint",
+    "align_static",
+    "check",
+    "checkpoint",
+    "lane_strategy",
+    "problems",
+    "since",
+]
 
 REASON_LIMIT: Final = 200
 """What `align_check` allows a reason to be, so both halves report the same shape."""
@@ -210,3 +244,172 @@ def align_static(hyp: Hypothesis, source: bytes) -> tuple[bool, str | None]:
     if len(reason) > REASON_LIMIT:
         reason = reason[: REASON_LIMIT - 1].rstrip() + "…"
     return False, reason
+
+
+# --- the model half, and what a drift costs ----------------------------------
+
+TASK: Final = "align_check"
+"""The task class the model half is routed under."""
+
+ALIGNED: Final = "aligned"
+DRIFTED: Final = "drifted"
+"""The two events one check can append, under the hypothesis id as subject."""
+
+MISALIGNED: Final = "misaligned"
+"""The escalation kind a drift raises."""
+
+_NO_REASON: Final = "the model reported drift without giving a reason"
+
+
+@dataclass(frozen=True)
+class Checkpoint:
+    """Where the last check of this run left it: how many cards it had, and on what bytes."""
+
+    cards: int
+    sha: str
+
+
+def lane_strategy(store: StateStore, run: RunRecord, directory: Path) -> bytes:
+    """The lane's `strategy.py`, restored from its blob when the directory lost it.
+
+    A run whose lane copy vanished has not lost anything — every version it ever held is
+    a blob — so the file is written back and the caller carries on rather than failing.
+    """
+    path = directory / STRATEGY_FILE
+    if not path.is_file():
+        lanes.restore(store, directory, {STRATEGY_FILE: run.best_sha or run.base_sha})
+    return path.read_bytes()
+
+
+def checkpoint(store: StateStore, run: RunRecord) -> Checkpoint:
+    """The last check of this run, or the run's own beginning when it has had none."""
+    found = Checkpoint(cards=0, sha=run.base_sha)
+    for event in store.events(subject=run.hyp_id):
+        if event.kind not in (ALIGNED, DRIFTED):
+            continue
+        if str(event.detail.get("run_id", "")) != run.run_id:
+            continue
+        found = Checkpoint(cards=int(str(event.detail["cards"])), sha=str(event.detail["sha"]))
+    return found
+
+
+def since(store: StateStore, run: RunRecord) -> int:
+    """How many cards this run has recorded since its last alignment check."""
+    return _card_count(store, run) - checkpoint(store, run).cards
+
+
+def check(
+    ws: Workspace, store: StateStore, hyp_id: str, lane: str = lanes.DEFAULT_LANE
+) -> tuple[bool, str | None]:
+    """Check the active run's `strategy.py` against its thesis, and rewind it on drift.
+
+    The deterministic checks run first and the model is asked only when they pass, so a
+    drift the syntax tree can prove costs nothing. Either way the cards since the last
+    check are marked with the verdict, the verdict is an event, and a drift also reverts
+    the lane copy, re-points `best`, rewrites the workspace copy and escalates.
+    """
+    run = records.require_active(store, hyp_id, lanes.check_lane(lane))
+    hyp = parse_yaml(
+        Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), HYPOTHESIS_FILE
+    )
+    directory = ws.root / run.dir
+    source = lane_strategy(store, run, directory)
+    mark = checkpoint(store, run)
+    counted = _card_count(store, run)
+    ok, reason = align_static(hyp, source)
+    if ok:
+        ok, reason = _ask(ws, store, hyp, source, mark, lane)
+    _mark(store, run, mark.cards, aligned=ok)
+    if ok:
+        store.event(
+            ALIGNED,
+            hyp_id,
+            {"run_id": run.run_id, "cards": counted, "sha": sha256(source).hexdigest()},
+        )
+        return True, None
+    restored = _revert(ws, store, run, directory)
+    store.event(
+        DRIFTED,
+        hyp_id,
+        {"run_id": run.run_id, "cards": counted, "sha": restored, "reason": reason},
+    )
+    escalate(
+        ws,
+        store,
+        MISALIGNED,
+        hyp_id,
+        f"{hyp_id} drifted from its thesis and was rewound to {restored[:7]}: {reason}",
+        actions=f"kanso research show {hyp_id} --sha {restored[:7]} · kanso align check {hyp_id}",
+    )
+    return False, reason
+
+
+def _ask(
+    ws: Workspace,
+    store: StateStore,
+    hyp: Hypothesis,
+    source: bytes,
+    mark: Checkpoint,
+    lane: str,
+) -> tuple[bool, str | None]:
+    """The model half: the thesis, the file, and what has changed since the last check."""
+    inputs = CallInputs(
+        subject=hyp.id,
+        stable={
+            "thesis": hyp.thesis,
+            "mechanism": hyp.mechanism,
+            "universe": sorted(hyp.universe),
+            "horizon": hyp.horizon,
+        },
+        dynamic={
+            STRATEGY_FILE: source.decode("utf-8", errors="replace"),
+            "diff_since_last_check": diffs.unified(store.get_blob(mark.sha), source),
+        },
+    )
+    answer = route(ws, store, TASK, inputs, lane=lane)
+    if bool(answer.data["aligned"]):
+        return True, None
+    return False, str(answer.data["reason"]).strip() or _NO_REASON
+
+
+def _revert(ws: Workspace, store: StateStore, run: RunRecord, directory: Path) -> str:
+    """Rewind to the last aligned keep of this run, or to the bytes it began with."""
+    keep = _last_aligned_keep(store, run)
+    if keep is None:
+        sha = run.base_sha
+        store.connection.execute(
+            "UPDATE runs SET best_sha = NULL, best_metric = NULL WHERE run_id = ?", (run.run_id,)
+        )
+        records.unset_best(store, run.hyp_id)
+    else:
+        sha, metric = keep
+        records.set_best(store, run, sha, metric)
+    source = store.get_blob(sha)
+    lanes.write_atomic(directory / STRATEGY_FILE, source)
+    lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
+    return sha
+
+
+def _last_aligned_keep(store: StateStore, run: RunRecord) -> tuple[str, float] | None:
+    """The newest keep of this run that a check has not marked drifted."""
+    row = store.connection.execute(
+        "SELECT strategy_sha, metric FROM cards WHERE run_id = ? AND status = 'keep'"
+        " AND aligned = 1 ORDER BY seq DESC LIMIT 1",
+        (run.run_id,),
+    ).fetchone()
+    return None if row is None else (str(row["strategy_sha"]), float(row["metric"]))
+
+
+def _mark(store: StateStore, run: RunRecord, after: int, *, aligned: bool) -> None:
+    """Mark every card recorded since the last check with this check's verdict."""
+    store.connection.execute(
+        "UPDATE cards SET aligned = ? WHERE run_id = ? AND seq > ?",
+        (int(aligned), run.run_id, after),
+    )
+
+
+def _card_count(store: StateStore, run: RunRecord) -> int:
+    row = store.connection.execute(
+        "SELECT COUNT(*) FROM cards WHERE run_id = ?", (run.run_id,)
+    ).fetchone()
+    return int(row[0])

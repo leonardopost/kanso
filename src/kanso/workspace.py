@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, datetime
 from pathlib import Path
 
 from kanso import __version__
@@ -275,6 +275,12 @@ def _write_demo(root: Path) -> None:
 
 
 def _today() -> str:
-    """Today as eight digits; `strftime` does not zero-pad a year below 1000 on glibc."""
-    day = date.today()
+    """Today in UTC as eight digits.
+
+    UTC because every other date kanso writes is a UTC day — windows, spans, run tags —
+    so a workspace scaffolded either side of local midnight reads the same everywhere.
+    The fields are formatted rather than `strftime`'d: `%Y` does not zero-pad a year
+    below 1000 on glibc while it does on BSD.
+    """
+    day = datetime.now(tz=UTC).date()
     return f"{day.year:04d}{day.month:02d}{day.day:02d}"

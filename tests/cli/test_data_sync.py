@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -192,7 +192,9 @@ def test_sync_defaults_its_horizon_to_today(runner: CliRunner, files: Path) -> N
     result = at(runner, files, "data", "sync")
 
     assert result.exit_code == Exit.OK
-    assert str(date.today()) in result.stdout
+    # UTC, because that is the clock `sync` reads: comparing with a local date fails for
+    # part of every day for anyone east of UTC.
+    assert str(datetime.now(tz=UTC).date()) in result.stdout
 
 
 def test_sync_reads_as_a_few_lines_for_a_human(runner: CliRunner, files: Path) -> None:

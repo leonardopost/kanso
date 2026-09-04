@@ -22,10 +22,14 @@ from typing import Annotated
 import typer
 
 from kanso import __version__, env, skills_sync, workspace
+from kanso.cli import align as align_commands
+from kanso.cli import classify as classify_commands
 from kanso.cli import data as data_commands
 from kanso.cli import doctor as diagnosis
 from kanso.cli import hyp as hyp_commands
+from kanso.cli import models as models_commands
 from kanso.cli import research as research_commands
+from kanso.cli import status as status_commands
 from kanso.cli.context import STATE_DB, global_json, open_workspace, workspace_option
 from kanso.cli.render import Report, emit, field, indent
 from kanso.env import envelope as envelope_module
@@ -56,6 +60,13 @@ app.add_typer(env_app, name="env")
 app.add_typer(data_commands.app, name="data")
 app.add_typer(hyp_commands.app, name="hyp")
 app.add_typer(research_commands.app, name="research")
+app.add_typer(models_commands.app, name="models")
+app.add_typer(align_commands.app, name="align")
+
+# Two commands are registered rather than declared here: their bodies live beside the
+# other command modules, and the application is where the command line is assembled.
+app.command("classify")(classify_commands.classify_command)
+app.command("status")(status_commands.status_command)
 
 
 @app.callback(invoke_without_command=True)

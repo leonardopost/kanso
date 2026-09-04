@@ -18,7 +18,7 @@ away work no other copy holds until the first card stores it.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -128,6 +128,12 @@ def _write(path: Path, text: str) -> None:
 
 
 def _today() -> str:
-    """Today as eight digits; `strftime` does not zero-pad a year below 1000 on glibc."""
-    day = date.today()
+    """Today in UTC as eight digits.
+
+    UTC because every other date kanso writes is a UTC day — windows, spans, run tags —
+    so a workspace scaffolded either side of local midnight reads the same everywhere.
+    The fields are formatted rather than `strftime`'d: `%Y` does not zero-pad a year
+    below 1000 on glibc while it does on BSD.
+    """
+    day = datetime.now(tz=UTC).date()
     return f"{day.year:04d}{day.month:02d}{day.day:02d}"

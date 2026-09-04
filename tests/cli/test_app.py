@@ -40,12 +40,31 @@ def test_help_lists_the_command_set(runner: CliRunner) -> None:
     result = run(runner, "--help")
 
     assert result.exit_code == Exit.OK
-    for command in ("init", "doctor", "migrate", "skills", "env"):
+    for command in (
+        "init",
+        "doctor",
+        "migrate",
+        "skills",
+        "env",
+        "classify",
+        "research",
+        "models",
+        "align",
+        "status",
+    ):
         assert command in result.stdout
 
 
 @pytest.mark.parametrize(
-    "command", [("doctor",), ("migrate",), ("skills", "sync"), ("env", "detect")]
+    "command",
+    [
+        ("doctor",),
+        ("migrate",),
+        ("skills", "sync"),
+        ("env", "detect"),
+        ("status",),
+        ("research", "status"),
+    ],
 )
 def test_json_is_accepted_before_and_after_the_command(
     runner: CliRunner, workspace: Path, command: tuple[str, ...]

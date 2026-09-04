@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, datetime
 
 import pytest
 from hypothesis import given, settings
@@ -37,7 +37,7 @@ def test_scaffold_dates_the_programs_example_tag(ws: Workspace) -> None:
     directory = hyp.scaffold(ws, "new_idea")
 
     program = (directory / "program.md").read_text(encoding="utf-8")
-    assert f"{date.today():%Y%m%d}-1" in program
+    assert f"{datetime.now(tz=UTC).date():%Y%m%d}-1" in program
 
 
 def test_the_scaffolded_strategy_is_the_sleeve_stub(ws: Workspace) -> None:

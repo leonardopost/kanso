@@ -52,6 +52,10 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with |
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
 | `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state |
+| `kanso classify ID` | decide what the hypothesis **is** — construct, host, the keep rule's two parameters and the card-stage constraints — in one call to the best model on the register, and write the three keys into `hypothesis.yaml`, re-pinning it. The objective is not asked for: it follows from the hypothesis and the construct. A construct this build cannot run is recorded honestly and refused at `research begin`. `strategy.py` is replaced by the construct's stub only while the file is still one kanso wrote |
+
+Editing `construct`, `objective` and `constraints` by hand and running `kanso hyp add` is
+the override path, and needs no model at all.
 
 ## Research
 
@@ -59,6 +63,7 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 |---|---|
 | `kanso research begin ID [--tag T] [--from-workspace]` | start a run and **print the lane directory**, which is where an agent works. Copies the three scoped files there, pins them, and runs the baseline card. `--from-workspace` starts from the workspace `strategy.py` and clears the hypothesis's best |
 | `kanso research card ID --desc TEXT` | evaluate the lane directory's `strategy.py` as one card: the static integrity rules first, then the backtest on the research window in a child process under the run's time and memory budgets, then the constraints and the keep rule |
+| `kanso research run ID [--cards N]` | the same loop with the model in the agent's seat: begin a run if there is none, then propose → apply → evaluate until `N` cards or until the run stalls. `--cards` counts what **this** invocation proposed, so the baseline and everything a previous invocation left behind are not in it. A proposal is a unified diff over `strategy.py`, applied in-package; one that does not fit, names another file, or changes nothing is a wrong answer and takes the retry ladder rather than becoming a card |
 | `kanso research end ID` | end the run and remove the lane directory, and nothing else: the cards, the blobs and the best stay in state |
 | `kanso research show ID [--sha S] [--diff S2]` | print a card's stored `strategy.py` (default: the best), or the unified diff between two of them. A sha is any unique prefix of one belonging to this hypothesis; a foreign or ambiguous prefix is refused (exit 3) |
 
@@ -66,3 +71,31 @@ A card is `keep`, `discard` or `crash`. On a keep the hypothesis's best moves an
 is written to `hypotheses/<id>/strategy.py`; on a discard or a crash the lane's
 `strategy.py` is restored from the best, else from the run's base. `results.tsv` is
 rendered from state, so the history survives every restore.
+
+Every `align_every` cards a run is asked whether it still tests its own idea; `stall_k`
+consecutive non-keeps end it. Both are `[research]` keys of `kanso.toml`.
+
+## The daemon and the queue
+
+| command | what it does |
+|---|---|
+| `kanso research start` | detach a supervisor and start one worker per lane the envelope allows, plus the monitor. Prints the pid, the lanes and the log. A second `start` in the same workspace is refused (exit 2): the pid file is also the lock |
+| `kanso research stop` | signal the daemon and wait for it to go. **Nothing is ended and nothing is cleaned up** — active runs and their lane directories stay exactly where they are, and the next `start` resumes them before it takes anything new — so stopping is a cheap act |
+| `kanso research status` | the daemon, its lanes, every active run with its `lane_sha`, `best_sha` and `base_sha`, and the queue |
+| `kanso research queue add ID [--priority P]` | put a hypothesis in the queue, or raise the priority of one already in it. Served by priority descending, then by arrival |
+| `kanso align check ID` | run the alignment check now: the deterministic syntax-tree checks first, the model only when they pass. Drift is not an error and does not exit like one — a check that finds the run has wandered has already rewound the lane to the last aligned keep, re-pointed `best`, marked the cards since the last check and written an escalation, and reports that with exit 0 |
+
+## Models
+
+| command | what it does |
+|---|---|
+| `kanso models check` | print the register as the router reads it — which model serves which tier, which task class routes where, at what thinking effort and output cap — then make one minimal call to every configured model. A tier with no model behind it is refused before any call is paid for. A model that does not answer is reported rather than raised; the command exits 2 when any failed and 0 when they all answered |
+
+Every call is ledgered, including the failed attempts of a retry, because a rejected answer
+was still generated and billed.
+
+## Operating
+
+| command | what it does |
+|---|---|
+| `kanso status` | the one screen: what the lanes are doing, cards per hour over the trailing hour, the best metric per hypothesis, today's spend broken out by lane, unread escalations, and any hypothesis whose baseline would not run. Writes nothing, so it is safe against a workspace a daemon is working in and safe to run in a loop |

@@ -1,8 +1,9 @@
 """No kanso command invokes git, in any repository situation.
 
 The workspace slice proves that its own functions spawn nothing at all. This is the
-command-level guard: every M0 command runs inside a spy that watches every process
-launch, lets the host probes through and fails the test the moment one of them is git.
+command-level guard: every command that needs neither data nor a model runs inside a spy
+that watches every process launch, lets the host probes through and fails the test the
+moment one of them is git.
 """
 
 from __future__ import annotations
@@ -60,6 +61,8 @@ def _every_command(runner: CliRunner, root: Path) -> None:
     assert at(runner, root, "data", "instruments", "show").exit_code == Exit.OK
     assert at(runner, root, "hyp", "new", "trial_one").exit_code == Exit.OK
     assert at(runner, root, "hyp", "show").exit_code == Exit.OK
+    assert at(runner, root, "research", "status").exit_code == Exit.OK
+    assert at(runner, root, "status").exit_code == Exit.OK
     assert run(runner, "--version").exit_code == Exit.OK
 
 
