@@ -13,14 +13,14 @@ classify:
 certify_plan:
   - gates:
       - {id: embargoed_window, stage: cert, params: {min_fraction: 0.5}, rationale: "required; the only out-of-sample evidence"}
-      - {id: parity_replay, stage: cert, params: {}, rationale: "required"}
+      - {id: publication_lag, stage: cert, params: {tolerance_s: 0}, rationale: "required; the synthetic series is realtime, so any lag at all is a surprise"}
       - {id: cost_stress, stage: cert, params: {mult_a: 2, mult_b: 3}, rationale: "30m horizon: edge is cost-sensitive"}
       - {id: bootstrap, stage: cert, params: {n: 1000}, rationale: "drawdown band and objective CI for paper/live gates"}
       - {id: paper_forward, stage: paper, params: {min_duration: 5d, horizon_mult: 20}, rationale: "≥1 paper gate required"}
       - {id: live_drift, stage: live, params: {}, rationale: "≥1 live gate required"}
     excluded:
       - {id: deflated_sharpe, reason: "intraday objective is per-trade edge, not Sharpe"}
-      - {id: param_plateau, reason: "one threshold parameter; a plateau test adds little at this stage"}
+      - {id: capacity_vs_adv, reason: "the synthetic series carries no volume to size participation against"}
 align_check:
   - {aligned: true, reason: "Same universe, resolution and mean-reversion mechanism."}
 propose:

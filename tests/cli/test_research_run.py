@@ -88,9 +88,22 @@ def test_a_stall_ends_the_run_and_the_command_says_so(runner: CliRunner, mocked_
     outcome = payload(result)
     assert outcome["reason"] == "stalled"
     assert outcome["ended"] is True
+    # The stall certified the keep it left behind, and the command says which and how.
+    assert outcome["certificate"]["sha7"] == outcome["best_sha"][:7]
+    assert outcome["certificate"]["verdict"] in ("pass", "fail")
     # Ending a run removes its lane directory and nothing else: the keep is still there.
     assert not lane(mocked_ws).exists()
     assert "Strategy.mode" in at(runner, mocked_ws, "research", "show", HYP_ID).stdout
+
+
+def test_a_stall_points_at_the_certificate_it_produced(runner: CliRunner, mocked_ws: Path) -> None:
+    mocked.tuned(mocked_ws, stall_k=1)
+
+    result = at(runner, mocked_ws, "research", "run", HYP_ID)
+
+    assert result.exit_code == Exit.OK
+    assert "certified" in result.stdout
+    assert f"kanso cert show {HYP_ID}" in result.stdout
 
 
 def test_a_drift_check_falls_on_the_cadence_the_workspace_sets(

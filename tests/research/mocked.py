@@ -12,6 +12,9 @@ assignment is the last one executed and therefore the one that wins, and a scrip
 `revert`, `boom` and `weak` produces a keep, a crash and a discard in that order and then
 goes round again.
 
+A stalled run certifies the keep it leaves behind, so the frontier model is scripted with
+a certification plan as well: a driver test that reaches a stall reaches the planner.
+
 Every model here is the `mock` protocol, so nothing in this directory opens a socket and
 every test is green with every provider credential unset.
 """
@@ -111,6 +114,38 @@ CYCLE: list[dict[str, Any]] = [proposal("revert"), proposal("boom"), proposal("w
 ALIGNED: dict[str, Any] = {"aligned": True, "reason": "still the stated mean reversion"}
 DRIFTED: dict[str, Any] = {"aligned": False, "reason": "it now trades momentum instead"}
 
+PLAN: dict[str, Any] = {
+    "gates": [
+        {
+            "id": "embargoed_window",
+            "stage": "cert",
+            "params": {"min_fraction": 0.0},
+            "rationale": "required; the only out-of-sample evidence there is",
+        },
+        {
+            "id": "publication_lag",
+            "stage": "cert",
+            "params": {"tolerance_s": 0.0},
+            "rationale": "required; the saw-tooth is published a second after each close",
+        },
+        {
+            "id": "paper_forward",
+            "stage": "paper",
+            "params": {"min_duration": "5d", "horizon_mult": 20.0},
+            "rationale": "a plan reaches the paper stage",
+        },
+        {
+            "id": "live_drift",
+            "stage": "live",
+            "params": {},
+            "rationale": "a plan reaches the live stage",
+        },
+    ],
+    "excluded": [{"id": "bootstrap", "reason": "the two required gates are proof enough here"}],
+}
+"""The smallest plan the validator accepts. A run that stalls on a keep certifies it, so
+a driver test that stalls needs a planner answer as much as it needs a proposer."""
+
 
 def model(model_id: str, tier: str) -> dict[str, Any]:
     """One register entry for a mock model serving one tier."""
@@ -149,12 +184,13 @@ def scripted(
     ws: Workspace,
     propose: list[Any] | None = None,
     align_check: list[Any] | None = None,
+    certify_plan: list[Any] | None = None,
 ) -> None:
-    """Point the register at mock models and script the tiers the two classes route to."""
+    """Point the register at mock models and script the tiers the task classes route to."""
     write_register(ws)
     write_script(ws, "mid", {"propose": propose if propose is not None else CYCLE})
     write_script(ws, "cheap", {"align_check": align_check} if align_check is not None else {})
-    write_script(ws, "frontier", {})
+    write_script(ws, "frontier", {"certify_plan": [PLAN] if certify_plan is None else certify_plan})
 
 
 def tuned(ws: Workspace, **values: object) -> Workspace:

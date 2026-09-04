@@ -15,12 +15,14 @@ import pytest
 
 from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
+from kanso.inbox import unread
 from kanso.research import records, scheduler
 from kanso.schemas import RunRecord
 from kanso.state import StateStore
 from kanso.workspace import Workspace
+from tests.certify.test_run import a_card, with_n_fail, write_plan
 
-from .conftest import DOCUMENT, classify, document
+from .conftest import DOCUMENT, FLAT, REVERTING, classify, document
 
 
 def register(ws: Workspace, store: StateStore, hyp_id: str) -> str:
@@ -160,21 +162,57 @@ def test_dropping_a_hypothesis_that_is_not_queued_does_nothing(
     assert ids(store) == []
 
 
-def test_a_stall_with_an_uncertified_best_makes_a_candidate_and_requeues_it(
+def test_a_stall_with_an_uncertified_best_certifies_it_and_requeues_it(
     ws: Workspace, store: StateStore
 ) -> None:
-    hyp_id = classify(ws, store, DOCUMENT)
-    run = open_run(store, hyp_id)
-    records.set_best(store, run, store.put_blob(b"kept"), 1.25)
+    """The whole of the stall path: candidate, certificate, then back in the queue."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
 
     stall = scheduler.on_stall(ws, store, hyp_id)
 
     assert stall.certifiable is True
+    assert stall.verdict == "pass", "the saw-tooth is as tradable past the embargo as before it"
     assert stall.priority == scheduler.STALL_PRIORITY
-    assert show(ws, store, hyp_id).status == "candidate"  # type: ignore[union-attr]
-    assert ids(store) == [hyp_id]
+    assert show(ws, store, hyp_id).status == "certified"  # type: ignore[union-attr]
+    assert ids(store) == [hyp_id], "a certificate is a milestone, not the end of the queue"
     kinds = [event.kind for event in store.events(subject=hyp_id)]
     assert scheduler.CERTIFIABLE in kinds and scheduler.STALLED in kinds
+
+
+def test_a_stall_whose_certificate_fails_returns_the_hypothesis_to_research(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    a_card(ws, store, FLAT)
+    write_plan(ws)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.verdict == "fail", "bytes that never trade earn nothing out of sample"
+    assert stall.priority == scheduler.STALL_PRIORITY
+    assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
+    assert ids(store) == [hyp_id]
+    assert not unread(store), "one failure is not yet an escalation"
+
+
+def test_a_stall_whose_certificate_ends_the_hypothesis_leaves_the_queue(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Death is the one way out of the queue, and the failure run is the way to death."""
+    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    a_card(ws, store, FLAT)
+    write_plan(ws)
+    scheduler.enqueue(store, hyp_id)
+
+    stall = scheduler.on_stall(with_n_fail(ws, 1), store, hyp_id)
+
+    assert stall.verdict == "fail"
+    assert stall.priority is None
+    assert show(ws, store, hyp_id).status == "failed"  # type: ignore[union-attr]
+    assert ids(store) == []
+    assert [entry.kind for entry in unread(store)] == ["cert_failed"]
 
 
 def test_a_stall_with_no_keep_only_requeues(ws: Workspace, store: StateStore) -> None:
@@ -220,13 +258,14 @@ def test_a_baseline_that_will_not_run_returns_behind_the_stalled_ones(
 
 
 def test_the_queue_payload_is_json(ws: Workspace, store: StateStore) -> None:
-    hyp_id = classify(ws, store, DOCUMENT)
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
     scheduler.enqueue(store, hyp_id, priority=3)
-    run = open_run(store, hyp_id)
-    records.set_best(store, run, store.put_blob(b"kept"), 0.5)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
 
     payload: dict[str, Any] = scheduler.queued(store)[0].payload()
     stall = scheduler.on_stall(ws, store, hyp_id).payload()
 
     assert json.loads(json.dumps(payload))["priority"] == 3
     assert json.loads(json.dumps(stall))["certifiable"] is True
+    assert json.loads(json.dumps(stall))["verdict"] == "pass"

@@ -16,9 +16,13 @@ recomputes from the fills the runner already recorded instead of running the eng
 which is possible only because costs are applied once, in the extraction, and never inside
 the simulated venue.
 
-Six gates are declared in the library and implemented later, when the machinery they read
-exists: `parity_replay` and `param_plateau` need a second engine run, and `paper_forward`,
-`live_drift`, `fill_quality_drift` and `daily_loss_kill` need a deployed stage.
+A gate whose test is more than arithmetic on the run in hand lives in a module of its own
+beside this one, because it needs machinery the rest do not: `param_plateau` re-runs the
+subject once per perturbation and so reads the re-run the certification runner hands it.
+
+Five gates are declared in the library and implemented later, when the machinery they read
+exists: `parity_replay` needs a replay session, and `paper_forward`, `live_drift`,
+`fill_quality_drift` and `daily_loss_kill` need a deployed stage.
 """
 
 from __future__ import annotations
@@ -506,11 +510,10 @@ capacity_vs_adv: Final[Gate] = _CapacityVsAdv()
 PENDING: Final = frozenset(
     {
         "parity_replay",
-        "param_plateau",
         "paper_forward",
         "live_drift",
         "fill_quality_drift",
         "daily_loss_kill",
     }
 )
-"""Declared in the library; implemented when a second engine run or a stage node exists."""
+"""Declared in the library; implemented when a replay session or a stage node exists."""

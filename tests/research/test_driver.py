@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from kanso.certify import certificate
 from kanso.errors import PreconditionError
 from kanso.models import Answer, Call, spend
 from kanso.models import router as router_module
@@ -169,6 +170,8 @@ def test_a_stall_ends_the_run_and_requeues_the_hypothesis(
     assert not lanes.lane_dir(workspace, "op", prepared_hyp).exists()
     assert [item.hyp_id for item in scheduler.queued(store)] == [prepared_hyp]
     assert scheduler.queued(store)[0].priority == scheduler.STALL_PRIORITY
+    # The baseline kept, so the stall had a subject and certified it on the way out.
+    assert certificate.latest(store, prepared_hyp) is not None
 
 
 def test_two_lanes_never_touch_each_other_s_files(ws: Workspace, store: StateStore) -> None:

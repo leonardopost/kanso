@@ -18,7 +18,7 @@ certification window during certification and a stage window in paper or live.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -71,7 +71,13 @@ class GateContext:
     * `datasets` are the pinned snapshot's datasets with their observed and documented
       publication delays;
     * `daily_volume` maps an instrument id to its daily traded notional in the run's
-      currency, oldest first, so a participation limit has something to be a share of.
+      currency, oldest first, so a participation limit has something to be a share of;
+    * `tunable` are the subject's own numeric parameters at the values it ran with, and
+      `rerun` runs it again over `window` with some of them replaced — the pair a
+      perturbation gate needs, and the one thing here that costs a backtest to use.
+
+    A gate never runs anything itself: `rerun` is supplied by whoever ran the subject in
+    the first place, so a perturbed run is measured exactly as the unperturbed one was.
     """
 
     hyp: Hypothesis
@@ -97,6 +103,8 @@ class GateContext:
     daily_volume: Mapping[str, Sequence[float]] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    tunable: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    rerun: Callable[[Mapping[str, float]], CardRun] | None = None
 
 
 class Gate(Protocol):

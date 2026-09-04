@@ -23,10 +23,12 @@ import typer
 
 from kanso import __version__, env, skills_sync, workspace
 from kanso.cli import align as align_commands
+from kanso.cli import cert as cert_commands
 from kanso.cli import classify as classify_commands
 from kanso.cli import data as data_commands
 from kanso.cli import doctor as diagnosis
 from kanso.cli import hyp as hyp_commands
+from kanso.cli import inbox as inbox_commands
 from kanso.cli import models as models_commands
 from kanso.cli import research as research_commands
 from kanso.cli import status as status_commands
@@ -62,6 +64,8 @@ app.add_typer(hyp_commands.app, name="hyp")
 app.add_typer(research_commands.app, name="research")
 app.add_typer(models_commands.app, name="models")
 app.add_typer(align_commands.app, name="align")
+app.add_typer(cert_commands.app, name="cert")
+app.add_typer(inbox_commands.app, name="inbox")
 
 # Two commands are registered rather than declared here: their bodies live beside the
 # other command modules, and the application is where the command line is assembled.

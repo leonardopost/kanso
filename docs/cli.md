@@ -63,7 +63,7 @@ the override path, and needs no model at all.
 |---|---|
 | `kanso research begin ID [--tag T] [--from-workspace]` | start a run and **print the lane directory**, which is where an agent works. Copies the three scoped files there, pins them, and runs the baseline card. `--from-workspace` starts from the workspace `strategy.py` and clears the hypothesis's best |
 | `kanso research card ID --desc TEXT` | evaluate the lane directory's `strategy.py` as one card: the static integrity rules first, then the backtest on the research window in a child process under the run's time and memory budgets, then the constraints and the keep rule |
-| `kanso research run ID [--cards N]` | the same loop with the model in the agent's seat: begin a run if there is none, then propose → apply → evaluate until `N` cards or until the run stalls. `--cards` counts what **this** invocation proposed, so the baseline and everything a previous invocation left behind are not in it. A proposal is a unified diff over `strategy.py`, applied in-package; one that does not fit, names another file, or changes nothing is a wrong answer and takes the retry ladder rather than becoming a card |
+| `kanso research run ID [--cards N]` | the same loop with the model in the agent's seat: begin a run if there is none, then propose → apply → evaluate until `N` cards or until the run stalls. `--cards` counts what **this** invocation proposed, so the baseline and everything a previous invocation left behind are not in it. A proposal is a unified diff over `strategy.py`, applied in-package; one that does not fit, names another file, or changes nothing is a wrong answer and takes the retry ladder rather than becoming a card. A run that stalls on a keep nothing has certified certifies it before returning, and the command reports that certificate |
 | `kanso research end ID` | end the run and remove the lane directory, and nothing else: the cards, the blobs and the best stay in state |
 | `kanso research show ID [--sha S] [--diff S2]` | print a card's stored `strategy.py` (default: the best), or the unified diff between two of them. A sha is any unique prefix of one belonging to this hypothesis; a foreign or ambiguous prefix is refused (exit 3) |
 
@@ -85,6 +85,25 @@ consecutive non-keeps end it. Both are `[research]` keys of `kanso.toml`.
 | `kanso research queue add ID [--priority P]` | put a hypothesis in the queue, or raise the priority of one already in it. Served by priority descending, then by arrival |
 | `kanso align check ID` | run the alignment check now: the deterministic syntax-tree checks first, the model only when they pass. Drift is not an error and does not exit like one — a check that finds the run has wandered has already rewound the lane to the last aligned keep, re-pointed `best`, marked the cards since the last check and written an escalation, and reports that with exit 0 |
 
+## Certification
+
+| command | what it does |
+|---|---|
+| `kanso cert plan ID [--replan]` | decide what would count as proof for this hypothesis — the cert, paper and live gates, each with parameters chosen inside the toolbox's ranges and a rationale — in one call to the best model on the register, and pin it at `certificates/<id>/plan.yaml`. The planner is shown the hypothesis, its construct, the toolbox, what data the workspace holds and the trial count, and never a card metric, a certificate or the strategy source. Reading a pinned plan costs nothing; `--replan` re-runs the planner on the same closed inputs and mints the next `plan_version`. There is no default plan: with no model configured the step exits 2 |
+| `kanso cert run ID [--sha S]` | run the plan's cert gates for the hypothesis's best card (or the one `--sha` names, as any unique prefix) over the embargoed certification window, on the data snapshot the run that produced that card pinned, and write `certificates/<id>/<sha7>-<n_trials>-p<plan>-e<engine>.yaml` with the certified `strategy.py` beside it as `<sha7>.py`. Plans first if there is no plan. A certificate is immutable: certifying the same bytes again under the same plan **and** the same engine is refused (exit 2), so re-certifying an unchanged commit after an engine upgrade is a plain `cert run` |
+| `kanso cert show ID` | the newest certificate: the verdict, then each gate with its evidence or the reason it judged nothing |
+
+**A failing verdict is not an error.** `cert run` exits 0 and says `fail`, because the
+certificate is what the command produces and a fail is evidence: it counts toward the
+`[certify] n_fail` run, its failing gates are fed back into the next proposal, and the run
+that exhausts the allowance turns the hypothesis `failed` and writes an inbox entry. A
+snapshot holding a dataset of unknown publication, or a vendor-adjusted one, is a recorded
+fail for the same reason — it reaches the operator the way every other failure does.
+
+A run that stalls with a keep nothing has certified certifies it there and then, so the
+autonomous loop reaches a certificate without an operator. Either verdict returns the
+hypothesis to the queue at priority −1; only `failed` and `retired` leave it.
+
 ## Models
 
 | command | what it does |
@@ -98,4 +117,6 @@ was still generated and billed.
 
 | command | what it does |
 |---|---|
+| `kanso inbox` | the escalations nobody has acknowledged, oldest first, each with the commands its kind offers over its subject |
+| `kanso inbox ack ID` | mark one entry read. **Never an approval**: it writes one timestamp and stands for no decision, so the actions the entry offers are still yours to take. Acknowledging twice is acknowledging once. `escalations/inbox.md` is append-only and is never rewritten, so the file keeps every line and the rows are what say which are unread |
 | `kanso status` | the one screen: what the lanes are doing, cards per hour over the trailing hour, the best metric per hypothesis, today's spend broken out by lane, unread escalations, and any hypothesis whose baseline would not run. Writes nothing, so it is safe against a workspace a daemon is working in and safe to run in a loop |

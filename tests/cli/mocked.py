@@ -3,7 +3,9 @@
 The commands this milestone adds all end in a model call, and none of them may reach a
 network. So the register these tests write lists one `mock` model per tier, each reading
 its own script: `propose` routes to `mid` and `align_check` to `cheap`, so the two never
-share a cursor and a test can script one without disturbing the other.
+share a cursor and a test can script one without disturbing the other. `classify` and
+`certify_plan` share the frontier model and so share one script, each reading its own
+list from it.
 
 The strategy the scripts drive is one file whose behaviour is the `mode` its last
 assignment sets, and every scripted diff appends such an assignment above a marker line at
@@ -111,6 +113,50 @@ CYCLE: list[dict[str, Any]] = [proposal("revert"), proposal("weak"), proposal("b
 ALIGNED: dict[str, Any] = {"aligned": True, "reason": "still the stated mean reversion"}
 DRIFTED: dict[str, Any] = {"aligned": False, "reason": "it now trades momentum instead"}
 
+
+PLAN: dict[str, Any] = {
+    "gates": [
+        {
+            "id": "embargoed_window",
+            "stage": "cert",
+            "params": {"min_fraction": 0.0},
+            "rationale": "required; the only out-of-sample evidence there is",
+        },
+        {
+            "id": "publication_lag",
+            "stage": "cert",
+            "params": {"tolerance_s": 0.0},
+            "rationale": "required; the synthetic series is realtime, so any lag is a surprise",
+        },
+        {
+            "id": "book_correlation",
+            "stage": "cert",
+            "params": {"max_corr": 0.8},
+            "rationale": "a candidate that repeats a deployed book adds risk, not return",
+        },
+        {
+            "id": "paper_forward",
+            "stage": "paper",
+            "params": {"min_duration": "5d", "horizon_mult": 20.0},
+            "rationale": "a plan reaches the paper stage",
+        },
+        {
+            "id": "live_drift",
+            "stage": "live",
+            "params": {},
+            "rationale": "a plan reaches the live stage",
+        },
+    ],
+    "excluded": [
+        {"id": "bootstrap", "reason": "the two required gates are proof enough for a fixture"}
+    ],
+}
+"""Both required cert gates, one gate that can only skip, then one gate per remaining
+stage. Fewer gates is fewer engine runs, and what the CLI slice tests is the command
+around the plan rather than the gates inside it; `book_correlation` is here because a
+workspace with nothing deployed is how a skipped gate reaches the rendering."""
+
+
 CLASSIFICATION: dict[str, Any] = {
     "construct": {"id": "sleeve"},
     "objective_params": {"min_delta": 0.0, "k_se": 0.5},
@@ -164,12 +210,22 @@ def scripted(
     propose: list[Any] | None = None,
     align_check: list[Any] | None = None,
     classify: list[Any] | None = None,
+    certify_plan: list[Any] | None = None,
 ) -> None:
-    """Point the register at mock models and script the tiers the classes route to."""
+    """Point the register at mock models and script the tiers the classes route to.
+
+    `classify` and `certify_plan` share the frontier model, so they share one script and
+    are written together; each task class reads its own list from it.
+    """
     write_register(root)
     write_script(root, "mid", {"propose": CYCLE if propose is None else propose})
     write_script(root, "cheap", {} if align_check is None else {"align_check": align_check})
-    write_script(root, "frontier", {} if classify is None else {"classify": classify})
+    frontier: dict[str, list[Any]] = {
+        "certify_plan": [PLAN] if certify_plan is None else certify_plan
+    }
+    if classify is not None:
+        frontier["classify"] = classify
+    write_script(root, "frontier", frontier)
 
 
 def tuned(root: Path, **values: object) -> None:

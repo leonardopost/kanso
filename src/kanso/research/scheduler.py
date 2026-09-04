@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Final
 from kanso.errors import PreconditionError
 from kanso.hyp import active_run, set_status
 from kanso.research import records
+from kanso.research.lanes import DEFAULT_LANE
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -88,7 +89,11 @@ class Stall:
     hyp_id: str
     best_sha: str | None
     certifiable: bool
-    priority: int
+    priority: int | None
+    verdict: str | None = None
+    """`None` where nothing was certified; otherwise the verdict of the certificate the
+    stall produced. A `priority` of `None` means the hypothesis did not come back: the
+    only way out of the queue is death, and the failure run is the one way to it."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -96,6 +101,7 @@ class Stall:
             "best_sha": self.best_sha,
             "certifiable": self.certifiable,
             "priority": self.priority,
+            "verdict": self.verdict,
         }
 
 
@@ -167,22 +173,40 @@ def dequeue(store: StateStore) -> str | None:
     return None
 
 
-def on_stall(ws: Workspace, store: StateStore, hyp_id: str) -> Stall:
+def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_LANE) -> Stall:
     """What happens when a run ends on `stall_k` consecutive non-keeps.
 
-    A `best` this hypothesis has not certified makes it a candidate, and the certification
-    run is the next step; either way it is requeued at −1, because a hypothesis leaves the
-    queue only by dying. `ws` names the workspace the certification will be run in.
+    A `best` this hypothesis has not certified makes it a candidate, and certification is
+    what happens next — here, on those bytes, before anything else takes a lane. The
+    verdict then decides where the hypothesis stands: a pass certifies it, a fail returns
+    it to research, and the run of failures the configuration allows ends it.
+
+    Either way it is requeued at −1, because a hypothesis leaves the queue only by dying;
+    the one that just died in the certification leaves instead. `ws` names the workspace
+    the certification runs in and `lane` is the lane its model call is billed to.
+
+    A certification that cannot run at all — no model on the planner's tier, a plan this
+    version can no longer honour — raises out of here rather than being swallowed. The
+    lane that called it records the failure and puts the hypothesis back itself, and an
+    operator driving the loop by hand sees the reason instead of a silent stall.
     """
+    # Certification reads research; research schedules certification. The import is
+    # deferred so the cycle exists only while this function runs.
+    from kanso.certify.run import certify
+
     best, _ = records.best_of(store, hyp_id)
     certifiable = best is not None and best != _certified_sha(store, hyp_id)
+    verdict: str | None = None
     if certifiable:
         set_status(store, hyp_id, "candidate")
         store.event(CERTIFIABLE, hyp_id, {"strategy_sha": best})
-        # The certification run belongs here, on this subject, before the requeue.
-    store.event(STALLED, hyp_id, {"best_sha": best, "certifiable": certifiable})
+        verdict = certify(ws, store, hyp_id, sha=best, lane=lane).verdict
+    store.event(STALLED, hyp_id, {"best_sha": best, "certifiable": certifiable, "verdict": verdict})
+    if _status(store, hyp_id) in DEAD:
+        drop(store, hyp_id)
+        return Stall(hyp_id, best, certifiable, None, verdict)
     requeue(store, hyp_id, STALL_PRIORITY)
-    return Stall(hyp_id, best, certifiable, STALL_PRIORITY)
+    return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict)
 
 
 def on_baseline_failed(store: StateStore, hyp_id: str) -> QueueItem:

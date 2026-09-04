@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from kanso import criteria
 from kanso.criteria import catalogue, check_params, criteria_version, gates, validate_plan
 from kanso.criteria import library as lib
 from kanso.criteria.gates import PENDING
@@ -34,7 +35,13 @@ def write_item(directory: Any, name: str, body: str) -> None:
 
 FOLDS = 4
 
-REQUIRED_CERT_GATES = ("embargoed_window", "parity_replay", "publication_lag")
+REQUIRED_CERT_GATES = ("embargoed_window", "publication_lag")
+"""Required cert gates this version can actually run.
+
+`parity_replay` is required too, but has no implementation until replay sessions land, so
+a plan is neither offered it nor held to it. `tests/criteria/test_pending_required.py`
+pins that exemption and is what forces it to end.
+"""
 
 PLAN: dict[str, Any] = {
     "schema": 1,
@@ -54,12 +61,6 @@ PLAN: dict[str, Any] = {
             "stage": "cert",
             "params": {"min_fraction": 0.5},
             "rationale": "out of sample",
-        },
-        {
-            "id": "parity_replay",
-            "stage": "cert",
-            "params": {"ts_ns": 0},
-            "rationale": "one code path",
         },
         {
             "id": "publication_lag",
@@ -128,8 +129,10 @@ def test_every_gate_declares_its_stage_and_every_objective_its_priority() -> Non
 
 
 def test_the_structural_invariants_are_the_only_required_gates() -> None:
+    """Including the ones this version cannot yet run — the catalogue is the declaration,
+    and what a plan is held to is a separate question `plannable` answers."""
     required = {item.id for item in catalogue().values() if item.required}
-    assert required == {"strategy_integrity", *REQUIRED_CERT_GATES}
+    assert required == {"strategy_integrity", *REQUIRED_CERT_GATES, *criteria.pending_required()}
 
 
 def test_the_toolbox_reaches_every_stage() -> None:
@@ -272,8 +275,8 @@ def test_excluding_a_required_gate_is_refused() -> None:
     with pytest.raises(ValidationError, match="is required and cannot be left out"):
         validate_plan(
             plan(
-                gates=[g for g in PLAN["gates"] if g["id"] != "parity_replay"],
-                excluded=[{"id": "parity_replay", "reason": "slow"}],
+                gates=[g for g in PLAN["gates"] if g["id"] != "embargoed_window"],
+                excluded=[{"id": "embargoed_window", "reason": "slow"}],
             ),
             make_hyp(),
             FOLDS,

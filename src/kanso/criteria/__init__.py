@@ -41,6 +41,9 @@ from kanso.criteria.library import (
     criteria_version,
     gates,
     objectives,
+    pending_required,
+    plan_complaints,
+    plannable,
     resolve_bound,
     validate_plan,
 )
@@ -55,6 +58,9 @@ from kanso.criteria.quantities import (
 from kanso.criteria.run import CardRun, Fill, Trade
 
 __all__ = [
+    "plan_complaints",
+    "pending_required",
+    "plannable",
     "ALLOWED_IMPORTS",
     "DENIED_ATTRIBUTES",
     "DENIED_BUILTINS",

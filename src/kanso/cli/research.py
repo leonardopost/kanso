@@ -17,6 +17,9 @@ active runs and their lane directories stay exactly where they are, and the next
 picks them up before it takes anything new — so stopping is a cheap act rather than a
 decision.
 
+A run that stalls with a keep nothing has certified certifies it before it returns, so
+`run` reports the certificate that stall produced and points at it.
+
 `show` prints what is in state: a card's stored `strategy.py`, or the unified diff between
 two of them. A sha is written as any unique prefix of one that belongs to this hypothesis;
 a prefix matching none of its cards, or several, is a validation failure, because guessing
@@ -31,6 +34,7 @@ from typing import Annotated, Any
 import typer
 
 from kanso import research
+from kanso.certify import certificate
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import PreconditionError, ValidationError
@@ -206,13 +210,25 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
     with store(ws) as opened:
         outcome = research.drive(ws, opened, hyp_id, cards=cards, lane=DEFAULT_LANE)
         trials = records.n_trials(opened, hyp_id)
-    data: dict[str, Any] = {**outcome.payload(), "n_trials": trials}
+        # A run that stalls on a keep nothing has certified certifies it before it
+        # returns, so the certificate of the best is part of what this invocation did.
+        # One of another subject is not: a rewound `best` leaves an older certificate
+        # newest, and reporting that as this run's outcome would be a lie.
+        newest = certificate.latest(opened, hyp_id) if outcome.ended else None
+    certified = newest if newest is not None and newest.strategy_sha == outcome.best_sha else None
+    data: dict[str, Any] = {
+        **outcome.payload(),
+        "n_trials": trials,
+        "certificate": None
+        if certified is None
+        else {"sha7": certified.sha7, "verdict": certified.verdict},
+    }
     best = (
         "none yet"
         if outcome.best_sha is None
         else f"{outcome.best_sha[:7]} at {outcome.best_metric:.6f}"
     )
-    lines = (
+    lines = [
         field("run", f"{outcome.run_id} · lane {outcome.lane} · {outcome.reason}"),
         field(
             "cards",
@@ -221,14 +237,20 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         ),
         field("aligned", f"{outcome.checks} check(s) · {outcome.drifts} drift(s)"),
         field("best", best),
+    ]
+    if certified is not None:
+        lines.append(field("certified", f"{certified.sha7} · {certified.verdict}"))
+    lines.append(
         field(
             "next",
-            f"kanso research show {hyp_id}"
+            f"kanso cert show {hyp_id}"
+            if certified is not None
+            else f"kanso research show {hyp_id}"
             if outcome.ended
             else f"kanso research run {hyp_id} --cards {outcome.proposed}",
-        ),
+        )
     )
-    return Report(data=data, lines=lines)
+    return Report(data=data, lines=tuple(lines))
 
 
 def _start(ws: Workspace) -> Report:

@@ -21,7 +21,7 @@ is the planner's decision and is not second-guessed here.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import cache
 from hashlib import sha256
 from importlib import import_module
@@ -45,6 +45,9 @@ from kanso.schemas import (
     parse_yaml,
 )
 from kanso.schemas.certification import PLAN_STAGES
+
+NO_IMPLEMENTATION: Final = "this version of kanso has no implementation for it"
+"""Why a declared-but-unbuilt gate is refused, in the words the planner is retried with."""
 
 LIBRARY: Final = Path(__file__).resolve().parent / "library"
 """One YAML file per toolbox item, named by its id."""
@@ -101,6 +104,40 @@ def _gates() -> Mapping[str, Gate]:
         for item in _catalogue().values()
         if item.kind == "gate" and item.id not in PENDING
     }
+
+
+def plannable() -> dict[str, CriteriaItem]:
+    """Every gate a plan written by this version may name, by id.
+
+    A cert-stage gate the library declares but this version cannot run is absent: the
+    plan's cert gates are run by certification itself, so planning one with no
+    implementation would pin a proof that can never be produced. Paper and live gates are
+    run by the stages rather than by certification, so they are offered whether or not
+    their implementations exist yet.
+    """
+    runnable = _gates()
+    return {
+        item.id: item
+        for item in _catalogue().values()
+        if item.kind == "gate"
+        and item.stage in PLAN_STAGES
+        and (item.stage != "cert" or item.id in runnable)
+    }
+
+
+def pending_required() -> frozenset[str]:
+    """Required gates this version cannot run, which a plan is therefore not held to.
+
+    Empty is the only state a release may ship in: a required gate is a structural
+    invariant, and one that never runs is a promise the certificate does not keep. It is
+    non-empty only between the milestone that declares a gate and the one that implements
+    it.
+    """
+    return frozenset(
+        item.id
+        for item in _catalogue().values()
+        if item.kind == "gate" and item.required and item.id in PENDING
+    )
 
 
 def objectives() -> dict[str, Objective]:
@@ -177,35 +214,78 @@ def check_params(
     return problems
 
 
-def validate_plan(plan: CertificationPlan | Mapping[str, Any], hyp: Hypothesis, folds: int) -> None:
-    """Refuse a certification plan that breaks a structural invariant of the toolbox."""
-    model = plan if isinstance(plan, CertificationPlan) else CertificationPlan.model_validate(plan)
+def plan_complaints(
+    included: Sequence[Any],
+    excluded: Sequence[Any],
+    hyp: Hypothesis,
+    folds: int,
+) -> list[str]:
+    """Every way a plan departs from the toolbox and the structural invariants.
+
+    All of them at once, because the planner is allowed one retry: a plan corrected one
+    complaint at a time would cost a call per mistake.
+
+    A gate this version has no implementation for is not part of the toolbox a plan may
+    draw on. It is neither offered to the planner, nor accepted from one, nor required of
+    a plan even where the catalogue marks it a structural invariant, nor the planner's to
+    exclude. Requiring a gate that cannot run would make every plan impossible; accepting
+    one would let a certificate claim a test that never executed.
+    """
     items = _catalogue()
-    problems: list[str] = []
-    for planned in model.gates:
-        item = items.get(planned.id)
+    offered = plannable()
+    complaints: list[str] = []
+    named: list[str] = []
+    for gate in included:
+        item = items.get(gate.id)
         if item is None or item.kind != "gate":
-            problems.append(f"gates.{planned.id}: is not a gate in the toolbox")
+            complaints.append(f"gates.{gate.id}: is not a gate in the toolbox")
             continue
-        if item.stage != planned.stage:
-            problems.append(
-                f"gates.{planned.id}: runs at the {item.stage} stage, not {planned.stage}"
-            )
-        problems.extend(
-            f"gates.{planned.id}.{problem}"
-            for problem in check_params(item, planned.params, hyp, folds)
+        if gate.id not in offered:
+            complaints.append(f"gates.{gate.id}: {NO_IMPLEMENTATION}, so a plan cannot name it")
+            continue
+        if item.stage != gate.stage:
+            complaints.append(f"gates.{gate.id}: runs at the {item.stage} stage, not {gate.stage}")
+        if gate.id in named:
+            complaints.append(f"gates.{gate.id}: is named twice")
+        else:
+            named.append(gate.id)
+        # Parameters are checked even when the stage is wrong: a plan gets one retry, so
+        # a gate with two faults must come back with both of them.
+        complaints.extend(
+            f"gates.{gate.id}.{problem}" for problem in check_params(item, gate.params, hyp, folds)
         )
-    present = {planned.id for planned in model.gates}
-    problems.extend(
-        f"gates: {item.id} is a structural invariant and every plan includes it"
-        for item in items.values()
-        if item.required and item.stage in PLAN_STAGES and item.id not in present
+    complaints.extend(
+        f"gates: no {stage} gate, and a plan reaches every stage"
+        for stage in PLAN_STAGES
+        if not any(gate.stage == stage for gate in included)
     )
-    for excluded in model.excluded:
-        item = items.get(excluded.id)
+    complaints.extend(
+        f"gates: {item.id} is a structural invariant and every plan includes it"
+        for item in offered.values()
+        if item.required and item.id not in named
+    )
+    for left in excluded:
+        item = items.get(left.id)
         if item is None or item.kind != "gate":
-            problems.append(f"excluded.{excluded.id}: is not a gate in the toolbox")
+            complaints.append(f"excluded.{left.id}: is not a gate in the toolbox")
+        elif left.id not in offered:
+            complaints.append(
+                f"excluded.{left.id}: {NO_IMPLEMENTATION}, so it was never yours to exclude"
+            )
         elif item.required:
-            problems.append(f"excluded.{excluded.id}: is required and cannot be left out")
+            complaints.append(f"excluded.{left.id}: is required and cannot be left out")
+        elif left.id in named:
+            complaints.append(f"excluded.{left.id}: is both included and excluded")
+    return complaints
+
+
+def validate_plan(plan: CertificationPlan | Mapping[str, Any], hyp: Hypothesis, folds: int) -> None:
+    """Refuse a certification plan that breaks a structural invariant of the toolbox.
+
+    The raising form of `plan_complaints`, which is the one rule set: two validators that
+    had to agree would eventually not.
+    """
+    model = plan if isinstance(plan, CertificationPlan) else CertificationPlan.model_validate(plan)
+    problems = plan_complaints(model.gates, model.excluded, hyp, folds)
     if problems:
         raise ValidationError("; ".join(problems))

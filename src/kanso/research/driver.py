@@ -157,7 +157,7 @@ def run(
 
     if reason == STALLED:
         research_loop.end(ws, store, hyp_id)
-        scheduler.on_stall(ws, store, hyp_id)
+        scheduler.on_stall(ws, store, hyp_id, lane)
     best_sha, best_metric = records.best_of(store, hyp_id)
     return Outcome(
         hyp_id=hyp_id,

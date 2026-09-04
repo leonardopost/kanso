@@ -5,4 +5,4 @@ required: false
 meaningful_when: "Informative when the strategy config has numeric fields to perturb; skipped when it has none. A metric that survives only at one setting was fitted to it."
 params: {perturb_pct: float, keep_fraction: float}
 ranges: {perturb_pct: [1, 50], keep_fraction: [0.0, 1.0]}
-impl: kanso.criteria.gates.param_plateau
+impl: kanso.criteria.gates.param_plateau.gate

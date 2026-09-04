@@ -62,7 +62,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 from math import fsum
@@ -91,6 +91,7 @@ __all__ = [
     "run",
     "run_subprocess",
     "stage_of",
+    "tunable",
     "window_data",
 ]
 
@@ -147,6 +148,11 @@ class RunRequest:
     construct id, the bytes of its module and the parameters its config takes.
     `budget_s` and `mem_cap_gb` bound the card path only; unset means unbounded, which
     is what a baseline card runs under.
+
+    `overrides` replaces sleeve configuration fields the author declared with values
+    chosen by the caller. Nothing in research sets any: a card is judged at the settings
+    its own file states. A perturbation gate is what moves them, and it moves only the
+    author's own numeric fields, never one the hypothesis injects.
     """
 
     hyp: Hypothesis
@@ -159,6 +165,7 @@ class RunRequest:
     budget_s: float | None = None
     mem_cap_gb: float | None = None
     period: str = DEFAULT_PERIOD
+    overrides: Mapping[str, float] = field(default_factory=dict)
 
     @property
     def bounds(self) -> tuple[int, int]:
@@ -173,6 +180,7 @@ class RunRequest:
             modifiers=tuple(
                 (construct, source, dict(params)) for construct, source, params in self.modifiers
             ),
+            overrides=dict(self.overrides),
         )
 
 
@@ -361,8 +369,23 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
         max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
         max_leverage=hyp.risk_limits.max_leverage,
         venue_model=dict(request.venue_model),
+        **dict(request.overrides),
     )
     return cls, config
+
+
+def tunable(request: RunRequest) -> dict[str, float]:
+    """The sleeve's own numeric parameters, at the values this request would run them at.
+
+    The author's fields, not the injected ones: the capital, the risk limits and the venue
+    model are the hypothesis's, and moving them would perturb the framework rather than
+    the idea. The values are read off the configuration the request builds, so an override
+    already applied is what comes back.
+    """
+    from kanso.nautilus.strategy import tunable_fields
+
+    _, config = _sleeve(request)
+    return {name: getattr(config, name) for name in tunable_fields(config)}
 
 
 def _modifier(
