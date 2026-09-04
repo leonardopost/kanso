@@ -1,0 +1,8 @@
+id: deflated_sharpe
+kind: gate
+stage: cert
+required: false
+meaningful_when: "Only for a Sharpe objective, and only with two or more non-crash cards: it deflates the research Sharpe by how wide the search that found it was."
+params: {min_dsr: float}
+ranges: {min_dsr: [0.5, 0.999]}
+impl: kanso.criteria.gates.deflated_sharpe

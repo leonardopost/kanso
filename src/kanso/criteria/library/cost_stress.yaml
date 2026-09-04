@@ -1,0 +1,8 @@
+id: cost_stress
+kind: gate
+stage: cert
+required: false
+meaningful_when: "Always informative where costs are non-zero: recomputed from the recorded fills, so it asks whether the edge is real or is the cost model being generous."
+params: {mult_a: float, mult_b: float}
+ranges: {mult_a: [1, 10], mult_b: [1, 10]}
+impl: kanso.criteria.gates.cost_stress

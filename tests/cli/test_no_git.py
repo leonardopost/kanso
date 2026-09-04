@@ -55,6 +55,11 @@ def _every_command(runner: CliRunner, root: Path) -> None:
     assert at(runner, root, "skills", "sync").exit_code == Exit.OK
     assert at(runner, root, "env", "detect").exit_code == Exit.OK
     assert at(runner, root, "doctor").exit_code == Exit.OK
+    assert at(runner, root, "data", "show").exit_code == Exit.OK
+    assert at(runner, root, "data", "adapters").exit_code == Exit.OK
+    assert at(runner, root, "data", "instruments", "show").exit_code == Exit.OK
+    assert at(runner, root, "hyp", "new", "trial_one").exit_code == Exit.OK
+    assert at(runner, root, "hyp", "show").exit_code == Exit.OK
     assert run(runner, "--version").exit_code == Exit.OK
 
 
@@ -94,7 +99,7 @@ def test_the_command_layer_spawns_nothing_itself() -> None:
     import kanso.cli
 
     modules = sorted(Path(kanso.cli.__file__ or "").parent.glob("*.py"))
-    assert len(modules) >= 4
+    assert len(modules) >= 7
     for module in modules:
         source = module.read_text(encoding="utf-8")
         assert "subprocess" not in source, module.name

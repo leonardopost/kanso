@@ -1,0 +1,8 @@
+id: book_correlation
+kind: gate
+stage: cert
+required: false
+meaningful_when: "Informative only once something is deployed to correlate against; skipped otherwise. A candidate that repeats a deployed book adds risk, not return."
+params: {max_corr: float}
+ranges: {max_corr: [0.0, 1.0]}
+impl: kanso.criteria.gates.book_correlation

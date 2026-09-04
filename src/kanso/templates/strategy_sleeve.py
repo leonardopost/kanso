@@ -3,6 +3,10 @@
 Contract: subclass KansoStrategy; kanso injects universe, resolution and costs from
 hypothesis.yaml and runs this class unchanged in backtest, paper and live nodes. Allowed imports are
 listed in program.md; anything else fails the strategy_integrity gate.
+
+Time comes from `self.data_time` (the ts_event of the last data event), never from a clock.
+Orders go through `self.submit_entry(...)` and `self.submit_exit(...)`, which size against the
+hypothesis capital and risk limits and leave room for costs.
 """
 
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy

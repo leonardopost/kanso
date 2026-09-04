@@ -2,9 +2,9 @@
 schema: 1
 id: demo_mr
 title: "Demo: intraday mean reversion on a synthetic OU series"
-thesis: "Prices of DEMO revert to a rolling mean within the hour; fading 2-sigma deviations earns more than the modelled spread and slippage."
+thesis: "Prices of DEMO.SIM revert to a rolling mean within the hour; fading 2-sigma deviations earns more than the modelled spread and slippage."
 mechanism: mean_reversion
-universe: [DEMO]
+universe: [DEMO.SIM]
 horizon: 30m
 resolution: 1m
 data_requirements: [bar]
@@ -14,6 +14,16 @@ windows:
   research:      {start: 2024-01-02, end: 2024-12-31}
   certification: {start: 2025-01-06, end: 2025-05-30}
   forward:       {start: 2025-06-02}
+# The demo ships classified: the operator states what the thesis is, so the demo runs
+# end to end with no model configured. `kanso classify` is for when you want the answer
+# produced rather than stated.
 construct:
+  id: sleeve
+  rationale: "A self-contained strategy with its own book: signal, entries, exits and sizing, attaching to nothing."
 objective:
+  id: net_edge_bps
+  params: {min_delta: 0.05, k_se: 1.0}
 constraints:
+  - {id: strategy_integrity, params: {}}
+  - {id: min_trades, params: {min: 30}}
+  - {id: max_drawdown, params: {}}

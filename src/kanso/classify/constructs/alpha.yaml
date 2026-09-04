@@ -1,0 +1,8 @@
+id: alpha
+description: >-
+  A return forecast (signal) that does not trade by itself; combined with other alphas
+  inside an alpha-combining sleeve, and evaluated on a canonical wrapper.
+needs_host: sleeve
+objective_mode: absolute
+runnable: false
+impl: kanso.classify.constructs.alpha

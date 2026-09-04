@@ -1,0 +1,10 @@
+id: marginal_wf_sharpe
+kind: objective
+applies:
+  objective_mode: relative
+  horizon: {min: 1d}
+priority: 20
+meaningful_when: "What an attached construct adds to its host, differenced fold by fold so the paired standard error is what an improvement must clear."
+params: {min_delta: float, k_se: float}
+ranges: {min_delta: [0.0, .inf], k_se: [0.5, 3.0]}
+impl: kanso.criteria.objectives.marginal_wf_sharpe

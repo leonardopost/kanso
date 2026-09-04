@@ -1,0 +1,8 @@
+id: daily_loss_kill
+kind: gate
+stage: live
+required: false
+meaningful_when: "Always, on a live stage: a pure evaluator of the stage day's loss against the portfolio limit. The monitor, not this gate, sets the kill switch."
+params: {}
+ranges: {}
+impl: kanso.criteria.gates.daily_loss_kill

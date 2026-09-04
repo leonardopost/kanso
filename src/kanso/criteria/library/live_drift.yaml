@@ -1,0 +1,8 @@
+id: live_drift
+kind: gate
+stage: live
+required: false
+meaningful_when: "Informative once the live window is as long as the paper one that set the expectation; it fails when the rolling objective falls below that interval."
+params: {}
+ranges: {}
+impl: kanso.criteria.gates.live_drift

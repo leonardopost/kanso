@@ -1,0 +1,8 @@
+id: execution
+description: >-
+  How a host's orders are worked: order types, passive or aggressive tactics, slicing —
+  implementation shortfall.
+needs_host: sleeve
+objective_mode: relative
+runnable: false
+impl: kanso.classify.constructs.execution

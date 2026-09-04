@@ -1,0 +1,8 @@
+id: bootstrap
+kind: gate
+stage: cert
+required: false
+meaningful_when: "Informative with at least two closed trades: it asks how deep the drawdown could have been had the same trades arrived in another order."
+params: {n: int}
+ranges: {n: [100, 100000]}
+impl: kanso.criteria.gates.bootstrap

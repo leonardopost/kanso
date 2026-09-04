@@ -1,0 +1,7 @@
+id: exit
+description: >-
+  Exit logic added to or replacing a host's: stops, targets, time exits, trailing rules.
+needs_host: sleeve
+objective_mode: relative
+runnable: true
+impl: kanso.classify.constructs.exit

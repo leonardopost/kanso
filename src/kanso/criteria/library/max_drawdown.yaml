@@ -1,0 +1,8 @@
+id: max_drawdown
+kind: gate
+stage: card
+required: false
+meaningful_when: "Always: the hypothesis's own drawdown limit, measured peak to trough over starting capital. Carries no parameter, since the limit is the hypothesis's."
+params: {}
+ranges: {}
+impl: kanso.criteria.gates.max_drawdown

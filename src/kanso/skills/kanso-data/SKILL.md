@@ -17,19 +17,21 @@ A hypothesis's `universe` is a list of plain ids. kanso turns each into a Nautil
 - `kanso doctor` constructs every instrument, lists overrides and manual entries, and flags drift between what is resolved now and what the newest snapshot pinned.
 
 ## Load
-1. Write a loader spec (example for files):
+1. Write a loader spec (example for files). One time zone for the whole spec, one entry per file, and a column map per entry — neither is ever inferred:
    ```yaml
    loader: csv_parquet
-   instrument: <ID>         # from instruments.yaml
-   type: bar                # bar | quote | trade | corporate_action | <registered custom type id>
-   resolution: 1m           # bars only
-   path: data/<file>.parquet
-   columns: {ts: timestamp, open: o, high: h, low: l, close: c, volume: v}
-   tz: UTC                  # IANA name of the file's timestamps
-   adjusted: false
+   timezone: America/New_York   # IANA name of the files' naive timestamps
+   files:
+     - path: data/<file>.parquet
+       instrument: <SYMBOL>     # with venue below, this is the id in instruments.yaml
+       venue: <MIC>
+       type: bar                # bar | quote | trade | corporate_action | <registered custom type id>
+       resolution: 1m           # bars only
+       columns: {ts_event: timestamp, open: o, high: h, low: l, close: c, volume: v}
+       adjusted: false
    ```
-   Synthetic data for tests/demos: `loader: synthetic`, `model: ou|gbm`, `seed`, `start`, `end`, `resolution`, `instruments`.
-2. `kanso data load --loader csv_parquet --spec <file>` → writes the dataset to the catalog and its manifest under `catalog/manifests/`.
+   Synthetic data for tests/demos: `loader: synthetic`, `model: ou|gbm`, `seed`, `start`, `end`, `resolution`, `instruments`, `venue`.
+2. `kanso data load --loader csv_parquet --spec <file>` → writes the dataset to the catalog and its manifest under `catalog/manifests/`. A load overlapping data already held is refused (exit 2); `--replace` deletes and rewrites the overlapped span, and is refused outright where a snapshot pins it.
 3. `kanso data backfill --loader <id> --spec <file>` → fills history back to the source's earliest servable date and closes any gaps. Run `--dry-run` first and report the chunk count and estimated bytes to the operator before a large pull. It is resumable and idempotent, so an interrupt is safe and a re-run costs nothing; never restart one by hand from the beginning. Reaching the source's history floor ends it normally, and the reported floor is the answer to "why does my data start there".
 4. `kanso data sync` → extends every dataset from where it ends to now. This is the routine top-up before a research or deploy session.
 5. `kanso data show` → datasets, served spans, gaps and row counts per instrument/type. Quote the **served** span, never the range that was requested: a source may return less than asked with no warning.

@@ -22,14 +22,16 @@ from typing import Annotated
 import typer
 
 from kanso import __version__, env, skills_sync, workspace
+from kanso.cli import data as data_commands
 from kanso.cli import doctor as diagnosis
+from kanso.cli import hyp as hyp_commands
+from kanso.cli import research as research_commands
+from kanso.cli.context import STATE_DB, global_json, open_workspace, workspace_option
 from kanso.cli.render import Report, emit, field, indent
 from kanso.env import envelope as envelope_module
 from kanso.errors import Exit
 from kanso.state import StateStore
 from kanso.workspace import Workspace
-
-STATE_DB = "state.db"
 
 STATUS, NAME = 5, 14
 """Widths of the grade and the name column of the human diagnosis."""
@@ -51,6 +53,9 @@ skills_app = typer.Typer(help="The packaged operator skills.", no_args_is_help=T
 env_app = typer.Typer(help="The host envelope.", no_args_is_help=True)
 app.add_typer(skills_app, name="skills")
 app.add_typer(env_app, name="env")
+app.add_typer(data_commands.app, name="data")
+app.add_typer(hyp_commands.app, name="hyp")
+app.add_typer(research_commands.app, name="research")
 
 
 @app.callback(invoke_without_command=True)
@@ -80,7 +85,7 @@ def init(
     as_json: JsonOption = False,
 ) -> None:
     """Scaffold a workspace, link the skills and detect the envelope."""
-    emit(as_json or _global_json(ctx), lambda: _init(_target(ctx, directory), demo))
+    emit(as_json or global_json(ctx), lambda: _init(_target(ctx, directory), demo))
 
 
 @app.command()
@@ -95,25 +100,25 @@ def doctor(
     as_json: JsonOption = False,
 ) -> None:
     """Diagnose the workspace, the install and the engine. Exits 2 when a check fails."""
-    emit(as_json or _global_json(ctx), lambda: _doctor(_open(ctx), report, check_adapters))
+    emit(as_json or global_json(ctx), lambda: _doctor(open_workspace(ctx), report, check_adapters))
 
 
 @app.command()
 def migrate(ctx: typer.Context, as_json: JsonOption = False) -> None:
     """Apply the pending state migrations."""
-    emit(as_json or _global_json(ctx), lambda: _migrate(_open(ctx)))
+    emit(as_json or global_json(ctx), lambda: _migrate(open_workspace(ctx)))
 
 
 @skills_app.command("sync")
 def skills_sync_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
     """Link the packaged skills into every configured target."""
-    emit(as_json or _global_json(ctx), lambda: _skills_sync(_open(ctx)))
+    emit(as_json or global_json(ctx), lambda: _skills_sync(open_workspace(ctx)))
 
 
 @env_app.command("detect")
 def env_detect(ctx: typer.Context, as_json: JsonOption = False) -> None:
     """Detect the host, derive the lane plan and write `envelope.yaml`."""
-    emit(as_json or _global_json(ctx), lambda: _env_detect(_open(ctx)))
+    emit(as_json or global_json(ctx), lambda: _env_detect(open_workspace(ctx)))
 
 
 # -- command bodies ---------------------------------------------------------------
@@ -252,24 +257,8 @@ def _env_detect(ws: Workspace) -> Report:
 # -- context ----------------------------------------------------------------------
 
 
-def _global_json(ctx: typer.Context) -> bool:
-    """Whether `--json` was given to the application rather than to the command."""
-    return bool(ctx.find_root().params.get("as_json"))
-
-
-def _workspace_option(ctx: typer.Context) -> Path | None:
-    """The `--workspace` the application was given, wherever the command sits."""
-    value = ctx.find_root().obj
-    return value if isinstance(value, Path) else None
-
-
-def _open(ctx: typer.Context) -> Workspace:
-    """The workspace the command acts on, discovered from `--workspace` or the cwd."""
-    return workspace.find(_workspace_option(ctx))
-
-
 def _target(ctx: typer.Context, directory: Path | None) -> Path:
     """Where `init` scaffolds: its argument, else `--workspace`, else the cwd."""
     if directory is not None:
         return directory
-    return _workspace_option(ctx) or Path.cwd()
+    return workspace_option(ctx) or Path.cwd()

@@ -1,0 +1,9 @@
+id: filter
+description: >-
+  A conditioning rule that gates a host's entries: regime, trend, volatility, calendar or
+  liquidity conditions (scope time), or which instruments the host may trade (scope instrument).
+needs_host: sleeve
+objective_mode: relative
+params: {scope: [time, instrument]}
+runnable: true
+impl: kanso.classify.constructs.filter

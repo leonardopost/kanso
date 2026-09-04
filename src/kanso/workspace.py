@@ -266,6 +266,15 @@ def _write_demo(root: Path) -> None:
         _render(
             _template("program.md"),
             hyp_id="demo_mr",
-            today=date.today().strftime("%Y%m%d"),
+            today=_today(),
         ),
     )
+    # The three scoped files, exactly as `hyp new` renders them: a run copies all three
+    # into its lane directory, so a demo missing the stub cannot begin one.
+    _write_new(hyp / "strategy.py", _render(_template("strategy_sleeve.py"), hyp_id="demo_mr"))
+
+
+def _today() -> str:
+    """Today as eight digits; `strftime` does not zero-pad a year below 1000 on glibc."""
+    day = date.today()
+    return f"{day.year:04d}{day.month:02d}{day.day:02d}"

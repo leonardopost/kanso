@@ -1,0 +1,8 @@
+id: allocation
+description: >-
+  Capital or risk allocation across sleeves: risk parity, regime switching, a strategy of
+  strategies.
+needs_host: portfolio
+objective_mode: relative
+runnable: false
+impl: kanso.classify.constructs.allocation

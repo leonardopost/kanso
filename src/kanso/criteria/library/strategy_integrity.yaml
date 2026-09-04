@@ -1,0 +1,8 @@
+id: strategy_integrity
+kind: gate
+stage: card
+required: true
+meaningful_when: "Always. Read before the backtest, so code that reaches the catalog, the filesystem or a wall clock never runs; a failure discards the card with no engine run."
+params: {}
+ranges: {}
+impl: kanso.criteria.gates.strategy_integrity

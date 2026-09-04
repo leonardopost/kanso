@@ -1,0 +1,8 @@
+id: publication_lag
+kind: gate
+stage: cert
+required: true
+meaningful_when: "Every delayed dataset must show at least its data class's documented publication delay; a dataset of unknown publication cannot be evaluated point in time and fails."
+params: {tolerance_s: float}
+ranges: {tolerance_s: [0, 86400]}
+impl: kanso.criteria.gates.publication_lag

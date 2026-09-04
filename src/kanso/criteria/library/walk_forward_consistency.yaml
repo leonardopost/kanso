@@ -1,0 +1,8 @@
+id: walk_forward_consistency
+kind: gate
+stage: cert
+required: false
+meaningful_when: "Informative when the research window holds several folds: it asks whether the edge recurs rather than arriving once, and whether certification is the worst fold."
+params: {min_positive_folds: int}
+ranges: {min_positive_folds: [1, "1 * folds"]}
+impl: kanso.criteria.gates.walk_forward_consistency

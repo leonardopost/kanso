@@ -1,0 +1,8 @@
+id: min_trades
+kind: gate
+stage: card
+required: false
+meaningful_when: "Informative once the window is long enough to hold the trades asked for; it also requires every fold to trade, so a metric earned in one fold is refused."
+params: {min: int}
+ranges: {min: [1, 10000]}
+impl: kanso.criteria.gates.min_trades

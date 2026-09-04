@@ -1,0 +1,10 @@
+id: marginal_net_edge_bps
+kind: objective
+applies:
+  objective_mode: relative
+  horizon: {max: 1d}
+priority: 10
+meaningful_when: "What an attached construct adds to its host's edge per trade, differenced fold by fold, for a holding period shorter than a day."
+params: {min_delta: float, k_se: float}
+ranges: {min_delta: [0.0, .inf], k_se: [0.5, 3.0]}
+impl: kanso.criteria.objectives.marginal_net_edge_bps

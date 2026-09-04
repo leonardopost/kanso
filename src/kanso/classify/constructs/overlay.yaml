@@ -1,0 +1,8 @@
+id: overlay
+description: >-
+  An exposure modification layered on a host without changing its signal: scaling
+  (volatility targeting, drawdown control) and/or hedge legs (beta, tail, currency, delta).
+needs_host: sleeve
+objective_mode: relative
+runnable: true
+impl: kanso.classify.constructs.overlay

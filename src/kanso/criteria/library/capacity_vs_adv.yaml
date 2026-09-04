@@ -1,0 +1,8 @@
+id: capacity_vs_adv
+kind: gate
+stage: cert
+required: false
+meaningful_when: "Informative where the instruments have a volume series; skipped without one. A busiest-day notional above a share of average volume will not fill as simulated."
+params: {participation: float, adv_days: int}
+ranges: {participation: [0.0001, 0.2], adv_days: [5, 250]}
+impl: kanso.criteria.gates.capacity_vs_adv

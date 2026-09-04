@@ -1,0 +1,8 @@
+id: embargoed_window
+kind: gate
+stage: cert
+required: true
+meaningful_when: "The one out-of-sample test: the objective must stay positive past the embargo and keep a stated fraction of what research measured."
+params: {min_fraction: float}
+ranges: {min_fraction: [0.0, 1.0]}
+impl: kanso.criteria.gates.embargoed_window

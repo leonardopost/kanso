@@ -185,7 +185,7 @@ id: demo_mr                  # ^[a-z0-9_]{3,40}$, unique
 title: "Demo: mean reversion on a synthetic series"
 thesis: "≤2 sentences, falsifiable."
 mechanism: mean_reversion    # mean_reversion|momentum|microstructure|stat_arb|event|carry|vol|other
-universe: [DEMO]             # ids from instruments.yaml; venues derive from their nautilus_id
+universe: [DEMO.SIM]         # ids from instruments.yaml, which are the qualified `<SYMBOL>.<VENUE>` ids the catalog files data under
 horizon: 30m                 # holding period
 resolution: 1m               # duration | tick | quote | trade
 data_requirements: [bar]     # bar|quote|trade|<registered custom type id>
@@ -350,7 +350,7 @@ Inbox entry: `- [ ] <id> <ts> <kind> <hyp|strategy> — <summary ≤200> · acti
 
 | transition | trigger | precondition |
 |---|---|---|
-| ∅ → draft | `hyp add` | §6.1 validation. On an already registered id (no active run, else exit 2), `hyp add` re-pins and keeps the status iff `construct`/`objective`/`constraints` still validate, else resets to `draft`; a change of `universe`, `resolution` or `data_requirements` clears the hypothesis's `best` (event `best_cleared`) |
+| ∅ → draft \| classified | `hyp add` | §6.1 validation. A file arriving with `construct`, `objective` and `constraints` all set and valid registers as `classified` — an operator who already knows the answer needs no model to state it, and this is the same override §8.3.1 gives after a classification — otherwise as `draft`. On an already registered id (no active run, else exit 2), `hyp add` re-pins and keeps the status iff those three still validate, else resets to `draft`; a change of `universe`, `resolution` or `data_requirements` clears the hypothesis's `best` (event `best_cleared`) |
 | draft → classified | `classify` | no active run; construct, objective params and constraints written and pinned; a change of `construct.id` clears `best` (event `best_cleared`); a non-runnable construct is recorded here and refused at `research begin` with the §12 seam named |
 | classified / candidate / researching / certified → researching | `research begin` or scheduler | no active run; lane free; snapshot pinned; construct runnable; the sha256 of the workspace `hypothesis.yaml` equals the registered pin (else exit 2: `hyp validate`, `hyp add`) |
 | researching → candidate | stall with ≥ 1 keep (§8.3.5) or `cert run` | `best` exists and differs from the latest certificate's `strategy_sha` |

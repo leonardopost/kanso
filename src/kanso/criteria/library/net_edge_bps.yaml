@@ -1,0 +1,10 @@
+id: net_edge_bps
+kind: objective
+applies:
+  objective_mode: absolute
+  horizon: {max: 1d}
+priority: 10
+meaningful_when: "A sub-daily holding period gives few return periods and many trades, so the edge per trade is the estimate with a sample behind it."
+params: {min_delta: float, k_se: float}
+ranges: {min_delta: [0.0, .inf], k_se: [0.5, 3.0]}
+impl: kanso.criteria.objectives.net_edge_bps

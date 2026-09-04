@@ -1,0 +1,8 @@
+id: sleeve
+description: >-
+  A self-contained strategy — signal, entries, exits, sizing — with its own book and P&L
+  attribution (also called a sub-strategy or book). Becomes a new strategy in the portfolio.
+needs_host: none
+objective_mode: absolute
+runnable: true
+impl: kanso.classify.constructs.sleeve
