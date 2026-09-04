@@ -1,0 +1,43 @@
+# models.yaml — LLM register and routing (docs/workspace.md). Model ids and providers are placeholders: use your providers' current ids and pricing.
+# Keys are never written here. Each provider's key is the variable KANSO_<PROVIDER>_API_KEY, read from the workspace .env first and
+# then from the environment (so a key exported in your shell profile works without a .env). `kanso doctor` prints the names it needs.
+schema: 1
+models:
+  - id: <frontier-model-id>
+    provider: <provider>
+    protocol: anthropic            # anthropic | openai_compat | mock
+    # api_key_env: MY_KEY_VAR             # optional: overrides the standard name KANSO_<PROVIDER>_API_KEY. A name, never a key.
+    tier: frontier
+    local: false
+    ctx: 200000
+    cost_in: 0.0                   # USD per 1M input tokens
+    cost_out: 0.0                  # USD per 1M output tokens
+    tools: true
+  - id: <mid-model-id>
+    provider: <provider>
+    protocol: openai_compat
+    tier: mid
+    local: false
+    ctx: 200000
+    cost_in: 0.0
+    cost_out: 0.0
+    tools: true
+  - id: <cheap-model-id>
+    provider: <provider>
+    protocol: openai_compat        # any hosted or local server speaking the OpenAI-compatible protocol: set base_url; a local server usually needs no key
+    base_url: http://localhost:<port>/v1
+    tier: cheap
+    local: true
+    ctx: 32000
+    cost_in: 0.0
+    cost_out: 0.0
+    tools: true
+  # Shipped mock provider for tests/demos: scripted responses, zero cost; `tier` may list several tiers.
+  # - {id: mock, provider: kanso, protocol: mock, script: mock/responses.yaml, tier: [cheap, mid, frontier], local: true, ctx: 100000, cost_in: 0, cost_out: 0, tools: true}
+routing:                            # task_class → {tier, effort, max_output}; escalate one tier on failure, never skip.
+                                    # These are the shipped defaults; omit a class or a field to keep its default.
+                                    # Spend where a wrong answer is dearest, think nothing where a rule already decided.
+  classify:     {tier: frontier, effort: high,   max_output: 1024}   # once per hypothesis; directs every run that follows
+  certify_plan: {tier: frontier, effort: high,   max_output: 4096}   # once per hypothesis; decides what counts as proof
+  propose:      {tier: mid,      effort: medium, max_output: 4096}   # every card, so it dominates spend
+  align_check:  {tier: cheap,    effort: none,   max_output: 256}    # a yes/no after the deterministic checks passed

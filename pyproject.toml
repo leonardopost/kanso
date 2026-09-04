@@ -1,0 +1,91 @@
+[project]
+name = "kanso"
+version = "0.1.0"
+description = "Minimal, agent-first quant workbench: hypotheses → infinite autoresearch → certification → strategies → portfolio, on NautilusTrader."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "Leonardo" }]
+keywords = ["quant", "trading", "research", "autoresearch", "nautilus", "agents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+# Runtime dependencies are exhaustive; adding one is a deliberate, documented change.
+dependencies = [
+  "nautilus_trader>=1.231.0,<1.232",   # one requirement for every supported host; `kanso doctor` checks the wheel tag against the host
+  "pydantic>=2.7,<3",
+  "typer>=0.12",
+  "pyyaml>=6",
+  "httpx>=0.27",
+  "numpy>=1.26",
+]
+
+# No extras: the shipped adapters add no runtime dependency and are enabled by their credentials, never by installation.
+
+[project.scripts]
+kanso = "kanso.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/leonardopost/kanso"
+Documentation = "https://github.com/leonardopost/kanso/tree/main/docs"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kanso"]
+# Ship skills, templates, the criteria library and migrations inside the wheel.
+artifacts = ["src/kanso/skills/**", "src/kanso/templates/**", "src/kanso/criteria/library/**", "src/kanso/state/migrations/**"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "hypothesis>=6.100",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "types-PyYAML",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The coverage floor is enforced by the full-suite invocation (CI and `uv run pytest --cov-fail-under=85`),
+# not here, so a partial run does not fail on coverage.
+addopts = "-q --cov=kanso --cov-report=term-missing -m 'not live'"
+markers = [
+  "live: needs real vendor or broker credentials; deselected by default and excluded from CI",
+]
+
+[tool.coverage.run]
+source = ["kanso"]
+# Cards, lanes and nodes run in subprocesses; without this their lines never count.
+patch = ["subprocess"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "N"]
+
+[tool.ruff.lint.per-file-ignores]
+# Workspace templates are rendered into operator projects, not imported by kanso.
+"src/kanso/templates/*" = ["ALL"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["kanso"]
+mypy_path = "src"
+exclude = ["src/kanso/templates/"]
+
+[[tool.mypy.overrides]]
+# nautilus_trader ships py.typed but its Cython modules have no stubs.
+module = ["nautilus_trader.*"]
+ignore_missing_imports = true

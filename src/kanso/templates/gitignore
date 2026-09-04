@@ -1,0 +1,11 @@
+# kanso workspace — rendered as .gitignore by `kanso init`
+.env
+state.db
+state.db-journal
+state.db-wal
+state.db-shm
+runs/
+hypotheses/*/results.tsv
+catalog/.cache/
+# Uncomment to keep market data out of git (recommended for anything beyond demos):
+# catalog/

@@ -1,0 +1,10 @@
+# demo.yaml — synthetic loader spec rendered by `kanso init --demo`
+loader: synthetic
+model: ou                          # mean-reverting price path so the demo hypothesis has something to find
+seed: 7
+instruments: [DEMO]                # rendered into instruments.yaml as DEMO.SIM by --demo
+resolution: 1m
+start: 2024-01-02
+end: 2025-09-01                    # covers research, certification and forward windows of demo_mr
+spread_bps: 2
+volume: 5000

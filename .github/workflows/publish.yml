@@ -1,0 +1,36 @@
+name: publish
+
+# Trusted publishing: the job requests an OIDC token and stores no credential.
+# The index-side registration must name this repository, this workflow filename
+# and the `pypi` environment exactly; a mismatch fails as an authentication error.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Tag matches the package version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          proj=$(uv run python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          pkg=$(uv run python -c "import kanso;print(kanso.__version__)")
+          echo "tag=$tag project=$proj package=$pkg"
+          test "$tag" = "$proj" && test "$tag" = "$pkg"
+
+      - name: Build
+        run: uv build
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

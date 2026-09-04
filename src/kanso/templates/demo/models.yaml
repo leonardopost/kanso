@@ -1,0 +1,20 @@
+# models.yaml — rendered by `kanso init --demo`. The shipped `mock` protocol only, listed for every tier,
+# so the demo classifies, proposes, aligns and plans with no provider key, no network and no cost.
+# Replace this register with the one in docs/workspace.md when you move past the demo.
+schema: 1
+models:
+  - id: mock
+    provider: kanso
+    protocol: mock
+    script: mock/responses.yaml   # scripted answers per task class, rendered beside this file
+    tier: [cheap, mid, frontier]
+    local: true
+    ctx: 100000
+    cost_in: 0
+    cost_out: 0
+    tools: true
+routing:                          # task_class → {tier, effort, max_output}; every tier resolves to the mock
+  classify:     {tier: frontier, effort: high,   max_output: 1024}
+  certify_plan: {tier: frontier, effort: high,   max_output: 4096}
+  propose:      {tier: mid,      effort: medium, max_output: 4096}
+  align_check:  {tier: cheap,    effort: none,   max_output: 256}

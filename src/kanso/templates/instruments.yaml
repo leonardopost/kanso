@@ -1,0 +1,15 @@
+# instruments.yaml — resolved-instrument cache, provenance and overrides (docs/workspace.md).
+# Written by `kanso data instruments resolve`; the registry of record is the catalog's instrument store.
+# You edit only `override`, `attributes`, `corporate_actions` and `manual` — everything else is rewritten on the next resolve.
+# Empty until you resolve a universe (`kanso init --demo` adds the synthetic DEMO as a manual entry).
+#
+# <ID>:
+#   nautilus_id: <SYMBOL>.<VENUE>   # the venue is the listing venue and is the same in backtest, paper and live; a broker is never a venue
+#   asset_class: <Nautilus asset class>
+#   resolved: {adapter: <id>, as_of: <date>, at: <timestamp>, checksum: <sha256>}   # written by resolve
+#   override: {}                    # optional: fields to correct after resolution, before the instrument is constructed
+#   manual: true                    # suppresses resolution; then you must supply the full field set for the asset class
+#   corporate_actions: adjust_all   # adjust_all | none
+#   attributes: {}                  # optional, free-form asset-specific facts strategies/gates may read
+#   sources: {}                     # <vendor or broker id>: <its symbol>, written by the adapter that resolved it
+{}

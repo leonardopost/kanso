@@ -1,0 +1,28 @@
+# hypothesis.yaml — the unit of research (docs/concepts.md). Pinned by the sha256 of its bytes (`hypothesis_sha`) by `kanso hyp add` / `kanso classify`; committing it is yours to do.
+# Status, data snapshot and run pins live in state.db, never here. Blank fields must be set before `kanso hyp validate` passes.
+schema: 1
+id: "{{hyp_id}}"
+title: ""
+thesis: ""                         # ≤2 sentences, falsifiable
+mechanism:                         # mean_reversion|momentum|microstructure|stat_arb|event|carry|vol|other
+universe: []                       # ids from instruments.yaml; venues derive from their nautilus_id
+horizon:                           # holding period: <n>(s|m|h|d|w)
+resolution:                        # bar duration <n>(s|m|h|d|w), or tick|quote|trade
+data_requirements: [bar]           # bar|quote|trade|<any registered custom type id>
+# costs:                           # optional. Costs are inherited from the venue, which the configured broker defines
+#   commission_bps: 0.5            # (kanso.toml research.broker, portfolio.yaml venues.<MIC>). Set any subset here only to
+#   slippage_bps: 1.0              # override them for this hypothesis — the way to test an idea against costs worse than
+#   spread: fixed_bps              # your broker's. quotes | fixed_bps
+#   fixed_bps: 2
+# capital: 100000                  # backtest starting balance; default kanso.toml research.capital
+risk_limits:                       # *_pct are percentages of capital
+  max_position_pct: 20
+  max_drawdown_pct: 15
+  max_leverage: 1
+windows:                           # dates YYYY-MM-DD; certification.start ≥ research.end + max(5×horizon, 1d)
+  research:      {start: , end: }
+  certification: {start: , end: }
+  forward:       {start: }         # no end; paper/live replay starts here
+construct:                         # (set by kanso classify) {id: sleeve|alpha|filter|overlay|exit|execution|allocation|<extension>, host?, params?, rationale}
+objective:                         # (set by kanso classify) {id, params: {min_delta, k_se}}
+constraints:                       # (set by kanso classify) card-stage gates [{id, params}]; cert/paper/live gates are planned at certification

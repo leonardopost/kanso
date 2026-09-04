@@ -1,0 +1,49 @@
+name: ci
+
+# Every milestone is gated on this workflow, so it lands in the first commit.
+# It runs the offline suite only: no credential is available to it and none is added,
+# which is what proves the core works with every vendor credential unset.
+
+on:
+  push:
+    branches: ["main", "feat/**", "fix/**", "docs/**", "chore/**"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS 26+ arm64 and Linux x86_64 are the supported hosts; the pinned engine
+        # publishes no wheel for an older macOS.
+        os: [macos-26, ubuntu-24.04]
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync
+        run: uv sync --locked --python ${{ matrix.python }}
+
+      - name: Format
+        run: uv run ruff format --check
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Types
+        run: uv run mypy src
+
+      - name: Tests
+        run: uv run pytest --cov-fail-under=85

@@ -1,0 +1,19 @@
+# hypotheses/demo_mr/hypothesis.yaml — rendered by `kanso init --demo`
+schema: 1
+id: demo_mr
+title: "Demo: intraday mean reversion on a synthetic OU series"
+thesis: "Prices of DEMO revert to a rolling mean within the hour; fading 2-sigma deviations earns more than the modelled spread and slippage."
+mechanism: mean_reversion
+universe: [DEMO]
+horizon: 30m
+resolution: 1m
+data_requirements: [bar]
+costs: {commission_bps: 0.5, slippage_bps: 1.0, spread: fixed_bps, fixed_bps: 2}   # the demo overrides: its synthetic venue has no broker
+risk_limits: {max_position_pct: 20, max_drawdown_pct: 15, max_leverage: 1}
+windows:
+  research:      {start: 2024-01-02, end: 2024-12-31}
+  certification: {start: 2025-01-06, end: 2025-05-30}
+  forward:       {start: 2025-06-02}
+construct:
+objective:
+constraints:

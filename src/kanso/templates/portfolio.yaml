@@ -1,0 +1,29 @@
+# portfolio.yaml — stages and limits (docs/workspace.md). Stages render Nautilus node configs via `kanso portfolio deploy --stage <name>`.
+# At most one version per strategy per stage; a new version replaces the old one and inherits its capital.
+schema: 1
+stages:
+  paper:
+    exec: sandbox                  # sandbox (simulated fills) | a broker paper id. `kanso data adapters` lists what is configured.
+    data: replay                   # replay (catalog from forward.start) | a live data adapter id. A broker exec id requires a live feed and speed 1.
+    speed: 1                       # replay speed; 0 = as fast as possible (tests)
+    capital: 100000                # stage capital; limits.*_pct are percentages of this
+    kill_switch: false             # true = cancel, flatten, halt; set by the operator or by daily_loss_kill; reset by hand
+    strategies: []                 # [{id, version, capital, joined_at}] — appended automatically on certification
+  live:
+    exec: sandbox                  # only a real-capital exec id may be set here, and only `kanso promote --live --as NAME` moves a version onto it
+    data: replay
+    speed: 1
+    capital: 0                     # set before the first `kanso promote --live`
+    kill_switch: false
+    strategies: []                 # only `kanso promote <strategy> --live --as NAME` adds here
+limits:
+  max_gross_pct: 100               # gross and net are computed per stage on each monitor pass; a breach halts the stage
+  max_net_pct: 100
+  per_strategy_max_pct: 40         # enforced where size is chosen, with the engine's per-order cap as a backstop
+  daily_loss_pct: 3
+
+# venues:                          # optional. Account type, currency and costs are inherited from the broker behind the
+#   XNAS:                          # stage's exec client (and from kanso.toml research.broker for research). Override per venue.
+#     account: margin              # margin | cash
+#     currency: USD
+#     costs: {commission_bps: 0, slippage_bps: 1.0, spread: quotes}
