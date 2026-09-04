@@ -30,8 +30,12 @@ from kanso.cli import doctor as diagnosis
 from kanso.cli import hyp as hyp_commands
 from kanso.cli import inbox as inbox_commands
 from kanso.cli import models as models_commands
+from kanso.cli import monitor as monitor_commands
+from kanso.cli import portfolio as portfolio_commands
+from kanso.cli import replay as replay_commands
 from kanso.cli import research as research_commands
 from kanso.cli import status as status_commands
+from kanso.cli import strat as strat_commands
 from kanso.cli.context import STATE_DB, global_json, open_workspace, workspace_option
 from kanso.cli.render import Report, emit, field, indent
 from kanso.env import envelope as envelope_module
@@ -66,11 +70,17 @@ app.add_typer(models_commands.app, name="models")
 app.add_typer(align_commands.app, name="align")
 app.add_typer(cert_commands.app, name="cert")
 app.add_typer(inbox_commands.app, name="inbox")
+app.add_typer(strat_commands.app, name="strat")
+app.add_typer(portfolio_commands.app, name="portfolio")
+app.add_typer(replay_commands.app, name="replay")
+app.add_typer(monitor_commands.app, name="monitor")
 
-# Two commands are registered rather than declared here: their bodies live beside the
+# Four commands are registered rather than declared here: their bodies live beside the
 # other command modules, and the application is where the command line is assembled.
 app.command("classify")(classify_commands.classify_command)
 app.command("status")(status_commands.status_command)
+app.command("promote")(portfolio_commands.promote_command)
+app.command("demote")(portfolio_commands.demote_command)
 
 
 @app.callback(invoke_without_command=True)

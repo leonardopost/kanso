@@ -37,7 +37,10 @@ composed with — never the capital, the risk limits or anything else the hypoth
 
 The verdict drives the lifecycle and nothing else does: a pass certifies the hypothesis, a
 fail returns it to research with its failing gates recorded where the proposer reads them,
-and the configured number of consecutive failures ends it and escalates.
+and the configured number of consecutive failures ends it and escalates. A pass also
+composes the version the certificate implies and offers it to the paper stage, because both
+acts follow from the certificate with no decision left in them; a stage that cannot take it
+escalates and the verdict still stands.
 
 Engine facts this module relies on (nautilus_trader 1.231.0): a backtest is built and run
 in this process by `kanso.nautilus.backtest`, whose window refusal is what keeps a
@@ -71,6 +74,8 @@ from kanso.hyp import HYPOTHESIS_FILE, Registration, set_status
 from kanso.hyp import show as registration_of
 from kanso.inbox import escalate
 from kanso.nautilus import backtest
+from kanso.replay.parity import Parity
+from kanso.replay.parity import parity as replay_parity
 from kanso.research import records
 from kanso.research.lanes import DEFAULT_LANE
 from kanso.schemas import (
@@ -126,6 +131,9 @@ CERT_FAILED: Final = "cert_failed"
 UNIMPLEMENTED: Final = (
     "the toolbox declares this gate but nothing implements it yet, so it judged nothing"
 )
+
+PARITY: Final = "parity_replay"
+"""The one cert gate whose evidence is a replay rather than a run of the window."""
 
 _HEX: Final = frozenset("0123456789abcdef")
 
@@ -599,6 +607,41 @@ def _instrument_of(point: object) -> str:
     return "" if instrument_id is None else str(instrument_id)
 
 
+# --- the two code paths -------------------------------------------------------
+
+
+def _parity(
+    ws: Workspace, store: StateStore, plan: CertificationPlan, subject: Subject
+) -> Parity | None:
+    """Replay the subject on both code paths over the certification window, if asked to.
+
+    The parity gate compares what the live path and the research path decided, and nothing
+    but a replay can produce that: it is run here, once, only when the plan names the gate,
+    and over the window the plan judges rather than the forward one a bare replay defaults
+    to.
+
+    A replay that cannot be set up at all — a host that was never composed, a window the
+    catalog cannot serve — leaves the gate without its evidence rather than ending the
+    certification. The gate then skips and says so, which is the same honesty every other
+    gate without its context observes, and the certificate records that nothing compared
+    the paths instead of claiming that they agreed.
+    """
+    if not any(gate.id == PARITY for gate in plan.stage_gates(CERT_STAGE)):
+        return None
+    opens, closes = subject.certification
+    try:
+        return replay_parity(
+            ws,
+            store,
+            hyp=subject.hyp.id,
+            sha=subject.strategy_sha,
+            start=opens,
+            end=closes,
+        )
+    except KansoError:
+        return None
+
+
 # --- judging ------------------------------------------------------------------
 
 
@@ -625,6 +668,7 @@ def _judge(
             ObjectiveResult(id=objective.id, value=0.0, se=0.0),
         )
     measured = _measure(subject)
+    compared = _parity(ws, store, plan, subject)
     value, se = objective.compute(
         measured.certification, subject.folds, measured.host_certification
     )
@@ -668,6 +712,7 @@ def _judge(
             daily_volume=volume,
             tunable=parameters,
             rerun=rerun,
+            session=compared,
         )
         evaluated.append(_evaluated(gate, found.evaluate(context)))
     return evaluated, ObjectiveResult(id=objective.id, value=value, se=se)
@@ -738,6 +783,11 @@ def _apply(ws: Workspace, store: StateStore, made: Certificate) -> None:
     if made.verdict == "pass":
         _set_failures(store, hyp_id, 0)
         set_status(store, hyp_id, CERTIFIED)
+        # Composition reads certificates; this is the one call back the other way, so the
+        # import is deferred and the cycle exists only while a verdict is being applied.
+        from kanso.portfolio.lifecycle import on_certified
+
+        on_certified(ws, store, made)
         return
     failures = _set_failures(store, hyp_id, _failures(store, hyp_id) + 1)
     if failures < ws.config.certify.n_fail:

@@ -63,6 +63,11 @@ def _every_command(runner: CliRunner, root: Path) -> None:
     assert at(runner, root, "hyp", "show").exit_code == Exit.OK
     assert at(runner, root, "research", "status").exit_code == Exit.OK
     assert at(runner, root, "status").exit_code == Exit.OK
+    assert at(runner, root, "inbox").exit_code == Exit.OK
+    assert at(runner, root, "strat", "show").exit_code == Exit.OK
+    assert at(runner, root, "portfolio", "show").exit_code == Exit.OK
+    assert at(runner, root, "replay", "show").exit_code == Exit.OK
+    assert at(runner, root, "monitor", "run").exit_code == Exit.OK
     assert run(runner, "--version").exit_code == Exit.OK
 
 

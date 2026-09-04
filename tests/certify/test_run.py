@@ -27,11 +27,14 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso.certify import certificate, run
 from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
+from kanso.criteria import library
+from kanso.criteria.gates.parity_replay import NO_PARITY
 from kanso.data import snapshot as snapshots
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import set_status
 from kanso.inbox import inbox_file, unread
+from kanso.replay.record import list_sessions as sessions
 from kanso.research import driver, records
 from kanso.schemas import (
     Card,
@@ -72,8 +75,14 @@ CERT_GATES: list[dict[str, Any]] = [
         "params": {"tolerance_s": 0.0},
         "rationale": "availability is the load-bearing invariant",
     },
+    {
+        "id": "parity_replay",
+        "stage": "cert",
+        "params": {"ts_ns": 0},
+        "rationale": "required; the deployed code path must be the researched one",
+    },
 ]
-"""The two cert gates every plan must carry, since both are structural invariants."""
+"""The three cert gates every plan must carry, since all three are structural invariants."""
 
 TAIL_GATES: list[dict[str, Any]] = [
     {
@@ -702,6 +711,47 @@ def test_a_gate_with_no_implementation_is_skipped_rather_than_failed(
     (lag,) = [gate for gate in made.gates if gate.id == "publication_lag"]
     assert lag.skipped == run.UNIMPLEMENTED
     assert lag.passed, "a gate that judged nothing does not fail a certificate"
+    assert made.verdict == "pass"
+
+
+def test_a_plan_that_does_not_name_the_parity_gate_replays_nothing(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two replays are what the gate costs, and a plan that did not ask does not pay it.
+
+    The gate is a structural invariant, so the only plan that omits it is one written while
+    this version could not run it. That is what is withheld here.
+    """
+    offered = {name: item for name, item in library.plannable().items() if name != "parity_replay"}
+    monkeypatch.setattr(library, "plannable", lambda: offered)
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=[gate for gate in CERT_GATES if gate["id"] != "parity_replay"])
+
+    made = certify(ws, store, HYP_ID)
+
+    assert [gate.id for gate in made.gates] == ["embargoed_window", "publication_lag"]
+    assert sessions(ws) == [], "nothing replayed, so no session was written"
+
+
+def test_a_replay_that_cannot_be_set_up_leaves_the_gate_without_its_evidence(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A certificate says nothing compared the paths rather than that they agreed."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+
+    def refusing(*_: Any, **__: Any) -> Any:
+        raise PreconditionError("the catalog serves nothing for this universe")
+
+    monkeypatch.setattr(run, "replay_parity", refusing)
+
+    made = certify(ws, store, HYP_ID)
+
+    (parity,) = [gate for gate in made.gates if gate.id == "parity_replay"]
+    assert parity.skipped == NO_PARITY
+    assert parity.passed, "a gate that judged nothing does not fail a certificate"
     assert made.verdict == "pass"
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -429,6 +430,102 @@ DRAFT: dict[str, Any] = {
     if key not in ("construct", "objective", "constraints")
 }
 """The same idea with nothing decided about it: what `kanso classify` is given."""
+
+
+E2E_WINDOWS: dict[str, Any] = {
+    "research": {"start": str(RESEARCH[0]), "end": str(RESEARCH[1])},
+    "certification": {"start": "2024-05-01", "end": "2024-05-31"},
+    "forward": {"start": "2024-06-03"},
+}
+"""The windows the deployment slice's fixtures use.
+
+A month of certification and four weeks of paper, so that what the paper stage realises is
+measured with roughly the precision the band it is judged against was measured with. The
+hypothesis's own certification window is two months, which is the right shape for the
+certification tests and the wrong one here: a band that tight is one a four-week paper
+window falls outside of on ordinary sampling noise, and a fixture that promotes only on a
+lucky draw proves nothing about promotion.
+"""
+
+
+def certify_sleeve(root: Path, cards: int = 6) -> None:
+    """Take the demo sleeve from an unclassified draft to a certificate, through the CLI.
+
+    Every step is the command an operator would type, because what the deployment slice is
+    built on has to be what the earlier commands actually leave behind. The run is ended
+    before the certification, so the workspace this leaves is one nothing is running in and
+    a later `hyp add` is free to re-pin. A passing verdict composes the version and offers
+    it to the paper stage on its own, so this returns with something already deployed.
+    """
+    runner = CliRunner()
+    path = write_hypothesis(root, mocked.SEED, base=DRAFT, windows=E2E_WINDOWS)
+    assert at(runner, root, "hyp", "add", path).exit_code == 0
+    mocked.scripted(root, classify=[mocked.CLASSIFICATION])
+    assert at(runner, root, "classify", HYP_ID).exit_code == 0
+    assert at(runner, root, "research", "run", HYP_ID, "--cards", cards).exit_code == 0
+    assert at(runner, root, "research", "end", HYP_ID).exit_code == 0
+    verdict = payload(at(runner, root, "cert", "run", HYP_ID, "--json"))
+    assert verdict["verdict"] == "pass", verdict
+
+
+@pytest.fixture(scope="session")
+def _certified(tmp_path_factory: pytest.TempPathFactory, _prepared: Path) -> Path:
+    """A workspace whose sleeve is certified, composed and on the paper stage.
+
+    Built once: research, certification and the deployment that follows are the slow part,
+    and every test of what comes after them needs exactly this.
+    """
+    root = tmp_path_factory.mktemp("certified") / "ws"
+    shutil.copytree(_prepared, root, symlinks=True)
+    certify_sleeve(root)
+    return root
+
+
+@pytest.fixture
+def deployed(_certified: Path, tmp_path: Path) -> Path:
+    """A fresh copy of that workspace, so one test's deployment never reaches another's."""
+    root = tmp_path / "ws"
+    shutil.copytree(_certified, root, symlinks=True)
+    return root
+
+
+def portfolio_document(root: Path) -> dict[str, Any]:
+    """`portfolio.yaml` as it stands."""
+    parsed = yaml.safe_load((root / "portfolio.yaml").read_text(encoding="utf-8"))
+    assert isinstance(parsed, dict)
+    return parsed
+
+
+def reconfigure(root: Path, stage: str, **changes: Any) -> dict[str, Any]:
+    """Rewrite one stage of `portfolio.yaml`, as an operator editing it would."""
+    document = portfolio_document(root)
+    document["stages"][stage].update(changes)
+    (root / "portfolio.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
+    return document
+
+
+def a_client(root: Path, name: str, *, capital: str, clock: str) -> str:
+    """A workspace extension declaring one execution client, as a broker package would."""
+    directory = root / "kanso_ext"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.py").write_text(
+        "from kanso.schemas import ExecutionClientSpec\n\n"
+        f'EXEC_CLIENTS = [ExecutionClientSpec(id="{name}", capital="{capital}", '
+        f'clock="{clock}")]\n',
+        encoding="utf-8",
+    )
+    return name
+
+
+@pytest.fixture
+def _leave_the_interpreter_as_found() -> Iterator[None]:
+    """An extension is imported by name, so a test's own must not outlive it."""
+    modules = set(sys.modules)
+    path = list(sys.path)
+    yield
+    for name in set(sys.modules) - modules:
+        del sys.modules[name]
+    sys.path[:] = path
 
 
 @pytest.fixture

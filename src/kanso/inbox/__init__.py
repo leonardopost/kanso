@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 from kanso.errors import ValidationError
+from kanso.inbox import webhook
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from collections.abc import Mapping
@@ -58,6 +59,7 @@ __all__ = [
     "escalate",
     "inbox_file",
     "unread",
+    "webhook",
 ]
 
 SEPARATOR: Final = " · "
@@ -202,6 +204,7 @@ def escalate(
     )
     _append(ws, entry)
     store.event(ESCALATED, entry.subject, {"id": entry.escalation_id, "kind": kind})
+    webhook.post(ws, store, entry.subject, entry.payload())
     return entry
 
 

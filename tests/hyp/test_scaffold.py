@@ -34,10 +34,14 @@ def test_scaffold_renders_the_id_into_every_file(ws: Workspace) -> None:
 
 
 def test_scaffold_dates_the_programs_example_tag(ws: Workspace) -> None:
+    before = datetime.now(tz=UTC).date()
     directory = hyp.scaffold(ws, "new_idea")
+    after = datetime.now(tz=UTC).date()
 
     program = (directory / "program.md").read_text(encoding="utf-8")
-    assert f"{datetime.now(tz=UTC).date():%Y%m%d}-1" in program
+    # Either day the call spanned: a scaffold written across UTC midnight is dated
+    # correctly, just not with the day this assertion would have computed for itself.
+    assert any(f"{day:%Y%m%d}-1" in program for day in {before, after})
 
 
 def test_the_scaffolded_strategy_is_the_sleeve_stub(ws: Workspace) -> None:

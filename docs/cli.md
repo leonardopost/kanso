@@ -104,6 +104,97 @@ A run that stalls with a keep nothing has certified certifies it there and then,
 autonomous loop reaches a certificate without an operator. Either verdict returns the
 hypothesis to the queue at priority −1; only `failed` and `retired` leave it.
 
+**A plan that names `parity_replay` makes `cert run` replay.** That gate is the comparison
+of the two code paths over the certification window, so the runner replays the subject on
+the node path and on the engine path and hands the gate what the comparison found; the two
+sessions it wrote stay in `sessions/` to be read. A replay that cannot be set up at all
+leaves the gate without its evidence, and the certificate records that nothing compared the
+paths rather than claiming that they agreed.
+
+**A passing verdict composes and deploys by itself.** The construct's version is made and
+the paper stage is offered it, because both acts follow from the certificate with no
+decision left in them and a loop that runs indefinitely cannot stop at every certificate to
+ask for a command with only one possible form. A stage that cannot take the version — it is
+halted, the engine has moved, the catalog has no forward data, the limits leave no capital —
+escalates `deploy_blocked` and the certificate still stands. What is never automatic is the
+next step: paper to live needs `promote --live --as NAME`.
+
+## Strategies
+
+A strategy is composed, never written. A passing certificate composes the version it
+implies and offers it to the paper stage on its own, so these commands are the hand-driven
+form of an automatic act; running `strat compose` on a subject already composed returns the
+version that exists rather than a second copy of it.
+
+`STRATEGY[@V]` is the notation every command below shares: a strategy id, optionally a
+version. Leaving the version out means the one the command's own rule picks — the latest
+for a read, the version on the stage for a move.
+
+| command | what it does |
+|---|---|
+| `kanso strat compose ID` | turn this hypothesis's newest passing certificate into a version: a new strategy at version 1 for a sleeve, the host's version n+1 for a construct attached to one. Writes `strategies/<id>/strategy.yaml` and generates `strategies/<id>/impl/<version>/` — a verbatim copy of every certified source plus a manifest naming the classes — which is the one directory a backtest, a replay and a live node all load. Runs that implementation over the sleeve's certification window to measure the version's `expectation`: the objective, a ninety-percent interval and the ninety-fifth-percentile drawdown |
+| `kanso strat show [STRATEGY[@V]]` | with no argument, every composed strategy and the state of each version; with a strategy, its versions and their bands; with a version, what it is made of, what is expected of it and what it was certified under |
+| `kanso strat retire STRATEGY[@V]` | end a version: take it off whatever stages hold it and mark it retired, then restart the stages whose kill switch is off. A stage a kill switch has halted is named and left halted |
+
+## Portfolio
+
+| command | what it does |
+|---|---|
+| `kanso portfolio show` | both stages: how each is configured, whether its node has consumed everything the catalog holds, what each deployed version holds and what it has realised over the windows its stage has closed. Writes nothing |
+| `kanso portfolio deploy --stage paper\|live` | admit what composition produced, apply the capital rule, validate what the stage's execution client declares, render the node configuration and (re)start the node. A node flattens before every stop, so a stage always restarts flat and each redeploy realises its window into the record the paper and live gates read |
+| `kanso promote STRATEGY[@V] --live --as NAME` | move a `promotable` version onto the live stage under a named operator's recorded approval, retiring whatever was live, then redeploy both stages |
+| `kanso demote STRATEGY[@V]` | take a live version off the live stage — back to paper, or retired when a newer version is already there — then redeploy the stages that are not halted |
+
+**`deploy` refuses four things with exit 2** and one with exit 4. A stage whose
+`kill_switch` is on, because the switch is the operator's and a deployment that cleared it
+by starting a node would make it advisory. A version whose `pins.nautilus_version` differs
+from the installed engine, because running it under another engine is running something
+that was never measured — the way out is a plain `cert run` on the same commit. A stage
+whose catalog holds nothing at or after the forward window's start, because that stage has
+nothing to trade and nothing to be judged on. And a wall-clock execution client paired with
+replay data or with any speed but one, because a broker matches against current prices.
+The exit-4 refusal is a version on a `capital: real` client with no approval on record.
+
+**`promote` is the only command in kanso that can put money at risk, and the only one that
+requires a person.** `--as NAME` is the whole of the approval: there is no environment
+fallback and no default, the approval is recorded against that exact version before
+anything moves, and without `--as` the command exits 4 having changed nothing. Editing
+`portfolio.yaml` by hand can therefore never move real money — the file says what is
+deployed and the record says what was allowed. Agents pass `--as` only on an explicit
+operator instruction; acknowledging an inbox entry is not one.
+
+## Replay
+
+| command | what it does |
+|---|---|
+| `kanso replay run (--strategy STRATEGY[@V] \| --hyp ID [--sha S]) [--from D] [--to D] [--speed N] [--mode node\|engine]` | replay one target over the catalog and write `sessions/<id>/`: the record, the points released and the order intents that came back. `node` is the live code path — a trading node, kanso's replay data client, a simulated execution client — and `engine` is the research one. The range defaults to the target's forward window through the last day the catalog serves |
+| `kanso replay parity (…)` | replay on both code paths over the same days and compare the order intents element by element — instant, instrument, side, quantity, order type and, for an order that names one, price — reporting the first divergence with its index and its field, or that the two agreed. `--ts-ns` is the instant tolerance in nanoseconds, and it exists to be set to zero |
+| `kanso replay show [SESSION]` | one session, or every session this workspace holds |
+
+**Replay always executes against the simulated client**, whatever a stage is configured
+with: a replay feeds history and a broker fills against current prices, so the pairing
+would fill orders at prices unrelated to the data that triggered them. Replay is evaluation
+only — it writes no card, moves no `best` and certifies nothing — and the window it runs is
+the one nothing may backtest.
+
+## Monitoring
+
+| command | what it does |
+|---|---|
+| `kanso monitor run` | one pass of the watch every deployed version lives under. The daemon runs it on `[monitor] interval`; this runs it once |
+
+A pass judges each deployed version against the paper or live gates of its **sleeve
+hypothesis's** plan, with the bands from the version's own `expectation`, and acts on the
+verdicts: a paper version whose gates all pass becomes `promotable` and reaches the inbox;
+a live version that fails one is demoted; a live version that fails the daily loss halts its
+stage instead, since halting is the stronger act and demoting into a halted stage would
+change nothing about the money. The pass also sums gross and net exposure per stage — the
+two limits only a whole-stage view can see — and halts a stage on a breach.
+
+Every action is taken once, on the transition, so the command is safe on a timer and safe
+to run twice. It exits 0 whatever the verdicts are: a failing gate is a fact about a
+deployment, not a failure of the pass that found it.
+
 ## Models
 
 | command | what it does |

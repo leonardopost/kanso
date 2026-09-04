@@ -129,6 +129,12 @@ PLAN: dict[str, Any] = {
             "rationale": "required; the saw-tooth is published a second after each close",
         },
         {
+            "id": "parity_replay",
+            "stage": "cert",
+            "params": {"ts_ns": 0},
+            "rationale": "required; the deployed code path must be the researched one",
+        },
+        {
             "id": "paper_forward",
             "stage": "paper",
             "params": {"min_duration": "5d", "horizon_mult": 20.0},

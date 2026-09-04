@@ -14,6 +14,7 @@ certify_plan:
   - gates:
       - {id: embargoed_window, stage: cert, params: {min_fraction: 0.5}, rationale: "required; the only out-of-sample evidence"}
       - {id: publication_lag, stage: cert, params: {tolerance_s: 0}, rationale: "required; the synthetic series is realtime, so any lag at all is a surprise"}
+      - {id: parity_replay, stage: cert, params: {ts_ns: 0}, rationale: "required; the live code path and the research one must submit the same orders"}
       - {id: cost_stress, stage: cert, params: {mult_a: 2, mult_b: 3}, rationale: "30m horizon: edge is cost-sensitive"}
       - {id: bootstrap, stage: cert, params: {n: 1000}, rationale: "drawdown band and objective CI for paper/live gates"}
       - {id: paper_forward, stage: paper, params: {min_duration: 5d, horizon_mult: 20}, rationale: "≥1 paper gate required"}

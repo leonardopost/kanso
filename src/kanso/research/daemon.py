@@ -24,8 +24,9 @@ they were left — which is why stopping the daemon is a cheap act an operator c
 without thinking about what it costs.
 
 On macOS the supervisor runs under `caffeinate -i`, so a research host does not idle-sleep
-mid-run. The monitor loop is started here and has nothing to check until deployment
-exists; it keeps its cadence so that the process it will need is already in place.
+mid-run. The monitor is a fourth kind of child beside the lanes: one pass of the paper and
+live gates per `[monitor] interval`, in a process of its own for the same reason a lane is
+in one.
 """
 
 from __future__ import annotations
@@ -128,6 +129,9 @@ MONITOR: Final = "monitor"
 
 LANE_FAILED: Final = "lane_failed"
 """The event a worker appends when a hypothesis it took could not be researched."""
+
+MONITOR_FAILED: Final = "monitor_failed"
+"""The event a monitoring pass that could not run at all leaves; the loop keeps its cadence."""
 
 _STOPPING = False
 """Set by the signal handler; every loop in this process reads it between iterations."""
@@ -363,14 +367,25 @@ def worker(ws: Workspace, lane: str) -> int:
 def monitor(ws: Workspace) -> int:
     """The monitoring pass, on `[monitor] interval`.
 
-    The loop keeps its cadence and does nothing: there is no deployed version to watch
-    until a strategy is composed and deployed, and the pass that will watch one belongs
-    with the stage gates rather than here.
+    One pass per interval, over its own store, for the same reason a lane has one: a
+    SQLite connection belongs to the process that opened it. A pass that raises is
+    recorded and the cadence is kept, because the loop that watches the money is the last
+    thing that should stop when one version of it cannot be judged.
+
+    A workspace with nothing deployed is the ordinary case here: the pass finds no version
+    and the loop simply keeps its cadence until deployment gives it one.
     """
+    from kanso.monitor import run_once
+
     interval = parse_duration(ws.config.monitor.interval, "monitor.interval").total_seconds()
     _listen()
-    while not stopping():
-        _wait(interval)
+    with StateStore(ws.path("state.db")) as store:
+        while not stopping():
+            try:
+                run_once(ws, store)
+            except KansoError as exc:
+                store.event(MONITOR_FAILED, MONITOR, {"error": exc.message})
+            _wait(interval)
     return 0
 
 

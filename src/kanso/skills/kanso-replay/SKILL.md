@@ -11,7 +11,7 @@ metadata:
 ## Steps
 1. Pick the target: `--strategy <id>[@<version>]` (deployed/composed impl) or `--hyp <id> [--sha <s>]` (defaults to `best`; `<s>` is any unique prefix of a card's `strategy_sha`). Pick the range: `--from <date> --to <date>`; omit for `forward.start` → last data in the catalog. `kanso data show` shows what ranges exist.
 2. Replay: `kanso replay run --strategy <id>@<version> --from <date> --to <date> --speed 0 --json`. Default mode `node` = the live code path (TradingNode + replay data client + sandbox fills); `--mode engine` = the research code path (BacktestNode) on the same data. The feed is the target's universe.
-3. Read the session: `kanso replay show <session>` → fills, PnL, order intents, and the session parameters; `kanso replay show` without an argument lists sessions.
+3. Read the session: `kanso replay show <session>` → what ran, over which range, at what speed and against which execution client, plus how many points were released and how many order intents came back; the stream and the intents themselves are the JSON-lines files in `sessions/<session>/`. `kanso replay show` without an argument lists sessions.
 4. Parity: `kanso replay parity --hyp <id> --from <d> --to <d>` runs node then engine on identical data and prints the first divergence in order intents, or `identical`. This is the same check the `parity_replay` certification gate runs over the certification window.
 
 ## Rules

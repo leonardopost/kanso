@@ -129,6 +129,12 @@ PLAN: dict[str, Any] = {
             "rationale": "required; the synthetic series is realtime, so any lag is a surprise",
         },
         {
+            "id": "parity_replay",
+            "stage": "cert",
+            "params": {"ts_ns": 0},
+            "rationale": "required; the deployed code path must be the researched one",
+        },
+        {
             "id": "book_correlation",
             "stage": "cert",
             "params": {"max_corr": 0.8},
@@ -151,7 +157,7 @@ PLAN: dict[str, Any] = {
         {"id": "bootstrap", "reason": "the two required gates are proof enough for a fixture"}
     ],
 }
-"""Both required cert gates, one gate that can only skip, then one gate per remaining
+"""All three required cert gates, one gate that can only skip, then one gate per remaining
 stage. Fewer gates is fewer engine runs, and what the CLI slice tests is the command
 around the plan rather than the gates inside it; `book_correlation` is here because a
 workspace with nothing deployed is how a skipped gate reaches the rendering."""

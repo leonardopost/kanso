@@ -191,7 +191,41 @@ def test_a_run_that_failed_mid_flight_stays_beside_the_stalled_ones(
     assert records.active(store, hyp_id) is not None
 
 
-def test_the_monitor_keeps_its_cadence_and_checks_nothing_yet(ws: Workspace) -> None:
+def test_the_monitor_runs_a_pass_every_interval(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    passes: list[int] = []
+
+    def counted(*_: Any, **__: Any) -> list[Any]:
+        passes.append(1)
+        daemon.request_stop()
+        return []
+
+    monkeypatch.setattr("kanso.monitor.run_once", counted)
+
+    assert daemon.monitor(ws) == 0
+    assert passes == [1], "the loop is the pass, not a placeholder around one"
+
+
+def test_a_pass_that_cannot_run_is_recorded_and_the_cadence_is_kept(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loop that watches the money is the last thing that should stop."""
+
+    def failing(*_: Any, **__: Any) -> Any:
+        daemon.request_stop()
+        raise PreconditionError("the plan names a stage this build cannot judge")
+
+    monkeypatch.setattr("kanso.monitor.run_once", failing)
+
+    assert daemon.monitor(ws) == 0
+    assert [event.kind for event in store.events(subject="monitor")] == ["monitor_failed"]
+
+
+def test_a_workspace_with_nothing_deployed_is_an_ordinary_pass(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The pass finds no version and the loop simply keeps its cadence."""
     threading.Timer(0.05, daemon.request_stop).start()
 
     assert daemon.monitor(ws) == 0

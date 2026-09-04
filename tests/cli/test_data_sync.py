@@ -189,12 +189,15 @@ def test_an_unknown_dataset_is_a_precondition_failure(runner: CliRunner, files: 
 
 def test_sync_defaults_its_horizon_to_today(runner: CliRunner, files: Path) -> None:
     """No `--to` means now, which for a file that stopped in January serves nothing."""
+    before = datetime.now(tz=UTC).date()
     result = at(runner, files, "data", "sync")
+    after = datetime.now(tz=UTC).date()
 
     assert result.exit_code == Exit.OK
     # UTC, because that is the clock `sync` reads: comparing with a local date fails for
-    # part of every day for anyone east of UTC.
-    assert str(datetime.now(tz=UTC).date()) in result.stdout
+    # part of every day for anyone east of UTC. Either day the call spanned will do — a run
+    # that crosses midnight is not a horizon that was computed wrongly.
+    assert any(str(day) in result.stdout for day in {before, after})
 
 
 def test_sync_reads_as_a_few_lines_for_a_human(runner: CliRunner, files: Path) -> None:

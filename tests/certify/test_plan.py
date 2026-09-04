@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 import yaml
 
+from kanso.certify import plan as plan_module
 from kanso.certify.plan import (
     PLAN_FILE,
     _ranges,
@@ -29,6 +30,7 @@ from kanso.certify.plan import (
     plannable,
     read_plan,
 )
+from kanso.criteria import library as lib
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import add, hypothesis_dir, show
@@ -116,6 +118,12 @@ def answer(**changes: Any) -> dict[str, Any]:
                 "rationale": "availability is the load-bearing invariant",
             },
             {
+                "id": "parity_replay",
+                "stage": "cert",
+                "params": {"ts_ns": 0},
+                "rationale": "the deployed code path must be the researched one",
+            },
+            {
                 "id": "bootstrap",
                 "stage": "cert",
                 "params": {"n": 1000},
@@ -143,6 +151,25 @@ def gates_of(*replacements: dict[str, Any], drop: str = "") -> list[dict[str, An
 def replacing(gate_id: str, **changes: Any) -> list[dict[str, Any]]:
     """The usable plan's gates with one of them altered."""
     return [dict(gate, **changes) if gate["id"] == gate_id else gate for gate in answer()["gates"]]
+
+
+WITHHELD = "parity_replay"
+"""The gate the refusal tests stand down, as if this version had no implementation for it.
+
+Every gate the toolbox declares is implemented, so a test about an unimplemented one has
+to withhold a real one. `parity_replay` is the one that was last in that state, and it is
+withheld from both places that read the toolbox: the validator's own view of what a plan
+may name, and the planner's view of what it may be offered.
+"""
+
+
+@pytest.fixture
+def withheld(monkeypatch: pytest.MonkeyPatch) -> str:
+    """The toolbox with one gate withheld, which is what a pending gate looks like."""
+    offered = {id_: item for id_, item in plannable().items() if id_ != WITHHELD}
+    monkeypatch.setattr(lib, "plannable", lambda: offered)
+    monkeypatch.setattr(plan_module, "plannable", lambda: offered)
+    return WITHHELD
 
 
 def script(ws: Workspace, **answers: list[Any]) -> None:
@@ -258,6 +285,7 @@ def test_a_plan_is_written_pinned_and_recorded(ws: Workspace, store: StateStore)
     assert [gate.id for gate in written.gates] == [
         "embargoed_window",
         "publication_lag",
+        "parity_replay",
         "bootstrap",
         "paper_forward",
         "live_drift",
@@ -426,16 +454,16 @@ def test_the_trial_count_is_the_search_the_plan_will_be_read_against(
 
 
 def test_a_gate_with_no_implementation_is_not_offered_to_the_planner(
-    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch, withheld: str
 ) -> None:
-    script(ws, certify_plan=[answer()])
+    script(ws, certify_plan=[answer(gates=gates_of(drop=withheld))])
     seen = prompts(monkeypatch)
 
     plan(ws, store, HYP_ID)
 
-    assert "parity_replay" not in plannable()
-    assert "parity_replay" not in seen[0].system
-    assert "paper_forward" in plannable()
+    assert withheld not in plan_module.plannable()
+    assert withheld not in seen[0].system
+    assert "paper_forward" in plan_module.plannable()
 
 
 # --- data availability -------------------------------------------------------
@@ -543,19 +571,6 @@ def test_without_a_scripted_answer_the_step_refuses(ws: Workspace, store: StateS
             {
                 "gates": gates_of(
                     {
-                        "id": "parity_replay",
-                        "stage": "cert",
-                        "params": {"ts_ns": 0},
-                        "rationale": "one code path",
-                    }
-                )
-            },
-            "gates.parity_replay: this version of kanso has no implementation for it",
-        ),
-        (
-            {
-                "gates": gates_of(
-                    {
                         "id": "bootstrap",
                         "stage": "cert",
                         "params": {"n": 200},
@@ -568,10 +583,6 @@ def test_without_a_scripted_answer_the_step_refuses(ws: Workspace, store: StateS
         (
             {"excluded": [{"id": "vibes", "reason": "not real"}]},
             "excluded.vibes: is not a gate in the toolbox",
-        ),
-        (
-            {"excluded": [{"id": "parity_replay", "reason": "slow"}]},
-            "excluded.parity_replay: this version of kanso has no implementation",
         ),
         (
             {"excluded": [{"id": "embargoed_window", "reason": "slow"}]},
@@ -598,6 +609,48 @@ def test_an_unusable_plan_is_refused_with_the_reason(
     assert complaint in str(refused.value.remedy)
 
 
+def test_a_plan_naming_a_gate_with_no_implementation_is_refused(
+    ws: Workspace, store: StateStore, withheld: str
+) -> None:
+    """A certificate must never claim a test that could not have run."""
+    named = answer(
+        gates=gates_of(
+            {"id": withheld, "stage": "cert", "params": {"ts_ns": 0}, "rationale": "one code path"},
+            drop=withheld,
+        )
+    )
+    script(ws, certify_plan=[named])
+
+    with pytest.raises(PreconditionError) as refused:
+        plan(ws, store, HYP_ID)
+
+    assert f"gates.{withheld}: this version of kanso has no implementation for it" in str(
+        refused.value.remedy
+    )
+
+
+def test_excluding_a_gate_with_no_implementation_is_refused(
+    ws: Workspace, store: StateStore, withheld: str
+) -> None:
+    """It was never the planner's to exclude: it was never offered."""
+    script(
+        ws,
+        certify_plan=[
+            answer(
+                gates=gates_of(drop=withheld),
+                excluded=[{"id": withheld, "reason": "slow"}],
+            )
+        ],
+    )
+
+    with pytest.raises(PreconditionError) as refused:
+        plan(ws, store, HYP_ID)
+
+    assert f"excluded.{withheld}: this version of kanso has no implementation" in str(
+        refused.value.remedy
+    )
+
+
 def test_every_problem_in_a_plan_is_reported_at_once(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -620,13 +673,13 @@ def test_every_problem_in_a_plan_is_reported_at_once(
 
 
 def test_a_pinned_plan_this_version_cannot_run_is_refused_with_the_way_out(
-    ws: Workspace, store: StateStore
+    ws: Workspace, store: StateStore, withheld: str
 ) -> None:
-    script(ws, certify_plan=[answer()])
+    script(ws, certify_plan=[answer(gates=gates_of(drop=withheld))])
     written = plan(ws, store, HYP_ID)
     document = yaml.safe_load(plan_file(ws, HYP_ID).read_text(encoding="utf-8"))
     document["gates"].append(
-        {"id": "parity_replay", "stage": "cert", "params": {}, "rationale": "hand-written"}
+        {"id": withheld, "stage": "cert", "params": {}, "rationale": "hand-written"}
     )
     plan_file(ws, HYP_ID).write_text(yaml.safe_dump(document), encoding="utf-8")
 
@@ -638,18 +691,21 @@ def test_a_pinned_plan_this_version_cannot_run_is_refused_with_the_way_out(
     assert written.plan_version == 1
 
 
-def test_a_replan_replaces_a_plan_this_version_cannot_run(ws: Workspace, store: StateStore) -> None:
-    script(ws, certify_plan=[answer(), answer()])
+def test_a_replan_replaces_a_plan_this_version_cannot_run(
+    ws: Workspace, store: StateStore, withheld: str
+) -> None:
+    usable = answer(gates=gates_of(drop=withheld))
+    script(ws, certify_plan=[usable, usable])
     plan(ws, store, HYP_ID)
     document = yaml.safe_load(plan_file(ws, HYP_ID).read_text(encoding="utf-8"))
     document["gates"].append(
-        {"id": "parity_replay", "stage": "cert", "params": {}, "rationale": "hand-written"}
+        {"id": withheld, "stage": "cert", "params": {}, "rationale": "hand-written"}
     )
     plan_file(ws, HYP_ID).write_text(yaml.safe_dump(document), encoding="utf-8")
 
     replanned = plan(ws, store, HYP_ID, replan=True)
 
-    assert "parity_replay" not in [gate.id for gate in replanned.gates]
+    assert withheld not in [gate.id for gate in replanned.gates]
     assert replanned.plan_version == 2
 
 

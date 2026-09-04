@@ -5,4 +5,4 @@ required: false
 meaningful_when: "Only on a broker execution client, and only past enough fills; skipped on simulated execution, which realises the modelled cost by construction."
 params: {max_excess_bps: float, min_fills: int}
 ranges: {max_excess_bps: [0, 50], min_fills: [10, 10000]}
-impl: kanso.criteria.gates.fill_quality_drift
+impl: kanso.criteria.gates.fill_quality_drift.gate

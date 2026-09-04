@@ -5,4 +5,4 @@ required: false
 meaningful_when: "Measured from the version's current joined_at, and a redeploy flattens the stage and restarts that clock, so a long minimum duration is expensive to reach."
 params: {min_duration: duration, horizon_mult: float}
 ranges: {min_duration: [1d, 365d], horizon_mult: [1, 1000]}
-impl: kanso.criteria.gates.paper_forward
+impl: kanso.criteria.gates.paper_forward.gate

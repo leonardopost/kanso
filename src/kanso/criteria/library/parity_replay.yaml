@@ -5,4 +5,4 @@ required: true
 meaningful_when: "Backtest and replay must produce identical order intents within a tolerance in nanoseconds; a difference means the deployed code path is not the researched one."
 params: {ts_ns: int}
 ranges: {ts_ns: [0, 1000000000]}
-impl: kanso.criteria.gates.parity_replay
+impl: kanso.criteria.gates.parity_replay.gate

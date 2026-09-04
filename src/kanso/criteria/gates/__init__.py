@@ -18,11 +18,13 @@ the simulated venue.
 
 A gate whose test is more than arithmetic on the run in hand lives in a module of its own
 beside this one, because it needs machinery the rest do not: `param_plateau` re-runs the
-subject once per perturbation and so reads the re-run the certification runner hands it.
+subject once per perturbation and so reads the re-run the certification runner hands it,
+`parity_replay` compares two code paths' order intents, which is a replay's record rather
+than a run's, and the four paper and live gates — `paper_forward`, `live_drift`,
+`daily_loss_kill` and `fill_quality_drift` — read the stage record the monitor assembles,
+because a run says nothing about the deployment that produced it.
 
-Five gates are declared in the library and implemented later, when the machinery they read
-exists: `parity_replay` needs a replay session, and `paper_forward`, `live_drift`,
-`fill_quality_drift` and `daily_loss_kill` need a deployed stage.
+Nothing is declared here and left unimplemented: every gate in the library resolves.
 """
 
 from __future__ import annotations
@@ -507,13 +509,5 @@ book_correlation: Final[Gate] = _BookCorrelation()
 publication_lag: Final[Gate] = _PublicationLag()
 capacity_vs_adv: Final[Gate] = _CapacityVsAdv()
 
-PENDING: Final = frozenset(
-    {
-        "parity_replay",
-        "paper_forward",
-        "live_drift",
-        "fill_quality_drift",
-        "daily_loss_kill",
-    }
-)
-"""Declared in the library; implemented when a replay session or a stage node exists."""
+PENDING: Final[frozenset[str]] = frozenset()
+"""Gates the library declares that this version cannot run. Empty, and a release ships so."""

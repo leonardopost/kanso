@@ -35,12 +35,12 @@ def write_item(directory: Any, name: str, body: str) -> None:
 
 FOLDS = 4
 
-REQUIRED_CERT_GATES = ("embargoed_window", "publication_lag")
-"""Required cert gates this version can actually run.
+REQUIRED_CERT_GATES = ("embargoed_window", "parity_replay", "publication_lag")
+"""The cert gates every plan is held to, all of which this version can run.
 
-`parity_replay` is required too, but has no implementation until replay sessions land, so
-a plan is neither offered it nor held to it. `tests/criteria/test_pending_required.py`
-pins that exemption and is what forces it to end.
+A gate the toolbox declares but this version cannot run is exempt from that, and is
+neither offered to a planner nor required of a plan. No required gate is in that state
+any more; `tests/criteria/test_pending_required.py` is what keeps it that way.
 """
 
 PLAN: dict[str, Any] = {
@@ -67,6 +67,12 @@ PLAN: dict[str, Any] = {
             "stage": "cert",
             "params": {"tolerance_s": 60.0},
             "rationale": "availability",
+        },
+        {
+            "id": "parity_replay",
+            "stage": "cert",
+            "params": {"ts_ns": 0},
+            "rationale": "the deployed path is the researched one",
         },
         {"id": "bootstrap", "stage": "cert", "params": {"n": 1000}, "rationale": "path risk"},
         {

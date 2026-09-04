@@ -10,6 +10,10 @@ document and branches on the exit code without scanning for a prefix.
 An unexpected exception is rendered the same way, as the generic error with exit 1,
 because a caller reading `--json` must never get a traceback where an object was
 promised.
+
+`verdict` lives here rather than beside one command because a gate reads the same way
+wherever it is printed — a certificate, a monitoring pass — and two renderers of one thing
+would eventually disagree about it.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import click
 import typer
 
 from kanso.errors import Exit, KansoError
+from kanso.schemas import EvaluatedGate, GateResult
 
 LABEL = 11
 """Width of the label column of the human two-column layout."""
@@ -58,6 +63,17 @@ def field(label: str, value: object) -> str:
 def indent(text: str, width: int = LABEL) -> str:
     """A continuation line, aligned under the value column."""
     return f"{'':<{width}}{text}"
+
+
+def verdict(gate: GateResult | EvaluatedGate, mark: int, name: int) -> str:
+    """One gate: pass, fail or skip, then the numbers it decided on or why it decided none.
+
+    A skipped gate is printed as a skip and not as a pass, even though a skip passes: what
+    the reader needs to know is that nothing was tested, and "pass" would say the opposite.
+    """
+    verdicts = "skip" if gate.skipped is not None else ("pass" if gate.passed else "fail")
+    evidence = ", ".join(f"{key}={value}" for key, value in sorted(gate.evidence.items()))
+    return f"{verdicts:<{mark}}{gate.id:<{name}}{gate.skipped or evidence or 'no evidence'}"
 
 
 def _render(report: Report, as_json: bool) -> None:

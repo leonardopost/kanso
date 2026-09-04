@@ -79,10 +79,17 @@ def test_a_malformed_as_of_is_a_validation_failure(runner: CliRunner, workspace:
 def test_refresh_resolves_again_rather_than_from_the_cache(
     runner: CliRunner, workspace: Path
 ) -> None:
-    write_instruments(workspace)
-    first = payload(at(runner, workspace, "data", "instruments", "resolve", "--json"))
+    """Both calls name the same date, because the claim is about the cache.
 
-    second = payload(at(runner, workspace, "data", "instruments", "resolve", "--refresh", "--json"))
+    A definition is stamped with the date it was resolved as of, so two unpinned calls
+    either side of UTC midnight legitimately differ — which is a fact about the calendar
+    rather than about the cache this test is here to check.
+    """
+    write_instruments(workspace)
+    resolve = ("data", "instruments", "resolve", "--as-of", str(FIRST), "--json")
+    first = payload(at(runner, workspace, *resolve))
+
+    second = payload(at(runner, workspace, *resolve, "--refresh"))
 
     assert second["refresh"] is True
     assert second["instruments"] == first["instruments"]

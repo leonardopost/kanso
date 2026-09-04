@@ -1238,6 +1238,26 @@ def _check_http_download() -> tuple[bool, str]:
     )
 
 
+def _check_sandbox_fill_knobs() -> tuple[bool, str]:
+    """The sandbox venue's matching is not configurable, and matches on submit.
+
+    The claim holds while the engine keeps the knobs private: it is what makes the
+    replay and backtest paths fill an order larger than one book state differently,
+    and it is checked here so that an engine release exposing them is noticed rather
+    than discovered by a certification that stops failing.
+    """
+    from nautilus_trader.adapters.sandbox.config import SandboxExecutionClientConfig
+
+    fields = set(SandboxExecutionClientConfig.__struct_fields__)
+    private = {"use_message_queue", "fee_model", "fill_model"} - fields
+    holds = private == {"use_message_queue", "fee_model", "fill_model"}
+    return holds, (
+        f"SandboxExecutionClientConfig exposes none of {sorted(private)}, so its exchange "
+        "matches an order in the call that submits it, against one book state, and what does "
+        "not fit there is dropped rather than left working"
+    )
+
+
 _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "the installed engine is the version these facts were verified against",
@@ -1382,6 +1402,10 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "nautilus_pyo3.http_download streams a URL to a file path",
         _check_http_download,
+    ),
+    (
+        "the sandbox execution client's matching knobs are private and it matches on submit",
+        _check_sandbox_fill_knobs,
     ),
 )
 

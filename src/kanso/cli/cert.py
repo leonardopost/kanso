@@ -28,11 +28,11 @@ from kanso.certify.plan import plan_file
 from kanso.certify.run import certify
 from kanso.certify.run import show as newest
 from kanso.cli.context import global_json, open_workspace, store
-from kanso.cli.render import Report, emit, field, indent
+from kanso.cli.render import Report, emit, field, indent, verdict
 from kanso.hyp import Registration
 from kanso.hyp import show as registration_of
 from kanso.research.lanes import DEFAULT_LANE
-from kanso.schemas import Certificate, EvaluatedGate, PlannedGate
+from kanso.schemas import Certificate, PlannedGate
 from kanso.schemas.certification import PLAN_STAGES
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -174,21 +174,7 @@ def _gate_lines(made: Certificate) -> list[str]:
         f"{len(judged)} judged · {passed} pass · {len(judged) - passed} fail · "
         f"{len(made.gates) - len(judged)} skipped",
     )
-    return [tally, *(indent(_evaluated(gate)) for gate in made.gates)]
-
-
-def _evaluated(gate: EvaluatedGate) -> str:
-    """One evaluated gate: pass, fail or skip, and the numbers it decided on."""
-    mark = "skip" if gate.skipped is not None else ("pass" if gate.passed else "fail")
-    return f"{mark:<{MARK}}{gate.id:<{GATE}}{_evidence(gate)}"
-
-
-def _evidence(gate: EvaluatedGate) -> str:
-    """What the gate saw, as one line, or why it saw nothing."""
-    if gate.skipped is not None:
-        return gate.skipped
-    pairs = ", ".join(f"{key}={value}" for key, value in sorted(gate.evidence.items()))
-    return pairs or "no evidence"
+    return [tally, *(indent(verdict(gate, MARK, GATE)) for gate in made.gates)]
 
 
 def _objective(made: Certificate) -> str:
