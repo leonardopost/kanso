@@ -18,6 +18,7 @@ read rather than for the research loop to select on.
 from __future__ import annotations
 
 from datetime import date
+from textwrap import wrap
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
@@ -31,6 +32,7 @@ from kanso.replay import parity as run_parity
 from kanso.replay import run as run_replay
 from kanso.replay import sessions as list_sessions
 from kanso.replay import show as read_session
+from kanso.replay.parity import Parity
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.replay import Session
@@ -198,12 +200,30 @@ def _parity(
     data: dict[str, Any] = found.payload()
     lines = (
         field("parity", "identical" if found.divergence is None else found.divergence.render()),
+        *_cause(found),
         field("node", f"{found.node} · {len(found.node_orders)} intent(s)"),
         field("engine", f"{found.engine} · {len(found.engine_orders)} intent(s)"),
         field("compared", f"{found.compared} · tolerance {found.ts_ns} ns"),
         field("widest", f"{found.max_ts_delta_ns} ns apart"),
     )
     return Report(data=data, lines=lines)
+
+
+CAUSE_WIDTH = 78
+"""How wide the wrapped explanation runs, leaving room for the label column."""
+
+
+def _cause(found: Parity) -> tuple[str, ...]:
+    """The known cause this divergence has the shape of, wrapped under the parity line.
+
+    Nothing at all when the paths agreed, or when the difference is not one this module
+    recognises: a reader looking at a divergence with no explanation should see no
+    explanation rather than a paragraph hedging about one.
+    """
+    cause = None if found.divergence is None else found.divergence.likely_cause
+    if cause is None:
+        return ()
+    return tuple(indent(line) for line in wrap(cause, width=CAUSE_WIDTH))
 
 
 def _show(ws: Workspace, session: str | None) -> Report:

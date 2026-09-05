@@ -203,3 +203,63 @@ def test_a_verdict_can_be_asked_again_at_another_tolerance() -> None:
     assert result.at(200).identical
     assert result.at(200).max_ts_delta_ns == 100
     assert result.compared == 1
+
+
+# --- the one divergence with a known cause ------------------------------------
+
+
+def test_a_lower_node_quantity_names_the_cause_it_usually_has() -> None:
+    """The shape the one known difference between the two venues produces."""
+    divergence, _ = compare([intent(qty=739.0)], [intent(qty=976.0)])
+
+    assert divergence is not None
+    assert divergence.likely_cause is not None
+    assert "filled only in part" in divergence.likely_cause
+
+
+def test_a_higher_node_quantity_names_nothing() -> None:
+    """The known cause leaves the node holding less, never more, so this is not it."""
+    divergence, _ = compare([intent(qty=976.0)], [intent(qty=739.0)])
+
+    assert divergence is not None
+    assert divergence.likely_cause is None
+
+
+def test_a_divergence_in_another_field_names_nothing() -> None:
+    """A side, an instrument or an instant is left unexplained rather than misexplained."""
+    for changes in ({"side": "SELL"}, {"instrument": "OTHER.SIM"}, {"ts_event": 2_000}):
+        divergence, _ = compare([intent()], [intent(**changes)])
+
+        assert divergence is not None, changes
+        assert divergence.likely_cause is None, changes
+
+
+def test_a_missing_intent_names_nothing() -> None:
+    """One path stopping is a divergence with no quantity to compare at all."""
+    divergence, _ = compare([intent()], [])
+
+    assert divergence is not None
+    assert divergence.likely_cause is None
+
+
+def test_the_payload_carries_the_cause_only_when_there_is_one() -> None:
+    """A passing certificate must not record an explanation for a divergence it never had."""
+    agreed = Parity(
+        node="n",
+        engine="e",
+        ts_ns=0,
+        node_orders=(intent(),),
+        engine_orders=(intent(),),
+        max_ts_delta_ns=0,
+    ).at(0)
+    parted = Parity(
+        node="n",
+        engine="e",
+        ts_ns=0,
+        node_orders=(intent(qty=739.0),),
+        engine_orders=(intent(qty=976.0),),
+        max_ts_delta_ns=0,
+    ).at(0)
+
+    assert "likely_cause" not in agreed.payload()
+    assert "filled only in part" in str(parted.payload()["likely_cause"])
