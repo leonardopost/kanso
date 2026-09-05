@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -34,10 +35,10 @@ from typing import TYPE_CHECKING, Any, Final
 import yaml
 
 from kanso import ext
-from kanso.data import catalog
+from kanso.data import catalog, registry
 from kanso.data import instruments as reference
 from kanso.data import snapshot as snapshots
-from kanso.data.loader import DatasetRef, Loader, get_loader, loaders
+from kanso.data.loader import DatasetRef, Loader, loaders
 from kanso.data.manifest import Manifest, data_path, manifests, merge
 from kanso.data.snapshot import Snapshot
 from kanso.errors import PreconditionError, ValidationError
@@ -173,8 +174,29 @@ def read_spec(path: Path) -> dict[str, object]:
 
 
 def loader_for(ws: Workspace, loader_id: str) -> Loader:
-    """The loader `loader_id` names, including one a workspace extension provides."""
-    return get_loader(loader_id, ext.discover(ws.root, ws.config.extensions_paths))
+    """The loader `loader_id` names, from any of the three places one comes from.
+
+    The package's own loaders and an extension's are stateless and shared; a vendor
+    adapter's is opened for this workspace, because that is where its credential, its
+    quota and its cache come from. This is the one place a vendor loader is built, so a
+    command that never names one never resolves a credential.
+    """
+    extensions = ext.discover(ws.root, ws.config.extensions_paths)
+    vendor = registry.adapter_loaders(ws, extensions)
+    factory = vendor.get(loader_id)
+    if factory is not None:
+        return factory()
+    known = loaders(extensions)
+    if loader_id in known:
+        return known[loader_id]
+    raise ValidationError(
+        f"loader: {loader_id!r} is not a known loader; known loaders are "
+        f"{', '.join(sorted({*known, *vendor}))}",
+        remedy=(
+            "check the spec's `loader` key, or run `kanso ext show` to see whether the "
+            "extension providing it imported cleanly"
+        ),
+    )
 
 
 def _declared(spec: Mapping[str, object], loader_id: str, path: Path) -> None:
@@ -824,14 +846,28 @@ def held_instruments(ws: Workspace, instrument_id: str | None = None) -> list[Re
 
 @dataclass(frozen=True, slots=True)
 class Registered:
-    """One registered source of data or reference definitions."""
+    """One registered source of data or reference definitions.
+
+    `origins` says where each declared credential resolves from and never what it holds,
+    which is the whole of what this command may know about a secret. A source needing no
+    credential resolves trivially, so `resolves` is true for every loader the package
+    ships — which is the property that keeps this command answerable in a workspace with
+    no vendor variable set at all.
+    """
 
     id: str
     kind: str
     provider: str
-    credentials: tuple[str, ...]
-    capabilities: tuple[str, ...]
+    credentials: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
     quota: str | None = None
+    loaders: tuple[str, ...] = ()
+    origins: dict[str, str | None] = dataclass_field(default_factory=dict)
+
+    @property
+    def resolves(self) -> bool:
+        """Whether every credential this source declares resolves somewhere."""
+        return all(self.origins.get(name) is not None for name in self.credentials)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -839,8 +875,10 @@ class Registered:
             "kind": self.kind,
             "provider": self.provider,
             "credentials": list(self.credentials),
-            "credentials_resolve": not self.credentials,
+            "credentials_resolve": self.resolves,
+            "credential_origins": {name: self.origins.get(name) for name in self.credentials},
             "capabilities": list(self.capabilities),
+            "loaders": list(self.loaders),
             "quota": self.quota,
         }
 
@@ -848,40 +886,96 @@ class Registered:
 def adapters(ws: Workspace) -> tuple[list[Registered], list[str]]:
     """Everything registered here, and what is missing, without touching the network.
 
-    No vendor adapter ships in this build, so what is registered is the package's own
-    loaders and the manual instrument provider. None of them takes a credential and none
-    of them reaches a network, which is exactly the property that keeps the suite, the
-    demo and `doctor` green with every vendor credential unset.
+    Three kinds of thing are registered: the package's own loaders and an extension's,
+    which take no credential and reach nothing; the manual instrument provider; and the
+    vendor adapters, discovered from the adapter packages rather than named here. A vendor
+    adapter is registered whether or not it is configured — it is enabled by the presence
+    of its credentials, never by installation — so this reports what it would need beside
+    what it declares, and resolves nothing to say so.
     """
+    extensions = ext.discover(ws.root, ws.config.extensions_paths)
+    known = registry.adapters(extensions)
+    packaged = set(registry.packaged())
     found = [
         Registered(
             id=loader_id,
             kind="data",
             provider="builtin" if loader_id in {"synthetic", "csv_parquet"} else "extension",
-            credentials=(),
             capabilities=("discover", "load", "load_arrow", "manifest"),
         )
-        for loader_id in sorted(loaders(ext.discover(ws.root, ws.config.extensions_paths)))
+        for loader_id in sorted(loaders(extensions))
     ]
     found.append(
         Registered(
             id=reference.ManualProvider.id,
             kind="reference",
             provider="builtin",
-            credentials=(),
             capabilities=("resolve", "sources"),
         )
     )
-    notes = ["no vendor adapter is configured: this build ships none"]
-    configured = sorted(ws.config.adapters)
-    if configured:
-        notes.append(f"kanso.toml configures {', '.join(configured)}, which nothing here provides")
-    return found, notes
+    found += [
+        Registered(
+            id=adapter.id,
+            kind=adapter.kind,
+            provider="builtin" if adapter.id in packaged else "extension",
+            credentials=adapter.credentials,
+            capabilities=adapter.capabilities.names(),
+            quota=adapter.quota(ws),
+            loaders=tuple(sorted(adapter.loaders(ws))),
+            origins=adapter.credential_origins(ws),
+        )
+        for _, adapter in sorted(known.items())
+    ]
+    return found, _adapter_notes(ws, known)
 
 
-def checked_adapters() -> list[str]:
-    """What `--check` had to check: nothing, because nothing configured reaches a network."""
-    return ["--check had no configured adapter to reach, and made no network call"]
+def _adapter_notes(ws: Workspace, known: Mapping[str, registry.Adapter]) -> list[str]:
+    """What an operator has to be told about the adapters, beyond the rows themselves.
+
+    An adapter needing several credentials can be half-configured, and that is worth saying
+    rather than rounding to "configured": the path needing the unset name refuses when it
+    is used, which is a long way from where the variable was forgotten.
+    """
+    notes: list[str] = []
+    for adapter_id, adapter in sorted(known.items()):
+        unset = [name for name, origin in adapter.credential_origins(ws).items() if origin is None]
+        if not unset:
+            continue
+        if not adapter.configured(ws):
+            notes.append(
+                f"{adapter_id} is registered and unconfigured: set {', '.join(unset)} to use it"
+            )
+        else:
+            notes.append(
+                f"{adapter_id} is configured, and {', '.join(unset)} is unset: whatever needs "
+                "it refuses when it is used"
+            )
+    unknown = sorted(name for name in ws.config.adapters if name not in known)
+    if unknown:
+        notes.append(f"kanso.toml configures {', '.join(unknown)}, which nothing here provides")
+    return notes
+
+
+def check_adapters(ws: Workspace) -> tuple[list[registry.Survey], list[str]]:
+    """Probe each configured adapter for what its credentials actually reach.
+
+    Only a configured adapter is asked anything: opening one that has no credential would
+    fail on the variable rather than on the plan, and a report of "not entitled" for a key
+    that was never sent is the wrong answer in the most expensive direction. An adapter
+    reports its own reach, at the grain its source gates on, and this makes no request of
+    its own.
+    """
+    known = registry.adapters(ext.discover(ws.root, ws.config.extensions_paths))
+    surveys: list[registry.Survey] = []
+    notes: list[str] = []
+    for adapter_id, adapter in sorted(known.items()):
+        if not adapter.configured(ws):
+            notes.append(f"{adapter_id}: no credential resolves, so no request was made for it")
+            continue
+        surveys.append(adapter.survey(ws))
+    if not surveys:
+        notes.append("--check reached no configured adapter, and made no network call")
+    return surveys, notes
 
 
 def dataset_ids(found: Iterable[Series]) -> Iterator[str]:

@@ -15,6 +15,7 @@ import kanso
 PACKAGE = Path(kanso.__file__).resolve().parent
 MODELS = PACKAGE / "models"
 TEMPLATES = PACKAGE / "templates"
+ADAPTERS = PACKAGE / "data" / "adapters"
 
 FORBIDDEN = (
     "api.anthropic.com",
@@ -61,8 +62,18 @@ def test_httpx_is_imported_by_the_model_layer_and_by_nothing_else() -> None:
 
 
 def test_no_provider_wire_detail_appears_outside_the_model_layer() -> None:
+    """This list is one provider's wire, so a vendor adapter is not what it is about.
+
+    A data vendor's own auth header and endpoints belong in its adapter package and
+    nowhere else, which is a different rule with its own test; scanning an adapter for the
+    model layer's tokens would fail a module for doing exactly what D2 requires of it. The
+    httpx rule above is not relaxed the same way: `httpx` serves the model layer alone, and
+    an adapter reaching for it would be a new dependency on an old name.
+    """
     found: list[str] = []
     for path in modules():
+        if path.is_relative_to(ADAPTERS):
+            continue
         text = path.read_text(encoding="utf-8")
         found += [f"{path.relative_to(PACKAGE)}: {token}" for token in FORBIDDEN if token in text]
     assert found == []

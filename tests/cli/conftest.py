@@ -23,9 +23,11 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from kanso.cli import app
+from kanso.data.adapters.massive import ACCESS_KEY_ID, API_KEY, SECRET_KEY
 from kanso.models import reset_mock
 
-from . import mocked
+from ..data.adapters.massive import Replay
+from . import massive_store, massive_wire, mocked
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +81,42 @@ def workspace(runner: CliRunner, fresh: Path) -> Path:
     """A scaffolded workspace: `kanso init` in a fresh directory, asserted green."""
     assert run(runner, "init", fresh).exit_code == 0
     return fresh
+
+
+@pytest.fixture
+def wired(monkeypatch: pytest.MonkeyPatch, workspace: Path) -> Replay:
+    """A workspace whose vendor key resolves, answering every request from a frozen body.
+
+    The transport is replaced where the adapter builds one, so nothing downstream is told
+    it is being tested: the command, the registry, the adapter and the probes are the ones
+    that ship. The key is a string this suite invented and reaches no assertion.
+    """
+    replay = Replay(massive_wire.answer)
+    monkeypatch.setenv(API_KEY, massive_wire.KEY)
+    monkeypatch.setattr(
+        "kanso.data.adapters.massive.pyo3_transport", lambda **_: replay, raising=True
+    )
+    return replay
+
+
+@pytest.fixture
+def wired_bulk(monkeypatch: pytest.MonkeyPatch, wired: Replay) -> Replay:
+    """The same workspace with the object store's two credentials resolving as well.
+
+    Both of the adapter's senders are replaced and neither reaches a socket: the signed
+    requests whose answer has a body go through the transport `wired` already froze, and
+    the engine's bulk download — the only other way out — answers from the same objects.
+    Three names are set because the store's key id and secret are resolved separately from
+    the REST key, which is what makes a half-configured adapter a state a test can hold.
+    """
+    for name in (ACCESS_KEY_ID, SECRET_KEY):
+        monkeypatch.setenv(name, massive_wire.KEY)
+    monkeypatch.setattr(
+        "kanso.data.adapters.massive.objectstore.ObjectStore._http_download",
+        staticmethod(massive_store.download),
+        raising=True,
+    )
+    return wired
 
 
 def run(runner: CliRunner, *args: object) -> Result:

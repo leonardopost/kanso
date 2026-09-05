@@ -759,8 +759,21 @@ def _from_cache(entry: InstrumentEntry, cached: Mapping[str, object], as_of: dat
 
 
 def _reference_provider(ws: Workspace) -> InstrumentProvider | None:
+    """The provider `[data] reference` names, from this table or from a registered adapter.
+
+    `PROVIDERS` is consulted first, so a workspace or a test can put a provider under an id
+    and have it win; otherwise the adapter registry is asked, which is how a vendor package
+    supplies one without anything here naming it. Both are resolved at the moment of use,
+    so an unconfigured workspace neither imports a credential nor opens a connection.
+    """
+    from kanso import ext
+    from kanso.data import registry
+
     factory = PROVIDERS.get(ws.config.data.reference)
-    return None if factory is None else factory(ws)
+    if factory is not None:
+        return factory(ws)
+    extensions = ext.discover(ws.root, ws.config.extensions_paths)
+    return registry.provider_for(ws, ws.config.data.reference, extensions)
 
 
 def _no_provider(ws: Workspace) -> str:

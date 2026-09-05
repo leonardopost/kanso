@@ -11,7 +11,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from kanso.cli.replay import CAUSE_WIDTH, _cause
 from kanso.errors import Exit
+from kanso.replay.parity import Parity
+from kanso.replay.record import Intent
 
 from .conftest import HYP_ID, at, payload
 
@@ -129,6 +132,41 @@ def test_parity_reads_as_the_verdict_and_the_two_sessions(
     assert "identical" in result.stdout
     assert "node" in result.stdout
     assert "engine" in result.stdout
+
+
+def parted(node: float, engine: float) -> Parity:
+    """A comparison of two intent sequences that differ only in quantity."""
+
+    def order(qty: float) -> Intent:
+        return Intent(
+            ts_event=1_000, instrument="DEMO.XNAS", side="BUY", qty=qty, order_type="MARKET"
+        )
+
+    return Parity(
+        node="n",
+        engine="e",
+        ts_ns=0,
+        node_orders=(order(node),),
+        engine_orders=(order(engine),),
+        max_ts_delta_ns=0,
+    ).at(0)
+
+
+def test_a_divergence_with_a_known_cause_is_explained_under_the_parity_line() -> None:
+    """The two paths agree over every fixture in this workspace, so nothing a command can
+    be run here would ever render the explanation — and it shipped unrendered by any test.
+    The cause is wrapped rather than printed as one long line, which is what makes it
+    readable beside a label column."""
+    lines = _cause(parted(node=739.0, engine=976.0))
+
+    assert lines
+    assert "filled only in part" in " ".join(line.strip() for line in lines)
+    assert max(len(line) for line in lines) <= CAUSE_WIDTH + len(lines[0]) - len(lines[0].lstrip())
+
+
+def test_a_divergence_of_a_shape_nobody_can_name_is_explained_with_nothing() -> None:
+    """A reader looking at an unexplained divergence sees no explanation, not a hedge."""
+    assert _cause(parted(node=976.0, engine=739.0)) == ()
 
 
 def test_show_lists_the_sessions_the_workspace_holds(runner: CliRunner, deployed: Path) -> None:

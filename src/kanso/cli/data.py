@@ -6,8 +6,17 @@ and `sync` walks forwards from what is held; `show` reports the served spans and
 between them, and `snapshot` freezes what is held into the thing a run is pinned to.
 
 `instruments resolve` and `instruments show` are the reference half, and `adapters` says
-what is registered here — which, in a build that ships no vendor adapter, is the package's
-own loaders and the manual instrument provider, and no credential at all.
+what is registered here: the package's own loaders, the manual instrument provider and
+every vendor adapter, with the credential names each needs and where they resolve from —
+never a value. Without `--check` it reaches nothing, so it answers in a workspace with no
+vendor variable set at all.
+
+`--check` asks the other question, and it is a different one: not what an adapter offers
+but what *this* key reaches, and how far back. Entitlement and the history floor are both
+facts about a plan on a day, so both are probed rather than declared, at the grain the
+source gates on. Keeping them apart is the point: a dataset a plan excludes and a range
+older than the source holds are one sentence at some vendors and two very different
+problems here, and confusing them sends an operator to buy what they already have.
 """
 
 from __future__ import annotations
@@ -21,7 +30,8 @@ import typer
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.data import commands
-from kanso.errors import ValidationError
+from kanso.data.registry import Survey
+from kanso.errors import Exit, ValidationError
 from kanso.workspace import Workspace
 
 app = typer.Typer(
@@ -123,7 +133,7 @@ def sync_command(
 def adapters_command(
     ctx: typer.Context,
     check: Annotated[
-        bool, typer.Option("--check", help="One minimal request per configured adapter.")
+        bool, typer.Option("--check", help="Probe what each configured adapter reaches.")
     ] = False,
     as_json: JsonOption = False,
 ) -> None:
@@ -272,20 +282,61 @@ def _sync(ws: Workspace, loader: str | None, dataset: str | None, to: str | None
 
 def _adapters(ws: Workspace, check: bool) -> Report:
     found, notes = commands.adapters(ws)
+    surveys: list[Survey] = []
     if check:
-        notes = [*notes, *commands.checked_adapters()]
+        surveys, checked = commands.check_adapters(ws)
+        notes = [*notes, *checked]
     data: dict[str, Any] = {
         "adapters": [item.payload() for item in found],
         "checked": check,
+        "reach": [item.payload() for item in surveys],
         "notes": notes,
     }
-    lines = [
-        f"{item.id} · {item.kind} · {item.provider} · no credential · "
-        f"{', '.join(item.capabilities)}"
-        for item in found
-    ]
+    lines: list[str] = []
+    for item in found:
+        lines.append(
+            f"{item.id} · {item.kind} · {item.provider} · {_credentials(item)} · "
+            f"{', '.join(item.capabilities)}"
+        )
+        if item.quota is not None:
+            lines.append(indent(f"quota {item.quota}"))
+        if item.loaders:
+            lines.append(indent(f"loaders {', '.join(item.loaders)}"))
+        lines += [indent(f"{name}: {origin or 'unset'}") for name, origin in _origins(item)]
+    lines += [line for survey in surveys for line in _reach_lines(survey)]
     lines += [indent(note) for note in notes]
-    return Report(data=data, lines=tuple(lines))
+    # A configured key the vendor will not accept is a precondition failure, not a
+    # listing: every later command through that adapter stops on it, and an operator
+    # agent branches on the code before it reads the object.
+    refused = [survey.adapter for survey in surveys if not survey.reachable]
+    return Report(data=data, lines=tuple(lines), code=Exit.PRECONDITION if refused else Exit.OK)
+
+
+def _credentials(item: commands.Registered) -> str:
+    """How this source's credentials stand, in three words and never a value."""
+    if not item.credentials:
+        return "no credential"
+    resolved = sum(1 for name in item.credentials if item.origins.get(name) is not None)
+    return f"{resolved}/{len(item.credentials)} credentials resolve"
+
+
+def _origins(item: commands.Registered) -> list[tuple[str, str | None]]:
+    """Each declared variable and where it resolves from — `.env`, `environment`, nowhere."""
+    return [(name, item.origins.get(name)) for name in item.credentials]
+
+
+def _reach_lines(survey: Survey) -> list[str]:
+    """One adapter's measured reach: what its key gets, and from when.
+
+    The outcome and the floor are printed side by side because they are the two answers an
+    operator confuses at their own expense: a dataset the plan excludes and a range older
+    than the source holds look identical at the vendor and are different problems here.
+    """
+    head = "reachable" if survey.reachable else "did not authenticate"
+    lines = [field(survey.adapter, f"{head} · {survey.detail} · {survey.requests} request(s)")]
+    lines += [indent(item.line()) for item in survey.reach]
+    lines += [indent(note) for note in survey.notes]
+    return lines
 
 
 def _resolve(ws: Workspace, ids: list[str], as_of: str | None, refresh: bool) -> Report:

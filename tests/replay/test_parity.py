@@ -234,6 +234,16 @@ def test_a_divergence_in_another_field_names_nothing() -> None:
         assert divergence.likely_cause is None, changes
 
 
+def test_a_quantity_that_is_not_a_number_names_nothing() -> None:
+    """A recorded intent is read back from a file, so a quantity is whatever that file
+    held. Two of them that cannot be compared as numbers are a divergence with no shape at
+    all, and a cause is claimed only for the one shape that has been measured."""
+    divergence, _ = compare([intent(qty="739")], [intent(qty=976.0)])
+
+    assert divergence is not None
+    assert divergence.likely_cause is None
+
+
 def test_a_missing_intent_names_nothing() -> None:
     """One path stopping is a divergence with no quantity to compare at all."""
     divergence, _ = compare([intent()], [])

@@ -16,6 +16,7 @@ from kanso.errors import Exit, PreconditionError
 from kanso.skills_sync import packaged_skills
 from kanso.state import StateStore
 
+from ..data.adapters.massive import Replay, refused
 from .conftest import at, payload, run
 
 CHECKS = (
@@ -369,13 +370,77 @@ def test_extensions_are_listed_and_a_broken_one_is_reported(
     assert any(item.startswith("broken: RuntimeError") for item in listed)
 
 
-def test_adapters_says_this_build_has_none_to_check(runner: CliRunner, workspace: Path) -> None:
-    plain = at(runner, workspace, "doctor", "--json")
-    assert "no adapter ships in this build" in str(checks(plain)["adapters"]["detail"])
+def test_an_unconfigured_adapter_is_registered_reported_and_green(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """An adapter with nothing set is reported, and it is not a fault.
 
+    Enablement is by credential and never by installation, so a registered adapter with no
+    variable set is the ordinary state of a fresh workspace.
+    """
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert status(result, "adapters") == "ok"
+    assert "1 registered · 0 configured" in str(checks(result)["adapters"]["detail"])
+    listed = items(result, "adapters")
+    assert any(item.startswith("massive: data · 90/s") for item in listed)
+    assert any("KANSO_MASSIVE_API_KEY=unset" in item for item in listed)
+
+
+def test_check_adapters_reaches_nothing_when_no_credential_resolves(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """Opening an adapter with no key would fail on the variable, not on the plan."""
     asked = at(runner, workspace, "doctor", "--check-adapters", "--json")
-    assert "nothing to check" in str(checks(asked)["adapters"]["detail"])
+
     assert asked.exit_code == Exit.OK
+    assert "made no network call" in str(checks(asked)["adapters"]["detail"])
+    assert status(asked, "adapters") == "ok"
+
+
+def test_check_adapters_reports_what_the_key_reaches_and_stays_green(
+    runner: CliRunner, workspace: Path, wired: Replay
+) -> None:
+    """A dataset the plan excludes is reported, never graded down: it is a subscription."""
+    result = at(runner, workspace, "doctor", "--check-adapters", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert status(result, "adapters") == "ok"
+    listed = items(result, "adapters")
+    assert "massive stocks bars (AAPL, per endpoint) → ok · from 2003-09-10" in listed
+    assert any("options trades" in item and "not_entitled" in item for item in listed)
+    assert not any("from " in item and "not_entitled" in item for item in listed)
+
+
+def test_a_key_that_does_not_authenticate_is_the_one_adapter_failure(
+    runner: CliRunner, workspace: Path, wired: Replay, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every later command through that adapter stops on it, so the diagnosis says so."""
+    monkeypatch.setattr(wired, "answer", lambda url, params: refused())
+
+    result = at(runner, workspace, "doctor", "--check-adapters", "--json")
+
+    assert status(result, "adapters") == "fail"
+    assert result.exit_code == Exit.PRECONDITION
+    assert "did not authenticate" in str(checks(result)["adapters"]["detail"])
+
+
+def test_an_extension_shadowing_a_registered_id_is_reported(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """The registries are read for the ids an extension would shadow, never listed by hand."""
+    package = workspace / "kanso_ext" / "greedy"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "PROVIDES = {'loaders': ['synthetic'], 'adapters': ['massive']}\n", encoding="utf-8"
+    )
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert status(result, "extensions") == "warn"
+    listed = items(result, "extensions")
+    assert "greedy shadows the built-in loaders 'synthetic'" in listed
+    assert "greedy shadows the built-in adapters 'massive'" in listed
 
 
 def test_doctor_makes_no_network_call(
@@ -558,7 +623,9 @@ def test_a_configuration_needing_no_credential_says_so(runner: CliRunner, worksp
     assert items(result, "credentials") == []
 
 
-def test_a_configured_adapter_is_named(runner: CliRunner, workspace: Path) -> None:
+def test_a_configured_adapter_nothing_registers_is_named(
+    runner: CliRunner, workspace: Path
+) -> None:
     path = workspace / "kanso.toml"
     path.write_text(
         path.read_text(encoding="utf-8") + '\n[adapters.acme]\nbase_url = "https://acme"\n',
@@ -567,7 +634,7 @@ def test_a_configured_adapter_is_named(runner: CliRunner, workspace: Path) -> No
 
     result = at(runner, workspace, "doctor", "--json")
 
-    assert "acme" in str(checks(result)["adapters"]["detail"])
+    assert any("acme" in item for item in items(result, "adapters"))
 
 
 def test_an_extension_that_loads_is_listed_without_a_warning(

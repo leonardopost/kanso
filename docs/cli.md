@@ -23,7 +23,7 @@ current directory, from which discovery walks up to the nearest `kanso.toml`.
 | command | what it does |
 |---|---|
 | `kanso init [DIR] [--demo]` | scaffold a workspace, link the skills, detect the envelope, apply the migrations. `--demo` renders the mock-only register, the synthetic loader spec, the `DEMO.SIM` instrument and `hypotheses/demo_mr/`. kanso never invokes git; a `.gitignore` is written or appended |
-| `kanso doctor [--report] [--check-adapters]` | diagnose the workspace, the install, the engine, the credentials and the lanes. Exits 2 when a check fails. `--report` redacts paths for pasting upstream. Makes no network call unless `--check-adapters` |
+| `kanso doctor [--report] [--check-adapters]` | diagnose the workspace, the install, the engine, the credentials, the adapters and the lanes. Exits 2 when a check fails. `--report` redacts paths for pasting upstream. Makes no network call unless `--check-adapters`, which probes what each configured adapter reaches — a dataset a plan excludes is reported and not graded down; a credential that does not authenticate fails |
 | `kanso migrate` | apply the pending state migrations. Every other command refuses a database behind the schema rather than migrating it behind your back |
 | `kanso skills sync` | link the packaged skills into every `[skills] targets` entry |
 | `kanso env detect` | detect the host, derive the lane plan, write `envelope.yaml` |
@@ -39,7 +39,7 @@ current directory, from which discovery walks up to the nearest `kanso.toml`.
 | `kanso data sync [--loader ID] [--dataset D] [--to DATE]` | extend each held dataset from its served end towards `--to` (default today) into a successor dataset recording `supersedes`, so a dataset a pinned snapshot references is never mutated |
 | `kanso data instruments resolve [ID…] [--as-of DATE] [--refresh]` | resolve ids (default: every id `instruments.yaml` names) into the catalog's instrument store and the cache. `--refresh` resolves again rather than answering from the cache, and is refused (exit 2) while a run is active or while a deployed version depends on a snapshot that pins one of these instruments |
 | `kanso data instruments show [ID]` | one resolved definition's canonical fields, or the ids the catalog holds |
-| `kanso data adapters [--check]` | what is registered here: id, kind (`data`, `reference`, `exec`), whether its credentials resolve, its capabilities and its quota. Without `--check` it performs no network I/O |
+| `kanso data adapters [--check]` | what is registered here: id, kind (`data`, `reference`, `exec`), the credential names each needs and where each resolves from (never a value), its capabilities, its loader ids and its quota. Without `--check` it performs no network I/O. `--check` probes each **configured** adapter for what its key actually reaches: entitlement per dataset at the grain the source gates on, and the measured history floor of each entitled price series — `docs/adapters.md` |
 
 Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 

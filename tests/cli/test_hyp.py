@@ -67,6 +67,21 @@ def test_validate_reports_the_hypothesis_and_changes_nothing(
         assert store.connection.execute("SELECT count(*) FROM hypotheses").fetchone()[0] == 0
 
 
+def test_a_data_type_a_vendor_adapter_registers_is_admissible(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A type introduced by an adapter is known to validation before anything has loaded it.
+
+    Registration happens when the adapter's loaders are listed, which costs no credential,
+    so a hypothesis may require a vendor's own type in a workspace holding none.
+    """
+    path = write_hypothesis(loaded, data_requirements=["bar", "financial_statement"])
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+
+
 def test_validate_refuses_a_hypothesis_whose_universe_does_not_resolve(
     runner: CliRunner, loaded: Path
 ) -> None:

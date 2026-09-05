@@ -43,6 +43,7 @@ from kanso.classify.construct import PORTFOLIO
 from kanso.classify.construct import catalogue as construct_catalogue
 from kanso.criteria import applicable_objectives, check_params
 from kanso.criteria import catalogue as criteria_catalogue
+from kanso.data import registry
 from kanso.data.instruments import resolve_universe
 from kanso.data.types import data_types
 from kanso.errors import ValidationError
@@ -176,11 +177,14 @@ def _check_data_requirements(ws: Workspace, hyp: Hypothesis) -> None:
 def _known_types(ws: Workspace) -> dict[str, type]:
     """Every type a `data_requirements` entry may name here.
 
-    Discovery imports the workspace's extensions, which is when one that provides a
-    custom type registers it, so an extension's type is known to validation and not only
-    once a loader has run.
+    Discovery imports the workspace's extensions, and asking each registered adapter for
+    its loaders imports those, which is when either registers a custom type of its own. So
+    a type a vendor adapter or an extension introduces is known to validation and not only
+    once something has loaded with it. Neither costs a credential: an adapter hands out
+    loader factories and none is built here.
     """
-    ext.discover(ws.root, ws.config.extensions_paths)
+    extensions = ext.discover(ws.root, ws.config.extensions_paths)
+    registry.adapter_loaders(ws, extensions)
     return data_types()
 
 

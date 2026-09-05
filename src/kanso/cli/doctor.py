@@ -8,8 +8,9 @@ so an operator agent branches on the code and reads the detail.
 
 Nothing here writes to the workspace and nothing reaches the network. The checks that
 touch the state database open it read-only in effect (they migrate nothing), the
-envelope is re-detected in memory and never written, and the adapter check is a
-statement about what this build ships rather than a request to a vendor.
+envelope is re-detected in memory and never written, and the adapter check reports
+what is registered and what each would need rather than asking a vendor anything —
+unless `--check-adapters` is passed, which is the one path here that reaches a network.
 
 Credentials are reported as names and origins. A value is never read into a message,
 because `doctor --report` is the block an operator pastes into an issue: that mode also
@@ -22,13 +23,14 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import platform
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 from kanso import __version__, creds, env, ext, skills_sync
+from kanso.data import registry
 from kanso.env import envelope as envelope_module
 from kanso.errors import KansoError
 from kanso.nautilus import facts
@@ -45,14 +47,21 @@ STALE_DAYS = 7
 HARDWARE = ("os", "os_version", "arch", "chip", "cores_total", "mem_gb")
 """The detected fields whose change invalidates an envelope; the rest fluctuate."""
 
-BUILTIN_IDS: dict[str, tuple[str, ...]] = {}
-"""The ids an extension would shadow, per kind.
 
-Empty in this build: the gate, objective, construct, loader and adapter registries land
-with the milestones that introduce them, and each fills its kind here. Discovery already
-reports what an extension declares, so a shadowing extension is visible the moment there
-is something to shadow.
-"""
+def builtin_ids() -> dict[str, tuple[str, ...]]:
+    """The ids an extension would shadow, per kind, read from the registries themselves.
+
+    Read rather than listed, so a registry that grows an id does not have to remember to
+    grow this too. It is computed at the call and not at import because reading the adapter
+    registry imports the adapter packages, and `doctor` is not the reason to do that until
+    it is actually asked.
+    """
+    from kanso.data.loaders import BUILTIN_LOADERS
+
+    return {
+        "loaders": tuple(sorted(BUILTIN_LOADERS)),
+        "adapters": tuple(sorted(registry.packaged())),
+    }
 
 
 @dataclass(frozen=True)
@@ -421,14 +430,84 @@ def _needed_credentials(ws: Workspace) -> list[tuple[str, list[str], bool]]:
 
 
 def _adapters(ws: Workspace, check_adapters: bool) -> Check:
-    """What `[adapters.<id>]` configures, and what this build can do about it."""
-    configured = sorted(ws.config.adapters)
-    detail = "no adapter ships in this build"
-    if configured:
-        detail += f"; kanso.toml configures {', '.join(configured)}"
-    if check_adapters:
-        detail += "; --check-adapters had nothing to check and made no network call"
-    return Check("adapters", "ok", detail)
+    """What is registered, what each needs, and — only when asked — what its key reaches.
+
+    Registration and configuration are separate facts and both are reported. An adapter is
+    enabled by the presence of its credentials, never by installation, so a registered
+    adapter with nothing set is the ordinary state of a fresh workspace and is graded `ok`.
+
+    `--check-adapters` is the only path here that reaches a network, and it asks only the
+    adapters whose credentials resolve: opening one that has none would fail on the missing
+    variable, and reporting that as "your plan excludes these datasets" is the wrong answer
+    in the most expensive direction. What comes back is the measured reach — entitlement
+    and history floor per dataset, at the grain the source gates on — which is why a
+    dataset the plan excludes is reported and not graded down: it is a fact about a
+    subscription, not a fault in this workspace. A credential that does not authenticate
+    is the one failure, because every later command through that adapter will stop on it.
+    """
+    known = registry.adapters(ext.discover(ws.root, ws.config.extensions_paths))
+    configured = {name: adapter for name, adapter in known.items() if adapter.configured(ws)}
+    items = [_adapter_item(ws, adapter) for _, adapter in sorted(known.items())]
+    items += list(_unprovided(ws, known))
+    detail = f"{len(known)} registered · {len(configured)} configured"
+    if not check_adapters:
+        return Check(
+            "adapters",
+            "ok",
+            f"{detail}; no request was made",
+            items=tuple(items),
+            remedy=None if not configured else "run `kanso doctor --check-adapters` to probe them",
+        )
+    if not configured:
+        return Check(
+            "adapters",
+            "ok",
+            f"{detail}; --check-adapters had no configured adapter to reach and made no "
+            "network call",
+            items=tuple(items),
+        )
+    surveys = [adapter.survey(ws) for _, adapter in sorted(configured.items())]
+    items += [line for survey in surveys for line in _survey_items(survey)]
+    spent = sum(survey.requests for survey in surveys)
+    reach = [item for survey in surveys for item in survey.reach]
+    included = f"{sum(1 for item in reach if item.ok)}/{len(reach)} datasets included"
+    refused = [survey.adapter for survey in surveys if not survey.reachable]
+    if refused:
+        return Check(
+            "adapters",
+            "fail",
+            f"{detail}; {', '.join(refused)} did not authenticate · {spent} request(s)",
+            items=tuple(items),
+            remedy="check the credential named above; every command through that adapter stops",
+        )
+    return Check("adapters", "ok", f"{detail}; {included} · {spent} request(s)", items=tuple(items))
+
+
+def _adapter_item(ws: Workspace, adapter: registry.Adapter) -> str:
+    """One adapter as a line: its kind, its quota, its offer and where each name resolves."""
+    origins = adapter.credential_origins(ws)
+    names = ", ".join(f"{name}={origins.get(name) or 'unset'}" for name in adapter.credentials)
+    return (
+        f"{adapter.id}: {adapter.kind} · {adapter.quota(ws)} · "
+        f"{', '.join(adapter.capabilities.names())} · {names or 'no credential'}"
+    )
+
+
+def _unprovided(ws: Workspace, known: Mapping[str, registry.Adapter]) -> tuple[str, ...]:
+    """The `[adapters.<id>]` tables naming something nothing here registers."""
+    return tuple(
+        f"{name}: configured in kanso.toml, and nothing registered here provides it"
+        for name in sorted(ws.config.adapters)
+        if name not in known
+    )
+
+
+def _survey_items(survey: registry.Survey) -> list[str]:
+    """One adapter's measured reach, one line per dataset, then what qualifies them."""
+    return [
+        *(f"{survey.adapter} {item.line()}" for item in survey.reach),
+        *(f"{survey.adapter}: {note}" for note in survey.notes),
+    ]
 
 
 def _extensions(ws: Workspace) -> Check:
@@ -440,7 +519,7 @@ def _extensions(ws: Workspace) -> Check:
         f"{extension.name}: {extension.error}" if extension.error else f"{extension.name}: ok"
         for extension in found
     ]
-    shadowing = ext.shadows(found, BUILTIN_IDS)
+    shadowing = ext.shadows(found, builtin_ids())
     items += [f"{name} shadows the built-in {kind} '{item}'" for name, kind, item in shadowing]
     broken = [extension for extension in found if not extension.ok]
     detail = f"{len(found)} loaded"
