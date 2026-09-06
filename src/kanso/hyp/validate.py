@@ -9,6 +9,11 @@ document is parsed. Everything else needs the workspace, and that is this module
 * the file lives at `hypotheses/<id>/`, so the id in the document and the directory that
   holds it are the same word. Directory names are unique, so this is what makes ids
   unique too, and it is what lets every later command find a hypothesis by its id alone;
+* the id is not `portfolio`. The id grammar admits it, but a certified sleeve composes a
+  strategy named after its hypothesis and `construct.host` spells the book itself as
+  `portfolio`, so a sleeve of that name would make a strategy the host field could no
+  longer tell from the book. The word is reserved here, where a hypothesis enters the
+  workspace, rather than at the seam where the two meanings collide;
 * every data requirement names a type the workspace knows — the three market-data types,
   or one an extension registered;
 * every universe id resolves to an instrument as of the research window's first day. A
@@ -22,8 +27,12 @@ document is parsed. Everything else needs the workspace, and that is this module
   nothing in the workspace records, so it is refused;
 * when classification has been written, its construct is in the catalogue, its host is
   present exactly when the construct needs one and names a certified strategy, its
-  objective applies to this hypothesis and its parameters are inside the toolbox's
-  ranges, and every constraint is a card-stage gate whose parameters are inside theirs.
+  parameters are ones that construct declares with values inside the sets it declares
+  them over, its objective applies to this hypothesis and its parameters are inside the
+  toolbox's ranges, and every constraint is a card-stage gate whose parameters are inside
+  theirs. The construct's own parameters are checked by asking the construct, which is the
+  same call the runner makes when it builds the harness: a classification this command
+  calls admissible is one the first card of a run does not reject.
 
 A validation failure names the field and the reason, and where several are independent
 they are reported together rather than one per attempt.
@@ -102,6 +111,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     except UnicodeDecodeError as exc:
         raise ValidationError(f"{path}: is not UTF-8 text: {exc}") from None
     hyp = parse_yaml(Hypothesis, text, str(path))
+    _check_id(hyp)
     _check_location(ws, path, hyp)
     _check_data_requirements(ws, hyp)
     instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start)
@@ -156,6 +166,25 @@ def _venue_overrides(ws: Workspace) -> Mapping[str, Any]:
     if not path.is_file():
         return {}
     return load_yaml(Portfolio, path).venues or {}
+
+
+def _check_id(hyp: Hypothesis) -> None:
+    """`portfolio` is the book, so it is not a hypothesis.
+
+    The id grammar admits the word and both meanings would be legitimate: a certified
+    sleeve composes a strategy named after its hypothesis, and `construct.host` names the
+    book itself with that same word. A workspace holding both has a `host: portfolio` that
+    means two things, and the construct reads it as the book — so an overlay properly
+    attached to the sleeve is refused for the portfolio it was never on. Reserving the
+    word costs an operator one id and keeps `construct.host` unambiguous.
+    """
+    if hyp.id == PORTFOLIO:
+        raise ValidationError(
+            f"id: {PORTFOLIO!r} is reserved: it is how a construct attached to the book names "
+            f"its host, and a certified sleeve of that name would compose a strategy nothing "
+            f"could tell from the book",
+            remedy=f"choose another id, and rename {HYPOTHESES}/{PORTFOLIO}/ to match",
+        )
 
 
 def _check_location(ws: Workspace, path: Path, hyp: Hypothesis) -> None:
@@ -219,8 +248,16 @@ def _check_classification(ws: Workspace, hyp: Hypothesis) -> None:
 
 
 def _check_construct(ws: Workspace, ref: ConstructRef) -> str:
-    """The construct's objective mode, once it exists and its host is what it needs."""
+    """The construct's objective mode, once it exists, its params fit and its host is right.
+
+    The parameters are checked by asking the construct rather than against a copy of its
+    declarations kept here, so this command and the harness the runner builds refuse the
+    same classification in the same words: a parameter the construct does not declare, or a
+    value outside its set, is refused where the file is judged rather than inside the first
+    card of a run.
+    """
     construct = construct_catalogue(ws).get(ref.id)
+    construct.check_params(ref.params)
     needs = construct.needs_host
     if needs == "none":
         if ref.host is not None:

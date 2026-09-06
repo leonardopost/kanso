@@ -118,14 +118,15 @@ def sync_command(
         str | None, typer.Option("--loader", metavar="ID", help="Only this loader's datasets.")
     ] = None,
     dataset: Annotated[
-        str | None, typer.Option("--dataset", metavar="D", help="Only this dataset.")
+        str | None,
+        typer.Option("--dataset", metavar="D", help="Only this one, newest of its series or not."),
     ] = None,
     to: Annotated[
         str | None, typer.Option("--to", metavar="DATE", help="Stop here (default: today).")
     ] = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Extend each held dataset from its served end into a successor dataset."""
+    """Extend each held series from its newest dataset's served end into a successor."""
     emit(as_json or global_json(ctx), lambda: _sync(open_workspace(ctx), loader, dataset, to))
 
 

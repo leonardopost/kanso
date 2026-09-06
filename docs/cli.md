@@ -37,7 +37,7 @@ current directory, from which discovery walks up to the nearest `kanso.toml`.
 | `kanso data show` | every series the store holds: its datasets, the spans they **served**, the gaps between them and the row counts |
 | `kanso data snapshot` | freeze what is held — the dataset checksums and the checksum of the resolved instruments — into `catalog/snapshots/<snapshot_id>.yaml`. A run is pinned to one of these |
 | `kanso data backfill --loader ID --spec FILE [--from DATE] [--to DATE] [--dry-run]` | fill history from the source's floor (or `--from`, clamped up to the floor and reported) to the earliest day already held (or `--to`), and close the gaps inside what is held. Chunked; the manifest each chunk writes is its checkpoint, so an interrupt resumes and a repeat fetches nothing. `--dry-run` prints the chunks, the request count and the estimated bytes and fetches nothing |
-| `kanso data sync [--loader ID] [--dataset D] [--to DATE]` | extend each held dataset from its served end towards `--to` (default today) into a successor dataset recording `supersedes`, so a dataset a pinned snapshot references is never mutated |
+| `kanso data sync [--loader ID] [--dataset D] [--to DATE]` | extend each held series from the served end of its **newest** dataset towards `--to` (default today) into a successor dataset recording `supersedes`, so a dataset a pinned snapshot references is never mutated. Only the newest is extended, because a request beginning after an interior dataset ends runs over the one behind it; `--dataset` names one instead, newest or not, which is how the dataset in front of a hole is extended on purpose |
 | `kanso data instruments resolve [ID…] [--as-of DATE] [--refresh]` | resolve ids (default: every id `instruments.yaml` names) into the catalog's instrument store and the cache. `--refresh` resolves again rather than answering from the cache, and is refused (exit 2) while a run is active or while a deployed version depends on a snapshot that pins one of these instruments |
 | `kanso data instruments show [ID]` | one resolved definition's canonical fields, or the ids the catalog holds |
 | `kanso data adapters [--check]` | what is registered here: id, kind (`data`, `reference`, `exec`), the credential names each needs and where each resolves from (never a value), its capabilities, its loader ids and its quota. Without `--check` it performs no network I/O. `--check` probes each **configured** adapter for what its key actually reaches: entitlement per dataset at the grain the source gates on, and the measured history floor of each entitled price series — `docs/adapters.md` |
@@ -49,7 +49,7 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | command | what it does |
 |---|---|
 | `kanso hyp new ID` | scaffold `hypotheses/<id>/` with `hypothesis.yaml`, `program.md` and a `strategy.py` stub |
-| `kanso hyp validate PATH` | say whether the file is admissible — windows, embargo, universe resolution, construct, objective and constraints — and change nothing either way |
+| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints — and change nothing either way |
 | `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with |
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
 | `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state |
@@ -90,7 +90,7 @@ consecutive non-keeps end it. Both are `[research]` keys of `kanso.toml`.
 
 | command | what it does |
 |---|---|
-| `kanso cert plan ID [--replan]` | decide what would count as proof for this hypothesis — the cert, paper and live gates, each with parameters chosen inside the toolbox's ranges and a rationale — in one call to the best model on the register, and pin it at `certificates/<id>/plan.yaml`. The planner is shown the hypothesis, its construct, the toolbox, what data the workspace holds and the trial count, and never a card metric, a certificate or the strategy source. Reading a pinned plan costs nothing; `--replan` re-runs the planner on the same closed inputs and mints the next `plan_version`. There is no default plan: with no model configured the step exits 2 |
+| `kanso cert plan ID [--replan]` | decide what would count as proof for this hypothesis — the cert, paper and live gates, each with parameters chosen inside the toolbox's ranges and a rationale — in one call to the best model on the register, and pin it at `certificates/<id>/plan.yaml`. The planner is shown the hypothesis, its construct, the toolbox, what data the workspace holds and the trial count, and never a card metric, a certificate or the strategy source. Reading a pinned plan costs nothing; `--replan` re-runs the planner on the same closed inputs and mints the next `plan_version`. There is no default plan: with no model configured the step exits 2. Warns (`warning`, and `warnings` under `--json`) when the paper window the plan implies — the longer of a paper gate's `min_duration` and its `horizon_mult` × horizon — is under a tenth of the certification window the hypothesis declares, because a paper objective that much noisier than the band measured over that window reads as drift; the plan is pinned either way |
 | `kanso cert run ID [--sha S]` | run the plan's cert gates for the hypothesis's best card (or the one `--sha` names, as any unique prefix) over the embargoed certification window, on the data snapshot the run that produced that card pinned, and write `certificates/<id>/<sha7>-<n_trials>-p<plan>-e<engine>.yaml` with the certified `strategy.py` beside it as `<sha7>.py`. Plans first if there is no plan. A certificate is immutable: certifying the same bytes again under the same plan **and** the same engine is refused (exit 2), so re-certifying an unchanged commit after an engine upgrade is a plain `cert run` |
 | `kanso cert show ID` | the newest certificate: the verdict, then each gate with its evidence or the reason it judged nothing |
 
@@ -141,13 +141,13 @@ for a read, the version on the stage for a move.
 
 | command | what it does |
 |---|---|
-| `kanso portfolio show` | both stages: how each is configured — including whose money its execution client trades and which clock it runs on — whether its node has consumed everything the catalog holds, what each deployed version holds and what it has realised over the windows its stage has closed. Writes nothing |
+| `kanso portfolio show` | both stages: how each is configured — including whose money its execution client trades and which clock it runs on — whether its node has consumed everything the catalog holds, what each deployed version holds and what it has realised over the windows its stage has closed. The file's entries are read against the record: one no deployment wrote — a stage entry added to `portfolio.yaml` by hand — prints as `not deployed · in portfolio.yaml only`, is `"recorded": false` under `--json`, and is counted in neither the stage's allocation nor its P&L. Writes nothing |
 | `kanso portfolio clients` | every execution client a stage may name: what each declares (`capital`, `clock`), which adapter provides it, which stages it may be configured on, and per credential the variable name and where it resolves from — never a value. Then, per stage, what `deploy` would refuse its configuration for, or `ok`. Opens nothing and reaches nothing |
 | `kanso portfolio deploy --stage paper\|live` | admit what composition produced, apply the capital rule, validate what the stage's execution client declares, render the node configuration and (re)start the node. A node flattens before every stop, so a stage always restarts flat and each redeploy realises its window into the record the paper and live gates read |
 | `kanso promote STRATEGY[@V] --live --as NAME` | move a `promotable` version onto the live stage under a named operator's recorded approval, retiring whatever was live, then redeploy both stages |
 | `kanso demote STRATEGY[@V]` | take a live version off the live stage — back to paper, or retired when a newer version is already there — then redeploy the stages that are not halted |
 
-**`deploy` refuses six things with exit 2** and two with exit 4.
+**`deploy` refuses six things with exit 2**, one with exit 3 and two with exit 4.
 
 With exit 2: a stage whose `kill_switch` is on, because the switch is the operator's and a
 deployment that cleared it by starting a node would make it advisory; an execution client id
@@ -159,6 +159,13 @@ trade and nothing to be judged on; a `clock: wall` execution client paired with 
 or with any speed but one, because a broker matches against current prices; and a
 `clock: wall` client at all, because in this version a stage node cannot run one — see
 below.
+
+With exit 3: a version whose implementation is not the code it was certified with. Every
+file under `strategies/<id>/impl/<version>/` is hashed against the `strategy_sha` its
+manifest records before anything is imported, so an edited, truncated or deleted source is
+named — with both digests and the certified copy to restore it from — rather than run.
+`kanso replay run --strategy` checks the same thing for the same reason: the directory is
+the one a stage loads, so a replay of it has to be a replay of what would trade.
 
 With exit 4: a `capital: real` client configured anywhere but the live stage, and a version
 on a `capital: real` client with no approval on record. Both are a missing act rather than a

@@ -12,7 +12,7 @@ metadata:
 `kanso doctor --json` carries an `install` check whose `detail` is `<mode> · <directory>`: `editable · /…/kanso/src/kanso` is a local checkout, `package · /…/site-packages/kanso` an install from an index.
 
 ## Path A — extension → framework (editable or a known checkout)
-1. `kanso ext show` → the workspace extensions and their kinds. Pick the one the operator named.
+1. `kanso ext show` → the workspace extensions and their kinds. Pick the one the operator named. A gate or an objective prototyped in a workspace declares nothing — `PROVIDES` refuses both kinds, because the toolbox is the package's own — so it shows as loaded with no provisions and the operator names the module.
 2. Copy its module and YAML into the framework checkout at the location for its kind (`docs/maintainers.md` §3: `src/kanso/criteria/library/`, `src/kanso/classify/constructs/`, `src/kanso/data/loaders/`, `src/kanso/data/types/`) and add a test next to the existing ones, starting from the extension's workspace tests.
 3. In the framework checkout: `uv run pytest`, `uv run ruff check`, `uv run mypy src`. Coverage floor is 85%.
 4. Branch `feat/<name>`, conventional commit, `gh pr create` with a body that states the workspace evidence (what it gated or loaded, over which data), and, if it changes a schema or the CLI, the semver consequence and a `docs/` update.

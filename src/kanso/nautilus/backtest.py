@@ -28,6 +28,9 @@ outside its window even if its code looked for one. The parent supervises wall t
 resident memory and kills the process group on breach; resident memory is bounded by
 supervision rather than by `setrlimit`, which does not bound RSS on Linux and is rejected
 for address space on macOS. The peak comes from the reaped child's own resource usage.
+What comes back from a failed child is the tail of its traceback and, when the failure was
+one kanso itself raised, that refusal's remedy — so a caller reporting a card that did not
+run can name the fault that occurred rather than assume every one of them is the code's.
 
 **The same request twice gives the same numbers.** Every global random source is seeded
 from the snapshot id, every aggregation is over a sorted sequence, and no set or dict
@@ -72,7 +75,7 @@ from typing import Any, Final
 
 from kanso.criteria import CardRun, Fill, Trade
 from kanso.criteria.run import BPS, NS_PER_DAY, NS_PER_SECOND, midnight_ns
-from kanso.errors import PreconditionError, ValidationError
+from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
 
@@ -190,6 +193,12 @@ class RunResult:
 
     A crashed run still carries a `CardRun` — an empty one over the requested window — so
     a caller that records a card never has to special-case the shape of a failure.
+
+    `remedy` is the remedy of the failure that ended the run, when the failure named one:
+    a card fails for reasons that are not the strategy's — rows the catalog no longer
+    holds, a point stamped outside the window — and the operator's next action differs for
+    each. It crosses the process boundary because a traceback tail carries the message and
+    loses everything else the refusal knew.
     """
 
     run: CardRun
@@ -199,6 +208,7 @@ class RunResult:
     crashed: bool = False
     reason: str | None = None
     traceback_tail: str | None = None
+    remedy: str | None = None
 
 
 def stage_of(hyp: Hypothesis, window: tuple[date, date]) -> str:
@@ -938,7 +948,9 @@ def _reported(
     except (OSError, pickle.UnpicklingError, EOFError):
         return _crashed(request, wall_s, peak_gb, DIED, tail)
     if not reported["ok"]:
-        return _crashed(request, wall_s, peak_gb, EXCEPTION, reported["traceback"])
+        return _crashed(
+            request, wall_s, peak_gb, EXCEPTION, reported["traceback"], reported["remedy"]
+        )
     return RunResult(
         run=reported["run"],
         wall_s=wall_s,
@@ -948,7 +960,12 @@ def _reported(
 
 
 def _crashed(
-    request: RunRequest, wall_s: float, peak_gb: float, reason: str, tail: str | None
+    request: RunRequest,
+    wall_s: float,
+    peak_gb: float,
+    reason: str,
+    tail: str | None,
+    remedy: str | None = None,
 ) -> RunResult:
     """A run that produced no numbers, shaped like one that did."""
     return RunResult(
@@ -959,6 +976,7 @@ def _crashed(
         crashed=True,
         reason=reason,
         traceback_tail=tail,
+        remedy=remedy,
     )
 
 
@@ -984,15 +1002,24 @@ def main(argv: Sequence[str]) -> int:
 
     Every failure is reported as a crash with the tail of its traceback rather than as a
     non-zero exit alone, because a card that raised is a card whose reason the loop has
-    to be able to read.
+    to be able to read. A failure kanso itself raised also reports its remedy, as a value
+    rather than as a line of a traceback: the parent decides what to tell the operator to
+    do about a card that did not run, and it can only choose the right thing if the cause
+    is what names it.
     """
     request_path, result_path = Path(argv[0]), Path(argv[1])
     payload = pickle.loads(request_path.read_bytes())
     try:
         result = execute(payload["request"], payload["instruments"], payload["groups"])
-    except Exception:
+    except Exception as failure:
         result_path.write_bytes(
-            pickle.dumps({"ok": False, "traceback": _tail(traceback.format_exc())})
+            pickle.dumps(
+                {
+                    "ok": False,
+                    "traceback": _tail(traceback.format_exc()),
+                    "remedy": failure.remedy if isinstance(failure, KansoError) else None,
+                }
+            )
         )
         return 1
     result_path.write_bytes(

@@ -635,7 +635,14 @@ def sync(
     dataset: str | None = None,
     to: date | None = None,
 ) -> Sync:
-    """Extend each held dataset from its served end towards `to`, as a successor.
+    """Extend each held series from the served end of its newest dataset, as a successor.
+
+    One series is extended once, at its newest dataset, because that is the only dataset
+    of a series a successor can follow: a chunked backfill leaves one manifest per chunk,
+    and a request that begins the day after an interior chunk ends runs over the chunk
+    after it, which the catalog refuses — outright where a snapshot pins it. Naming a
+    `dataset` extends exactly that one instead, newest or not, which is how a hole inside
+    a series is extended on purpose; `loader_id` narrows to the datasets one loader wrote.
 
     The successor records `supersedes`, so a dataset a pinned snapshot references is never
     mutated: the run that pinned it keeps exactly the bytes it ran on.
@@ -647,11 +654,11 @@ def sync(
             f"{dataset!r} is not a dataset this workspace holds",
             remedy="run `kanso data show` to list the datasets it does hold",
         )
+    candidates = [held[dataset]] if dataset is not None else _newest_per_series(held.values())
     chosen = [
         manifest
-        for manifest in sorted(held.values(), key=lambda m: m.dataset_id)
-        if (dataset is None or manifest.dataset_id == dataset)
-        and (loader_id is None or manifest.source == loader_id)
+        for manifest in sorted(candidates, key=lambda m: m.dataset_id)
+        if loader_id is None or manifest.source == loader_id
     ]
     fetches: list[Fetch] = []
     notes: list[str] = []
@@ -678,6 +685,26 @@ def sync(
     result = Sync(to=horizon, fetches=tuple(fetches), notes=tuple(notes))
     store.event(SYNCED, loader_id or "all", {"to": str(horizon), "rows": result.rows})
     return result
+
+
+def _newest_per_series(held: Iterable[Manifest]) -> list[Manifest]:
+    """The dataset serving the latest day in each series, which is where the series goes on.
+
+    A series is what the store files in one place — the instrument, the type and the
+    resolution — so an adjusted dataset and an unadjusted one of the same bars belong to
+    one series here, as they do to the catalog's overlap check. Ties are broken by dataset
+    id, so which of two datasets ending on the same day is extended is fixed rather than
+    left to the order the manifests were read in.
+    """
+    tips: dict[tuple[str, str, str | None], Manifest] = {}
+    for manifest in held:
+        standing = tips.get(manifest.filed_under)
+        if standing is None or (manifest.end, manifest.dataset_id) > (
+            standing.end,
+            standing.dataset_id,
+        ):
+            tips[manifest.filed_under] = manifest
+    return list(tips.values())
 
 
 def _extend(

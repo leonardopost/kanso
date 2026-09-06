@@ -14,6 +14,12 @@ certificate that exists — because a certificate is immutable.
 
 `plan` is the one command here that spends a model call, and it spends exactly one per
 hypothesis: reading a pinned plan is free, and `--replan` is the only way to pay again.
+
+`plan` also warns, and warns rather than refuses. A paper gate judges the objective a stage
+realises against the interval measured over the certification window, so a plan whose paper
+window is a small fraction of that window asks for evidence too noisy to sit inside its own
+band. The plan is the planner's and the windows are the operator's; the command says what
+the pair costs and pins the plan either way.
 """
 
 from __future__ import annotations
@@ -23,8 +29,8 @@ from typing import Annotated, Any, cast
 import typer
 
 from kanso.certify.certificate import certificate_file, source_file
+from kanso.certify.plan import paper_window_note, plan_file
 from kanso.certify.plan import plan as make_plan
-from kanso.certify.plan import plan_file
 from kanso.certify.run import certify
 from kanso.certify.run import show as newest
 from kanso.cli.context import global_json, open_workspace, store
@@ -91,8 +97,14 @@ def show_command(ctx: typer.Context, hyp_id: IdArgument, as_json: JsonOption = F
 def _plan(ws: Workspace, hyp_id: str, replan: bool) -> Report:
     with store(ws) as opened:
         pinned = make_plan(ws, opened, hyp_id, replan=replan, lane=DEFAULT_LANE)
+        note = paper_window_note(ws, opened, pinned)
+    warnings = [] if note is None else [note]
     path = plan_file(ws, hyp_id)
-    data: dict[str, Any] = {**pinned.model_dump(mode="json", by_alias=True), "path": str(path)}
+    data: dict[str, Any] = {
+        **pinned.model_dump(mode="json", by_alias=True),
+        "path": str(path),
+        "warnings": warnings,
+    }
     counts = " · ".join(f"{stage} {len(pinned.stage_gates(stage))}" for stage in PLAN_STAGES)
     lines = [
         field("plan", f"{hyp_id} · version {pinned.plan_version} · by {pinned.planned_by}"),
@@ -101,6 +113,8 @@ def _plan(ws: Workspace, hyp_id: str, replan: bool) -> Report:
     lines += [indent(_planned(gate)) for gate in pinned.gates]
     lines.append(field("excluded", str(len(pinned.excluded))))
     lines += [indent(f"{'':<{MARK}}{item.id:<{GATE}}{item.reason}") for item in pinned.excluded]
+    if note is not None:
+        lines.append(field("warning", note))
     lines += [field("pinned", path), field("next", f"kanso cert run {hyp_id}")]
     return Report(data=data, lines=tuple(lines))
 

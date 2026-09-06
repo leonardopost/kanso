@@ -277,6 +277,17 @@ def test_a_hypothesis_lives_in_the_directory_its_id_names(ws: Workspace) -> None
     assert "somewhere_else" in failure.message
 
 
+def test_a_hypothesis_may_not_be_called_portfolio(ws: Workspace) -> None:
+    # The id grammar admits the word, but it is how `construct.host` names the book, and a
+    # certified sleeve composes a strategy named after its hypothesis.
+    failure = refused(ws, document(id="portfolio"))
+
+    assert failure.message.startswith("id:")
+    assert "names its host" in failure.message
+    assert failure.remedy is not None
+    assert "hypotheses/portfolio/" in failure.remedy
+
+
 def test_a_file_outside_the_hypotheses_tree_is_judged_on_its_content_alone(
     ws: Workspace,
 ) -> None:
@@ -361,6 +372,34 @@ def test_a_host_file_declaring_another_strategy_is_refused(ws: Workspace) -> Non
 
     assert failure.message.startswith("construct.host:")
     assert "other_sleeve" in failure.message
+
+
+def test_a_construct_parameter_outside_its_declared_set_is_refused(ws: Workspace) -> None:
+    # The host is certified and the objective applies: the value is the only thing wrong.
+    write_strategy(ws, HOST_ID)
+    classification = {
+        **FILTER_CLASSIFICATION,
+        "construct": {"id": "filter", "host": HOST_ID, "params": {"scope": "sideways"}},
+    }
+
+    failure = refused(ws, document(**classification))
+
+    assert failure.message == "construct.params.scope: 'sideways' is not one of time, instrument"
+
+
+def test_a_construct_parameter_the_construct_does_not_declare_is_refused(
+    ws: Workspace,
+) -> None:
+    write_strategy(ws, HOST_ID)
+    classification = {
+        **FILTER_CLASSIFICATION,
+        "construct": {"id": "filter", "host": HOST_ID, "params": {"window": "time"}},
+    }
+
+    failure = refused(ws, document(**classification))
+
+    assert failure.message.startswith("construct.params:")
+    assert "has no parameter 'window'" in failure.message
 
 
 def test_a_portfolio_construct_attaches_to_the_book(ws: Workspace) -> None:

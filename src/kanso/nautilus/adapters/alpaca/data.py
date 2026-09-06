@@ -40,6 +40,13 @@ client asks the system to shut down, naming the tape and the endpoint. A live st
 keeps running on stale prices is a stage placing orders against a market it can no longer
 see, and this milestone is the first one where those orders can be real.
 
+**How often it sweeps belongs to the operator, not to this module.** A bar is delivered at
+worst one sweep after it closes, and the resolution a stage trades is the only thing that
+says what that is worth: fifteen seconds is a third of a minute bar's life and a rounding
+error on a daily one. So the cadence is `poll_interval_s` in the workspace's
+`[adapters.alpaca]` table, bounded there at both ends, and this module is handed a number
+rather than choosing one.
+
 **Quotes and prints are refused rather than approximated.** The broker publishes a schema
 for both and neither was measured, and the streaming transport that carries them was not
 measured either. A subscription for one is refused by name, which is visible, rather than
@@ -93,6 +100,7 @@ from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
 from kanso.nautilus.adapters.alpaca import ID
 from kanso.nautilus.adapters.alpaca.config import (
     DATA_HOST,
+    DEFAULT_POLL_INTERVAL_S,
     Credentials,
     Feed,
     account,
@@ -134,7 +142,6 @@ __all__ = [
     "MAX_PAGES",
     "PAGE_PARAM",
     "PAGE_TOKEN",
-    "POLL_INTERVAL_S",
     "START_PARAM",
     "TIMEFRAMES",
     "TIMEFRAME_PARAM",
@@ -188,13 +195,6 @@ back into the resolution the parser stamps a bar with."""
 MAX_PAGES: Final = 100
 """Pages one window may be walked over. Far past any legitimate answer for a live sweep,
 and a bound on a cursor that does not end."""
-
-POLL_INTERVAL_S: Final = 15.0
-"""Seconds between sweeps. One request per subscribed series per sweep, so this and the
-account's quota together bound how many series a stage may run — which is why a
-subscription past that bound is refused rather than silently throttled into missing bars.
-A caller that knows its resolution may widen it; a daily stage has no use for fifteen
-seconds, and a minute stage has no use for more."""
 
 SECONDS_PER_MINUTE: Final = 60.0
 
@@ -385,7 +385,7 @@ class AlpacaDataClient(LiveMarketDataClient):
         transport: Transport,
         instrument_provider: Any,
         data_url: str = DATA_HOST,
-        poll_interval_s: float = POLL_INTERVAL_S,
+        poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         requests_per_minute: int | None = None,
         max_failures: int = MAX_FAILURES,
         config: LiveDataClientConfig | None = None,
@@ -559,7 +559,8 @@ class AlpacaDataClient(LiveMarketDataClient):
                 f"{self._interval:g}s, and {bar_type} would be one more",
                 remedy=(
                     "raise `[adapters.alpaca] requests_per_minute` to the account's own "
-                    "ceiling, widen the poll interval, or deploy fewer instruments"
+                    "ceiling, widen `[adapters.alpaca] poll_interval_s` to the resolution "
+                    "this stage trades, or deploy fewer instruments"
                 ),
             )
 
@@ -796,7 +797,6 @@ def data_client(
     transport: Transport | None = None,
     instrument_provider: Any = None,
     recorded_feed: str | None = None,
-    poll_interval_s: float = POLL_INTERVAL_S,
     config: LiveDataClientConfig | None = None,
 ) -> AlpacaDataClient:
     """This broker's live feed for one workspace and one of its accounts.
@@ -804,8 +804,11 @@ def data_client(
     The tape is read from the workspace's `[adapters.alpaca]` table, which has no default,
     so a workspace that has not declared one is refused here rather than opened on a guess;
     `recorded_feed` is the tape a previous run of the same stage ran on, and a run that
-    contradicts it is refused. The credential is resolved at this moment and the key is
-    checked against the host it would address before anything is opened.
+    contradicts it is refused. The cadence comes from that table too, and from nowhere
+    else: an operator whose stage trades daily bars has to be able to say so, and a caller
+    that overrode it here would be a second answer to a question the workspace has already
+    answered. The credential is resolved at this moment and the key is checked against the
+    host it would address before anything is opened.
     """
     from kanso.nautilus.adapters.alpaca import BROKER
 
@@ -824,7 +827,7 @@ def data_client(
             instrument_provider if instrument_provider is not None else instrument_provider_for(ws)
         ),
         data_url=settings.data_url,
-        poll_interval_s=poll_interval_s,
+        poll_interval_s=settings.poll_interval_s,
         requests_per_minute=settings.requests_per_minute,
         config=config,
     )

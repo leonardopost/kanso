@@ -20,6 +20,7 @@ import yaml
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.ext import KINDS
 
 from .conftest import at, payload, run
 
@@ -253,25 +254,36 @@ def test_a_declared_data_type_nothing_registered_is_absent(
     assert "register_custom_type" in item["note"]
 
 
-def test_a_gate_or_an_objective_is_declared_and_registered_nowhere(
+def test_a_declared_gate_or_objective_is_refused_and_names_the_page(
     runner: CliRunner, workspace: Path
 ) -> None:
-    """The one kind `PROVIDES` accepts that no registry in this version reads.
+    """The two kinds no registry reads, refused at the declaration rather than listed.
 
-    The declaration is admissible, discovery collects it and `doctor` compares it for
-    shadowing, so an operator has every reason to believe a workspace gate is live. It is
-    not: certification plans and judges from the package's own toolbox. Saying so here is
-    the difference between a silent absence and a known limitation.
+    A plan is drawn from, and judged by, the criteria library in the package, and nothing
+    that builds it takes a workspace. So a collected gate would read as `doctor` green and
+    the extension loaded, and be refused a command later by `hyp validate` as an id the
+    toolbox does not hold. Here the extension imported and the declaration did not read,
+    which is the state this command exists to distinguish.
     """
     module(workspace, "house_rules", 'PROVIDES = {"gates": ["g"], "objectives": ["o"]}\n')
 
+    result = at(runner, workspace, "ext", "show")
     document = payload(at(runner, workspace, "ext", "show", "--json"))
 
-    found = provisions(document, "house_rules")
-    assert found[("gates", "g")]["state"] == "absent"
-    assert found[("objectives", "o")]["state"] == "absent"
-    assert "toolbox" in found[("gates", "g")]["note"]
-    assert found[("gates", "g")]["note"] == found[("objectives", "o")]["note"]
+    assert result.exit_code == Exit.OK
+    assert provisions(document, "house_rules") == {}
+    (found,) = document["extensions"]
+    assert found["loaded"] is True
+    assert "which a workspace cannot provide" in str(found["error"])
+    assert "docs/extensions.md" in str(found["error"])
+    assert "gates, objectives" in result.stdout
+    assert document["counts"] == {
+        "extensions": 1,
+        "loaded": 1,
+        "registered": 0,
+        "shadowed": 0,
+        "absent": 0,
+    }
 
 
 def test_an_id_that_ships_is_reported_shadowed_for_every_kind(
@@ -287,8 +299,6 @@ def test_an_id_that_ships_is_reported_shadowed_for_every_kind(
         '    "constructs": ["filter"],\n'
         '    "exec_clients": ["sandbox"],\n'
         '    "data_types": ["bar"],\n'
-        '    "gates": ["max_drawdown"],\n'
-        '    "objectives": ["net_edge_bps"],\n'
         "}\n",
     )
 
@@ -298,8 +308,8 @@ def test_an_id_that_ships_is_reported_shadowed_for_every_kind(
     assert result.exit_code == Exit.OK
     found = provisions(document, "house_greedy")
     assert {item["state"] for item in found.values()} == {"shadowed"}
-    assert len(found) == 7
-    assert document["counts"]["shadowed"] == 7
+    assert {kind for kind, _ in found} == set(KINDS)
+    assert document["counts"]["shadowed"] == len(KINDS)
     assert "the packaged one is what this workspace uses" in result.stdout
 
 

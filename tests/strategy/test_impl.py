@@ -6,6 +6,7 @@ from hashlib import sha256
 
 import pytest
 
+from kanso.certify.certificate import source_file
 from kanso.criteria import drawdown_pct
 from kanso.data.manifest import catalog_path
 from kanso.errors import ValidationError
@@ -150,6 +151,71 @@ def test_a_version_with_no_implementation_is_refused_rather_than_guessed(
 
     with pytest.raises(ValidationError, match="has no implementation"):
         impl.read_manifest(ws, HYP_ID, 2)
+
+
+# -- the version is the certified bytes, or it is refused --------------------------
+
+
+def test_an_edited_source_is_refused_rather_than_loaded(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    """What a stage loads is hashed first, so an edited file is named rather than run."""
+    compose(ws, store, HYP_ID)
+    manifest = impl.read_manifest(ws, HYP_ID, 1)
+    edited = files.impl_dir(ws, HYP_ID, 1) / manifest.sleeve.source
+    edited.write_bytes(VARYING + b"\nEDITED = True\n")
+
+    with pytest.raises(ValidationError, match="is not the sleeve that was certified") as refused:
+        impl.load(ws, HYP_ID, 1)
+
+    assert str(edited) in refused.value.message
+    assert sha256(edited.read_bytes()).hexdigest()[:7] in refused.value.message
+    assert sleeve.strategy_sha[:7] in refused.value.message, "the digest it should hash to"
+    assert str(source_file(ws, HYP_ID, sleeve.strategy_sha)) in str(refused.value.remedy)
+
+
+def test_an_edited_source_is_refused_where_a_replay_reads_it(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    """A replay runs the directory rather than the blobs, so it is checked the same way."""
+    compose(ws, store, HYP_ID)
+    manifest = impl.read_manifest(ws, HYP_ID, 1)
+    (files.impl_dir(ws, HYP_ID, 1) / manifest.sleeve.source).write_bytes(VARYING + b"\n")
+
+    with pytest.raises(ValidationError, match="hashes to"):
+        impl.sources(ws, manifest)
+
+
+def test_an_edited_construct_is_refused_by_the_name_of_its_own_file(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    """Every component is checked, so an edit to an attached construct is found too."""
+    compose(ws, store, HYP_ID)
+    certified_filter(ws, store)
+    compose(ws, store, FILTER_ID)
+    manifest = impl.read_manifest(ws, HYP_ID, 2)
+    edited = files.impl_dir(ws, HYP_ID, 2) / manifest.attached[0].source
+    edited.write_bytes(ALLOWING.replace(b'"time"', b'"instrument"'))
+
+    with pytest.raises(ValidationError, match="is not the filter that was certified") as refused:
+        impl.sources(ws, manifest)
+    assert str(edited) in refused.value.message
+
+    with pytest.raises(ValidationError, match=f"{HYP_ID}@2 was certified with"):
+        impl.load(ws, HYP_ID, 2)
+
+
+def test_a_deleted_source_is_refused_rather_than_run_from_the_interpreter_cache(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    """A module imported once in this process would otherwise load out of `sys.modules`."""
+    compose(ws, store, HYP_ID)
+    impl.load(ws, HYP_ID, 1)
+    manifest = impl.read_manifest(ws, HYP_ID, 1)
+    (files.impl_dir(ws, HYP_ID, 1) / manifest.sleeve.source).unlink()
+
+    with pytest.raises(ValidationError, match=f"is missing, so {HYP_ID}@1 has no sleeve to run"):
+        impl.load(ws, HYP_ID, 1)
 
 
 def test_a_second_composition_replaces_the_directory_rather_than_adding_to_it(

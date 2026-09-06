@@ -1,10 +1,10 @@
 """Workspace extension discovery.
 
-A workspace may carry packages of its own that provide gates, objectives, constructs,
-loaders, adapters, execution clients and custom data types through the same interfaces
-the shipped ones use. They live under the directories the configuration lists (`kanso_ext`
-by default), and they are found at startup: every package or single-module file directly
-under such a directory is imported, and what it declares is collected.
+A workspace may carry packages of its own that provide constructs, loaders, adapters,
+execution clients and custom data types through the same interfaces the shipped ones use.
+They live under the directories the configuration lists (`kanso_ext` by default), and they
+are found at startup: every package or single-module file directly under such a directory
+is imported, and what it declares is collected.
 
 An extension is operator code, so importing one is expected to fail sometimes. A failure
 is recorded on the extension and never raised: a broken extension degrades the workspace
@@ -14,6 +14,11 @@ An extension declares what it registers in a module-level `PROVIDES` table, mapp
 kind to the ids it claims. Discovery reads that declaration and compares it against the
 built-in ids its caller supplies. It does not resolve a clash: shadowing is reported, and
 which definition wins is not decided here.
+
+A kind a registry cannot read is refused here rather than collected, so that a declaration
+which could never take effect is a message at the declaration instead of a silence at the
+command that wanted it. Gates and objectives are the two: certification plans from, and
+judges by, the library in the package, and no workspace path reaches it.
 """
 
 from __future__ import annotations
@@ -26,8 +31,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 KINDS = (
-    "gates",
-    "objectives",
     "constructs",
     "loaders",
     "adapters",
@@ -36,10 +39,28 @@ KINDS = (
 )
 """The kinds of thing an extension may declare in `PROVIDES`.
 
-`exec_clients` is declared like any other, and shadowing one that ships is worth reporting
-for the same reason: a packaged id wins, so an extension declaring it would be registered
-nowhere and its author would have no way to find out.
+Each is a kind some registry reads from an extension. `exec_clients` is declared like any
+other, and shadowing one that ships is worth reporting for the same reason: a packaged id
+wins, so an extension declaring it would be registered nowhere and its author would have
+no way to find out.
 """
+
+REFUSED = ("gates", "objectives")
+"""The kinds a workspace may not provide, refused where they are declared.
+
+A plan is drawn from, and judged by, the criteria library in the package: no function
+that builds the toolbox takes a workspace, so an extension's gate or objective would be
+registered nowhere while `doctor` read green and the extension read loaded. Refusing the
+declaration is what turns that silence into a sentence at the file the author wrote.
+"""
+
+REFUSAL = (
+    "PROVIDES declares {kinds}, which a workspace cannot provide: the toolbox a plan is "
+    "drawn from and judged by is the package's own library, so a gate or an objective is "
+    "written in the package (docs/extensions.md)"
+)
+"""What an author is told about a refused kind, and where the two files that make one are
+described."""
 
 
 @dataclass(frozen=True)
@@ -129,17 +150,30 @@ def _import(name: str, directory: Path) -> object:
 
 
 def _read_provides(module: object) -> tuple[dict[str, tuple[str, ...]], str | None]:
+    """One module's declaration, and the one line describing everything wrong with it.
+
+    A refused kind is reported before an unusable one, because the first has a repair the
+    author can act on and the second is a typo. Both are reported together when both are
+    there: an author fixing a declaration should see the whole of it once.
+    """
     declared = getattr(module, "PROVIDES", None)
     if declared is None:
         return {}, None
     if not isinstance(declared, Mapping):
         return {}, "PROVIDES is not a table of kind to ids"
     provides: dict[str, tuple[str, ...]] = {}
+    refused: list[str] = []
     unknown: list[str] = []
     for kind, ids in declared.items():
-        if kind not in KINDS or isinstance(ids, str) or not isinstance(ids, Iterable):
+        if kind in REFUSED:
+            refused.append(str(kind))
+        elif kind not in KINDS or isinstance(ids, str) or not isinstance(ids, Iterable):
             unknown.append(str(kind))
         else:
             provides[str(kind)] = tuple(str(i) for i in ids)
-    error = f"PROVIDES has unusable kinds: {', '.join(sorted(unknown))}" if unknown else None
-    return provides, error
+    problems: list[str] = []
+    if refused:
+        problems.append(REFUSAL.format(kinds=", ".join(sorted(refused))))
+    if unknown:
+        problems.append(f"PROVIDES has unusable kinds: {', '.join(sorted(unknown))}")
+    return provides, "; ".join(problems) or None

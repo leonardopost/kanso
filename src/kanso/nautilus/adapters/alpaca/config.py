@@ -126,6 +126,23 @@ trips it. An operator on a plan with a higher ceiling raises it in `[adapters.al
 
 DEFAULT_TIMEOUT_S: Final = 30
 
+DEFAULT_POLL_INTERVAL_S: Final = 15.0
+"""Seconds between the live feed's sweeps of the series a stage has subscribed. One request
+per series per sweep, so this and the quota above together bound how many series a stage may
+run, which is why a subscription past that bound is refused rather than silently throttled
+into missing bars. It is a default and not a constant of the broker: a daily stage has no use
+for fifteen seconds and a minute stage has no use for more, so an operator whose stage trades
+a coarser bar widens it in `[adapters.alpaca]`."""
+
+MIN_POLL_INTERVAL_S: Final = 1.0
+MAX_POLL_INTERVAL_S: Final = 3600.0
+"""The cadence an operator may state, bounded at both ends because outside them it stops
+meaning anything. The finest bar this broker aggregates is a minute, so one second is already
+sixty sweeps per bar and every sweep but the first spends quota on a window with nothing new
+in it. And three consecutive failed sweeps is what stops a stage that has gone blind, so at
+an hour that verdict takes three hours to reach — most of a session traded on prices the feed
+had already stopped serving."""
+
 USER_AGENT: Final = "kanso"
 
 
@@ -315,6 +332,14 @@ class AlpacaConfig(KansoModel):
     of use — so this table is safe to print, to record and to commit. Every host is
     overridable because an operator behind a proxy has to be able to say so, and because
     the websocket origins were published rather than measured.
+
+    The two rates are here for the same reason as the hosts: they are this account's, not
+    this broker's. `requests_per_minute` is the ceiling the plan grants and
+    `poll_interval_s` is how often the live feed spends it, and together they decide how
+    many series a stage may subscribe — so an operator who cannot state the second cannot
+    trade a daily strategy without sweeping it every fifteen seconds, nor a minute one
+    without missing bars. Both are bounded, and a value outside the bounds is refused when
+    the table is read rather than at the first sweep.
     """
 
     paper_url: NonEmpty = PAPER_HOST
@@ -326,6 +351,9 @@ class AlpacaConfig(KansoModel):
     feed: Feed | None = None
     requests_per_minute: int = Field(default=DEFAULT_REQUESTS_PER_MINUTE, ge=1, le=100_000)
     timeout_s: int = Field(default=DEFAULT_TIMEOUT_S, ge=1, le=600)
+    poll_interval_s: float = Field(
+        default=DEFAULT_POLL_INTERVAL_S, ge=MIN_POLL_INTERVAL_S, le=MAX_POLL_INTERVAL_S
+    )
 
     def host(self, client_id: str) -> str:
         """The trading host `client_id` addresses, which is its account's and no other."""

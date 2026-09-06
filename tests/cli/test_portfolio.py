@@ -10,6 +10,7 @@ what stands between a workspace and real money.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -88,6 +89,43 @@ def test_show_writes_nothing(runner: CliRunner, deployed: Path) -> None:
     assert portfolio_document(deployed) == before
 
 
+def by_hand(root: Path, name: str, entry: dict[str, Any]) -> None:
+    """Add a strategy to a stage of `portfolio.yaml` with an editor, which is legal."""
+    document = portfolio_document(root)
+    document["stages"][name]["capital"] = 100_000
+    document["stages"][name]["strategies"] = [entry]
+    (root / "portfolio.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
+
+
+def test_show_marks_a_hand_added_entry_rather_than_printing_it_as_deployed(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The file can name a stage that will never exist; `show` says so, `deploy` proves it."""
+    by_hand(
+        deployed,
+        "live",
+        {"id": HYP_ID, "version": 1, "capital": 40_000, "joined_at": "2024-06-03T00:00:00Z"},
+    )
+
+    result = at(runner, deployed, "portfolio", "show")
+    live = stage(runner, deployed, "live")
+
+    assert result.exit_code == Exit.OK
+    assert "not deployed · in portfolio.yaml only" in result.stdout
+    assert live["strategies"][0]["recorded"] is False
+    assert live["allocated"] == 0, "an entry no deployment wrote holds none of the capital"
+    assert live["live"] is False
+    admitted = payload(at(runner, deployed, "portfolio", "deploy", "--stage", "live", "--json"))
+    assert admitted["admitted"] == [], "which is what deploy says about the same entry"
+
+
+def test_show_reports_a_deployed_version_as_recorded(runner: CliRunner, deployed: Path) -> None:
+    paper = stage(runner, deployed, "paper")
+
+    assert paper["strategies"][0]["recorded"] is True
+    assert "not deployed" not in at(runner, deployed, "portfolio", "show").stdout
+
+
 # -- deploy ------------------------------------------------------------------------
 
 
@@ -149,6 +187,21 @@ def test_an_engine_pin_that_has_moved_is_refused(runner: CliRunner, deployed: Pa
     assert result.exit_code == Exit.PRECONDITION
     assert "0.0.1" in payload(result)["error"]
     assert "cert run" in str(payload(result)["remedy"])
+
+
+def test_an_edited_implementation_is_refused_rather_than_deployed(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """A stage runs the certified bytes or nothing: the digest is checked before the node."""
+    source = next((deployed / "strategies" / HYP_ID / "impl" / "1").glob("kanso_impl_*.py"))
+    source.write_bytes(source.read_bytes() + b"\nEDITED = True\n")
+
+    result = at(runner, deployed, "portfolio", "deploy", "--stage", "paper", "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert source.name in str(payload(result)["error"])
+    assert "is not the sleeve that was certified" in str(payload(result)["error"])
+    assert "certificates" in str(payload(result)["remedy"])
 
 
 def test_a_stage_with_no_data_in_the_forward_window_is_refused(

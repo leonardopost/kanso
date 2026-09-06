@@ -455,6 +455,27 @@ def test_the_quota_is_reported_as_the_rate_it_enforces(ws: Workspace) -> None:
     assert BROKER.quota(configured(ws, requests_per_minute=17)) == "17/min"
 
 
+def test_the_sweep_cadence_is_a_key_of_the_table_rather_than_a_constant(ws: Workspace) -> None:
+    """A daily stage has no use for fifteen seconds, so the operator states the cadence."""
+    assert BROKER.config(ws).poll_interval_s == 15.0
+    assert BROKER.config(configured(ws, poll_interval_s=300)).poll_interval_s == 300.0
+
+
+@pytest.mark.parametrize(
+    ("stated", "reason"),
+    [(0.25, "greater than or equal to"), (7200, "less than or equal to")],
+)
+def test_a_cadence_outside_the_bounds_is_refused_when_the_table_is_read(
+    ws: Workspace, stated: float, reason: str
+) -> None:
+    """A second is already sixty sweeps of a minute bar; an hour is three hours gone blind."""
+    with pytest.raises(ValidationError) as failure:
+        BROKER.config(configured(ws, poll_interval_s=stated))
+
+    assert "poll_interval_s" in str(failure.value)
+    assert reason in str(failure.value)
+
+
 def test_no_credential_may_be_written_into_the_table(ws: Workspace) -> None:
     """Configuration names variables and never holds values, so an unknown key is refused."""
     with pytest.raises(ValidationError):

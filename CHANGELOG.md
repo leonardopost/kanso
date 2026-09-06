@@ -3,6 +3,22 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- `kanso doctor` grades a state database written by a later kanso as a failure rather than reporting it up to date, so it no longer disagrees with every other command about whether a workspace is usable.
+
+- `kanso data sync` extends only the **newest** dataset of each series, so a series with a chunked backfill behind it can be continued at all; `--dataset` still names one directly, newest of its series or not.
+- `kanso data instruments resolve` builds the `[data] reference` adapter only once an id is actually left unresolved, so a wholly manual universe resolves with that adapter's credential unset.
+- A baseline that did not run reports the remedy of the failure that ended it — rows the catalog no longer holds send an operator to `kanso data load` — where every cause alike used to say `fix hypotheses/<id>/strategy.py`.
+- `kanso hyp validate` and `kanso hyp add` refuse a construct parameter the construct does not declare, or a value outside its declared set (exit 3); the refusal used to arrive inside a run's first card.
+- `kanso hyp validate` and `kanso hyp add` refuse `portfolio` as a hypothesis id (exit 3): it is how a construct attached to the book names its host.
+- `kanso portfolio deploy` and `kanso replay run --strategy` hash every file under `strategies/<id>/impl/<version>/` against the `strategy_sha` its manifest records, and refuse an edited, truncated or deleted source by name (exit 3), naming the certified copy to restore it from.
+- `kanso portfolio show` reads `portfolio.yaml` against the record: a stage entry no deployment wrote prints as `not deployed · in portfolio.yaml only`, carries `"recorded": false` under `--json`, and counts towards neither the stage's allocation nor its P&L nor whether its node is up.
+- `kanso cert plan` warns when the paper window the plan implies is under a tenth of the certification window the hypothesis declares, and pins the plan either way; `warnings` under `--json`.
+- A `kanso_ext` module declaring `gates` or `objectives` in `PROVIDES` is refused where it is declared: no registry reads either kind, and a criterion is written in the package.
+- `kanso doctor`'s shadow check reads one registry per kind a declaration may carry — the packaged constructs, the custom data types and the framework's own `sandbox` execution client included — where it read three kinds out of seven.
+- `[adapters.alpaca] poll_interval_s` sets the live feed's sweep cadence, `1` to `3600` seconds and still 15 by default, refused out of range when the table is read; it was a constructor argument no workspace could reach.
+
 ## v0.1.0 — 2026-09-06
 
 First release.

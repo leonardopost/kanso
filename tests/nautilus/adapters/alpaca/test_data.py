@@ -1132,6 +1132,33 @@ def test_a_configuration_of_another_adapter_is_refused(ws: Workspace) -> None:
     assert failure.value.code is Exit.PRECONDITION
 
 
+def test_the_builder_sweeps_at_the_cadence_the_workspace_declares(ws: Workspace) -> None:
+    """The cadence is the operator's, and with the quota it bounds the series a stage runs."""
+    prepared = with_credentials(
+        configured(ws, feed="sip", requests_per_minute=60, poll_interval_s=30)
+    )
+    made = data_client(prepared, PAPER_CLIENT, transport=Replay(answers(bars_body())), **parts(ws))
+
+    assert made.provenance()["poll_interval_s"] == 30.0
+    assert made._capacity == 30
+
+
+def test_the_cadence_written_into_the_file_is_the_one_the_node_sweeps_at(ws: Workspace) -> None:
+    """The file is where a node reads the table, so it is where the cadence has to reach."""
+    from kanso.nautilus.adapters.alpaca.factory import AlpacaDataClientConfig
+
+    prepared = on_disk(ws)
+    path = prepared.root / "kanso.toml"
+    path.write_text(f"{path.read_text()}poll_interval_s = 60\n")
+    made = feed.DATA_CLIENT_FACTORY.create(
+        config=AlpacaDataClientConfig(client_id=PAPER_CLIENT, workspace=str(prepared.root)),
+        name=PAPER_CLIENT,
+        **parts(ws),
+    )
+
+    assert made.provenance()["poll_interval_s"] == 60.0
+
+
 def test_the_builder_takes_the_adapters_one_shared_connection_by_default(ws: Workspace) -> None:
     """Three clients with three connections would be three times the published limit."""
     prepared = with_credentials(configured(ws, feed="sip", requests_per_minute=60))

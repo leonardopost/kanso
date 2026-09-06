@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import socket
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from typer.testing import CliRunner
 from kanso import env
 from kanso.cli import doctor as doctor_module
 from kanso.errors import Exit, PreconditionError
+from kanso.ext import KINDS
 from kanso.nautilus.adapters import exec_clients
 from kanso.skills_sync import packaged_skills
 from kanso.state import StateStore
@@ -359,7 +361,7 @@ def test_extensions_are_listed_and_a_broken_one_is_reported(
 ) -> None:
     package = workspace / "kanso_ext" / "good"
     package.mkdir(parents=True)
-    (package / "__init__.py").write_text("PROVIDES = {'gates': ['mine']}\n", encoding="utf-8")
+    (package / "__init__.py").write_text("PROVIDES = {'loaders': ['mine']}\n", encoding="utf-8")
     (workspace / "kanso_ext" / "broken.py").write_text(
         "raise RuntimeError('boom')\n", encoding="utf-8"
     )
@@ -447,6 +449,39 @@ def test_an_extension_shadowing_a_registered_id_is_reported(
     assert "greedy shadows the built-in loaders 'synthetic'" in listed
     assert "greedy shadows the built-in adapters 'massive'" in listed
     assert f"greedy shadows the built-in exec_clients '{broker_client}'" in listed
+
+
+def test_the_shadow_check_reads_every_kind_a_declaration_may_carry(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """A construct, a data type and the framework's own client shadow as easily as a loader.
+
+    Each of those registries keeps the packaged id, so an extension declaring one is
+    registered nowhere — the same silence a shadowed loader would be, and the reason to
+    read every registry rather than the three an adapter happens to touch. `sandbox` is
+    the sharpest of them: it is the execution client every workspace has without a broker.
+    """
+    package = workspace / "kanso_ext" / "unseen"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "PROVIDES = {'constructs': ['filter'], 'data_types': ['bar'], "
+        "'exec_clients': ['sandbox']}\n",
+        encoding="utf-8",
+    )
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert status(result, "extensions") == "warn"
+    listed = items(result, "extensions")
+    assert "unseen shadows the built-in constructs 'filter'" in listed
+    assert "unseen shadows the built-in data_types 'bar'" in listed
+    assert "unseen shadows the built-in exec_clients 'sandbox'" in listed
+    assert "3 shadowed id(s)" in str(checks(result)["extensions"]["detail"])
+
+
+def test_the_declaration_and_the_shadow_check_name_the_same_kinds() -> None:
+    """One comparison reads both tables, so a kind in only one of them is a blind spot."""
+    assert set(doctor_module.builtin_ids()) == set(KINDS)
 
 
 def test_doctor_makes_no_network_call(
@@ -648,7 +683,7 @@ def test_an_extension_that_loads_is_listed_without_a_warning(
 ) -> None:
     package = workspace / "kanso_ext" / "fine"
     package.mkdir(parents=True)
-    (package / "__init__.py").write_text("PROVIDES = {'gates': ['mine']}\n", encoding="utf-8")
+    (package / "__init__.py").write_text("PROVIDES = {'loaders': ['mine']}\n", encoding="utf-8")
 
     result = at(runner, workspace, "doctor", "--json")
 
@@ -710,3 +745,20 @@ def test_a_packaged_skill_is_looked_up_under_its_prefixed_link_name(
 
     assert status(result, "skills") == "ok"
     assert "3 links" in str(checks(result)["skills"]["detail"])
+
+
+def test_a_state_database_ahead_of_the_package_fails_rather_than_reading_as_up_to_date(
+    runner: CliRunner, fresh: Path
+) -> None:
+    """`pending` only looks upward, so without the other direction `doctor` would be the
+    one command calling a workspace well that every other command refuses."""
+    assert run(runner, "init", fresh).exit_code == Exit.OK
+    with sqlite3.connect(fresh / "state.db") as conn:
+        conn.execute("PRAGMA user_version = 99")
+
+    result = at(runner, fresh, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    schema = next(c for c in payload(result)["checks"] if c["name"] == "schema")
+    assert schema["status"] == "fail"
+    assert "past the newest this package ships" in schema["detail"]

@@ -769,15 +769,26 @@ def _baseline(
         directory,
     )
     if result.crashed:
-        _refuse_baseline(setup.hyp.id, f"{result.reason}: {result.traceback_tail or 'no output'}")
+        _refuse_baseline(
+            setup.hyp.id,
+            f"{result.reason}: {result.traceback_tail or 'no output'}",
+            result.remedy,
+        )
     return result
 
 
-def _refuse_baseline(hyp_id: str, why: str) -> NoReturn:
-    """Refuse the run, naming what the baseline did instead of running."""
+def _refuse_baseline(hyp_id: str, why: str, remedy: str | None = None) -> NoReturn:
+    """Refuse the run, naming what the baseline did instead of running.
+
+    A baseline fails for causes that are not the strategy's — a catalog that no longer
+    holds the window's rows is the one an operator meets — and each wants a different
+    next action. Where the cause named its own remedy and that remedy crossed the card's
+    process boundary, it is the one reported; fixing `strategy.py` is what is left when
+    nothing else was named, which is the case for a strategy that raised.
+    """
     raise PreconditionError(
         f"the baseline card of {hyp_id} did not run: {why}",
-        remedy=f"fix hypotheses/{hyp_id}/{STRATEGY_FILE} and begin again",
+        remedy=remedy or f"fix hypotheses/{hyp_id}/{STRATEGY_FILE} and begin again",
     )
 
 

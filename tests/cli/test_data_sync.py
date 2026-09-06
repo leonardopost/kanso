@@ -27,6 +27,21 @@ def rows(count: int, start: int = 0) -> str:
     return "".join(made)
 
 
+def same_series(root: Path, name: str, content: str) -> Path:
+    """A second CSV of the same instrument, type and resolution, and the spec that reads it.
+
+    One series to the catalog and two datasets to kanso, which is the shape a backfill
+    leaves behind: the loader and the columns are the fixture's own, so only the file the
+    rows come from differs.
+    """
+    (root / f"{name}.csv").write_text(content, encoding="utf-8")
+    spec = yaml.safe_load((root / "files.yaml").read_text(encoding="utf-8"))
+    spec["files"][0]["path"] = str(root / f"{name}.csv")
+    path = root / f"{name}.yaml"
+    path.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    return path
+
+
 @pytest.fixture
 def files(runner: CliRunner, workspace: Path) -> Path:
     """A workspace holding five days of a CSV file, and the spec that reads it."""
@@ -100,6 +115,81 @@ def test_a_synced_dataset_never_rewrites_the_one_a_snapshot_pins(
     [series] = payload(at(runner, files, "data", "show", "--json"))["series"]
     still = [item for item in series["datasets"] if item["dataset_id"] == pinned["dataset_id"]]
     assert still and still[0]["checksum"] == pinned["checksum"]
+
+
+def test_sync_extends_only_the_newest_dataset_of_each_series(
+    runner: CliRunner, files: Path
+) -> None:
+    """A series that has been extended once is several datasets, and only its last grows.
+
+    Extending an interior dataset asks for days the dataset after it already serves, which
+    the catalog refuses — outright once a snapshot pins it. A sync that reached for every
+    manifest could therefore not succeed at all on a series a backfill or an earlier sync
+    had left in chunks, which is every series with any history behind it.
+    """
+    (files / "bars.csv").write_text(CSV_HEADER + rows(9), encoding="utf-8")
+    assert at(runner, files, "data", "sync", "--to", "2024-01-10").exit_code == Exit.OK
+    (files / "bars.csv").write_text(CSV_HEADER + rows(13), encoding="utf-8")
+
+    result = at(runner, files, "data", "sync", "--to", "2024-01-14", "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    document = payload(result)
+    assert [chunk["start"] for chunk in document["chunks"]] == ["2024-01-11"]
+    [series] = payload(at(runner, files, "data", "show", "--json"))["series"]
+    assert series["spans"] == [["2024-01-02", "2024-01-14"]]
+
+
+def test_every_series_is_extended_and_not_only_one_of_them(runner: CliRunner, files: Path) -> None:
+    """Newest *per series*: two series in a workspace are two datasets to continue."""
+    write_spec(files, "synthetic.yaml", start="2024-01-02", end="2024-01-08")
+    assert (
+        at(
+            runner,
+            files,
+            "data",
+            "load",
+            "--loader",
+            "synthetic",
+            "--spec",
+            files / "synthetic.yaml",
+        ).exit_code
+        == Exit.OK
+    )
+    (files / "bars.csv").write_text(CSV_HEADER + rows(9), encoding="utf-8")
+
+    document = payload(at(runner, files, "data", "sync", "--to", "2024-01-10", "--json"))
+
+    assert sorted(chunk["resolution"] for chunk in document["chunks"]) == ["1d", "1h"]
+
+
+def test_a_named_dataset_is_extended_even_when_it_is_not_the_newest(
+    runner: CliRunner, files: Path
+) -> None:
+    """Naming one is how an operator extends the dataset in front of a hole on purpose.
+
+    The default is the newest dataset because that is the only one that can be extended
+    without knowing what the series looks like; `--dataset` is the operator saying which
+    end of which dataset they meant, and it is not second-guessed.
+    """
+    later = same_series(files, "later", CSV_HEADER + rows(5, 10))
+    assert (
+        at(runner, files, "data", "load", "--loader", "csv_parquet", "--spec", later).exit_code
+        == Exit.OK
+    )
+    behind = min(
+        payload(at(runner, files, "data", "show", "--json"))["series"][0]["datasets"],
+        key=lambda item: item["span"][1],
+    )["dataset_id"]
+    (files / "bars.csv").write_text(CSV_HEADER + rows(8), encoding="utf-8")
+
+    document = payload(
+        at(runner, files, "data", "sync", "--dataset", behind, "--to", "2024-01-09", "--json")
+    )
+
+    assert document["rows"] == 3
+    [series] = payload(at(runner, files, "data", "show", "--json"))["series"]
+    assert series["spans"] == [["2024-01-02", "2024-01-09"], ["2024-01-12", "2024-01-16"]]
 
 
 def test_a_source_with_nothing_further_says_so(runner: CliRunner, files: Path) -> None:

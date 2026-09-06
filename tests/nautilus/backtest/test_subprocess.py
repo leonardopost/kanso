@@ -14,7 +14,13 @@ from kanso.nautilus.backtest import (
     run_subprocess,
 )
 
-from .conftest import RAISING_SLEEVE, SLOW_SLEEVE, TELLING_SLEEVE, VANISHING_SLEEVE
+from .conftest import (
+    RAISING_SLEEVE,
+    REFUSING_SLEEVE,
+    SLOW_SLEEVE,
+    TELLING_SLEEVE,
+    VANISHING_SLEEVE,
+)
 
 pytestmark = pytest.mark.usefixtures("store")
 
@@ -119,8 +125,24 @@ def test_a_card_that_raises_is_a_crash_with_its_traceback_tail(
     assert result.reason == "exception"
     assert "the card asked for the impossible" in (result.traceback_tail or "")
     assert len((result.traceback_tail or "").splitlines()) <= 50
+    assert result.remedy is None
     assert result.run.returns == ()
     assert result.run.capital == request_for().capital
+
+
+def test_a_refusal_the_child_raised_brings_its_remedy_back(
+    store: Path, lane: Path, request_for
+) -> None:
+    """A card fails for causes that are not the card's, and each names its own next action.
+
+    The traceback tail carries the message and nothing else, so a caller reading only that
+    has to guess a remedy for every failure alike. What the cause knew crosses the process
+    boundary as a value.
+    """
+    result = run_subprocess(request_for(source=REFUSING_SLEEVE), store, lane)
+
+    assert result.crashed is True
+    assert result.remedy == "load it and try again"
 
 
 def test_a_card_that_leaves_no_report_is_a_crash(store: Path, lane: Path, request_for) -> None:

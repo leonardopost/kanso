@@ -27,10 +27,10 @@ or `editable` — and from where.
 Capabilities are prototyped as **workspace extensions** (`kanso_ext/`, same interfaces as
 built-ins: `Construct`, `Loader`, `register_custom_type`, `ExecutionClientSpec`, and the data
 and broker adapter protocols) and moved upstream with the `kanso-upstream` skill (copy, real
-tests, branch, PR with the workspace evidence). `Gate` and `Objective` are written against the
-same interfaces and are the two exceptions to prototyping: no workspace registry reads either
-in 0.1.0 — the toolbox is the package's own library — so one judges nothing until it is
-upstream (`docs/backlog.md` entry 26). Built-in additions land in
+tests, branch, PR with the workspace evidence). `Gate` and `Objective` are the two exceptions
+to prototyping: no workspace registry reads either — the toolbox a plan is drawn from and
+judged by is the package's own library — so `PROVIDES` refuses both kinds and one is written
+here from the start. Built-in additions land in
 `src/kanso/criteria/library/` (gate/objective YAML + `impl`),
 `src/kanso/classify/constructs/`, `src/kanso/data/loaders/`, `src/kanso/data/types/`,
 `src/kanso/data/adapters/<vendor>/` or `src/kanso/nautilus/adapters/<broker>/`, each with
@@ -55,10 +55,13 @@ Anything found in use without a checkout goes to the issue tracker with `kanso d
 - Schema changes ship with a migration `src/kanso/state/migrations/NNNN_name.sql` and a
   `schema_version` bump. `kanso migrate` applies them, and every other command refuses a
   database behind the package with exit 2 rather than migrating it behind the operator's
-  back. A database *ahead* of the package — an operator who downgraded — is not detected:
-  nothing is pending, `doctor` reports it up to date, and commands run against a schema this
-  kanso does not know. Downgrading across a migration is unsupported until that check
-  exists, and a release whose migrations are not additive should say so in the changelog.
+  back. A database *ahead* of the package — an operator who downgraded — is refused the same
+  way, by name and by how far, because applying this package's writes to a shape a later one
+  wrote is how a downgrade corrupts a workspace rather than merely failing. The command
+  layer, `doctor` and the daemon entry point a service unit starts all check both
+  directions. Downgrading across a migration is still unsupported; what changed is that
+  trying it is refused rather than silently permitted, and a release whose migrations are
+  not additive should still say so in the changelog.
 - Skills and templates ship inside the wheel; a release changes them for every workspace at
   the next `kanso skills sync` / `kanso init`.
 

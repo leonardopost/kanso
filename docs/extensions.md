@@ -24,10 +24,11 @@ cannot replace part of it. The reason is the fixture: the loaders, constructs an
 test suite and the demo run against must be the package's own, or a green suite would say
 nothing about the package. A clash is not resolved, it is reported: `kanso ext show` marks
 the id `shadowed`, and the packaged definition is what the workspace uses. `kanso doctor`
-grades a workspace `warn` for a shadowed loader, adapter or *broker* execution client, and
-does not see a shadowed construct, data type, gate, objective or the framework's own
-`sandbox` client — which is one of the reasons to run `ext show` rather than infer from a
-green `doctor`.
+grades a workspace `warn` for an id that shadows a **packaged** one, in every kind a
+declaration may carry — the framework's own `sandbox` client included. `ext show` compares
+against what this workspace's registries actually hand out, so it also marks an id that
+shadows a loader a packaged *adapter* provides (`massive_bars` and its siblings), and it is
+the only one of the two that says why an id is `absent`.
 
 **An extension that fails to import degrades the workspace; it does not stop it.** Extension
 code is operator code, so an import failure is expected to happen sometimes. Discovery
@@ -74,26 +75,28 @@ An extension says what it registers in a module-level `PROVIDES`, a table of kin
 PROVIDES = {"loaders": ["house_bars"], "data_types": ["house_signal"]}
 ```
 
-Seven kinds are accepted. Each is registered by one module attribute, read by the registry
+Five kinds are accepted. Each is registered by one module attribute, read by the registry
 for that kind:
 
-| kind | where the registry reads it | 0.1.0 |
-|---|---|---|
-| `loaders` | `LOADERS`, a mapping of id to a `Loader` | registered |
-| `adapters` | `ADAPTERS`, a mapping of id to an `Adapter` | registered |
-| `constructs` | `CONSTRUCTS`, a sequence of `ConstructItem` | registered |
-| `exec_clients` | `EXEC_CLIENTS`, a sequence of `ExecutionClientSpec` | registered |
-| `data_types` | a `register_custom_type` call made while the module is imported | registered |
-| `gates` | nothing reads it | **declared only** |
-| `objectives` | nothing reads it | **declared only** |
+| kind | where the registry reads it |
+|---|---|
+| `loaders` | `LOADERS`, a mapping of id to a `Loader` |
+| `adapters` | `ADAPTERS`, a mapping of id to an `Adapter` |
+| `constructs` | `CONSTRUCTS`, a sequence of `ConstructItem` |
+| `exec_clients` | `EXEC_CLIENTS`, a sequence of `ExecutionClientSpec` |
+| `data_types` | a `register_custom_type` call made while the module is imported |
 
-A kind outside those seven, or an id list written as a bare string, is reported as an
-unusable declaration and the rest of the table is still read. It is not free, though: the
-construct catalogue and the execution client registry take nothing at all from an extension
-whose declaration did not read, where the loader, adapter and data-type registries take what
-they can. So one bad kind costs an extension its constructs and its clients and leaves its
-loaders alone, and `kanso ext show` blames the declaration rather than the table, so that
-the thing you go and check is the thing that is wrong:
+Two kinds are **refused**: `gates` and `objectives`. No registry reads either, so declaring
+one is refused where it is written rather than collected and forgotten — the section below
+says where a gate goes instead.
+
+A kind outside those five, or an id list written as a bare string, is reported as an
+unusable declaration and the rest of the table is still read. Neither that nor a refused
+kind is free, though: the construct catalogue and the execution client registry take nothing
+at all from an extension whose declaration did not read, where the loader, adapter and
+data-type registries take what they can. So one bad kind costs an extension its constructs
+and its clients and leaves its loaders alone, and `kanso ext show` blames the declaration
+rather than the table, so that the thing you go and check is the thing that is wrong:
 
 ```
 $ kanso ext show
@@ -127,14 +130,11 @@ house_broker    loaded · kanso_ext/house_broker.py
                 exec_clients house_paper         registered
 house_overlay   loaded · kanso_ext/house_overlay
                 constructs   vol_target          registered
-house_rules     loaded · kanso_ext/house_rules.py
-                gates        min_holding_period  absent · no registry reads it: this version's toolbox is the package's own library
-                objectives   net_edge_per_turn   absent · no registry reads it: this version's toolbox is the package's own library
 house_signal    loaded · kanso_ext/house_signal.py
                 data_types   house_signal        registered
 house_vendor    loaded · kanso_ext/house_vendor.py
                 adapters     house               registered
-6/6 loaded · 5 registered · 0 shadowed · 2 absent
+5/5 loaded · 5 registered · 0 shadowed · 0 absent
 ```
 
 Three states, and each is a fact about the registry for that kind rather than a claim about
@@ -147,9 +147,8 @@ where the id came from:
 | `absent` | nothing hands the id out, and the reason follows it |
 
 The reason is the point of the command. `the module's LOADERS table yields no loader under
-that id` is a forgotten table or a class that does not satisfy the protocol;
-`nothing registered it` on a data type is a missing `register_custom_type` call; and
-`no registry reads it` is the section below.
+that id` is a forgotten table or a class that does not satisfy the protocol, and
+`nothing registered it` on a data type is a missing `register_custom_type` call.
 
 `--json` prints the same thing as one object, with `paths`, an `extensions` array carrying
 each extension's `loaded`, `error` and `provides`, a `counts` summary, and `notes`.
@@ -177,33 +176,36 @@ boom            loaded · kanso_ext/boom
            the construct catalogue: RuntimeError: the house model server is not running
 ```
 
-## Gates and objectives are declared and registered nowhere
+## A gate or an objective goes in the package
 
-`PROVIDES` accepts `gates` and `objectives` and discovery collects them — and no registry
-reads either. Certification plans from, and judges by, the toolbox in the package: one YAML
-file per item under `src/kanso/criteria/library/`, naming the implementation it resolves.
-There is no workspace path into that catalogue in 0.1.0.
+`PROVIDES` refuses `gates` and `objectives`. Certification plans from, and judges by, the
+toolbox in the package: one YAML file per item under `src/kanso/criteria/library/`, naming
+the implementation it resolves, and nothing that builds that toolbox takes a workspace. A
+declaration is therefore refused where it is written:
 
-What that looks like from the outside is a hypothesis refused by name:
+```
+$ kanso ext show
+paths      kanso_ext
+house_rules     loaded · kanso_ext/house_rules.py
+                PROVIDES declares gates, objectives, which a workspace cannot provide: the toolbox a plan is drawn from and judged by is the package's own library, so a gate or an objective is written in the package (docs/extensions.md)
+1/1 loaded · 0 registered · 0 shadowed · 0 absent
+```
+
+The module still imported; what it said about itself did not read, so its constructs and
+its execution clients are skipped with it. Collecting the declaration instead would buy a
+green `doctor` and a loaded extension, and then a hypothesis refused a command later for an
+id nothing holds:
 
 ```
 $ kanso hyp validate hypotheses/house_mr/hypothesis.yaml
 error: constraints.min_holding_period: is not a gate in the toolbox
 ```
 
-with `kanso doctor` green and the extension listed as loaded. `kanso ext show` is what joins
-the two:
-
-```
-house_rules     loaded · kanso_ext/house_rules.py
-                gates        min_holding_period  absent · no registry reads it: this version's toolbox is the package's own library
-```
-
 So a gate or an objective is written against `kanso.criteria`'s `Gate` and `Objective` and
-lands **in** the package rather than in the workspace. Prototyping one in `kanso_ext/` is
+lands **in** the package rather than in the workspace. Prototyping one under `kanso_ext/` is
 still worth doing — a gate is a function of a `GateContext` and can be exercised against a
-real `CardRun` with nothing else running — but the workspace will not judge anything with
-it. The limitation is recorded in `docs/backlog.md`.
+real `CardRun` with nothing else running — but declare nothing for it, and the workspace
+will judge nothing with it until it is upstream.
 
 Two files make one item, and both go in the package. The YAML **is** the catalogue: nothing
 enumerates gates, so the file is the declaration the classifier and the planner read, and
@@ -507,7 +509,7 @@ house · data · extension · 0/1 credentials resolve · bars
 
 ## When an extension does not do anything
 
-Six failures, in the order they are worth checking.
+Seven failures, in the order they are worth checking.
 
 | what you see | what happened |
 |---|---|
@@ -515,6 +517,7 @@ Six failures, in the order they are worth checking.
 | `failed · …` and `the name … was already taken` | the extension's name is one an importable module already has. Rename the directory or file |
 | `loaded` and `declares nothing` | there is no `PROVIDES`, or nothing in it was usable |
 | `loaded` and `PROVIDES has unusable kinds` | a kind or an id list kanso cannot read. Its constructs and clients are lost with it; its loaders, adapters and types are not |
+| `loaded` and `PROVIDES declares gates` (or `objectives`) | a kind no registry reads. Delete it from the declaration; the criterion itself goes in the package |
 | `absent` on a declared id | the registry for that kind found nothing under it; the reason is on the line |
 | `shadowed` on a declared id | a packaged id of that name exists, and the packaged one is what the workspace uses |
 

@@ -103,6 +103,24 @@ class Strategy(KansoStrategy):
         raise RuntimeError("the card asked for the impossible")
 """
 
+REFUSING_SLEEVE = b"""
+from kanso.errors import PreconditionError
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_bar(self, bar):
+        raise PreconditionError("the window is not there", remedy="load it and try again")
+"""
+"""A card that fails the way kanso itself fails: with a remedy, which is the part of a
+refusal a traceback loses."""
+
 CLOSING_SLEEVE = b'''
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 

@@ -639,6 +639,12 @@ def resolve_universe(
     validation failure naming every id that could not be resolved and why, so one report
     covers the whole universe rather than one id per attempt.
 
+    The reference adapter is built only once an id is actually left unresolved. Building it
+    resolves that adapter's credential, so a universe the cache and the manual entries
+    answer in full — the demo's, and every file-export workspace's — resolves under a named
+    reference adapter whose key is unset, which is the difference between naming a vendor
+    and needing one.
+
     `refresh` passes the cache by: every id is resolved again, from its manual entry or
     through the reference adapter, which is how an operator picks up a definition that
     changed at the source. The definitions already held stay in the store, so a run pinned
@@ -677,7 +683,7 @@ def resolve_universe(
 
     _collect(ManualProvider(file).resolve(manual, as_of), resolved, failures)
 
-    provider = _reference_provider(ws)
+    provider = _reference_provider(ws) if unresolved else None
     updates: dict[str, InstrumentEntry] = {}
     if provider is None:
         absent = _no_provider(ws)

@@ -149,22 +149,26 @@ def test_a_strategy_resolves_to_its_latest_version(
     assert target.strategy_source == REVERTING
 
 
-def test_a_strategy_runs_the_generated_implementation(
+def test_a_strategy_reads_the_generated_implementation_and_refuses_a_drifted_one(
     ws: Workspace, store: StateStore, carded_hyp: str
 ) -> None:
-    """A stage loads `impl/<version>/`, so that directory is what a replay runs.
+    """A stage loads `impl/<version>/`, so that directory is what a replay reads.
 
-    Not the blobs it was copied from: an implementation that has drifted from them is
-    exactly what a replay of a version is meant to be running.
+    Which is what the edit proves: a resolver reading the blobs instead could not have
+    noticed it. What the directory holds is checked against the digest its manifest
+    records, so a replay either runs the certified bytes or refuses by the name of the
+    file that diverged — never bytes nobody certified under the label of a version.
     """
     composed(ws, store, carded_hyp)
     edited = REVERTING.replace(b"notional: float = 5_000.0", b"notional: float = 4_000.0")
     manifest = strategy.read_manifest(ws, carded_hyp, 1)
-    (strategy.impl_dir(ws, carded_hyp, 1) / manifest.sleeve.source).write_bytes(edited)
+    source = strategy.impl_dir(ws, carded_hyp, 1) / manifest.sleeve.source
+    source.write_bytes(edited)
 
-    target = resolve(ws, store, strategy=carded_hyp)
+    with pytest.raises(ValidationError, match="is not the sleeve that was certified") as refused:
+        resolve(ws, store, strategy=carded_hyp)
 
-    assert target.strategy_source == edited
+    assert source.name in refused.value.message
 
 
 def test_a_version_carries_its_attached_constructs(

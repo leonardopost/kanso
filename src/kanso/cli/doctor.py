@@ -54,17 +54,28 @@ HARDWARE = ("os", "os_version", "arch", "chip", "cores_total", "mem_gb")
 def builtin_ids() -> dict[str, tuple[str, ...]]:
     """The ids an extension would shadow, per kind, read from the registries themselves.
 
+    Every kind `PROVIDES` accepts is here, because a packaged id wins in every one of
+    those registries: an extension declaring one is registered nowhere, and a check that
+    read some of them would grade that silence `ok`. `exec_clients` covers the framework's
+    own `sandbox` as well as each broker's, since the client that is not a broker's is
+    shadowed exactly as easily and matters more — it is the one client every workspace has.
+
     Read rather than listed, so a registry that grows an id does not have to remember to
-    grow this too. It is computed at the call and not at import because reading the adapter
-    registry imports the adapter packages, and `doctor` is not the reason to do that until
-    it is actually asked.
+    grow this too. It is computed at the call and not at import because reading these
+    registries imports the adapter packages and every packaged construct's implementation,
+    and `doctor` is not the reason to do that until it is actually asked.
     """
+    from kanso.classify.construct import builtin as builtin_constructs
     from kanso.data.loaders import BUILTIN_LOADERS
+    from kanso.data.types import BUILTIN_TYPES
+    from kanso.portfolio import clients
 
     return {
         "loaders": tuple(sorted(BUILTIN_LOADERS)),
         "adapters": tuple(sorted(registry.packaged())),
-        "exec_clients": tuple(sorted(brokers.exec_clients())),
+        "constructs": tuple(sorted(builtin_constructs())),
+        "data_types": tuple(sorted(BUILTIN_TYPES)),
+        "exec_clients": tuple(sorted(clients.builtin())),
     }
 
 
@@ -217,7 +228,12 @@ def _wheel() -> Check:
 
 
 def _schema(ws: Workspace) -> Check:
-    """The version stamped on `state.db`, and the migrations it has not been given."""
+    """The version stamped on `state.db`, and whether this package can write it.
+
+    Both directions, because `pending` only looks upward: a database a later kanso wrote
+    has migrations this one has never heard of, and reporting it up to date would make
+    `doctor` the one command that says a workspace is well when every other refuses it.
+    """
     path = ws.path("state.db")
     if not path.exists():
         pending = [migration.name for migration in migrations()]
@@ -231,6 +247,14 @@ def _schema(ws: Workspace) -> Check:
     with StateStore(path) as store:
         version = store.schema_version()
         pending = store.pending()
+        ahead = store.ahead_by()
+    if ahead:
+        return Check(
+            "schema",
+            "fail",
+            f"schema {version} · {ahead} version(s) past the newest this package ships",
+            remedy="install the kanso that wrote it, or start a workspace this one owns",
+        )
     if not pending:
         return Check("schema", "ok", f"schema {version} · up to date")
     return Check(

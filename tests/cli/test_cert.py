@@ -108,6 +108,44 @@ def test_the_plan_reads_as_the_gates_the_stages_and_the_reasons(
     assert f"kanso cert run {HYP_ID}" in result.stdout
 
 
+def sized(min_duration: str) -> dict[str, Any]:
+    """The fixture's plan with its paper window set, which is the operator's real choice."""
+    gates = [
+        dict(gate, params={"min_duration": min_duration, "horizon_mult": 20.0})
+        if gate["id"] == "paper_forward"
+        else gate
+        for gate in mocked.PLAN["gates"]
+    ]
+    return {**mocked.PLAN, "gates": gates}
+
+
+def test_a_paper_window_too_short_for_its_own_band_is_warned_about(
+    runner: CliRunner, researched: Path
+) -> None:
+    """The fixture certifies over 61 days and its plan judges paper over five: a warning."""
+    result = at(runner, researched, "cert", "plan", HYP_ID)
+    document = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
+
+    assert result.exit_code == Exit.OK
+    assert "warning" in result.stdout
+    assert "paper window 5d against a 61d certification window" in result.stdout
+    (warning,) = document["warnings"]
+    assert "noisier than the band" in warning
+    assert plan_document(researched)["plan_version"] == 1, "a warning pins the plan all the same"
+
+
+def test_a_paper_window_the_certification_window_can_judge_is_not(
+    runner: CliRunner, researched: Path
+) -> None:
+    mocked.scripted(researched, certify_plan=[sized("5d"), sized("30d")])
+    assert at(runner, researched, "cert", "plan", HYP_ID, "--json").exit_code == Exit.OK
+
+    result = at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json")
+
+    assert payload(result)["warnings"] == []
+    assert "warning" not in at(runner, researched, "cert", "plan", HYP_ID).stdout
+
+
 def test_reading_a_pinned_plan_costs_nothing(runner: CliRunner, researched: Path) -> None:
     assert at(runner, researched, "cert", "plan", HYP_ID, "--json").exit_code == Exit.OK
 

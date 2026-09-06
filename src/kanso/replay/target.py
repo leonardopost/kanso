@@ -121,7 +121,9 @@ def _of_strategy(ws: Workspace, store: StateStore, strategy_id: str, version: in
     The bytes come from `impl/<version>/`, not from the blobs they were copied from. That
     directory is what a stage loads, so it is what a replay has to run: were replay to read
     the blobs instead, it would answer a question about the certificate rather than about
-    the thing that will trade.
+    the thing that will trade. Reading it checks every file against the digest the manifest
+    records, so a version whose implementation has been edited is refused here too rather
+    than replayed under the label of the version it diverged from.
     """
     file = strategy.require(ws, strategy_id)
     chosen = HostRef.of(file, version).version

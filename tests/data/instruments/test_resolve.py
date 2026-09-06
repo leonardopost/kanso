@@ -73,12 +73,12 @@ def test_an_id_asked_for_twice_is_answered_once(ws: Workspace) -> None:
 
 
 def test_a_manual_entry_is_never_resolved(ws: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`manual` suppresses resolution: the adapter is never asked, and nothing is cached."""
+    """`manual` suppresses resolution: the adapter is never built, and nothing is cached."""
     write(ws, AAPL=EQUITY)
     probe = Probe(answers={"AAPL": equity()})
     resolved = resolve_universe(probing(ws, probe, monkeypatch), ["AAPL"], AS_OF)
 
-    assert probe.asked == [()]
+    assert probe.asked == []
     assert cache(ws)["AAPL"].resolved is None
     assert str(resolved["AAPL"].price_increment) == "0.01"
 
@@ -277,7 +277,7 @@ def test_a_fresh_cache_answers_without_asking_the_adapter(
 ) -> None:
     probe, configured = resolve_then_stale(ws, monkeypatch)
     resolved = resolve_universe(configured, ["MSFT"], AS_OF)
-    assert probe.asked == [()]
+    assert probe.asked == []
     assert resolved["MSFT"].id.value == "MSFT.XNAS"
 
 
@@ -378,7 +378,7 @@ def test_a_cached_derivative_is_still_a_cache_hit(
     probe.asked.clear()
 
     resolved = resolve_universe(configured, ["ESZ4"], AS_OF)
-    assert probe.asked == [()]
+    assert probe.asked == []
     assert definition_checksum(resolved["ESZ4"]) == definition_checksum(contract)
 
 

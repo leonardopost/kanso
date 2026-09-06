@@ -31,6 +31,7 @@ from kanso.schemas.base import (
     Sha256,
     Versioned,
 )
+from kanso.schemas.duration import parse_duration
 from kanso.schemas.hypothesis import ConstructRef
 from kanso.schemas.venue import VenueModel
 
@@ -104,6 +105,29 @@ class CertificationPlan(Versioned):
     def stage_gates(self, stage: PlanStage) -> list[PlannedGate]:
         """The gates of one stage, in plan order."""
         return [g for g in self.gates if g.stage == stage]
+
+    def paper_window_s(self, horizon: str) -> float | None:
+        """How long this plan requires a version's paper window to be, in seconds.
+
+        The longer of a paper gate's own minimum and its multiple of the hypothesis's
+        horizon, over the paper gates that state one — that is the earliest a paper gate
+        can judge a version, and so the window the plan asks its evidence to be measured
+        over. `None` when no paper gate states either, which is a plan holding the paper
+        stage to no window at all.
+        """
+        floors: list[float] = []
+        for gate in self.stage_gates("paper"):
+            floor = 0.0
+            duration = gate.params.get("min_duration")
+            if isinstance(duration, str):
+                floor = max(floor, parse_duration(duration, "min_duration").total_seconds())
+            multiple = gate.params.get("horizon_mult")
+            if isinstance(multiple, int | float) and not isinstance(multiple, bool):
+                horizon_s = parse_duration(horizon, "horizon").total_seconds()
+                floor = max(floor, float(multiple) * horizon_s)
+            if floor > 0:
+                floors.append(floor)
+        return max(floors) if floors else None
 
     @model_validator(mode="after")
     def _invariants(self) -> CertificationPlan:

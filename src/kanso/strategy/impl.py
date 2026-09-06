@@ -4,8 +4,15 @@
 each attached construct's — beside a manifest naming the class in each file, the
 configuration class it takes and the values that configuration is built with. Nothing is
 rewritten on the way in: the bytes in this directory are byte-for-byte the bytes that were
-certified, and their sha256 is recorded, so a version can be checked against the
-certificate that produced it without the state store.
+certified, and their sha256 is recorded, so a version is checked against the certificate
+that produced it without the state store.
+
+**The check is made where the version is used.** Both ways out of this directory — loading
+an implementation into an engine and reading its sources for a replay — hash every file
+they are about to run and refuse the version when a digest is not the one its manifest
+records. The directory is generated and long-lived, so the edit that matters happens long
+after it is written; refusing there is what makes the code on a stage the code that was
+certified rather than the code that happens to be on disk.
 
 **One directory, every stage.** A backtest, a replay and a live node all load from here, so
 they cannot drift apart. A file is named after the module it defines and that module name
@@ -46,6 +53,7 @@ from typing import TYPE_CHECKING, Any, Final, get_origin, get_type_hints
 
 from pydantic import Field
 
+from kanso.certify.certificate import source_file
 from kanso.errors import ValidationError
 from kanso.schemas import (
     CatalogueId,
@@ -201,18 +209,15 @@ def sources(
     """The bytes this implementation holds: the sleeve's, then each construct's.
 
     Shaped as the runner asks for them, so measuring an implementation runs the files in
-    the directory rather than the blobs they were copied from.
+    the directory rather than the blobs they were copied from. Every file is checked
+    against the digest the manifest records, so what is measured is what was certified.
     """
-    directory = impl_dir(ws, manifest.strategy_id, manifest.version)
+    sleeve = _verified(ws, manifest, manifest.sleeve)
     attached = tuple(
-        (
-            component.construct,
-            (directory / component.source).read_bytes(),
-            _params(component.config),
-        )
+        (component.construct, _verified(ws, manifest, component), _params(component.config))
         for component in manifest.attached
     )
-    return (directory / manifest.sleeve.source).read_bytes(), attached
+    return sleeve, attached
 
 
 def generate(
@@ -268,9 +273,15 @@ def generate(
 
 
 def load(ws: Workspace, strategy_id: str, version: int) -> Loaded:
-    """Import one version's implementation and configure every component of it."""
+    """Import one version's implementation and configure every component of it.
+
+    Every file is hashed before anything is imported, so a version whose bytes are not the
+    bytes it was certified with is named rather than run.
+    """
     manifest = read_manifest(ws, strategy_id, version)
     directory = impl_dir(ws, strategy_id, version)
+    for component in manifest.components:
+        _verified(ws, manifest, component)
     _add_to_path(directory)
     return Loaded(
         manifest=manifest,
@@ -278,6 +289,42 @@ def load(ws: Workspace, strategy_id: str, version: int) -> Loaded:
         sleeve=_build(manifest.sleeve),
         attached=tuple(_build(component) for component in manifest.attached),
     )
+
+
+# --- checking one against its certificate --------------------------------------
+
+
+def _verified(ws: Workspace, manifest: ImplManifest, component: Component) -> bytes:
+    """One component's file, refused unless its bytes are the bytes that were certified.
+
+    The manifest records every source's sha256 and the module name carries a prefix of the
+    same digest, so the check is one hash of a file that was about to be read anyway. The
+    refusal names the file, both digests and the certified source to restore it from: the
+    bytes are also on disk beside the certificate that admitted them, under the sha they
+    hash to.
+    """
+    path = impl_dir(ws, manifest.strategy_id, manifest.version) / component.source
+    version = f"{manifest.strategy_id}@{manifest.version}"
+    certified = source_file(ws, component.hyp_id, component.strategy_sha)
+    remedy = (
+        f"restore the file from {certified}, which holds the certified bytes; to run code "
+        "of your own, research and certify it"
+    )
+    if not path.is_file():
+        raise ValidationError(
+            f"{path} is missing, so {version} has no {component.construct} to run",
+            remedy=remedy,
+        )
+    source = path.read_bytes()
+    digest = sha256(source).hexdigest()
+    if digest != component.strategy_sha:
+        raise ValidationError(
+            f"{path} hashes to {digest[:7]} and {version} was certified with "
+            f"{component.strategy_sha[:7]}, so this file is not the {component.construct} "
+            "that was certified",
+            remedy=remedy,
+        )
+    return source
 
 
 # --- writing one source -------------------------------------------------------

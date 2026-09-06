@@ -49,6 +49,7 @@ __all__ = [
     "record_stage_run",
     "set_stage",
     "stage_results",
+    "staged",
     "subject_of",
 ]
 
@@ -117,6 +118,20 @@ def clear_stage(store: StateStore, strategy_id: str, stage: str) -> list[int]:
         (strategy_id, stage),
     )
     return [int(row[0]) for row in rows]
+
+
+def staged(store: StateStore, stage: str) -> dict[str, int]:
+    """Which version of each strategy the record puts on this stage, by strategy id.
+
+    This is what a deployment wrote, so it is the answer to "what is on the stage?" —
+    `portfolio.yaml` is where an operator may add an entry no node ever ran, and the file
+    is read against this rather than believed. One version per strategy per stage is a
+    unique index of the store, so a strategy appears here at most once.
+    """
+    rows = store.connection.execute(
+        "SELECT strategy_id, version FROM strategy_versions WHERE stage = ?", (stage,)
+    ).fetchall()
+    return {str(row[0]): int(row[1]) for row in rows}
 
 
 # --- approvals ----------------------------------------------------------------

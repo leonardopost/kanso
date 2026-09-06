@@ -108,11 +108,35 @@ def test_a_baseline_that_raises_leaves_no_run_and_no_lane_directory(
     ws: Workspace, store: StateStore
 ) -> None:
     hyp_id = classify(ws, store, DOCUMENT, RAISING)
-    with pytest.raises(PreconditionError, match="baseline card of demo_mr did not run"):
+    with pytest.raises(PreconditionError, match="baseline card of demo_mr did not run") as caught:
         loop.begin(ws, store, hyp_id)
     assert records.active(store, hyp_id) is None
     assert not ws.path("runs", "op", hyp_id).exists()
     assert [event.kind for event in store.events(subject=hyp_id)][-1] == loop.BASELINE_FAILED
+    # The strategy raised, so the strategy is what there is to fix; a failure that named
+    # no remedy of its own is the only case this one answers for.
+    assert "strategy.py" in (caught.value.remedy or "")
+
+
+def test_a_baseline_whose_rows_are_gone_carries_the_data_remedy(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A parquet deleted by hand is a data fault, and the refusal has to say so.
+
+    The manifests still describe the dataset, so the loss surfaces only when the runner
+    reads the window — which happens inside the card's own process. Asserted here is that
+    the remedy the runner raised crossed that boundary: an operator whose rows are missing
+    is sent to load them, not to debug a strategy that never ran.
+    """
+    for parquet in ws.path("catalog", "data", "bar").rglob("*.parquet"):
+        parquet.unlink()
+
+    with pytest.raises(PreconditionError) as caught:
+        loop.begin(ws, store, registered)
+
+    assert "the catalog holds nothing" in caught.value.message
+    assert "kanso data load" in (caught.value.remedy or "")
+    assert "strategy.py" not in (caught.value.remedy or "")
 
 
 def test_a_baseline_that_reaches_outside_the_lane_is_never_executed(

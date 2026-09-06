@@ -125,28 +125,19 @@ def series_of(runner: CliRunner, root: Path) -> dict[str, Any]:
     return found
 
 
-def newest(runner: CliRunner, root: Path) -> str:
-    """The id of the dataset holding the most recent day, which is what `sync` extends.
-
-    Named rather than left to the default, because a backfill leaves one manifest per
-    chunk and `sync` with no dataset extends every one of them — a run of the command
-    that belongs to a workspace holding one dataset per series, not to this one.
-    """
-    held = series_of(runner, root)["datasets"]
-    return str(max(held, key=lambda item: item["span"][1])["dataset_id"])
-
-
 def sequence(runner: CliRunner, root: Path, loader: str) -> dict[str, Any]:
     """`load` the tail, `backfill` the history before it, `sync` past it, then `snapshot`.
 
     The whole of what the milestone asks of a transport, in the order an operator meets
-    it, returning what each step reported so a test may assert on any of them.
+    it, returning what each step reported so a test may assert on any of them. The sync
+    names no dataset, which is how an operator runs it: the backfill leaves one manifest
+    per chunk and `sync` continues the newest of them.
     """
     tail = write_massive_spec(root, loader, span=HELD, name=f"{loader}-tail.yaml")
     whole = write_massive_spec(root, loader, span=WHOLE, name=f"{loader}-whole.yaml")
     loaded = run(runner, root, "data", "load", "--loader", loader, "--spec", tail)
     filled = run(runner, root, "data", "backfill", "--loader", loader, "--spec", whole)
-    synced = run(runner, root, "data", "sync", "--dataset", newest(runner, root), "--to", SYNC_TO)
+    synced = run(runner, root, "data", "sync", "--to", SYNC_TO)
     frozen = run(runner, root, "data", "snapshot")
     return {
         "load": loaded,

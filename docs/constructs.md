@@ -51,12 +51,12 @@ Three declarations carry all of that, and each one refuses something.
 
 A construct may also declare **`params`**, a fixed set of names with a fixed set of values
 each. Only `filter` declares any: `scope`, one of `time` or `instrument`. A parameter the
-construct does not declare, or a value outside its set, is refused — but not by
-`hyp validate`, which passes it. The check happens where the harness is built, so it is
-`research begin` that says no (exit 3):
+construct does not declare, or a value outside its set, is refused by `hyp validate` and
+`hyp add` (exit 3). The check is the construct's own — the same call the runner makes when it
+builds the harness — so a classification validation admits is one a run accepts:
 
 ```
-$ kanso research begin demo_f2
+$ kanso hyp validate hypotheses/demo_f2/hypothesis.yaml
 error: construct.params.scope: 'sideways' is not one of time, instrument
 ```
 
@@ -209,6 +209,22 @@ $ kanso research begin demo_alloc
 error: construct.host: 'portfolio' is not a composed strategy of this workspace
 remedy: certify and compose the host sleeve before researching against it
 ```
+
+**And there can never be one.** A certified sleeve composes a strategy named after its
+hypothesis, so a hypothesis called `portfolio` would make `host: portfolio` mean two things —
+that strategy, and the book — and a construct reads it as the book. The word is therefore not
+an id a hypothesis may take, which is checked where the hypothesis enters the workspace
+rather than at the seam where the two meanings would collide (exit 3):
+
+```
+$ kanso hyp add hypotheses/portfolio/hypothesis.yaml
+error: id: 'portfolio' is reserved: it is how a construct attached to the book names its host, and a certified sleeve of that name would compose a strategy nothing could tell from the book
+remedy: choose another id, and rename hypotheses/portfolio/ to match
+```
+
+It costs an operator one word out of `^[a-z0-9_]{3,40}$` and keeps `construct.host`
+unambiguous. `kanso hyp new portfolio` still scaffolds the directory — the word is reserved
+at validation, so it is `hyp add` that says no, once the scaffolded file has been filled in.
 
 Also a seam: an **`overlay` whose host is the portfolio** rather than one sleeve — allocating
 exposure across the book needs the same portfolio-level host run. An overlay is declared to

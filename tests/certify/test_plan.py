@@ -25,6 +25,7 @@ from kanso.certify.plan import (
     _ranges,
     availability,
     certificates_dir,
+    paper_window_note,
     plan,
     plan_file,
     plannable,
@@ -778,3 +779,46 @@ def test_the_shipped_demo_script_plans_the_demo_hypothesis(
     assert [gate.id for gate in written.gates] == [
         gate["id"] for gate in scripted["certify_plan"][0]["gates"]
     ]
+
+
+# --- the paper window the plan implies ----------------------------------------
+
+
+def test_a_paper_window_far_shorter_than_the_certification_window_is_warned_about(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The demo certifies over 145 days; a five-day paper window is judged by that band."""
+    script(
+        ws, certify_plan=[answer(gates=replacing("paper_forward", params={"min_duration": "5d"}))]
+    )
+    pinned = plan(ws, store, HYP_ID)
+
+    note = paper_window_note(ws, store, pinned)
+
+    assert note is not None
+    assert "paper window 5d against a 145d certification window" in note
+    assert "noisier than the band" in note
+    assert "min_duration" in note and "horizon_mult" in note
+
+
+def test_a_paper_window_comparable_with_the_certification_window_is_not(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Thirty days against 145 is an ordinary choice, and an ordinary choice says nothing."""
+    script(ws, certify_plan=[answer()])
+    pinned = plan(ws, store, HYP_ID)
+
+    assert pinned.paper_window_s("30m") == 30 * 86_400
+    assert paper_window_note(ws, store, pinned) is None
+
+
+def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`paper_forward` reports an absent window itself, when it runs; there is nothing to size."""
+    bare = replacing("paper_forward", params={})
+    script(ws, certify_plan=[answer(gates=bare)])
+    pinned = plan(ws, store, HYP_ID)
+
+    assert pinned.paper_window_s("30m") is None
+    assert paper_window_note(ws, store, pinned) is None

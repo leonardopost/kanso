@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from kanso.errors import Exit, KansoError
@@ -189,8 +191,56 @@ def test_show_reports_the_stage_its_liveness_and_the_realised_pnl(
     assert paper.exec_id == "sandbox"
     assert [one.label for one in paper.strategies] == [f"{composed_strategy.id}@1"]
     assert paper.strategies[0].windows == 1
+    assert paper.strategies[0].recorded is True
     assert paper.pnl == pytest.approx(paper.strategies[0].pnl)
     assert report.stage("live").live is False
+
+
+def hand_add(ws: Workspace, stage: str, strategy_id: str, version: int = 1) -> None:
+    """Add an entry to a stage of `portfolio.yaml` by hand, as an operator can.
+
+    This is the one edit the file admits that no command would make: it funds nothing,
+    approves nothing and starts nothing, and `deploy` reads the store rather than this.
+    """
+    portfolio = files.read(ws)
+    held = files.stage_of(portfolio, stage)
+    placed = files.place(
+        held.model_copy(update={"capital": 100_000.0}),
+        strategy_id,
+        version,
+        40_000.0,
+        datetime.now(tz=UTC),
+    )
+    files.write(ws, files.with_stage(portfolio, stage, placed))
+
+
+def test_show_marks_a_stage_entry_the_record_does_not_know(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """A hand-added entry is the file's claim, and `deploy` admits nothing for it."""
+    hand_add(ws, "live", composed_strategy.id)
+
+    live = show(ws, store).stage("live")
+
+    assert [one.label for one in live.strategies] == [f"{composed_strategy.id}@1"]
+    assert live.strategies[0].recorded is False
+    assert live.held == (), "nothing the record knows is on the stage"
+    assert deploy(ws, store, "live").admitted == ()
+
+
+def test_an_entry_the_record_does_not_know_holds_no_capital_and_no_stage(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """It is counted in nothing: not the allocation, not the P&L, not the liveness."""
+    deploy(ws, store, "paper")
+    hand_add(ws, "live", composed_strategy.id)
+
+    live = show(ws, store).stage("live")
+
+    assert live.allocated == 0.0
+    assert live.pnl == 0.0
+    assert live.live is False
+    assert live.served_to is None, "a stage entry no node ran needs no data served"
 
 
 def test_show_on_an_undeployed_workspace_reports_two_empty_stages(

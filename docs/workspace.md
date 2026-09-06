@@ -101,8 +101,8 @@ what the catalog holds (the manifests), what a composed version is and what stat
 certificate, a deployed version — the file is a rendering and state is the record.
 
 So editing a file kanso owns is not a way to change kanso's mind. Depending on which file it
-is, the edit is ignored, silently reverted on the next write, or believed at your own risk.
-Each section below says which.
+is, the edit is ignored, silently reverted on the next write, refused by name, or believed at
+your own risk. Each section below says which.
 
 ## What the workspace refuses
 
@@ -124,6 +124,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `data load` over unpinned data | 2 · until you pass `--replace` |
 | `cert run` on bytes already certified under the same plan and engine | 2 · a certificate is immutable |
 | `models check` or `cert plan` with no `models.yaml` | 2 · there is no default plan |
+| edit a file under `strategies/<id>/impl/<version>/` | 3 · at `deploy` and at `replay`, before either runs it |
 | `deploy` a stage whose `kill_switch` is on | 2 · the switch is yours |
 | `deploy` a `clock: wall` client, or feed one `data: replay` | 2 · no stage node runs one in 0.1.0 |
 | `deploy` a real-capital client on the paper stage | **4** · it may be configured only on live |
@@ -250,6 +251,12 @@ error: hypotheses/demo_mr/hypothesis.yaml: windows: certification.start: 2024-12
 than trusted, because a certification window that touches the research window is not
 out-of-sample and a strategy measured on it has no evidence behind it.
 
+An id is 3 to 40 characters of `a-z`, `0-9` and `_`, and **`portfolio` is not one of them.**
+A certified sleeve composes a strategy named after its hypothesis, and `portfolio` is how a
+construct attached to the book names its host, so a hypothesis of that name would leave
+`construct.host` meaning two things. `hyp validate` and `hyp add` refuse the id and say so;
+`docs/constructs.md` has the reasoning under `allocation`.
+
 `kanso hyp add` pins the file under the sha256 of its bytes. Edit it afterwards and kanso
 says so rather than silently working from either version:
 
@@ -331,6 +338,12 @@ resolution actually changed them.
 fields yourself. That is the path the file loaders, the synthetic loader and the demo take,
 and it is why a workspace can run end to end with no reference adapter and no credential.
 
+A workspace whose entries are all `manual` may still name a reference adapter in `[data]
+reference` without setting that adapter's key: the adapter is built only once resolution
+finds an id the cache and the manual entries cannot answer, and building it is what
+resolves the credential. Name the vendor you will eventually resolve through; you need it
+configured on the day you first ask it something.
+
 The registry of record is the catalog's instrument store, not this file — `kanso data
 instruments show <ID>` reads the store. The file is the cache and the place your overrides
 live, so deleting it costs you the overrides and a round of resolution, not the definitions.
@@ -387,9 +400,17 @@ remedy: pass --replace to delete and rewrite the overlapped span
 rather than the parquet files. Delete a parquet by hand and `data show` keeps reporting the
 dataset, its span and its row count; `kanso doctor` has no catalog check at all. The loss
 surfaces only when a run needs the rows, as a baseline or card that did not run (exit 2):
-`data: the catalog holds nothing for <id> over <window>` — whose remedy line suggests fixing
-`strategy.py`, which is not what went wrong. The catalog is a directory you back up, not one
-you prune.
+
+```
+error: the baseline card of demo_mr did not run: exception: …
+kanso.errors.PreconditionError: data: the catalog holds nothing for demo_mr over 2024-01-02..2024-12-31
+remedy: run `kanso data load` for the window, then take a snapshot
+```
+
+The card runs in a process of its own, and the remedy is the one the failure inside it
+raised rather than one remedy for every way a baseline can fail — a baseline that fails
+because the strategy raised still says to fix `strategy.py`. The catalog is a directory you
+back up, not one you prune.
 
 ## `runs/`
 
@@ -485,11 +506,28 @@ defines, and that module name carries a digest of the file's own bytes — which
 sha of that file, the `strategy_sha` in `manifest.yaml`, the sha of the certificate's
 `<sha7>.py` and the `<sha7>` in the certificate's own name are all one number.
 
-Nothing checks that at deploy time. Edit a file under `impl/` and the next
-`kanso portfolio deploy` runs your edit and reports success. The digest in the filename and
-the `strategy_sha` in the manifest are what make the divergence *findable* — `shasum -a 256`
-against either — but they are a record, not a guard. Treat the directory as generated: change
-`strategy.py`, research it, certify it, and let composition write the next version.
+That number is checked every time the directory is used, so **what a stage runs is what was
+certified or nothing at all.** Both ways out of `impl/` — loading a version into a node and
+reading its sources for a replay — hash every file first and refuse the version by name when
+a digest is not the one its manifest records. Edit a file under `impl/` and the next
+`kanso portfolio deploy` or `kanso replay run --strategy` exits 3 having run nothing:
+
+```
+$ kanso portfolio deploy --stage paper
+error: …/strategies/demo_mr/impl/1/kanso_impl_sleeve_demo_mr_f729a538831e.py hashes to
+       8d18d26 and demo_mr@1 was certified with f729a53, so this file is not the sleeve
+       that was certified
+remedy: restore the file from …/certificates/demo_mr/f729a53.py, which holds the certified
+        bytes; to run code of your own, research and certify it
+```
+
+(exit 3, and the same from `kanso replay run --strategy demo_mr`). The remedy is exact: the
+certificate keeps the same bytes beside it under the sha they hash to, so copying that file
+back over this one restores the version and the next deployment runs. A deleted or truncated
+source is refused the same way, which matters because a module imported once in a process
+would otherwise keep running out of the interpreter's cache. Treat the directory as
+generated: change `strategy.py`, research it, certify it, and let composition write the next
+version.
 
 `__pycache__` appears inside it the first time a version is imported. It is the interpreter's,
 not the version's, and the template gitignores it.
@@ -547,8 +585,17 @@ $ kanso portfolio deploy --stage live
 deployed   live · 0 version(s) · 0
 ```
 
-The live stage admits only what `promote` moved there. (`kanso portfolio show` does read the
-file, so a hand-added entry appears there and nowhere else — a good reason not to add one.)
+The live stage admits only what `promote` moved there. `kanso portfolio show` reads the same
+record, so it marks the entry rather than printing it as a deployed version: it is counted in
+neither the stage's `allocated` nor its P&L, the stage is not `up` for it, and `--json` gives
+it `"recorded": false`.
+
+```
+$ kanso portfolio show                    # the paper stage and the limits line are elided
+live       down · exec sandbox (simulated) · data replay · speed 1 · capital 100,000
+           clock never run · catalog to nothing · allocated 0 · pnl +0.00
+           demo_mr@1               40,000  not deployed · in portfolio.yaml only
+```
 
 *And a stage whose kill switch is on stays halted.*
 
@@ -608,10 +655,11 @@ A missing envelope is a `warn` in `kanso doctor` and leaves `research status` re
 
 Optional, and yours. Every package or single-module file **directly under** each
 `[extensions] paths` entry (default `kanso_ext`) is imported at startup, and what its
-module-level `PROVIDES` table declares — gates, objectives, constructs, loaders, adapters,
-execution clients, custom data types — is collected. A file at `kanso_ext/house.py` is an
-extension; a `kanso_ext/__init__.py` is not, because the directory is a search path and not a
-package. `docs/extensions.md` is how to write one.
+module-level `PROVIDES` table declares — constructs, loaders, adapters, execution clients,
+custom data types — is collected. A file at `kanso_ext/house.py` is an extension; a
+`kanso_ext/__init__.py` is not, because the directory is a search path and not a package.
+A gate or an objective is not on that list and declaring one is refused: the toolbox a plan
+is drawn from and judged by is the package's own. `docs/extensions.md` is how to write one.
 
 `kanso ext show` says what is there and whether it is actually in play:
 
@@ -619,7 +667,7 @@ package. `docs/extensions.md` is how to write one.
 $ kanso ext show
 paths      kanso_ext
 house           loaded · kanso_ext/house.py
-                objectives   always_one          absent · no registry reads it: …
+                loaders      house_bars          absent · the module's LOADERS table yields no loader under that id
 1/1 loaded · 0 registered · 0 shadowed · 1 absent
 ```
 

@@ -278,6 +278,20 @@ exits 2.
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
 
+**A paper window is chosen against the certification window, and `cert plan` says so when it
+is not.** The paper gate compares the objective a stage realises against the interval
+composition measured over the *certification* window: two estimates of the same quantity, and
+the shorter one scatters more widely around a band that does not widen with it. So a plan
+that judges a fortnight against a year is asking a sound version to look drifted, and the
+command warns — with the two spans and how much noisier the shorter one is — while pinning
+the plan anyway. The plan is the planner's and the windows are yours; the warning is all kanso
+has to say about the pair, and a short paper window you meant is a short paper window you get.
+
+```
+$ kanso cert plan demo_mr                 # the gates, the exclusions and the last two lines are elided
+warning    paper window 5d against a 145d certification window · the paper objective is about 5x noisier than the band it is judged against, so a version behaving as certified can read as drifted · raise min_duration or horizon_mult, or narrow windows.certification
+```
+
 **A certificate is immutable, and that is what makes it evidence.** It records one
 evaluation of one `strategy_sha`, on one data snapshot, under one plan version, on one
 engine version — every gate with the numbers it decided on, or the reason it judged nothing.
@@ -348,6 +362,10 @@ f729a538831e3ea8f80c46b68c5993ed4662c168bd9c56541cdf570619b6f6e9  hypotheses/dem
 f729a538831e3ea8f80c46b68c5993ed4662c168bd9c56541cdf570619b6f6e9  certificates/demo_mr/f729a53.py
 f729a538831e3ea8f80c46b68c5993ed4662c168bd9c56541cdf570619b6f6e9  strategies/demo_mr/impl/1/kanso_impl_sleeve_demo_mr_f729a538831e.py
 ```
+
+kanso checks that last line itself, every time it loads the directory: a source that no
+longer hashes to what the manifest records is refused by name and nothing runs, so a version
+is the bytes it was certified with or it is nothing.
 
 A version's life is `composed → paper → promotable → live → retired`. At most one version of
 a strategy per stage; a replaced version is retired.

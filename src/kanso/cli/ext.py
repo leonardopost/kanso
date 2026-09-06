@@ -38,7 +38,6 @@ from kanso.classify.construct import Catalogue, catalogue
 from kanso.classify.construct import builtin as builtin_constructs
 from kanso.cli.context import global_json, open_workspace
 from kanso.cli.render import Report, emit, field, indent
-from kanso.criteria.library import gates, objectives
 from kanso.data.loader import loaders
 from kanso.data.loaders import BUILTIN_LOADERS
 from kanso.data.registry import adapter_loaders, adapters, packaged
@@ -64,10 +63,6 @@ ABSENT: Final = "absent"
 STATES: Final = (REGISTERED, SHADOWED, ABSENT)
 """What a registry did with a declared id, and the order the summary counts them in."""
 
-TOOLBOX: Final = "no registry reads it: this version's toolbox is the package's own library"
-"""Why a workspace cannot add a criterion in 0.1.0. It is the one kind `PROVIDES` accepts
-that no registry reads, so saying it plainly is the whole value of listing it at all."""
-
 WHY: Final[Mapping[str, str]] = {
     "loaders": "the module's LOADERS table yields no loader under that id",
     "adapters": "the module's ADAPTERS table yields no adapter under that id",
@@ -77,16 +72,15 @@ WHY: Final[Mapping[str, str]] = {
         "nothing registered it: a type is registered by calling "
         "kanso.data.types.register_custom_type while the module is being imported"
     ),
-    "gates": TOOLBOX,
-    "objectives": TOOLBOX,
 }
 """Why an id an imported extension declares is handed out by nothing, per kind."""
 
 SKIPS_UNSOUND: Final = frozenset({"constructs", "exec_clients"})
 """The two registries that take nothing at all from an extension whose declaration did not
-read, where the other five take what they can. So an unusable `PROVIDES` kind costs an
-extension its constructs and its execution clients and leaves its loaders alone, and the
-reason those two are missing is the declaration rather than the table they are in."""
+read, where the other three take what they can. So a `PROVIDES` kind that is unusable — or
+one this version refuses — costs an extension its constructs and its execution clients and
+leaves its loaders alone, and the reason those two are missing is the declaration rather
+than the table they are in."""
 
 UNSOUND: Final = "the declaration above did not read, and this registry skips such an extension"
 
@@ -201,8 +195,6 @@ def _registries(
         "constructs": set(constructs.entries),
         "exec_clients": set(clients.registry(ws)),
         "data_types": set(data_types()),
-        "gates": set(gates()),
-        "objectives": set(objectives()),
     }
     shipped = {
         "loaders": {*BUILTIN_LOADERS, *adapter_loaders(ws)},
@@ -210,8 +202,6 @@ def _registries(
         "constructs": set(builtin_constructs()),
         "exec_clients": set(clients.builtin()),
         "data_types": set(BUILTIN_TYPES),
-        "gates": set(gates()),
-        "objectives": set(objectives()),
     }
     return (
         {kind: frozenset(ids) for kind, ids in held.items()},

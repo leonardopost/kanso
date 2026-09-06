@@ -190,6 +190,15 @@ class Construct(Protocol):
     runnable: ClassVar[bool]
     params: ClassVar[Mapping[str, tuple[str, ...]]]
 
+    def check_params(self, params: Params | None) -> None:
+        """Refuse a parameter this construct does not declare, or a value outside its set.
+
+        Part of the protocol because it is what validation asks a construct before a run
+        exists: `hyp validate` and the harness must refuse the same classification in the
+        same words, and `Base` is where both get the implementation.
+        """
+        ...
+
     def harness(
         self, hyp: Hypothesis, host: StrategyFile | None = None, *, version: int | None = None
     ) -> Harness: ...

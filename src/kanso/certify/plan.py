@@ -42,8 +42,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, date, datetime
-from math import isfinite
+from datetime import UTC, date, datetime, timedelta
+from math import isfinite, sqrt
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso.criteria import plan_complaints, plannable, resolve_bound
@@ -64,6 +64,7 @@ from kanso.schemas import (
     Span,
     load_yaml,
     parse_yaml,
+    render_duration,
     write_yaml,
 )
 from kanso.schemas.certification import PLAN_STAGES
@@ -76,9 +77,11 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "PLAN_FILE",
+    "SAMPLING_FLOOR",
     "availability",
     "certificates_dir",
     "complaints_about",
+    "paper_window_note",
     "plan",
     "plan_file",
     "plannable",
@@ -94,6 +97,20 @@ PLAN_FILE: Final = "plan.yaml"
 
 PLANNED: Final = "planned"
 """The event kind this module appends, under the hypothesis id as subject."""
+
+DAY_S: Final = 86_400.0
+"""Seconds in a day; the windows are dated, so a window is a whole number of these."""
+
+SAMPLING_FLOOR: Final = 0.1
+"""The share of the certification window a paper window is warned for falling under.
+
+Both are estimates of the same objective and their scatter goes as the inverse square root
+of the window, so at a tenth the paper result is drawn from a distribution more than three
+times as wide as the one the ninety-percent band was drawn from — and a version behaving
+exactly as certified lands outside that band more often than inside it. The line is drawn
+on a continuum, so it is drawn generously: it warns about the plans that are certainly
+mis-sized rather than about the borderline ones.
+"""
 
 CERT_STAGE: Final = "cert"
 """The one plan stage certification itself runs, and so the one that needs an implementation."""
@@ -351,6 +368,49 @@ def complaints_about(
     one mistake per call.
     """
     return plan_complaints(included, excluded, hyp, folds)
+
+
+# -- the paper window a plan implies ------------------------------------------
+
+
+def paper_window_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) -> str | None:
+    """Say so when this plan's paper window is too short to be judged by its own band.
+
+    A paper gate compares the objective realised on the stage against the interval
+    composition measured over the *certification* window, and the two are estimates of the
+    same quantity at different precision: the shorter the paper window, the wider the
+    result scatters around a band that does not widen with it. The scatter goes as the
+    square root of the ratio, so a paper window a tenth of the certification window is
+    roughly three times noisier than the band it must fall inside, and a version that is
+    behaving exactly as certified reads as drifted more often than not.
+
+    It is a note and not a refusal. The plan is the planner's, the windows are the
+    operator's, and a short paper window is a defensible choice — it is only one made in
+    the dark when nobody said what it costs. `None` when the plan asks for no paper window
+    at all, which `paper_forward` reports for itself when it runs.
+    """
+    hyp = _pinned_hypothesis(store, cast("Registration", show(ws, store, pinned.hyp_id)))
+    paper = pinned.paper_window_s(hyp.horizon)
+    certification = _window_s(hyp)
+    if paper is None or paper >= SAMPLING_FLOOR * certification:
+        return None
+    return (
+        f"paper window {_rendered(paper)} against a {_rendered(certification)} certification "
+        f"window · the paper objective is about {sqrt(certification / paper):.0f}x noisier than "
+        "the band it is judged against, so a version behaving as certified can read as drifted "
+        "· raise min_duration or horizon_mult, or narrow windows.certification"
+    )
+
+
+def _window_s(hyp: Hypothesis) -> float:
+    """The certification window in seconds, counting both of the days it closes on."""
+    window = hyp.windows.certification
+    return ((window.end - window.start).days + 1) * DAY_S
+
+
+def _rendered(seconds: float) -> str:
+    """A span of seconds in the duration grammar a workspace file writes them in."""
+    return render_duration(timedelta(seconds=round(seconds)))
 
 
 def _refuse_unusable(pinned: CertificationPlan, hyp: Hypothesis, folds: int) -> None:

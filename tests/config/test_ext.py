@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from kanso.ext import KINDS, Extension, discover, shadows
+from kanso.ext import KINDS, REFUSAL, REFUSED, Extension, discover, shadows
 
 
 @pytest.fixture(autouse=True)
@@ -48,14 +48,14 @@ def test_a_package_is_imported_and_its_declaration_collected(tmp_path: Path) -> 
     path = package(
         tmp_path / "kanso_ext",
         "ext_alpha",
-        'PROVIDES = {"gates": ["my_gate"], "objectives": ("my_objective",)}\nLOADED = True\n',
+        'PROVIDES = {"loaders": ["my_loader"], "data_types": ("my_type",)}\nLOADED = True\n',
     )
     (found,) = discover(tmp_path, ["kanso_ext"])
     assert found.name == "ext_alpha"
     assert found.path == path
     assert found.ok
     assert found.error is None
-    assert found.provides == {"gates": ("my_gate",), "objectives": ("my_objective",)}
+    assert found.provides == {"loaders": ("my_loader",), "data_types": ("my_type",)}
     assert getattr(found.module, "LOADED", False) is True
 
 
@@ -75,16 +75,16 @@ def test_an_extension_without_a_declaration_provides_nothing(tmp_path: Path) -> 
 
 def test_a_package_may_import_its_own_submodules(tmp_path: Path) -> None:
     directory = package(tmp_path / "kanso_ext", "ext_deep", "from ext_deep.inner import PROVIDES\n")
-    (directory / "inner.py").write_text('PROVIDES = {"gates": ["deep"]}\n', encoding="utf-8")
+    (directory / "inner.py").write_text('PROVIDES = {"adapters": ["deep"]}\n', encoding="utf-8")
     (found,) = discover(tmp_path, ["kanso_ext"])
     assert found.ok
-    assert found.provides == {"gates": ("deep",)}
+    assert found.provides == {"adapters": ("deep",)}
 
 
 def test_a_broken_extension_is_reported_and_never_fatal(tmp_path: Path) -> None:
     root = tmp_path / "kanso_ext"
     package(root, "ext_bad", 'raise RuntimeError("no credentials for you")\n')
-    package(root, "ext_good", 'PROVIDES = {"gates": ["fine"]}\n')
+    package(root, "ext_good", 'PROVIDES = {"loaders": ["fine"]}\n')
     bad, good = discover(tmp_path, ["kanso_ext"])
     assert bad.name == "ext_bad"
     assert bad.module is None
@@ -134,12 +134,14 @@ def test_what_is_not_an_extension_is_skipped(tmp_path: Path, kind: str, name: st
 def test_declarations_that_are_not_a_table_of_ids_are_reported(tmp_path: Path) -> None:
     root = tmp_path / "kanso_ext"
     package(root, "ext_wrong", "PROVIDES = [1, 2, 3]\n")
-    package(root, "ext_partly", 'PROVIDES = {"gates": ["g"], "widgets": ["w"], "loaders": "l"}\n')
+    package(
+        root, "ext_partly", 'PROVIDES = {"constructs": ["c"], "widgets": ["w"], "loaders": "l"}\n'
+    )
     partly, wrong = discover(tmp_path, ["kanso_ext"])
     assert wrong.provides == {}
     assert wrong.error is not None
     assert "PROVIDES" in wrong.error
-    assert partly.provides == {"gates": ("g",)}
+    assert partly.provides == {"constructs": ("c",)}
     assert partly.error is not None
     assert "loaders" in partly.error
     assert "widgets" in partly.error
@@ -151,6 +153,47 @@ def test_every_kind_is_declarable(tmp_path: Path) -> None:
     (found,) = discover(tmp_path, ["kanso_ext"])
     assert found.error is None
     assert set(found.provides) == set(KINDS)
+
+
+def test_a_gate_or_an_objective_is_refused_where_it_is_declared(tmp_path: Path) -> None:
+    """No registry reads either kind, so collecting one would promise what it cannot keep.
+
+    A workspace gate that is merely collected reads as `doctor` green and the extension
+    loaded, and is then refused by `hyp validate` as an id the toolbox does not hold. The
+    declaration is the one place that mismatch can be named while the author is still
+    looking at the file, so it is refused here and the message says where one goes.
+    """
+    package(
+        tmp_path / "kanso_ext",
+        "ext_rules",
+        'PROVIDES = {"gates": ["min_holding_period"], "objectives": ["net_edge_per_turn"]}\n',
+    )
+    (found,) = discover(tmp_path, ["kanso_ext"])
+    assert found.module is not None  # it imported; what it said about itself is refused
+    assert not found.ok
+    assert found.provides == {}
+    assert found.error == REFUSAL.format(kinds="gates, objectives")
+    assert "docs/extensions.md" in found.error
+
+
+def test_a_refused_kind_leaves_the_kinds_beside_it_readable(tmp_path: Path) -> None:
+    """Refusing one kind is not refusing the table: the rest is read as it always was."""
+    package(
+        tmp_path / "kanso_ext",
+        "ext_mixed",
+        'PROVIDES = {"gates": ["mine"], "loaders": ["house_bars"], "widgets": ["w"]}\n',
+    )
+    (found,) = discover(tmp_path, ["kanso_ext"])
+    assert found.provides == {"loaders": ("house_bars",)}
+    assert found.error is not None
+    # Both problems in one line, the one with a repair first.
+    assert found.error.startswith(REFUSAL.format(kinds="gates"))
+    assert found.error.endswith("PROVIDES has unusable kinds: widgets")
+
+
+def test_a_refused_kind_is_not_also_an_accepted_one() -> None:
+    """The two tables are read in one pass, and a kind in both would make it order."""
+    assert set(KINDS).isdisjoint(REFUSED)
 
 
 def test_paths_are_visited_in_order_and_children_by_name(tmp_path: Path) -> None:
@@ -165,22 +208,22 @@ def test_shadowing_of_a_built_in_id_is_reported_not_resolved(tmp_path: Path) -> 
     package(
         tmp_path / "kanso_ext",
         "ext_shadow",
-        'PROVIDES = {"gates": ["max_drawdown", "mine"], "objectives": ["sharpe"]}\n',
+        'PROVIDES = {"loaders": ["synthetic", "mine"], "data_types": ["bar"]}\n',
     )
     found = discover(tmp_path, ["kanso_ext"])
-    builtins = {"gates": ["max_drawdown", "publication_lag"], "objectives": ["sharpe"]}
+    builtins = {"loaders": ["synthetic", "file"], "data_types": ["bar"]}
     assert shadows(found, builtins) == [
-        ("ext_shadow", "gates", "max_drawdown"),
-        ("ext_shadow", "objectives", "sharpe"),
+        ("ext_shadow", "data_types", "bar"),
+        ("ext_shadow", "loaders", "synthetic"),
     ]
     assert found[0].ok  # reported, and the extension still loaded
 
 
 def test_nothing_shadows_when_the_registries_are_empty(tmp_path: Path) -> None:
-    package(tmp_path / "kanso_ext", "ext_free", 'PROVIDES = {"gates": ["mine"]}\n')
+    package(tmp_path / "kanso_ext", "ext_free", 'PROVIDES = {"loaders": ["mine"]}\n')
     assert shadows(discover(tmp_path, ["kanso_ext"]), {}) == []
 
 
 def test_a_broken_extension_shadows_nothing() -> None:
     broken = Extension(name="ext_broken", path=Path("nowhere"), error="ImportError: boom")
-    assert shadows([broken], {"gates": ["g"]}) == []
+    assert shadows([broken], {"loaders": ["g"]}) == []

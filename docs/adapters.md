@@ -190,7 +190,7 @@ key can read it is measured with a one-byte ranged GET rather than by dragging a
 multi-gigabyte day across to find out. Only a read proves entitlement there — the listing
 is not scoped by product, so a prefix can list a decade cleanly and refuse every object in
 it. Nothing chooses for you: the ids never collide, so a spec picks a transport by naming
-one, and `data sync` extends a dataset over whichever transport first wrote it.
+one, and `data sync` continues a series over whichever transport wrote its newest dataset.
 
 A `massive_bulk` spec names no session and no zone. The file's `window_start` and the API's
 `t` are the same instant in different units — nanoseconds in the file, milliseconds over
@@ -334,7 +334,18 @@ these keys and no others. It holds no credential.
 | `feed` | *none* | `sip` or `iex`; the tape the data client reads. Required before a data client opens |
 | `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200 |
 | `timeout_s` | `30` | per-request timeout |
+| `poll_interval_s` | `15` | seconds between the live feed's sweeps; `1` to `3600`, and a value outside that is refused when the table is read |
 | the six URLs | the broker's own hosts | the paper, live and market-data REST hosts and their stream endpoints |
+
+**The cadence and the quota together bound the universe a stage may trade.** The live feed
+sweeps every subscribed series on each tick of `poll_interval_s`, one request per series, so
+`requests_per_minute` divided by the sweeps in a minute is how many series it can carry: at
+the defaults, 190 a minute at four sweeps a minute is 47. One subscription past that is
+refused when the stage starts — a bound rather than a throttle, because a sweep the quota
+cannot finish drops the series at the end of it and a stage that silently stopped seeing half
+its universe is worse than one that refused to start. Set the cadence to the resolution the
+strategy trades: a bar reaches the strategy at worst one sweep after it closes, which is a
+third of a minute bar's life and nothing at all on a daily one.
 
 **One connection is meant to carry all of it.** The rate limit belongs to the account, not to
 any one caller, so the execution client, the live data client and the tradability overlay

@@ -59,7 +59,6 @@ from kanso.schemas import (
     Portfolio,
     StrategyFile,
     StrategyVersion,
-    parse_duration,
     parse_yaml,
 )
 from kanso.schemas.portfolio import STAGES, Deployment
@@ -229,24 +228,12 @@ def mark(ws: Workspace, store: StateStore, strategy_id: str, version: int, state
 def paper_window_s(plan: CertificationPlan, hyp: Hypothesis) -> float | None:
     """How long the plan required the paper window that confirmed the expectation to be.
 
-    It is the paper gates' own floor — the longer of their absolute minimum and their
-    multiple of the hypothesis's horizon — because that is the window the expectation was
-    held to, and so the only live window comparable with it. A plan whose paper gates state
-    no duration leaves a live drift nothing to roll over, and it says so instead.
+    It is the paper gates' own floor, which the plan itself computes, because that is the
+    window the expectation was held to and so the only live window comparable with it. A
+    plan whose paper gates state no duration leaves a live drift nothing to roll over, and
+    it says so instead.
     """
-    horizon = parse_duration(hyp.horizon, "horizon").total_seconds()
-    floors: list[float] = []
-    for gate in plan.stage_gates(PAPER):
-        floor = 0.0
-        duration = gate.params.get("min_duration")
-        if isinstance(duration, str):
-            floor = max(floor, parse_duration(duration, "min_duration").total_seconds())
-        multiple = gate.params.get("horizon_mult")
-        if isinstance(multiple, int | float) and not isinstance(multiple, bool):
-            floor = max(floor, float(multiple) * horizon)
-        if floor > 0:
-            floors.append(floor)
-    return max(floors) if floors else None
+    return plan.paper_window_s(hyp.horizon)
 
 
 # --- exposure ----------------------------------------------------------------

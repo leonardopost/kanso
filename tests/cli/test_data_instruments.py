@@ -67,6 +67,29 @@ def test_a_workspace_naming_no_instrument_has_nothing_to_resolve(
     assert "instruments.yaml" in payload(result)["remedy"]
 
 
+def test_a_manual_universe_resolves_under_an_unconfigured_reference_adapter(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """Naming a vendor is not the same as needing one.
+
+    Every entry here is `manual`, so the file answers the whole universe and nothing is
+    left for a reference adapter to resolve. Building that adapter is what resolves its
+    credential, so building it before anything is known to be unresolved makes a key the
+    resolution never uses into a requirement of it — and this is the ordinary shape of a
+    workspace, the demo's and every file-export workspace's included.
+    """
+    write_instruments(workspace)
+    config = workspace / "kanso.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + '\n[data]\nreference = "massive"\n', encoding="utf-8"
+    )
+
+    result = at(runner, workspace, "data", "instruments", "resolve", "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert [item["id"] for item in payload(result)["instruments"]] == [INSTRUMENT]
+
+
 def test_a_malformed_as_of_is_a_validation_failure(runner: CliRunner, workspace: Path) -> None:
     write_instruments(workspace)
 

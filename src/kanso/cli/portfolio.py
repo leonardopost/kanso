@@ -3,7 +3,10 @@
 `portfolio show` reads three things at once: the file as it stands, whether each stage's
 node has consumed everything the catalog holds, and what every deployed version has
 realised over the windows its stage has closed. It writes nothing and is safe to run while
-a stage is running.
+a stage is running. The file's entries are printed against the record rather than as read:
+one no deployment wrote — a stage entry added to `portfolio.yaml` by hand — is marked `not
+deployed` and counted in neither the stage's allocation nor its P&L, because it holds no
+money and no node was given it.
 
 `portfolio deploy --stage S` is the only way a version reaches a stage. It admits what
 composition produced, funds it by the capital rule, validates what the stage's execution
@@ -44,7 +47,7 @@ from kanso.schemas.portfolio import STAGES
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.portfolio import Declared, Deployment
-    from kanso.portfolio.show import StageReport
+    from kanso.portfolio.show import Deployed, StageReport
     from kanso.workspace import Workspace
 
 app = typer.Typer(help="The stages, their capital and what runs on them.", no_args_is_help=True)
@@ -137,13 +140,7 @@ def _show(ws: Workspace) -> Report:
                 f"allocated {one.allocated:,.0f} · pnl {one.pnl:+,.2f}"
             )
         )
-        for held in one.strategies:
-            lines.append(
-                indent(
-                    f"{held.label:<{NAME}}{held.capital:>12,.0f}  "
-                    f"pnl {held.pnl:+,.2f} over {held.windows} window(s)"
-                )
-            )
+        lines += [indent(_held_line(held)) for held in one.strategies]
     limits = report.portfolio.limits
     lines.append(
         field(
@@ -295,6 +292,19 @@ def _funding(client: Declared | None) -> str:
     return "unknown" if client is None else client.capital
 
 
+def _held_line(held: Deployed) -> str:
+    """One entry of a stage: what it holds and made, or that only the file says it is there.
+
+    An entry the record does not know has no P&L and no windows to report — no node ever
+    ran it — so it says that instead of printing zeros a reader would take for a version
+    that traded and made nothing.
+    """
+    money = f"{held.label:<{NAME}}{held.capital:>12,.0f}"
+    if not held.recorded:
+        return f"{money}  not deployed · in portfolio.yaml only"
+    return f"{money}  pnl {held.pnl:+,.2f} over {held.windows} window(s)"
+
+
 def _stage_payload(one: StageReport, client: Declared | None) -> dict[str, Any]:
     """One stage as JSON: its configuration, its liveness and what it holds."""
     return {
@@ -319,6 +329,7 @@ def _stage_payload(one: StageReport, client: Declared | None) -> dict[str, Any]:
                 "joined_at": held.joined_at.isoformat(),
                 "windows": held.windows,
                 "pnl": held.pnl,
+                "recorded": held.recorded,
             }
             for held in one.strategies
         ],

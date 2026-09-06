@@ -135,6 +135,27 @@ the fixtures.
 - Conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`) on a branch named for
   the change. Semver per `docs/maintainers.md`.
 
+## Two rules paid for in defects
+
+Both were learned the expensive way during the build and are cheap to keep.
+
+**A fixture is a claim about the world, and is worth what its evidence is worth.** Eight
+defects in the first data adapter reached a suite of 3,492 tests at 100% line coverage,
+because every fixture recorded what its author expected the vendor to do rather than what
+the vendor was measured doing: an option key asked of the wrong reference endpoint, a
+listing requested under a version prefix that answers 404, a page four times wider than the
+endpoint serves, a signed `Host` forwarded to a transport that sets its own, an empty page
+read as an entitlement refusal — which tells an operator to buy what they already own. Every
+one was invisible offline and obvious in one live call. So: record the measured response,
+say where it came from, and drive an adapter against its real source before calling the work
+done. Coverage tells you which lines ran, never whether the fixture resembles the source.
+
+**A test that recomputes a timestamp the product already took is asserting that no clock
+moved between them.** Five did, and one failed CI at 00:13 UTC when a definition was
+resolved either side of midnight and the two checksums differed. Pin the input, freeze the
+clock, or accept either instant the call spanned — never leave it to the hour the suite
+happens to run at.
+
 ## Definition of done
 
 1. `uv run ruff format --check`, `uv run ruff check` and `uv run mypy src` clean.
