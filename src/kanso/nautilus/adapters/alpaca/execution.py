@@ -70,7 +70,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from nautilus_trader.execution.reports import FillReport, OrderStatusReport, PositionStatusReport
 from nautilus_trader.live.execution_client import LiveExecutionClient
@@ -97,6 +97,8 @@ from kanso.nautilus.adapters.alpaca.config import (
     Response,
     Transport,
     account,
+    buckets,
+    document,
     endpoint,
     key_name,
 )
@@ -104,6 +106,7 @@ from kanso.nautilus.adapters.alpaca.parsing import (
     ISSUER,
     NS_PER_SECOND,
     account_id,
+    canonical,
     client_order_id,
     decimal_of,
     fill_report,
@@ -112,6 +115,7 @@ from kanso.nautilus.adapters.alpaca.parsing import (
     position_report,
     rfc3339,
     symbol_of,
+    text_of,
     to_broker_order_type,
     to_broker_side,
     to_broker_time_in_force,
@@ -137,7 +141,6 @@ __all__ = [
     "UNSUPPORTED",
     "AccountRow",
     "AlpacaExecutionClient",
-    "Sender",
     "account_row",
     "denial",
     "sender",
@@ -259,26 +262,7 @@ order type, the side and the time in force are not here — those are the parser
 tables, and are consulted after this one so that a refusal always names one field."""
 
 
-class Sender(Protocol):
-    """How a request that may carry a body is sent.
-
-    The same rate-limited connection the whole adapter shares, with the one addition an
-    execution client needs of it: an order is a POST with a JSON body, and a body dropped
-    on the way to the broker would be an order with no symbol, no side and no quantity.
-    """
-
-    def __call__(
-        self,
-        method: str,
-        url: str,
-        params: Mapping[str, str],
-        headers: Mapping[str, str],
-        keys: Sequence[str],
-        body: bytes | None = None,
-    ) -> Response: ...
-
-
-def sender(transport: Transport) -> Sender:
+def sender(transport: Transport) -> Transport:
     """The shared transport, checked once for the one thing this client needs of it.
 
     Checked here, when the client is built, rather than discovered at the first order:
@@ -360,21 +344,14 @@ class AccountRow:
 def account_row(row: Mapping[str, Any]) -> AccountRow:
     """One account row, read field by field because its key set was never measured."""
     return AccountRow(
-        number=_text(row, "account_number"),
-        currency=_text(row, "currency"),
+        number=text_of(row, "account_number", "account"),
+        currency=text_of(row, "currency", "account"),
         cash=_amount(row, "cash"),
         equity=_amount(row, "equity"),
         initial_margin=_optional(row, "initial_margin"),
         maintenance_margin=_optional(row, "maintenance_margin"),
         blocked=tuple(name for name in ACCOUNT_BLOCKS if row.get(name) is True),
     )
-
-
-def _text(row: Mapping[str, Any], name: str) -> str:
-    value = row.get(name)
-    if not isinstance(value, str) or not value:
-        raise ValidationError(f"account.{name}: {value!r} is not a value the broker writes here")
-    return value
 
 
 def _amount(row: Mapping[str, Any], name: str) -> Decimal:
@@ -432,16 +409,16 @@ def submission(order: Any) -> dict[str, Any]:
         raise ValidationError(f"order {order.client_order_id.value}: {reason}")
     body: dict[str, Any] = {
         "symbol": symbol_of(order.instrument_id),
-        "qty": _plain(order.quantity.as_decimal()),
+        "qty": canonical(order.quantity.as_decimal()),
         "side": to_broker_side(order.side),
         "type": to_broker_order_type(order.order_type),
         "time_in_force": to_broker_time_in_force(order.time_in_force),
         "client_order_id": client_order_id(order.client_order_id),
     }
     if order.order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT):
-        body["limit_price"] = _plain(order.price.as_decimal())
+        body["limit_price"] = canonical(order.price.as_decimal())
     if order.order_type in (OrderType.STOP_MARKET, OrderType.STOP_LIMIT):
-        body["stop_price"] = _plain(order.trigger_price.as_decimal())
+        body["stop_price"] = canonical(order.trigger_price.as_decimal())
     if order.order_type is OrderType.TRAILING_STOP_MARKET:
         body[TRAILING_OFFSETS[order.trailing_offset_type]] = _trailing(order)
     return body
@@ -457,12 +434,7 @@ def _trailing(order: Any) -> str:
     offset = Decimal(order.trailing_offset)
     if order.trailing_offset_type is TrailingOffsetType.BASIS_POINTS:
         offset = offset.scaleb(-2)
-    return _plain(offset)
-
-
-def _plain(value: Decimal) -> str:
-    """A decimal in the one spelling the wire carries, without an exponent."""
-    return format(value.normalize(), "f")
+    return canonical(offset)
 
 
 # --- the client ---------------------------------------------------------------
@@ -485,7 +457,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         *,
         client_id: str,
         credentials: Credentials,
-        send: Sender,
+        send: Transport,
         host: str,
         instrument_provider: InstrumentProvider,
         msgbus: Any,
@@ -677,7 +649,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             self._clock.timestamp_ns(),
         )
         response = await self._request("POST", ORDERS_PATH, body=payload)
-        row = _decoded(response)
+        row = document(response)
         if not _ok(response) or row is None:
             self._reject(order, _fault(ORDERS_PATH, response))
             return
@@ -732,7 +704,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             return
         path = f"{ORDERS_PATH}/{command.venue_order_id.value}"
         response = await self._request("PATCH", path, body=changes)
-        row = _decoded(response)
+        row = document(response)
         if not _ok(response) or row is None:
             self._reject_modify(command, _fault(path, response))
             return
@@ -781,7 +753,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         meant to keep.
         """
         for order in self._open(command):
-            await self._cancel_order(_Cancel(order))
+            await self._cancel_order(order)
 
     async def _batch_cancel_orders(self, command: Any) -> None:
         """Cancel each order of a batch, in the order the batch names them."""
@@ -990,7 +962,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         if response.status == 404:
             return None
         _check(path, response, self.kanso_client_id)
-        return _decoded(response)
+        return document(response)
 
     async def _rows(
         self, path: str, params: Mapping[str, str] | None = None
@@ -1029,32 +1001,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 endpoint(self.host, path),
                 dict(params or {}),
                 self._credentials.headers(),
-                _keys(path),
+                buckets(path),
                 payload,
             )
-
-
-@dataclass(frozen=True, slots=True)
-class _Cancel:
-    """One order of a cancel-everything command, in the shape a single cancel reads."""
-
-    order: Any
-
-    @property
-    def strategy_id(self) -> Any:
-        return self.order.strategy_id
-
-    @property
-    def instrument_id(self) -> Any:
-        return self.order.instrument_id
-
-    @property
-    def client_order_id(self) -> Any:
-        return self.order.client_order_id
-
-    @property
-    def venue_order_id(self) -> Any:
-        return self.order.venue_order_id
 
 
 def _selected(
@@ -1083,11 +1032,11 @@ def _amendment(command: Any) -> dict[str, Any]:
     """
     changes: dict[str, Any] = {}
     if command.quantity is not None:
-        changes["qty"] = _plain(command.quantity.as_decimal())
+        changes["qty"] = canonical(command.quantity.as_decimal())
     if command.price is not None:
-        changes["limit_price"] = _plain(command.price.as_decimal())
+        changes["limit_price"] = canonical(command.price.as_decimal())
     if command.trigger_price is not None:
-        changes["stop_price"] = _plain(command.trigger_price.as_decimal())
+        changes["stop_price"] = canonical(command.trigger_price.as_decimal())
     return changes
 
 
@@ -1156,24 +1105,9 @@ def _paged_from(page: Sequence[Mapping[str, Any]]) -> int:
     return max(stamps)
 
 
-def _keys(path: str) -> list[str]:
-    """The rate-limit buckets one request counts against, coarsest last."""
-    parts = [part for part in path.split("/") if part][:2]
-    return ["/".join(parts), parts[0]] if len(parts) > 1 else parts
-
-
 def _ok(response: Response) -> bool:
     """Whether the broker answered rather than refused."""
     return 200 <= response.status < 300
-
-
-def _decoded(response: Response) -> Mapping[str, Any] | None:
-    """The body as one JSON object, or `None` when it is not one."""
-    try:
-        parsed = json.loads(response.body)
-    except (ValueError, UnicodeDecodeError):
-        return None
-    return parsed if isinstance(parsed, Mapping) else None
 
 
 def _fault(path: str, response: Response) -> str:
@@ -1183,7 +1117,7 @@ def _fault(path: str, response: Response) -> str:
     the request is not, because the request carries the credential headers and a
     credential in a rejection reason is a credential in the engine's event log.
     """
-    body = _decoded(response) or {}
+    body = document(response) or {}
     said = body.get("message")
     code = body.get("code")
     detail = f": {str(said)[:200]}" if isinstance(said, str) and said else ""

@@ -112,6 +112,7 @@ from kanso.nautilus.adapters.alpaca.config import (
     account,
     credential_names,
 )
+from kanso.nautilus.adapters.alpaca.data import DATA_CLIENT_FACTORY
 from kanso.nautilus.adapters.alpaca.execution import (
     ACCOUNT_PATH,
     BY_CLIENT_ORDER_ID_PATH,
@@ -127,12 +128,7 @@ from kanso.nautilus.adapters.alpaca.execution import (
     sender,
     submission,
 )
-from kanso.nautilus.adapters.alpaca.factory import (
-    DATA_CLIENT_FACTORY,
-    EXEC_CLIENT_FACTORY,
-    AlpacaDataClientConfig,
-    AlpacaExecClientConfig,
-)
+from kanso.nautilus.adapters.alpaca.factory import EXEC_CLIENT_FACTORY, AlpacaExecClientConfig
 from kanso.nautilus.adapters.alpaca.parsing import ISSUER, trade_id
 from kanso.workspace import Workspace, init
 
@@ -1867,53 +1863,9 @@ def test_the_factory_refuses_an_id_this_broker_does_not_provide(workspace: Works
         loop.close()
 
 
-def test_the_factory_the_registry_reaches_is_the_one_in_this_module(
+def test_the_factories_the_registry_reaches_are_the_ones_each_client_module_defines(
     workspace: Workspace,
 ) -> None:
     """The adapter's entry points are the two factories, imported when asked for."""
     assert BROKER.exec_client_factory() is EXEC_CLIENT_FACTORY
     assert BROKER.data_client_factory() is DATA_CLIENT_FACTORY
-
-
-def test_the_data_factory_delegates_to_the_module_that_owns_the_data_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """One module per client, so a fault in one of them is not a fault in both."""
-    made: list[str] = []
-
-    class Stub:
-        @staticmethod
-        def create(**arguments: Any) -> str:
-            made.append(arguments["name"])
-            return "a data client"
-
-    module = types.ModuleType("kanso.nautilus.adapters.alpaca.data")
-    module.DATA_CLIENT_FACTORY = Stub  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, module.__name__, module)
-    answer = DATA_CLIENT_FACTORY.create(
-        loop=None,
-        name=PAPER_CLIENT,
-        config=AlpacaDataClientConfig(),
-        msgbus=None,
-        cache=None,
-        clock=None,
-    )
-    assert (answer, made) == ("a data client", [PAPER_CLIENT])
-
-
-def test_a_data_module_declaring_no_factory_is_refused_by_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rather than failing with an attribute error in the middle of a node's start-up."""
-    module = types.ModuleType("kanso.nautilus.adapters.alpaca.data")
-    monkeypatch.setitem(sys.modules, module.__name__, module)
-    with pytest.raises(PreconditionError) as raised:
-        DATA_CLIENT_FACTORY.create(
-            loop=None,
-            name=PAPER_CLIENT,
-            config=AlpacaDataClientConfig(),
-            msgbus=None,
-            cache=None,
-            clock=None,
-        )
-    assert "DATA_CLIENT_FACTORY" in str(raised.value)

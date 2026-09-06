@@ -7,13 +7,11 @@ which is the failure this build has already paid for once, when a green suite hi
 defects because its fixtures encoded a hope.
 
 Where a row carries a field the measurement did not cover, it is said so here and no test
-asserts on it. Three of them are worth naming:
+asserts on it. Two of them are worth naming:
 
 * the daily bar's high and low, which were not part of the two-tape comparison; the open,
   close, volume and trade count are the measured figures, and the high and low are set to
   the wider of the two measured prices only so the row is a bar the engine will build;
-* the quote and trade rows, which are the broker's published stream schema and were not
-  measured at all;
 * the equity asset row's three increment fields, whose *absence* was measured — they are
   crypto fields, and an overlay that required them would refuse every equity there is. The
   row below therefore omits them, exactly as the live one did.
@@ -228,30 +226,6 @@ IEX_BAR: Mapping[str, Any] = {
 }
 """The same session on one venue's slice of the tape: a different open, a different close
 and a twentieth of the volume. Two series, not two readings of one."""
-
-QUOTE: Mapping[str, Any] = {
-    "t": "2026-08-03T13:30:00.123456789Z",
-    "bp": 309.55,
-    "bs": 3,
-    "ap": 309.60,
-    "as": 5,
-    "bx": "V",
-    "ax": "V",
-    "c": ["R"],
-    "z": "C",
-}
-"""A quote in the broker's published spelling. Not measured on the read-only pass."""
-
-TRADE: Mapping[str, Any] = {
-    "t": "2026-08-03T13:30:00.987654321Z",
-    "p": 309.58,
-    "s": 100,
-    "i": 52983525029461,
-    "x": "V",
-    "c": ["@"],
-    "z": "C",
-}
-"""A trade print in the broker's published spelling. Not measured on the read-only pass."""
 
 
 @dataclass(frozen=True, slots=True)

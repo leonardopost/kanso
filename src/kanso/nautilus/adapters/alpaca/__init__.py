@@ -192,7 +192,7 @@ class AlpacaBroker:
 
     def data_client_factory(self) -> Any:
         """The engine factory that builds this broker's live market data client."""
-        return _engine_module("factory").DATA_CLIENT_FACTORY
+        return _engine_module("data").DATA_CLIENT_FACTORY
 
     def provider(self, ws: Workspace) -> Any:
         """The instrument provider this broker offers for the assets it trades."""

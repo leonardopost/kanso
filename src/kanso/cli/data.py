@@ -200,7 +200,7 @@ def _show(ws: Workspace) -> Report:
     found = commands.series(ws)
     data: dict[str, Any] = {
         "series": [item.payload() for item in found],
-        "datasets": len(list(commands.dataset_ids(found))),
+        "datasets": sum(len(item.datasets) for item in found),
         "rows": sum(item.rows for item in found),
     }
     if not found:

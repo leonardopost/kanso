@@ -2,12 +2,11 @@
 
 Five properties are under test.
 
-**The tape is declared, carried and checked.** A client cannot open on an undeclared feed;
-the tape it opened on is in its engine id, in every request it makes and in the payload it
-reports for a caller to record; and a run whose declared tape contradicts the recorded one
-is refused. The two tapes are then shown to be what the measurement says they are — two
-different series for the same session, not two readings of one — by replaying both frozen
-rows through the same client and comparing the bars.
+**The tape is declared and carried.** A client cannot open on an undeclared feed, and the
+tape it opened on is in its engine id and in every request it makes. The two tapes are then
+shown to be what the measurement says they are — two different series for the same session,
+not two readings of one — by replaying both frozen rows through the same client and
+comparing the bars.
 
 **A bar lands at its close, whatever transport served it.** The daily bar this broker
 serves for a session and the daily bar the historical vendor in this build serves for the
@@ -59,6 +58,7 @@ from kanso.nautilus.adapters.alpaca.config import (
     Feed,
     Response,
     account,
+    buckets,
     credential_names,
 )
 from kanso.nautilus.adapters.alpaca.data import (
@@ -73,7 +73,6 @@ from kanso.nautilus.adapters.alpaca.data import (
     TIMEFRAME_PARAM,
     AlpacaDataClient,
     bars_of,
-    check_feed,
     client_id_of,
     data_client,
     engine_client_id,
@@ -238,37 +237,7 @@ def subscribed(bed: Bed, bar_type: BarType | None = None) -> BarType:
     return found
 
 
-# --- the tape is declared, carried and checked --------------------------------
-
-
-def test_nothing_recorded_contradicts_nothing() -> None:
-    """A first run has no recorded tape, so there is nothing for it to disagree with."""
-    assert check_feed(Feed.SIP, None, subject="stages.live") is None
-
-
-@pytest.mark.parametrize("recorded", ["sip", "SIP", "  sip  "])
-def test_a_recorded_tape_that_matches_is_no_objection(recorded: str) -> None:
-    assert check_feed(Feed.SIP, recorded, subject="stages.live") is None
-
-
-def test_a_stage_may_not_change_tape_between_runs() -> None:
-    """The two are different series, so continuing on the other is a different strategy."""
-    with pytest.raises(KansoError) as failure:
-        check_feed(Feed.IEX, "sip", subject="stages.live: the alpaca feed")
-
-    assert failure.value.code is Exit.PRECONDITION
-    assert "'sip'" in failure.value.message
-    assert "'iex'" in failure.value.message
-    assert "stages.live" in failure.value.message
-
-
-def test_a_recorded_value_naming_no_tape_is_refused_rather_than_ignored() -> None:
-    """A record written by something that meant another thing is not silently accepted."""
-    with pytest.raises(KansoError) as failure:
-        check_feed(Feed.SIP, "consolidated", subject="stages.live")
-
-    assert failure.value.code is Exit.PRECONDITION
-    assert "sip, iex" in str(failure.value.remedy) or "iex, sip" in str(failure.value.remedy)
+# --- the tape is declared and carried -----------------------------------------
 
 
 def test_the_engine_id_names_the_account_and_the_tape() -> None:
@@ -303,18 +272,6 @@ def test_the_two_tapes_are_two_series_for_the_same_session(make: Any) -> None:
     assert (str(iex.open), str(iex.close), int(iex.volume)) == ("309.77", "303.41", 3_242_233)
     assert sip.ts_event == iex.ts_event
     assert (sip.open, sip.close, sip.volume) != (iex.open, iex.close, iex.volume)
-
-
-def test_what_the_feed_reports_for_a_caller_to_record(make: Any) -> None:
-    bed = make(tape=Feed.IEX)
-
-    recorded = bed.client.provenance()
-
-    assert recorded["broker"] == ID
-    assert recorded["client"] == PAPER_CLIENT
-    assert recorded["feed"] == "iex"
-    assert PAPER_KEY not in str(recorded)
-    assert SECRET not in str(recorded)
 
 
 def test_the_repr_carries_the_account_and_the_tape_and_no_credential(make: Any) -> None:
@@ -1064,18 +1021,6 @@ def test_the_builder_refuses_a_workspace_that_has_declared_no_tape(ws: Workspace
     assert "'iex'" in failure.value.message
 
 
-def test_the_builder_refuses_a_tape_that_contradicts_what_was_recorded(ws: Workspace) -> None:
-    with pytest.raises(KansoError) as failure:
-        data_client(
-            with_credentials(configured(ws, feed="iex")),
-            PAPER_CLIENT,
-            recorded_feed="sip",
-            **parts(ws),
-        )
-
-    assert failure.value.code is Exit.PRECONDITION
-
-
 def test_the_builder_refuses_a_key_that_belongs_to_the_other_account(ws: Workspace) -> None:
     """A paper key on the live client is a `401` in the middle of a session, refused here."""
     prepared = with_credentials(configured(ws, feed="sip"), LIVE_CLIENT)
@@ -1139,7 +1084,7 @@ def test_the_builder_sweeps_at_the_cadence_the_workspace_declares(ws: Workspace)
     )
     made = data_client(prepared, PAPER_CLIENT, transport=Replay(answers(bars_body())), **parts(ws))
 
-    assert made.provenance()["poll_interval_s"] == 30.0
+    assert made._interval == 30.0
     assert made._capacity == 30
 
 
@@ -1156,7 +1101,7 @@ def test_the_cadence_written_into_the_file_is_the_one_the_node_sweeps_at(ws: Wor
         **parts(ws),
     )
 
-    assert made.provenance()["poll_interval_s"] == 60.0
+    assert made._interval == 60.0
 
 
 def test_the_builder_takes_the_adapters_one_shared_connection_by_default(ws: Workspace) -> None:
@@ -1166,7 +1111,7 @@ def test_the_builder_takes_the_adapters_one_shared_connection_by_default(ws: Wor
 
     assert made._transport is not None
     assert made._capacity == 15
-    assert made.provenance()["host"] == BROKER.config(prepared).data_url
+    assert made._data_url == BROKER.config(prepared).data_url
 
 
 # --- the buckets a request counts against -------------------------------------
@@ -1177,7 +1122,7 @@ def test_the_builder_takes_the_adapters_one_shared_connection_by_default(ws: Wor
     [("/v2/stocks/AAPL/bars", ["v2/stocks", "v2"]), ("/v2", ["v2"]), ("/", [])],
 )
 def test_a_request_counts_against_its_endpoints_buckets(path: str, expected: list[str]) -> None:
-    assert feed._keys(path) == expected
+    assert buckets(path) == expected
 
 
 # --- the instruments a stage trades -------------------------------------------
@@ -1288,7 +1233,7 @@ def test_nothing_in_this_slice_sends_a_credential_as_a_parameter(make: Any) -> N
     bed.clock.set_time(CLOSE_NS + 1)
     bed.run(bed.client.poll())
     written = "".join(
-        [repr(bed.client), str(bed.client.provenance())]
+        [repr(bed.client)]
         + [request.url + str(request.params) + str(request.keys) for request in bed.transport.asked]
     )
 

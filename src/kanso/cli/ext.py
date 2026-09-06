@@ -35,13 +35,11 @@ import typer
 
 from kanso import ext
 from kanso.classify.construct import Catalogue, catalogue
-from kanso.classify.construct import builtin as builtin_constructs
 from kanso.cli.context import global_json, open_workspace
 from kanso.cli.render import Report, emit, field, indent
 from kanso.data.loader import loaders
-from kanso.data.loaders import BUILTIN_LOADERS
-from kanso.data.registry import adapter_loaders, adapters, packaged
-from kanso.data.types import BUILTIN_TYPES, data_types
+from kanso.data.registry import adapter_loaders, adapters
+from kanso.data.types import data_types
 from kanso.portfolio import clients
 from kanso.workspace import Workspace
 
@@ -119,7 +117,7 @@ def show_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
 def _show(ws: Workspace) -> Report:
     found = ext.discover(ws.root, ws.config.extensions_paths)
     constructs, failure = _constructs(ws)
-    held, shipped = _registries(ws, found, constructs)
+    held, shipped = _held(ws, found, constructs), ext.shipped(ws)
     why = WHY if failure is None else {**WHY, "constructs": UNBUILT}
     # An extension's catalogue item that does not validate is recorded by the construct
     # catalogue and raised by nothing, so a malformed one is invisible until a
@@ -179,34 +177,22 @@ def _constructs(ws: Workspace) -> tuple[Catalogue, str | None]:
         return Catalogue({}), f"the construct catalogue: {type(exc).__name__}: {exc}"
 
 
-def _registries(
+def _held(
     ws: Workspace, extensions: Sequence[ext.Extension], constructs: Catalogue
-) -> tuple[dict[str, frozenset[str]], dict[str, frozenset[str]]]:
-    """The ids each registry hands out here, and the ids that ship, by kind.
+) -> dict[str, frozenset[str]]:
+    """The ids each registry hands out here, by kind.
 
     Asked of the registries themselves rather than restated, so a registry that grows an
     id does not have to remember to grow this too, and so this cannot claim an id is
     registered that the command needing it would not find.
     """
-    vendor = adapter_loaders(ws, extensions)
-    held = {
-        "loaders": {*loaders(extensions), *vendor},
-        "adapters": set(adapters(extensions)),
-        "constructs": set(constructs.entries),
-        "exec_clients": set(clients.registry(ws)),
-        "data_types": set(data_types()),
+    return {
+        "loaders": frozenset({*loaders(extensions), *adapter_loaders(ws, extensions)}),
+        "adapters": frozenset(adapters(extensions)),
+        "constructs": frozenset(constructs.entries),
+        "exec_clients": frozenset(clients.registry(ws)),
+        "data_types": frozenset(data_types()),
     }
-    shipped = {
-        "loaders": {*BUILTIN_LOADERS, *adapter_loaders(ws)},
-        "adapters": set(packaged()),
-        "constructs": set(builtin_constructs()),
-        "exec_clients": set(clients.builtin()),
-        "data_types": set(BUILTIN_TYPES),
-    }
-    return (
-        {kind: frozenset(ids) for kind, ids in held.items()},
-        {kind: frozenset(ids) for kind, ids in shipped.items()},
-    )
 
 
 def _provisions(

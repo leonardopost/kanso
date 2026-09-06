@@ -47,6 +47,7 @@ sites.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -84,8 +85,10 @@ __all__ = [
     "Response",
     "Transport",
     "account",
+    "buckets",
     "check_key",
     "credential_names",
+    "document",
     "key_name",
     "pyo3_transport",
     "resolve",
@@ -404,6 +407,12 @@ def endpoint(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
+def buckets(path: str) -> list[str]:
+    """The rate-limit buckets one request counts against, coarsest last."""
+    parts = [part for part in path.split("/") if part][:2]
+    return ["/".join(parts), parts[0]] if len(parts) > 1 else parts
+
+
 @dataclass(frozen=True, slots=True)
 class Response:
     """One HTTP response, reduced to what this adapter reads."""
@@ -411,6 +420,15 @@ class Response:
     status: int
     body: bytes = b""
     headers: Mapping[str, str] = field(default_factory=dict)
+
+
+def document(response: Response) -> Mapping[str, Any] | None:
+    """The response body as one JSON object, or `None` when it is not one."""
+    try:
+        parsed = json.loads(response.body)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, Mapping) else None
 
 
 class Transport(Protocol):

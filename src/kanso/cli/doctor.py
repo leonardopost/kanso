@@ -14,14 +14,15 @@ and the adapter check reports what is registered and what each would need rather
 asking a vendor anything — unless `--check-adapters` is passed, which is the one path
 here that reaches a network.
 
-Four checks compare the files against the records. `best` is the workspace `strategy.py`
+Five checks compare the files against the records. `best` is the workspace `strategy.py`
 against the blob kanso last wrote there; `certificates` is every certified subject
-against the bytes that must still be held for it; `instruments` is the registry file,
-the universes it must resolve and the definitions the newest snapshot pinned; `lanes` is
+against the bytes that must still be held for it; `record` is the certified work on disk
+against what the record remembers of it; `instruments` is the registry file, the
+universes it must resolve and the definitions the newest snapshot pinned; `lanes` is
 every open run against its lane directory and every lane directory against the open
 runs. Each grades a fault by what it stops: a run that cannot take a card and a subject
 whose bytes are gone fail, and everything an operator may have meant — an edited
-best-so-far, a lane note, a snapshot older than a resolution — warns.
+best-so-far, a lane note, a snapshot older than a resolution, a clone — warns.
 
 Credentials are reported as names and origins. A value is never read into a message,
 because `doctor --report` is the block an operator pastes into an issue: that mode also
@@ -35,7 +36,6 @@ import hashlib
 import importlib.metadata
 import json
 import platform
-import sqlite3
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -47,10 +47,11 @@ from kanso.certify.certificate import source_file
 from kanso.cli.context import STATE_DB
 from kanso.criteria.integrity import scope as lane_scope
 from kanso.data import registry
-from kanso.data.instruments import CACHE_NAME, ManualProvider, ResolveError, read_store
+from kanso.data.instruments import CACHE_NAME, ManualProvider, ResolveError, _lookup, read_store
 from kanso.data.manifest import catalog_path
 from kanso.data.snapshot import instrument_drift, newest
 from kanso.env import envelope as envelope_module
+from kanso.env import host
 from kanso.errors import KansoError, ValidationError
 from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE, hypothesis_dir
 from kanso.nautilus import adapters as brokers
@@ -76,34 +77,6 @@ HARDWARE = ("os", "os_version", "arch", "chip", "cores_total", "mem_gb")
 """The detected fields whose change invalidates an envelope; the rest fluctuate."""
 
 
-def builtin_ids() -> dict[str, tuple[str, ...]]:
-    """The ids an extension would shadow, per kind, read from the registries themselves.
-
-    Every kind `PROVIDES` accepts is here, because a packaged id wins in every one of
-    those registries: an extension declaring one is registered nowhere, and a check that
-    read some of them would grade that silence `ok`. `exec_clients` covers the framework's
-    own `sandbox` as well as each broker's, since the client that is not a broker's is
-    shadowed exactly as easily and matters more — it is the one client every workspace has.
-
-    Read rather than listed, so a registry that grows an id does not have to remember to
-    grow this too. It is computed at the call and not at import because reading these
-    registries imports the adapter packages and every packaged construct's implementation,
-    and `doctor` is not the reason to do that until it is actually asked.
-    """
-    from kanso.classify.construct import builtin as builtin_constructs
-    from kanso.data.loaders import BUILTIN_LOADERS
-    from kanso.data.types import BUILTIN_TYPES
-    from kanso.portfolio import clients
-
-    return {
-        "loaders": tuple(sorted(BUILTIN_LOADERS)),
-        "adapters": tuple(sorted(registry.packaged())),
-        "constructs": tuple(sorted(builtin_constructs())),
-        "data_types": tuple(sorted(BUILTIN_TYPES)),
-        "exec_clients": tuple(sorted(clients.builtin())),
-    }
-
-
 @dataclass(frozen=True)
 class Check:
     """One diagnosis: what was checked, how it graded, and what was observed."""
@@ -126,6 +99,7 @@ class Check:
 
 def run(ws: Workspace, check_adapters: bool = False) -> list[Check]:
     """Every check, in report order. Never raises: a broken check is a graded check."""
+    unread = _unread(ws)
     return [
         _guard(name, check)
         for name, check in (
@@ -136,15 +110,15 @@ def run(ws: Workspace, check_adapters: bool = False) -> list[Check]:
             ("envelope", lambda: _envelope(ws)),
             ("repository", lambda: _repository(ws)),
             ("gitignore", lambda: _gitignore(ws)),
-            ("best", lambda: _best(ws)),
-            ("certificates", lambda: _certificates(ws)),
-            ("record", lambda: _record(ws)),
+            ("best", lambda: _best(ws, unread)),
+            ("certificates", lambda: _certificates(ws, unread)),
+            ("record", lambda: _record(ws, unread)),
             ("skills", lambda: _skills(ws)),
             ("credentials", lambda: _credentials(ws)),
             ("adapters", lambda: _adapters(ws, check_adapters)),
             ("execution", lambda: _execution(ws)),
-            ("instruments", lambda: _instruments(ws)),
-            ("lanes", lambda: _lanes(ws)),
+            ("instruments", lambda: _instruments(ws, unread)),
+            ("lanes", lambda: _lanes(ws, unread)),
             ("extensions", lambda: _extensions(ws)),
             ("engine facts", _engine_facts),
         )
@@ -336,7 +310,7 @@ def _envelope(ws: Workspace) -> Check:
 
 def _hardware_changed(written: env.Detected) -> list[str]:
     """The hardware fields the host no longer reports as the envelope recorded them."""
-    now = env.detect().detected
+    now = host.facts()
     return [
         f"{name}: {getattr(written, name)} → {getattr(now, name)}"
         for name in HARDWARE
@@ -421,10 +395,7 @@ def _skills(ws: Workspace) -> Check:
 
 def _linked(directory: Path, skill: Path) -> bool:
     """Is there a link in `directory` pointing at this packaged skill?"""
-    name = skill.name
-    if not name.startswith(skills_sync.LINK_PREFIX):
-        name = f"{skills_sync.LINK_PREFIX}{name}"
-    link = directory / name
+    link = directory / skills_sync._link_name(skill.name)
     return link.is_symlink() and Path(link.readlink()) == skill
 
 
@@ -630,7 +601,7 @@ def _extensions(ws: Workspace) -> Check:
         f"{extension.name}: {extension.error}" if extension.error else f"{extension.name}: ok"
         for extension in found
     ]
-    shadowing = ext.shadows(found, builtin_ids())
+    shadowing = ext.shadows(found, ext.shipped(ws))
     items += [f"{name} shadows the built-in {kind} '{item}'" for name, kind, item in shadowing]
     broken = [extension for extension in found if not extension.ok]
     detail = f"{len(found)} loaded"
@@ -716,19 +687,21 @@ class Unread:
 def _unread(ws: Workspace) -> Unread | None:
     """Why the state store is not one this package reads now, or `None` when it is.
 
-    Every check that reads records asks this first rather than opening the database
-    itself. An absent, unmigrated, newer or unreadable `state.db` is the schema check's
-    finding, and a check that opened it regardless would grade the same fault a second
-    time — or, for an absent file, create the database it was only meant to read.
+    Asked once per diagnosis and handed to every check that reads records, rather than
+    each of them opening the database itself. An absent, unmigrated, newer or unreadable
+    `state.db` is the schema check's finding, and a check that opened it regardless would
+    grade the same fault a second time — or, for an absent file, create the database it
+    was only meant to read. Never raises: it runs outside the guard each check has, so a
+    store that cannot be opened is what those checks report, not what stops the diagnosis.
     """
     path = ws.path(STATE_DB)
-    if not path.exists():
-        return Unread("no state.db", None, "ok")
     try:
+        if not path.exists():
+            return Unread("no state.db", None, "ok")
         with StateStore(path) as store:
             pending = store.pending()
             ahead = store.ahead_by()
-    except (KansoError, sqlite3.Error) as error:
+    except Exception as error:
         return Unread(f"state.db could not be opened: {error}", None, "warn")
     if pending:
         return Unread(
@@ -747,7 +720,7 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _best(ws: Workspace) -> Check:
+def _best(ws: Workspace, unread: Unread | None) -> Check:
     """`hypotheses/<id>/strategy.py` against the `best` blob kanso last wrote there.
 
     Once a hypothesis has a `best`, kanso owns that file: every keep and every re-point
@@ -756,7 +729,6 @@ def _best(ws: Workspace) -> Check:
     exactly how an operator prepares `research begin --from-workspace` — the run that
     starts from the edit and clears `best`. A retired hypothesis is left alone.
     """
-    unread = _unread(ws)
     if unread is not None:
         return unread.check("best")
     with StateStore(ws.path(STATE_DB)) as store:
@@ -794,7 +766,7 @@ def _best(ws: Workspace) -> Check:
     )
 
 
-def _certificates(ws: Workspace) -> Check:
+def _certificates(ws: Workspace, unread: Unread | None) -> Check:
     """Every certified subject against the bytes that must still be held for it.
 
     A certificate and a strategy version each name their subject by `strategy_sha`, and
@@ -804,7 +776,6 @@ def _certificates(ws: Workspace) -> Check:
     That is a failure, because every command that reads the subject stops on it; the
     remedy names a copy kanso can still find in the workspace, when there is one.
     """
-    unread = _unread(ws)
     if unread is not None:
         return unread.check("certificates")
     with StateStore(ws.path(STATE_DB)) as store:
@@ -839,7 +810,7 @@ def _certificates(ws: Workspace) -> Check:
     )
 
 
-def _record(ws: Workspace) -> Check:
+def _record(ws: Workspace, unread: Unread | None) -> Check:
     """Certified work on disk the record has no memory of.
 
     A repository carries the files — hypotheses, certificates, composed versions — and not
@@ -851,7 +822,6 @@ def _record(ws: Workspace) -> Check:
     re-established by the commands named — approvals deliberately not among them, since real
     capital always needs a person to say so again, on the machine that will trade.
     """
-    unread = _unread(ws)
     if unread is not None:
         return unread.check("record")
     on_disk: dict[str, int] = {}
@@ -945,7 +915,7 @@ def _copy_of(ws: Workspace, hyp_id: str, sha: str) -> str | None:
     return None
 
 
-def _instruments(ws: Workspace) -> Check:
+def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     """The instrument registry: its entries, the universes it must resolve, and drift.
 
     Three things. Every manual entry and every override in `instruments.yaml` is listed,
@@ -976,7 +946,6 @@ def _instruments(ws: Workspace) -> Check:
     universes = 0
     hypotheses = 0
 
-    unread = _unread(ws)
     if unread is not None:
         items.append(f"universes not checked: {unread.reason}")
     else:
@@ -1105,8 +1074,8 @@ def _resolvable(
         if not isinstance(outcome, ResolveError):
             out[wanted] = ("ok", "manual, built")
             continue
-        entry = _entry_of(file, wanted)
-        if entry is None or entry.manual:
+        entry = _lookup(file, wanted)
+        if isinstance(entry, ResolveError) or entry.manual:
             out[wanted] = ("fail", outcome.reason)
         elif (
             entry.resolved is not None
@@ -1125,15 +1094,7 @@ def _resolvable(
     return out
 
 
-def _entry_of(file: InstrumentsFile, wanted: str) -> InstrumentEntry | None:
-    """The one entry an id names — by key, symbol or qualified id — or `None`."""
-    if wanted in file:
-        return file[wanted]
-    matches = [entry for entry in file.root.values() if wanted in (entry.symbol, entry.nautilus_id)]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _lanes(ws: Workspace) -> Check:
+def _lanes(ws: Workspace, unread: Unread | None) -> Check:
     """Every open run against its lane directory, and every lane directory against the runs.
 
     A lane directory is `runs/<lane>/<hyp>/`: exactly the three scoped files as the run
@@ -1144,7 +1105,6 @@ def _lanes(ws: Workspace) -> Check:
     and warns; and a directory departing from its three files is what the next card's
     `strategy_integrity` refuses, and warns before the card does.
     """
-    unread = _unread(ws)
     if unread is not None:
         return unread.check("lanes")
     with StateStore(ws.path(STATE_DB)) as store:

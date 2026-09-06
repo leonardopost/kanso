@@ -25,9 +25,10 @@ smoothed over.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -42,7 +43,6 @@ from kanso.data.loader import DatasetRef, Loader, loaders
 from kanso.data.manifest import Manifest, data_path, manifests, merge
 from kanso.data.snapshot import Snapshot
 from kanso.errors import PreconditionError, ValidationError
-from kanso.schemas import InstrumentsFile, load_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -53,8 +53,6 @@ CHUNK_DAYS: Final = 30
 that a decade of history is hundreds of requests rather than thousands."""
 
 DAY: Final = timedelta(days=1)
-
-CACHE_NAME: Final = "instruments.yaml"
 
 EMPTY_CHUNK: Final = "data_chunk_empty"
 """The event kind recording a chunk a source served nothing for, so it is asked once."""
@@ -338,11 +336,6 @@ def missing(held: Sequence[tuple[date, date]], want: tuple[date, date]) -> list[
     return out
 
 
-def _clip(span: tuple[date, date], bound: tuple[date, date]) -> tuple[date, date] | None:
-    start, end = max(span[0], bound[0]), min(span[1], bound[1])
-    return (start, end) if start <= end else None
-
-
 def bytes_per_row(ws: Workspace) -> float | None:
     """What a row of held data costs on disk, or `None` when nothing is held.
 
@@ -481,21 +474,25 @@ def backfill(
         wanted_end = (
             end if end is not None else (min(s[0] for s in spans) - DAY if spans else ref.span[1])
         )
-        window = _clip((wanted_start, wanted_end), ref.span) if wanted_start <= wanted_end else None
+        window = ref.window((wanted_start, wanted_end)) if wanted_start <= wanted_end else None
         targets: list[tuple[date, date]] = []
         if window is not None:
             targets += missing(spans, window)
         for gap in Series(ref.instrument, ref.type, ref.resolution, tuple(mine)).gaps:
-            clipped = _clip(gap, ref.span)
+            clipped = ref.window(gap)
             if clipped is not None:
                 targets.append(clipped)
         if not targets:
             notes.append(f"{ref.instrument} {ref.type}: nothing missing before {wanted_end}")
             continue
-        for target in sorted(targets):
+        per_day = _rows_per_day(mine)
+        for target in merge(targets):
             for chunk in chunked(target):
+                over = dataclass_replace(ref, span=(chunk.start, chunk.end))
                 fetches.append(
-                    _fetch(ws, store, loader, ref, chunk, dry_run=dry_run, rate=rate, held=mine)
+                    _estimate(over, per_day, rate)
+                    if dry_run
+                    else _fetch(ws, store, loader, over, source=loader.id)
                 )
 
     result = Backfill(
@@ -513,37 +510,39 @@ def backfill(
     return result
 
 
+def _estimate(ref: DatasetRef, per_day: float | None, rate: float | None) -> Fetch:
+    """What fetching the chunk `ref` spans would cost, at the rate its series served at."""
+    chunk = Chunk(*ref.span)
+    rows = None if per_day is None else int(round(per_day * chunk.days))
+    return Fetch(
+        instrument=ref.instrument,
+        type=ref.type,
+        resolution=ref.resolution,
+        chunk=chunk,
+        est_rows=rows,
+        est_bytes=None if rows is None or rate is None else int(round(rows * rate)),
+    )
+
+
 def _fetch(
     ws: Workspace,
     store: StateStore,
     loader: Loader,
     ref: DatasetRef,
-    chunk: Chunk,
     *,
-    dry_run: bool,
-    rate: float | None,
-    held: Sequence[Manifest],
+    source: str,
+    supersedes: str | None = None,
 ) -> Fetch:
-    """Fetch and write one chunk, or describe what fetching it would cost."""
-    where = _checkpoint_subject(ref)
-    if dry_run:
-        per_day = _rows_per_day(held)
-        rows = None if per_day is None else int(round(per_day * chunk.days))
-        return Fetch(
-            instrument=ref.instrument,
-            type=ref.type,
-            resolution=ref.resolution,
-            chunk=chunk,
-            est_rows=rows,
-            est_bytes=None if rows is None or rate is None else int(round(rows * rate)),
-        )
-    if _already_empty(store, where, chunk):
+    """Fetch the chunk `ref` spans and write it, unless it was already asked and served nothing."""
+    chunk = Chunk(*ref.span)
+    subject = _checkpoint_subject(ref)
+    if _already_empty(store, subject, chunk):
         return Fetch(ref.instrument, ref.type, ref.resolution, chunk, outcome="empty")
-    points = list(loader.load(_over(ref, (chunk.start, chunk.end)), (chunk.start, chunk.end)))
+    points = list(loader.load(ref, ref.span))
     if not points:
-        store.event(EMPTY_CHUNK, where, {"start": str(chunk.start), "end": str(chunk.end)})
+        store.event(EMPTY_CHUNK, subject, {"start": str(chunk.start), "end": str(chunk.end)})
         return Fetch(ref.instrument, ref.type, ref.resolution, chunk, outcome="empty")
-    written = catalog.write(ws, points, ref=_over(ref, (chunk.start, chunk.end)), source=loader.id)
+    written = catalog.write(ws, points, ref=ref, source=source, supersedes=supersedes)
     return Fetch(
         instrument=ref.instrument,
         type=ref.type,
@@ -564,23 +563,6 @@ def _already_empty(store: StateStore, subject: str, chunk: Chunk) -> bool:
     """Whether this chunk was already asked for and served nothing."""
     wanted = {"start": str(chunk.start), "end": str(chunk.end)}
     return any(event.detail == wanted for event in store.events(kind=EMPTY_CHUNK, subject=subject))
-
-
-def _over(ref: DatasetRef, span: tuple[date, date]) -> DatasetRef:
-    """The same dataset asked for over another span."""
-    return DatasetRef(
-        dataset_id=ref.dataset_id,
-        instrument=ref.instrument,
-        type=ref.type,
-        resolution=ref.resolution,
-        span=span,
-        adjusted=ref.adjusted,
-        publication=ref.publication,
-        publication_rule=ref.publication_rule,
-        vendor=ref.vendor,
-        vendor_dataset=ref.vendor_dataset,
-        request_params=ref.request_params,
-    )
 
 
 def ref_of(manifest: Manifest, span: tuple[date, date]) -> DatasetRef:
@@ -671,7 +653,14 @@ def sync(
         latest = manifest
         mine: list[Fetch] = []
         for chunk in chunked(window):
-            fetched = _extend(ws, store, loader, latest, chunk)
+            fetched = _fetch(
+                ws,
+                store,
+                loader,
+                ref_of(latest, (chunk.start, chunk.end)),
+                source=latest.source,
+                supersedes=latest.dataset_id,
+            )
             mine.append(fetched)
             if fetched.outcome == "written" and fetched.dataset_id is not None:
                 # Each successor supersedes the one before it, so a multi-chunk sync is a
@@ -707,37 +696,6 @@ def _newest_per_series(held: Iterable[Manifest]) -> list[Manifest]:
     return list(tips.values())
 
 
-def _extend(
-    ws: Workspace, store: StateStore, loader: Loader, manifest: Manifest, chunk: Chunk
-) -> Fetch:
-    """Fetch one chunk beyond a dataset's served end and write it as its successor."""
-    window = (chunk.start, chunk.end)
-    ref = ref_of(manifest, window)
-    subject = _checkpoint_subject(ref)
-    if _already_empty(store, subject, chunk):
-        return Fetch(
-            manifest.instrument, manifest.type, manifest.resolution, chunk, outcome="empty"
-        )
-    points = list(loader.load(ref, window))
-    if not points:
-        store.event(EMPTY_CHUNK, subject, {"start": str(chunk.start), "end": str(chunk.end)})
-        return Fetch(
-            manifest.instrument, manifest.type, manifest.resolution, chunk, outcome="empty"
-        )
-    written = catalog.write(
-        ws, points, ref=ref, source=manifest.source, supersedes=manifest.dataset_id
-    )
-    return Fetch(
-        instrument=manifest.instrument,
-        type=manifest.type,
-        resolution=manifest.resolution,
-        chunk=chunk,
-        rows=written.manifest.row_count,
-        dataset_id=written.manifest.dataset_id,
-        outcome="written",
-    )
-
-
 # --- instruments --------------------------------------------------------------
 
 
@@ -751,7 +709,7 @@ class Resolved:
     @property
     def fields(self) -> dict[str, Any]:
         """The engine's own canonical field map for this definition."""
-        return engine_fields(self.definition)
+        return reference.engine_fields(self.definition)
 
     def payload(self) -> dict[str, Any]:
         """The instrument as one object: the id asked for, its address, its definition.
@@ -764,24 +722,6 @@ class Resolved:
             "checksum": reference.definition_checksum(self.definition),
             "definition": self.fields,
         }
-
-
-def engine_fields(definition: object) -> dict[str, Any]:
-    """A Nautilus instrument as its own canonical field map.
-
-    NautilusTrader facts (`nautilus_trader 1.231.0`): every instrument class carries a
-    `to_dict` taking the instrument, which is the definition's canonical serialisation and
-    the same map the content address is taken over.
-    """
-    engine: Any = definition
-    dumped: dict[str, Any] = type(engine).to_dict(engine)
-    return dumped
-
-
-def cache(ws: Workspace) -> InstrumentsFile:
-    """The workspace's instrument cache, empty when the file is absent."""
-    path = ws.path(CACHE_NAME)
-    return load_yaml(InstrumentsFile, path) if path.is_file() else InstrumentsFile({})
 
 
 def resolve(
@@ -800,10 +740,10 @@ def resolve(
     definitions under something already recorded.
     """
     when = as_of or datetime.now(tz=UTC).date()
-    wanted = list(ids) if ids else sorted(cache(ws).root)
+    wanted = list(ids) if ids else sorted(reference.read_cache(ws).root)
     if not wanted:
         raise PreconditionError(
-            f"{ws.path(CACHE_NAME)} names no instrument and none was given",
+            f"{ws.path(reference.CACHE_NAME)} names no instrument and none was given",
             remedy="name the ids to resolve, or add them to instruments.yaml",
         )
     if refresh:
@@ -1004,10 +944,3 @@ def check_adapters(ws: Workspace) -> tuple[list[registry.Survey], list[str]]:
     if not surveys:
         notes.append("--check reached no configured adapter, and made no network call")
     return surveys, notes
-
-
-def dataset_ids(found: Iterable[Series]) -> Iterator[str]:
-    """Every dataset id of every series, in series order."""
-    for item in found:
-        for manifest in item.datasets:
-            yield manifest.dataset_id

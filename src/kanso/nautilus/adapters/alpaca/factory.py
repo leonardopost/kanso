@@ -36,16 +36,15 @@ adapter's own configuration is a subclass carrying only serialisable fields.
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from nautilus_trader.config import LiveDataClientConfig, LiveExecClientConfig
-from nautilus_trader.live.factories import LiveDataClientFactory, LiveExecClientFactory
+from nautilus_trader.live.factories import LiveExecClientFactory
 
 from kanso.errors import PreconditionError
 from kanso.nautilus.adapters.alpaca import BROKER
-from kanso.nautilus.adapters.alpaca.config import PAPER_CLIENT, account
+from kanso.nautilus.adapters.alpaca.config import account
 from kanso.nautilus.adapters.alpaca.execution import AlpacaExecutionClient, sender
 from kanso.workspace import find
 
@@ -55,20 +54,11 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from nautilus_trader.live.execution_client import LiveExecutionClient
 
 __all__ = [
-    "DATA_CLIENT_FACTORY",
-    "DATA_FACTORY_ATTR",
     "EXEC_CLIENT_FACTORY",
     "AlpacaDataClientConfig",
     "AlpacaExecClientConfig",
-    "AlpacaLiveDataClientFactory",
     "AlpacaLiveExecClientFactory",
 ]
-
-DATA_FACTORY_ATTR: Final = "DATA_CLIENT_FACTORY"
-"""What this adapter's market data module exposes its own factory under."""
-
-DATA_MODULE: Final = "data"
-"""The module the live market data client lives in, imported when one is asked for."""
 
 
 class AlpacaExecClientConfig(LiveExecClientConfig, frozen=True):
@@ -132,50 +122,6 @@ class AlpacaLiveExecClientFactory(LiveExecClientFactory):
         )
 
 
-class AlpacaLiveDataClientFactory(LiveDataClientFactory):
-    """Builds this broker's live market data client, which lives beside this module.
-
-    A thin delegation rather than an import, so that listing what a workspace can deploy
-    to — which reaches this module for the execution factory — never builds the market
-    data client, and so that a fault in one of the two clients is not a fault in both.
-    """
-
-    @staticmethod
-    def create(
-        loop: asyncio.AbstractEventLoop,
-        name: str,
-        config: LiveDataClientConfig,
-        msgbus: Any,
-        cache: Any,
-        clock: Any,
-    ) -> Any:
-        """The market data client this broker's own data module builds."""
-        return _data_factory().create(
-            loop=loop,
-            name=name,
-            config=config,
-            msgbus=msgbus,
-            cache=cache,
-            clock=clock,
-        )
-
-
-def _data_factory() -> Any:
-    """This adapter's market data factory, imported when a client is asked for."""
-    module = importlib.import_module(f"{__package__}.{DATA_MODULE}")
-    found = getattr(module, DATA_FACTORY_ATTR, None)
-    if found is None:
-        raise PreconditionError(
-            f"alpaca: this adapter's {DATA_MODULE} module declares no {DATA_FACTORY_ATTR}, "
-            "so it offers no live market data client",
-            remedy=(
-                f"give the stage a data client another adapter provides, or pair "
-                f"{PAPER_CLIENT!r} with the catalog replay client"
-            ),
-        )
-    return found
-
-
 EXEC_CLIENT_FACTORY: Final = AlpacaLiveExecClientFactory
-DATA_CLIENT_FACTORY: Final = AlpacaLiveDataClientFactory
-"""The two names the adapter's registry reaches these factories through."""
+"""The name the adapter's registry reaches this factory through. The market data factory
+lives beside its client in `data`, under the same convention."""

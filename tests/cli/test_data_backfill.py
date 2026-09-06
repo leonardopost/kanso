@@ -207,6 +207,37 @@ def test_an_explicit_end_bounds_the_backfill(runner: CliRunner, held: Path) -> N
     assert series["gaps"] == [["2024-02-01", "2024-02-29"]]
 
 
+def test_an_end_past_an_interior_gap_plans_the_gap_once(runner: CliRunner, workspace: Path) -> None:
+    """A gap inside the window and a gap inside what is held are one gap, asked for once."""
+    write_instruments(workspace)
+    assert at(runner, workspace, "data", "instruments", "resolve").exit_code == Exit.OK
+    for name, span in (
+        ("early.yaml", {"start": "2024-01-02", "end": "2024-01-31"}),
+        ("late.yaml", {"start": "2024-03-01", "end": "2024-03-29"}),
+    ):
+        spec = write_spec(workspace, name, **span)
+        assert (
+            at(runner, workspace, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code
+            == Exit.OK
+        )
+    write_spec(workspace, "full.yaml", **FULL)
+
+    planned = backfill(runner, workspace, "--to", "2024-03-15", "--dry-run")
+    document = backfill(runner, workspace, "--to", "2024-03-15")
+
+    assert planned["requests"] == document["requests"] == 1
+    [chunk] = document["chunks"]
+    assert (chunk["start"], chunk["end"], chunk["outcome"]) == (
+        "2024-02-01",
+        "2024-02-29",
+        "written",
+    )
+    assert document["rows"] > 0
+    [series] = payload(at(runner, workspace, "data", "show", "--json"))["series"]
+    assert series["spans"] == [["2024-01-02", "2024-03-29"]]
+    assert backfill(runner, workspace, "--to", "2024-03-15")["requests"] == 0
+
+
 def test_backfill_is_recorded_in_the_event_log(runner: CliRunner, held: Path) -> None:
     from kanso.state import StateStore
 

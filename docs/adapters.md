@@ -321,8 +321,9 @@ a close of 303.42 and 75,314,280 shares; the single-venue tape reported 309.765,
 So `feed` has no default. Set it in `[adapters.alpaca]`, matching the tape the strategy was
 researched on, and the data client refuses to open without it (exit 2, naming both). The tape
 is part of the engine client id, so every log line and every response says which one is being
-read, and a run whose declared tape contradicts one already recorded is refused rather than
-silently switched.
+read. Nothing in this version records the tape a stage ran on, so nothing compares one run's
+declaration with the last: that check belongs to the long-running stage node that
+`docs/backlog.md` tracks.
 
 ### Configuration
 

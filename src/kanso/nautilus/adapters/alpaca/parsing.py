@@ -7,12 +7,12 @@ testable from frozen rows with no network and no key.
 
 **What was measured, and what was not.** The key sets of the clock, the asset row, the
 order row and the position row were read from the live account and are relied on as
-facts; the daily bar row was read for both tapes. The quote and trade rows, the account
-row and the exchange spellings beyond `NASDAQ` are the broker's published schema and were
-not measured, so every one of them is read field by field: a row missing something a
-point needs yields nothing at all rather than a point with an invented number in it. A
-missing point is visible — the count and the span are taken from what was kept — and a
-fabricated one is not.
+facts; the daily bar row was read for both tapes. The account row and the exchange
+spellings beyond `NASDAQ` are the broker's published schema and were not measured, so
+every one of them is read field by field: a row missing something a point needs yields
+nothing at all rather than a point with an invented number in it. A missing point is
+visible — the count and the span are taken from what was kept — and a fabricated one is
+not.
 
 **A bar is stamped at its close, and no zone is consulted.** The row's `t` is the instant
 the aggregation window opened, and this build's rule — settled once, for every source —
@@ -40,10 +40,8 @@ reports a `LiveExecutionClient` generates; each takes a `report_id: UUID4` and n
 up to 128 does not fit, so a derived id is hashed rather than concatenated. A `FillReport`
 whose `trade_id` an order already carries is skipped by reconciliation, which is what
 makes a deterministic id worth having. `Bar` validates its own OHLC ordering and raises
-`ValueError` on a high below the low; `QuoteTick` requires its two prices to share a
-precision and its two sizes to share a precision; `TradeTick` requires a strictly positive
-size and a non-empty trade id. `Price` and `Quantity` are fixed point, so a decimal from
-the wire is quantised to the instrument's declared precision rather than to a float's.
+`ValueError` on a high below the low. `Price` and `Quantity` are fixed point, so a decimal
+from the wire is quantised to the instrument's declared precision rather than to a float's.
 """
 
 from __future__ import annotations
@@ -58,9 +56,8 @@ from typing import Any, Final
 
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.reports import FillReport, OrderStatusReport, PositionStatusReport
-from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+from nautilus_trader.model.data import Bar
 from nautilus_trader.model.enums import (
-    AggressorSide,
     LiquiditySide,
     OrderSide,
     OrderStatus,
@@ -91,18 +88,15 @@ __all__ = [
     "ORDER_STATUSES",
     "ORDER_TYPES",
     "POSITION_SIDES",
-    "QUOTE_FIELDS",
     "SIMPLE_ORDER_CLASSES",
-    "SUPPORTED_ORDER_TYPES",
-    "SUPPORTED_TIME_IN_FORCE",
     "TIME_IN_FORCE",
-    "TRADE_FIELDS",
     "TRADE_ID_DIGITS",
     "Asset",
     "MarketClock",
     "account_id",
     "asset",
     "bar",
+    "canonical",
     "client_order_id",
     "decimal_of",
     "fill_report",
@@ -114,13 +108,13 @@ __all__ = [
     "position_report",
     "price_of",
     "quantity_of",
-    "quote",
     "rfc3339",
+    "step_ns",
     "symbol_of",
+    "text_of",
     "to_broker_order_type",
     "to_broker_side",
     "to_broker_time_in_force",
-    "trade",
     "trade_id",
     "unsupported_reason",
 ]
@@ -157,12 +151,6 @@ BAR_FIELDS: Final[tuple[str, ...]] = ("t", "o", "h", "l", "c", "v")
 """What a bar row must carry. Measured on both tapes, together with `n` and `vw`, which a
 bar in this build does not use."""
 
-QUOTE_FIELDS: Final[tuple[str, ...]] = ("t", "bp", "bs", "ap", "as")
-TRADE_FIELDS: Final[tuple[str, ...]] = ("t", "p", "s", "i")
-"""What a quote and a trade row must carry, in the broker's published spelling — the same
-short keys on the request path and on the stream. Not measured in the read-only pass, so
-every one of them is required and a row missing any yields no point."""
-
 SIMPLE_ORDER_CLASSES: Final[frozenset[str]] = frozenset({"", "simple"})
 """The order classes this adapter maps. A bracket, an OCO or an OTO row carries legs whose
 contingencies the engine models differently, and mapping one without having measured it
@@ -189,7 +177,6 @@ ORDER_TYPES: Final[dict[str, OrderType]] = {
 BROKER_ORDER_TYPES: Final[dict[OrderType, str]] = {
     engine: broker for broker, engine in ORDER_TYPES.items()
 }
-SUPPORTED_ORDER_TYPES: Final[frozenset[OrderType]] = frozenset(BROKER_ORDER_TYPES)
 """The order types the broker accepts. Everything else the engine can express — a
 market-to-limit, an if-touched, a trailing stop limit — has no spelling here, and an
 attempt to send one is refused by name rather than translated into something else."""
@@ -206,7 +193,6 @@ TIME_IN_FORCE: Final[dict[str, TimeInForce]] = {
 BROKER_TIME_IN_FORCE: Final[dict[TimeInForce, str]] = {
     engine: broker for broker, engine in TIME_IN_FORCE.items()
 }
-SUPPORTED_TIME_IN_FORCE: Final[frozenset[TimeInForce]] = frozenset(BROKER_TIME_IN_FORCE)
 """Every time in force the broker offers. `GTD` is the one the engine has and the broker
 does not, so an order carrying it is refused rather than silently made good-till-cancel."""
 
@@ -363,8 +349,12 @@ def _quantised(value: Decimal, precision: int) -> str:
     return f"{value.quantize(step, rounding=ROUND_HALF_UP):.{precision}f}"
 
 
-def _canonical(value: Decimal) -> str:
-    """A decimal's one spelling, so `10`, `10.0` and `1E+1` hash to the same trade id."""
+def canonical(value: Decimal) -> str:
+    """A decimal's one spelling, without an exponent.
+
+    The spelling the wire carries in an order body, and the one a trade id is hashed
+    from, so `10`, `10.0` and `1E+1` travel as one number and hash to one fill.
+    """
     return format(value.normalize(), "f")
 
 
@@ -419,7 +409,7 @@ def trade_id(order_ref: str, filled_qty: Decimal) -> TradeId:
     duplicate fills. The pair is hashed because the engine's `TradeId` holds 36 characters
     and a client order id may hold 128.
     """
-    digest = hashlib.sha256(f"{order_ref}|{_canonical(filled_qty)}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{order_ref}|{canonical(filled_qty)}".encode()).hexdigest()
     return TradeId(digest[:TRADE_ID_DIGITS])
 
 
@@ -498,10 +488,10 @@ def asset(row: Mapping[str, Any]) -> Asset:
     broker refuses.
     """
     return Asset(
-        symbol=_text(row, "symbol"),
-        asset_class=_text(row, "class"),
-        exchange=_text(row, "exchange"),
-        status=_text(row, "status"),
+        symbol=text_of(row, "symbol", "asset"),
+        asset_class=text_of(row, "class", "asset"),
+        exchange=text_of(row, "exchange", "asset"),
+        status=text_of(row, "status", "asset"),
         tradable=_flag(row, "tradable"),
         marginable=_flag(row, "marginable"),
         shortable=_flag(row, "shortable"),
@@ -515,10 +505,11 @@ def asset(row: Mapping[str, Any]) -> Asset:
     )
 
 
-def _text(row: Mapping[str, Any], name: str) -> str:
+def text_of(row: Mapping[str, Any], name: str, prefix: str) -> str:
+    """One required text field of a row, refused by `prefix.name` when it is not there."""
     value = row.get(name)
     if not isinstance(value, str) or not value:
-        raise ValidationError(f"asset.{name}: {value!r} is not a value the broker writes here")
+        raise ValidationError(f"{prefix}.{name}: {value!r} is not a value the broker writes here")
     return value
 
 
@@ -530,6 +521,11 @@ def _flag(row: Mapping[str, Any], name: str) -> bool:
 
 
 # --- market data --------------------------------------------------------------
+
+
+def step_ns(resolution: str) -> int:
+    """One resolution as nanoseconds, which is the distance from a window's open to close."""
+    return int(parse_duration(resolution, "resolution").total_seconds()) * NS_PER_SECOND
 
 
 def bar(
@@ -550,8 +546,7 @@ def bar(
     if any(row.get(name) is None for name in BAR_FIELDS):
         return None
     opened = instant(row.get("t"), "bar.t")
-    step = int(parse_duration(resolution, "resolution").total_seconds()) * NS_PER_SECOND
-    ts_event = opened + step
+    ts_event = opened + step_ns(resolution)
     try:
         return Bar(
             bar_type(instrument, resolution),
@@ -567,65 +562,6 @@ def bar(
         raise ValidationError(
             f"bar: the row the broker served for {instrument} at {rfc3339(opened)} is not a "
             f"bar: {exc}"
-        ) from None
-
-
-def quote(
-    row: Mapping[str, Any],
-    *,
-    instrument: InstrumentId,
-    price_precision: int,
-    size_precision: int,
-) -> QuoteTick | None:
-    """One quote row as a two-sided quote, or `None` when the row is not one.
-
-    Both sides are built at one precision, which is the only thing the engine refuses a
-    quote for, so a number that cannot be held fails where it is read rather than here.
-    """
-    if any(row.get(name) is None for name in QUOTE_FIELDS):
-        return None
-    ts_event = instant(row.get("t"), "quote.t")
-    return QuoteTick(
-        instrument,
-        price_of(row.get("bp"), price_precision, "quote.bp"),
-        price_of(row.get("ap"), price_precision, "quote.ap"),
-        quantity_of(row.get("bs"), size_precision, "quote.bs"),
-        quantity_of(row.get("as"), size_precision, "quote.as"),
-        ts_event,
-        ts_event,
-    )
-
-
-def trade(
-    row: Mapping[str, Any],
-    *,
-    instrument: InstrumentId,
-    price_precision: int,
-    size_precision: int,
-) -> TradeTick | None:
-    """One trade row as a print, or `None` when the row is not one.
-
-    The aggressor is unknown rather than assumed: the broker's print says which venue and
-    which conditions, and never which side crossed, so a side is not invented from the
-    price. `i` is the venue's own print id and is what the trade is identified by.
-    """
-    if any(row.get(name) is None for name in TRADE_FIELDS):
-        return None
-    ts_event = instant(row.get("t"), "trade.t")
-    try:
-        return TradeTick(
-            instrument,
-            price_of(row.get("p"), price_precision, "trade.p"),
-            quantity_of(row.get("s"), size_precision, "trade.s"),
-            AggressorSide.NO_AGGRESSOR,
-            TradeId(str(row.get("i"))),
-            ts_event,
-            ts_event,
-        )
-    except ValueError as exc:
-        raise ValidationError(
-            f"trade: the row the broker served for {instrument} at {rfc3339(ts_event)} is not "
-            f"a trade: {exc}"
         ) from None
 
 

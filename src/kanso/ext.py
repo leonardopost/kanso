@@ -12,8 +12,8 @@ to the extensions that do load, and `doctor` shows what went wrong.
 
 An extension declares what it registers in a module-level `PROVIDES` table, mapping a
 kind to the ids it claims. Discovery reads that declaration and compares it against the
-built-in ids its caller supplies. It does not resolve a clash: shadowing is reported, and
-which definition wins is not decided here.
+ids that ship, read from the registries themselves by `shipped`. It does not resolve a
+clash: shadowing is reported, and which definition wins is not decided here.
 
 A kind a registry cannot read is refused here rather than collected, so that a declaration
 which could never take effect is a message at the declaration instead of a silence at the
@@ -29,6 +29,8 @@ import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from kanso.workspace import Workspace
 
 KINDS = (
     "constructs",
@@ -97,10 +99,40 @@ def discover(workspace: Path, paths: list[str]) -> list[Extension]:
     return found
 
 
+def shipped(ws: Workspace) -> dict[str, frozenset[str]]:
+    """The ids that ship, per kind `PROVIDES` accepts: what an extension's own would shadow.
+
+    Every kind is here, because a packaged id wins in every one of those registries: an
+    extension declaring one is registered nowhere, and a check that read some of them
+    would grade that silence `ok`. `loaders` carries the ones every packaged adapter
+    provides for `ws` beside the built-in two, and `exec_clients` the framework's own
+    `sandbox` beside each broker's — the client that is not a broker's is shadowed
+    exactly as easily and matters more, since it is the one every workspace has.
+
+    Read rather than listed, so a registry that grows an id does not have to remember to
+    grow this too, and read at the call and not at import: these registries import the
+    adapter packages and every packaged construct's implementation, and neither `doctor`
+    nor `ext show` is the reason to do that until it is actually asked.
+    """
+    from kanso.classify.construct import builtin as builtin_constructs
+    from kanso.data.loaders import BUILTIN_LOADERS
+    from kanso.data.registry import adapter_loaders, packaged
+    from kanso.data.types import BUILTIN_TYPES
+    from kanso.portfolio import clients
+
+    return {
+        "loaders": frozenset({*BUILTIN_LOADERS, *adapter_loaders(ws)}),
+        "adapters": frozenset(packaged()),
+        "constructs": frozenset(builtin_constructs()),
+        "data_types": frozenset(BUILTIN_TYPES),
+        "exec_clients": frozenset(clients.builtin()),
+    }
+
+
 def shadows(
     extensions: Iterable[Extension], builtins: Mapping[str, Iterable[str]]
 ) -> list[tuple[str, str, str]]:
-    """Every `(extension, kind, id)` where a declared id is also a built-in one."""
+    """Every `(extension, kind, id)` where a declared id is also one that ships."""
     known = {kind: set(ids) for kind, ids in builtins.items()}
     return sorted(
         (ext.name, kind, item)

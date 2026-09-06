@@ -23,12 +23,12 @@ extension declares under an id nothing has taken, so an extension can add to kan
 cannot replace part of it. The reason is the fixture: the loaders, constructs and gates the
 test suite and the demo run against must be the package's own, or a green suite would say
 nothing about the package. A clash is not resolved, it is reported: `kanso ext show` marks
-the id `shadowed`, and the packaged definition is what the workspace uses. `kanso doctor`
-grades a workspace `warn` for an id that shadows a **packaged** one, in every kind a
-declaration may carry — the framework's own `sandbox` client included. `ext show` compares
-against what this workspace's registries actually hand out, so it also marks an id that
-shadows a loader a packaged *adapter* provides (`massive_bars` and its siblings), and it is
-the only one of the two that says why an id is `absent`.
+the id `shadowed`, `kanso doctor` grades the workspace `warn` for it, and the packaged
+definition is what the workspace uses. Both read one table of what ships —
+`kanso.ext.shipped`, asked of the registries themselves — in every kind a declaration may
+carry: the framework's own `sandbox` client and the loaders a packaged *adapter* provides
+(`massive_bars` and its siblings) included. `ext show` is the one of the two that says why
+an id is `absent`.
 
 **An extension that fails to import degrades the workspace; it does not stop it.** Extension
 code is operator code, so an import failure is expected to happen sometimes. Discovery

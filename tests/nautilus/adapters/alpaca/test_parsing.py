@@ -23,7 +23,6 @@ from typing import Any
 import pytest
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.enums import (
-    AggressorSide,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -52,18 +51,16 @@ from kanso.nautilus.adapters.alpaca.parsing import (
     position_report,
     price_of,
     quantity_of,
-    quote,
     rfc3339,
     symbol_of,
     to_broker_order_type,
     to_broker_side,
     to_broker_time_in_force,
-    trade,
     trade_id,
     unsupported_reason,
 )
 
-from . import ACCOUNT_NUMBER, ASSET, CLOCK, IEX_BAR, QUOTE, SIP_BAR, TRADE, order, position
+from . import ACCOUNT_NUMBER, ASSET, CLOCK, IEX_BAR, SIP_BAR, order, position
 
 AAPL = InstrumentId.from_str("AAPL.XNAS")
 ACCOUNT = account_id(ACCOUNT_NUMBER)
@@ -202,7 +199,7 @@ def test_a_price_is_quantised_to_the_instrument_and_not_to_a_float() -> None:
 def test_a_negative_quantity_is_refused_where_a_sign_is_not_expected() -> None:
     """The one caller that expects one — a short position — takes the magnitude itself."""
     with pytest.raises(ValidationError) as failure:
-        quantity_of("-10", 0, "quote.bs")
+        quantity_of("-10", 0, "bar.v")
 
     assert "negative size" in str(failure.value)
 
@@ -361,100 +358,27 @@ def test_a_row_whose_prices_contradict_each_other_is_not_a_bar() -> None:
     assert "AAPL.XNAS" in str(failure.value)
 
 
-# --- quotes and trades ---------------------------------------------------------
-
-
-def test_a_quote_row_becomes_a_two_sided_quote() -> None:
-    built = quote(
-        QUOTE, instrument=AAPL, price_precision=PRICE_PRECISION, size_precision=SIZE_PRECISION
-    )
-
-    assert built is not None
-    assert (str(built.bid_price), str(built.ask_price)) == ("309.55", "309.60")
-    assert built.ts_event == instant(str(QUOTE["t"]))
-
-
-@pytest.mark.parametrize("missing", ["t", "bp", "bs", "ap", "as"])
-def test_a_half_quote_is_no_quote(missing: str) -> None:
-    assert (
-        quote(
-            {**QUOTE, missing: None},
-            instrument=AAPL,
-            price_precision=PRICE_PRECISION,
-            size_precision=SIZE_PRECISION,
-        )
-        is None
-    )
-
-
 def test_a_negative_size_is_a_broken_row_rather_than_a_magnitude() -> None:
     """Read as its magnitude it would put a size in a point that nobody served."""
     with pytest.raises(ValidationError) as failure:
-        quote(
-            {**QUOTE, "bs": -1},
-            instrument=AAPL,
-            price_precision=PRICE_PRECISION,
-            size_precision=SIZE_PRECISION,
-        )
+        daily(SIP_BAR, v=-1)
 
-    assert "quote.bs" in str(failure.value)
+    assert "bar.v" in str(failure.value)
 
 
 def test_a_price_the_engine_cannot_hold_is_refused_by_the_field_that_carried_it() -> None:
     """A magnitude no fixed point holds must fail by name, not escape as a decimal error."""
     with pytest.raises(ValidationError) as failure:
-        quote(
-            {**QUOTE, "ap": 1e30},
-            instrument=AAPL,
-            price_precision=PRICE_PRECISION,
-            size_precision=SIZE_PRECISION,
-        )
+        daily(SIP_BAR, h=1e30)
 
-    assert "quote.ap" in str(failure.value)
+    assert "bar.h" in str(failure.value)
 
 
 def test_a_size_the_engine_cannot_hold_is_refused_the_same_way() -> None:
     with pytest.raises(ValidationError) as failure:
-        quantity_of(1e30, 2, "quote.bs")
+        quantity_of(1e30, 2, "bar.v")
 
-    assert "quote.bs" in str(failure.value)
-
-
-def test_a_trade_row_becomes_a_print_whose_aggressor_is_unknown() -> None:
-    """The broker says which venue and which conditions, never which side crossed."""
-    built = trade(
-        TRADE, instrument=AAPL, price_precision=PRICE_PRECISION, size_precision=SIZE_PRECISION
-    )
-
-    assert built is not None
-    assert built.aggressor_side == AggressorSide.NO_AGGRESSOR
-    assert str(built.trade_id) == str(TRADE["i"])
-    assert str(built.price) == "309.58"
-
-
-@pytest.mark.parametrize("missing", ["t", "p", "s", "i"])
-def test_a_trade_missing_what_it_is_identified_by_is_no_trade(missing: str) -> None:
-    assert (
-        trade(
-            {**TRADE, missing: None},
-            instrument=AAPL,
-            price_precision=PRICE_PRECISION,
-            size_precision=SIZE_PRECISION,
-        )
-        is None
-    )
-
-
-def test_a_print_of_no_size_is_refused_by_the_engine_and_reported_as_such() -> None:
-    with pytest.raises(ValidationError) as failure:
-        trade(
-            {**TRADE, "s": 0},
-            instrument=AAPL,
-            price_precision=PRICE_PRECISION,
-            size_precision=SIZE_PRECISION,
-        )
-
-    assert "trade" in str(failure.value)
+    assert "bar.v" in str(failure.value)
 
 
 # --- orders --------------------------------------------------------------------

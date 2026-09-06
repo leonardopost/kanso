@@ -11,6 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import nautilus_trader
 import pytest
 from typer.testing import CliRunner
 
@@ -18,7 +19,7 @@ from kanso import env
 from kanso.cli import doctor as doctor_module
 from kanso.data.snapshot import InstrumentDrift, newest
 from kanso.errors import Exit, PreconditionError
-from kanso.ext import KINDS
+from kanso.ext import KINDS, shipped
 from kanso.nautilus import facts
 from kanso.nautilus.adapters import exec_clients
 from kanso.skills_sync import packaged_skills
@@ -462,6 +463,27 @@ def test_an_extension_shadowing_a_registered_id_is_reported(
     assert f"greedy shadows the built-in exec_clients '{broker_client}'" in listed
 
 
+def test_a_loader_a_packaged_adapter_provides_is_shadowed_in_doctor_as_in_ext_show(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """One table of what ships serves both commands, so neither is silent where the other
+    speaks: an id an adapter's loaders hand out is reported here as `ext show` marks it."""
+    package = workspace / "kanso_ext" / "vendored"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "PROVIDES = {'loaders': ['massive_bars']}\n", encoding="utf-8"
+    )
+
+    result = at(runner, workspace, "doctor", "--json")
+    shown = payload(at(runner, workspace, "ext", "show", "--json"))
+
+    assert status(result, "extensions") == "warn"
+    assert "vendored shadows the built-in loaders 'massive_bars'" in items(result, "extensions")
+    assert "1 shadowed id(s)" in str(checks(result)["extensions"]["detail"])
+    [extension] = shown["extensions"]
+    assert [item["state"] for item in extension["provides"]] == ["shadowed"]
+
+
 def test_the_shadow_check_reads_every_kind_a_declaration_may_carry(
     runner: CliRunner, workspace: Path
 ) -> None:
@@ -490,9 +512,9 @@ def test_the_shadow_check_reads_every_kind_a_declaration_may_carry(
     assert "3 shadowed id(s)" in str(checks(result)["extensions"]["detail"])
 
 
-def test_the_declaration_and_the_shadow_check_name_the_same_kinds() -> None:
+def test_the_declaration_and_the_shadow_check_name_the_same_kinds(workspace: Path) -> None:
     """One comparison reads both tables, so a kind in only one of them is a blind spot."""
-    assert set(doctor_module.builtin_ids()) == set(KINDS)
+    assert set(shipped(find(workspace))) == set(KINDS)
 
 
 def test_doctor_makes_no_network_call(
@@ -602,13 +624,22 @@ def test_a_state_database_that_is_not_one_fails_and_the_rest_still_report(
 def test_another_engine_version_warns_on_the_versions_and_the_facts(
     runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An engine other than the one the facts were verified against is a warning, not a
+    broken binding: the version is a fact about the facts, and grades no claim by itself."""
     monkeypatch.setattr(doctor_module.envelope_module, "engine_version", lambda: "0.0.1")
+    monkeypatch.setattr(nautilus_trader, "__version__", "0.0.1")
+    claims = len(facts.verify())
 
     result = at(runner, workspace, "doctor", "--json")
 
     assert result.exit_code == Exit.OK
     assert status(result, "versions") == "warn"
-    assert status(result, "engine facts") == "warn"
+    check = checks(result)["engine facts"]
+    assert check["status"] == "warn"
+    assert f"/{claims} claims hold on nautilus_trader 0.0.1" in str(check["detail"])
+    assert "binding(s) broken" not in str(check["detail"])
+    assert f"verified against {facts.ENGINE_VERSION}" in str(check["detail"])
+    assert "re-verify" in str(check["remedy"])
 
 
 def test_running_without_an_installed_distribution_is_a_warning(
@@ -1237,6 +1268,33 @@ def test_the_record_checks_are_not_graded_against_a_database_this_package_cannot
         assert str(checks(broken)[name]["detail"]).startswith(
             "not checked: state.db could not be opened"
         )
+
+
+def test_a_store_that_raises_anything_is_graded_once_and_never_stops_the_diagnosis(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record checks share one reading of the store, taken outside their guard, so a
+    store that raises something neither kanso nor sqlite names must still be a graded
+    finding — the schema check's failure — and the five say `not checked` rather than dying."""
+
+    def boom(*_: object, **__: object) -> None:
+        raise RuntimeError("the disk went away")
+
+    monkeypatch.setattr(doctor_module, "StateStore", boom)
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert status(result, "schema") == "fail"
+    assert checks(result)["schema"]["detail"] == "RuntimeError: the disk went away"
+    for name in ("best", "certificates", "record", "lanes"):
+        assert status(result, name) == "warn"
+        assert checks(result)[name]["detail"] == (
+            "not checked: state.db could not be opened: the disk went away"
+        )
+    assert "universes not checked: state.db could not be opened: the disk went away" in items(
+        result, "instruments"
+    )
 
 
 def _sha(path: Path) -> str:

@@ -69,7 +69,6 @@ module deliberately does not use, for the reason given above.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -89,6 +88,7 @@ from kanso.nautilus.adapters.alpaca.config import (
     Transport,
     account,
     credential_names,
+    document,
     endpoint,
     resolve,
 )
@@ -411,7 +411,7 @@ class Overlay:
         if response.status == 404:
             return Undescribed(symbol, "the broker does not list it")
         self._raise_for_status(symbol, response.status)
-        row = _document(response.body)
+        row = document(response)
         if row is None:
             return Undescribed(symbol, "the broker answered with a body that is not one row")
         try:
@@ -532,15 +532,6 @@ def _symbol(value: str | InstrumentId) -> str:
             "built out of an arbitrary string"
         )
     return text
-
-
-def _document(body: bytes) -> Mapping[str, Any] | None:
-    """The response body as one JSON object, or `None` when it is not one."""
-    try:
-        parsed = json.loads(body)
-    except ValueError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
 
 
 def _text(value: Decimal | None) -> str | None:

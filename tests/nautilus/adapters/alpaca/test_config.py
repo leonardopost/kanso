@@ -617,7 +617,7 @@ def test_an_engine_module_is_imported_when_it_is_asked_for() -> None:
     ("accessor", "module", "attribute"),
     [
         ("exec_client_factory", "factory", "EXEC_CLIENT_FACTORY"),
-        ("data_client_factory", "factory", "DATA_CLIENT_FACTORY"),
+        ("data_client_factory", "data", "DATA_CLIENT_FACTORY"),
     ],
 )
 def test_a_client_factory_is_read_off_the_module_that_provides_it(

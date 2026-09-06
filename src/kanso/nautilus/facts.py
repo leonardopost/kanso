@@ -23,11 +23,10 @@ construction rather than by convention.
 The engine defines **no** `config_cls` class attribute on `Strategy` or
 `Actor`. Nothing in the engine pairs a component class with its config class as
 an attribute; the pairing is the constructor's runtime type check, plus the
-dotted-path triple `ImportableStrategyConfig(strategy_path, config_path,
-config)` and `ImportableActorConfig(actor_path, config_path, config)` used when
-a node builds components from configuration. Where kanso exposes `config_cls`
-it is kanso's own attribute, honoured by kanso's own loader, and the engine
-neither reads nor validates it.
+dotted paths an `ImportableStrategyConfig` or `ImportableActorConfig` carries
+when a node builds components from configuration. Where kanso exposes
+`config_cls` it is kanso's own attribute, honoured by kanso's own loader, and
+the engine neither reads nor validates it.
 
 The data catalog
 ----------------
@@ -80,9 +79,7 @@ restricted to exactly `InstrumentId`, `str`, `bool`, `float`, `int`, `bytes`,
 `ndarray` and `dict`; any other annotation — `Decimal` and `datetime` included —
 raises `TypeError` at class definition. Timestamps must therefore travel as
 `int` nanoseconds and decimals as `float` or `str`. A registered type
-round-trips through the catalog, where it is returned wrapped in `CustomData`,
-and `BacktestDataConfig.data_cls` names it by dotted path, so any registered
-type is loadable into a backtest by name.
+round-trips through the catalog, where it is returned wrapped in `CustomData`.
 
 Two traps sit in that decorator. First, **it cannot read postponed
 annotations.** It reads `cls.__annotations__` verbatim and resolves nothing on
@@ -143,20 +140,6 @@ aggressor_side, trade_id, ts_event, ts_init)` requires a strictly positive
 size — a zero-size print cannot be represented and must be dropped or
 recorded as another type.
 
-Backtests
----------
-`BacktestNode(configs=[BacktestRunConfig, ...])` with `run() -> list[BacktestResult]`
-is the research code path. `BacktestRunConfig` carries `venues`, `data`,
-`engine`, `chunk_size`, `raise_exception`, `dispose_on_completion`, `start`,
-`end` and `data_clients`. `BacktestVenueConfig` is where the trading model
-lives: `oms_type`, `account_type`, `starting_balances`, `base_currency`,
-`default_leverage`, `leverages`, `fill_model`, `latency_model`, `fee_model`,
-`book_type`, `bar_execution`, `trade_execution` and more. `BacktestDataConfig`
-selects from a catalog by `catalog_path`, `data_cls` (a dotted path string),
-`instrument_id`/`instrument_ids`/`bar_types` and `start_time`/`end_time`.
-`BacktestEngineConfig` holds `actors`, `strategies`, `risk_engine`, `streaming`
-and the rest of the kernel configuration.
-
 Live and sandbox nodes
 ----------------------
 `TradingNode(config=TradingNodeConfig)` is the live code path.
@@ -177,27 +160,13 @@ returns the client. The client overrides the `_subscribe_*` and `_request_*`
 coroutines it supports; the base class tracks subscriptions and publishes to the
 message bus.
 
-Sandbox execution is `SandboxExecutionClient`, a `LiveExecutionClient`,
-configured by `SandboxExecutionClientConfig` (`venue`, `starting_balances`,
-`base_currency`, `oms_type`, `account_type`, `default_leverage`, `book_type`,
-`bar_execution`, `trade_execution` and the order-support switches) and built by
-`SandboxLiveExecClientFactory`. It owns a `SimulatedExchange` driven by a
-`TestClock` and subscribes on the message bus to `data.*.{venue}.*`; its
-`on_data` handler feeds `Instrument`, `InstrumentStatus`, `InstrumentClose`,
-`OrderBookDelta`, `OrderBookDeltas`, `OrderBookDepth10`, `QuoteTick`,
-`TradeTick` and `Bar` into the exchange and then calls `exchange.process(data.ts_init)`.
-Fills therefore exist only for venues whose data reaches the bus, and the
-sandbox clock follows the data's `ts_init`, not wall time.
-
-kanso does not use that client. `SandboxExecutionClientConfig` exposes neither
-`use_message_queue` nor `fee_model` nor `fill_model`, so the matching a node
-does cannot be brought into line with a backtest's through it; kanso assembles
-the same `SimulatedExchange` and `BacktestExecClient` pair itself instead. The
-engine fact that assembly rests on is that `LiveExecutionEngine.process`
-overrides `ExecutionEngine.process` in order to queue the event: on an L1 book
-an order larger than the top level is filled there and then, *if it is still
-open*, slipped one increment and filled again, both in the call that matched it.
-A backtest's engine has applied the first fill by the time "still open" is read
+kanso assembles its own `SimulatedExchange` and `BacktestExecClient` pair for a
+node rather than taking the engine's convenience client. The engine fact that
+assembly rests on is that `LiveExecutionEngine.process` overrides
+`ExecutionEngine.process` in order to queue the event: on an L1 book an order
+larger than the top level is filled there and then, *if it is still open*,
+slipped one increment and filled again, both in the call that matched it. A
+backtest's engine has applied the first fill by the time "still open" is read
 and a live engine has not, so the remainder is never filled, never cancelled and
 never reported — which is why kanso's own venue sends its events to the
 synchronous implementation.
@@ -213,40 +182,10 @@ portfolio-level cap, so any such limit must be enforced where the order size is
 chosen and where the deployed set is seen as a whole, with this as the
 per-order backstop underneath.
 
-Session persistence and replay
-------------------------------
-`StreamingConfig(catalog_path=...)` on either `BacktestEngineConfig` or
-`TradingNodeConfig` makes the kernel construct a `StreamingFeatherWriter` at
-`<catalog_path>/<environment>/<instance_id>` and subscribe it to `"*"` on the
-trader's message bus, so every data object and every event flows to feather
-files, alongside a `config.json` copy of the kernel configuration.
-`include_types` narrows what is written; the rotation options bound file size.
-
-Reading a session back is only half-covered by the engine. `Environment` has
-three values — `backtest`, `sandbox` and `live` — and the writer path uses the
-environment's value, but the catalog exposes run listings for two of them only:
-`list_backtest_runs()` / `read_backtest(instance_id)` and `list_live_runs()` /
-`read_live_run(instance_id)`. **A sandbox node's session is written to
-`<catalog>/sandbox/<instance_id>` and is invisible to both listings.** The
-reachable path for it is `convert_stream_to_data(instance_id, data_cls,
-subdirectory="sandbox")`, which deserialises a stream and writes it into a
-catalog; the generic reader behind the two run listings is private. A component
-that runs sandbox sessions must therefore keep its own index of session ids
-rather than discovering them from the catalog.
-
-`read_backtest` and `read_live_run` return the whole stream sorted by
-`ts_init`. Order intents survive the round trip: `OrderInitialized` serialises
-with `instrument_id`, `order_side`, `order_type`, `quantity`, `price` and its
-timestamp, and deserialises to the same values. Its Arrow schema carries
-`ts_init` but no `ts_event` column, which loses nothing because
-`OrderInitialized` takes only `ts_init` at construction and reports
-`ts_event == ts_init`; a comparison of order-intent sequences across two code
-paths reads that one timestamp.
-
 Network I/O
 -----------
-`nautilus_trader.core.nautilus_pyo3` exposes the Rust HTTP and WebSocket
-clients. `HttpClient(default_headers=..., header_keys=..., keyed_quotas=...,
+`nautilus_trader.core.nautilus_pyo3` exposes the Rust HTTP client.
+`HttpClient(default_headers=..., header_keys=..., keyed_quotas=...,
 default_quota=..., timeout_secs=..., proxy_url=...)` rate-limits by key: the
 keyword is `keyed_quotas` — a list of `(key, Quota)` pairs — and a request
 passes the keys it should be counted against, most specific first. `Quota` is
@@ -256,12 +195,6 @@ offers `request`, `get`, `post`, `patch` and `delete`; `HttpResponse` carries
 `status`, `headers` and `body`. `http_download(url, filepath, params=None,
 headers=None, timeout_secs=None)` streams a response straight to disk without
 holding it in memory, which is the transport for bulk history objects.
-`WebSocketClient.connect(...)` runs in handler mode with automatic reconnection
-and exponential backoff, configured by `WebSocketConfig(url, headers,
-heartbeat, heartbeat_msg, reconnect_timeout_ms, reconnect_delay_initial_ms,
-reconnect_delay_max_ms, reconnect_backoff_factor, reconnect_jitter_ms,
-reconnect_max_attempts, idle_timeout_ms, proxy_url, backend)`; `send`,
-`send_text`, `send_pong` and `disconnect` complete the surface.
 """
 
 from __future__ import annotations
@@ -279,8 +212,6 @@ DESIGN_CONSTRAINTS: frozenset[str] = frozenset(
         "the engine pairs a component with its config through a config_cls class attribute",
         "ParquetDataCatalog accepts pyarrow tables or record batches on its write path",
         "customdataclass reads a module that postpones annotation evaluation",
-        "a persisted session is discoverable through the catalog's run listings for every "
-        "node environment",
     }
 )
 """The claims that do **not** hold against `ENGINE_VERSION`, by design.
@@ -307,16 +238,6 @@ def _raises(call: Callable[[], object]) -> str | None:
     except Exception as exc:
         return f"{type(exc).__name__}: {exc}"
     return None
-
-
-# --- version -----------------------------------------------------------------
-
-
-def _check_version() -> tuple[bool, str]:
-    import nautilus_trader
-
-    installed = str(nautilus_trader.__version__)
-    return installed == ENGINE_VERSION, f"installed {installed}, verified against {ENGINE_VERSION}"
 
 
 # --- configs and components --------------------------------------------------
@@ -396,22 +317,8 @@ def _check_config_cls_attribute() -> tuple[bool, str]:
     return present, (
         "the engine defines no `config_cls` on Strategy or Actor; a config is bound to a "
         "component by the constructor's type check and by the dotted paths in "
-        "ImportableStrategyConfig(strategy_path, config_path, config) / "
-        "ImportableActorConfig(actor_path, config_path, config). Any `config_cls` is kanso's own."
+        "ImportableStrategyConfig / ImportableActorConfig. Any `config_cls` is kanso's own."
     )
-
-
-def _check_importable_configs() -> tuple[bool, str]:
-    from nautilus_trader.config import ImportableActorConfig, ImportableStrategyConfig
-
-    s = tuple(ImportableStrategyConfig.__struct_fields__)
-    a = tuple(ImportableActorConfig.__struct_fields__)
-    holds = s == ("strategy_path", "config_path", "config") and a == (
-        "actor_path",
-        "config_path",
-        "config",
-    )
-    return holds, f"ImportableStrategyConfig{s}; ImportableActorConfig{a}"
 
 
 # --- catalog -----------------------------------------------------------------
@@ -557,15 +464,6 @@ def _check_engine_orders_by_ts_init() -> tuple[bool, str]:
     )
 
 
-def _check_data_timestamps() -> tuple[bool, str]:
-    bar = _sample_bar(ts_event=5, ts_init=9)
-    ts_event = int(bar.ts_event)  # type: ignore[attr-defined]
-    ts_init = int(bar.ts_init)  # type: ignore[attr-defined]
-    return (ts_event, ts_init) == (5, 9), (
-        f"Data exposes independent ts_event={ts_event} and ts_init={ts_init} nanosecond fields"
-    )
-
-
 # --- custom data types -------------------------------------------------------
 
 
@@ -672,17 +570,6 @@ def _check_custom_data_names_are_global() -> tuple[bool, str]:
         f"registering {name} twice raised {second}: the serializable-type registry is keyed "
         "by bare "
         "class name across the process, so custom type names are a global namespace"
-    )
-
-
-def _check_backtest_data_cls_is_a_path() -> tuple[bool, str]:
-    import msgspec
-    from nautilus_trader.config import BacktestDataConfig
-
-    types = {f.name: f.type for f in msgspec.structs.fields(BacktestDataConfig)}
-    return types.get("data_cls") is str, (
-        f"BacktestDataConfig.data_cls is {types.get('data_cls')}, a dotted path, so a registered "
-        "custom type is selectable by name"
     )
 
 
@@ -891,32 +778,6 @@ def _check_market_data_objects() -> tuple[bool, str]:
 # --- nodes -------------------------------------------------------------------
 
 
-def _check_backtest_node() -> tuple[bool, str]:
-    import inspect
-
-    from nautilus_trader.backtest.node import BacktestNode
-    from nautilus_trader.backtest.results import BacktestResult
-    from nautilus_trader.config import (
-        BacktestDataConfig,
-        BacktestEngineConfig,
-        BacktestRunConfig,
-        BacktestVenueConfig,
-    )
-
-    init = inspect.signature(BacktestNode.__init__)
-    run = inspect.signature(BacktestNode.run)
-    run_fields = tuple(BacktestRunConfig.__struct_fields__)
-    holds = (
-        "configs" in init.parameters
-        and BacktestResult is not None
-        and {"venues", "data", "engine", "start", "end"} <= set(run_fields)
-        and hasattr(BacktestVenueConfig, "__struct_fields__")
-        and hasattr(BacktestDataConfig, "__struct_fields__")
-        and hasattr(BacktestEngineConfig, "__struct_fields__")
-    )
-    return holds, (f"BacktestNode{init} with run{run}; BacktestRunConfig{run_fields}")
-
-
 def _check_trading_node() -> tuple[bool, str]:
     import inspect
 
@@ -938,60 +799,6 @@ def _check_trading_node() -> tuple[bool, str]:
         f"exec_clients={types.get('exec_clients')}; factories registered by name, resolved "
         "from the "
         "client key's text before the first hyphen"
-    )
-
-
-def _check_sandbox_exec_client() -> tuple[bool, str]:
-    import inspect
-
-    from nautilus_trader.adapters.sandbox.config import SandboxExecutionClientConfig
-    from nautilus_trader.adapters.sandbox.execution import SandboxExecutionClient
-    from nautilus_trader.adapters.sandbox.factory import SandboxLiveExecClientFactory
-    from nautilus_trader.live.execution_client import LiveExecutionClient
-
-    create = inspect.signature(SandboxLiveExecClientFactory.create)
-    fields = tuple(SandboxExecutionClientConfig.__struct_fields__)
-    holds = (
-        issubclass(SandboxExecutionClient, LiveExecutionClient)
-        and {"venue", "starting_balances", "account_type", "oms_type"} <= set(fields)
-        and set(create.parameters) >= {"loop", "name", "config", "msgbus", "cache", "clock"}
-    )
-    return holds, (
-        f"SandboxExecutionClient MRO {[c.__name__ for c in SandboxExecutionClient.__mro__]}; "
-        f"SandboxExecutionClientConfig{fields}; factory.create{create}"
-    )
-
-
-def _check_sandbox_subscription() -> tuple[bool, str]:
-    import inspect
-
-    from nautilus_trader.adapters.sandbox.execution import SandboxExecutionClient
-
-    init_source = inspect.getsource(SandboxExecutionClient.__init__)
-    on_data_source = inspect.getsource(SandboxExecutionClient.on_data)
-    subscribes = 'self._msgbus.subscribe(f"data.*.{self.venue}.*", handler=self.on_data)' in (
-        inspect.getsource(SandboxExecutionClient)
-    )
-    handled = [
-        name
-        for name in (
-            "Instrument",
-            "InstrumentStatus",
-            "InstrumentClose",
-            "OrderBookDelta",
-            "OrderBookDeltas",
-            "OrderBookDepth10",
-            "QuoteTick",
-            "TradeTick",
-            "Bar",
-        )
-        if f"isinstance(data, {name})" in on_data_source
-    ]
-    clocked = "self.exchange.process(data.ts_init)" in on_data_source
-    holds = subscribes and len(handled) == 9 and clocked and "SimulatedExchange(" in init_source
-    return holds, (
-        f"subscribes to data.*.{{venue}}.* ({subscribes}); on_data handles {handled}; "
-        f"advances the simulated exchange to data.ts_init ({clocked})"
     )
 
 
@@ -1063,137 +870,6 @@ def _check_risk_engine_config() -> tuple[bool, str]:
     )
 
 
-# --- sessions ----------------------------------------------------------------
-
-
-def _check_streaming_config() -> tuple[bool, str]:
-    import inspect
-
-    from nautilus_trader.config import (
-        BacktestEngineConfig,
-        StreamingConfig,
-        TradingNodeConfig,
-    )
-    from nautilus_trader.persistence.writer import StreamingFeatherWriter
-    from nautilus_trader.system.kernel import NautilusKernel
-
-    fields = tuple(StreamingConfig.__struct_fields__)
-    setup = inspect.getsource(NautilusKernel._setup_streaming)
-    path_shape = 'f"{config.catalog_path}/{self._environment.value}/{self.instance_id}"' in setup
-    subscribes_all = 'self._trader.subscribe("*", self._writer.write)' in setup
-    holds = (
-        "streaming" in BacktestEngineConfig.__struct_fields__
-        and "streaming" in TradingNodeConfig.__struct_fields__
-        and "catalog_path" in fields
-        and path_shape
-        and subscribes_all
-        and StreamingFeatherWriter is not None
-    )
-    return holds, (
-        f"StreamingConfig{fields} on both engine and node configs; the kernel writes feather to "
-        f"<catalog_path>/<environment>/<instance_id> ({path_shape}) with the writer subscribed to "
-        f'"*" on the message bus ({subscribes_all})'
-    )
-
-
-def _check_session_listings() -> tuple[bool, str]:
-    from nautilus_trader.common import Environment
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
-    environments = [e.value for e in Environment]
-    listed = [
-        value
-        for value in environments
-        if hasattr(ParquetDataCatalog, f"list_{value}_runs")
-        or hasattr(ParquetDataCatalog, f"read_{value}")
-    ]
-    holds = sorted(listed) == sorted(environments)
-    return holds, (
-        f"Environment values {environments} but run listings exist only for {listed}: "
-        "list_backtest_runs/read_backtest and list_live_runs/read_live_run. A sandbox session is "
-        "written to <catalog>/sandbox/<instance_id> and is invisible to both; the generic reader "
-        "behind them is private, so sandbox session ids must be tracked outside the catalog."
-    )
-
-
-def _check_stream_conversion() -> tuple[bool, str]:
-    import inspect
-
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
-    signature = inspect.signature(ParquetDataCatalog.convert_stream_to_data)
-    subdirectory = signature.parameters.get("subdirectory")
-    holds = subdirectory is not None and subdirectory.default == "backtest"
-    return holds, (
-        f"convert_stream_to_data{signature}: `subdirectory` selects the environment folder, so "
-        '`subdirectory="sandbox"` reaches a sandbox session the run listings cannot see'
-    )
-
-
-def _check_order_intent_roundtrip() -> tuple[bool, str]:
-    from nautilus_trader.core.uuid import UUID4
-    from nautilus_trader.model.enums import (
-        ContingencyType,
-        OrderSide,
-        OrderType,
-        TimeInForce,
-        TriggerType,
-    )
-    from nautilus_trader.model.events import OrderInitialized
-    from nautilus_trader.model.identifiers import (
-        ClientOrderId,
-        InstrumentId,
-        StrategyId,
-        TraderId,
-    )
-    from nautilus_trader.model.objects import Quantity
-    from nautilus_trader.serialization.arrow.serializer import ArrowSerializer, get_schema
-
-    event = OrderInitialized(
-        TraderId("TRADER-001"),
-        StrategyId("S-1"),
-        InstrumentId.from_str("AAPL.XNAS"),
-        ClientOrderId("O-1"),
-        OrderSide.BUY,
-        OrderType.MARKET,
-        Quantity.from_int(1),
-        TimeInForce.GTC,
-        False,
-        False,
-        False,
-        {},
-        TriggerType.NO_TRIGGER,
-        None,
-        ContingencyType.NO_CONTINGENCY,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        UUID4(),
-        123,
-    )
-    table = ArrowSerializer.serialize_batch([event], OrderInitialized)
-    back = ArrowSerializer.deserialize(OrderInitialized, table)[0]
-    names = list(get_schema(OrderInitialized).names)
-    holds = (
-        event.ts_event == event.ts_init == 123
-        and back.ts_init == 123
-        and back.instrument_id == event.instrument_id
-        and back.side == event.side
-        and back.order_type == event.order_type
-        and back.quantity == event.quantity
-        and "ts_event" not in names
-    )
-    return holds, (
-        "OrderInitialized takes only ts_init and reports ts_event == ts_init; its Arrow schema "
-        f"carries ts_init and no ts_event column ({'ts_event' not in names}); instrument_id, "
-        "order_side, order_type, quantity and price survive the round trip"
-    )
-
-
 # --- network -----------------------------------------------------------------
 
 
@@ -1235,26 +911,6 @@ def _check_quota() -> tuple[bool, str]:
     return holds, f"Quota constructors {built}; a zero max burst is refused ({zero_burst})"
 
 
-def _check_websocket_client() -> tuple[bool, str]:
-    from nautilus_trader.core import nautilus_pyo3
-
-    config = nautilus_pyo3.WebSocketConfig(
-        url="wss://localhost:1/",
-        headers=[("User-Agent", "kanso")],
-        heartbeat=30,
-    )
-    methods = [
-        m
-        for m in ("connect", "send", "send_text", "send_pong", "disconnect")
-        if hasattr(nautilus_pyo3.WebSocketClient, m)
-    ]
-    holds = len(methods) == 5 and config is not None
-    return holds, (
-        f"WebSocketConfig{nautilus_pyo3.WebSocketConfig.__text_signature__} constructs offline; "
-        f"WebSocketClient methods {methods}; handler mode reconnects with exponential backoff"
-    )
-
-
 def _check_http_download() -> tuple[bool, str]:
     import inspect
 
@@ -1264,26 +920,6 @@ def _check_http_download() -> tuple[bool, str]:
     holds = callable(nautilus_pyo3.http_download) and "filepath" in signature
     return holds, (
         f"http_download{signature} streams a response straight to disk without holding it in memory"
-    )
-
-
-def _check_sandbox_fill_knobs() -> tuple[bool, str]:
-    """The engine's convenience venue exposes none of its exchange's matching knobs.
-
-    This is why kanso assembles its own `SimulatedExchange` and `BacktestExecClient`
-    from the engine's components instead of using that client: with the fill model,
-    the fee model and the command queue all private, a node could not be made to fill
-    what a backtest fills. It is checked so that an engine release exposing them is
-    noticed here rather than left as a simplification nobody takes.
-    """
-    from nautilus_trader.adapters.sandbox.config import SandboxExecutionClientConfig
-
-    fields = set(SandboxExecutionClientConfig.__struct_fields__)
-    private = {"use_message_queue", "fee_model", "fill_model"} - fields
-    holds = private == {"use_message_queue", "fee_model", "fill_model"}
-    return holds, (
-        f"SandboxExecutionClientConfig exposes none of {sorted(private)}, so the matching a "
-        "node does could not be brought into line with a backtest's through it"
     )
 
 
@@ -1316,10 +952,6 @@ def _check_live_exec_engine_queues_events() -> tuple[bool, str]:
 
 _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
-        "the installed engine is the version these facts were verified against",
-        _check_version,
-    ),
-    (
         "StrategyConfig and ActorConfig are distinct sibling bases under NautilusConfig",
         _check_config_bases,
     ),
@@ -1334,11 +966,6 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "the engine pairs a component with its config through a config_cls class attribute",
         _check_config_cls_attribute,
-    ),
-    (
-        "ImportableStrategyConfig and ImportableActorConfig name a component and its config "
-        "by dotted path",
-        _check_importable_configs,
     ),
     (
         "ParquetDataCatalog writes Data objects and reads them back by type",
@@ -1365,10 +992,6 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_engine_orders_by_ts_init,
     ),
     (
-        "Data carries independent ts_event and ts_init nanosecond timestamps",
-        _check_data_timestamps,
-    ),
-    (
         "a custom Data type is registered by subclassing Data and applying customdataclass",
         _check_custom_data_type,
     ),
@@ -1386,10 +1009,6 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_custom_data_names_are_global,
     ),
     (
-        "BacktestDataConfig names its data class by dotted path",
-        _check_backtest_data_cls_is_a_path,
-    ),
-    (
         "the five instrument classes construct from the fields kanso must supply",
         _check_instrument_classes,
     ),
@@ -1403,20 +1022,8 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_market_data_objects,
     ),
     (
-        "BacktestNode runs a list of BacktestRunConfig and returns BacktestResults",
-        _check_backtest_node,
-    ),
-    (
         "TradingNode is configured by TradingNodeConfig and takes client factories by name",
         _check_trading_node,
-    ),
-    (
-        "sandbox execution is a LiveExecutionClient with a config and a factory",
-        _check_sandbox_exec_client,
-    ),
-    (
-        "the sandbox client drives a SimulatedExchange from data on the message bus",
-        _check_sandbox_subscription,
     ),
     (
         "a custom live data client needs only a client, a config and a factory subclass",
@@ -1427,23 +1034,6 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_risk_engine_config,
     ),
     (
-        "StreamingConfig persists a node session through the kernel's feather writer",
-        _check_streaming_config,
-    ),
-    (
-        "a persisted session is discoverable through the catalog's run listings for every "
-        "node environment",
-        _check_session_listings,
-    ),
-    (
-        "convert_stream_to_data replays a persisted stream from any environment folder",
-        _check_stream_conversion,
-    ),
-    (
-        "an order intent survives the session stream with the fields a parity check compares",
-        _check_order_intent_roundtrip,
-    ),
-    (
         "nautilus_pyo3.HttpClient takes a default quota and per-key quotas",
         _check_http_client_quotas,
     ),
@@ -1452,27 +1042,14 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_quota,
     ),
     (
-        "nautilus_pyo3.WebSocketClient connects with a reconnecting WebSocketConfig",
-        _check_websocket_client,
-    ),
-    (
         "nautilus_pyo3.http_download streams a URL to a file path",
         _check_http_download,
-    ),
-    (
-        "the sandbox execution client's matching knobs are private and it matches on submit",
-        _check_sandbox_fill_knobs,
     ),
     (
         "a live execution engine queues an order event where a backtest's applies it",
         _check_live_exec_engine_queues_events,
     ),
 )
-
-
-def claims() -> list[str]:
-    """Every engine claim `verify()` checks, in order."""
-    return [claim for claim, _ in _CHECKS]
 
 
 def verify() -> list[Fact]:

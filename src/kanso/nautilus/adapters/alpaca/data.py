@@ -15,10 +15,7 @@ never defaulted, never inferred and never silent:
 * the configuration has no default and refuses to guess one, so a client cannot open on an
   undeclared feed at all;
 * the tape is part of this client's engine id, so every log line, every data response and
-  the node's own client registry name the tape the points came off;
-* the tape a stage ran on is reported by `provenance` for the caller to record, and
-  `check_feed` refuses a run whose declared tape contradicts the recorded one — a stage
-  does not silently change series between one restart and the next.
+  the node's own client registry name the tape the points came off.
 
 **A bar is stamped at its close, consulting no zone.** The row's `t` is the instant the
 aggregation window opened — for a daily bar, midnight of the exchange's own calendar day,
@@ -53,7 +50,7 @@ measured either. A subscription for one is refused by name, which is visible, ra
 accepted and never delivered, which is not.
 
 The credential travels in two headers and nowhere else — never a query parameter, never a
-log line, never this client's `repr`, never the payload `provenance` returns.
+log line, never this client's `repr`.
 
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
@@ -97,23 +94,22 @@ from nautilus_trader.model.enums import BarAggregation, PriceType
 from nautilus_trader.model.identifiers import ClientId, InstrumentId
 
 from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
-from kanso.nautilus.adapters.alpaca import ID
 from kanso.nautilus.adapters.alpaca.config import (
     DATA_HOST,
     DEFAULT_POLL_INTERVAL_S,
     Credentials,
     Feed,
     account,
+    buckets,
     credential_names,
     endpoint,
     resolve,
 )
 from kanso.nautilus.adapters.alpaca.parsing import bar as bar_of
-from kanso.nautilus.adapters.alpaca.parsing import rfc3339, symbol_of
+from kanso.nautilus.adapters.alpaca.parsing import rfc3339, step_ns, symbol_of
 from kanso.nautilus.adapters.alpaca.provider import provider as instrument_provider_for
 from kanso.nautilus.adapters.alpaca.venue import serves
 from kanso.nautilus.session import SHUTDOWN_TOPIC
-from kanso.schemas import parse_duration
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from collections.abc import Iterable, Mapping, Sequence
@@ -149,7 +145,6 @@ __all__ = [
     "AlpacaDataClient",
     "AlpacaLiveDataClientFactory",
     "bars_of",
-    "check_feed",
     "client_id_of",
     "data_client",
     "engine_client_id",
@@ -207,36 +202,6 @@ MAX_FAILURES: Final = 3
 row is a feed that is not coming back, and a stage that cannot see the market must not go
 on placing orders into it."""
 
-NS_PER_SECOND: Final = 1_000_000_000
-
-
-# --- the tape -----------------------------------------------------------------
-
-
-def check_feed(declared: Feed, recorded: str | None, *, subject: str) -> None:
-    """Refuse a run whose declared tape contradicts the one already recorded.
-
-    `None` is not a contradiction: nothing was recorded, so there is nothing to disagree
-    with, and the caller records the declared tape instead. Anything else must match
-    exactly — including a value that names no tape this broker serves, which is a record
-    written by something that did not mean what this reader assumes.
-    """
-    if recorded is None:
-        return
-    text = recorded.strip().lower()
-    if text == declared.value:
-        return
-    known = ", ".join(sorted(member.value for member in Feed))
-    raise PreconditionError(
-        f"{subject}: was recorded on the {recorded!r} tape and is configured for "
-        f"{declared.value!r}; the two are different series for the same session, so this "
-        "would not be the same strategy",
-        remedy=(
-            "set `feed` in the [adapters.alpaca] table to the tape this deployment was "
-            f"recorded on, or deploy afresh on {declared.value!r} (the tapes are {known})"
-        ),
-    )
-
 
 # --- bar types and windows ----------------------------------------------------
 
@@ -279,11 +244,6 @@ def timeframe_of(resolution: str) -> str:
             f"{', '.join(sorted(TIMEFRAMES.values()))}"
         )
     return f"{step}{suffix}"
-
-
-def step_ns(resolution: str) -> int:
-    """One resolution as nanoseconds, which is the distance from a window's open to close."""
-    return int(parse_duration(resolution, "resolution").total_seconds()) * NS_PER_SECOND
 
 
 # --- reading the wire ---------------------------------------------------------
@@ -354,12 +314,6 @@ def engine_client_id(client_id: str, feed: Feed) -> ClientId:
 def client_id_of(engine_id: ClientId | str) -> str:
     """The kanso client id an engine client id was built from."""
     return str(engine_id).rsplit("-", 1)[0].lower()
-
-
-def _keys(path: str) -> list[str]:
-    """The rate-limit buckets a request counts against, coarsest last."""
-    parts = [part for part in path.split("/") if part][:2]
-    return ["/".join(parts), parts[0]] if len(parts) > 1 else parts
 
 
 # --- the client ---------------------------------------------------------------
@@ -449,20 +403,6 @@ class AlpacaDataClient(LiveMarketDataClient):
     def failures(self) -> int:
         """Consecutive failed sweeps; reset by the first that succeeds."""
         return self._failures
-
-    def provenance(self) -> dict[str, object]:
-        """What this feed was, for the caller to record beside a stage's run.
-
-        Carries no credential and no value: the account's id, the tape, the host and the
-        cadence are what a later run is checked against by `check_feed`.
-        """
-        return {
-            "broker": ID,
-            "client": self.client_id,
-            "feed": self._feed.value,
-            "host": self._data_url,
-            "poll_interval_s": self._interval,
-        }
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -718,7 +658,7 @@ class AlpacaDataClient(LiveMarketDataClient):
                 endpoint(self._data_url, path),
                 params,
                 self._credentials.headers(),
-                _keys(path),
+                buckets(path),
             )
         except KansoError:
             raise
@@ -796,32 +736,28 @@ def data_client(
     clock: Any,
     transport: Transport | None = None,
     instrument_provider: Any = None,
-    recorded_feed: str | None = None,
     config: LiveDataClientConfig | None = None,
 ) -> AlpacaDataClient:
     """This broker's live feed for one workspace and one of its accounts.
 
     The tape is read from the workspace's `[adapters.alpaca]` table, which has no default,
-    so a workspace that has not declared one is refused here rather than opened on a guess;
-    `recorded_feed` is the tape a previous run of the same stage ran on, and a run that
-    contradicts it is refused. The cadence comes from that table too, and from nowhere
-    else: an operator whose stage trades daily bars has to be able to say so, and a caller
-    that overrode it here would be a second answer to a question the workspace has already
-    answered. The credential is resolved at this moment and the key is checked against the
-    host it would address before anything is opened.
+    so a workspace that has not declared one is refused here rather than opened on a guess.
+    The cadence comes from that table too, and from nowhere else: an operator whose stage
+    trades daily bars has to be able to say so, and a caller that overrode it here would be
+    a second answer to a question the workspace has already answered. The credential is
+    resolved at this moment and the key is checked against the host it would address
+    before anything is opened.
     """
     from kanso.nautilus.adapters.alpaca import BROKER
 
     settings = BROKER.config(ws)
-    feed = settings.require_feed()
-    check_feed(feed, recorded_feed, subject=f"stages: the {client_id} feed")
     return AlpacaDataClient(
         loop,
         msgbus,
         cache,
         clock,
         credentials=resolve(ws.root, client_id),
-        feed=feed,
+        feed=settings.require_feed(),
         transport=transport if transport is not None else BROKER.transport(ws),
         instrument_provider=(
             instrument_provider if instrument_provider is not None else instrument_provider_for(ws)
@@ -875,4 +811,4 @@ class AlpacaLiveDataClientFactory(LiveDataClientFactory):
 
 
 DATA_CLIENT_FACTORY: Final = AlpacaLiveDataClientFactory
-"""What this adapter's factory module delegates a market data client to."""
+"""The name the adapter's registry reaches this factory through."""

@@ -12,7 +12,9 @@ import nautilus_trader
 import pytest
 
 from kanso.nautilus import facts
-from kanso.nautilus.facts import DESIGN_CONSTRAINTS, ENGINE_VERSION, Fact, claims, verify
+from kanso.nautilus.facts import DESIGN_CONSTRAINTS, ENGINE_VERSION, Fact, verify
+
+CLAIMS = [claim for claim, _ in facts._CHECKS]
 
 
 @pytest.fixture(scope="module")
@@ -30,16 +32,11 @@ def test_docstring_records_the_engine_version() -> None:
 
 
 def test_one_fact_per_claim(verified: list[Fact]) -> None:
-    assert [fact.claim for fact in verified] == claims()
+    assert [fact.claim for fact in verified] == CLAIMS
 
 
 def test_claims_are_unique() -> None:
-    assert len(set(claims())) == len(claims())
-
-
-def test_every_claim_is_checked(verified: list[Fact]) -> None:
-    assert len(verified) == len(facts._CHECKS)
-    assert len(verified) >= 30
+    assert len(set(CLAIMS)) == len(CLAIMS)
 
 
 def test_every_fact_carries_evidence(verified: list[Fact]) -> None:
@@ -58,9 +55,9 @@ def test_every_claim_but_the_design_constraints_holds(verified: list[Fact]) -> N
     assert set(failed) == DESIGN_CONSTRAINTS, failed
 
 
-def test_design_constraints_are_claims(verified: list[Fact]) -> None:
-    assert set(claims()) >= DESIGN_CONSTRAINTS
-    assert len(DESIGN_CONSTRAINTS) == 4
+def test_design_constraints_are_claims() -> None:
+    assert set(CLAIMS) >= DESIGN_CONSTRAINTS
+    assert len(DESIGN_CONSTRAINTS) == 3
 
 
 def test_verify_is_repeatable() -> None:

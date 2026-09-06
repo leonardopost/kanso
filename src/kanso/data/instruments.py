@@ -262,8 +262,13 @@ _DERIVED = (("price_increment", "price_precision"), ("size_increment", "size_pre
 # --- coercion -----------------------------------------------------------------
 
 
-def _fields(instrument: Any) -> dict[str, Any]:
-    """The engine's own canonical field map for a definition."""
+def engine_fields(instrument: Any) -> dict[str, Any]:
+    """A Nautilus instrument as its own canonical field map.
+
+    NautilusTrader facts (`nautilus_trader 1.231.0`): every instrument class carries a
+    `to_dict` taking the instrument, which is the definition's canonical serialisation and
+    the same map the content address is taken over.
+    """
     dumped: dict[str, Any] = type(instrument).to_dict(instrument)
     return dumped
 
@@ -522,7 +527,9 @@ def _engine(name: str) -> Any:
 
 def definition_checksum(instrument: object) -> str:
     """The content address of one definition: sha256 over its canonical field map."""
-    canonical = json.dumps(_fields(instrument), sort_keys=True, separators=(",", ":"), default=str)
+    canonical = json.dumps(
+        engine_fields(instrument), sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -754,8 +761,7 @@ def resolve_universe(
     changed something in it. Without `record` nothing is written anywhere: the question is
     answered and the workspace is as it was, which is what a validation needs.
     """
-    path = ws.path(CACHE_NAME)
-    file = load_yaml(InstrumentsFile, path) if path.is_file() else InstrumentsFile({})
+    file = read_cache(ws)
     cached = read_store(ws)
 
     resolved: dict[str, object] = {}
@@ -803,7 +809,7 @@ def resolve_universe(
 
     if record:
         write_store(ws, resolved.values(), replace=refresh)
-        _write_cache(path, file, updates)
+        _write_cache(ws.path(CACHE_NAME), file, updates)
     return resolved
 
 
@@ -826,7 +832,7 @@ def _reconstructed(file: InstrumentsFile, answered: Mapping[str, object]) -> dic
 def _resolved_fields(instrument: object) -> dict[str, object]:
     """A resolved definition as constructor fields, for an override to be applied over."""
     fields: dict[str, object] = {
-        key: value for key, value in _fields(instrument).items() if value is not None
+        key: value for key, value in engine_fields(instrument).items() if value is not None
     }
     fields.pop("type", None)
     fields.pop("id", None)
@@ -856,7 +862,7 @@ def _from_cache(entry: InstrumentEntry, cached: Mapping[str, object], as_of: dat
     held = cached.get(entry.resolved.checksum)
     if held is None:
         return None
-    stored = _fields(held)
+    stored = engine_fields(held)
     for field, value in entry.override.items():
         if field in _CONSUMED:
             continue
@@ -927,7 +933,7 @@ def _entry_for(file: InstrumentsFile, wanted: str, instrument: object) -> Instru
     if not isinstance(found, ResolveError):
         return found
     stated = _NAMED_CLASS.get(type(instrument).__name__)
-    stored = _fields(instrument)
+    stored = engine_fields(instrument)
     return InstrumentEntry(
         nautilus_id=str(stored["id"]),
         asset_class=str(stored.get("asset_class", "EQUITY")),
@@ -941,6 +947,12 @@ def _key_for(file: InstrumentsFile, wanted: str, entry: InstrumentEntry) -> str:
         if held.nautilus_id == entry.nautilus_id:
             return key
     return wanted
+
+
+def read_cache(ws: Workspace) -> InstrumentsFile:
+    """The workspace's instrument cache, empty when the file is absent."""
+    path = ws.path(CACHE_NAME)
+    return load_yaml(InstrumentsFile, path) if path.is_file() else InstrumentsFile({})
 
 
 def _write_cache(path: Path, file: InstrumentsFile, updates: Mapping[str, InstrumentEntry]) -> None:
