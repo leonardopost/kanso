@@ -189,6 +189,19 @@ configured by `SandboxExecutionClientConfig` (`venue`, `starting_balances`,
 Fills therefore exist only for venues whose data reaches the bus, and the
 sandbox clock follows the data's `ts_init`, not wall time.
 
+kanso does not use that client. `SandboxExecutionClientConfig` exposes neither
+`use_message_queue` nor `fee_model` nor `fill_model`, so the matching a node
+does cannot be brought into line with a backtest's through it; kanso assembles
+the same `SimulatedExchange` and `BacktestExecClient` pair itself instead. The
+engine fact that assembly rests on is that `LiveExecutionEngine.process`
+overrides `ExecutionEngine.process` in order to queue the event: on an L1 book
+an order larger than the top level is filled there and then, *if it is still
+open*, slipped one increment and filled again, both in the call that matched it.
+A backtest's engine has applied the first fill by the time "still open" is read
+and a live engine has not, so the remainder is never filled, never cancelled and
+never reported — which is why kanso's own venue sends its events to the
+synchronous implementation.
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -1239,12 +1252,13 @@ def _check_http_download() -> tuple[bool, str]:
 
 
 def _check_sandbox_fill_knobs() -> tuple[bool, str]:
-    """The sandbox venue's matching is not configurable, and matches on submit.
+    """The engine's convenience venue exposes none of its exchange's matching knobs.
 
-    The claim holds while the engine keeps the knobs private: it is what makes the
-    replay and backtest paths fill an order larger than one book state differently,
-    and it is checked here so that an engine release exposing them is noticed rather
-    than discovered by a certification that stops failing.
+    This is why kanso assembles its own `SimulatedExchange` and `BacktestExecClient`
+    from the engine's components instead of using that client: with the fill model,
+    the fee model and the command queue all private, a node could not be made to fill
+    what a backtest fills. It is checked so that an engine release exposing them is
+    noticed here rather than left as a simplification nobody takes.
     """
     from nautilus_trader.adapters.sandbox.config import SandboxExecutionClientConfig
 
@@ -1252,9 +1266,35 @@ def _check_sandbox_fill_knobs() -> tuple[bool, str]:
     private = {"use_message_queue", "fee_model", "fill_model"} - fields
     holds = private == {"use_message_queue", "fee_model", "fill_model"}
     return holds, (
-        f"SandboxExecutionClientConfig exposes none of {sorted(private)}, so its exchange "
-        "matches an order in the call that submits it, against one book state, and what does "
-        "not fit there is dropped rather than left working"
+        f"SandboxExecutionClientConfig exposes none of {sorted(private)}, so the matching a "
+        "node does could not be brought into line with a backtest's through it"
+    )
+
+
+def _check_live_exec_engine_queues_events() -> tuple[bool, str]:
+    """`LiveExecutionEngine.process` overrides the synchronous implementation.
+
+    The fact kanso's simulated venue rests on. On an L1 book an order larger than the
+    top level is filled there and, if it is *still open*, slipped one increment and
+    filled again — both inside the call that matched it, with "still open" read off the
+    order. A backtest's engine applies the first fill event synchronously, so the order
+    is partially filled by the time that is read; a live engine queues it, so it is not,
+    and the remainder is never filled, cancelled or reported. kanso therefore delivers
+    its own venue's events to the synchronous implementation. An engine release in which
+    these are the same function would make that relay unnecessary — and one in which the
+    synchronous one stopped existing would make it impossible.
+    """
+    from nautilus_trader.execution.engine import ExecutionEngine
+    from nautilus_trader.live.execution_engine import LiveExecutionEngine
+
+    synchronous = getattr(ExecutionEngine, "process", None)
+    queued = getattr(LiveExecutionEngine, "process", None)
+    holds = callable(synchronous) and callable(queued) and synchronous is not queued
+    return holds, (
+        f"ExecutionEngine.process is {type(synchronous).__name__} and "
+        f"LiveExecutionEngine.process is {type(queued).__name__}; the live engine overrides "
+        f"it ({synchronous is not queued}), so an event sent to the base implementation is "
+        "applied to its order before the venue decides what is left of it"
     )
 
 
@@ -1406,6 +1446,10 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "the sandbox execution client's matching knobs are private and it matches on submit",
         _check_sandbox_fill_knobs,
+    ),
+    (
+        "a live execution engine queues an order event where a backtest's applies it",
+        _check_live_exec_engine_queues_events,
     ),
 )
 

@@ -48,6 +48,7 @@ from kanso.data.instruments import resolve_universe
 from kanso.data.types import data_types
 from kanso.errors import ValidationError
 from kanso.hyp.scaffold import HYPOTHESES
+from kanso.nautilus import adapters
 from kanso.schemas import (
     ConstraintRef,
     ConstructRef,
@@ -120,13 +121,21 @@ def venue_models(
     spread with no width — and a universe spanning more than one account currency are
     both refused here, because both would put a number on a card that nothing in the
     workspace can account for.
+
+    The broker is named in `kanso.toml` and its declaration is asked of whichever adapter
+    provides it, so this reads a broker's account type, currency and costs without naming
+    one. A workspace configured for a broker no adapter here provides inherits nothing and
+    falls back to the shipped defaults, which the resolved model records as its origin: a
+    missing adapter must not silently change the numbers a card is measured with.
     """
     overrides = _venue_overrides(ws)
     quotes = QUOTE_TYPE in hyp.data_requirements
+    broker = ws.config.research.broker
     models = {
         venue: resolve_venue_model(
             venue,
-            broker=ws.config.research.broker,
+            broker=broker,
+            declaration=adapters.venue_declaration(broker, venue),
             override=overrides.get(venue),
             hypothesis_costs=hyp.costs,
             max_leverage=hyp.risk_limits.max_leverage,

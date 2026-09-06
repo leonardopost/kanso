@@ -33,8 +33,11 @@ from kanso import __version__, creds, env, ext, skills_sync
 from kanso.data import registry
 from kanso.env import envelope as envelope_module
 from kanso.errors import KansoError
+from kanso.nautilus import adapters as brokers
 from kanso.nautilus import facts
+from kanso.portfolio import Declared, exec_client_declarations, stage_refusals
 from kanso.schemas.models import ModelsFile
+from kanso.schemas.portfolio import STAGES
 from kanso.schemas.yamlio import load_yaml
 from kanso.state import StateStore, migrations
 from kanso.workspace import Workspace, gitignore_entries, in_git_repo
@@ -61,6 +64,7 @@ def builtin_ids() -> dict[str, tuple[str, ...]]:
     return {
         "loaders": tuple(sorted(BUILTIN_LOADERS)),
         "adapters": tuple(sorted(registry.packaged())),
+        "exec_clients": tuple(sorted(brokers.exec_clients())),
     }
 
 
@@ -99,6 +103,7 @@ def run(ws: Workspace, check_adapters: bool = False) -> list[Check]:
             ("skills", lambda: _skills(ws)),
             ("credentials", lambda: _credentials(ws)),
             ("adapters", lambda: _adapters(ws, check_adapters)),
+            ("execution", lambda: _execution(ws)),
             ("extensions", lambda: _extensions(ws)),
             ("engine facts", _engine_facts),
         )
@@ -494,11 +499,63 @@ def _adapter_item(ws: Workspace, adapter: registry.Adapter) -> str:
 
 
 def _unprovided(ws: Workspace, known: Mapping[str, registry.Adapter]) -> tuple[str, ...]:
-    """The `[adapters.<id>]` tables naming something nothing here registers."""
+    """The `[adapters.<id>]` tables naming something nothing here registers.
+
+    A broker adapter is configured through the same table as a data adapter and lives in
+    its own registry, so both are consulted: a table for a broker that is installed is
+    configuration, not a mistake, and reporting it as one would send an operator to delete
+    the settings their stage depends on.
+    """
+    provided = set(known) | set(brokers.packaged())
     return tuple(
         f"{name}: configured in kanso.toml, and nothing registered here provides it"
         for name in sorted(ws.config.adapters)
-        if name not in known
+        if name not in provided
+    )
+
+
+def _execution(ws: Workspace) -> Check:
+    """Which execution clients exist, which are configured, and what each stage would do.
+
+    Registration and configuration are separate facts here too: a broker's clients are
+    discovered from the adapter directory whether or not a credential is set, and a
+    workspace with none set is the ordinary fresh one. What is graded is the stage
+    configuration, and it is graded by calling the refusals `deploy` itself makes rather
+    than by restating them — a stage naming a client nothing provides, pairing a
+    wall-clock client with replayed data or any speed but one, putting real capital
+    anywhere but the live stage, or naming a client this version's node cannot run.
+
+    No value is read: a client is reported by the variables its account needs and where
+    each of them resolves from.
+    """
+    found = exec_client_declarations(ws)
+    items = [_client_item(one) for one in found]
+    configured = [one for one in found if one.credentials and one.configured]
+    problems = stage_refusals(ws)
+    items += [f"{stage}: {problem or 'ok'}" for stage, problem in sorted(problems.items())]
+    refused = sorted(stage for stage, problem in problems.items() if problem is not None)
+    detail = (
+        f"{len(found)} client(s) · {len(configured)} broker account(s) configured · "
+        f"{len(STAGES) - len(refused)}/{len(STAGES)} stages deployable"
+    )
+    if refused:
+        return Check(
+            "execution",
+            "fail",
+            f"{detail}; {', '.join(refused)} would be refused",
+            items=tuple(items),
+            remedy="fix the stage in portfolio.yaml; `kanso portfolio clients` lists what "
+            "may be named",
+        )
+    return Check("execution", "ok", detail, items=tuple(items))
+
+
+def _client_item(one: Declared) -> str:
+    """One execution client as a line: what it trades, where, and which names resolve."""
+    origins = ", ".join(f"{name}={one.origins.get(name) or 'unset'}" for name in one.credentials)
+    return (
+        f"{one.id}: {one.capital} · clock {one.clock} · {one.source} · "
+        f"stages {', '.join(one.stages)} · {origins or 'no credential'}"
     )
 
 

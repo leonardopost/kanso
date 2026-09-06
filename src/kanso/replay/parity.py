@@ -16,15 +16,13 @@ stamped with the data event's time: the tolerance is there to be set to zero and
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
 
-One divergence has a known cause and says so. The venue a node executes against matches an
-order once, against the single book state a bar left behind, and never revisits what did not
-fit; a backtest matches a working order against the whole sequence of prices it replays that
-bar as, so an order too large for one state completes there and not on the node. The node
-then holds less than the engine does, and the next exit — which closes the position actually
-held — is the smaller of the two. That is the shape this module recognises: a quantity lower
-on the node path than on the engine path. It is a hint and not a verdict, because another
-fault could produce the same shape, so it names the check that tells them apart rather than
-closing the question.
+No divergence carries an explanation. One used to: while the node executed against the
+engine's own convenience venue, an order larger than a single book state was filled once and
+its remainder never revisited, so a quantity lower on the node path had a known cause and was
+reported with it. kanso now assembles its own exchange and the two paths fill that order
+identically, so the hint would name a cause that no longer exists — which is worse than
+silence, because it sends a reader to check the one thing that is no longer wrong. A
+divergence is reported as what it is: an index, a field and the two values.
 """
 
 from __future__ import annotations
@@ -50,15 +48,6 @@ FIELDS: Final = ("ts_event", "instrument", "side", "qty", "order_type", "price")
 MISSING: Final = "missing"
 """The field a divergence names when one path stopped submitting and the other did not."""
 
-UNDER_FILLED: Final = (
-    "a lower quantity on the node path is usually an order the simulated venue filled only in "
-    "part: it matches once, against the one book state a bar left behind, and does not revisit "
-    "the remainder, where a backtest matches against every price it replays that bar as. It "
-    "shows only where one order is large against the depth a single state offers, so compare "
-    "this order's size with the volume of the bar it was sent on before suspecting the strategy."
-)
-"""What a quantity lower on the node path than on the engine path usually means."""
-
 
 @dataclass(frozen=True)
 class Divergence:
@@ -68,21 +57,6 @@ class Divergence:
     field: str
     node: object | None
     engine: object | None
-
-    @property
-    def likely_cause(self) -> str | None:
-        """The known cause this divergence has the shape of, or `None` for any other shape.
-
-        Only a quantity lower on the node path is recognised, because that is the shape the
-        one known difference between the venues produces. Anything else — a side, an
-        instrument, an instant, or a quantity that is *higher* on the node — is left
-        unexplained rather than given a cause that may not be its own.
-        """
-        if self.field != "qty":
-            return None
-        if not isinstance(self.node, int | float) or not isinstance(self.engine, int | float):
-            return None
-        return UNDER_FILLED if self.node < self.engine else None
 
     def render(self) -> str:
         """One line naming where the paths parted and what each said."""
@@ -128,12 +102,8 @@ class Parity:
         return replace(self, ts_ns=ts_ns, max_ts_delta_ns=widest, divergence=divergence)
 
     def payload(self) -> dict[str, object]:
-        """The result as one JSON object.
-
-        `likely_cause` is present only when there is one, so a passing certificate does not
-        carry an empty explanation for a divergence it never had.
-        """
-        document: dict[str, object] = {
+        """The result as one JSON object."""
+        return {
             "node": self.node,
             "engine": self.engine,
             "ts_ns": self.ts_ns,
@@ -144,10 +114,6 @@ class Parity:
             "max_ts_delta_ns": self.max_ts_delta_ns,
             "divergence": None if self.divergence is None else self.divergence.render(),
         }
-        cause = None if self.divergence is None else self.divergence.likely_cause
-        if cause is not None:
-            document["likely_cause"] = cause
-        return document
 
 
 def compare(

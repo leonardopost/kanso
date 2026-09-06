@@ -10,9 +10,10 @@ what is deployed, and if they do not, the deployment is not the experiment.
 **Replay always executes against a simulated venue.** Not the stage's broker, whatever the
 stage is configured with: a replay feeds historical data while a broker's paper account
 matches against today's prices, so the pairing would fill orders at prices unrelated to the
-data that triggered them. The simulated exchange here is configured from the same resolved
-venue model the backtest venue is built from — account type, currency, leverage, starting
-balance and bar execution — so the two exchanges differ in nothing that touches a fill.
+data that triggered them. The venue is `kanso.nautilus.sandbox`'s — the same one a stage
+node attaches, built from the same resolved venue model the backtest venue is built from,
+so the exchange a replay is judged against and the exchange a deployment runs on are one
+piece of code and cannot drift apart.
 
 **Nothing is flattened at the end.** A stage node flattens before it stops, because a
 simulated account keeps no position across a restart; a replay session must not, because the
@@ -33,18 +34,8 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   constructed directly and registered before the node starts is indistinguishable from one
   a factory built. `run_async()` gathers the engines' queue tasks and returns only when they
   end, so it is driven as a task beside the feed rather than awaited.
-* `SandboxExecutionClient` owns a `SimulatedExchange` on a `TestClock` and is configured by
-  `SandboxExecutionClientConfig`, whose defaults match `BacktestEngine.add_venue`'s. It
-  drives the exchange from `on_data`, which it subscribes at `connect()` to
-  `data.*.{venue}.*`.
-* **That subscription does not match a bar.** The data engine publishes a bar to
-  `data.bars.{bar_type}`, and a bar type begins with the instrument id, so the venue lands
-  inside the last segment (`data.bars.DEMO.XNAS-1-DAY-LAST-EXTERNAL`) where the pattern
-  needs a separator. Quotes and trades match (`data.quotes.{venue}.{symbol}`) and bars never
-  do, so on a bar-only universe the sandbox exchange sees no market at all and fills
-  nothing. This module therefore subscribes each sandbox client's own `on_data` to the bar
-  topics of its venue, at a priority above the strategies', which is also the order the
-  backtest loop uses: the exchange sees a point, then the strategy does.
+* The simulated venue, its exchange, its own message bus and the bar subscription it needs
+  are `kanso.nautilus.sandbox`'s, and the engine facts behind them are recorded there.
 * A live engine kills the process outright on an unhandled exception in queue processing
   unless `graceful_shutdown_on_exception` is set, so every engine here sets it and a
   strategy that raises stops the node instead of the interpreter.
@@ -62,12 +53,9 @@ import contextlib
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 from itertools import chain
 from typing import Any, Final
 
-from nautilus_trader.adapters.sandbox.config import SandboxExecutionClientConfig
-from nautilus_trader.adapters.sandbox.execution import SandboxExecutionClient
 from nautilus_trader.common import Environment
 from nautilus_trader.config import (
     LiveDataEngineConfig,
@@ -77,23 +65,20 @@ from nautilus_trader.config import (
     TradingNodeConfig,
 )
 from nautilus_trader.live.node import TradingNode
-from nautilus_trader.model.data import Bar
-from nautilus_trader.model.identifiers import TraderId, Venue
+from nautilus_trader.model.identifiers import TraderId
 
 from kanso.errors import PreconditionError
-from kanso.nautilus import backtest
+from kanso.nautilus import backtest, sandbox
 from kanso.nautilus.backtest import RunRequest, RunResult
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
 
 __all__ = [
-    "MARKET_FIRST",
     "Replayed",
     "SHUTDOWN_TOPIC",
     "STOPPED",
     "TRADER_ID",
     "Halt",
-    "bar_topics",
     "ordered",
     "run_node",
 ]
@@ -111,15 +96,6 @@ A live engine that catches an exception in one of its queues publishes here inst
 raising, so a strategy that fails in a node fails quietly where the same strategy in a
 backtest fails the run. Listening on this topic is how a replay learns of it, and the reason
 it carries is the one the engine gave.
-"""
-
-MARKET_FIRST: Final = 10
-"""The message-bus priority the simulated venue reads a bar at.
-
-Above a strategy's, so the exchange has the point before the strategy acts on it — which is
-the order the backtest loop feeds them in, and the order the sandbox client's own quote and
-trade subscription already has, since it is registered when the node connects its clients
-and a strategy subscribes only when the trader starts it.
 """
 
 START_TURNS: Final = 100_000
@@ -177,20 +153,6 @@ def ordered(groups: Sequence[Sequence[Any]]) -> tuple[Any, ...]:
     stream rather than two.
     """
     return tuple(sorted(chain.from_iterable(groups), key=lambda point: int(point.ts_init)))
-
-
-def bar_topics(points: Sequence[Any]) -> dict[str, tuple[str, ...]]:
-    """The bar topics each venue's simulated exchange must be subscribed to, by venue.
-
-    Read off the points rather than off the hypothesis, so whatever grain the window
-    actually holds reaches the exchange that has to match against it.
-    """
-    found: dict[str, set[str]] = {}
-    for point in points:
-        if isinstance(point, Bar):
-            venue = point.bar_type.instrument_id.venue.value
-            found.setdefault(venue, set()).add(f"data.bars.{point.bar_type}")
-    return {venue: tuple(sorted(topics)) for venue, topics in sorted(found.items())}
 
 
 def run_node(
@@ -291,31 +253,13 @@ def _config() -> TradingNodeConfig:
 
 
 def _venues(request: RunRequest, kernel: Any, points: Sequence[Any]) -> None:
-    """One simulated venue per venue the universe trades, wired to this session's bars."""
-    topics = bar_topics(points)
-    for venue in venue_configs(request.hyp, request.venue_model, request.capital):
-        client = SandboxExecutionClient(
-            loop=kernel.loop,
-            portfolio=kernel.portfolio,
-            msgbus=kernel.msgbus,
-            cache=kernel.cache,
-            clock=kernel.clock,
-            config=SandboxExecutionClientConfig(
-                venue=venue.name,
-                starting_balances=list(venue.starting_balances),
-                base_currency=venue.base_currency,
-                oms_type=venue.oms_type,
-                account_type=venue.account_type,
-                # Through a string, so a leverage is the decimal it was written as rather
-                # than the binary float that happens to be nearest to it.
-                default_leverage=Decimal(str(venue.default_leverage)),
-                bar_execution=venue.bar_execution,
-            ),
-        )
-        kernel.exec_engine.register_client(client)
-        kernel.exec_engine.register_venue_routing(client, Venue(venue.name))
-        for topic in topics.get(venue.name, ()):
-            kernel.msgbus.subscribe(topic=topic, handler=client.on_data, priority=MARKET_FIRST)
+    """One simulated venue per venue the universe trades, wired to this session's bars.
+
+    The same call a stage node makes, so the exchange a replay is compared against and the
+    exchange a deployed stage executes against are one piece of code rather than two that
+    have to be kept in step.
+    """
+    sandbox.attach(kernel, venue_configs(request.hyp, request.venue_model, request.capital), points)
 
 
 def _strategy(request: RunRequest, node: TradingNode) -> Any:

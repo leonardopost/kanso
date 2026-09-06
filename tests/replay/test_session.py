@@ -16,7 +16,7 @@ from nautilus_trader.model.identifiers import ClientId
 
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
-from kanso.nautilus.session import Halt, bar_topics, ordered
+from kanso.nautilus.session import Halt, ordered
 from tests.replay.conftest import (
     BLOCKING_FILTER,
     FLAT,
@@ -126,24 +126,6 @@ def test_a_bar_reaches_the_simulated_venue() -> None:
 
     assert node.run.trades
     assert node.run.fills
-
-
-def test_the_venue_reads_a_bar_before_the_strategy_does() -> None:
-    """The exchange is a higher-priority subscriber, which is the backtest loop's order."""
-    assert session.MARKET_FIRST > 0
-
-
-def test_bar_topics_are_read_off_the_points() -> None:
-    """Whatever grain the window holds is the grain the exchange is subscribed to."""
-    topics = bar_topics([*bars(FORWARD), *quotes(FORWARD)])
-
-    assert set(topics) == {"XNAS"}
-    assert topics["XNAS"] == (f"data.bars.{INSTRUMENT}-1-DAY-LAST-EXTERNAL",)
-
-
-def test_a_window_with_no_bars_subscribes_no_topic() -> None:
-    """A quote-only universe fills through the client's own subscription."""
-    assert bar_topics(quotes(FORWARD)) == {}
 
 
 def test_ordered_is_the_stable_sort_the_engine_uses() -> None:

@@ -3,6 +3,10 @@ dist/
 build/
 *.egg-info/
 
+# Credentials — resolved from here at the moment of use, never committed
+.env
+.env.*
+
 # Python
 __pycache__/
 *.py[cod]

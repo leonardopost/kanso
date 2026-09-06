@@ -12,6 +12,12 @@ exit 2, a halted stage, a version certified under another engine, and a stage wh
 holds nothing in the forward window. Real capital with no approval on record is exit 4,
 because that is a missing act rather than a broken precondition.
 
+`portfolio clients` is the execution half of `data adapters`: every client a stage may
+name, what each declares — whose money it trades and which clock it runs on — which stages
+it may be configured on, and which of its credential variables resolve and from where. It
+opens nothing and reads no value, so it answers in a workspace with every broker variable
+unset, which is the ordinary state of a fresh one.
+
 `promote` and `demote` are top-level commands rather than subcommands of `portfolio`,
 because they are the two acts an operator takes on a strategy rather than on the deployment
 surface. `promote` is the one command in kanso that can put money at risk and the only one
@@ -31,12 +37,13 @@ from kanso.cli.strat import target
 from kanso.errors import ValidationError
 from kanso.portfolio import demote as demote_version
 from kanso.portfolio import deploy as deploy_stage
+from kanso.portfolio import exec_client_declarations, stage_refusals
 from kanso.portfolio import promote as promote_version
 from kanso.portfolio import show as show_portfolio
 from kanso.schemas.portfolio import STAGES
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
-    from kanso.portfolio import Deployment
+    from kanso.portfolio import Declared, Deployment
     from kanso.portfolio.show import StageReport
     from kanso.workspace import Workspace
 
@@ -50,11 +57,21 @@ TargetArgument = Annotated[
 NAME = 18
 """Width of the version-name column of the human stage listing."""
 
+CLIENT = 14
+"""Width of the id column of the client listing; an execution client id is longer than
+the two-column layout's label, and a wrapped id is harder to read than a wider column."""
+
 
 @app.command("show")
 def show_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
     """The two stages: how each is configured, whether it is current, and what it has made."""
     emit(as_json or global_json(ctx), lambda: _show(open_workspace(ctx)))
+
+
+@app.command("clients")
+def clients_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
+    """List the execution clients: what each trades, on which clock, on which stage."""
+    emit(as_json or global_json(ctx), lambda: _clients(open_workspace(ctx)))
 
 
 @app.command("deploy")
@@ -98,16 +115,18 @@ def demote_command(
 def _show(ws: Workspace) -> Report:
     with store(ws) as opened:
         report = show_portfolio(ws, opened)
+    funding = {one.id: one for one in exec_client_declarations(ws)}
     data: dict[str, Any] = {
         "limits": report.portfolio.limits.model_dump(mode="json"),
-        "stages": [_stage_payload(one) for one in report.stages],
+        "stages": [_stage_payload(one, funding.get(one.exec_id)) for one in report.stages],
     }
     lines: list[str] = []
     for one in report.stages:
         lines.append(
             field(
                 one.stage,
-                f"{'up' if one.live else 'down'} · exec {one.exec_id} · data {one.data} · "
+                f"{'up' if one.live else 'down'} · exec {one.exec_id} "
+                f"({_funding(funding.get(one.exec_id))}) · data {one.data} · "
                 f"speed {one.speed:g} · capital {one.capital:,.0f}"
                 + (" · HALTED" if one.kill_switch else ""),
             )
@@ -135,6 +154,41 @@ def _show(ws: Workspace) -> Report:
         )
     )
     return Report(data=data, lines=tuple(lines))
+
+
+def _clients(ws: Workspace) -> Report:
+    """Every execution client, and what each stage's configuration would do with it.
+
+    Two questions, answered together because an operator has both at once: what may be
+    named, and what the stage that names it would be refused for. The refusals are the
+    ones `deploy` makes, called here rather than restated, so this cannot drift from what
+    the command would actually do.
+    """
+    found = exec_client_declarations(ws)
+    problems = stage_refusals(ws)
+    data: dict[str, Any] = {
+        "clients": [one.payload() for one in found],
+        "stages": problems,
+    }
+    lines = [line for one in found for line in _client_lines(one)]
+    lines += [
+        field(stage, "ok" if problem is None else problem) for stage, problem in problems.items()
+    ]
+    return Report(data=data, lines=tuple(lines))
+
+
+def _client_lines(one: Declared) -> list[str]:
+    """One client as its declarations, then where each variable it needs resolves from."""
+    lines = [
+        f"{one.id:<{CLIENT}}{one.capital} · clock {one.clock} · {one.source} · "
+        f"stages {', '.join(one.stages)}"
+    ]
+    if not one.credentials:
+        return [*lines, indent("no credential", CLIENT)]
+    lines += [
+        indent(f"{name}: {one.origins.get(name) or 'unset'}", CLIENT) for name in one.credentials
+    ]
+    return lines
 
 
 def _deploy(ws: Workspace, stage: str) -> Report:
@@ -231,11 +285,23 @@ def _stage(stage: str) -> str:
     return stage
 
 
-def _stage_payload(one: StageReport) -> dict[str, Any]:
+def _funding(client: Declared | None) -> str:
+    """Whose money a stage's execution client trades, in one word.
+
+    A stage may name a client this workspace no longer provides — an adapter that was
+    removed, an extension that stopped loading — and `show` must still print the stage
+    rather than fail on it. `deploy` is where that is refused; here it is reported.
+    """
+    return "unknown" if client is None else client.capital
+
+
+def _stage_payload(one: StageReport, client: Declared | None) -> dict[str, Any]:
     """One stage as JSON: its configuration, its liveness and what it holds."""
     return {
         "stage": one.stage,
         "exec": one.exec_id,
+        "funding": _funding(client),
+        "exec_clock": None if client is None else client.clock,
         "data": one.data,
         "speed": one.speed,
         "capital": one.capital,

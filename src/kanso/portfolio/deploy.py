@@ -19,6 +19,14 @@ happen, and each refusal exists because the alternative is a book nobody intende
 * **Real capital needs a named approval on record, per version.** `deploy --stage live`
   refuses a version that has none, so editing `portfolio.yaml` by hand can never move real
   money — the file says what is deployed, and the approval says what was allowed.
+* **A stage node executes against the simulated venue, so a wall-clock client is refused.**
+  The node this version builds is a bounded run: it releases what the catalog holds that the
+  stage has not replayed, flattens and returns — which is what a `clock: replay` client
+  declares it is fed by. A `clock: wall` client fills against current prices and needs a node
+  that outlives the command; running one through this node would fill every order in
+  simulation while the stage record — and the gates that read it — called the money the
+  broker's. The refusal comes after the approval check, so real capital still fails first for
+  the approval it is missing rather than for the node it would have run in.
 
 **Capital is inherited, then rationed.** A new version of a strategy the stage already holds
 takes its predecessor's share; anything else takes the largest slice the limits leave. A
@@ -48,6 +56,7 @@ from kanso.nautilus import node
 from kanso.nautilus.node import Placement, StageNode, StageRun
 from kanso.portfolio import files, records
 from kanso.portfolio.capital import assign
+from kanso.portfolio.clients import check_runnable
 from kanso.portfolio.clients import get as exec_client
 from kanso.replay import record
 from kanso.replay.record import Intent, Point, Session
@@ -136,6 +145,7 @@ def deploy(ws: Workspace, store: StateStore, stage: str) -> Deployment:
     _check_data(ws, chosen)
     if spec.capital == "real":
         _check_approvals(store, stage, chosen)
+    check_runnable(stage, spec)
 
     admitted, blocked = _fund(ws, store, stage, portfolio.limits, chosen)
     if not admitted:

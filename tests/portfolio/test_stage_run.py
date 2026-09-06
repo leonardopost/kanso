@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from kanso.portfolio import deploy, files, records, set_state, show
+from kanso.portfolio import clients, deploy, files, records, set_state, show
 from kanso.schemas import StrategyFile
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -170,7 +170,7 @@ def test_a_broken_extension_leaves_the_clients_that_load(ws: Workspace) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "brokenext.py").write_text("this is not python(", encoding="utf-8")
 
-    assert set(exec_clients(ws)) == {"sandbox"}
+    assert set(exec_clients(ws)) == set(clients.builtin())
 
 
 def test_a_state_move_is_written_to_the_file_and_the_store(

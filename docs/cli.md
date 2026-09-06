@@ -23,7 +23,7 @@ current directory, from which discovery walks up to the nearest `kanso.toml`.
 | command | what it does |
 |---|---|
 | `kanso init [DIR] [--demo]` | scaffold a workspace, link the skills, detect the envelope, apply the migrations. `--demo` renders the mock-only register, the synthetic loader spec, the `DEMO.SIM` instrument and `hypotheses/demo_mr/`. kanso never invokes git; a `.gitignore` is written or appended |
-| `kanso doctor [--report] [--check-adapters]` | diagnose the workspace, the install, the engine, the credentials, the adapters and the lanes. Exits 2 when a check fails. `--report` redacts paths for pasting upstream. Makes no network call unless `--check-adapters`, which probes what each configured adapter reaches — a dataset a plan excludes is reported and not graded down; a credential that does not authenticate fails |
+| `kanso doctor [--report] [--check-adapters]` | diagnose the workspace, the install, the engine, the credentials, the data adapters, the execution clients and the lanes. Exits 2 when a check fails. `--report` redacts paths for pasting upstream. Makes no network call unless `--check-adapters`, which probes what each configured adapter reaches — a dataset a plan excludes is reported and not graded down; a credential that does not authenticate fails |
 | `kanso migrate` | apply the pending state migrations. Every other command refuses a database behind the schema rather than migrating it behind your back |
 | `kanso skills sync` | link the packaged skills into every `[skills] targets` entry |
 | `kanso env detect` | detect the host, derive the lane plan, write `envelope.yaml` |
@@ -140,20 +140,51 @@ for a read, the version on the stage for a move.
 
 | command | what it does |
 |---|---|
-| `kanso portfolio show` | both stages: how each is configured, whether its node has consumed everything the catalog holds, what each deployed version holds and what it has realised over the windows its stage has closed. Writes nothing |
+| `kanso portfolio show` | both stages: how each is configured — including whose money its execution client trades and which clock it runs on — whether its node has consumed everything the catalog holds, what each deployed version holds and what it has realised over the windows its stage has closed. Writes nothing |
+| `kanso portfolio clients` | every execution client a stage may name: what each declares (`capital`, `clock`), which adapter provides it, which stages it may be configured on, and per credential the variable name and where it resolves from — never a value. Then, per stage, what `deploy` would refuse its configuration for, or `ok`. Opens nothing and reaches nothing |
 | `kanso portfolio deploy --stage paper\|live` | admit what composition produced, apply the capital rule, validate what the stage's execution client declares, render the node configuration and (re)start the node. A node flattens before every stop, so a stage always restarts flat and each redeploy realises its window into the record the paper and live gates read |
 | `kanso promote STRATEGY[@V] --live --as NAME` | move a `promotable` version onto the live stage under a named operator's recorded approval, retiring whatever was live, then redeploy both stages |
 | `kanso demote STRATEGY[@V]` | take a live version off the live stage — back to paper, or retired when a newer version is already there — then redeploy the stages that are not halted |
 
-**`deploy` refuses four things with exit 2** and one with exit 4. A stage whose
-`kill_switch` is on, because the switch is the operator's and a deployment that cleared it
-by starting a node would make it advisory. A version whose `pins.nautilus_version` differs
-from the installed engine, because running it under another engine is running something
-that was never measured — the way out is a plain `cert run` on the same commit. A stage
-whose catalog holds nothing at or after the forward window's start, because that stage has
-nothing to trade and nothing to be judged on. And a wall-clock execution client paired with
-replay data or with any speed but one, because a broker matches against current prices.
-The exit-4 refusal is a version on a `capital: real` client with no approval on record.
+**`deploy` refuses six things with exit 2** and two with exit 4.
+
+With exit 2: a stage whose `kill_switch` is on, because the switch is the operator's and a
+deployment that cleared it by starting a node would make it advisory; an execution client id
+nothing in the workspace provides; a version whose `pins.nautilus_version` differs from the
+installed engine, because running it under another engine is running something that was
+never measured — the way out is a plain `cert run` on the same commit; a stage whose catalog
+holds nothing at or after the forward window's start, because that stage has nothing to
+trade and nothing to be judged on; a `clock: wall` execution client paired with replay data
+or with any speed but one, because a broker matches against current prices; and a
+`clock: wall` client at all, because in this version a stage node cannot run one — see
+below.
+
+With exit 4: a `capital: real` client configured anywhere but the live stage, and a version
+on a `capital: real` client with no approval on record. Both are a missing act rather than a
+broken precondition, which is why they carry their own code.
+
+**Execution clients, and what each declares.** A stage names one in `portfolio.yaml`, and
+the id is all the file carries; what matters is the pair of declarations behind it. `capital`
+is `simulated`, `broker_paper` or `real`, and `clock` is `replay` or `wall`. Those two are
+what forbid real money off the live stage, what forbid replayed history feeding a broker,
+and what make a promotion the only way a version reaches real capital. `kanso portfolio
+clients` prints them; `kanso doctor` grades them.
+
+**A `clock: wall` stage needs a live data client and `speed: 1`.** A wall-clock client fills
+against the price the market is showing now, so pairing it with `data: replay` would fill
+orders at prices unrelated to the data that triggered them, and any speed but real time
+would compress a market that is not compressible. `data` therefore names a live data client
+an adapter provides — for a broker's own feed, usually the client id of the same account —
+and `speed` is 1.
+
+**In this version `deploy` refuses a `clock: wall` client outright (exit 2).** A stage node
+here is a bounded run: it releases whatever the catalog holds that the stage has not
+replayed, into kanso's own simulated venue, flattens and returns. That is exactly what a
+`clock: replay` client declares it is executed by. A wall-clock client needs a node that
+outlives the command that started it, and running one through this node would fill every
+order in simulation while the stage record — and the paper and live gates reading it —
+called the money the broker's. The declarations, the refusals and the promotion path are all
+live; the long-running node is the piece that is not, and it is tracked in the backlog.
 
 **`promote` is the only command in kanso that can put money at risk, and the only one that
 requires a person.** `--as NAME` is the whole of the approval: there is no environment
@@ -171,9 +202,11 @@ operator instruction; acknowledging an inbox entry is not one.
 | `kanso replay parity (…)` | replay on both code paths over the same days and compare the order intents element by element — instant, instrument, side, quantity, order type and, for an order that names one, price — reporting the first divergence with its index and its field, or that the two agreed. `--ts-ns` is the instant tolerance in nanoseconds, and it exists to be set to zero |
 | `kanso replay show [SESSION]` | one session, or every session this workspace holds |
 
-**Replay always executes against the simulated client**, whatever a stage is configured
-with: a replay feeds history and a broker fills against current prices, so the pairing
-would fill orders at prices unrelated to the data that triggered them. Replay is evaluation
+**Replay always executes against kanso's own simulated venue**, whatever a stage is
+configured with: a replay feeds history and a broker fills against current prices, so the
+pairing would fill orders at prices unrelated to the data that triggered them. It is the
+same venue a stage node attaches — one piece of code, so the exchange a version is judged
+against and the exchange it is deployed onto cannot drift apart. Replay is evaluation
 only — it writes no card, moves no `best` and certifies nothing — and the window it runs is
 the one nothing may backtest.
 

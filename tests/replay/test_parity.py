@@ -205,63 +205,29 @@ def test_a_verdict_can_be_asked_again_at_another_tolerance() -> None:
     assert result.compared == 1
 
 
-# --- the one divergence with a known cause ------------------------------------
+# --- what a divergence does and does not claim --------------------------------
 
 
-def test_a_lower_node_quantity_names_the_cause_it_usually_has() -> None:
-    """The shape the one known difference between the two venues produces."""
+def test_a_divergence_is_reported_as_an_index_a_field_and_two_values() -> None:
+    """And nothing else: the one cause this module used to name no longer exists.
+
+    While the node ran on the engine's own convenience venue, an order larger than one
+    book state was under-filled there and not in a backtest, so a lower quantity on the
+    node path carried that explanation. kanso builds its own exchange now and the two
+    paths fill it identically, so an explanation here would send a reader to check the
+    one thing that has been repaired.
+    """
     divergence, _ = compare([intent(qty=739.0)], [intent(qty=976.0)])
 
     assert divergence is not None
-    assert divergence.likely_cause is not None
-    assert "filled only in part" in divergence.likely_cause
+    assert (
+        divergence.render()
+        == "intent 0: qty is 739.0 on the node path and 976.0 on the engine path"
+    )
+    assert not hasattr(divergence, "likely_cause")
 
 
-def test_a_higher_node_quantity_names_nothing() -> None:
-    """The known cause leaves the node holding less, never more, so this is not it."""
-    divergence, _ = compare([intent(qty=976.0)], [intent(qty=739.0)])
-
-    assert divergence is not None
-    assert divergence.likely_cause is None
-
-
-def test_a_divergence_in_another_field_names_nothing() -> None:
-    """A side, an instrument or an instant is left unexplained rather than misexplained."""
-    for changes in ({"side": "SELL"}, {"instrument": "OTHER.SIM"}, {"ts_event": 2_000}):
-        divergence, _ = compare([intent()], [intent(**changes)])
-
-        assert divergence is not None, changes
-        assert divergence.likely_cause is None, changes
-
-
-def test_a_quantity_that_is_not_a_number_names_nothing() -> None:
-    """A recorded intent is read back from a file, so a quantity is whatever that file
-    held. Two of them that cannot be compared as numbers are a divergence with no shape at
-    all, and a cause is claimed only for the one shape that has been measured."""
-    divergence, _ = compare([intent(qty="739")], [intent(qty=976.0)])
-
-    assert divergence is not None
-    assert divergence.likely_cause is None
-
-
-def test_a_missing_intent_names_nothing() -> None:
-    """One path stopping is a divergence with no quantity to compare at all."""
-    divergence, _ = compare([intent()], [])
-
-    assert divergence is not None
-    assert divergence.likely_cause is None
-
-
-def test_the_payload_carries_the_cause_only_when_there_is_one() -> None:
-    """A passing certificate must not record an explanation for a divergence it never had."""
-    agreed = Parity(
-        node="n",
-        engine="e",
-        ts_ns=0,
-        node_orders=(intent(),),
-        engine_orders=(intent(),),
-        max_ts_delta_ns=0,
-    ).at(0)
+def test_the_payload_carries_no_explanation_for_a_divergence() -> None:
     parted = Parity(
         node="n",
         engine="e",
@@ -271,5 +237,5 @@ def test_the_payload_carries_the_cause_only_when_there_is_one() -> None:
         max_ts_delta_ns=0,
     ).at(0)
 
-    assert "likely_cause" not in agreed.payload()
-    assert "filled only in part" in str(parted.payload()["likely_cause"])
+    assert "likely_cause" not in parted.payload()
+    assert parted.payload()["divergence"] == parted.divergence.render()  # type: ignore[union-attr]

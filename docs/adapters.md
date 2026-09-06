@@ -1,16 +1,23 @@
 # Adapters
 
-An **adapter** is one vendor's whole presence in kanso: the datasets it offers, the
-credential names it needs, the loaders that fetch through it and the provider that resolves
-its instruments. It is the only way the rest of kanso reaches a vendor, and it is the same
-interface for an adapter this package ships and one you write in `kanso_ext/`.
+An **adapter** is one outside party's whole presence in kanso. There are two kinds and the
+rules are the same for both. A **data adapter** offers datasets, the credential names it
+needs, the loaders that fetch through it and the provider that resolves its instruments. A
+**broker adapter** offers execution clients, the live market data client that goes with
+them, the venue model it declares for the venues it serves, and the credential names each of
+its accounts needs. Either is the only way the rest of kanso reaches that party, and it is
+the same interface for an adapter this package ships and one you write in `kanso_ext/`.
 
 Two rules hold for every adapter and are worth stating before any particular one.
 
-**The core knows no vendor.** No module outside an adapter's own package names it, no
-framework behaviour requires one, and the whole test suite, `kanso doctor` and the demo are
-green with every vendor credential unset. Adapters are discovered from the adapter
+**The core knows no vendor and no broker.** No module outside an adapter's own package names
+one, no framework behaviour requires one, and the whole test suite, `kanso doctor` and the
+demo are green with every credential unset. Adapters are discovered from their adapter
 directory rather than listed anywhere, so nothing in kanso has to be edited when one lands.
+The single exemption is the rendered `kanso.toml`, which names a broker under
+`[research] broker` as the operator's default; the core itself defaults it to nothing, and a
+workspace naming a broker it has no adapter for falls back to the shipped venue defaults
+rather than to a refusal.
 
 **An adapter is enabled by its credentials, never by installation.** There are no extras to
 install and no switch to flip. A registered adapter with nothing set is the ordinary state
@@ -25,6 +32,7 @@ and where each resolves from, and reaches nothing to say so.
 | `kanso data adapters --check` | what your key *actually reaches*: one authenticated lookup first, then one entitlement probe per dataset and one history-floor measurement per entitled price series. It reports the number of requests it made, and exits 2 if a configured key does not authenticate |
 | `kanso doctor` | the same registration facts, graded. Green whether or not an adapter is configured |
 | `kanso doctor --check-adapters` | the same probe, graded. A dataset your plan excludes is reported and never graded down — it is a subscription, not a fault in the workspace; a credential that does not authenticate is the one failure |
+| `kanso portfolio clients` | the execution half: every client a stage may name, what each declares, which adapter provides it, which stages it may be configured on, and where each credential resolves from. Then what `deploy` would refuse each stage for. No network I/O |
 
 `--check` asks a different question from the plain command, and the difference is the whole
 design. What an adapter *offers* is a constant. What your key *reaches* — whether a dataset
@@ -263,13 +271,127 @@ tolerated is a setting that silently does nothing. It holds no credential.
 The object store's host and bucket are not configurable: they are measured constants of the
 layout, and a wrong one is a mis-signed request rather than a redirect.
 
+## The Alpaca adapter
+
+The broker this package ships, for US equities, in two accounts: a paper one and a real one.
+It provides both halves of a live stage — the execution client that places the orders and
+the live market data client that feeds the strategy placing them — and declares the venue
+model kanso costs a backtest with, so a card is measured the way the account that would
+trade it is charged.
+
+### Credentials
+
+Four names under the standard scheme, two per account, resolved independently at the moment
+of use:
+
+| variable | what it opens |
+|---|---|
+| `KANSO_ALPACA_PAPER_API_KEY` · `KANSO_ALPACA_PAPER_API_SECRET` | the paper account |
+| `KANSO_ALPACA_API_KEY` · `KANSO_ALPACA_API_SECRET` | the real account |
+
+The adapter knows these four spellings and no others. It never reads, mentions or falls back
+to whatever else a machine happens to export, because a fallback is how a key intended for
+one tool ends up trading through another. No value reaches a log, an error message, a repr,
+a manifest, a session or a commit.
+
+**A key belongs to an account, and the adapter checks that before it opens a socket.** A
+paper key carries a prefix a real key does not, so a paper key configured for the real
+account is refused, and a key without the prefix configured for the paper account is refused
+too. The message names the variable and the account, never the value or the prefix. The
+broker answers `401` to the mismatch it can see; this refuses it earlier and more clearly.
+
+### The two execution clients
+
+| client | `capital` | `clock` | may be configured on |
+|---|---|---|---|
+| `alpaca_paper` | `broker_paper` | `wall` | `paper`, `live` |
+| `alpaca` | `real` | `wall` | `live` only, and only behind `promote --live --as NAME` |
+
+There is no switch anywhere in the adapter that turns one into the other: the id chooses the
+account, the variables and the host together. A stage that trades real money says so by
+naming the client that declares it.
+
+### The feed is declared, never defaulted
+
+The market data host serves two tapes and they are **different series for the same day**.
+Measured for one session of one US equity: the consolidated tape reported an open of 309.58,
+a close of 303.42 and 75,314,280 shares; the single-venue tape reported 309.765, 303.41 and
+3,242,233. A card researched on one and traded on the other is not the same strategy.
+
+So `feed` has no default. Set it in `[adapters.alpaca]`, matching the tape the strategy was
+researched on, and the data client refuses to open without it (exit 2, naming both). The tape
+is part of the engine client id, so every log line and every response says which one is being
+read, and a run whose declared tape contradicts one already recorded is refused rather than
+silently switched.
+
+### Configuration
+
+`[adapters.alpaca]` in `kanso.toml` is validated by the adapter's own model, which accepts
+these keys and no others. It holds no credential.
+
+| key | default | what it does |
+|---|---|---|
+| `feed` | *none* | `sip` or `iex`; the tape the data client reads. Required before a data client opens |
+| `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200 |
+| `timeout_s` | `30` | per-request timeout |
+| the six URLs | the broker's own hosts | the paper, live and market-data REST hosts and their stream endpoints |
+
+**One connection is meant to carry all of it.** The rate limit belongs to the account, not to
+any one caller, so the execution client, the live data client and the tradability overlay
+each take a transport rather than building one, and are meant to be handed the same object:
+three connections would be three times the limit. Nothing in this version builds more than
+one of the three in a process — the stage node that would is the piece that is not wired —
+so the sharing is a contract the components honour and not yet a thing the code enforces.
+It is entry 24 in `docs/backlog.md`, to be closed with that node.
+
+### What it will and will not do
+
+**Order shapes it cannot honour are refused by name, before anything is sent.** A deny table
+names the field that produced the refusal — a venue on the order, post-only, reduce-only, a
+display quantity, a quote quantity, a contingency, a trigger type or a trailing-offset type
+the wire has no field for — and the parser's own tables refuse a side, an order type or a
+time in force the same way. A denied order never reaches the wire.
+
+**A restart produces no duplicate fill.** The client order id is kanso's own, sent verbatim
+and returned verbatim, and the trade id is derived from it and the cumulative filled quantity
+alone, so the same fill read twice is the same trade id twice and reconciliation skips it. A
+genuinely new fill reports the difference under a different id.
+
+**The tradability overlay says what the broker will actually allow.** Whether an asset is
+tradable, shortable and easy to borrow is a fact about the account on a day, so it is fetched
+and held with its age, and a flag missing from a row the broker sent is not a flag with a
+default: the instrument is recorded as undescribed with the field named, and every permission
+that flag would have granted is withheld. The flags live beside the instrument definition and
+never inside it — a definition is content-addressed, and a daily-changing borrow flag inside
+one would re-key the instrument every day.
+
+### What is not wired yet
+
+The adapter, its declarations, its refusals and the promotion path are all live and tested. A
+stage node that could actually run one of these clients is not: a node here is a bounded
+replay of the catalog into kanso's own simulated venue, so `deploy` refuses a `clock: wall`
+execution client (exit 2) rather than fill its orders in simulation and record them as the
+broker's. `docs/backlog.md` tracks the long-running node, and the fills reach the engine by
+polling rather than by an order stream, which is recorded there too.
+
 ## Writing your own
 
-An adapter is a package exposing a module-level `ADAPTER` with `id`, `kind`, `capabilities`,
-`credentials`, and the methods the registry calls: `client(ws)`, `configured(ws)`,
-`credential_origins(ws)`, `quota(ws)`, `loaders(ws)`, `provider(ws)` and `survey(ws)`. A
-workspace extension declares its ids in `PROVIDES["adapters"]` and exposes them in an
-`ADAPTERS` mapping, exactly as it declares loaders.
+A **data adapter** is a package exposing a module-level `ADAPTER` with `id`, `kind`,
+`capabilities`, `credentials`, and the methods the registry calls: `client(ws)`,
+`configured(ws)`, `credential_origins(ws)`, `quota(ws)`, `loaders(ws)`, `provider(ws)` and
+`survey(ws)`. A workspace extension declares its ids in `PROVIDES["adapters"]` and exposes
+them in an `ADAPTERS` mapping, exactly as it declares loaders.
+
+A **broker adapter** is a package under `nautilus/adapters/` exposing a module-level `BROKER`
+with `id`, `kind`, `exec_clients` (each an `ExecutionClientSpec` declaring `capital` and
+`clock`), `data_clients`, and the methods the registry calls: `credentials(client_id)`,
+`credential_origins(ws, client_id)`, `configured(ws, client_id)` and
+`venue_declaration(venue)`. Those four declarations are the whole of what the core is allowed
+to know about a broker, and they are what the refusals are decided from — before anything
+connects, which is the point of their being declarations. A workspace extension declares its
+clients in an `EXEC_CLIENTS` table instead, exactly as it declares gates, and names the ids
+in `PROVIDES["exec_clients"]` so that shadowing one that ships is reported — a packaged id
+wins, so an extension that claimed one would be registered nowhere.
 
 Two things are worth copying rather than reinventing.
 
@@ -279,3 +401,7 @@ has to answer in a workspace that has none.
 
 `survey(ws)` returns measured reach, not declared reach. If your vendor states entitlement
 and history in a document, the document is still not what your key holds today.
+
+Everything that touches a credential takes the workspace as an argument and resolves at the
+moment of use. Two workspaces on one host may hold two different accounts, and an adapter
+that cached one would trade the other's money.

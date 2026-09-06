@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 from kanso.criteria.run import CardRun, Fill, Trade
 from kanso.errors import Exit, KansoError
+from kanso.nautilus import adapters
 from kanso.portfolio import approvals, approve, approved, capital, clients, files, records
 from kanso.schemas import SANDBOX, Deployment, Limits, Stage
 from kanso.state import StateStore
@@ -69,9 +70,18 @@ def test_the_ceiling_is_a_percentage_of_the_stage() -> None:
 # --- execution clients --------------------------------------------------------
 
 
-def test_the_only_client_the_framework_ships_is_the_simulated_one() -> None:
-    assert clients.builtin() == {"sandbox": SANDBOX}
-    assert clients.registry() == {"sandbox": SANDBOX}
+def test_what_ships_is_the_simulated_client_and_every_packaged_brokers() -> None:
+    """Read from the adapter directory rather than listed, so a new broker needs no edit.
+
+    The simulated client is the one every workspace is guaranteed, and it keeps its id
+    whatever an adapter declares: a broker that claimed it would take the only stage a
+    workspace with no credential can deploy to.
+    """
+    found = clients.builtin()
+
+    assert found["sandbox"] == SANDBOX
+    assert set(found) == {SANDBOX.id} | set(adapters.exec_clients())
+    assert clients.registry() == found
 
 
 def test_an_unknown_client_is_refused_by_name(ws: Workspace) -> None:

@@ -16,7 +16,10 @@ redeploy realises its window into the record the paper and live gates read.
 from __future__ import annotations
 
 from kanso.portfolio.capital import assign, ceiling
+from kanso.portfolio.clients import Declared
+from kanso.portfolio.clients import declared as exec_client_declarations
 from kanso.portfolio.clients import get as exec_client
+from kanso.portfolio.clients import refusals as stage_refusals
 from kanso.portfolio.clients import registry as exec_clients
 from kanso.portfolio.deploy import (
     BLOCKED,
@@ -65,6 +68,7 @@ __all__ = [
     "Admitted",
     "Adoption",
     "Approval",
+    "Declared",
     "Deployed",
     "Deployment",
     "Demotion",
@@ -82,6 +86,7 @@ __all__ = [
     "demote",
     "deploy",
     "exec_client",
+    "exec_client_declarations",
     "exec_clients",
     "halt",
     "on_certified",
@@ -93,6 +98,7 @@ __all__ = [
     "stage_of",
     "stage_results",
     "show",
+    "stage_refusals",
     "subject_of",
     "write_portfolio",
 ]

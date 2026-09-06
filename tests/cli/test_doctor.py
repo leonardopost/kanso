@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from kanso import env
 from kanso.cli import doctor as doctor_module
 from kanso.errors import Exit, PreconditionError
+from kanso.nautilus.adapters import exec_clients
 from kanso.skills_sync import packaged_skills
 from kanso.state import StateStore
 
@@ -30,6 +31,7 @@ CHECKS = (
     "skills",
     "credentials",
     "adapters",
+    "execution",
     "extensions",
     "engine facts",
 )
@@ -431,8 +433,11 @@ def test_an_extension_shadowing_a_registered_id_is_reported(
     """The registries are read for the ids an extension would shadow, never listed by hand."""
     package = workspace / "kanso_ext" / "greedy"
     package.mkdir(parents=True)
+    broker_client = sorted(exec_clients())[0]
     (package / "__init__.py").write_text(
-        "PROVIDES = {'loaders': ['synthetic'], 'adapters': ['massive']}\n", encoding="utf-8"
+        "PROVIDES = {'loaders': ['synthetic'], 'adapters': ['massive'], "
+        f"'exec_clients': ['{broker_client}']}}\n",
+        encoding="utf-8",
     )
 
     result = at(runner, workspace, "doctor", "--json")
@@ -441,6 +446,7 @@ def test_an_extension_shadowing_a_registered_id_is_reported(
     listed = items(result, "extensions")
     assert "greedy shadows the built-in loaders 'synthetic'" in listed
     assert "greedy shadows the built-in adapters 'massive'" in listed
+    assert f"greedy shadows the built-in exec_clients '{broker_client}'" in listed
 
 
 def test_doctor_makes_no_network_call(

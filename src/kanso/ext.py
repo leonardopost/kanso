@@ -1,10 +1,10 @@
 """Workspace extension discovery.
 
 A workspace may carry packages of its own that provide gates, objectives, constructs,
-loaders, adapters and custom data types through the same interfaces the shipped ones
-use. They live under the directories the configuration lists (`kanso_ext` by default),
-and they are found at startup: every package or single-module file directly under such a
-directory is imported, and what it declares is collected.
+loaders, adapters, execution clients and custom data types through the same interfaces
+the shipped ones use. They live under the directories the configuration lists (`kanso_ext`
+by default), and they are found at startup: every package or single-module file directly
+under such a directory is imported, and what it declares is collected.
 
 An extension is operator code, so importing one is expected to fail sometimes. A failure
 is recorded on the extension and never raised: a broken extension degrades the workspace
@@ -25,8 +25,21 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-KINDS = ("gates", "objectives", "constructs", "loaders", "adapters", "data_types")
-"""The kinds of thing an extension may declare in `PROVIDES`."""
+KINDS = (
+    "gates",
+    "objectives",
+    "constructs",
+    "loaders",
+    "adapters",
+    "data_types",
+    "exec_clients",
+)
+"""The kinds of thing an extension may declare in `PROVIDES`.
+
+`exec_clients` is declared like any other, and shadowing one that ships is worth reporting
+for the same reason: a packaged id wins, so an extension declaring it would be registered
+nowhere and its author would have no way to find out.
+"""
 
 
 @dataclass(frozen=True)
