@@ -52,7 +52,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from itertools import chain
 from typing import Any, Final
 
@@ -200,10 +200,7 @@ def run_node(
         strategy = _strategy(request, node)
         loop.run_until_complete(_drive(node, client, strategy, halt))
         card = backtest._extract(request, kernel, stream, groups)
-        intents = tuple(
-            (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
-            for i in strategy.intents
-        )
+        intents = tuple(astuple(i) for i in strategy.intents)
         stopped = halt.reason
         released = client.released
         clock_ns = client.last_ts if released else None

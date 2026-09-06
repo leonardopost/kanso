@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 
 import pytest
 
@@ -331,4 +332,19 @@ def test_a_host_that_is_gone_is_refused(ws: Workspace, store: StateStore, carded
     ws.path("strategies", carded_hyp, "strategy.yaml").unlink()
 
     with pytest.raises(PreconditionError, match="is not a composed strategy"):
+        resolve(ws, store, hyp=hyp_id)
+
+
+def test_a_host_whose_bytes_this_workspace_lost_is_refused(
+    ws: Workspace, store: StateStore, carded_hyp: str
+) -> None:
+    """A host version pins bytes; a store that no longer holds them cannot run the host."""
+    host = b"# the host\n" + REVERTING
+    composed(ws, store, carded_hyp, sleeve=host)
+    hyp_id = carded(
+        ws, store, doc=filter_document(carded_hyp), strategy=BLOCKING_FILTER, host_version=1
+    )
+    store.connection.execute("DELETE FROM blobs WHERE sha = ?", (sha256(host).hexdigest(),))
+
+    with pytest.raises(PreconditionError, match="holds no such bytes"):
         resolve(ws, store, hyp=hyp_id)

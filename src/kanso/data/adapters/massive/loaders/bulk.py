@@ -90,9 +90,8 @@ import gzip
 import io
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from pydantic import Field, model_validator
@@ -104,6 +103,7 @@ from kanso.data.adapters.massive.loaders.bars import (
     NS_PER_UNIT,
     Request,
     built,
+    common_checks,
     shift,
     vendor_ticker,
     vendor_window,
@@ -111,8 +111,7 @@ from kanso.data.adapters.massive.loaders.bars import (
 from kanso.data.adapters.massive.objectstore import Access, ObjectStore, Reply
 from kanso.data.loader import DatasetRef, arrow_batches, checked, manifest_for, utc_day
 from kanso.data.loaders.points import instrument_id
-from kanso.data.manifest import PUBLICATIONS, Manifest, dataset_id
-from kanso.data.publication import resolve as resolve_rule
+from kanso.data.manifest import Manifest, dataset_id
 from kanso.data.publication import stamp
 from kanso.data.types import resolve_type
 from kanso.errors import ValidationError
@@ -123,10 +122,8 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.workspace import Workspace
 
 __all__ = [
-    "BISECTED",
     "CLASSES",
     "COLUMNS",
-    "FIRST_OBJECT",
     "RESOLUTIONS",
     "Bulk",
     "BulkLoader",
@@ -186,18 +183,9 @@ FIELDS: Final[dict[str, str]] = {
 The store and the API serve one aggregate under two spellings. Naming the correspondence
 here is what lets a single row builder serve both transports."""
 
-FIRST_OBJECT: Final = "first-object"
-BISECTED: Final = "bisected"
-"""How a floor was established: the oldest object listed was readable, or the earliest
-readable object was found by halving the listed days."""
-
 PARTIAL: Final = ".partial"
 """What a download in progress is named, beside the object it becomes. A file under this
 name is never read: the cache holds an object only once its bytes are all there."""
-
-PROBE_BYTES: Final = 1
-"""How much of an object a probe reads. One byte answers the only question it asks, and a
-ranged request comes back `206` rather than dragging a multi-gigabyte day across."""
 
 
 def prefix_for(asset_class: str, resolution: str) -> str:
@@ -363,29 +351,10 @@ class BulkSpec(KansoModel):
     @model_validator(mode="after")
     def _validate(self) -> BulkSpec:
         prefix_for(self.asset_class, self.resolution)
-        if self.end < self.start:
-            raise ValueError(f"end: {self.end} is before start {self.start}")
-        if self.publication not in PUBLICATIONS:
-            raise ValueError(
-                f"publication: {self.publication!r} is not a publication class; expected one "
-                f"of {', '.join(PUBLICATIONS)}"
-            )
-        if self.publication == "delayed":
-            if not self.publication_rule:
-                raise ValueError(
-                    "publication_rule: a delayed dataset must name the rule its availability "
-                    "timestamps are derived from"
-                )
-            resolve_rule(self.publication_rule)
+        common_checks(self)
         if len(set(self.instruments)) != len(self.instruments):
             raise ValueError(
                 "instruments: one instrument is named twice, which is one dataset twice"
-            )
-        unknown = sorted(set(self.tickers) - set(self.instruments))
-        if unknown:
-            raise ValueError(
-                f"tickers: {', '.join(unknown)} are not in this spec's instruments, so the "
-                "override would never be used"
             )
         return self
 
@@ -415,17 +384,11 @@ class Coverage:
 
     `days` is every day the store has an object for, ascending, which listing establishes
     without a plan. `floor` is the earliest of them that can actually be read, which only
-    a GET establishes. `method` records which of the two ways the floor was found, and
-    `probed_on` the day it was found, because a rolling window moves it.
+    a GET establishes.
     """
 
-    asset_class: str
-    resolution: str
     days: tuple[date, ...]
     floor: date
-    probed_on: date
-    method: str
-    reads: tuple[Mapping[str, object], ...] = ()
 
     @property
     def newest(self) -> date:
@@ -442,32 +405,17 @@ class Coverage:
         low = max(window[0], self.floor)
         return tuple(day for day in self.days if low <= day <= window[1])
 
-    def payload(self) -> dict[str, object]:
-        """The measurement as a plain record, carrying no credential and no prose."""
-        return {
-            "asset_class": self.asset_class,
-            "resolution": self.resolution,
-            "objects": len(self.days),
-            "floor": self.floor.isoformat(),
-            "newest": self.newest.isoformat(),
-            "probed_on": self.probed_on.isoformat(),
-            "method": self.method,
-            "reads": [dict(item) for item in self.reads],
-        }
-
 
 class Bulk:
     """The store's answer about one class and resolution, measured once and reused.
 
     A backfill walks years in chunks and would otherwise re-list and re-probe for each of
     them. Listing is one walk, entitlement is one read, and the floor costs about a dozen
-    more; every chunk after that is judged against the cached answer with no request. The
-    day is fixed at construction, so one long run sees one consistent set of floors.
+    more; every chunk after that is judged against the cached answer with no request.
     """
 
-    def __init__(self, store: ObjectStore, *, as_of: date | None = None) -> None:
+    def __init__(self, store: ObjectStore) -> None:
         self._store = store
-        self.as_of = as_of or datetime.now(tz=UTC).date()
         self._coverage: dict[str, Coverage] = {}
 
     def coverage(self, asset_class: str, resolution: str) -> Coverage:
@@ -478,10 +426,6 @@ class Bulk:
         found = self._measure(asset_class, resolution)
         self._coverage[f"{asset_class}:{resolution}"] = found
         return found
-
-    def measured(self) -> tuple[Coverage, ...]:
-        """Every answer established here, in the order it was reached."""
-        return tuple(self._coverage.values())
 
     def _measure(self, asset_class: str, resolution: str) -> Coverage:
         prefix = prefix_for(asset_class, resolution)
@@ -497,8 +441,7 @@ class Bulk:
                     "serve the same series without the object store"
                 ),
             )
-        reads: list[Mapping[str, object]] = []
-        newest = self._read(asset_class, resolution, days[-1], reads)
+        newest = self._read(asset_class, resolution, days[-1])
         if newest.access is not Access.SERVED:
             raise NotEntitledError(
                 f"massive files: the newest object under {prefix} ({days[-1]}) is "
@@ -509,28 +452,11 @@ class Bulk:
                     "the spec, or add it to the plan"
                 ),
             )
-        if self._read(asset_class, resolution, days[0], reads).access is Access.SERVED:
-            return Coverage(
-                asset_class,
-                resolution,
-                tuple(days),
-                days[0],
-                self.as_of,
-                FIRST_OBJECT,
-                tuple(reads),
-            )
-        floor = self._bisect(asset_class, resolution, days, reads)
-        return Coverage(
-            asset_class, resolution, tuple(days), floor, self.as_of, BISECTED, tuple(reads)
-        )
+        if self._read(asset_class, resolution, days[0]).access is Access.SERVED:
+            return Coverage(tuple(days), days[0])
+        return Coverage(tuple(days), self._bisect(asset_class, resolution, days))
 
-    def _bisect(
-        self,
-        asset_class: str,
-        resolution: str,
-        days: Sequence[date],
-        reads: list[Mapping[str, object]],
-    ) -> date:
+    def _bisect(self, asset_class: str, resolution: str, days: Sequence[date]) -> date:
         """The earliest listed day the store serves, over a bracket already established.
 
         `low` is known not to serve and `high` is known to serve — the two reads above are
@@ -540,24 +466,15 @@ class Bulk:
         low, high = 0, len(days) - 1
         while high - low > 1:
             middle = (low + high) // 2
-            if self._read(asset_class, resolution, days[middle], reads).access is Access.SERVED:
+            if self._read(asset_class, resolution, days[middle]).access is Access.SERVED:
                 high = middle
             else:
                 low = middle
         return days[high]
 
-    def _read(
-        self,
-        asset_class: str,
-        resolution: str,
-        day: date,
-        reads: list[Mapping[str, object]],
-    ) -> Reply:
-        """One byte of one object, recorded as evidence before anything else happens."""
-        reply = self._store.read(
-            key_for(asset_class, resolution, day), byte_range=(0, PROBE_BYTES - 1)
-        )
-        reads.append(reply.evidence())
+    def _read(self, asset_class: str, resolution: str, day: date) -> Reply:
+        """One byte of one object, which is the only request that says whether it reads."""
+        reply = self._store.probe(key_for(asset_class, resolution, day))
         reply.raise_for_transport()
         return reply
 
@@ -567,15 +484,15 @@ class BulkLoader:
     """The flat-file loader: one object per day, filtered to the ticker of each dataset.
 
     Stateless in the sense the loader protocol requires — the same ref and window always
-    produce the same points — while holding the store it reads through and the day its
-    floors were measured on, so one command sees one consistent set of them.
+    produce the same points — while holding the store it reads through and the coverage
+    it measured once, so one command judges every chunk against one answer.
     """
 
     id: ClassVar[str] = "massive_bulk"
 
     store: ObjectStore
     bulk: Bulk
-    cache: Path | None = None
+    cache: Path
 
     def discover(self, spec: Mapping[str, object]) -> list[DatasetRef]:
         """One dataset per instrument, spanning what the store both holds and serves.
@@ -631,29 +548,17 @@ class BulkLoader:
     def _rows(self, series: Series, window: tuple[date, date]) -> Iterator[Mapping[str, str]]:
         """This ticker's rows from every object covering `window`, oldest day first.
 
-        A day's object is fetched once and read per ticker, so a universe of a hundred
-        names costs one download per day rather than a hundred.
-        """
-        if self.cache is not None:
-            yield from self._under(self.cache, series, window)
-            return
-        with TemporaryDirectory() as scratch:
-            yield from self._under(Path(scratch), series, window)
-
-    def _under(
-        self, root: Path, series: Series, window: tuple[date, date]
-    ) -> Iterator[Mapping[str, str]]:
-        """The same rows, out of objects held under `root`.
-
-        `window` is in reference days and objects are named by the day their windows open
-        in, so it is widened into window-start days by the function the request path widens
-        its own requests with. The surplus rows are dropped rather than written, which is
-        what makes a chunked backfill lose nothing where two chunks meet.
+        A day's object is fetched into the cache once and read per ticker, so a universe
+        of a hundred names costs one download per day rather than a hundred. `window` is
+        in reference days and objects are named by the day their windows open in, so it
+        is widened into window-start days by the function the request path widens its own
+        requests with. The surplus rows are dropped rather than written, which is what
+        makes a chunked backfill lose nothing where two chunks meet.
         """
         found = self.bulk.coverage(series.asset_class, series.resolution)
         for day in found.within(vendor_window(window, series.resolution)):
             key = key_for(series.asset_class, series.resolution, day)
-            path = root / key
+            path = self.cache / key
             if not path.is_file():
                 _fetch(self.store, key, path)
             mine = [row for row in _read_object(path) if row.get("ticker") == series.ticker]
@@ -679,7 +584,6 @@ def loader(
     ws: Workspace,
     *,
     transport: Transport | None = None,
-    as_of: date | None = None,
     cache: Path | None = None,
 ) -> BulkLoader:
     """The bulk loader for one workspace, with its two object-store credentials resolved.
@@ -701,7 +605,7 @@ def loader(
         transport=transport or ADAPTER.client(ws).transport,
         timeout_s=settings.timeout_s,
     )
-    return BulkLoader(store=store, bulk=Bulk(store, as_of=as_of), cache=cache or cache_path(ws))
+    return BulkLoader(store=store, bulk=Bulk(store), cache=cache or cache_path(ws))
 
 
 def _fetch(store: ObjectStore, key: str, path: Path) -> None:

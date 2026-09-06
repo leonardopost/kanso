@@ -55,7 +55,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final
 
@@ -410,11 +410,7 @@ def run(
                 node.placements, requests, window.per_version, strict=True
             )
         )
-        intents = tuple(
-            (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
-            for strategy in strategies
-            for i in strategy.intents
-        )
+        intents = tuple(astuple(i) for strategy in strategies for i in strategy.intents)
         released = client.released
         return StageRun(
             stage=node.stage,

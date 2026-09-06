@@ -72,6 +72,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
+from kanso.criteria.run import BPS
 from kanso.errors import ValidationError
 from kanso.nautilus.hooks import (
     EXIT,
@@ -114,7 +115,6 @@ ENTRY: Final = "entry"
 EXIT_ORDER: Final = "exit"
 """An order that shrinks the absolute net position."""
 
-BASIS_POINT: Final = 10_000.0
 PERCENT: Final = 100.0
 ROUND_TRIP: Final = 2
 
@@ -270,7 +270,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         bps = float(costs.get("commission_bps") or 0.0) + float(costs.get("slippage_bps") or 0.0)
         if costs.get("spread") == "fixed_bps":
             bps += float(costs.get("fixed_bps") or 0.0)
-        return bps / BASIS_POINT
+        return bps / BPS
 
     @property
     def max_notional(self) -> float:

@@ -15,7 +15,8 @@ A project depends on the framework with `uv add kanso` (a release) or `uv add --
 or `editable` — and from where.
 
 ## 2. Development loop
-1. Change the framework in its checkout; `uv run pytest` (coverage ≥85%), `uv run ruff
+1. Change the framework in its checkout; `uv run pytest -n auto` (coverage ≥85%; the
+   serial `uv run pytest` is the form a `--durations` reading is taken from), `uv run ruff
    format --check`, `uv run ruff check`, `uv run mypy src`.
 2. Try it from a project with an editable install; the demo workspace — `kanso init demo
    --demo` and the first-run sequence in `README.md` — is the smoke test, and it must stay

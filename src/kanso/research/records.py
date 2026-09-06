@@ -14,26 +14,35 @@ one run are ordered and countable without a scan.
 `n_trials` counts every card of every run of the hypothesis — baselines and crashes
 included — because it is the multiple-comparisons count a deflated Sharpe consumes, and
 a trial that failed is still a trial that was tried.
+
+Two readings of the same rows serve every command that names a card or runs against a
+certified host: a sha prefix is resolved among one hypothesis's own cards, and the bytes
+a host version pinned are read back from the blob table, refused by name when the store
+no longer holds them.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
-from kanso.errors import PreconditionError
+from kanso.errors import PreconditionError, ValidationError
 from kanso.schemas import Card, GateResult, RunRecord, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from kanso.classify.construct import HostRef
     from kanso.state import StateStore
 
 __all__ = [
     "active",
     "best_of",
+    "card_sha",
     "cards_of",
     "close",
+    "host_sources",
     "insert",
     "n_trials",
     "next_tag",
@@ -44,6 +53,8 @@ __all__ = [
     "set_best",
     "unset_best",
 ]
+
+_HEX: Final = frozenset("0123456789abcdef")
 
 _RUN_COLUMNS = (
     "run_id",
@@ -262,6 +273,64 @@ def cards_of(store: StateStore, hyp_id: str) -> list[Card]:
         "SELECT * FROM cards WHERE hyp_id = ? ORDER BY card_id", (hyp_id,)
     ).fetchall()
     return [_card(row) for row in rows]
+
+
+def card_sha(store: StateStore, hyp_id: str, sha: str) -> str:
+    """The one card sha of this hypothesis the given prefix names.
+
+    A prefix is resolved among this hypothesis's own cards, so a prefix that is unique
+    here is accepted however many other blobs the store holds, and one naming a card of
+    another hypothesis is refused rather than silently served.
+    """
+    prefix = sha.strip().lower()
+    if not prefix or not set(prefix) <= _HEX:
+        raise ValidationError(
+            f"sha: {sha!r} is not a strategy sha or a prefix of one",
+            remedy=f"pass the hex prefix of a card's sha, as `kanso research show {hyp_id}` "
+            "prints it",
+        )
+    rows = store.connection.execute(
+        "SELECT DISTINCT strategy_sha FROM cards WHERE hyp_id = ? AND strategy_sha >= ?"
+        " AND strategy_sha < ? ORDER BY strategy_sha LIMIT 2",
+        (hyp_id, prefix, prefix + "g"),
+    ).fetchall()
+    if not rows:
+        raise ValidationError(
+            f"sha: no card of {hyp_id} starts with {prefix!r}",
+            remedy=f"run `kanso research show {hyp_id}` to list its cards",
+        )
+    if len(rows) > 1:
+        raise ValidationError(
+            f"sha: {prefix!r} is ambiguous within {hyp_id}: "
+            f"{', '.join(str(row[0])[:12] for row in rows)}",
+            remedy="pass more characters of the sha",
+        )
+    return str(rows[0][0])
+
+
+def host_sources(
+    store: StateStore, host: HostRef
+) -> tuple[bytes, tuple[tuple[str, bytes, Mapping[str, Any]], ...]]:
+    """The host version's own sleeve bytes and the constructs already attached to it."""
+    sleeve = _blob(store, host.sleeve.strategy_sha, f"the sleeve of {host.strategy_id}")
+    attached = tuple(
+        (
+            ref.construct,
+            _blob(store, ref.strategy_sha, f"the {ref.construct} attached to {host.strategy_id}"),
+            dict(ref.params or {}),
+        )
+        for ref in host.attached
+    )
+    return sleeve, attached
+
+
+def _blob(store: StateStore, sha: str, what: str) -> bytes:
+    if not store.has_blob(sha):
+        raise PreconditionError(
+            f"{what} is recorded under {sha[:7]}, and this workspace holds no such bytes",
+            remedy="restore the state store this strategy was certified in",
+        )
+    return store.get_blob(sha)
 
 
 def _run(row: sqlite3.Row) -> RunRecord:

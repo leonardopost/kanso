@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any, Final, get_origin, get_type_hints
 from pydantic import Field
 
 from kanso.certify.certificate import source_file
+from kanso.classify.construct import MODIFIER_ENTRY, SLEEVE_ENTRY
 from kanso.errors import ValidationError
 from kanso.schemas import (
     CatalogueId,
@@ -103,10 +104,6 @@ DIGEST_CHARS: Final = 12
 
 SLEEVE: Final = "sleeve"
 """The construct a sleeve component records, and the slot its file is named for."""
-
-SLEEVE_ENTRY: Final = "Strategy"
-MODIFIER_ENTRY: Final = "Modifier"
-"""The class each kind of certified source must define; the templates spell both."""
 
 _ADDED: set[str] = set()
 """Implementation directories already on the import path, so one is added once."""
@@ -339,12 +336,14 @@ def _write_source(
     config: dict[str, Any],
 ) -> Component:
     """Copy one certified source in, import it, and describe the classes it defines."""
+    from kanso.nautilus.backtest import entry
+
     module = module_name(slot, hyp_id, source)
     (directory / f"{module}.py").write_bytes(source)
     invalidate_caches()
     entrypoint = SLEEVE_ENTRY if slot == SLEEVE else MODIFIER_ENTRY
     loaded = _import(module)
-    cls = _entry(loaded, entrypoint, slot)
+    cls = entry(loaded, entrypoint, f"{module}.py")
     return Component(
         hyp_id=hyp_id,
         strategy_sha=strategy_sha,
@@ -421,20 +420,6 @@ def _import(module: str) -> ModuleType:
             f"{module}.py: the certified source does not import: {type(exc).__name__}: {exc}",
             remedy="certify a strategy that imports; the implementation runs these bytes",
         ) from None
-
-
-def _entry(module: ModuleType, entrypoint: str, slot: str) -> Any:
-    """The one class a certified source must define, checked against its base."""
-    from kanso.nautilus.strategy import KansoModifier, KansoStrategy
-
-    base = KansoStrategy if slot == SLEEVE else KansoModifier
-    found = getattr(module, entrypoint, None)
-    if not isinstance(found, type) or not issubclass(found, base):
-        raise ValidationError(
-            f"{module.__name__}.py: defines no class {entrypoint} subclassing "
-            f"{base.__name__}; a {slot} is run by loading {entrypoint} from the file"
-        )
-    return found
 
 
 def _named(module: ModuleType, config_cls: type, entrypoint: str) -> str:

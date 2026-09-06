@@ -283,7 +283,11 @@ def test_a_universe_of_several_instruments_is_all_loaded(tmp_path: Path, request
 
 
 def test_a_file_that_defines_no_strategy_is_refused(store: Path, request_for) -> None:
-    with pytest.raises(ValidationError, match="defines no class Strategy"):
+    with pytest.raises(
+        ValidationError,
+        match=r"^strategy\.py: defines no class Strategy subclassing KansoStrategy; "
+        r"a sleeve is run by loading Strategy from the file$",
+    ):
         run(request_for(source=b"answer = 42\n"), store)
 
 
@@ -312,7 +316,11 @@ def test_a_parameter_the_modifier_does_not_take_is_refused(store: Path, request_
 
 
 def test_a_file_that_defines_no_modifier_is_refused(store: Path, request_for) -> None:
-    with pytest.raises(ValidationError, match="defines no class Modifier"):
+    with pytest.raises(
+        ValidationError,
+        match=r"^strategy\.py: defines no class Modifier subclassing KansoModifier; "
+        r"a modifier is run by loading Modifier from the file$",
+    ):
         run(request_for(modifiers=(("filter", b"answer = 42\n", {}),)), store)
 
 

@@ -87,6 +87,7 @@ from kanso.schemas.base import KansoModel, NonEmpty
 from kanso.schemas.duration import Duration, parse_duration
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from kanso.data.adapters.massive.loaders.bulk import BulkSpec
     from kanso.workspace import Workspace
 
 __all__ = [
@@ -105,6 +106,7 @@ __all__ = [
     "bars_endpoint",
     "build_bar",
     "built",
+    "common_checks",
     "futures_year",
     "instant",
     "numbers",
@@ -340,27 +342,38 @@ class MassiveSpec(KansoModel):
                 f"asset_class: {self.asset_class!r} is not a class this adapter serves; it "
                 f"serves {', '.join(sorted(_OFFERED))}"
             )
-        if self.end < self.start:
-            raise ValueError(f"end: {self.end} is before start {self.start}")
-        if self.publication not in PUBLICATIONS:
-            raise ValueError(
-                f"publication: {self.publication!r} is not a publication class; expected one "
-                f"of {', '.join(PUBLICATIONS)}"
-            )
-        if self.publication == "delayed":
-            if not self.publication_rule:
-                raise ValueError(
-                    "publication_rule: a delayed dataset must name the rule its availability "
-                    "timestamps are derived from"
-                )
-            resolve_rule(self.publication_rule)
-        unknown = sorted(set(self.tickers) - set(self.instruments))
-        if unknown:
-            raise ValueError(
-                f"tickers: {', '.join(unknown)} are not in this spec's instruments, so the "
-                "override would never be used"
-            )
+        common_checks(self)
         return self
+
+
+def common_checks(spec: MassiveSpec | BulkSpec) -> None:
+    """The checks every spec of this adapter shares, whichever transport it names.
+
+    The range, the publication class and its rule, and that a ticker override names an
+    instrument the spec carries are facts about a dataset and not about the way a day is
+    fetched, so both specs refuse them in one place rather than in two that agree until
+    one is edited.
+    """
+    if spec.end < spec.start:
+        raise ValueError(f"end: {spec.end} is before start {spec.start}")
+    if spec.publication not in PUBLICATIONS:
+        raise ValueError(
+            f"publication: {spec.publication!r} is not a publication class; expected one "
+            f"of {', '.join(PUBLICATIONS)}"
+        )
+    if spec.publication == "delayed":
+        if not spec.publication_rule:
+            raise ValueError(
+                "publication_rule: a delayed dataset must name the rule its availability "
+                "timestamps are derived from"
+            )
+        resolve_rule(spec.publication_rule)
+    unknown = sorted(set(spec.tickers) - set(spec.instruments))
+    if unknown:
+        raise ValueError(
+            f"tickers: {', '.join(unknown)} are not in this spec's instruments, so the "
+            "override would never be used"
+        )
 
 
 @dataclass(frozen=True, slots=True)

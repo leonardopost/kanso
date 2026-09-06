@@ -45,7 +45,7 @@ nothing.
 from __future__ import annotations
 
 import gzip
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as clock_time
@@ -67,9 +67,7 @@ from kanso.data.adapters.massive.errors import (
 from kanso.data.adapters.massive.loaders import bulk
 from kanso.data.adapters.massive.loaders.bars import MassiveBarsLoader
 from kanso.data.adapters.massive.loaders.bulk import (
-    BISECTED,
     COLUMNS,
-    FIRST_OBJECT,
     Bulk,
     BulkLoader,
     BulkSpec,
@@ -725,13 +723,6 @@ def test_a_ranged_read_is_a_served_answer_and_sends_the_range_it_asked_for() -> 
 
     assert reply.served and reply.answered and reply.status == 206
     assert replay.asked[0].headers["Range"] == "bytes=0-0"
-    assert reply.evidence() == {
-        "key": "us_stocks_sip/day_aggs_v1/2024/01/2024-01-02.csv.gz",
-        "status": 206,
-        "access": "served",
-        "code": None,
-        "bytes": 1,
-    }
 
 
 def test_a_range_that_names_nothing_is_refused_before_it_is_signed() -> None:
@@ -1074,35 +1065,39 @@ class Flat:
         )
 
 
-def flat(
-    days: Sequence[date],
-    *,
-    floor: date | None = None,
-    rows: Mapping[date, Sequence[Mapping[str, object]]] | None = None,
-    resolution: str = "1d",
-    asset_class: str = "stocks",
-    page: int = 1000,
-    header: Sequence[str] = COLUMNS,
-) -> tuple[BulkLoader, Flat, Replay]:
-    """A bulk loader over a frozen store, and the two recorders behind it."""
-    supplied = (
-        rows if rows is not None else {day: [agg_row(TICKER, midnight_ns(day))] for day in days}
-    )
-    store_rows = {day: aggregate(supplied.get(day, ()), header) for day in days}
-    fixture = Flat(
-        days=days,
-        objects=store_rows,
-        floor=floor,
-        resolution=resolution,
-        asset_class=asset_class,
-        page=page,
-    )
-    store, replay = wire(fixture.answer, download=fixture.download)
-    return (
-        BulkLoader(store=store, bulk=Bulk(store, as_of=date(2026, 9, 5))),
-        fixture,
-        replay,
-    )
+Builder = Callable[..., tuple[BulkLoader, Flat, Replay]]
+"""What the `flat` fixture hands a test: a bulk loader over a frozen store, caching under
+the test's own scratch directory, and the two recorders behind it."""
+
+
+@pytest.fixture
+def flat(tmp_path: Path) -> Builder:
+    def build(
+        days: Sequence[date],
+        *,
+        floor: date | None = None,
+        rows: Mapping[date, Sequence[Mapping[str, object]]] | None = None,
+        resolution: str = "1d",
+        asset_class: str = "stocks",
+        page: int = 1000,
+        header: Sequence[str] = COLUMNS,
+    ) -> tuple[BulkLoader, Flat, Replay]:
+        supplied = (
+            rows if rows is not None else {day: [agg_row(TICKER, midnight_ns(day))] for day in days}
+        )
+        store_rows = {day: aggregate(supplied.get(day, ()), header) for day in days}
+        fixture = Flat(
+            days=days,
+            objects=store_rows,
+            floor=floor,
+            resolution=resolution,
+            asset_class=asset_class,
+            page=page,
+        )
+        store, replay = wire(fixture.answer, download=fixture.download)
+        return BulkLoader(store=store, bulk=Bulk(store), cache=tmp_path), fixture, replay
+
+    return build
 
 
 def week(start: date, count: int) -> list[date]:
@@ -1110,38 +1105,34 @@ def week(start: date, count: int) -> list[date]:
     return [start + timedelta(days=offset) for offset in range(count)]
 
 
-def test_a_prefix_that_serves_its_oldest_object_has_that_object_as_its_floor() -> None:
+def test_a_prefix_that_serves_its_oldest_object_has_that_object_as_its_floor(flat: Builder) -> None:
     """One read at each end answers both questions; nothing is bisected needlessly."""
-    loader, _, _ = flat(week(date(2024, 1, 2), 7))
+    loader, _, replay = flat(week(date(2024, 1, 2), 7))
 
     found = loader.bulk.coverage("stocks", "1d")
 
-    assert found.method == FIRST_OBJECT
     assert found.floor == date(2024, 1, 2)
     assert found.newest == date(2024, 1, 8)
-    assert len(found.reads) == 2
-    assert found.payload()["objects"] == 7
-    assert loader.bulk.measured() == (found,)
+    assert len(found.days) == 7
+    assert len(replay.asked) == 3, "one listing page, the newest object and the oldest"
 
 
-def test_a_prefix_refused_before_a_date_reports_a_floor_and_not_a_plan() -> None:
+def test_a_prefix_refused_before_a_date_reports_a_floor_and_not_a_plan(flat: Builder) -> None:
     """The newest object serves, so the old refusals are history, not entitlement.
 
     Reporting this as `not entitled` is the single most expensive wrong answer here: it
     sends an operator to buy a subscription they already hold.
     """
     days = week(date(2024, 1, 1), 64)
-    loader, _, _ = flat(days, floor=date(2024, 2, 1))
+    loader, _, replay = flat(days, floor=date(2024, 2, 1))
 
     found = loader.bulk.coverage("stocks", "1d")
 
-    assert found.method == BISECTED
     assert found.floor == date(2024, 2, 1)
-    assert found.probed_on == date(2026, 9, 5)
-    assert len(found.reads) < len(days)
+    assert len(replay.asked) < len(days), "halved over the listed days, not read one by one"
 
 
-def test_a_prefix_whose_newest_object_is_refused_is_a_plan_and_not_a_floor() -> None:
+def test_a_prefix_whose_newest_object_is_refused_is_a_plan_and_not_a_floor(flat: Builder) -> None:
     """Listing is not scoped by plan, so only a GET can tell these two apart."""
     days = week(date(2024, 1, 2), 5)
     loader, _, _ = flat(days, floor=date(2030, 1, 1))
@@ -1153,7 +1144,7 @@ def test_a_prefix_whose_newest_object_is_refused_is_a_plan_and_not_a_floor() -> 
     assert caught.value.fatal is False
 
 
-def test_a_prefix_with_no_object_of_this_layout_serves_no_bulk_history() -> None:
+def test_a_prefix_with_no_object_of_this_layout_serves_no_bulk_history(flat: Builder) -> None:
     loader, _, _ = flat([])
 
     with pytest.raises(NotEntitledError) as caught:
@@ -1162,7 +1153,7 @@ def test_a_prefix_with_no_object_of_this_layout_serves_no_bulk_history() -> None
     assert "no object of this layout" in caught.value.message
 
 
-def test_the_measurement_is_taken_once_however_many_chunks_ask_for_it() -> None:
+def test_the_measurement_is_taken_once_however_many_chunks_ask_for_it(flat: Builder) -> None:
     """A backfill walks years in chunks; re-listing per chunk would cost a run."""
     loader, _, replay = flat(week(date(2024, 1, 2), 5))
 
@@ -1173,7 +1164,7 @@ def test_the_measurement_is_taken_once_however_many_chunks_ask_for_it() -> None:
     assert len(replay.asked) == before
 
 
-def test_a_listing_is_walked_to_its_end_before_a_floor_is_measured() -> None:
+def test_a_listing_is_walked_to_its_end_before_a_floor_is_measured(flat: Builder) -> None:
     loader, fixture, _ = flat(week(date(2024, 1, 2), 7), page=2)
 
     found = loader.bulk.coverage("stocks", "1d")
@@ -1184,7 +1175,7 @@ def test_a_listing_is_walked_to_its_end_before_a_floor_is_measured() -> None:
 # --- what the loader serves ---------------------------------------------------
 
 
-def test_a_daily_bar_closes_a_resolution_after_its_window_opens() -> None:
+def test_a_daily_bar_closes_a_resolution_after_its_window_opens(flat: Builder) -> None:
     """`window_start` is the start of the vendor's calendar day and not the session's open.
 
     So the close is that instant plus the resolution, which lands a daily bar on the UTC day
@@ -1204,7 +1195,9 @@ def test_a_daily_bar_closes_a_resolution_after_its_window_opens() -> None:
     assert str(bars[0].bar_type) == f"{TICKER}.{VENUE}-1-DAY-LAST-EXTERNAL"
 
 
-def test_a_row_timed_in_the_rest_epoch_falls_out_of_the_window_rather_than_into_it() -> None:
+def test_a_row_timed_in_the_rest_epoch_falls_out_of_the_window_rather_than_into_it(
+    flat: Builder,
+) -> None:
     """The two epochs differ by a million; read as milliseconds, a 2024 window opens in 1970.
 
     Which is not the range the dataset asked for, so the mistake serves nothing instead of
@@ -1219,7 +1212,7 @@ def test_a_row_timed_in_the_rest_epoch_falls_out_of_the_window_rather_than_into_
     assert list(loader.load(ref, ref.span)) == []
 
 
-def test_a_minute_bar_closes_one_step_after_its_window_opens() -> None:
+def test_a_minute_bar_closes_one_step_after_its_window_opens(flat: Builder) -> None:
     """An intraday window's close is derivable, so no session fact is needed or accepted."""
     day = date(2024, 1, 2)
     opened = to_ns(datetime(2024, 1, 2, 14, 31, tzinfo=UTC))
@@ -1241,7 +1234,9 @@ def test_a_minute_bar_closes_one_step_after_its_window_opens() -> None:
     assert bars[0].ts_event == opened + 60 * 1_000_000_000
 
 
-def test_only_the_ticker_of_the_dataset_comes_out_of_a_day_that_holds_them_all() -> None:
+def test_only_the_ticker_of_the_dataset_comes_out_of_a_day_that_holds_them_all(
+    flat: Builder,
+) -> None:
     """One object per day holds the whole class; a dataset is one name out of it."""
     day = date(2024, 1, 2)
     loader, _, _ = flat(
@@ -1256,21 +1251,22 @@ def test_only_the_ticker_of_the_dataset_comes_out_of_a_day_that_holds_them_all()
     assert float(bars[0].close) == 100.0
 
 
-def test_a_day_is_downloaded_once_and_read_from_the_cache_after_that(tmp_path: Path) -> None:
+def test_a_day_is_downloaded_once_and_read_from_the_cache_after_that(
+    flat: Builder, tmp_path: Path
+) -> None:
     """An interrupted backfill re-reads what it already fetched rather than the network."""
     days = week(date(2024, 1, 2), 2)
     loader, fixture, _ = flat(days)
-    cached = BulkLoader(store=loader.store, bulk=loader.bulk, cache=tmp_path)
 
-    ref = cached.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
-    list(cached.load(ref, ref.span))
-    list(cached.load(ref, ref.span))
+    ref = loader.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
+    list(loader.load(ref, ref.span))
+    list(loader.load(ref, ref.span))
 
     assert len(fixture.downloads) == 2
     assert (tmp_path / key_for("stocks", "1d", days[0])).is_file()
 
 
-def test_the_manifest_records_the_span_that_was_served_not_the_one_asked_for() -> None:
+def test_the_manifest_records_the_span_that_was_served_not_the_one_asked_for(flat: Builder) -> None:
     """A day whose object holds no row for this name is coverage the dataset does not have."""
     days = week(date(2024, 1, 2), 5)
     held = {day: [agg_row(TICKER, midnight_ns(day))] for day in days[:3]}
@@ -1288,7 +1284,9 @@ def test_the_manifest_records_the_span_that_was_served_not_the_one_asked_for() -
     assert manifest.publication == "realtime"
 
 
-def test_a_discovered_span_runs_from_the_floor_s_close_to_the_newest_object_s() -> None:
+def test_a_discovered_span_runs_from_the_floor_s_close_to_the_newest_object_s(
+    flat: Builder,
+) -> None:
     """`backfill` clamps to a floor it was told rather than to one it guessed.
 
     Stated in reference days, so both ends of the store's measurement are shifted by the
@@ -1303,7 +1301,7 @@ def test_a_discovered_span_runs_from_the_floor_s_close_to_the_newest_object_s() 
     assert ref.span == (date(2024, 1, 7), date(2024, 1, 12))
 
 
-def test_a_range_that_lies_outside_what_the_store_serves_is_refused_by_name() -> None:
+def test_a_range_that_lies_outside_what_the_store_serves_is_refused_by_name(flat: Builder) -> None:
     loader, _, _ = flat(week(date(2024, 1, 2), 3))
 
     with pytest.raises(ValidationError) as caught:
@@ -1312,7 +1310,7 @@ def test_a_range_that_lies_outside_what_the_store_serves_is_refused_by_name() ->
     assert "do not meet" in caught.value.message
 
 
-def test_the_arrow_path_yields_the_catalog_s_own_tables() -> None:
+def test_the_arrow_path_yields_the_catalog_s_own_tables(flat: Builder) -> None:
     loader, _, _ = flat(week(date(2024, 1, 2), 2))
 
     ref = loader.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
@@ -1321,7 +1319,7 @@ def test_the_arrow_path_yields_the_catalog_s_own_tables() -> None:
     assert sum(table.num_rows for table in tables) == 2
 
 
-def test_a_ref_carries_everything_a_later_process_needs_to_extend_it() -> None:
+def test_a_ref_carries_everything_a_later_process_needs_to_extend_it(flat: Builder) -> None:
     """`data sync` rebuilds a ref from the manifest, without the spec that first wrote it."""
     loader, _, _ = flat(week(date(2024, 1, 2), 2))
 
@@ -1337,7 +1335,9 @@ def test_a_ref_carries_everything_a_later_process_needs_to_extend_it() -> None:
     assert not any(STORE_SECRET in value for value in (ref.request_params or {}).values())
 
 
-def test_a_ref_that_was_not_discovered_here_is_refused_rather_than_guessed_at() -> None:
+def test_a_ref_that_was_not_discovered_here_is_refused_rather_than_guessed_at(
+    flat: Builder,
+) -> None:
     loader, _, _ = flat(week(date(2024, 1, 2), 2))
     ref = loader.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
     handmade = replace(ref, request_params={"ticker": TICKER, "symbol": TICKER})
@@ -1415,7 +1415,7 @@ def test_the_two_epochs_name_one_instant_in_different_units() -> None:
     assert datetime.fromtimestamp(REST_T / 1000, UTC) == datetime(2026, 8, 3, 4, tzinfo=UTC)
 
 
-def test_the_bulk_and_the_request_path_serve_one_session_as_one_bar() -> None:
+def test_the_bulk_and_the_request_path_serve_one_session_as_one_bar(flat: Builder) -> None:
     """One session is one bar, whichever transport served it.
 
     A `data backfill` over the store followed by a `data sync` over the API must extend one
@@ -1451,7 +1451,7 @@ BROKEN_FLAT = {"high": 95.0, "low": 99.0}
 """The same aggregate as the store spells it: same numbers, the file's own column names."""
 
 
-def test_a_row_the_engine_refuses_is_the_same_refusal_over_either_transport() -> None:
+def test_a_row_the_engine_refuses_is_the_same_refusal_over_either_transport(flat: Builder) -> None:
     """A vendor row the engine will not accept is one vendor answer, not two.
 
     Both transports hand the row to the one builder, so both fail as a kanso validation
@@ -1480,7 +1480,7 @@ def test_a_row_the_engine_refuses_is_the_same_refusal_over_either_transport() ->
     assert f"massive bars {TICKER}" in from_store.value.message
 
 
-def test_a_delayed_plan_stamps_one_availability_over_either_transport() -> None:
+def test_a_delayed_plan_stamps_one_availability_over_either_transport(flat: Builder) -> None:
     """`publication` describes the plan, so it is a bulk spec's field as much as a request
     spec's — and reaches the points the same way.
 
@@ -1548,7 +1548,7 @@ def test_an_interrupted_download_leaves_nothing_the_next_run_would_read(
 
     fixture = Flat(days=[day], objects={day: complete})
     store, _ = wire(fixture.answer, download=download)
-    loader = BulkLoader(store=store, bulk=Bulk(store, as_of=date(2026, 9, 5)), cache=tmp_path)
+    loader = BulkLoader(store=store, bulk=Bulk(store), cache=tmp_path)
     ref = loader.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
 
     with pytest.raises(TransportError):
@@ -1563,26 +1563,27 @@ def test_an_interrupted_download_leaves_nothing_the_next_run_would_read(
 
 
 def test_a_cached_object_that_is_not_readable_gzip_names_the_file_to_delete(
-    tmp_path: Path,
+    flat: Builder, tmp_path: Path
 ) -> None:
     """However it got there, the only remedy is deleting it, and it has to be nameable."""
     day = date(2024, 1, 2)
     loader, _, _ = flat([day])
-    cached = BulkLoader(store=loader.store, bulk=loader.bulk, cache=tmp_path)
     poisoned = tmp_path / key_for("stocks", "1d", day)
     poisoned.parent.mkdir(parents=True, exist_ok=True)
     poisoned.write_bytes(gzip.compress(b"ticker,volume\n")[:6])
 
-    ref = cached.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
+    ref = loader.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
 
     with pytest.raises(ValidationError) as caught:
-        list(cached.load(ref, ref.span))
+        list(loader.load(ref, ref.span))
 
     assert str(poisoned) in caught.value.message
     assert str(poisoned) in (caught.value.remedy or "")
 
 
-def test_a_ref_that_names_no_venue_is_refused_for_the_venue_and_not_for_the_id() -> None:
+def test_a_ref_that_names_no_venue_is_refused_for_the_venue_and_not_for_the_id(
+    flat: Builder,
+) -> None:
     """`venue` is as required as the four beside it: an instrument id is symbol and venue."""
     loader, _, _ = flat(week(date(2024, 1, 2), 2))
     ref = loader.discover({**DAILY_SPEC, "end": "2024-01-04"})[0]
@@ -1598,7 +1599,9 @@ def test_a_ref_that_names_no_venue_is_refused_for_the_venue_and_not_for_the_id()
 # --- what the loader refuses --------------------------------------------------
 
 
-def test_a_file_is_read_by_column_name_so_a_reordering_cannot_swap_two_fields() -> None:
+def test_a_file_is_read_by_column_name_so_a_reordering_cannot_swap_two_fields(
+    flat: Builder,
+) -> None:
     """Read positionally, a vendor moving `close` before `open` would still validate."""
     day = date(2024, 1, 2)
     swapped = ("ticker", "volume", "close", "open", "high", "low", "window_start", "transactions")
@@ -1612,7 +1615,7 @@ def test_a_file_is_read_by_column_name_so_a_reordering_cannot_swap_two_fields() 
     assert float(bars[0].open) == 100.0 and float(bars[0].high) == 101.0
 
 
-def test_a_file_missing_a_column_this_loader_maps_is_refused() -> None:
+def test_a_file_missing_a_column_this_loader_maps_is_refused(flat: Builder) -> None:
     day = date(2024, 1, 2)
     loader, _, _ = flat([day], header=COLUMNS[:-1])
 
@@ -1624,7 +1627,7 @@ def test_a_file_missing_a_column_this_loader_maps_is_refused() -> None:
     assert "changed its layout" in (caught.value.remedy or "")
 
 
-def test_a_window_start_that_is_not_a_whole_number_is_refused() -> None:
+def test_a_window_start_that_is_not_a_whole_number_is_refused(flat: Builder) -> None:
     day = date(2024, 1, 2)
     loader, _, _ = flat([day], rows={day: [{**agg_row(TICKER, 0), "window_start": "noon"}]})
 
@@ -1636,7 +1639,7 @@ def test_a_window_start_that_is_not_a_whole_number_is_refused() -> None:
     assert "nanoseconds" in caught.value.message
 
 
-def test_a_price_that_is_not_a_number_is_refused() -> None:
+def test_a_price_that_is_not_a_number_is_refused(flat: Builder) -> None:
     day = date(2024, 1, 2)
     loader, _, _ = flat([day], rows={day: [{**agg_row(TICKER, midnight_ns(day)), "open": "n/a"}]})
 
@@ -1714,14 +1717,13 @@ def test_an_object_key_names_its_class_its_type_and_its_day() -> None:
     assert day_of("us_stocks_sip/day_aggs_v1/2024/01/not-a-date.csv.gz") is None
 
 
-def test_coverage_reports_only_the_days_it_both_holds_and_serves() -> None:
+def test_coverage_reports_only_the_days_it_both_holds_and_serves(flat: Builder) -> None:
     days = week(date(2024, 1, 2), 5)
     loader, _, _ = flat(days, floor=date(2024, 1, 4))
 
     found = loader.bulk.coverage("stocks", "1d")
 
     assert found.within((date(2024, 1, 1), date(2024, 1, 31))) == tuple(days[2:])
-    assert found.payload()["method"] == BISECTED
 
 
 # --- opening the store from a workspace ---------------------------------------
@@ -1731,7 +1733,9 @@ def workspace(tmp_path: Path) -> Workspace:
     return init(tmp_path / "ws")
 
 
-def test_a_prefixed_class_keeps_its_prefix_in_the_key_and_out_of_the_instrument_id() -> None:
+def test_a_prefixed_class_keeps_its_prefix_in_the_key_and_out_of_the_instrument_id(
+    flat: Builder,
+) -> None:
     """The object's `ticker` column holds the vendor key; a kanso id names a venue instead."""
     day = date(2024, 1, 2)
     loader, _, _ = flat(
@@ -1755,7 +1759,7 @@ def test_a_prefixed_class_keeps_its_prefix_in_the_key_and_out_of_the_instrument_
     assert len(bars) == 1
 
 
-def test_an_operator_may_override_the_key_a_symbol_derives(tmp_path: Path) -> None:
+def test_an_operator_may_override_the_key_a_symbol_derives(flat: Builder, tmp_path: Path) -> None:
     """A spelling the convention does not reach is named rather than worked around."""
     day = date(2024, 1, 2)
     loader, _, _ = flat([day], rows={day: [agg_row("BRK.B", midnight_ns(day))]})
@@ -1790,11 +1794,10 @@ def test_a_workspace_loader_caches_under_the_catalog_s_own_scratch_space(
     monkeypatch.setenv("KANSO_MASSIVE_ACCESS_KEY_ID", "not-a-real-id")
     monkeypatch.setenv("KANSO_MASSIVE_SECRET_KEY", "not-a-real-secret")
 
-    built = bulk.loader(ws, as_of=date(2026, 9, 5))
+    built = bulk.loader(ws)
 
     assert built.id == "massive_bulk"
     assert built.cache == ws.path("catalog", ".cache")
-    assert built.bulk.as_of == date(2026, 9, 5)
 
 
 def test_a_workspace_loader_may_be_handed_the_transport_the_suite_replays_on(

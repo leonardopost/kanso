@@ -83,7 +83,7 @@ compares what was served against what was asked and records the served span.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
@@ -116,10 +116,8 @@ __all__ = [
     "Entitlements",
     "Floor",
     "Probe",
-    "Step",
     "control_for",
     "grain",
-    "history_floor",
     "key",
     "probe",
     "raise_if_blocked",
@@ -143,10 +141,6 @@ window that can only ever be empty is a window that establishes nothing."""
 EARLIEST: Final = date(1970, 1, 1)
 """Where the search for a floor starts. No vendor serves anything older, and the epoch is
 the one date that needs no justification of its own."""
-
-STALE_AFTER: Final = timedelta(days=1)
-"""How long a probed floor may be trusted. Where a plan grants a rolling window the floor
-moves every day, so a floor is a fact about a day, not about a source."""
 
 PER_TICKER: Final[frozenset[str]] = frozenset({"indices"})
 """The classes whose entitlement is decided per ticker rather than per endpoint.
@@ -210,15 +204,13 @@ class Endpoint:
             )
 
     def request(
-        self, ticker: str | None = None, window: tuple[date, date] | None = None
+        self, ticker: str, window: tuple[date, date] | None = None
     ) -> tuple[str, dict[str, str]]:
         """The path and parameters that ask this endpoint for `ticker` over `window`.
 
-        A ticker is optional because one request genuinely has none: a listing asked of
-        the whole market, where dropping the filter is exactly what makes an empty answer
-        evidence about the plan rather than about one issuer. An endpoint that names a
-        ticker in its own template or parameters cannot be asked that way, and says so as
-        a refusal an operator can read rather than as a substitution failure.
+        A listing asked of the whole market has had its ticker filter dropped from the
+        parameters, so `ticker` is substituted wherever the template or a parameter still
+        names one and reaches the request nowhere else.
         """
         return (
             self._fill(self.template, ticker, window),
@@ -240,9 +232,9 @@ class Endpoint:
         """Whether this endpoint carries a date window at all, in its path or parameters.
 
         A question asked of an endpoint that carries none is not a question about a window,
-        and must never be recorded or described as one: the evidence a probe prints is the
-        only account of itself an operator gets, and a window in it for a request that
-        carried no dates is evidence of something that did not happen.
+        and must never be described as one: the detail a probe reports is the only account
+        of itself an operator gets, and a recent window in it for a request that carried
+        no dates is an account of something that did not happen.
         """
         return self.dated_path or any(_dated(value) for _, value in self.params)
 
@@ -264,19 +256,9 @@ class Endpoint:
             return None
         return datetime.fromtimestamp(int(value) // UNITS[self.timestamp_unit], UTC).date()
 
-    def _fill(self, text: str, ticker: str | None, window: tuple[date, date] | None) -> str:
-        if "{ticker}" in text:
-            if ticker is None:
-                raise MalformedRequestError(
-                    f"massive: the {self.dataset} endpoint names a ticker in {text!r} and "
-                    "none was given",
-                    remedy=(
-                        "pass the ticker to ask about; only a listing whose ticker filter "
-                        "has been dropped is asked of the whole market"
-                    ),
-                )
-            text = text.replace("{ticker}", ticker)
-        if "{start}" not in text and "{end}" not in text:
+    def _fill(self, text: str, ticker: str, window: tuple[date, date] | None) -> str:
+        text = text.replace("{ticker}", ticker)
+        if not _dated(text):
             return text
         if window is None:
             raise MalformedRequestError(
@@ -349,38 +331,12 @@ def control_for(asset_class: str, generic: Endpoint = REFERENCE) -> Endpoint:
 
 
 @dataclass(frozen=True, slots=True)
-class Step:
-    """One request a probe made and what it signalled, as the evidence for its answer."""
-
-    dataset: str
-    path: str
-    window: tuple[date, date] | None
-    status: int
-    signal: Signal
-    rows: int
-
-    def payload(self) -> dict[str, object]:
-        """The step as a plain record, carrying no credential and no vendor prose."""
-        return {
-            "dataset": self.dataset,
-            "path": self.path,
-            "window": [self.window[0].isoformat(), self.window[1].isoformat()]
-            if self.window
-            else None,
-            "status": self.status,
-            "signal": str(self.signal),
-            "rows": self.rows,
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class Probe:
     """What was established about one ticker and one dataset, and how.
 
-    `grain` names the grain the answer is cached at, `detail` says in words what the
-    steps showed, and `steps` is the evidence, so an operator reading a refusal can see
-    which requests were made and what each returned rather than a vendor sentence that
-    means four things.
+    `grain` names the grain the answer is cached at, and `detail` says in words which
+    questions were asked and what each answered, so an operator reading a refusal gets
+    the account of it rather than a vendor sentence that means four things.
     """
 
     outcome: Outcome
@@ -391,26 +347,11 @@ class Probe:
     probed_on: date
     detail: str
     floor: date | None = None
-    steps: tuple[Step, ...] = ()
 
     @property
     def ok(self) -> bool:
         """True when the source will serve what was asked for."""
         return self.outcome is Outcome.OK
-
-    def payload(self) -> dict[str, object]:
-        """The probe as a plain record, for `--json`, `doctor` and a manifest note."""
-        return {
-            "outcome": str(self.outcome),
-            "dataset": self.dataset,
-            "asset_class": self.asset_class,
-            "ticker": self.ticker,
-            "grain": self.grain,
-            "probed_on": self.probed_on.isoformat(),
-            "detail": self.detail,
-            "floor": self.floor.isoformat() if self.floor else None,
-            "steps": [step.payload() for step in self.steps],
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,22 +374,6 @@ class Floor:
     floor: date
     probed_on: date
     method: str
-    steps: tuple[Step, ...] = ()
-
-    def stale(self, on: date) -> bool:
-        """True when this floor is too old to be trusted on `on`."""
-        return on - self.probed_on > STALE_AFTER
-
-    def payload(self) -> dict[str, object]:
-        return {
-            "asset_class": self.asset_class,
-            "dataset": self.dataset,
-            "ticker": self.ticker,
-            "floor": self.floor.isoformat(),
-            "probed_on": self.probed_on.isoformat(),
-            "method": self.method,
-            "steps": [step.payload() for step in self.steps],
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,8 +447,6 @@ def probe(
     dataset: Endpoint = BARS,
     window: tuple[date, date] | None = None,
     as_of: date | None = None,
-    control: Endpoint | None = None,
-    earliest: date = EARLIEST,
 ) -> Probe:
     """Establish which of the five outcomes this series and window are in.
 
@@ -531,23 +454,23 @@ def probe(
     that window comes back empty rather than refused, asks the widest question the
     endpoint admits, because an empty page is about a window until there is no window left
     to blame. Then the requested window, if there is one; then the control endpoint or the
-    floor, whichever separates the remaining cases. The control defaults to the endpoint
-    that holds keys of this class, which for an option contract is not the generic ticker
-    reference; passing one names it explicitly. Entitlement alone costs one request where
-    the plan serves the fortnight, two where it refuses one or where a quiet fortnight is
-    settled by the wider question, and three where that wider question settles nothing
-    either. Only a range that came back short pays for a floor besides: one further request
-    where the source truncates, none where the floor cannot be measured, and about fifteen
-    where the source refuses a straddling range and a start date is known to serve — so
-    `Entitlements` measures a floor once and reuses it.
+    floor, whichever separates the remaining cases. The control is the endpoint that holds
+    keys of this class, which for an option contract is not the generic ticker reference.
+    Entitlement alone costs one request where the plan serves the fortnight, two where it
+    refuses one or where a quiet fortnight is settled by the wider question, and three
+    where that wider question settles nothing either. Only a range that came back short
+    pays for a floor besides: one further request where the source truncates, none where
+    the floor cannot be measured, and about fifteen where the source refuses a straddling
+    range and a start date is known to serve — so `Entitlements` measures a floor once and
+    reuses it.
     """
     today = as_of or today_utc()
-    steps: list[Step] = []
+    steps: list[str] = []
 
     def settled(outcome: Outcome, detail: str, floor: date | None = None) -> Probe:
-        return _verdict(dataset, ticker, asset_class, today, outcome, detail, steps, floor)
+        return _verdict(dataset, ticker, asset_class, today, outcome, detail, floor)
 
-    plan = _included(client, dataset, ticker, asset_class, today, earliest, control, steps)
+    plan = _included(client, dataset, ticker, asset_class, today, steps)
     if plan.outcome is not None:
         return settled(plan.outcome, plan.detail)
     if window is None:
@@ -559,9 +482,7 @@ def probe(
     if asked is Signal.BAD_REQUEST:
         return settled(Outcome.MALFORMED, "the vendor rejected the requested window outright")
 
-    found = _floor(
-        client, dataset, ticker, asset_class, today, earliest, steps, plan.straddle, plan.serving
-    )
+    found = _floor(client, dataset, ticker, asset_class, today, steps, plan.straddle, plan.serving)
     if window[1] < found.floor:
         return settled(
             Outcome.BELOW_FLOOR,
@@ -582,35 +503,6 @@ def probe(
         f"the plan includes this series and its floor is {found.floor}, and "
         f"{window[0]}..{window[1]} holds nothing",
         found.floor,
-    )
-
-
-def history_floor(
-    client: MassiveClient,
-    ticker: str,
-    asset_class: str,
-    *,
-    dataset: Endpoint = BARS,
-    as_of: date | None = None,
-    control: Endpoint | None = None,
-    earliest: date = EARLIEST,
-) -> Floor:
-    """The earliest date the source serves for this series, measured.
-
-    Refuses (precondition) a series the plan does not include, because the earliest date
-    of something that is never served is not a floor: it is an entitlement failure, and
-    reporting it as a floor is the confusion this adapter exists to avoid. Entitlement is
-    established here exactly as a probe establishes it, so a series whose recent fortnight
-    happens to be quiet is floored rather than refused, and the failure a caller sees names
-    which of the outcomes stopped it.
-    """
-    today = as_of or today_utc()
-    steps: list[Step] = []
-    plan = _included(client, dataset, ticker, asset_class, today, earliest, control, steps)
-    if plan.outcome is not None:
-        raise _no_floor(dataset, ticker, asset_class, plan.outcome, plan.detail)
-    return _floor(
-        client, dataset, ticker, asset_class, today, earliest, steps, plan.straddle, plan.serving
     )
 
 
@@ -693,15 +585,11 @@ class Entitlements:
         client: MassiveClient,
         *,
         as_of: date | None = None,
-        control: Endpoint | None = None,
-        earliest: date = EARLIEST,
     ) -> None:
         self._client = client
         self.as_of = as_of or today_utc()
-        self._control = control
-        self._earliest = earliest
         self._probes: dict[str, Probe] = {}
-        self._plans: dict[str, tuple[_Plan, tuple[Step, ...]]] = {}
+        self._plans: dict[str, _Plan] = {}
         self._floors: dict[str, Floor] = {}
         self._requests = 0
 
@@ -709,10 +597,9 @@ class Entitlements:
     def requests(self) -> int:
         """How many requests this memo has spent, counted as they were made.
 
-        Counted here rather than from the answers, because an answer that failed carries
-        its steps into an exception and an answer reused at the source's grain appears on
-        several lines: a report summing either would be short exactly where a survey ran
-        into trouble.
+        Counted as the requests are made rather than summed from the answers, because an
+        answer reused at the source's grain appears on several lines and a sum over lines
+        would charge the same request more than once.
         """
         return self._requests
 
@@ -738,12 +625,10 @@ class Entitlements:
         found = self._settled(ticker, asset_class, dataset)
         if not found.ok or window is None:
             return found
-        plan, steps = self._planned(ticker, asset_class, dataset)
+        plan = self._planned(ticker, asset_class, dataset)
         if plan.outcome is not None:
-            return _verdict(
-                dataset, ticker, asset_class, self.as_of, plan.outcome, plan.detail, steps
-            )
-        floor = self._floored(ticker, asset_class, dataset, plan, steps)
+            return _verdict(dataset, ticker, asset_class, self.as_of, plan.outcome, plan.detail)
+        floor = self._floored(ticker, asset_class, dataset, plan)
         if window[1] < floor.floor:
             return replace(
                 found,
@@ -767,18 +652,10 @@ class Entitlements:
         earliest date of something never served is not a floor. A caller that would rather
         have the outcome as a value asks `check`.
         """
-        plan, steps = self._planned(ticker, asset_class, dataset)
+        plan = self._planned(ticker, asset_class, dataset)
         if plan.outcome is not None:
             raise _no_floor(dataset, ticker, asset_class, plan.outcome, plan.detail)
-        return self._floored(ticker, asset_class, dataset, plan, steps)
-
-    def probes(self) -> tuple[Probe, ...]:
-        """Every entitlement answer established here, in the order it was reached."""
-        return tuple(self._probes.values())
-
-    def floors(self) -> tuple[Floor, ...]:
-        """Every floor measured here."""
-        return tuple(self._floors.values())
+        return self._floored(ticker, asset_class, dataset, plan)
 
     def _settled(self, ticker: str, asset_class: str, dataset: Endpoint) -> Probe:
         """This key's entitlement answer, reusing another key's only where it is a plan."""
@@ -788,67 +665,42 @@ class Entitlements:
         return self._probe(ticker, asset_class, dataset)
 
     def _probe(self, ticker: str, asset_class: str, dataset: Endpoint) -> Probe:
-        plan, steps = self._planned(ticker, asset_class, dataset)
+        plan = self._planned(ticker, asset_class, dataset)
         found = _verdict(
-            dataset,
-            ticker,
-            asset_class,
-            self.as_of,
-            plan.outcome or Outcome.OK,
-            plan.detail,
-            steps,
+            dataset, ticker, asset_class, self.as_of, plan.outcome or Outcome.OK, plan.detail
         )
         self._probes[key(asset_class, dataset.dataset, ticker)] = found
         return found
 
-    def _planned(
-        self, ticker: str, asset_class: str, dataset: Endpoint
-    ) -> tuple[_Plan, tuple[Step, ...]]:
+    def _planned(self, ticker: str, asset_class: str, dataset: Endpoint) -> _Plan:
         """What the entitlement questions establish about this key, asked at most once."""
         memo = self._series(asset_class, dataset, ticker)
         cached = self._plans.get(memo)
         if cached is not None:
             return cached
-        steps: list[Step] = []
-        plan = _included(
-            self._client,
-            dataset,
-            ticker,
-            asset_class,
-            self.as_of,
-            self._earliest,
-            self._control,
-            steps,
-        )
+        steps: list[str] = []
+        plan = _included(self._client, dataset, ticker, asset_class, self.as_of, steps)
         self._requests += len(steps)
-        self._plans[memo] = (plan, tuple(steps))
-        return self._plans[memo]
+        self._plans[memo] = plan
+        return plan
 
-    def _floored(
-        self,
-        ticker: str,
-        asset_class: str,
-        dataset: Endpoint,
-        plan: _Plan,
-        steps: Sequence[Step],
-    ) -> Floor:
+    def _floored(self, ticker: str, asset_class: str, dataset: Endpoint, plan: _Plan) -> Floor:
         memo = self._series(asset_class, dataset, ticker)
         cached = self._floors.get(memo)
         if cached is not None:
             return cached
-        trail = list(steps)
+        steps: list[str] = []
         found = _floor(
             self._client,
             dataset,
             ticker,
             asset_class,
             self.as_of,
-            self._earliest,
-            trail,
+            steps,
             plan.straddle,
             plan.serving,
         )
-        self._requests += len(trail) - len(steps)
+        self._requests += len(steps)
         self._floors[memo] = found
         return found
 
@@ -863,26 +715,12 @@ def _ask(
     endpoint: Endpoint,
     ticker: str,
     window: tuple[date, date] | None,
-    steps: list[Step],
+    steps: list[str],
 ) -> Call:
-    """One probe request, recorded as evidence before anything can go wrong with it.
-
-    The window is recorded only where the endpoint carries one. A request that named no
-    dates is not evidence about a window, and a step claiming otherwise would put a
-    fortnight in the record of a question asked over the whole of a market's history.
-    """
+    """One probe request, counted before anything can go wrong with it."""
     path, params = endpoint.request(ticker, window)
     call = client.call(path, params)
-    steps.append(
-        Step(
-            dataset=endpoint.dataset,
-            path=call.path,
-            window=window if endpoint.windowed else None,
-            status=call.status,
-            signal=call.signal,
-            rows=len(call.rows),
-        )
-    )
+    steps.append(call.path)
     call.raise_for_transport()
     return call
 
@@ -893,9 +731,7 @@ def _included(
     ticker: str,
     asset_class: str,
     today: date,
-    earliest: date,
-    control: Endpoint | None,
-    steps: list[Step],
+    steps: list[str],
 ) -> _Plan:
     """Whether the plan includes this series at all, asked so that no empty page can lie.
 
@@ -917,7 +753,7 @@ def _included(
     and calling it an entitlement failure would be the expensive answer again with a longer
     range attached.
     """
-    asking = control_for(asset_class) if control is None else control
+    asking = control_for(asset_class)
     question = _question(endpoint)
     live = _ask(client, endpoint, ticker, recent_window(today), steps).signal
     if live is Signal.BAD_REQUEST:
@@ -926,7 +762,7 @@ def _included(
         return _Plan(None, f"the source served {question} for this series", serving=True)
     if live is Signal.REFUSED:
         return _Plan(*_refused(client, ticker, asking, steps, question))
-    wide = _widest(client, endpoint, ticker, today, earliest, steps)
+    wide = _widest(client, endpoint, ticker, today, steps)
     if wide is None:
         return _Plan(*_nowhere(client, ticker, asking, steps, question))
     straddle = wide if endpoint.dated_path else None
@@ -942,7 +778,7 @@ def _included(
         return _Plan(
             None,
             f"{question} held nothing and was not refused, and the source refused the "
-            f"same question dated back to {earliest}; a plan that excluded this series "
+            f"same question dated back to {EARLIEST}; a plan that excluded this series "
             "would have refused the recent window too, so what was refused is the range",
             straddle,
         )
@@ -971,8 +807,7 @@ def _widest(
     endpoint: Endpoint,
     ticker: str,
     today: date,
-    earliest: date,
-    steps: list[Step],
+    steps: list[str],
 ) -> Call | None:
     """The same question asked as widely as the endpoint admits, or `None` where the
     question already was that wide.
@@ -986,7 +821,7 @@ def _widest(
     one there is, and repeating it would only cost a request.
     """
     if endpoint.dated_path:
-        return _ask(client, endpoint, ticker, (earliest, settled_end(today)), steps)
+        return _ask(client, endpoint, ticker, (EARLIEST, settled_end(today)), steps)
     wide = endpoint.unwindowed()
     return None if wide == endpoint else _ask(client, wide, ticker, None, steps)
 
@@ -995,7 +830,7 @@ def _refused(
     client: MassiveClient,
     ticker: str,
     control: Endpoint,
-    steps: list[Step],
+    steps: list[str],
     question: str,
 ) -> tuple[Outcome, str]:
     """What a refusal means: a plan that excludes the series, or a key the vendor lacks.
@@ -1029,7 +864,7 @@ def _nowhere(
     client: MassiveClient,
     ticker: str,
     control: Endpoint,
-    steps: list[Step],
+    steps: list[str],
     question: str,
 ) -> tuple[Outcome, str]:
     """What an empty page means once there is no window left to blame it on.
@@ -1061,8 +896,7 @@ def _floor(
     ticker: str,
     asset_class: str,
     today: date,
-    earliest: date,
-    steps: list[Step],
+    steps: list[str],
     asked: Call | None = None,
     serving: bool = True,
 ) -> Floor:
@@ -1089,23 +923,22 @@ def _floor(
     `serving` is whether that recent window returned rows.
     """
     end = settled_end(today)
-    straddle = asked or _ask(client, endpoint, ticker, (earliest, end), steps)
+    straddle = asked or _ask(client, endpoint, ticker, (EARLIEST, end), steps)
     days = [day for row in straddle.rows if (day := endpoint.day(row)) is not None]
     if straddle.signal is Signal.ROWS and days:
-        return _found(asset_class, endpoint, ticker, min(days), today, FIRST_ROW, steps)
+        return _found(asset_class, endpoint, ticker, min(days), today, FIRST_ROW)
     if straddle.signal is Signal.ROWS or not serving:
-        return _found(asset_class, endpoint, ticker, earliest, today, UNMEASURED, steps)
-    edge = _bisect(client, endpoint, ticker, earliest, end, steps)
-    return _found(asset_class, endpoint, ticker, edge, today, BISECTED, steps)
+        return _found(asset_class, endpoint, ticker, EARLIEST, today, UNMEASURED)
+    edge = _bisect(client, endpoint, ticker, end, steps)
+    return _found(asset_class, endpoint, ticker, edge, today, BISECTED)
 
 
 def _bisect(
     client: MassiveClient,
     endpoint: Endpoint,
     ticker: str,
-    earliest: date,
     end: date,
-    steps: list[Step],
+    steps: list[str],
 ) -> date:
     """The earliest start date the source answers with rows, to the day.
 
@@ -1118,7 +951,7 @@ def _bisect(
     dressed as a measurement, which is why the guard lives in the caller rather than here.
     """
     high = end - PROBE_SPAN
-    low = min(earliest, high)
+    low = min(EARLIEST, high)
     while (high - low).days > 1:
         middle = low + timedelta(days=(high - low).days // 2)
         if _ask(client, endpoint, ticker, (middle, end), steps).signal is Signal.ROWS:
@@ -1135,7 +968,6 @@ def _verdict(
     today: date,
     outcome: Outcome,
     detail: str,
-    steps: Sequence[Step],
     floor: date | None = None,
 ) -> Probe:
     """One probe answer, built the same way wherever it is reached."""
@@ -1148,7 +980,6 @@ def _verdict(
         probed_on=today,
         detail=detail,
         floor=floor,
-        steps=tuple(steps),
     )
 
 
@@ -1159,7 +990,6 @@ def _found(
     floor: date,
     today: date,
     method: str,
-    steps: Sequence[Step],
 ) -> Floor:
     return Floor(
         asset_class=asset_class,
@@ -1168,5 +998,4 @@ def _found(
         floor=floor,
         probed_on=today,
         method=method,
-        steps=tuple(steps),
     )

@@ -108,16 +108,17 @@ record.
 
 ```bash
 uv sync
-uv run pytest --cov-fail-under=85    # the gate CI runs; drop the flag for a partial run
+uv run pytest -n auto --cov-fail-under=85    # the gate CI runs; drop the flag for a partial run
+uv run pytest --durations=40                 # serial: the form a durations reading is taken from
 uv run ruff format
 uv run ruff check
 uv run mypy src
 ```
 
 Python ≥3.12; `nautilus_trader>=1.231.0,<1.232`, one requirement for every supported host
-(macOS 26+ arm64, Linux x86_64). Tests use `pytest`, `pytest-cov` and `hypothesis`, make no
-network call and are deterministic; the `synthetic` loader and the `mock` model protocol are
-the fixtures.
+(macOS 26+ arm64, Linux x86_64). Tests use `pytest`, `pytest-cov`, `pytest-xdist` and
+`hypothesis`, make no network call and are deterministic; the `synthetic` loader and the
+`mock` model protocol are the fixtures.
 
 ## Conventions
 

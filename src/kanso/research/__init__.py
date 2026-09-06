@@ -24,17 +24,15 @@ from kanso.research.driver import Outcome
 from kanso.research.driver import run as drive
 from kanso.research.keep import keep
 from kanso.research.lanes import DEFAULT_LANE, lane_dir
-from kanso.research.loop import BASELINE, Setup, begin, card, end
+from kanso.research.loop import begin, card, end
 from kanso.research.records import active, cards_of, n_trials, runs_of
 from kanso.research.results import results_file, results_tsv, write_results
 from kanso.research.scheduler import QueueItem, Stall, dequeue, enqueue, on_stall, queued, requeue
 
 __all__ = [
-    "BASELINE",
     "DEFAULT_LANE",
     "Outcome",
     "QueueItem",
-    "Setup",
     "Stall",
     "Status",
     "active",

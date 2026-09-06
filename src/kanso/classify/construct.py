@@ -60,6 +60,7 @@ PORTFOLIO: Final = "portfolio"
 
 SLEEVE_ENTRY: Final = "Strategy"
 MODIFIER_ENTRY: Final = "Modifier"
+"""The class each kind of strategy file must define, and the name the runner loads it by."""
 SLEEVE_BASE: Final = "kanso.nautilus.strategy.KansoStrategy"
 MODIFIER_BASE: Final = "kanso.nautilus.strategy.KansoModifier"
 SLEEVE_TEMPLATE: Final = "strategy_sleeve.py"

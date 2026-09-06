@@ -263,7 +263,9 @@ def test_a_source_defining_no_entrypoint_is_refused(
         }
     )
 
-    with pytest.raises(ValidationError, match="defines no class Strategy"):
+    with pytest.raises(
+        ValidationError, match=r"kanso_impl_sleeve_\w+\.py: defines no class Strategy subclassing"
+    ):
         impl.generate(ws, store, HYP_ID, empty, pinned(ws, store), 100_000.0)
 
 
@@ -299,7 +301,11 @@ def test_a_modifier_source_must_define_a_modifier(
         }
     )
 
-    with pytest.raises(ValidationError, match="subclassing KansoModifier"):
+    with pytest.raises(
+        ValidationError,
+        match=r"kanso_impl_filter_\w+\.py: defines no class Modifier subclassing KansoModifier; "
+        r"a modifier is run by loading Modifier from the file",
+    ):
         impl.generate(ws, store, HYP_ID, swapped, pinned(ws, store), 100_000.0)
 
 

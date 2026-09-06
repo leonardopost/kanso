@@ -85,10 +85,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "BASELINE",
-    "HEADROOM",
-    "MIN_CARD_BUDGET_S",
     "RESEARCHABLE",
-    "Setup",
     "begin",
     "card",
     "end",
@@ -104,7 +101,8 @@ HEADROOM: Final = 3.0
 """What a card is allowed over what the baseline needed, in time and in memory alike."""
 
 RESEARCHABLE: Final = frozenset({"classified", "researching", "candidate", "certified"})
-"""The statuses a run may begin from: a draft is unclassified, and the rest are over."""
+"""The statuses a run may begin from, and certification runs on the same four: a draft is
+unclassified, and the rest are over."""
 
 BEGUN: Final = "run_begun"
 CARDED: Final = "card"
@@ -200,31 +198,6 @@ def _host(ws: Workspace, hyp: Hypothesis) -> StrategyFile | None:
     return load_yaml(StrategyFile, path)
 
 
-def _host_sources(
-    store: StateStore, host: HostRef
-) -> tuple[bytes, tuple[tuple[str, bytes, Mapping[str, Any]], ...]]:
-    """The host version's own sleeve bytes and the constructs already attached to it."""
-    sleeve = _blob(store, host.sleeve.strategy_sha, f"the sleeve of {host.strategy_id}")
-    attached = tuple(
-        (
-            ref.construct,
-            _blob(store, ref.strategy_sha, f"the {ref.construct} attached to {host.strategy_id}"),
-            dict(ref.params or {}),
-        )
-        for ref in host.attached
-    )
-    return sleeve, attached
-
-
-def _blob(store: StateStore, sha: str, what: str) -> bytes:
-    if not store.has_blob(sha):
-        raise PreconditionError(
-            f"{what} is recorded under {sha[:7]}, and this workspace holds no such bytes",
-            remedy="restore the state store this strategy was certified in",
-        )
-    return store.get_blob(sha)
-
-
 def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | None = None) -> Setup:
     """The construct's harness, the venue model and the run's numeric settings.
 
@@ -250,7 +223,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     host_source: bytes | None = None
     modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = ()
     if harness.host is not None:
-        host_source, modifiers = _host_sources(store, harness.host)
+        host_source, modifiers = records.host_sources(store, harness.host)
     return Setup(
         hyp=hyp,
         harness=harness,

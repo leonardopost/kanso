@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from kanso import strategy
 from kanso.classify.construct import HostRef
@@ -41,8 +41,6 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.workspace import Workspace
 
 __all__ = ["Target", "resolve"]
-
-_HEX: Final = frozenset("0123456789abcdef")
 
 Modifiers = tuple[tuple[str, bytes, Mapping[str, Any]], ...]
 
@@ -183,7 +181,7 @@ def _of_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, sha: str | Non
         sleeve: bytes = source
         modifiers: Modifiers = ()
     else:
-        sleeve, attached = _layers(store, harness.host)
+        sleeve, attached = records.host_sources(store, harness.host)
         modifiers = (
             *attached,
             (harness.construct, source, dict(hypothesis.construct.params or {})),
@@ -245,50 +243,14 @@ def _host(ws: Workspace, host_id: str | None) -> StrategyFile | None:
     return None if host_id is None else strategy.require(ws, host_id)
 
 
-def _layers(store: StateStore, host: HostRef) -> tuple[bytes, Modifiers]:
-    """The host version's own sleeve bytes and the constructs already attached to it."""
-    attached = tuple(
-        (ref.construct, store.get_blob(ref.strategy_sha), dict(ref.params or {}))
-        for ref in host.attached
-    )
-    return store.get_blob(host.sleeve.strategy_sha), attached
-
-
 def _card_sha(store: StateStore, hyp_id: str, sha: str | None) -> str:
-    """This hypothesis's `best`, or the one card its prefix names.
-
-    Resolved among this hypothesis's own cards, so a prefix unique here is accepted however
-    many other blobs the store holds and one naming another hypothesis's card is refused.
-    """
-    if sha is None:
-        best, _ = records.best_of(store, hyp_id)
-        if best is None:
-            raise PreconditionError(
-                f"{hyp_id} has no best card, so there is nothing to replay",
-                remedy=f"research it with `kanso research begin {hyp_id}`",
-            )
-        return best
-    prefix = sha.strip().lower()
-    if not prefix or not set(prefix) <= _HEX:
-        raise ValidationError(
-            f"sha: {sha!r} is not a strategy sha or a prefix of one",
-            remedy=f"pass the hex prefix of a card's sha, as `kanso research show {hyp_id}` "
-            "prints it",
+    """This hypothesis's `best`, or the one card its prefix names."""
+    if sha is not None:
+        return records.card_sha(store, hyp_id, sha)
+    best, _ = records.best_of(store, hyp_id)
+    if best is None:
+        raise PreconditionError(
+            f"{hyp_id} has no best card, so there is nothing to replay",
+            remedy=f"research it with `kanso research begin {hyp_id}`",
         )
-    rows = store.connection.execute(
-        "SELECT DISTINCT strategy_sha FROM cards WHERE hyp_id = ? AND strategy_sha >= ?"
-        " AND strategy_sha < ? ORDER BY strategy_sha LIMIT 2",
-        (hyp_id, prefix, prefix + "g"),
-    ).fetchall()
-    if not rows:
-        raise ValidationError(
-            f"sha: no card of {hyp_id} starts with {prefix!r}",
-            remedy=f"run `kanso research show {hyp_id}` to list its cards",
-        )
-    if len(rows) > 1:
-        raise ValidationError(
-            f"sha: {prefix!r} is ambiguous within {hyp_id}: "
-            f"{', '.join(str(row[0])[:12] for row in rows)}",
-            remedy="pass more characters of the sha",
-        )
-    return str(rows[0][0])
+    return best

@@ -31,7 +31,7 @@ from typing import Any
 
 import pytest
 
-from kanso.data.adapters.massive.client import MassiveClient, Response, Signal
+from kanso.data.adapters.massive.client import MassiveClient, Response
 from kanso.data.adapters.massive.entitlement import (
     BARS,
     BISECTED,
@@ -49,12 +49,9 @@ from kanso.data.adapters.massive.entitlement import (
     UNMEASURED,
     Endpoint,
     Entitlements,
-    Floor,
     Probe,
-    Step,
     control_for,
     grain,
-    history_floor,
     key,
     probe,
     raise_if_blocked,
@@ -194,7 +191,8 @@ def test_a_key_the_vendor_knows_and_the_plan_excludes_is_not_entitled() -> None:
     found = probe(client, "O:AAPL260116C00150000", "options", as_of=TODAY)
 
     assert found.outcome is Outcome.NOT_ENTITLED
-    assert [step.dataset for step in found.steps] == ["bars", "reference"]
+    assert "/v2/aggs/" in replay.paths[0]
+    assert OPTION_CONTRACTS in replay.paths[1]
     assert len(replay.asked) == 2
 
 
@@ -219,13 +217,13 @@ def test_an_index_feed_the_plan_excludes_refuses_and_is_not_entitled() -> None:
 
 def test_a_key_the_vendor_does_not_know_is_a_malformed_request_not_a_plan_problem() -> None:
     """Sending an operator to buy a plan they hold is the expensive wrong answer here."""
-    client, _ = reader(Vendor(entitled=False, reference="empty"))
+    client, replay = reader(Vendor(entitled=False, reference="empty"))
 
     found = probe(client, "O:NOTATICKER", "options", as_of=TODAY)
 
     assert found.outcome is Outcome.MALFORMED
     assert "does not recognise the key" in found.detail
-    assert found.steps[1].path == f"{OPTION_CONTRACTS}/O:NOTATICKER"
+    assert replay.paths[1].endswith(f"{OPTION_CONTRACTS}/O:NOTATICKER")
 
 
 def test_a_control_that_rejects_the_key_shape_is_also_a_malformed_request() -> None:
@@ -528,7 +526,8 @@ def test_a_question_that_carried_no_window_is_not_asked_a_second_time() -> None:
     found = probe(client, "AAPL", "stocks", dataset=SPARSE.unwindowed(), as_of=TODAY)
 
     assert found.outcome is Outcome.EMPTY
-    assert [step.dataset for step in found.steps] == ["financials", "reference"]
+    assert "/financials" in replay.paths[0]
+    assert GENERIC_REFERENCE in replay.paths[1]
     assert len(replay.asked) == 2
 
 
@@ -557,7 +556,6 @@ def test_the_whole_of_history_is_asked_for_once_and_the_floor_reads_it_off() -> 
         "stocks",
         window=(date(1994, 1, 3), date(1995, 1, 3)),
         as_of=TODAY,
-        earliest=EARLIEST,
     )
 
     assert found.outcome is Outcome.BELOW_FLOOR
@@ -573,14 +571,14 @@ def test_a_floor_is_measured_for_a_series_whose_recent_fortnight_is_quiet() -> N
     quiet = (TODAY - timedelta(days=40), TODAY)
     client, _ = reader(Vendor(floor=STOCK_FLOOR, holes=(quiet,), looks="empty"))
 
-    assert history_floor(client, "AAPL", "stocks", as_of=TODAY).floor == STOCK_FLOOR
+    assert Entitlements(client, as_of=TODAY).floor("AAPL", "stocks").floor == STOCK_FLOOR
 
 
 def test_a_floor_asked_for_on_an_empty_series_fails_as_empty_and_not_as_a_plan() -> None:
     client, _ = reader_of(Listing(dated="empty", undated="empty", reference="rows"))
 
     with pytest.raises(EmptyResultError, match="no history floor"):
-        history_floor(client, "AAPL", "stocks", dataset=SPARSE, as_of=TODAY)
+        Entitlements(client, as_of=TODAY).floor("AAPL", "stocks", dataset=SPARSE)
 
 
 def test_a_refusal_of_the_epoch_is_about_the_range_and_never_about_the_plan() -> None:
@@ -594,7 +592,7 @@ def test_a_refusal_of_the_epoch_is_about_the_range_and_never_about_the_plan() ->
     in terms that this is not a history-floor failure, which is precisely what it is.
     """
     quiet = (TODAY - timedelta(days=40), TODAY)
-    client, _ = reader(Vendor(floor=ROLLING_FLOOR, truncates=False, holes=(quiet,)))
+    client, replay = reader(Vendor(floor=ROLLING_FLOOR, truncates=False, holes=(quiet,)))
 
     found = probe(client, "C:EURUSD", "forex", as_of=TODAY)
 
@@ -602,9 +600,9 @@ def test_a_refusal_of_the_epoch_is_about_the_range_and_never_about_the_plan() ->
     assert found.outcome is not Outcome.NOT_ENTITLED
     assert "was not refused" in found.detail
     assert "refused a recent window" not in found.detail
-    assert [(step.status, str(step.signal)) for step in found.steps] == [
-        (200, "no_rows"),
-        (403, "refused"),
+    assert [window_of(path) for path in replay.paths] == [
+        recent_window(TODAY),
+        (EARLIEST, settled_end(TODAY)),
     ]
 
 
@@ -619,7 +617,7 @@ def test_a_series_with_no_start_date_known_to_serve_has_no_floor_to_bisect() -> 
     quiet = (TODAY - timedelta(days=40), TODAY)
     client, replay = reader(Vendor(floor=ROLLING_FLOOR, truncates=False, holes=(quiet,)))
 
-    found = history_floor(client, "C:EURUSD", "forex", as_of=TODAY)
+    found = Entitlements(client, as_of=TODAY).floor("C:EURUSD", "forex")
 
     assert (found.method, found.floor) == (UNMEASURED, EARLIEST)
     assert found.floor < ROLLING_FLOOR, "a floor that clamps nothing, not one a fortnight old"
@@ -655,7 +653,7 @@ def test_an_option_key_is_checked_against_the_contracts_endpoint() -> None:
 
     found = probe(client, "O:AAPL260909C00205000", "options", as_of=TODAY)
 
-    assert found.steps[1].path == f"{OPTION_CONTRACTS}/O:AAPL260909C00205000"
+    assert replay.paths[1].endswith(f"{OPTION_CONTRACTS}/O:AAPL260909C00205000")
     assert found.outcome is Outcome.NOT_ENTITLED
     assert len(replay.asked) == 2
 
@@ -683,11 +681,11 @@ def test_every_other_class_is_checked_against_the_generic_reference(
 ) -> None:
     """`AAPL` and `C:EURUSD` were both measured answering there; only options are keyed
     elsewhere, and moving the rest with them would break four classes to fix one."""
-    client, _ = reader(Vendor(entitled=False))
+    client, replay = reader(Vendor(entitled=False))
 
     found = probe(client, ticker, asset_class, as_of=TODAY)
 
-    assert found.steps[1].path == f"{GENERIC_REFERENCE}{ticker}"
+    assert replay.paths[1].endswith(f"{GENERIC_REFERENCE}{ticker}")
     assert found.outcome is Outcome.NOT_ENTITLED
 
 
@@ -699,17 +697,6 @@ def test_the_control_endpoint_is_chosen_by_asset_class() -> None:
     assert OPTION_REFERENCE.request("O:X") == (f"{OPTION_CONTRACTS}/O:X", {})
 
 
-def test_a_control_named_explicitly_wins_over_the_class_default() -> None:
-    """The injection seam, and a demonstration of what it costs to point it wrong: the
-    generic reference asked about an option key produces exactly the defect."""
-    client, _ = reader(Vendor(entitled=False))
-
-    found = probe(client, "O:X", "options", control=REFERENCE, as_of=TODAY)
-
-    assert found.steps[1].path == f"{GENERIC_REFERENCE}O:X"
-    assert found.outcome is Outcome.MALFORMED
-
-
 # --- the floor, measured -------------------------------------------------------
 
 
@@ -717,7 +704,7 @@ def test_a_straddling_request_names_the_floor_in_one_request() -> None:
     """A range beginning below the floor comes back beginning at it, so the first row is it."""
     client, replay = reader(Vendor(floor=STOCK_FLOOR))
 
-    found = history_floor(client, "AAPL", "stocks", as_of=TODAY)
+    found = Entitlements(client, as_of=TODAY).floor("AAPL", "stocks")
 
     assert (found.floor, found.method) == (STOCK_FLOOR, FIRST_ROW)
     assert len(replay.asked) == 2
@@ -727,7 +714,7 @@ def test_a_straddling_request_names_the_floor_in_one_request() -> None:
 def test_a_source_that_refuses_a_straddling_range_is_bisected_instead() -> None:
     client, replay = reader(Vendor(floor=ROLLING_FLOOR, truncates=False))
 
-    found = history_floor(client, "C:EURUSD", "forex", as_of=TODAY)
+    found = Entitlements(client, as_of=TODAY).floor("C:EURUSD", "forex")
 
     assert found.method == BISECTED
     assert abs((found.floor - ROLLING_FLOOR).days) <= 1
@@ -743,36 +730,16 @@ def test_rows_without_a_usable_timestamp_leave_the_floor_unmeasured() -> None:
     """
     client, replay = reader(Vendor(floor=ROLLING_FLOOR, timestamps=False))
 
-    found = history_floor(client, "AAPL", "stocks", as_of=TODAY)
+    found = Entitlements(client, as_of=TODAY).floor("AAPL", "stocks")
 
     assert (found.method, found.floor) == (UNMEASURED, EARLIEST)
     assert len(replay.asked) == 2, "the recent window and the straddle, and nothing halved"
 
 
-def test_a_series_the_plan_excludes_has_no_floor_to_measure() -> None:
-    """A floor for something never served would be an entitlement failure in disguise."""
-    client, _ = reader(Vendor(entitled=False))
-
-    with pytest.raises(NotEntitledError) as caught:
-        history_floor(client, "O:X", "options", as_of=TODAY)
-
-    assert caught.value.code == Exit.PRECONDITION
-    assert caught.value.fatal is False
-
-
-def test_a_floor_is_a_fact_about_the_day_it_was_probed() -> None:
-    found = Floor("forex", "bars", "C:EURUSD", ROLLING_FLOOR, TODAY, FIRST_ROW)
-
-    assert found.stale(TODAY) is False
-    assert found.stale(TODAY + timedelta(days=1)) is False
-    assert found.stale(TODAY + timedelta(days=2)) is True
-    assert found.payload()["method"] == FIRST_ROW
-
-
 def test_the_search_starts_at_the_epoch_and_ends_at_the_last_settled_day() -> None:
     client, replay = reader(Vendor())
 
-    history_floor(client, "AAPL", "stocks", as_of=TODAY)
+    Entitlements(client, as_of=TODAY).floor("AAPL", "stocks")
 
     assert window_of(replay.paths[0]) == recent_window(TODAY)
     assert window_of(replay.paths[1]) == (EARLIEST, settled_end(TODAY))
@@ -798,7 +765,6 @@ def test_indices_are_probed_and_cached_per_ticker() -> None:
 
     assert entitlements.check("I:NDX", "indices").ok is True
     assert entitlements.check("I:SPX", "indices").ok is False
-    assert len(entitlements.probes()) == 2
 
 
 def test_a_class_the_source_gates_as_a_whole_is_asked_once() -> None:
@@ -809,7 +775,6 @@ def test_a_class_the_source_gates_as_a_whole_is_asked_once() -> None:
     reused = entitlements.check("MSFT", "stocks")
 
     assert len(replay.asked) == 1
-    assert len(entitlements.probes()) == 1
     assert reused.ticker == "MSFT"
 
 
@@ -855,7 +820,6 @@ def test_a_range_is_judged_against_the_cached_floor_rather_than_by_asking_again(
     assert below.floor == STOCK_FLOOR
     assert above.ok is True and again.ok is True
     assert len(replay.asked) == 2, "the recent window once, the straddle once, and no repeats"
-    assert len(entitlements.floors()) == 1
     assert entitlements.requests == 2
 
 
@@ -866,8 +830,7 @@ def test_a_series_the_plan_excludes_is_answered_without_measuring_a_floor() -> N
     found = entitlements.check("O:X", "options", window=(date(2024, 1, 2), date(2024, 2, 2)))
 
     assert found.outcome is Outcome.NOT_ENTITLED
-    assert entitlements.floors() == ()
-    assert len(replay.asked) == 2
+    assert len(replay.asked) == 2, "the recent window and the control, and no floor"
 
 
 def quiet_key(silent: str) -> Answer:
@@ -957,12 +920,17 @@ def test_an_outcome_the_floor_pass_is_first_to_find_comes_back_as_an_answer() ->
 
 
 def test_a_memo_asked_for_the_floor_of_an_excluded_series_still_refuses_to_invent_one() -> None:
-    """`check` folds the outcome into its answer; `floor` returns a floor or it fails."""
+    """`check` folds the outcome into its answer; `floor` returns a floor or it fails, and
+    a floor for something never served would be an entitlement failure in disguise.
+    """
     client, _ = reader(Vendor(entitled=False))
     entitlements = Entitlements(client, as_of=TODAY)
 
-    with pytest.raises(NotEntitledError, match="no history floor"):
+    with pytest.raises(NotEntitledError, match="no history floor") as caught:
         entitlements.floor("O:X", "options")
+
+    assert caught.value.code == Exit.PRECONDITION
+    assert caught.value.fatal is False
 
 
 def test_the_day_is_fixed_for_the_life_of_one_run() -> None:
@@ -1077,33 +1045,12 @@ rather than about one issuer, so this shape has to be askable."""
 
 
 def test_a_listing_that_names_no_ticker_is_asked_without_one() -> None:
-    """A market-wide probe has no ticker by definition. This shape used to raise
-    `TypeError: replace() argument 2 must be str, not None` out of the substitution."""
-    path, params = MARKET_WIDE.request(None, (date(2024, 1, 2), date(2024, 1, 16)))
+    """A market-wide probe has no ticker by definition: the one it is asked with reaches
+    neither the path nor the parameters."""
+    path, params = MARKET_WIDE.request("AAPL", (date(2024, 1, 2), date(2024, 1, 16)))
 
     assert path == "/v3/reference/splits"
     assert params == {"execution_date.gte": "2024-01-02", "execution_date.lte": "2024-01-16"}
-
-
-def test_an_endpoint_that_names_a_ticker_refuses_a_request_without_one() -> None:
-    """A kanso error saying what is missing, not a `TypeError` from inside a substitution:
-    a probe raising one would reach an operator as a crash, and a walk that catches the
-    adapter's own failures would not catch it at all."""
-    with pytest.raises(MalformedRequestError, match="names a ticker") as caught:
-        BARS.request(None, (date(2024, 1, 2), date(2024, 1, 16)))
-
-    assert caught.value.code == Exit.VALIDATION
-    assert caught.value.remedy
-
-
-def test_a_ticker_named_only_in_a_parameter_is_refused_the_same_way() -> None:
-    """The filtered listing: its path names no ticker and its parameters do."""
-    filtered = Endpoint(
-        dataset="splits", template="/v3/reference/splits", params=(("ticker", "{ticker}"),)
-    )
-
-    with pytest.raises(MalformedRequestError, match="names a ticker"):
-        filtered.request(None)
 
 
 @pytest.mark.parametrize(
@@ -1129,53 +1076,25 @@ def test_an_endpoint_declared_with_an_epoch_nobody_uses_is_refused() -> None:
         Endpoint("bars", "/x/{ticker}", timestamp_unit="fortnights")
 
 
-# --- the evidence --------------------------------------------------------------
+# --- the account a probe gives of itself ---------------------------------------
 
 
-def test_a_probe_records_every_request_it_made() -> None:
-    """An operator reading a refusal sees the questions asked, not a sentence."""
-    client, _ = reader(Vendor(entitled=False))
+def test_a_request_that_carried_no_dates_is_not_described_as_a_window() -> None:
+    """The sentence beside an answer must be an account of what happened.
 
-    payload = probe(client, "O:X", "options", as_of=TODAY).payload()
-
-    steps = payload["steps"]
-    assert isinstance(steps, list)
-    assert [step["dataset"] for step in steps] == ["bars", "reference"]
-    assert steps[0]["window"] is not None
-    assert steps[1]["window"] is None
-    assert payload["floor"] is None
-    assert payload["grain"] == "endpoint"
-
-
-def test_a_request_that_carried_no_dates_records_no_window_and_claims_none() -> None:
-    """The evidence must be evidence of what happened, and so must the sentence beside it.
-
-    A listing asked market-wide with the dates off carried no window at all. A step
-    stamping the fortnight on it, and a detail calling it "a recent window", together tell
-    an operator their key returns current quarterly statements when all that was
-    established is that the vendor holds some statement for some issuer at some date.
+    A listing asked market-wide with the dates off carried no window at all. A detail
+    calling it "a recent window" tells an operator their key returns current quarterly
+    statements when all that was established is that the vendor holds some statement for
+    some issuer at some date.
     """
-    client, _ = reader_of(Listing(dated="empty", undated="rows"))
+    client, replay = reader_of(Listing(dated="empty", undated="rows"))
 
     found = probe(client, "AAPL", "stocks", dataset=SPARSE.unwindowed(), as_of=TODAY)
 
     assert found.ok is True
-    assert [step.window for step in found.steps] == [None]
+    assert not any(name.endswith((".gte", ".lte")) for name in replay.asked[0].params)
     assert "recent window" not in found.detail
     assert "no date window" in found.detail
-
-
-def test_a_step_is_a_plain_record() -> None:
-    step = Step("bars", "/v2/x", (date(2024, 1, 1), date(2024, 2, 1)), 200, Signal.ROWS, 3)
-
-    assert step.payload() == {
-        "dataset": "bars",
-        "path": "/v2/x",
-        "window": ["2024-01-01", "2024-02-01"],
-        "status": 200,
-        "signal": "rows",
-        "rows": 3,
-    }
 
 
 def test_the_recent_window_is_wide_enough_to_contain_trading_days() -> None:

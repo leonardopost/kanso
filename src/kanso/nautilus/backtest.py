@@ -65,7 +65,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import astuple, dataclass, field
 from datetime import date
 from decimal import Decimal
 from math import fsum
@@ -73,6 +73,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
+from kanso.classify.construct import MODIFIER_ENTRY, SLEEVE_ENTRY
 from kanso.criteria import CardRun, Fill, Trade
 from kanso.criteria.run import BPS, NS_PER_DAY, NS_PER_SECOND, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
@@ -89,6 +90,7 @@ __all__ = [
     "RunRequest",
     "RunResult",
     "child_env",
+    "entry",
     "execute",
     "main",
     "run",
@@ -103,9 +105,6 @@ DEFAULT_PERIOD: Final = "1d"
 
 RESEARCH: Final = "research"
 CERTIFICATION: Final = "certification"
-
-SLEEVE_ENTRY: Final = "Strategy"
-MODIFIER_ENTRY: Final = "Modifier"
 
 ALLOWED_ENV: Final = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
 """The only ambient variables a card subprocess inherits. No catalog path is among
@@ -174,17 +173,6 @@ class RunRequest:
     def bounds(self) -> tuple[int, int]:
         """The window as a half-open instant span `[opens, closes)` in nanoseconds."""
         return midnight_ns(self.window[0]), midnight_ns(self.window[1]) + NS_PER_DAY
-
-    def plain(self) -> RunRequest:
-        """The same request with every mapping a plain dict, so it can be serialised."""
-        return replace(
-            self,
-            venue_model=dict(self.venue_model),
-            modifiers=tuple(
-                (construct, source, dict(params)) for construct, source, params in self.modifiers
-            ),
-            overrides=dict(self.overrides),
-        )
 
 
 @dataclass(frozen=True)
@@ -351,12 +339,20 @@ def _module(source: bytes, kind: str) -> ModuleType:
     return module
 
 
-def _entry(module: ModuleType, entrypoint: str, base: Any, what: str) -> Any:
-    """The one class a strategy file must define, checked before anything is built."""
+def entry(module: ModuleType, entrypoint: str, file: str = "strategy.py") -> Any:
+    """The one class a strategy file must define, checked before anything is built.
+
+    `file` is the name the refusal gives it: the lane's `strategy.py` on every run path,
+    and the generated module's file when an implementation directory is written.
+    """
+    from kanso.nautilus.strategy import KansoModifier, KansoStrategy
+
+    sleeve = entrypoint == SLEEVE_ENTRY
+    base, what = (KansoStrategy, "sleeve") if sleeve else (KansoModifier, "modifier")
     found = getattr(module, entrypoint, None)
     if not isinstance(found, type) or not issubclass(found, base):
         raise ValidationError(
-            f"strategy.py: defines no class {entrypoint} subclassing {base.__name__}; a {what} "
+            f"{file}: defines no class {entrypoint} subclassing {base.__name__}; a {what} "
             f"is run by loading {entrypoint} from the file"
         )
     return found
@@ -364,10 +360,8 @@ def _entry(module: ModuleType, entrypoint: str, base: Any, what: str) -> Any:
 
 def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     """The sleeve class and the configuration the hypothesis injects into it."""
-    from kanso.nautilus.strategy import KansoStrategy
-
     module = _module(request.strategy_source, "sleeve")
-    cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
+    cls = entry(module, SLEEVE_ENTRY)
     hyp = request.hyp
     config = cls.config_cls(
         hyp_id=hyp.id,
@@ -402,10 +396,8 @@ def _modifier(
     construct: str, source: bytes, params: Mapping[str, object], hyp_id: str, host: str
 ) -> Any:
     """One attached construct, configured against the sleeve it modifies."""
-    from kanso.nautilus.strategy import KansoModifier
-
     module = _module(source, "modifier")
-    cls = _entry(module, MODIFIER_ENTRY, KansoModifier, "modifier")
+    cls = entry(module, MODIFIER_ENTRY)
     if cls.construct != construct:
         raise ValidationError(
             f"strategy.py: {MODIFIER_ENTRY}.construct is {cls.construct!r}, but it was attached "
@@ -486,10 +478,7 @@ def execute(
         opens, closes = request.bounds
         engine.run(start=opens, end=closes - 1)
         card = _extract(request, engine, stream, groups)
-        intents = tuple(
-            (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
-            for i in strategy.intents
-        )
+        intents = tuple(astuple(i) for i in strategy.intents)
     finally:
         engine.dispose()
     return RunResult(
@@ -825,7 +814,7 @@ def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> Ru
         )
     instruments, groups = window_data(request, catalog_path)
     payload = pickle.dumps(
-        {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)},
+        {"request": request, "instruments": list(instruments), "groups": list(groups)},
         protocol=pickle.HIGHEST_PROTOCOL,
     )
     with tempfile.TemporaryDirectory(prefix="kanso-card-") as transfer:

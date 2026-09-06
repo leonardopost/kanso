@@ -723,23 +723,6 @@ def test_a_window_the_catalog_cannot_serve_is_reported_as_the_data_problem_it_is
 # --- gates the runner cannot run ----------------------------------------------
 
 
-def test_a_gate_with_no_implementation_is_skipped_rather_than_failed(
-    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    classify(ws, store, DOCUMENT, REVERTING)
-    a_card(ws, store, REVERTING)
-    write_plan(ws)
-    without_lag = {name: gate for name, gate in run.gates().items() if name != "publication_lag"}
-    monkeypatch.setattr(run, "gates", lambda: without_lag)
-
-    made = certify(ws, store, HYP_ID)
-
-    (lag,) = [gate for gate in made.gates if gate.id == "publication_lag"]
-    assert lag.skipped == run.UNIMPLEMENTED
-    assert lag.passed, "a gate that judged nothing does not fail a certificate"
-    assert made.verdict == "pass"
-
-
 def test_a_plan_that_does_not_name_the_parity_gate_replays_nothing(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -840,6 +823,19 @@ def test_certifying_against_a_host_the_workspace_no_longer_holds_is_refused(
         certify(ws, store, str(FILTER["id"]))
 
 
+def test_certifying_against_a_host_whose_bytes_this_workspace_lost_is_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    compose_host(ws, store)
+    classify(ws, store, FILTER, ALLOWING)
+    a_card(ws, store, ALLOWING, hyp_id=str(FILTER["id"]), document=FILTER)
+    write_plan(ws, str(FILTER["id"]))
+    store.connection.execute("DELETE FROM blobs WHERE sha = ?", (sha256(REVERTING).hexdigest(),))
+
+    with pytest.raises(PreconditionError, match="holds no such bytes"):
+        certify(ws, store, str(FILTER["id"]))
+
+
 # --- the small readings the gates depend on -----------------------------------
 
 
@@ -856,9 +852,8 @@ def a_quote() -> QuoteTick:
     )
 
 
-def test_the_instrument_a_point_belongs_to_is_read_off_the_point() -> None:
-    assert run._instrument_of(a_quote()) == INSTRUMENT
-    assert run._instrument_of(object()) == "", "a market-wide series belongs to no instrument"
+def test_a_lag_is_keyed_by_the_instrument_and_the_type_of_the_point() -> None:
+    assert run._observed_lags([(a_quote(),)]) == {(INSTRUMENT, "quote"): 0.0}
 
 
 def test_only_bars_carry_the_volume_a_capacity_gate_reads() -> None:

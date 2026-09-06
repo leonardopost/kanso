@@ -416,16 +416,6 @@ class Reply:
         """True when the bytes came back."""
         return self.access is Access.SERVED
 
-    def evidence(self) -> dict[str, object]:
-        """What this request proves, for a probe to record and an operator to read."""
-        return {
-            "key": self.key,
-            "status": self.status,
-            "access": str(self.access),
-            "code": self.code,
-            "bytes": len(self.body),
-        }
-
     def raise_for_transport(self) -> None:
         """Fail when no answer arrived, leaving every answer to the caller."""
         if self.answered:

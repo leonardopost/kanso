@@ -2,10 +2,11 @@
 
 Certification is the one place a strategy meets the window that was kept away from it.
 The subject is a card of the hypothesis — its `best`, or a named one — and it is judged
-exactly as it was researched: the same snapshot the run that produced it was pinned to,
-the same venue model that card was costed with, the same hypothesis bytes the run pinned.
-Nothing about the subject is re-derived from the workspace as it stands now, because a
-number that moved because a file moved is not evidence.
+over what it was researched over: the same snapshot the run that produced it was pinned
+to, the same venue model that card was costed with, the same hypothesis bytes the run
+pinned. The capital, the fold count and the return period are not on the run record, so
+those three are read from `kanso.toml` as it stands now — the same reading research
+makes — and both windows are run under that one reading.
 
 **Both windows are run, always.** The certification window is what the plan's gates judge;
 the research window is run beside it because the gates that matter most compare the two,
@@ -22,11 +23,6 @@ verdict is an ordinary failing verdict that counts toward the failure run and re
 operator through the escalation everything else uses. That is the difference between a
 gate that cannot reach its context, which passes and says so, and one whose context is
 present but inadmissible, which fails.
-
-**A gate the toolbox declares but nothing implements is skipped, not failed.** The
-certificate says which gate judged nothing and why, so a plan naming a gate whose
-machinery arrives with a later milestone still produces an honest verdict over the gates
-that did run.
 
 **A gate that perturbs a parameter runs the window again through this runner.** The
 certification window's instruments and points are already in hand, so a perturbation costs
@@ -59,7 +55,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso.certify import certificate
 from kanso.certify.plan import plan as plan_for
-from kanso.classify.construct import Harness, HostRef
+from kanso.classify.construct import Harness
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
 from kanso.criteria.run import day_of
@@ -69,7 +65,7 @@ from kanso.data.snapshot import Snapshot
 from kanso.data.snapshot import read as read_snapshot
 from kanso.data.types import type_id_of
 from kanso.env.envelope import engine_version
-from kanso.errors import KansoError, PreconditionError, ValidationError
+from kanso.errors import KansoError, PreconditionError
 from kanso.hyp import HYPOTHESIS_FILE, Registration, set_status
 from kanso.hyp import show as registration_of
 from kanso.inbox import escalate
@@ -78,6 +74,7 @@ from kanso.replay.parity import Parity
 from kanso.replay.parity import parity as replay_parity
 from kanso.research import records
 from kanso.research.lanes import DEFAULT_LANE
+from kanso.research.loop import RESEARCHABLE
 from kanso.schemas import (
     Certificate,
     CertificationPlan,
@@ -101,21 +98,10 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
-__all__ = [
-    "CERTIFIABLE",
-    "CERT_STAGE",
-    "UNIMPLEMENTED",
-    "Measured",
-    "Subject",
-    "certify",
-    "show",
-]
+__all__ = ["certify", "show"]
 
 CERT_STAGE: Final = "cert"
 """The plan stage certification runs; the other two belong to a deployed stage."""
-
-CERTIFIABLE: Final = frozenset({"classified", "researching", "candidate", "certified"})
-"""The statuses certification starts from: a draft has no construct, and the rest are over."""
 
 CANDIDATE: Final = "candidate"
 CERTIFIED: Final = "certified"
@@ -128,14 +114,8 @@ CERTIFICATE: Final = "certificate"
 CERT_FAILED: Final = "cert_failed"
 """The escalation a hypothesis that has run out of attempts raises."""
 
-UNIMPLEMENTED: Final = (
-    "the toolbox declares this gate but nothing implements it yet, so it judged nothing"
-)
-
 PARITY: Final = "parity_replay"
 """The one cert gate whose evidence is a replay rather than a run of the window."""
-
-_HEX: Final = frozenset("0123456789abcdef")
 
 
 # --- what is being certified --------------------------------------------------
@@ -145,11 +125,12 @@ _HEX: Final = frozenset("0123456789abcdef")
 class Subject:
     """One card of one hypothesis, with everything needed to run it again.
 
-    Every field comes from the record of the run that produced the card rather than from
-    the workspace as it stands: the hypothesis bytes the run pinned, the snapshot it was
-    pinned to and the venue model the card was costed with. Re-running under anything else
-    would compare two different experiments, and the gate that compares the certification
-    window against the research one would be comparing nothing.
+    The bytes, the snapshot and the venue model come from the record of the run that
+    produced the card rather than from the workspace as it stands; the capital, the fold
+    count and the return period come from `kanso.toml` today, because the run record does
+    not carry them. Both windows are run under the same values either way, so the gate
+    that compares the certification window against the research one compares like with
+    like.
     """
 
     hyp: Hypothesis
@@ -269,10 +250,10 @@ def _registration(ws: Workspace, store: StateStore, hyp_id: str) -> Registration
 
 def _certifiable(registration: Registration) -> None:
     """Refuse a hypothesis whose life has ended, or which was never classified."""
-    if registration.status not in CERTIFIABLE:
+    if registration.status not in RESEARCHABLE:
         raise PreconditionError(
             f"{registration.hyp_id} is {registration.status}, and certification runs on "
-            f"{', '.join(sorted(CERTIFIABLE))}",
+            f"{', '.join(sorted(RESEARCHABLE))}",
             remedy=f"a draft is classified with `kanso classify {registration.hyp_id}`; a "
             "hypothesis that is over is replaced by a new one",
         )
@@ -296,7 +277,9 @@ def _subject(ws: Workspace, store: StateStore, hyp_id: str, sha: str | None) -> 
     harness = construct_for(hyp.construct.id, ws).harness(
         hyp, _host(ws, hyp.construct), version=run.host_version
     )
-    host_source, modifiers = _host_sources(store, harness.host)
+    host_source, modifiers = (
+        (None, ()) if harness.host is None else records.host_sources(store, harness.host)
+    )
     return Subject(
         hyp=hyp,
         construct=hyp.construct,
@@ -316,44 +299,16 @@ def _subject(ws: Workspace, store: StateStore, hyp_id: str, sha: str | None) -> 
 
 
 def _chosen_sha(store: StateStore, hyp_id: str, sha: str | None) -> str:
-    """The hypothesis's `best`, or the one card sha the given prefix names.
-
-    A prefix is resolved among this hypothesis's own cards, so a prefix that is unique
-    here is accepted however many other blobs the store holds, and one naming a card of
-    another hypothesis is refused rather than silently certified.
-    """
-    if sha is None:
-        best, _ = records.best_of(store, hyp_id)
-        if best is None:
-            raise PreconditionError(
-                f"{hyp_id} has no best card, so there is nothing to certify",
-                remedy=f"research it with `kanso research begin {hyp_id}` until a card keeps",
-            )
-        return best
-    prefix = sha.strip().lower()
-    if not prefix or not set(prefix) <= _HEX:
-        raise ValidationError(
-            f"sha: {sha!r} is not a strategy sha or a prefix of one",
-            remedy=f"pass the hex prefix of a card's sha, as `kanso research show {hyp_id}` "
-            "prints it",
+    """The hypothesis's `best`, or the one card sha the given prefix names."""
+    if sha is not None:
+        return records.card_sha(store, hyp_id, sha)
+    best, _ = records.best_of(store, hyp_id)
+    if best is None:
+        raise PreconditionError(
+            f"{hyp_id} has no best card, so there is nothing to certify",
+            remedy=f"research it with `kanso research begin {hyp_id}` until a card keeps",
         )
-    rows = store.connection.execute(
-        "SELECT DISTINCT strategy_sha FROM cards WHERE hyp_id = ? AND strategy_sha >= ?"
-        " AND strategy_sha < ? ORDER BY strategy_sha LIMIT 2",
-        (hyp_id, prefix, prefix + "g"),
-    ).fetchall()
-    if not rows:
-        raise ValidationError(
-            f"sha: no card of {hyp_id} starts with {prefix!r}",
-            remedy=f"run `kanso research show {hyp_id}` to list its cards",
-        )
-    if len(rows) > 1:
-        raise ValidationError(
-            f"sha: {prefix!r} is ambiguous within {hyp_id}: "
-            f"{', '.join(str(row[0])[:12] for row in rows)}",
-            remedy="pass more characters of the sha",
-        )
-    return str(rows[0][0])
+    return best
 
 
 def _run_of(store: StateStore, hyp_id: str, run_id: str) -> RunRecord:
@@ -375,19 +330,6 @@ def _host(ws: Workspace, ref: ConstructRef) -> StrategyFile | None:
             remedy="certify and compose the host sleeve before certifying against it",
         )
     return load_yaml(StrategyFile, path)
-
-
-def _host_sources(
-    store: StateStore, host: HostRef | None
-) -> tuple[bytes | None, tuple[tuple[str, bytes, Mapping[str, Any]], ...]]:
-    """The host version's own sleeve bytes and the constructs already attached to it."""
-    if host is None:
-        return None, ()
-    attached = tuple(
-        (ref.construct, store.get_blob(ref.strategy_sha), dict(ref.params or {}))
-        for ref in host.attached
-    )
-    return store.get_blob(host.sleeve.strategy_sha), attached
 
 
 # --- running both windows -----------------------------------------------------
@@ -568,7 +510,7 @@ def _observed_lags(groups: Sequence[Sequence[object]]) -> dict[tuple[str, str], 
     for group in groups:
         for point in group:
             stamped = cast("Any", point)
-            key = (_instrument_of(point), type_id_of(point))
+            key = (backtest._instrument_of(point) or "", type_id_of(point))
             delay = (int(stamped.ts_init) - int(stamped.ts_event)) / NANOS_PER_SECOND
             lags[key] = min(lags.get(key, inf), delay)
     return lags
@@ -595,16 +537,6 @@ def _daily_volume(groups: Sequence[Sequence[object]]) -> dict[str, list[float]]:
             day = day_of(int(point.ts_event))
             days[day] = days.get(day, 0.0) + float(point.volume) * float(point.close)
     return {name: [days[day] for day in sorted(days)] for name, days in per_day.items()}
-
-
-def _instrument_of(point: object) -> str:
-    """The instrument a point belongs to, or the empty name for a market-wide one."""
-    inner = getattr(point, "data", point)
-    bar_type = getattr(inner, "bar_type", None)
-    if bar_type is not None:
-        return str(bar_type.instrument_id)
-    instrument_id = getattr(inner, "instrument_id", None)
-    return "" if instrument_id is None else str(instrument_id)
 
 
 # --- the two code paths -------------------------------------------------------
@@ -689,10 +621,6 @@ def _judge(
     registry = gates()
     evaluated: list[EvaluatedGate] = []
     for gate in planned:
-        found = registry.get(gate.id)
-        if found is None:
-            evaluated.append(_skipped(gate, UNIMPLEMENTED))
-            continue
         context = GateContext(
             hyp=subject.hyp,
             construct=subject.harness.construct,
@@ -714,7 +642,7 @@ def _judge(
             rerun=rerun,
             session=compared,
         )
-        evaluated.append(_evaluated(gate, found.evaluate(context)))
+        evaluated.append(_evaluated(gate, registry[gate.id].evaluate(context)))
     return evaluated, ObjectiveResult(id=objective.id, value=value, se=se)
 
 
@@ -728,19 +656,6 @@ def _evaluated(planned: PlannedGate, result: GateResult) -> EvaluatedGate:
             "evidence": dict(result.evidence),
             "pass": result.passed,
             "skipped": result.skipped,
-        }
-    )
-
-
-def _skipped(planned: PlannedGate, reason: str) -> EvaluatedGate:
-    """A gate that could not judge, recorded as passing and saying what it lacked."""
-    return EvaluatedGate.model_validate(
-        {
-            "id": planned.id,
-            "stage": planned.stage,
-            "params": dict(planned.params),
-            "pass": True,
-            "skipped": reason,
         }
     )
 

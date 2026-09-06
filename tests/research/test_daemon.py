@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from hashlib import sha256
 from pathlib import Path
@@ -306,6 +307,21 @@ def test_start_detaches_and_stop_leaves_the_run_and_the_lane_directory(
     assert (directory / "strategy.py").read_bytes() == b"# the operator is mid-edit\n"
 
 
+def test_a_stop_from_the_process_that_started_the_daemon_reaps_it_rather_than_waiting(
+    stopped: Workspace,
+) -> None:
+    """The starting process is the supervisor's parent, and an exited child is a zombie a
+    signal probe still answers for until it is reaped."""
+    pid = daemon.start(stopped)
+    began = time.monotonic()
+
+    assert daemon.stop(stopped) == pid
+
+    assert time.monotonic() - began < 10 < daemon.STOP_TIMEOUT_S
+    with pytest.raises(ChildProcessError):
+        os.waitpid(pid, os.WNOHANG)
+
+
 def test_a_daemon_that_will_not_answer_a_signal_is_killed(
     ws: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -324,8 +340,11 @@ def test_a_daemon_that_will_not_answer_a_signal_is_killed(
 
     assert daemon.stop(ws) == deaf.pid
 
-    assert deaf.wait(timeout=10) != 0
+    # Stopping reaped it, so its status went with it; what is left to see is that it went.
+    with pytest.raises(ProcessLookupError):
+        os.kill(deaf.pid, 0)
     assert daemon.pid_of(ws) is None
+    deaf.wait(timeout=10)
 
 
 def test_stopping_nothing_is_a_precondition_failure(ws: Workspace) -> None:

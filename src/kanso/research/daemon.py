@@ -539,7 +539,18 @@ def _gone(pid: int, seconds: float) -> bool:
 
 
 def _alive(pid: int) -> bool:
-    """Whether a process with this id exists."""
+    """Whether a process with this id exists.
+
+    A process that starts the daemon and later stops it is the supervisor's parent, and a
+    child that has exited is a zombie until its parent reaps it — one a signal probe keeps
+    answering for, so `stop` would wait out its whole timeout and then kill a corpse. So a
+    child of ours is reaped first and reported gone; a pid that is not ours to reap is
+    probed with the signal. From the CLI, `start` and `stop` are two processes and the
+    daemon is re-parented to init, which reaps it, so only an embedding host sees this.
+    """
+    with contextlib.suppress(ChildProcessError):
+        if os.waitpid(pid, os.WNOHANG) != (0, 0):
+            return False
     try:
         os.kill(pid, 0)
     except OSError:
