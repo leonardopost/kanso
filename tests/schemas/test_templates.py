@@ -32,7 +32,7 @@ def test_a_template_validates(name: str, model: type) -> None:
     assert load_yaml(model, TEMPLATES / name) is not None
 
 
-def test_the_demo_hypothesis_is_the_one_the_spec_describes() -> None:
+def test_the_demo_hypothesis_is_the_one_the_demo_workspace_runs() -> None:
     hyp = load_yaml(Hypothesis, TEMPLATES / "demo" / "hypothesis.yaml")
     assert hyp.id == "demo_mr"
     assert hyp.universe == ["DEMO.SIM"]

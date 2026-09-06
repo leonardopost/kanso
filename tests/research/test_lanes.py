@@ -16,9 +16,7 @@ from .conftest import HYP_ID
 
 def test_a_lane_directory_is_named_for_its_lane_and_hypothesis(ws: Workspace) -> None:
     assert lanes.lane_dir(ws, "op", HYP_ID) == ws.path("runs", "op", HYP_ID)
-    assert lanes.log_file(ws, "l1", HYP_ID, "20240101-1") == ws.path(
-        "runs", "l1", f"{HYP_ID}-20240101-1.jsonl"
-    )
+    assert lanes.lane_dir(ws, "l1", HYP_ID) == ws.path("runs", "l1", HYP_ID)
 
 
 @pytest.mark.parametrize("lane", ["", "OP", "a-b", "x" * 17, "l 1"])

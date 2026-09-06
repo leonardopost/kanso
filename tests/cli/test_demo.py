@@ -120,7 +120,7 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
 
 
 def test_the_demo_reaches_no_provider_and_needs_no_credential(demo: Path) -> None:
-    """Every model on the demo's register is the shipped mock protocol (D14)."""
+    """Every model on the demo's register is the shipped mock protocol."""
     register = yaml.safe_load((demo / "models.yaml").read_text(encoding="utf-8"))
 
     assert {entry["protocol"] for entry in register["models"]} == {"mock"}

@@ -110,7 +110,7 @@ def test_a_broker_client_declares_its_variables_and_resolves_none_of_them(
 def test_real_capital_may_be_configured_on_one_stage_and_paper_money_on_both(
     runner: CliRunner, workspace: Path, paper_client: str, real_client: str
 ) -> None:
-    """The declaration D13 rests on, reported before anything is deployed."""
+    """The declaration that keeps real capital off the paper stage, reported before a deploy."""
     listed = clients(runner, workspace)
 
     assert listed[real_client]["stages"] == ["live"]

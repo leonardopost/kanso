@@ -495,7 +495,7 @@ def test_a_class_offers_the_datasets_it_can_ask_for_not_the_ones_it_is_entitled_
 
 
 def test_no_credential_is_needed_to_declare_any_of_this() -> None:
-    """The property D14 asserts: importing and describing the adapter reaches nothing."""
+    """Adapter isolation: importing and describing the adapter reaches nothing."""
     assert ADAPTER.capabilities.payload()["classes"]
 
 

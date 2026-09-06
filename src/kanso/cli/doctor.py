@@ -587,7 +587,7 @@ def _extensions(ws: Workspace) -> Check:
             f"{len(found) - len(broken)}/{len(found)} loaded"
             + (f" · {len(shadowing)} shadowed id(s)" if shadowing else ""),
             items=tuple(items),
-            remedy="fix or remove the extension; a shadowed id is resolved to neither by default",
+            remedy="fix or remove the extension; a shadowed id resolves to the packaged one",
         )
     return Check("extensions", "ok", detail, items=tuple(items))
 

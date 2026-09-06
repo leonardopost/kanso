@@ -2,7 +2,7 @@
 
 Two properties are under test and they pull in opposite directions.
 
-D14 is the first: the core knows no vendor, so a workspace with every vendor credential
+Adapter isolation is the first: the core knows no vendor, so a workspace with every credential
 unset still has a complete answer to "what can this fetch?" — the package's own loaders,
 the manual instrument provider and every registered adapter, listed with the variable
 names each would need and where each resolves from, never a value. Nothing opens a socket

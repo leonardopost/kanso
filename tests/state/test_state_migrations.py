@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from kanso.errors import KansoError, PreconditionError
-from kanso.state import BUSY_TIMEOUT_MS, SCHEMA_VERSION, TABLES, StateStore, migrations
+from kanso.state import BUSY_TIMEOUT_MS, SCHEMA_VERSION, TABLES, StateStore, migrations, usable
 from kanso.state import store as store_module
 
 
@@ -228,3 +228,60 @@ def test_a_migration_another_process_applied_first_is_not_reported_as_ours(
     with StateStore(db_path) as store:
         assert store.migrate() == []
         assert store.connection.in_transaction is False
+
+
+# --- a database this package cannot correctly write, in either direction ------
+
+
+def test_a_migrated_database_is_neither_behind_nor_ahead(db_path: Path) -> None:
+    with StateStore(db_path) as store:
+        store.migrate()
+
+        assert store.pending() == []
+        assert store.ahead_by() == 0
+        usable(store, db_path)
+
+
+def test_a_database_behind_the_package_is_refused_with_the_migration_to_run(
+    db_path: Path,
+) -> None:
+    with StateStore(db_path) as store:
+        with pytest.raises(PreconditionError, match="behind this kanso") as caught:
+            usable(store, db_path)
+
+        assert "kanso migrate" in (caught.value.remedy or "")
+
+
+def test_a_database_ahead_of_the_package_is_refused_by_how_far(db_path: Path) -> None:
+    """`pending` only looks upward, so a downgrade would otherwise read as up to date."""
+    with StateStore(db_path) as store:
+        store.migrate()
+        newest = max(m.version for m in migrations())
+        store.connection.execute(f"PRAGMA user_version = {newest + 3}")
+
+        assert store.pending() == []
+        assert store.ahead_by() == 3
+        with pytest.raises(PreconditionError, match="written by a later kanso"):
+            usable(store, db_path)
+
+
+def test_the_daemon_entry_point_refuses_before_it_takes_the_lock(
+    db_path: Path, tmp_path: Path
+) -> None:
+    """A service unit starts `serve`, and the supervisor never opens the store itself.
+
+    Checking only where a store is opened for work would let a unit come up and restart
+    lanes that each refuse, so the refusal has to happen here, before anything is spawned.
+    """
+    from kanso.research.daemon import main
+    from kanso.workspace import init
+
+    root = tmp_path / "ws"
+    init(root)
+    with StateStore(root / "state.db") as store:
+        store.migrate()
+        newest = max(m.version for m in migrations())
+        store.connection.execute(f"PRAGMA user_version = {newest + 1}")
+
+    with pytest.raises(PreconditionError, match="written by a later kanso"):
+        main(["serve", str(root)])

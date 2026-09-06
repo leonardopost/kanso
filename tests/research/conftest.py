@@ -325,6 +325,8 @@ def prepared(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A workspace built once: the catalog write and the freeze are the slow part."""
     root = tmp_path_factory.mktemp("prepared") / "ws"
     ws = init(root)
+    with StateStore(ws.path("state.db")) as opened:
+        opened.migrate()  # `kanso init` migrates; a fixture that does not is not a workspace
     write_instruments(ws)
     resolve_universe(ws, [INSTRUMENT], RESEARCH[0])
     catalog.write(ws, bars(SPAN), ref=dataset(), source="synthetic")

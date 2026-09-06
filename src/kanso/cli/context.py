@@ -19,8 +19,7 @@ from pathlib import Path
 import typer
 
 from kanso import workspace
-from kanso.errors import PreconditionError
-from kanso.state import StateStore
+from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
 
 STATE_DB = "state.db"
@@ -47,10 +46,5 @@ def open_workspace(ctx: typer.Context) -> Workspace:
 def store(ws: Workspace) -> Iterator[StateStore]:
     """The workspace's state store, open for the command and closed after it."""
     with StateStore(ws.path(STATE_DB)) as opened:
-        pending = opened.pending()
-        if pending:
-            raise PreconditionError(
-                f"{ws.path(STATE_DB)} is {len(pending)} migration(s) behind this kanso",
-                remedy="run `kanso migrate`",
-            )
+        usable(opened, ws.path(STATE_DB))
         yield opened

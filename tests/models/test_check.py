@@ -125,6 +125,28 @@ def test_an_unreachable_provider_is_reported_rather_than_raised(
     assert "ConnectError" in result.detail
 
 
+def test_a_base_url_the_client_cannot_parse_is_reported_rather_than_raised(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The register template ships `http://localhost:<port>/v1`, so this is the first run."""
+    write_register(
+        ws,
+        [
+            model(
+                "local",
+                "cheap",
+                protocol="openai_compat",
+                base_url="http://localhost:<port>/v1",
+            )
+        ],
+    )
+
+    result = check(ws, store)[0]
+
+    assert not result.ok
+    assert "InvalidURL" in result.detail
+
+
 def test_a_register_with_no_models_checks_nothing(ws: Workspace, store: StateStore) -> None:
     write_register(ws, [])
     assert check(ws, store) == []

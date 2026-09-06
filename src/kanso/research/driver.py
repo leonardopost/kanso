@@ -302,7 +302,7 @@ def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Ro
     """The last `limit` cards of this run, oldest first.
 
     Read as rows rather than as `Card`s, and bounded in SQL rather than in Python, because
-    a run is unbounded (D17) and a proposer is shown a fixed window of it either way.
+    a run is unbounded and a proposer is shown a fixed window of it either way.
     """
     rows = store.connection.execute(
         "SELECT strategy_sha, status, metric, metric_se, description, crash_tail FROM cards"

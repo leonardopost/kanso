@@ -66,7 +66,7 @@ def test_no_provider_wire_detail_appears_outside_the_model_layer() -> None:
 
     A data vendor's own auth header and endpoints belong in its adapter package and
     nowhere else, which is a different rule with its own test; scanning an adapter for the
-    model layer's tokens would fail a module for doing exactly what D2 requires of it. The
+    model layer's tokens would fail a module for doing exactly what that rule requires. The
     httpx rule above is not relaxed the same way: `httpx` serves the model layer alone, and
     an adapter reaching for it would be a new dependency on an old name.
     """

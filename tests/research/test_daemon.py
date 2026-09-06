@@ -417,7 +417,7 @@ def test_a_stop_request_can_be_taken_back(ws: Workspace) -> None:
 
 
 def test_no_module_of_the_research_package_reaches_for_git(ws: Workspace) -> None:
-    """The daemon starts processes; none of them is ever git (D18)."""
+    """The daemon starts processes; none of them is ever git."""
     import kanso.research
 
     modules = sorted(Path(kanso.research.__file__ or "").parent.glob("*.py"))

@@ -1,32 +1,182 @@
-# kanso — build agent instructions
+# kanso — instructions for changing this package
 
-You are building the `kanso` package. `SPEC.md` is the single source of truth for the build and for nothing else: it is deleted at the 0.1.0 release, after which `docs/` and the tests are the reference, so nothing that outlives the build (code, docstrings, docs, skills, templates) may refer to it. `docs/maintainers.md` is how this repository is maintained and released (maintainer skills live in `skills/`; link that directory into your tool's skills path). Read `SPEC.md` before writing code.
+This repository is the `kanso` framework: a released Python package, versioned by semver.
+It is its own reference. `docs/` states what every part of it guarantees and refuses, the
+tests state it again in a form that fails when it stops being true, and the two are changed
+together or not at all. There is no design document, no decision log and no build plan; if
+something is true of kanso and is written down nowhere, that is a gap in `docs/` or in the
+suite, and the fix is to close it rather than to write a note.
 
-## Ground rules
-- Follow `SPEC.md` §11 build order. Finish a milestone (green acceptance tests, coverage ≥85%) before starting the next.
-- Deviating from the spec is allowed only when the spec is impossible or contradicts NautilusTrader's pinned API; then amend `SPEC.md` in the same commit as the code and state the reason in the commit body. Do not silently reinterpret; there is no deviation log.
-- Directives in `SPEC.md` §3.1 are binding. In particular: D1 (no learnings/notes artefacts), D2 (provider specifics only in `models/`; vendor and broker specifics only in `data/adapters/<vendor>/` and `nautilus/adapters/<broker>/`), D10/D12 (mutable surface and embargo enforced by code), D14 (adapter isolation: the core knows no vendor, and the suite, `doctor` and the demo are green with every vendor credential unset), D19 (availability timestamps), D18 (kanso never invokes git in a workspace — no `git init`, commit, branch, tag, worktree or reset; the §10 subprocess spy test enforces it). The commit rules below apply to this framework repository, not to workspaces.
-- Pure Python. No Rust, no Cython, no compiled extensions in v0 (§12 governs when that changes). The only Rust kanso executes is NautilusTrader's, through `nautilus_pyo3` — adapter network I/O uses its `HttpClient` and `WebSocketClient` with `Quota` rate limits.
-- Runtime dependencies are exhaustive in `pyproject.toml`; adding one requires amending C3 in `SPEC.md` in the same commit.
+`docs/maintainers.md` is the other side of this file: repositories, the development loop,
+promoting an extension upstream, releases, and running the daemon as a service. Maintainer
+skills live in `skills/` — link that directory into your tool's skills path.
 
-## Toolchain and conventions
-- `uv` for everything: `uv sync`, `uv run pytest`, `uv run ruff check`, `uv run mypy src`.
-- Python ≥3.12. `ruff` (format + lint) and `mypy --strict` clean on `src/`.
-- Tests: `pytest`, `pytest-cov`, `hypothesis`. No network in tests; the `synthetic` loader and the `mock` model protocol are the fixtures.
-- Conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`). Semver; `0.1.0` is the M8 release.
-- Every CLI command: `--json`, exit codes per `SPEC.md` §7.2, one integration test.
-- Every schema: pydantic v2 model, one property test.
-- Docstrings state the contract a module implements in words, and record the NautilusTrader facts it relies on with the engine version; never a `SPEC.md` section reference.
+## The standing invariants
 
-## Definition of done (per milestone)
-1. Acceptance tests from `SPEC.md` §11 pass on macOS arm64 and Linux x86_64.
-2. Coverage ≥85% lines for `src/kanso`.
-3. `kanso doctor` green in a fresh workspace.
-4. `docs/` updated for anything operator-visible (CLI, workspace files, skills).
-5. The milestone is committed on a `feat/m<N>-<slug>` branch, pushed to origin, and its CI run is green on macOS arm64 and Linux x86_64 before the next milestone starts.
+These are the properties the rest of the package is built on. Each one would be easy to
+lose in a change that looks local, so each is enforced somewhere you can read.
+
+**kanso never invokes git.** No `git` subprocess, in a workspace or anywhere else — no
+`init`, commit, branch, tag, worktree, reset or object write, by itself or on an operator's
+behalf. Committing a workspace is the operator's business; versioning the file research
+mutates is kanso's own, content-addressed in the state store. `tests/workspace/test_no_git.py`
+and `tests/cli/test_no_git.py` spy on every process launch and fail the moment one is git.
+
+**The core knows no vendor and no broker.** Every outside party lives in exactly one
+package — `data/adapters/<vendor>/` for data and reference, `nautilus/adapters/<broker>/`
+for execution and live feeds — and nothing outside it names a vendor, an endpoint, a vendor
+field or a vendor symbology. Mapping to engine types and kanso schemas happens at the
+adapter boundary. Provider specifics stay inside `models/` the same way. The isolation
+tests (`tests/data/adapters/`, `tests/nautilus/adapters/`, `tests/models/`) are a source
+scan and an import-graph check, and they read the names from the adapter directories rather
+than from a list, so a new adapter is scanned without anyone remembering to add it.
+
+**An adapter is enabled by its credentials, never by installation.** There are no extras.
+The full suite, `kanso doctor` and the demo are green with every vendor and broker
+credential unset, and CI has no credential at all, which is what proves it. A test that
+genuinely needs a real key carries the `live` marker, is deselected by default and never
+runs in CI.
+
+**Availability, not observation.** Every catalog point's `ts_init` is the instant its
+information became public and `ts_event` is its economic reference time; `ts_init >=
+ts_event` always, and the engine orders by `ts_init`. Never derive `ts_init` from
+`ts_event` or from ingest time. A delayed dataset whose `ts_init` does not come from a
+declared publication rule is refused at write (`data/publication.py`).
+
+**Costs are applied once, by the runner, in the extraction.** Commission, slippage and half
+the spread each side are deducted per fill in `nautilus/backtest.py` and nowhere else. One
+application means one number: a card, a certification gate, a composition expectation and a
+realised paper objective all read the same arithmetic, and a cost model can be re-applied to
+recorded fills without re-running anything. The simulated venue charges nothing to keep it
+that way — and it charges nothing because kanso's resolved instruments leave their maker and
+taker rates at zero, not because the venue is configured fee-free, so an instrument that
+arrives with a non-zero rate double-counts silently.
+
+**The embargo is code.** A backtest request may name only a window the hypothesis declares,
+and the card path accepts only the research window. A card runs in a child process with no
+path to any catalog — the parent reads the window and serialises the points across, and the
+child re-checks them against the window it was asked for. Never add a route by which
+research could reach the certification window, and never replace the refusal with an
+instruction to a model.
+
+**Only `strategy.py` is mutable by the research loop.** Everything fixed lives in the
+package. A proposal that names another file, does not apply, or changes nothing is a wrong
+answer that takes the retry ladder; it never becomes a card.
+
+**Real capital moves only on a named, recorded approval.** `promote --live --as NAME` is the
+only path, `--as` has no default and no environment fallback, and the approval is recorded
+against the exact version before anything moves. Paper promotion and demotion are automatic;
+this one is not, and no convenience is worth making it so.
+
+**One strategy class, one data model, one evaluation path.** Backtest, replay, paper and
+live run the same generated implementation, and a version pins the engine version it was
+certified under. `kanso replay parity` compares the two code paths element by element and
+exists to be run at a tolerance of zero.
+
+**A run optimises exactly one scalar.** Constraints are gates, never terms in an objective.
+
+**Agents decide, the framework evaluates.** Which gates, which thresholds, which constraints
+and which construct are chosen at runtime by a model from catalogues that declare
+capabilities and ranges. There are no default plans, no default thresholds and no non-LLM
+fallback for a decision an agent is supposed to make: with no model configured the step
+exits 2. The framework's own opinions are structural invariants and the construct taxonomy,
+and nothing else.
+
+**Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,
+`httpx`, `numpy`, and the standard library. `pyarrow`, `pandas` and `msgspec` are reachable
+only as the engine's own transitive dependencies and only where its API hands them to you.
+`httpx` serves `models/` only. Adding a runtime dependency is a deliberate change to
+`pyproject.toml` argued in the commit body; an adapter that would need one is not
+admissible.
+
+**Pure Python.** kanso ships no compiled artefact of its own. The only Rust it executes is
+NautilusTrader's, through `nautilus_trader.core.nautilus_pyo3` — adapter network I/O uses
+its `HttpClient` and `WebSocketClient` with `Quota` rate limits.
+
+**Secrets live only in environment variables**, resolved by standard name from the
+workspace `.env` and then the ambient environment, sent in a request header and never in a
+URL path or query string, because URLs reach logs, manifests and `doctor --report`. No
+credential appears in anything kanso writes.
+
+**No notes, learnings, summaries or progress reports** — not in this repository, not in a
+workspace. The tests, the diff, the cards, the certificates and the state store are the
+record.
+
+## Toolchain
+
+`uv` for everything.
+
+```bash
+uv sync
+uv run pytest --cov-fail-under=85    # the gate CI runs; drop the flag for a partial run
+uv run ruff format
+uv run ruff check
+uv run mypy src
+```
+
+Python ≥3.12; `nautilus_trader>=1.231.0,<1.232`, one requirement for every supported host
+(macOS 26+ arm64, Linux x86_64). Tests use `pytest`, `pytest-cov` and `hypothesis`, make no
+network call and are deterministic; the `synthetic` loader and the `mock` model protocol are
+the fixtures.
+
+## Conventions
+
+- Every CLI command takes `--json` and prints exactly one object under it, exits with the
+  codes `docs/cli.md` lists, and has at least one integration test.
+- Every schema is a pydantic v2 model in `schemas/` with one property test.
+- Docstrings state the contract a module implements in words, and record the
+  NautilusTrader facts it relies on with the engine version. They never point at a document
+  outside this repository.
+- `from __future__ import annotations` everywhere. No `print()` outside `cli/`. Raise
+  `kanso.errors.{PreconditionError, ValidationError, ApprovalError}` — each carries the
+  message and, wherever there is one to give, a remedy that is a command the reader can run.
+- A new state table ships as a new file in `src/kanso/state/migrations/`, never as an edit
+  to an existing one, with the `schema_version` bump beside it.
+- Conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`) on a branch named for
+  the change. Semver per `docs/maintainers.md`.
+
+## Definition of done
+
+1. `uv run ruff format --check`, `uv run ruff check` and `uv run mypy src` clean.
+2. `uv run pytest` green. The enforced floor is 85% of lines in `src/kanso`; the tree is at
+   100%, and a change that lowers it has shipped lines nothing runs.
+3. `kanso doctor` green in a fresh workspace, and the demo sequence in `README.md` runs end
+   to end with every `KANSO_*` and vendor variable unset.
+4. `docs/` changed in the same commit as any operator-visible behaviour — a command, a
+   workspace file, a refusal, a skill — and the tests with it. The PR body says why.
+5. CI green on macOS arm64 and Linux x86_64, on both Python versions, before it merges.
 
 ## Working style
-- Small commits, each green. No WIP commits on `main`.
-- Prefer deleting code to adding it. If a component can be a function, it is not a class.
-- When NautilusTrader's API is unclear, read the installed package source (`uv run python -c "import nautilus_trader, inspect; ..."`) rather than guessing; note the version in the docstring.
-- Do not write summaries, progress reports, or learnings files. The tests and the diff are the report.
+
+- Small commits, each green. Prefer deleting code to adding it. If a component can be a
+  function, it is not a class.
+- When the engine's API is unclear, read the installed source rather than guessing:
+  `uv run python -c "import nautilus_trader, inspect; ..."`. Check
+  `src/kanso/nautilus/facts.py` first — it asserts what this build relies on, and
+  `kanso doctor` re-checks every claim against the installed engine and names the ones that
+  no longer hold.
+- **A fixture is a claim about an outside party, and it is worth what its evidence is
+  worth.** Eight defects reached a green suite at 100% line coverage during the build
+  because the fixtures encoded what an author expected instead of what the vendor did.
+  Coverage says which lines ran, never whether the fixture resembles the source. Drive an
+  adapter against the real thing before trusting it, and record the measured response.
+- Prose fails the same way. Every command a document shows must have been run, and if the
+  code and the explanation disagree, the code is what happened.
+
+## Where things are
+
+| directory | what it holds |
+|---|---|
+| `cli/` | every command, its `--json` object and its exit codes |
+| `schemas/` | a pydantic model for every file kanso reads or writes |
+| `state/` | the store and its migrations |
+| `data/` | the catalog, manifests, snapshots, loaders, instruments, `adapters/<vendor>/` |
+| `nautilus/` | the strategy base, the runner, the venue, the node, replay, `facts.py`, `adapters/<broker>/` |
+| `classify/` | the construct catalogue and the classifier |
+| `criteria/` | objectives and gates, with the declared toolbox in `library/` |
+| `hyp/`, `research/` | registration, the loop, the driver, the daemon, alignment |
+| `certify/`, `strategy/` | the planner, certificates, composition and versions |
+| `portfolio/`, `monitor/`, `replay/` | stages, deployment, promotion, surveillance, the two code paths |
+| `models/` | the register, the router, the two wire protocols and the mock |
+| `inbox/` | the five escalation kinds and the append-only file |
+| `skills/`, `templates/` | what ships into an operator's workspace |

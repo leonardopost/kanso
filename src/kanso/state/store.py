@@ -78,6 +78,31 @@ class Migration:
     sql: str
 
 
+def usable(store: StateStore, path: Path) -> None:
+    """Refuse a database this package cannot correctly write, in either direction.
+
+    Behind the package is a migration away and says so. Ahead of it is not: a file written
+    by a later kanso has a shape this one does not know, and applying this package's
+    writes to it is how a downgrade corrupts a workspace rather than merely failing. Both
+    the command layer and the daemon call this, because a guard only one entry point
+    honours protects only the operators who use that one — and the shipped service recipe
+    starts the daemon directly.
+    """
+    behind = store.pending()
+    if behind:
+        raise PreconditionError(
+            f"{path} is {len(behind)} migration(s) behind this kanso",
+            remedy="run `kanso migrate`",
+        )
+    ahead = store.ahead_by()
+    if ahead:
+        raise PreconditionError(
+            f"{path} was written by a later kanso: its schema is {ahead} version(s) "
+            f"past the newest this package ships",
+            remedy="install the kanso that wrote it, or start a workspace this one owns",
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Event:
     """One row of the append-only event log."""
@@ -255,6 +280,18 @@ class StateStore:
         """The file names of the migrations this database has not been stamped with."""
         current = self.schema_version()
         return [m.name for m in migrations() if m.version > current]
+
+    def ahead_by(self) -> int:
+        """How far the database's schema is *past* the newest migration this package ships.
+
+        Zero for every database this kanso knows, including one behind it — that direction
+        is `pending`. A positive number means the file was written by a later kanso and
+        then opened by an earlier one, which `pending` cannot see because it only looks
+        upward: an operator who downgrades would otherwise be told the schema is up to
+        date while every command runs against a shape this package does not know.
+        """
+        newest = max((m.version for m in migrations()), default=0)
+        return max(0, self.schema_version() - newest)
 
     def migrate(self) -> list[str]:
         """Apply every pending migration in order and return the names applied.

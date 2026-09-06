@@ -23,7 +23,7 @@ from kanso.research.diff import unified as unified_diff
 from kanso.research.driver import Outcome
 from kanso.research.driver import run as drive
 from kanso.research.keep import keep
-from kanso.research.lanes import DEFAULT_LANE, lane_dir, log_file
+from kanso.research.lanes import DEFAULT_LANE, lane_dir
 from kanso.research.loop import BASELINE, Setup, begin, card, end
 from kanso.research.records import active, cards_of, n_trials, runs_of
 from kanso.research.results import results_file, results_tsv, write_results
@@ -52,7 +52,6 @@ __all__ = [
     "keep",
     "lane_dir",
     "lane_names",
-    "log_file",
     "n_trials",
     "on_stall",
     "queued",

@@ -4,7 +4,7 @@ schema_version = 1
 # kanso never runs git: committing this workspace is yours to do; the rendered .gitignore lists what to leave out.
 
 [extensions]
-paths = ["kanso_ext"]              # workspace packages providing gates, objectives, loaders, custom data types (docs/extensions.md)
+paths = ["kanso_ext"]              # workspace packages providing loaders, constructs, custom data types, data adapters, execution clients (docs/extensions.md)
 
 [skills]
 # Where `kanso skills sync` links the packaged skills. Add your tool's path if missing.

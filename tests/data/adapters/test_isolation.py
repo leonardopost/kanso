@@ -61,7 +61,7 @@ def test_there_is_at_least_one_vendor_to_scan_for() -> None:
 
 
 def test_no_vendor_name_appears_outside_its_own_adapter_package() -> None:
-    """The scan D2 asks for: an endpoint, a field name or a symbology has exactly one home."""
+    """The anti-leak scan: an endpoint, a field name or a symbology has exactly one home."""
     patterns = {name: re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE) for name in vendors()}
     leaked = [
         f"{path.relative_to(PACKAGE)}: {name}"

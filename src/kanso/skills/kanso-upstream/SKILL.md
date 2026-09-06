@@ -9,7 +9,7 @@ metadata:
 # kanso-upstream
 
 ## Where is the framework?
-`kanso doctor --json` reports `install.mode`: `editable` (a local checkout at `install.path`) or `package` (installed from an index).
+`kanso doctor --json` carries an `install` check whose `detail` is `<mode> · <directory>`: `editable · /…/kanso/src/kanso` is a local checkout, `package · /…/site-packages/kanso` an install from an index.
 
 ## Path A — extension → framework (editable or a known checkout)
 1. `kanso ext show` → the workspace extensions and their kinds. Pick the one the operator named.

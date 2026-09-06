@@ -56,8 +56,13 @@ def emit(as_json: bool, work: Callable[[], Report]) -> None:
 
 
 def field(label: str, value: object) -> str:
-    """One line of the human layout: a short label, then the value."""
-    return f"{label:<{LABEL}}{value}"
+    """One line of the human layout: a short label, then the value.
+
+    A label as long as the column keeps one space rather than running into the value:
+    `kanso hyp show` labels each row with a hypothesis id, which may be forty characters,
+    and `instruments` is already eleven.
+    """
+    return f"{label:<{LABEL}}{value}" if len(label) < LABEL else f"{label} {value}"
 
 
 def indent(text: str, width: int = LABEL) -> str:

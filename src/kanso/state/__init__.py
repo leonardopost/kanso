@@ -16,6 +16,7 @@ from kanso.state.store import (
     Migration,
     StateStore,
     migrations,
+    usable,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "Migration",
     "StateStore",
     "migrations",
+    "usable",
 ]

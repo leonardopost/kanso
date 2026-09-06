@@ -51,7 +51,7 @@ from kanso.hyp import STRATEGY_FILE
 from kanso.research import driver as research_driver
 from kanso.research import lanes, records, scheduler
 from kanso.schemas import RunRecord, parse_duration
-from kanso.state import StateStore
+from kanso.state import StateStore, usable
 from kanso.workspace import LANE_ROOT, Workspace, find
 
 __all__ = [
@@ -112,8 +112,8 @@ GRACE_S: Final = 5.0
 
 CARDS_PER_TURN: Final = 1
 """How many cards a lane asks the driver for before it looks up. One, so that stopping
-the daemon costs at most one card and never waits out a whole run (D3 makes runs
-indefinite, and a shutdown cannot wait for one to end)."""
+the daemon costs at most one card and never waits out a whole run — a run is
+indefinite, and a shutdown cannot wait for one to end."""
 
 START_TIMEOUT_S: Final = 20.0
 STOP_TIMEOUT_S: Final = 20.0
@@ -347,6 +347,7 @@ def worker(ws: Workspace, lane: str) -> int:
     lane = lanes.check_lane(lane)
     _listen()
     with StateStore(ws.path("state.db")) as store:
+        usable(store, ws.path("state.db"))
         while not stopping():
             subject = claim(store, lane)
             if subject is None:
@@ -380,6 +381,7 @@ def monitor(ws: Workspace) -> int:
     interval = parse_duration(ws.config.monitor.interval, "monitor.interval").total_seconds()
     _listen()
     with StateStore(ws.path("state.db")) as store:
+        usable(store, ws.path("state.db"))
         while not stopping():
             try:
                 run_once(ws, store)
@@ -401,20 +403,29 @@ def claim(store: StateStore, lane: str) -> str | None:
 
 
 def main(argv: Sequence[str]) -> int:
-    """`python -m kanso.research <serve|lane|monitor> <workspace> [lane]`."""
+    """`python -m kanso.research <serve|lane|monitor> <workspace> [lane]`.
+
+    The schema is checked here, before the supervisor takes the lock or spawns anything,
+    because this is the entry point a service unit starts and the supervisor itself never
+    opens the store. Checking only where a store is opened for work would let a unit come
+    up, spawn lanes that each refuse, and restart them for as long as the unit is enabled;
+    the operator would see a crash loop rather than the one sentence that explains it.
+    """
     if len(argv) < 2:
         raise PreconditionError(
             f"usage: python -m {MODULE} <{SERVE}|{LANE}|{MONITOR}> <workspace> [lane]"
         )
     command, root, *rest = argv
+    if command not in (SERVE, LANE, MONITOR):
+        raise PreconditionError(f"{command!r} is not one of {SERVE}, {LANE}, {MONITOR}")
     ws = find(Path(root))
+    with StateStore(ws.path("state.db")) as opened:
+        usable(opened, ws.path("state.db"))
     if command == SERVE:
         return serve(ws)
     if command == LANE:
         return worker(ws, rest[0])
-    if command == MONITOR:
-        return monitor(ws)
-    raise PreconditionError(f"{command!r} is not one of {SERVE}, {LANE}, {MONITOR}")
+    return monitor(ws)
 
 
 # --- the small mechanics -----------------------------------------------------

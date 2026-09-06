@@ -5,6 +5,9 @@ attached and optimises the relative objective. A modifier is an engine actor, so
 subclasses KansoModifierConfig, not KansoConfig. `evaluate` returns the Decision for the construct:
 filter → allow: bool · overlay → scale: float in [0, 1], hedges: [Hedge(instrument, qty)] · exit → exit: bool
 Read data time from `ctx.ts_event`; never a wall clock.
+The construct's classified `params` are passed to Config as keyword arguments, so declare a
+field for each: a `filter` classified `scope: time` needs `scope: str = "time"` below, or the
+baseline card refuses with `Config does not take these parameters` (docs/constructs.md).
 """
 
 from kanso.nautilus.strategy import Decision, KansoModifier, KansoModifierConfig

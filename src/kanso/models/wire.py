@@ -69,12 +69,17 @@ def post(
 
     `transport` exists so the suite can put a recorded exchange behind the same code the
     network path uses; nothing else passes it.
+
+    A `base_url` the client cannot even parse is caught here with the rest: `InvalidURL`
+    is not an `HTTPError`, so without it the placeholder the register template ships
+    (`http://localhost:<port>/v1`) reaches an operator as a traceback and exit 1 rather
+    than as the model that did not answer, which is what it is.
     """
     timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
     try:
         with httpx.Client(transport=transport, timeout=timeout) as client:
             response = client.post(url, headers=dict(headers), json=dict(body))
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         raise PreconditionError(
             f"{spec.id}: the request did not complete ({type(exc).__name__})",
             remedy="check the network and the model's base_url",

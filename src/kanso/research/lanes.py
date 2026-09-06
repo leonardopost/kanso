@@ -13,8 +13,10 @@ reader either sees the previous bytes or the new ones and never a half-written f
 the hypothesis's own `strategy.py` is rewritten after every keep while an agent may be
 reading it.
 
-The run's log lives *beside* the lane directory as `<hyp>-<tag>.jsonl`, so ending a run
-removes the directory without removing the record of what happened in it.
+Ending a run removes the lane directory and nothing else. What happened in it is already
+elsewhere: every card, its bytes and its verdict are in the state store, `results.tsv` is
+rendered from there, and the daemon's own stream goes to `runs/daemon.log`. A lane writes
+no log of its own, which is why the directory is disposable.
 """
 
 from __future__ import annotations
@@ -46,7 +48,6 @@ __all__ = [
     "STRATEGY_FILE",
     "check_lane",
     "lane_dir",
-    "log_file",
     "prepare",
     "remove",
     "restore",
@@ -73,11 +74,6 @@ def check_lane(lane: str) -> str:
 def lane_dir(ws: Workspace, lane: str, hyp_id: str) -> Path:
     """The directory this lane works this hypothesis in: `runs/<lane>/<hyp>/`."""
     return ws.path(LANE_ROOT, check_lane(lane), hyp_id)
-
-
-def log_file(ws: Workspace, lane: str, hyp_id: str, tag: str) -> Path:
-    """The run's log, beside the lane directory rather than in it, so `end` keeps it."""
-    return ws.path(LANE_ROOT, check_lane(lane), f"{hyp_id}-{tag}.jsonl")
 
 
 def prepare(directory: Path) -> Path:

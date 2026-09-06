@@ -27,6 +27,7 @@ from kanso.cli import cert as cert_commands
 from kanso.cli import classify as classify_commands
 from kanso.cli import data as data_commands
 from kanso.cli import doctor as diagnosis
+from kanso.cli import ext as ext_commands
 from kanso.cli import hyp as hyp_commands
 from kanso.cli import inbox as inbox_commands
 from kanso.cli import models as models_commands
@@ -74,6 +75,7 @@ app.add_typer(strat_commands.app, name="strat")
 app.add_typer(portfolio_commands.app, name="portfolio")
 app.add_typer(replay_commands.app, name="replay")
 app.add_typer(monitor_commands.app, name="monitor")
+app.add_typer(ext_commands.app, name="ext")
 
 # Four commands are registered rather than declared here: their bodies live beside the
 # other command modules, and the application is where the command line is assembled.
