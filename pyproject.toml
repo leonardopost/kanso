@@ -1,6 +1,6 @@
 [project]
 name = "kanso"
-version = "0.1.0"
+version = "0.1.1"
 description = "Minimal, agent-first quant workbench: hypotheses → infinite autoresearch → certification → strategies → portfolio, on NautilusTrader."
 readme = "README.md"
 license = "Apache-2.0"

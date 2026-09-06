@@ -335,7 +335,8 @@ f729a538831e3ea8f80c46b68c5993ed4662c168bd9c56541cdf570619b6f6e9
 which is the `f729a53` in `kanso hyp show`, `research show`, the certificate's filename and
 the certified source beside it. Editing it by hand does not change what a card evaluates —
 a card evaluates the **lane** copy, `runs/<lane>/<hyp>/strategy.py` — and the next keep
-overwrites your edit without comment. Nothing in 0.1.0 warns you that it diverged; if you
+overwrites your edit without comment. `kanso doctor`'s `best` check warns that it diverged,
+naming both shas; it never fails, because editing that file is how you prepare the next line. If you
 want to start from your own code, that is what `kanso research begin --from-workspace` is
 for, and it clears `best` so the history says what happened.
 
