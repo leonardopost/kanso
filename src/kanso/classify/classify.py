@@ -29,6 +29,11 @@ like any other and refused when a run is begun, naming the seam that would make 
 runnable. What it does not get is a stub: the file kanso knows how to write is not the
 file that construct would need.
 
+**Another construct is another question**, so a classification that changes it clears
+the hypothesis's `best`. That is the registry's rule, applied by the re-pin this step
+ends with, and the same rule a hand-edited `hyp add` meets — including the edit that
+strips the classification to make the hypothesis classifiable again.
+
 The stub it does write replaces the hypothesis's `strategy.py` only while that file is
 still one kanso rendered — compared by content address against every stub it could have
 written for this hypothesis — so a classification never overwrites work.
@@ -61,9 +66,8 @@ from kanso.hyp import (
     stub,
     validate,
 )
-from kanso.hyp.registry import BEST_CLEARED, CLASSIFIED, DRAFT
+from kanso.hyp.registry import CLASSIFIED, DRAFT
 from kanso.models import CallInputs, route
-from kanso.research import records
 from kanso.research.lanes import DEFAULT_LANE
 from kanso.schemas import (
     ConstraintRef,
@@ -143,7 +147,6 @@ def classify(
     _replace(path, document)
     pin(store, updated, document.encode("utf-8"))
     set_status(store, hyp_id, CLASSIFIED)
-    _clear_best(store, registration, chosen)
     _render_stub(ws, updated, chosen, computed["certified"])
     return updated
 
@@ -401,18 +404,6 @@ def _replace(path: Path, text: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(text, encoding="utf-8")
     temporary.replace(path)
-
-
-def _clear_best(store: StateStore, registration: Registration, chosen: Classification) -> None:
-    """A change of construct makes every earlier card incomparable, so `best` goes."""
-    if registration.construct is None or registration.construct == chosen.construct.id:
-        return
-    records.unset_best(store, registration.hyp_id)
-    store.event(
-        BEST_CLEARED,
-        registration.hyp_id,
-        {"reason": f"construct changed from {registration.construct} to {chosen.construct.id}"},
-    )
 
 
 def _render_stub(

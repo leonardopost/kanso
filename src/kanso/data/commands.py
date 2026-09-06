@@ -843,14 +843,15 @@ def _refuse_refresh(ws: Workspace, store: StateStore, ids: Sequence[str]) -> Non
 
 
 def held_instruments(ws: Workspace, instrument_id: str | None = None) -> list[Resolved]:
-    """The definitions the catalog holds, newest resolution per id, optionally one.
+    """The definition a run would use for each id the catalog holds, optionally one.
 
     The catalog is the registry of record, so this reads it rather than the cache; the
-    cache's own entries are what `doctor` reports on.
+    cache's own entries are what `doctor` reports on. The store keeps every dated
+    definition of an instrument and a run takes one, so one is rendered — the newest-dated,
+    which is the one a backtest is priced under — rather than every dated copy.
     """
     found = [
-        Resolved(str(engine_fields(definition)["id"]), definition)
-        for definition in reference.read_store(ws).values()
+        Resolved(name, definition) for name, definition in reference.current_definitions(ws).items()
     ]
     picked = sorted(found, key=lambda item: item.id)
     if instrument_id is None:

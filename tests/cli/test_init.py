@@ -55,6 +55,19 @@ def test_init_scaffolds_a_fresh_directory(runner: CliRunner, fresh: Path) -> Non
     assert str(fresh) in result.stdout
 
 
+def test_init_writes_the_envelope_but_keeps_it_out_of_git(runner: CliRunner, fresh: Path) -> None:
+    """`init` measures the host into `envelope.yaml`, and the `.gitignore` excludes it, so a
+    clone of the repository detects its own host rather than inheriting a foreign measurement.
+    """
+    assert run(runner, "init", fresh).exit_code == Exit.OK
+
+    assert (fresh / "envelope.yaml").is_file()
+    present = {
+        line.strip() for line in (fresh / ".gitignore").read_text(encoding="utf-8").splitlines()
+    }
+    assert "envelope.yaml" in present
+
+
 def test_init_reports_the_workspace_the_skills_and_the_envelope(
     runner: CliRunner, fresh: Path
 ) -> None:

@@ -12,7 +12,7 @@ import json
 
 from kanso.data import catalog, instruments, loader, manifest, snapshot
 
-from .conftest import AAPL, FakeWorkspace, Ref, bars, equity
+from .conftest import AAPL, FakeWorkspace, Ref, bars, define, equity
 
 
 def test_only_the_store_writes_the_manifest_a_snapshot_pins(ws: FakeWorkspace) -> None:
@@ -31,6 +31,7 @@ def test_only_the_store_writes_the_manifest_a_snapshot_pins(ws: FakeWorkspace) -
     held = manifest.manifests(ws)
     assert [item.checksum for item in held.values()] == [written.manifest.checksum]
 
+    define(ws)
     frozen = snapshot.freeze(ws)
     assert written.manifest.checksum in frozen.checksums
     assert from_loader.checksum not in frozen.checksums

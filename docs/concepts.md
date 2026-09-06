@@ -98,7 +98,7 @@ an attached construct should be. Here is one, on a filter attached to the demo s
 $ kanso research begin demo_filter
 lane dir   /…/runs/op/demo_filter
 run        f922aba53c5d48f3a3f40b45f850fb72 · 20260906-1 · lane op
-snapshot   52aca7b6664cdd1f235cc2ae3bd1843b2ac6240ab365a340deefdd80b92a1b94
+snapshot   4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062
 baseline   keep · metric 0.000000 · 4.2s · budget 60s
 next       edit /…/runs/op/demo_filter/strategy.py, then `kanso research card demo_filter`
 ```
@@ -133,24 +133,41 @@ A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.m
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
 before every card, and the first two are compared against the blobs the run pinned.
 
+A lane writes no log of its own. What a run did — every card, its metric, its verdict and
+each change of status — is recorded in `state.db`, as the card rows and the `events` table
+every state change appends to, and read back with `kanso research show` (a card's source,
+or the diff between two), `kanso research status` and `results.tsv`. The daemon's
+`runs/daemon.log` is one shared stream for whatever the supervisor and its lanes print, not
+a per-run record; `research end` removes the lane directory and loses nothing, because
+nothing in it was the record.
+
 ## Snapshot
 
 An immutable, content-addressed set of catalog datasets, plus the checksum of the resolved
 instrument definitions. `research begin` pins the newest snapshot that covers the
-hypothesis's universe and data requirements over its research **and** certification windows,
-and refuses to start when none does.
+hypothesis's universe and data requirements over its research **and** certification windows
+and whose instrument checksum is the store's own. It refuses to start when none covers, and
+refuses by name — the snapshot, what it pins, what the store holds — when the definitions
+have moved since the newest covering snapshot was taken.
 
 ```
+$ kanso data instruments resolve --as-of 2024-01-02
+as of      2024-01-02
+           DEMO.SIM → DEMO.SIM
+resolved   1 instrument(s)
 $ kanso data snapshot
-snapshot   52aca7b6664cdd1f235cc2ae3bd1843b2ac6240ab365a340deefdd80b92a1b94
+snapshot   4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062
 datasets   1 · reproducible
-instrument e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+instrument a2b290ce0b0542b34d8cd512bd338c72615c35201b4e0f5e13d7d8e9fac9b9b1
 ```
 
 A dataset a snapshot pins is immutable: an overlapping write is refused, and `data backfill`
 and `data sync` write successor datasets rather than editing one. The instrument checksum
 is in the snapshot for the same reason as the data — a tick size reassigned next year must
-not silently rewrite a card that was measured under the old one.
+not silently rewrite a card that was measured under the old one — and it is read back where
+a run is pinned. The store is resolved before it is frozen: a snapshot over instrument data
+is refused while the store holds no definition, since the checksum of nothing pins nothing a
+run could use.
 
 ## Card
 
@@ -306,7 +323,7 @@ gates      5 judged · 5 pass · 0 fail · 0 skipped
            pass  cost_stress           metric_a=5.146082462396991, metric_b=0.14229404757397998, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.38450757237500577, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204389, 12.394500908889786]
 objective  net_edge_bps 10.149871 ± 0.603055
-pins       engine 1.231.0 · plan 1 · snapshot 52aca7b6664cdd1f235cc2ae3bd1843b2ac6240ab365a340deefdd80b92a1b94 · trial 4
+pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 written    /…/certificates/demo_mr/f729a53-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
 next       kanso cert show demo_mr
@@ -403,6 +420,13 @@ above nothing was deployed by hand: `cert run` passed, and paper had the version
 **Promotion is the one thing kanso will not do by itself.** Everything else on this page
 happens without a person: classification, research, certification, composition, paper
 deployment, demotion, halting a stage. Moving a version onto real capital does not.
+
+What moves a paper version to `promotable` is one gate, `paper_forward`, and it is strict
+both ways: the version must have been on the stage for the longer of the plan's minimum
+duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
+objective it realised must fall **inside** the ninety-percent interval composition
+measured, above the band as much a fail as below it, because a stage that out-performs its
+certification is not reproducing what was certified. `docs/cli.md` has the pass.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

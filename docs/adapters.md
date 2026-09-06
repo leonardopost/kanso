@@ -389,9 +389,10 @@ polling rather than by an order stream, which is recorded there too.
 
 A **data adapter** is a package exposing a module-level `ADAPTER` with `id`, `kind`,
 `capabilities`, `credentials`, and the methods the registry calls: `client(ws)`,
-`configured(ws)`, `credential_origins(ws)`, `quota(ws)`, `loaders(ws)`, `provider(ws)` and
-`survey(ws)`. A workspace extension declares its ids in `PROVIDES["adapters"]` and exposes
-them in an `ADAPTERS` mapping, exactly as it declares loaders.
+`configured(ws)`, `credential_origins(ws)`, `quota(ws)`, `loaders(ws)`, `provider(ws)` — a
+`kanso.data.instruments.InstrumentProvider`, or `None` — and `survey(ws)`. A workspace
+extension declares its ids in `PROVIDES["adapters"]` and exposes them in an `ADAPTERS`
+mapping, exactly as it declares loaders.
 
 A **broker adapter** is a package under `nautilus/adapters/` exposing a module-level `BROKER`
 with `id`, `kind`, `exec_clients` (each an `ExecutionClientSpec` declaring `capital` and

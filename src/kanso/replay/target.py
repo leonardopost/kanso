@@ -27,11 +27,11 @@ from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError, ValidationError
-from kanso.hyp import HYPOTHESIS_FILE
+from kanso.hyp import HYPOTHESIS_FILE, hypothesis_file
 from kanso.hyp import show as registration_of
 from kanso.nautilus.backtest import RunRequest
 from kanso.research import records
-from kanso.schemas import Hypothesis, StrategyFile, VenueModel, parse_yaml
+from kanso.schemas import Hypothesis, StrategyFile, VenueModel, load_yaml, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from datetime import date
@@ -124,6 +124,13 @@ def _of_strategy(ws: Workspace, store: StateStore, strategy_id: str, version: in
     the thing that will trade. Reading it checks every file against the digest the manifest
     records, so a version whose implementation has been edited is refused here too rather
     than replayed under the label of the version it diverged from.
+
+    Everything a strategy version runs comes from files — `strategy.yaml`, the manifest and
+    the sources — except the traded universe and the forward window, which a version does
+    not carry and its hypothesis does. Those are read from the pinned hypothesis when the
+    registry holds it, and from the committed `hypotheses/<id>/hypothesis.yaml` when it does
+    not, so a fresh clone whose `state.db` never travelled replays a committed version from
+    its files without re-registering the hypothesis first.
     """
     file = strategy.require(ws, strategy_id)
     chosen = HostRef.of(file, version).version
@@ -196,23 +203,41 @@ def _of_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, sha: str | Non
 
 
 def _hypothesis(ws: Workspace, store: StateStore, hyp_id: str) -> Hypothesis:
-    """The hypothesis a composed version was built from, as it was registered.
+    """The hypothesis a composed version was built from: the pinned bytes, or the file.
 
-    The pinned bytes, not the workspace file: a version was composed from what the
-    hypothesis said when it was certified, and an edit since then belongs to the next
-    version rather than to this one.
+    The pinned bytes are preferred: a version was composed from what the hypothesis said
+    when it was certified, and an edit since then belongs to the next version rather than to
+    this one. When the registry holds no pin — a clone whose `state.db` never travelled has
+    no registry at all — the committed `hypotheses/<id>/hypothesis.yaml` is read instead, so
+    a version's universe and forward window are recovered from the file that composed it and
+    a committed, certified version replays without re-registering the hypothesis first.
     """
-    registration = cast("Registration", registration_of(ws, store, hyp_id))
-    if registration.hypothesis_sha is None:  # pragma: no cover - a version implies a pin
+    registration = _registration_or_none(ws, store, hyp_id)
+    if registration is not None and registration.hypothesis_sha is not None:
+        return parse_yaml(
+            Hypothesis,
+            store.get_blob(registration.hypothesis_sha).decode("utf-8"),
+            HYPOTHESIS_FILE,
+        )
+    path = hypothesis_file(ws, hyp_id)
+    if not path.is_file():
         raise PreconditionError(
-            f"{hyp_id} has no pinned hypothesis, so its version cannot be replayed",
+            f"{hyp_id} is neither registered nor present at {path}, so the version's "
+            "universe and forward window cannot be recovered to replay it",
             remedy=f"run `kanso hyp add hypotheses/{hyp_id}/hypothesis.yaml`",
         )
-    return parse_yaml(
-        Hypothesis,
-        store.get_blob(registration.hypothesis_sha).decode("utf-8"),
-        HYPOTHESIS_FILE,
-    )
+    return load_yaml(Hypothesis, path)
+
+
+def _registration_or_none(ws: Workspace, store: StateStore, hyp_id: str) -> Registration | None:
+    """This hypothesis's registration, or `None` when the registry does not hold it.
+
+    Listed rather than fetched by id, because fetching one by id refuses an id the registry
+    does not know, and a clone's empty registry is a state to read past rather than to fail
+    on.
+    """
+    registrations = cast("list[Registration]", registration_of(ws, store))
+    return next((one for one in registrations if one.hyp_id == hyp_id), None)
 
 
 def _host(ws: Workspace, host_id: str | None) -> StrategyFile | None:

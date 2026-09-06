@@ -14,7 +14,7 @@ targets = [".claude/skills", ".cursor/skills", ".codex/skills"]
 capital = 100000          # default backtest starting balance for cards/cert/compose; hypothesis.yaml `capital` overrides
 broker = "alpaca"         # whose venue model (account type, currency, costs) research inherits; portfolio.yaml venues.<MIC> overrides per venue
 account = "margin"        # margin | cash. margin with default_leverage = risk_limits.max_leverage, so max_leverage 1 still forbids borrowing but allows shorts
-currency = "USD"          # account currency; a universe whose instruments span more than one is refused at `kanso hyp validate`
+currency = "USD"          # account currency of every venue the broker does not override; a universe whose venues carry more than one account currency is refused at `kanso hyp validate`
 return_period = "1d"      # the period a return is measured over, for every objective and drawdown
 annualisation = "auto"    # observed periods per year in the window; set a number to force one
 align_every = 10          # alignment check cadence (cards)
@@ -27,6 +27,10 @@ baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s 
 [certify]
 n_fail = 3                # consecutive certification failures before `failed`
 
+# [data]                  # commented out whole, so a `[data]` table you append (docs/adapters.md) is not declared twice
+# reference = "none"      # the adapter `kanso data instruments resolve` resolves through; none = manual entries and the cache only
+# adjusted = false        # whether loaded prices are vendor-adjusted; certification refuses an adjusted series as unreproducible
+
 [env]
 # Overrides for the lane plan; leave unset to use the defaults (docs/concepts.md, envelope).
 # reserved_cores = 2
@@ -38,3 +42,5 @@ interval = "5m"
 
 [webhook]
 # url = "https://<any endpoint accepting a JSON POST>"   # per escalation; env KANSO_WEBHOOK_URL is the fallback
+
+# [adapters.<id>]         # one table per adapter, validated by that adapter with its own keys (docs/adapters.md)

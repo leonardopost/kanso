@@ -5,7 +5,7 @@ stages:
   paper:
     exec: sandbox                  # sandbox (simulated fills) | a broker paper id. `kanso data adapters` lists what is configured.
     data: replay                   # replay (catalog from forward.start) | a live data adapter id. A broker exec id requires a live feed and speed 1.
-    speed: 1                       # replay speed; 0 = as fast as possible (tests)
+    speed: 1                       # replay speed, 0 = as fast as possible; a wall-clock exec needs 1. In this version a stage node replays unpaced whatever this says (only `kanso replay run --speed` paces)
     capital: 100000                # stage capital; limits.*_pct are percentages of this
     kill_switch: false             # true = cancel, flatten, halt; set by the operator or by daily_loss_kill; reset by hand
     strategies: []                 # [{id, version, capital, joined_at}] — appended automatically on certification
@@ -25,5 +25,5 @@ limits:
 # venues:                          # optional. Account type, currency and costs are inherited from the broker behind the
 #   XNAS:                          # stage's exec client (and from kanso.toml research.broker for research). Override per venue.
 #     account: margin              # margin | cash
-#     currency: USD
-#     costs: {commission_bps: 0, slippage_bps: 1.0, spread: quotes}
+#     currency: USD                # account currency; a universe spanning venues with different ones is refused
+#     costs: {commission_bps: 0, slippage_bps: 1.0, spread: quotes}   # spread: quotes needs `quote` in data_requirements; a bar-only hypothesis needs `spread: fixed_bps, fixed_bps: <width>` here or on the hypothesis

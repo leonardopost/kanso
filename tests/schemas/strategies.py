@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from hypothesis import strategies as st
 
+from kanso.replay.record import Session
 from kanso.schemas import (
     Applies,
     AttachedRef,
@@ -598,4 +599,25 @@ def criteria_items(draw: st.DrawFn) -> CriteriaItem:
         params=params,
         ranges=ranges,
         impl=impl,
+    )
+
+
+@st.composite
+def sessions(draw: st.DrawFn) -> Session:
+    """A session record as a replay, a parity comparison or a stage node writes one."""
+    start = draw(st.dates(min_value=date(2000, 1, 1), max_value=date(2030, 1, 1)))
+    return Session(
+        session_id=draw(IDENTIFIERS),
+        mode=draw(st.sampled_from(["node", "engine", "paper", "live"])),
+        target=draw(IDENTIFIERS),
+        instruments=draw(st.lists(IDENTIFIERS, max_size=3)),
+        from_=start,
+        to=draw(st.dates(min_value=start, max_value=date(2030, 1, 1))),
+        speed=draw(NON_NEGATIVE),
+        exec_=draw(IDENTIFIERS),
+        released=draw(st.integers(0, 10**9)),
+        intents=draw(st.integers(0, 10**9)),
+        clock_ns=draw(st.none() | st.integers(0, 2**63 - 1)),
+        started_at=draw(TIMESTAMPS),
+        ended_at=draw(st.none() | TIMESTAMPS),
     )

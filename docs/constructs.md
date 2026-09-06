@@ -31,7 +31,7 @@ not the refusal are elided as `…`.*
 |---|---|---|---|---|
 | `sleeve` | A self-contained strategy — signal, entries, exits, sizing — with its own book and P&L attribution. Becomes a new strategy in the portfolio. | nothing | absolute | **runnable** |
 | `filter` | A conditioning rule that gates a host's entries: regime, trend, volatility, calendar or liquidity conditions (`scope: time`), or which instruments the host may trade (`scope: instrument`). | a sleeve | relative | **runnable** |
-| `overlay` | An exposure modification layered on a host without changing its signal: scaling (volatility targeting, drawdown control) and/or hedge legs (beta, tail, currency, delta). | a sleeve, or the portfolio | relative | **runnable** on a sleeve; the portfolio host is a seam |
+| `overlay` | An exposure modification layered on a host without changing its signal: scaling (volatility targeting, drawdown control) and/or hedge legs (beta, tail, currency, delta). | a sleeve (`host: portfolio` is refused at registration; the seam is under `allocation`) | relative | **runnable** on a sleeve; the portfolio host is a seam |
 | `exit` | Exit logic added to or replacing a host's: stops, targets, time exits, trailing rules. | a sleeve | relative | **runnable** |
 | `alpha` | A return forecast that does not trade by itself; combined with other alphas inside an alpha-combining sleeve. | a sleeve | absolute | classification only |
 | `execution` | How a host's orders are worked: order types, passive or aggressive tactics, slicing — implementation shortfall. | a sleeve | relative | classification only |

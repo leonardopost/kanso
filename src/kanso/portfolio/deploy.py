@@ -139,7 +139,7 @@ def deploy(ws: Workspace, store: StateStore, stage: str) -> Deployment:
     check_execution_client(
         stage, spec, data_client=configured.data, speed=configured.speed, approved=True
     )
-    chosen = _candidates(ws, stage)
+    chosen = _candidates(ws, store, stage)
     _check_pins(chosen)
     chosen = tuple(replace(one, target=_target(ws, store, one)) for one in chosen)
     _check_data(ws, chosen)
@@ -221,30 +221,54 @@ class _Candidate:
         return self.target
 
 
-def _candidates(ws: Workspace, stage: str) -> tuple[_Candidate, ...]:
+def _candidates(ws: Workspace, store: StateStore, stage: str) -> tuple[_Candidate, ...]:
     """Every version this stage will hold after the deployment, and what each replaces.
 
     The paper stage admits composition's output: the newest composed version of each
     strategy, replacing whatever that strategy already had on paper. The live stage admits
     nothing on its own — a version reaches it through `promote` and no other way — so
     deploying it renders and restarts what promotion already moved there.
+
+    A version the state record does not know is never a candidate, even when `strategy.yaml`
+    marks it composed or deployed. What a stage holds is what a deployment wrote into the
+    store, and a version with no `strategy_versions` row was never composed into this
+    workspace's record — the state of a fresh clone whose `state.db` did not travel. Reading
+    only versions the record knows is what makes `deploy` agree with `portfolio show`, which
+    reads the same record: neither deploys nor reports as deployed a version the record
+    forgot, rather than one command trusting the file while the other trusts the record.
     """
     found: list[_Candidate] = []
     for file in strategies.strategies(ws):
+        recorded = _recorded_versions(store, file.id)
         if stage == LIVE:
             live = file.deployed(LIVE)
-            if live is not None:
+            if live is not None and live.version in recorded:
                 found.append(_Candidate(file, live, None, LIVE))
             continue
-        current = next((v for v in file.versions if v.state in PAPER_STATES), None)
+        current = next(
+            (v for v in file.versions if v.state in PAPER_STATES and v.version in recorded), None
+        )
         composed = next(
-            (v for v in reversed(file.versions) if v.state == strategies.COMPOSED), None
+            (
+                v
+                for v in reversed(file.versions)
+                if v.state == strategies.COMPOSED and v.version in recorded
+            ),
+            None,
         )
         if composed is not None and (current is None or composed.version > current.version):
             found.append(_Candidate(file, composed, current, PAPER))
         elif current is not None:
             found.append(_Candidate(file, current, None, current.state))
     return tuple(found)
+
+
+def _recorded_versions(store: StateStore, strategy_id: str) -> frozenset[int]:
+    """Which versions of a strategy the state record knows, whatever stage each is on."""
+    rows = store.connection.execute(
+        "SELECT version FROM strategy_versions WHERE strategy_id = ?", (strategy_id,)
+    ).fetchall()
+    return frozenset(int(row[0]) for row in rows)
 
 
 def _target(ws: Workspace, store: StateStore, candidate: _Candidate) -> Target:

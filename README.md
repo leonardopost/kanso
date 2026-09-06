@@ -152,6 +152,7 @@ kanso init demo --demo
 cd demo
 kanso doctor
 kanso data load --loader synthetic --spec demo.yaml
+kanso data instruments resolve --as-of 2024-01-02
 kanso data snapshot
 kanso hyp add hypotheses/demo_mr/hypothesis.yaml
 kanso classify demo_mr
@@ -206,7 +207,7 @@ gates      5 judged · 5 pass · 0 fail · 0 skipped
            pass  cost_stress           metric_a=5.146082462396991, metric_b=0.14229404757397998, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.38450757237500577, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204389, 12.394500908889786]
 objective  net_edge_bps 10.149871 ± 0.603055
-pins       engine 1.231.0 · plan 1 · snapshot 52aca7b6664cdd1f235cc2ae3bd1843b2ac6240ab365a340deefdd80b92a1b94 · trial 4
+pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 
 $ kanso portfolio show
 paper      up · exec sandbox (simulated) · data replay · speed 1 · capital 100,000
@@ -265,8 +266,9 @@ instruments by hand. Keys live only in environment variables, read from the giti
   stage; the execution client polls for fills rather than reading an order stream; and
   several constructs in the catalogue are declared but not runnable.
 
-`docs/backlog.md` is the full list — thirty-four entries, twenty-five of them open, what the
-build did about each and what each would need. It is worth reading before you trust a number.
+`docs/backlog.md` is the full list — every entry with what the build did about it and what
+each would need, the closed ones struck through beside what closed them. It is worth reading
+before you trust a number.
 
 ## Maintaining the framework while using it
 

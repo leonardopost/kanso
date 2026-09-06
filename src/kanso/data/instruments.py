@@ -24,11 +24,19 @@ naming the id.
 correction of a definition, not a note about one, so it reaches the constructor. Tick and
 lot come from the dated convention table, never from a vendor.
 
-What is resolved is written to the catalog's instrument store, which is the registry of
-record, and the cache is written back to the workspace file, touching only the fields kanso
-owns — `nautilus_id`, `asset_class`, `resolved` and `sources` — and leaving `override`,
-`attributes`, `corporate_actions` and `manual` exactly as the operator wrote them. The file
-is rewritten only when a resolution actually changed it.
+What is resolved is recorded, when the caller asks for it to be: the definitions go to the
+catalog's instrument store, which is the registry of record, and the cache is written back
+to the workspace file, touching only the fields kanso owns — `nautilus_id`, `asset_class`,
+`resolved` and `sources` — and leaving `override`, `attributes`, `corporate_actions` and
+`manual` exactly as the operator wrote them. The file is rewritten only when a resolution
+actually changed it. A caller that only asks the question — validation — records nothing.
+
+The store keeps every dated definition of an instrument, and a date holds one. A
+definition the store already has is left alone; one dated the same as a held definition
+of that instrument but differing from it is a correction, and a correction is explicit: a
+refresh replaces what is held, and a plain resolution refuses by name rather than moving
+the registry of record under whatever was pinned to it. A definition dated otherwise is
+added beside the held ones, so a run pinned to an earlier date still reproduces.
 
 NautilusTrader facts this module relies on (nautilus_trader 1.231.0):
 
@@ -44,6 +52,15 @@ NautilusTrader facts this module relies on (nautilus_trader 1.231.0):
   asked for.
 * `ParquetDataCatalog.write_data([instrument])` stores a definition and `instruments()`
   reads it back unchanged, which is what makes a content address a usable cache key.
+* The catalog files one definition per instrument per `ts_init`, and `write_data` skips a
+  file whose name already exists — with a line on stdout, no error and no return value.
+  Replacing a same-dated definition is therefore `delete_data_range` over that instant
+  first, and every write here is read back: a definition the store did not take is a
+  failure, never a printed line. A batch handed to `write_data` must be non-decreasing in
+  `ts_init` or the engine raises, so a batch is sorted before it is written.
+* `instruments()` lists definitions in ascending `ts_init`, so a reader that keys them by
+  id keeps the newest-dated one, which is what a backtest runs against; `current_definitions`
+  makes that choice explicit rather than leaving it to iteration order.
 * Every instrument class exposes `to_dict`, a canonical field map of plain scalars, which
   is what is content-addressed.
 * The engine's own `InstrumentProvider` is a different interface: it takes an already
@@ -62,7 +79,7 @@ from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from kanso.data import conventions
-from kanso.errors import ValidationError
+from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.schemas import InstrumentEntry, InstrumentsFile, Resolved, load_yaml, write_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -619,18 +636,98 @@ def read_store(ws: Workspace) -> dict[str, object]:
     return {definition_checksum(item): item for item in held}
 
 
-def write_store(ws: Workspace, instruments: Iterable[object]) -> None:
-    """Write definitions to the catalog, which is the registry of record."""
+def current_definitions(ws: Workspace) -> dict[str, object]:
+    """The one definition per instrument a run reads, keyed by the qualified id.
+
+    The store keeps every dated definition of an instrument and a backtest takes one per
+    id: the engine lists definitions in ascending `ts_init` and the runner keys them by
+    id, so the newest-dated definition is the one a run is priced under. This is that
+    choice made explicit — the newest `ts_init` wins, the content address breaking a tie —
+    so what `data instruments show` renders is what a run would use.
+    """
+    chosen: dict[str, object] = {}
+    ranking: dict[str, tuple[int, str]] = {}
+    for held in _catalog(ws).instruments():
+        name, instant = _dated_key(held)
+        rank = (instant, definition_checksum(held))
+        if name not in ranking or rank > ranking[name]:
+            ranking[name] = rank
+            chosen[name] = held
+    return chosen
+
+
+def write_store(ws: Workspace, instruments: Iterable[object], *, replace: bool = False) -> None:
+    """Make the catalog, the registry of record, hold these definitions.
+
+    A definition the store already holds is left alone. One dated the same as a held
+    definition of the same instrument is a correction of it rather than a second one —
+    what an instrument was on a date is one fact — so it takes the held one's place, and
+    only when `replace` says so: a correction the caller did not ask for is refused by
+    name, and the store is left as it was. Any other definition is added beside what is
+    held, so a run pinned to an earlier date still reproduces.
+
+    The engine skips a write whose file already exists and says so only on stdout, so the
+    same-dated file is removed before the write and the store is read back afterwards: a
+    definition it did not take is a failure here, never a printed line.
+    """
     fresh = list(instruments)
-    if fresh:
-        _catalog(ws).write_data(fresh)
+    if not fresh:
+        return
+    catalog = _catalog(ws)
+    held: list[Any] = list(catalog.instruments())
+    addresses = {definition_checksum(item) for item in held}
+    dated = {_dated_key(item): item for item in held}
+    wanted = [item for item in fresh if definition_checksum(item) not in addresses]
+    conflicts = [item for item in wanted if _dated_key(item) in dated]
+    if conflicts and not replace:
+        raise PreconditionError(
+            "; ".join(_conflict(item, dated[_dated_key(item)]) for item in conflicts),
+            remedy=(
+                "pass --refresh to `kanso data instruments resolve` to replace what the store "
+                "holds, or resolve as of another date"
+            ),
+        )
+    for item in conflicts:
+        name, instant = _dated_key(item)
+        catalog.delete_data_range(type(item), name, instant, instant)
+    if wanted:
+        catalog.write_data(sorted(wanted, key=lambda item: _dated_key(item)[1]))
+    taken = {definition_checksum(item) for item in catalog.instruments()}
+    skipped = sorted(
+        _dated_key(item)[0] for item in wanted if definition_checksum(item) not in taken
+    )
+    if skipped:
+        raise KansoError(
+            f"the instrument store did not take the definition of {', '.join(skipped)}: the "
+            "engine skipped the write",
+            remedy="inspect catalog/data/ for a file already dated as this definition is",
+        )
+
+
+def _dated_key(instrument: Any) -> tuple[str, int]:
+    """What a date holds one of: the qualified id and the instant it was resolved as of."""
+    return str(instrument.id), int(instrument.ts_init)
+
+
+def _conflict(fresh: Any, held: Any) -> str:
+    name, instant = _dated_key(fresh)
+    return (
+        f"{name}: the store already holds a definition as of {_as_date(instant)} "
+        f"({definition_checksum(held)[:12]}), and this resolution would put "
+        f"{definition_checksum(fresh)[:12]} in its place"
+    )
 
 
 # --- resolution ---------------------------------------------------------------
 
 
 def resolve_universe(
-    ws: Workspace, ids: Sequence[str], as_of: date, refresh: bool = False
+    ws: Workspace,
+    ids: Sequence[str],
+    as_of: date,
+    refresh: bool = False,
+    *,
+    record: bool = True,
 ) -> dict[str, object]:
     """Every id in the universe as the definition that held on `as_of`.
 
@@ -647,12 +744,15 @@ def resolve_universe(
 
     `refresh` passes the cache by: every id is resolved again, from its manual entry or
     through the reference adapter, which is how an operator picks up a definition that
-    changed at the source. The definitions already held stay in the store, so a run pinned
-    to one of them still reproduces.
+    changed at the source or corrects one with `override`. Definitions dated otherwise stay
+    in the store, so a run pinned to one of them still reproduces.
 
-    On success the definitions the store does not already hold are written to it, and the
-    cache is written back — leaving the operator's fields untouched, and rewriting the file
-    only when a resolution changed something in it.
+    With `record`, on success the definitions the store does not already hold are written
+    to it — a definition that would take the place of a held one dated the same is written
+    only under `refresh`, and refused by name without it — and the cache is written back,
+    leaving the operator's fields untouched and rewriting the file only when a resolution
+    changed something in it. Without `record` nothing is written anywhere: the question is
+    answered and the workspace is as it was, which is what a validation needs.
     """
     path = ws.path(CACHE_NAME)
     file = load_yaml(InstrumentsFile, path) if path.is_file() else InstrumentsFile({})
@@ -701,8 +801,9 @@ def resolve_universe(
             remedy=f"correct these ids in {CACHE_NAME}, or resolve them as of another date",
         )
 
-    write_store(ws, [held for held in resolved.values() if definition_checksum(held) not in cached])
-    _write_cache(path, file, updates)
+    if record:
+        write_store(ws, resolved.values(), replace=refresh)
+        _write_cache(path, file, updates)
     return resolved
 
 

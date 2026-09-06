@@ -12,8 +12,9 @@ data_requirements: [bar]           # bar|quote|trade|<any registered custom type
 # costs:                           # optional. Costs are inherited from the venue, which the configured broker defines
 #   commission_bps: 0.5            # (kanso.toml research.broker, portfolio.yaml venues.<MIC>). Set any subset here only to
 #   slippage_bps: 1.0              # override them for this hypothesis — the way to test an idea against costs worse than
-#   spread: fixed_bps              # your broker's. quotes | fixed_bps
-#   fixed_bps: 2
+#   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
+#   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
+                                   # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
 risk_limits:                       # *_pct are percentages of capital
   max_position_pct: 20

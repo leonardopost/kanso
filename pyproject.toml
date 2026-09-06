@@ -57,10 +57,7 @@ dev = [
 testpaths = ["tests"]
 # The coverage floor is enforced by the full-suite invocation (CI and `uv run pytest --cov-fail-under=85`),
 # not here, so a partial run does not fail on coverage.
-addopts = "-q --cov=kanso --cov-report=term-missing -m 'not live'"
-markers = [
-  "live: needs real vendor or broker credentials; deselected by default and excluded from CI",
-]
+addopts = "-q --cov=kanso --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["kanso"]

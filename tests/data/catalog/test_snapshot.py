@@ -5,13 +5,24 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from nautilus_trader.model.instruments import Equity
 
 from kanso.data import catalog as cat
+from kanso.data import instruments
 from kanso.data import manifest as m
 from kanso.data import snapshot as snap
 from kanso.errors import Exit, PreconditionError, ValidationError
 from kanso.schemas.hypothesis import Windows
-from tests.data.catalog.conftest import AAPL, MSFT, FakeWorkspace, Ref, bars, equity, quotes
+from tests.data.catalog.conftest import (
+    AAPL,
+    MSFT,
+    FakeWorkspace,
+    Ref,
+    bars,
+    define,
+    equity,
+    quotes,
+)
 
 JAN1 = date(2024, 1, 1)
 RESEARCH = (JAN1, date(2024, 1, 10))
@@ -39,7 +50,9 @@ def load_bars(
     basis: str | None = None,
     **kw: object,
 ) -> cat.Written:
+    """Bars for `instrument`, whose definition the store then holds: a snapshot needs it."""
     span = (start, date.fromordinal(start.toordinal() + count - 1))
+    define(ws, instrument)
     return cat.write(
         ws,
         bars(start, count, instrument=instrument),
@@ -51,6 +64,7 @@ def load_bars(
 
 def load_quotes(ws: FakeWorkspace, instrument: str = AAPL, count: int = 25) -> cat.Written:
     span = (JAN1, date.fromordinal(JAN1.toordinal() + count - 1))
+    define(ws, instrument)
     return cat.write(
         ws,
         quotes(JAN1, count, instrument=instrument),
@@ -256,3 +270,110 @@ def test_covering_ignores_the_forward_window(ws: FakeWorkspace) -> None:
     load_bars(ws, count=25)
     snap.freeze(ws)
     assert snap.covering(ws, [AAPL], ["bar"], "1d", windows()) is not None
+
+
+# --- the instrument pin, read back ---------------------------------------------
+
+
+def covering(ws: FakeWorkspace, *universe: str) -> snap.Snapshot | None:
+    return snap.covering(ws, list(universe or (AAPL,)), ["bar"], "1d", windows())
+
+
+def test_freezing_refuses_an_empty_store_over_instrument_data(ws: FakeWorkspace) -> None:
+    """The checksum of nothing pins nothing, and a run reads its definitions from the store."""
+    cat.write(ws, bars(JAN1, 5), ref=Ref(), source="synthetic")
+
+    with pytest.raises(PreconditionError) as raised:
+        snap.freeze(ws)
+
+    assert raised.value.code is Exit.PRECONDITION
+    assert AAPL in raised.value.message
+    assert "kanso data instruments resolve" in str(raised.value.remedy)
+    assert snap.snapshots(ws) == []
+
+
+def test_freezing_nothing_needs_no_definition(ws: FakeWorkspace) -> None:
+    assert snap.freeze(ws).datasets == []
+
+
+def test_a_store_that_moved_since_the_snapshot_is_refused_by_name(ws: FakeWorkspace) -> None:
+    """A run reproduces the definitions its snapshot pins, or it is not started."""
+    load_bars(ws, count=25)
+    taken = snap.freeze(ws)
+    instruments.write_store(ws, [equity(AAPL, "0.05")], replace=True)
+
+    with pytest.raises(PreconditionError) as raised:
+        covering(ws)
+
+    assert raised.value.code is Exit.PRECONDITION
+    assert taken.snapshot_id in raised.value.message
+    assert taken.instruments_checksum in raised.value.message
+    assert cat.resolved_instruments_checksum(ws) in raised.value.message
+    assert "kanso data snapshot" in str(raised.value.remedy)
+
+
+def test_the_newest_covering_snapshot_pinning_the_stores_instruments_wins(
+    ws: FakeWorkspace,
+) -> None:
+    load_bars(ws, count=25)
+    first = snap.freeze(ws)
+    instruments.write_store(ws, [equity(AAPL, "0.05")], replace=True)
+    second = snap.freeze(ws)
+    assert first.snapshot_id != second.snapshot_id
+
+    found = covering(ws)
+    assert found is not None
+    assert found.snapshot_id == second.snapshot_id
+
+    # The store is put back: the older snapshot is the one that pins what it holds now.
+    instruments.write_store(ws, [equity(AAPL)], replace=True)
+    found = covering(ws)
+    assert found is not None
+    assert found.snapshot_id == first.snapshot_id
+
+
+def test_covering_refuses_a_universe_the_store_does_not_define(ws: FakeWorkspace) -> None:
+    load_bars(ws, count=25)
+    load_bars(ws, count=25, instrument=MSFT)
+    snap.freeze(ws)
+    cat.open_catalog(ws).delete_data_range(Equity, MSFT, 0, 0)
+
+    with pytest.raises(PreconditionError) as raised:
+        covering(ws, AAPL, MSFT)
+
+    assert raised.value.message.startswith(f"the instrument store holds no definition for {MSFT}")
+    assert f"kanso data instruments resolve {MSFT}" in str(raised.value.remedy)
+
+
+def test_no_covering_snapshot_is_none_whatever_the_store_holds(ws: FakeWorkspace) -> None:
+    load_bars(ws, count=18)
+    snap.freeze(ws)
+    instruments.write_store(ws, [equity(AAPL, "0.05")], replace=True)
+    assert covering(ws) is None
+
+
+def test_instrument_drift_names_the_snapshot_and_both_checksums(ws: FakeWorkspace) -> None:
+    load_bars(ws)
+    taken = snap.freeze(ws)
+    assert snap.instrument_drift(ws, taken) is None
+
+    instruments.write_store(ws, [equity(MSFT)])
+    drift = snap.instrument_drift(ws, taken)
+
+    assert drift is not None
+    assert drift.snapshot_id == taken.snapshot_id
+    assert drift.pinned == taken.instruments_checksum
+    assert drift.held == cat.resolved_instruments_checksum(ws)
+
+
+def test_newest_is_the_snapshot_taken_last(ws: FakeWorkspace) -> None:
+    assert snap.newest(ws) is None
+    load_bars(ws, count=25)
+    first = snap.freeze(ws)
+    load_quotes(ws)
+    second = snap.freeze(ws)
+
+    found = snap.newest(ws)
+
+    assert found is not None
+    assert found.snapshot_id == second.snapshot_id != first.snapshot_id

@@ -140,3 +140,19 @@ def equity(instrument: str = AAPL, increment: str = "0.01") -> Equity:
         ts_event=0,
         ts_init=0,
     )
+
+
+def define(ws: FakeWorkspace, *instruments: str) -> None:
+    """Put a definition of each instrument in the store, once.
+
+    A snapshot over instrument data is refused while the store holds no definition, so a
+    workspace that is to be frozen defines what its datasets name. Written only when the
+    store lacks the id: the engine skips a same-dated rewrite and says so on stdout.
+    """
+    from kanso.data.catalog import open_catalog
+
+    catalog = open_catalog(ws)
+    held = {str(item.id) for item in catalog.instruments()}
+    fresh = [equity(name) for name in (instruments or (AAPL,)) if name not in held]
+    if fresh:
+        catalog.write_data(fresh)

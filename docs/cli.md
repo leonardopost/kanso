@@ -23,7 +23,7 @@ current directory, from which discovery walks up to the nearest `kanso.toml`.
 | command | what it does |
 |---|---|
 | `kanso init [DIR] [--demo]` | scaffold a workspace, link the skills, detect the envelope, apply the migrations. `--demo` renders the mock-only register, the synthetic loader spec, the `DEMO.SIM` instrument and `hypotheses/demo_mr/`. kanso never invokes git; a `.gitignore` is written or appended |
-| `kanso doctor [--report] [--check-adapters]` | diagnose the workspace, the install, the engine, the credentials, the data adapters, the execution clients and the lanes. Exits 2 when a check fails. `--report` redacts paths for pasting upstream. Makes no network call unless `--check-adapters`, which probes what each configured adapter reaches — a dataset a plan excludes is reported and not graded down; a credential that does not authenticate fails |
+| `kanso doctor [--report] [--check-adapters]` | one line per check, by name: `versions` (kanso and the engine), `install` (package or editable, and from where), `engine wheel`, `schema` (`state.db` against the package's migrations, behind or ahead), `envelope` (the lane plan, its age and whether the host changed), `repository`, `gitignore`, `best` (`hypotheses/<id>/strategy.py` against the best blob kanso last wrote there), `certificates` (every certified subject against the bytes still held for it), `record` (certified files on disk the record has no memory of — a clone, or a removed `state.db` — named once as a fresh workspace that inherits certified work, a warning never a failure), `skills`, `credentials`, `adapters`, `execution` (what each stage's client declares and what `deploy` would refuse), `instruments` (the registry's entries, the universes it must resolve, and drift against the newest snapshot), `lanes` (every open run against its lane directory, and the reverse), `extensions`, and `engine facts` — the claims about NautilusTrader that kanso is built on, re-verified against the installed version; a claim that does not hold is listed as a design constraint the build works around, and the check warns, rather than fails, when the installed engine is not the version the facts were verified against. Exits 2 when a check fails. `--report` redacts paths for pasting upstream. Makes no network call unless `--check-adapters`, which probes what each configured adapter reaches — a dataset a plan excludes is reported and not graded down; a credential that does not authenticate fails The `engine facts` check re-verifies the engine claims kanso binds to against the installed `nautilus_trader`: claims the package records as design constraints are listed `by design`; any other that does not hold fails, with its evidence. |
 | `kanso ext show` | every extension this workspace carries: whether it imported, and per id its `PROVIDES` declares, what the registry for that kind did with it — `registered` (it hands the id out), `shadowed` (it hands out the packaged one instead) or `absent`, with the reason. Exits 0 whatever it finds, because a broken extension degrades a workspace rather than stopping it and `doctor` is where that is graded. Opens nothing and resolves no credential — `docs/extensions.md` |
 | `kanso migrate` | apply the pending state migrations. Every other command refuses a database behind the schema rather than migrating it behind your back |
 | `kanso skills sync` | link the packaged skills into every `[skills] targets` entry |
@@ -35,11 +35,11 @@ current directory, from which discovery walks up to the nearest `kanso.toml`.
 |---|---|
 | `kanso data load --loader ID --spec FILE [--replace]` | run a loader over the range its spec names. An overlapping write into unpinned data is refused (exit 2) and needs `--replace`; one into a dataset a snapshot pins is refused outright |
 | `kanso data show` | every series the store holds: its datasets, the spans they **served**, the gaps between them and the row counts |
-| `kanso data snapshot` | freeze what is held — the dataset checksums and the checksum of the resolved instruments — into `catalog/snapshots/<snapshot_id>.yaml`. A run is pinned to one of these |
-| `kanso data backfill --loader ID --spec FILE [--from DATE] [--to DATE] [--dry-run]` | fill history from the source's floor (or `--from`, clamped up to the floor and reported) to the earliest day already held (or `--to`), and close the gaps inside what is held. Chunked; the manifest each chunk writes is its checkpoint, so an interrupt resumes and a repeat fetches nothing. `--dry-run` prints the chunks, the request count and the estimated bytes and fetches nothing |
+| `kanso data snapshot` | freeze what is held — the dataset checksums and the checksum of the resolved instruments — into `catalog/snapshots/<snapshot_id>.yaml`. A run is pinned to one of these. Refused (exit 2) while the instrument store holds no definition and the datasets name instruments: a run reads its definitions from the store, so resolve the universe first |
+| `kanso data backfill --loader ID --spec FILE [--from DATE] [--to DATE] [--dry-run]` | fill history from the source's floor (or `--from`, clamped up to the floor and reported) to the earliest day already held (or `--to`), and close the gaps inside what is held. Chunked; the manifest each chunk writes is its checkpoint, so an interrupt resumes and a repeat fetches nothing. `--dry-run` prints the chunks, the request count and the estimated bytes and fetches nothing. The transport is the loader the spec names — an adapter's bulk loader is chosen by naming it, never for you |
 | `kanso data sync [--loader ID] [--dataset D] [--to DATE]` | extend each held series from the served end of its **newest** dataset towards `--to` (default today) into a successor dataset recording `supersedes`, so a dataset a pinned snapshot references is never mutated. Only the newest is extended, because a request beginning after an interior dataset ends runs over the one behind it; `--dataset` names one instead, newest or not, which is how the dataset in front of a hole is extended on purpose |
-| `kanso data instruments resolve [ID…] [--as-of DATE] [--refresh]` | resolve ids (default: every id `instruments.yaml` names) into the catalog's instrument store and the cache. `--refresh` resolves again rather than answering from the cache, and is refused (exit 2) while a run is active or while a deployed version depends on a snapshot that pins one of these instruments |
-| `kanso data instruments show [ID]` | one resolved definition's canonical fields, or the ids the catalog holds |
+| `kanso data instruments resolve [ID…] [--as-of DATE] [--refresh]` | resolve ids (default: every id `instruments.yaml` names) into the catalog's instrument store and the cache. A definition the store already holds is left alone and one dated otherwise is added beside it. `--refresh` resolves again rather than answering from the cache and **replaces** a definition the store holds for the same date — without it, a resolution that would change one is refused (exit 2) by name — and is itself refused (exit 2) while a run is active or while a deployed version depends on a snapshot that pins one of these instruments |
+| `kanso data instruments show [ID]` | the definition a run would use for one instrument — the newest-dated the store holds — as its canonical fields, or the ids the catalog holds |
 | `kanso data adapters [--check]` | what is registered here: id, kind (`data`, `reference`, `exec`), the credential names each needs and where each resolves from (never a value), its capabilities, its loader ids and its quota. Without `--check` it performs no network I/O. `--check` probes each **configured** adapter for what its key actually reaches: entitlement per dataset at the grain the source gates on, and the measured history floor of each entitled price series — `docs/adapters.md` |
 
 Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
@@ -49,11 +49,11 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | command | what it does |
 |---|---|
 | `kanso hyp new ID` | scaffold `hypotheses/<id>/` with `hypothesis.yaml`, `program.md` and a `strategy.py` stub |
-| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints — and change nothing either way |
-| `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with |
+| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
+| `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with. A re-pin that changes the `universe`, the `resolution`, the `data_requirements` or `construct.id` — stripping the classification included — clears the hypothesis's best and records `best_cleared` naming the field, because a card's metric means nothing across any of them; the cards and their blobs stay in state |
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
 | `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state |
-| `kanso classify ID` | decide what the hypothesis **is** — construct, host, the keep rule's two parameters and the card-stage constraints — in one call to the best model on the register, and write the three keys into `hypothesis.yaml`, re-pinning it. The objective is not asked for: it follows from the hypothesis and the construct. A construct this build cannot run is recorded honestly and refused at `research begin`. `strategy.py` is replaced by the construct's stub only while the file is still one kanso wrote |
+| `kanso classify ID` | decide what the hypothesis **is** — construct, host, the keep rule's two parameters and the card-stage constraints — in one call to the best model on the register, and write the three keys into `hypothesis.yaml`, re-pinning it. The objective is not asked for: it follows from the hypothesis and the construct. A construct this build cannot run is recorded honestly and refused at `research begin`. `strategy.py` is replaced by the construct's stub only while the file is still one kanso wrote. A classification onto another construct clears the hypothesis's best on the same terms as `hyp add` |
 
 Editing `construct`, `objective` and `constraints` by hand and running `kanso hyp add` is
 the override path, and needs no model at all.
@@ -62,7 +62,7 @@ the override path, and needs no model at all.
 
 | command | what it does |
 |---|---|
-| `kanso research begin ID [--tag T] [--from-workspace]` | start a run and **print the lane directory**, which is where an agent works. Copies the three scoped files there, pins them, and runs the baseline card. `--from-workspace` starts from the workspace `strategy.py` and clears the hypothesis's best |
+| `kanso research begin ID [--tag T] [--from-workspace]` | start a run and **print the lane directory**, which is where an agent works. Copies the three scoped files there, pins them, and runs the baseline card. Pins the newest snapshot that covers the universe and whose instrument checksum is the store's own, and refuses (exit 2) by name — the snapshot, what it pins, what the store holds — when the definitions have moved since; `kanso data snapshot` pins the current ones. Needs no model and opens no register: the register is checked where a call is about to be made — `classify`, `cert plan`, `research run` — and a run begun by hand is measurement only. `--from-workspace` starts from the workspace `strategy.py` and clears the hypothesis's best. A baseline that does not run is refused (exit 2) with no run recorded; when the strategy that failed was the best card's, the remedy names `--from-workspace`, since beginning again would take that blob again |
 | `kanso research card ID --desc TEXT` | evaluate the lane directory's `strategy.py` as one card: the static integrity rules first, then the backtest on the research window in a child process under the run's time and memory budgets, then the constraints and the keep rule |
 | `kanso research run ID [--cards N]` | the same loop with the model in the agent's seat: begin a run if there is none, then propose → apply → evaluate until `N` cards or until the run stalls. `--cards` counts what **this** invocation proposed, so the baseline and everything a previous invocation left behind are not in it. A proposal is a unified diff over `strategy.py`, applied in-package; one that does not fit, names another file, or changes nothing is a wrong answer and takes the retry ladder rather than becoming a card. A run that stalls on a keep nothing has certified certifies it before returning, and the command reports that certificate |
 | `kanso research end ID` | end the run and remove the lane directory, and nothing else: the cards, the blobs and the best stay in state |
@@ -80,7 +80,7 @@ consecutive non-keeps end it. Both are `[research]` keys of `kanso.toml`.
 
 | command | what it does |
 |---|---|
-| `kanso research start` | detach a supervisor and start one worker per lane the envelope allows, plus the monitor. Prints the pid, the lanes and the log. A second `start` in the same workspace is refused (exit 2): the pid file is also the lock |
+| `kanso research start` | detach a supervisor and start one worker per lane the envelope allows, plus the monitor. Prints the pid, the lanes and the log. The lane count is read from `envelope.yaml` as last detected — `start` does not re-detect, so a host that changed keeps its old plan until `kanso env detect` runs again. A second `start` in the same workspace is refused (exit 2): the pid file is also the lock |
 | `kanso research stop` | signal the daemon and wait for it to go. **Nothing is ended and nothing is cleaned up** — active runs and their lane directories stay exactly where they are, and the next `start` resumes them before it takes anything new — so stopping is a cheap act |
 | `kanso research status` | the daemon, its lanes, every active run with its `lane_sha`, `best_sha` and `base_sha`, and the queue |
 | `kanso research queue add ID [--priority P]` | put a hypothesis in the queue, or raise the priority of one already in it. Served by priority descending, then by arrival |
@@ -194,6 +194,11 @@ order in simulation while the stage record — and the paper and live gates read
 called the money the broker's. The declarations, the refusals and the promotion path are all
 live; the long-running node is the piece that is not, and it is tracked in the backlog.
 
+The same bounded node is why a stage's `speed` paces nothing yet: the value is validated
+against the client's clock, recorded on the session and printed by `portfolio show`, and the
+catch-up itself runs unpaced, so a stage at `speed: 1` replays months of minute bars in
+seconds. `kanso replay run --speed` is the one place a speed is honoured in this version.
+
 **`promote` is the only command in kanso that can put money at risk, and the only one that
 requires a person.** `--as NAME` is the whole of the approval: there is no environment
 fallback and no default, the approval is recorded against that exact version before
@@ -235,6 +240,17 @@ two limits only a whole-stage view can see — and halts a stage on a breach.
 Every action is taken once, on the transition, so the command is safe on a timer and safe
 to run twice. It exits 0 whatever the verdicts are: a failing gate is a fact about a
 deployment, not a failure of the pass that found it.
+
+**The paper gate is two-sided, and a short window is a fail.** `paper_forward` requires the
+version to have been on the stage for the longer of the plan's `min_duration` and
+`horizon_mult` × the hypothesis's horizon, measured on the stage clock; a version that joined
+more recently fails with `elapsed_s` and `required_s` in its evidence rather than being
+skipped. It then requires the objective the stage realised to fall **inside** the
+ninety-percent interval composition measured — a result above the band fails exactly as one
+below it does, because a stage that out-performs its certification is not reproducing the
+model that was certified, and promoting on it would promote an unexplained difference. Of
+the sleeve's card-stage constraints only the drawdown limit is judged; `min_trades` is
+recorded as skipped, since a research-window count cannot be met in a paper window.
 
 ## Models
 

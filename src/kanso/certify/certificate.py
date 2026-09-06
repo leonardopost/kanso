@@ -6,14 +6,21 @@ contradict a first is refused before anything runs — `refuse_repeat` is called
 four facts that identify a certification and nothing else, so a certification that will
 not be allowed to land costs no backtest.
 
-**Two refusals, one meaning.** The state store's primary key is the subject, the plan
+**Three refusals, one meaning.** The state store's primary key is the subject, the plan
 version and the engine version together, which is exactly what immutability forbids
 repeating: the same code, judged by the same plan, on the same engine. Moving to
 a new engine changes the third of those, so re-certifying an unchanged commit under a new
 engine is a plain certification that writes a new file beside the old one rather than an
-impossibility. The second refusal is the file itself — a target that already exists is
-never overwritten, whatever the store believes, because the file is what an operator and
-their agent read.
+impossibility. The second refusal is the file at the exact target name, which is never
+overwritten whatever the store believes, because the file is what an operator and their
+agent read. The third is the certificate on disk under any trial count: a workspace whose
+`state.db` never travelled — a fresh clone of a research repository — has no row to consult,
+but it does have the certificate files, and a certificate of the same subject, plan and
+engine already among them is the same immutability. The filename carries the trial count,
+so keying only on the exact name would let a clone re-certifying from trial one write
+`<sha7>-1-…` beside a committed `<sha7>-4-…`: the same bytes under the same plan and engine
+with the count laundered. This refusal therefore matches the subject, the plan and the
+engine, ignores the trial count, and names the file it found.
 
 **The bytes travel with the record.** The certified `strategy.py` is written beside the
 certificate as `<sha7>.py`, so a certified subject is legible from the files alone, in a
@@ -104,7 +111,7 @@ def refuse_repeat(
     plan_version: int,
     nautilus_version: str,
 ) -> None:
-    """Refuse a certification that would contradict one already recorded or written."""
+    """Refuse a certification that would contradict one already recorded or on disk."""
     held = store.connection.execute(
         "SELECT created_at FROM certificates WHERE hyp_id = ? AND strategy_sha = ?"
         " AND plan_version = ? AND nautilus_version = ?",
@@ -117,14 +124,37 @@ def refuse_repeat(
             "immutable",
             remedy="research a better strategy, replan, or upgrade the engine",
         )
-    target = certificates_dir(ws, hyp_id) / filename(
-        strategy_sha, n_trials, plan_version, nautilus_version
-    )
+    directory = certificates_dir(ws, hyp_id)
+    target = directory / filename(strategy_sha, n_trials, plan_version, nautilus_version)
     if target.exists():
         raise PreconditionError(
             f"{target} already exists, and a certificate is never overwritten",
             remedy="move the existing file aside if it does not belong to this workspace",
         )
+    on_disk = _certified_on_disk(directory, strategy_sha, plan_version, nautilus_version)
+    if on_disk is not None:
+        raise PreconditionError(
+            f"{on_disk.name} certifies {strategy_sha[:7]} under plan version {plan_version} "
+            f"and nautilus_trader {nautilus_version}; a certificate is immutable, and this "
+            "workspace's state store does not record it — this is a clone whose record did "
+            "not travel",
+            remedy="research a better strategy, replan, or upgrade the engine",
+        )
+
+
+def _certified_on_disk(
+    directory: Path, strategy_sha: str, plan_version: int, nautilus_version: str
+) -> Path | None:
+    """A certificate file of this subject, plan and engine, whatever its trial count.
+
+    The trial count is the one part of the filename that varies for the same certified
+    bytes, so it is matched with a wildcard: any `<sha7>-*-p<plan>-e<engine>.yaml` present
+    is the immutable certificate a repeat would contradict. A directory that does not exist
+    yet globs to nothing, so no separate guard is needed for it.
+    """
+    pattern = f"{strategy_sha[:7]}-*-p{plan_version}-e{nautilus_version}.yaml"
+    matches = sorted(path for path in directory.glob(pattern) if path.is_file())
+    return matches[0] if matches else None
 
 
 def write(ws: Workspace, store: StateStore, certificate: Certificate, source: bytes) -> Path:

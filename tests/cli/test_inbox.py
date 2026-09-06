@@ -129,3 +129,23 @@ def test_the_json_option_is_the_same_before_or_after_the_command(
     result = at(runner, mocked_ws, "--json", "inbox")
 
     assert payload(result)["unread"] == 0
+
+
+def test_every_kind_keeps_a_gap_before_its_subject(runner: CliRunner, mocked_ws: Path) -> None:
+    """The kind column is padded past the longest kind, so `deploy_blocked` reads as two words."""
+    import re
+
+    from kanso import inbox
+    from kanso.state import StateStore
+    from kanso.workspace import find
+
+    ws = find(mocked_ws)
+    with StateStore(ws.path("state.db")) as store:
+        for kind in inbox.KINDS:
+            inbox.escalate(ws, store, kind, "demo_mr@1", f"a {kind} entry")
+
+    result = at(runner, mocked_ws, "inbox")
+
+    assert result.exit_code == Exit.OK
+    for kind in inbox.KINDS:
+        assert re.search(rf"^[0-9a-f]{{8}} {kind} +demo_mr@1 +a {kind} entry$", result.stdout, re.M)

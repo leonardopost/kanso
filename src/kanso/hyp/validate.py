@@ -20,7 +20,10 @@ document is parsed. Everything else needs the workspace, and that is this module
   manual entry answers on its own, a cached resolution answers when it was made as of
   that date, and anything else needs the configured reference adapter. An id that is
   unknown, ambiguous across venues, delisted before that date or listed after it fails,
-  and every failing id is reported together;
+  and every failing id is reported together. The question is asked and nothing is
+  written — not the catalog's instrument store, not the cache: a validation that left
+  something behind would not be one, and the store is written by `kanso data instruments
+  resolve` alone;
 * the venues those instruments trade on resolve to a complete cost model, and to one
   account currency. A spread taken from quotes needs quotes; a fixed spread needs its
   width; a universe spanning two account currencies would have a leg priced at a rate
@@ -114,7 +117,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_id(hyp)
     _check_location(ws, path, hyp)
     _check_data_requirements(ws, hyp)
-    instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start)
+    instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
     venue_models(ws, hyp, instruments)
     _check_classification(ws, hyp)
     return hyp

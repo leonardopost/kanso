@@ -9,14 +9,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nautilus_trader.model.instruments import Equity
 from typer.testing import CliRunner
 
+from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
 from kanso.errors import Exit
+from kanso.workspace import find
 
 from .conftest import (
     BETTER,
+    FIRST,
     FLAT,
     HYP_ID,
+    INSTRUMENT,
     RAISING,
     READING,
     REVERTING,
@@ -444,3 +449,37 @@ def test_show_diffs_two_cards_of_the_hypothesis(runner: CliRunner, registered: P
     diff = payload(result)["diff"]
     assert diff.startswith(f"--- {baseline[:7]}/strategy.py")
     assert "+    lookback: int = 12" in diff
+
+
+def test_begin_needs_no_model_register(runner: CliRunner, registered: Path) -> None:
+    """A run begun by hand is measurement only: the register is read where a call is made."""
+    (registered / "models.yaml").rename(registered / "models.yaml.away")
+
+    result = at(runner, registered, "research", "begin", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert payload(result)["baseline"]["status"] in ("keep", "discard")
+
+
+def test_a_run_writes_nothing_to_the_instrument_store(runner: CliRunner, registered: Path) -> None:
+    """A run is priced under the store its snapshot pins, and its resolution records nothing.
+
+    The store is left holding a definition dated otherwise than the research start, so
+    the resolution `begin` makes for the venue model has nothing held to answer from. Were
+    it recorded, a definition dated the research start would join the store and move its
+    checksum out from under the snapshot the run was pinned to a moment earlier.
+    """
+    later = ("data", "instruments", "resolve", "--as-of", "2024-02-01")
+    assert at(runner, registered, *later).exit_code == Exit.OK
+    ws = find(registered)
+    start = day_start_ns(FIRST)
+    open_catalog(ws).delete_data_range(Equity, INSTRUMENT, start, start)
+    assert at(runner, registered, "data", "snapshot").exit_code == Exit.OK
+    pinned = resolved_instruments_checksum(ws)
+    cache = (registered / "instruments.yaml").read_bytes()
+
+    begin(runner, registered)
+    card(runner, registered, "unchanged")
+
+    assert resolved_instruments_checksum(ws) == pinned
+    assert (registered / "instruments.yaml").read_bytes() == cache

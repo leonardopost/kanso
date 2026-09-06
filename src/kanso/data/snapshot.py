@@ -10,7 +10,12 @@ would do.
 
 Instruments are in the id because they change what a run means. A tick-size or lot-size
 reassignment changes what a fill costs, so a card run against reassigned instruments is
-not the card that was recorded. Pinning them freezes that too.
+not the card that was recorded. Pinning them freezes that too — and the pin is read back
+where a run is pinned: `covering` hands out only a snapshot whose instrument checksum is
+the store's own, and refuses by name when the definitions have moved since the newest
+covering snapshot was taken. A snapshot over instrument data is likewise refused while
+the store holds no definition at all, because a run reads its definitions from the store
+and a snapshot pinning none is a promise no run can keep.
 
 `reproducible` is false when any dataset in the snapshot carries vendor-adjusted prices.
 Such a series is adjusted as of the date it was requested, so the same request repeated
@@ -31,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -117,7 +123,9 @@ def freeze(
 
     Every dataset the workspace holds is included unless `datasets` names a subset.
     `instruments_checksum` defaults to the checksum of the definitions in the store, which
-    is what a run resolving its universe from the store would pin.
+    is what a run resolving its universe from the store would pin. Refused while the store
+    holds no definition and the datasets to be pinned name instruments: the checksum of
+    nothing pins nothing, and a run reads its definitions from the store.
     """
     held = manifests(ws)
     chosen = sorted(held) if datasets is None else sorted(set(datasets))
@@ -127,13 +135,21 @@ def freeze(
             f"cannot freeze datasets this workspace does not hold: {', '.join(missing)}",
             remedy="run `kanso data show` to list the datasets it does hold",
         )
+    picked = [held[name] for name in chosen]
+    named = sorted({manifest.instrument for manifest in picked})
+    if named and not _defined(ws, named):
+        raise PreconditionError(
+            f"the instrument store holds no definition, and the datasets to be pinned name "
+            f"{', '.join(named)}; a run reads its definitions from the store, so this snapshot "
+            f"would pin none a run could use",
+            remedy="run `kanso data instruments resolve` first, then snapshot again",
+        )
     if instruments_checksum is None:
         # Imported here rather than at module scope: `catalog` binds the engine and reads
         # this module's pinned set, and neither module needs the other at import time.
         from kanso.data.catalog import resolved_instruments_checksum
 
         instruments_checksum = resolved_instruments_checksum(ws)
-    picked = [held[name] for name in chosen]
     snapshot = Snapshot(
         snapshot_id=snapshot_id([m.checksum for m in picked], instruments_checksum),
         datasets=chosen,
@@ -153,25 +169,100 @@ def covering(
     resolution: str | None,
     windows: Windows,
 ) -> Snapshot | None:
-    """The newest snapshot covering the universe over research and certification.
+    """The newest snapshot covering the universe, pinning the instruments the store holds.
 
     Newest is the latest `created_at`. A snapshot covers when, for every instrument and
     every required type at `resolution`, the union of the spans it pins contains both
     windows; the forward window is never loaded, so it is never required. A snapshot
     whose covering datasets include one with an unknown publication does not qualify:
-    research may not be pinned to data whose availability nobody declared.
+    research may not be pinned to data whose availability nobody declared. `None` when
+    no snapshot covers.
+
+    A run reproduces the instruments its snapshot pins only if the store still holds
+    them, so among the covering snapshots the newest whose instrument checksum is the
+    store's own is the one handed out. When one covers and none matches, the definitions
+    have moved since the newest covering snapshot was taken, and that is refused by name —
+    the snapshot, what it pins and what the store holds now — rather than pinning a run to
+    definitions it will not run against. A universe id the store holds no definition for
+    is refused first, since no snapshot can pin what does not exist.
     """
     held = manifests(ws)
     required = tuple(
         (window.start, window.end) for window in (windows.research, windows.certification)
     )
+    candidates: list[Snapshot] = []
     for snapshot in sorted(snapshots(ws), key=lambda s: s.created_at, reverse=True):
         picked = [held[name] for name in snapshot.datasets if name in held]
         if len(picked) != len(snapshot.datasets):
             continue
         if _covers(picked, universe, types, resolution, required):
+            candidates.append(snapshot)
+    if not candidates:
+        return None
+    defined = _defined(ws, universe)
+    undefined = [name for name in universe if name not in defined]
+    if undefined:
+        raise PreconditionError(
+            f"the instrument store holds no definition for {', '.join(undefined)}, and a run "
+            f"reads its definitions from the store",
+            remedy=(
+                f"run `kanso data instruments resolve {' '.join(undefined)}`, then "
+                f"`kanso data snapshot`"
+            ),
+        )
+    drifts = [instrument_drift(ws, snapshot) for snapshot in candidates]
+    for snapshot, drift in zip(candidates, drifts, strict=True):
+        if drift is None:
             return snapshot
-    return None
+    moved = drifts[0]
+    assert moved is not None  # noqa: S101 - every candidate drifted, so the newest did
+    raise PreconditionError(
+        f"snapshot {moved.snapshot_id} pins instruments {moved.pinned}, and the store now "
+        f"holds {moved.held}; a run reproduces the definitions its snapshot pins",
+        remedy="run `kanso data snapshot` to pin the definitions the store holds now",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentDrift:
+    """A snapshot whose pinned instruments are no longer the ones the store holds."""
+
+    snapshot_id: str
+    pinned: str
+    held: str
+
+
+def instrument_drift(ws: Workspace, snapshot: Snapshot) -> InstrumentDrift | None:
+    """How this snapshot's instrument pin differs from the store, or `None` when it does not.
+
+    The comparison a run is pinned by, exported so a diagnosis can make it too: the
+    store's checksum is taken the one way the package takes it, and drift is what a
+    resolution since the snapshot — a new instrument, a refreshed definition — looks like.
+    """
+    from kanso.data.catalog import resolved_instruments_checksum
+
+    held = resolved_instruments_checksum(ws)
+    if held == snapshot.instruments_checksum:
+        return None
+    return InstrumentDrift(
+        snapshot_id=snapshot.snapshot_id, pinned=snapshot.instruments_checksum, held=held
+    )
+
+
+def newest(ws: Workspace) -> Snapshot | None:
+    """The snapshot taken last, by `created_at`, or `None` when none has been taken."""
+    taken = snapshots(ws)
+    if not taken:
+        return None
+    return max(taken, key=lambda s: s.created_at)
+
+
+def _defined(ws: Workspace, universe: Sequence[str]) -> frozenset[str]:
+    """Which of these instruments the store holds a definition for."""
+    from kanso.data.catalog import open_catalog
+
+    held = open_catalog(ws).instruments(instrument_ids=list(universe))
+    return frozenset(str(item.id) for item in held)
 
 
 def _covers(

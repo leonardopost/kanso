@@ -23,6 +23,14 @@ or `editable` — and from where.
 3. Conventional commit on a `feat/`, `fix/`, `docs/` or `chore/` branch; PR; CI (macOS
    arm64 + Linux x86_64, Python 3.12/3.13) must be green.
 
+The suite is offline in its entirety: no test reaches a vendor, a broker or a model, and
+there is no `tests/live/` tree and no `live` marker to select one with. **Credentialed
+acceptance is a maintainer-driven CLI run, recorded in the pull request** — an adapter
+change is driven by hand against the live vendor or the paper account with the shipped
+commands, and the commands, what they printed and what was found go in the PR body, where
+the M5 and M7 bodies are the precedent. A test that needed a credential to collect would be
+a test CI never runs and a promise nobody keeps.
+
 ## 3. Prototype in a project, promote to the framework
 Capabilities are prototyped as **workspace extensions** (`kanso_ext/`, same interfaces as
 built-ins: `Construct`, `Loader`, `register_custom_type`, `ExecutionClientSpec`, and the data
@@ -52,12 +60,16 @@ Anything found in use without a checkout goes to the issue tracker with `kanso d
 - `nautilus_trader` range: bump in a minor release only after the demo e2e and the parity
   tests pass on the new version; note wheel/OS constraints in the changelog. Strategy
   versions pin the engine they were certified under; operators re-certify to move.
-- Schema changes ship with a migration `src/kanso/state/migrations/NNNN_name.sql` and a
-  `schema_version` bump. `kanso migrate` applies them, and every other command refuses a
-  database behind the package with exit 2 rather than migrating it behind the operator's
-  back. A database *ahead* of the package — an operator who downgraded — is refused the same
-  way, by name and by how far, because applying this package's writes to a shape a later one
-  wrote is how a downgrade corrupts a workspace rather than merely failing. The command
+- Schema changes ship with a migration `src/kanso/state/migrations/NNNN_name.sql`, numbered
+  after the newest; the package's schema version follows from the newest migration file and
+  nothing is bumped by hand. The version a database is at is `PRAGMA user_version` in
+  `state.db`, which is what `migrate` advances and `doctor` guards — not the `schema_version`
+  key `init` writes to `kanso.toml`, which is read by nothing. `kanso migrate` applies them,
+  and every other command refuses a database behind the package with exit 2 rather than
+  migrating it behind the operator's back. A database *ahead* of the package — an operator
+  who downgraded — is refused the same way, by name and by how far, because applying this
+  package's writes to a shape a later one wrote is how a downgrade corrupts a workspace
+  rather than merely failing. The command
   layer, `doctor` and the daemon entry point a service unit starts all check both
   directions. Downgrading across a migration is still unsupported; what changed is that
   trying it is refused rather than silently permitted, and a release whose migrations are
@@ -203,9 +215,10 @@ systemd: `kanso research stop` really stops the service, and a crash brings it b
   restart policy starts it again, and the throttle is the only thing keeping it to twice a
   minute. `kanso doctor` names the cause; fix the workspace rather than the unit.
 - **Run `kanso doctor` before enabling the unit, and after every upgrade.** The CLI refuses
-  a state database behind the package's schema (exit 2, remedy `kanso migrate`); the
-  supervisor entry point does not check, and will happily start lanes against an
-  un-migrated database. Nothing else in the daemon substitutes for that check.
+  a state database behind or ahead of the package's schema (exit 2, remedy `kanso migrate`),
+  and the supervisor entry point checks the same thing before it takes the lock or spawns
+  anything — so an un-migrated workspace exits the supervisor with the one sentence that
+  explains it, and the restart policy loops on that sentence until you migrate.
 - **One daemon per workspace, and the lock is what says so.** A hand-run `kanso research
   start` and a running unit cannot coexist: whichever is second refuses, the CLI with exit 2
   and the bare supervisor with a traceback and exit 1.
@@ -220,6 +233,7 @@ systemd: `kanso research stop` really stops the service, and a crash brings it b
   workspace `.env` and then the ambient environment, so a unit needs no `Environment=` line
   and should not have one — `systemctl show` prints them. If the ambient environment is
   genuinely where a key must live, use `EnvironmentFile=` and a mode-0600 file.
-- **The lane count comes from the envelope, which was measured once.** A host whose cores or
-  memory changed keeps the old plan until `kanso env detect` runs again; `kanso doctor`
+- **The lane count comes from the envelope, which was measured once.** The supervisor reads
+  `envelope.yaml` as last detected and does not re-detect at startup, so a host whose cores
+  or memory changed keeps the old plan until `kanso env detect` runs again; `kanso doctor`
   warns that the host changed since detection.

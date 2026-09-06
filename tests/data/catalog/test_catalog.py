@@ -19,6 +19,7 @@ from tests.data.catalog.conftest import (
     Ref,
     bar,
     bars,
+    define,
     equity,
     quotes,
     trade,
@@ -114,6 +115,7 @@ def test_a_successor_must_name_a_dataset_the_workspace_holds(ws: FakeWorkspace) 
 
 def test_a_successor_records_what_it_follows(ws: FakeWorkspace) -> None:
     first = write_bars(ws)
+    define(ws)
     snap.freeze(ws)
     later = cat.write(
         ws,
@@ -128,6 +130,7 @@ def test_a_successor_records_what_it_follows(ws: FakeWorkspace) -> None:
 
 def test_a_pinned_dataset_cannot_be_overwritten(ws: FakeWorkspace) -> None:
     write_bars(ws)
+    define(ws)
     snap.freeze(ws)
     with pytest.raises(PreconditionError) as raised:
         write_bars(ws, start=date(2024, 1, 3))
@@ -139,6 +142,7 @@ def test_a_pinned_dataset_cannot_be_overwritten(ws: FakeWorkspace) -> None:
 
 def test_replace_does_not_lift_a_snapshot_pin(ws: FakeWorkspace) -> None:
     write_bars(ws)
+    define(ws)
     snap.freeze(ws)
     with pytest.raises(PreconditionError, match="named by a snapshot"):
         cat.write(ws, bars(JAN1, 5), ref=Ref(), source="synthetic", replace=True)

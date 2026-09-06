@@ -207,3 +207,39 @@ def test_a_registration_shows_the_best_once_a_card_has_kept(
     assert document["best_sha"] is not None
     assert document["best_metric"] > 0
     assert f"{document['best_sha'][:7]} at " in at(runner, registered, "hyp", "show", HYP_ID).stdout
+
+
+def test_the_scaffold_filled_in_without_costs_is_refused_naming_the_fixed_spread(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A bar-only hypothesis has no quotes to take a spread from, so the scaffold's own defaults
+    do not validate: the operator must write `fixed_bps`, as the scaffold's comment says."""
+    import re
+
+    assert at(runner, loaded, "hyp", "new", "mr_draft").exit_code == Exit.OK
+    path = loaded / "hypotheses" / "mr_draft" / "hypothesis.yaml"
+    text = path.read_text(encoding="utf-8")
+    filled = {
+        "title": 'title: "draft"',
+        "thesis": 'thesis: "it reverts"',
+        "mechanism": "mechanism: mean_reversion",
+        "universe": f"universe: [{INSTRUMENT}]",
+        "horizon": "horizon: 30m",
+        "resolution": "resolution: 1m",
+    }
+    for key, line in filled.items():
+        text = re.sub(rf"^{key}:.*$", line, text, count=1, flags=re.M)
+    text = text.replace(
+        "research:      {start: , end: }", "research:      {start: 2024-01-02, end: 2024-06-28}"
+    )
+    text = text.replace(
+        "certification: {start: , end: }", "certification: {start: 2024-07-01, end: 2024-09-30}"
+    )
+    text = text.replace("forward:       {start: }", "forward:       {start: 2024-10-01}")
+    path.write_text(text, encoding="utf-8")
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert payload(result)["error"].startswith("costs.fixed_bps: no value declared")
+    assert "fixed_bps" in "\n".join(line for line in text.splitlines() if line.startswith("#"))

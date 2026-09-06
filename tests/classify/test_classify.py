@@ -217,7 +217,31 @@ def test_a_changed_construct_clears_the_best(ws: Workspace, store: StateStore) -
     classify(ws, store, HYP_ID)
 
     assert records.best_of(store, HYP_ID) == (None, None)
-    assert [event.kind for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.kind for event in store.events(subject=HYP_ID)].count("best_cleared") == 1
+
+
+def test_a_hypothesis_stripped_to_a_draft_does_not_carry_its_best_into_another_construct(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The route a researched hypothesis takes back to classifiable: strip, add, classify.
+
+    The strip re-pins with no construct, so a classification that then chooses another
+    one has nothing on the registry row to compare against; the best has to have gone at
+    the strip, or a filter inherits a sleeve's champion and `research begin` takes a
+    sleeve into a modifier harness.
+    """
+    certify(ws, store)
+    register(ws, store, HYP_ID, STATED)
+    run = records.insert(store, run_record())
+    records.set_best(store, run, SHA, 1.5)
+    records.close(store, run)
+    register(ws, store, HYP_ID, DRAFT)
+    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID})])
+
+    classify(ws, store, HYP_ID)
+
+    assert records.best_of(store, HYP_ID) == (None, None)
+    assert [event.kind for event in store.events(subject=HYP_ID)].count("best_cleared") == 1
 
 
 def test_an_unchanged_construct_keeps_the_best(ws: Workspace, store: StateStore) -> None:

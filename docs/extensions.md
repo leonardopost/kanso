@@ -484,13 +484,20 @@ class HouseAdapter:
     def credential_origins(self, ws): ...  # per variable, where it resolved — never a value
     def quota(self, ws): ...  # the rate limit, reportable with no credential
     def loaders(self, ws): ...  # id -> factory, nothing built
-    def provider(self, ws): ...  # an InstrumentProvider, or None
+    def provider(self, ws): ...  # a kanso.data.instruments.InstrumentProvider, or None
     def survey(self, ws): ...  # measured reach: Survey
 
 
 ADAPTER = HouseAdapter()
 ADAPTERS = {"house": ADAPTER}
 ```
+
+`provider(ws)` returns the instrument provider, whose protocol lives at
+`kanso.data.instruments.InstrumentProvider` (it is not re-exported from `kanso.data`):
+`resolve(ids, as_of)` answers a definition or a `kanso.data.instruments.ResolveError` —
+the id and the reason, in words — for every id asked, keyed by the id as asked, and
+`sources(instrument_id)` names the symbol the instrument carries at each vendor or broker
+where known. An adapter that resolves nothing returns `None`.
 
 Derive every variable name with `creds.standard_name`, which is the scheme kanso resolves
 under: `KANSO_<SUBJECT>_<PURPOSE>`, the subject being the id the consumer is configured as.

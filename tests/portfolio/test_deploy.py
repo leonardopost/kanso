@@ -243,6 +243,38 @@ def test_an_entry_the_record_does_not_know_holds_no_capital_and_no_stage(
     assert live.served_to is None, "a stage entry no node ran needs no data served"
 
 
+def test_a_version_the_record_forgot_is_not_deployed_and_agrees_with_show(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """A clone's `strategy.yaml` says paper while its `state.db` never travelled.
+
+    `deploy` reads the record, as `portfolio show` does, so it admits nothing and runs no
+    node for a version the record does not know — rather than admitting from the file, which
+    left `show` calling the stage down while `deploy` and the monitor called it deployed.
+    """
+    from kanso.portfolio.deploy import restated
+    from kanso.strategy import files as strategy_files
+
+    # a clone: strategy.yaml marks the version paper and portfolio.yaml lists it, exactly as
+    # the original committed them, but the record a deployment writes never travelled
+    strategy_files.write(ws, restated(composed_strategy, {1: "paper"}))
+    hand_add(ws, "paper", composed_strategy.id)
+    store.connection.execute("DELETE FROM strategy_versions")
+
+    assert show(ws, store).stage("paper").held == (), "show already reads the record"
+
+    made = deploy(ws, store, "paper")
+
+    assert made.admitted == (), "deploy admits nothing the record does not know"
+    assert made.session is None, "and runs no node, so the monitor finds no book to judge"
+    after = show(ws, store).stage("paper")
+    assert after.held == () and after.live is False
+    assert (
+        records.stage_results(store, strategy_id=composed_strategy.id, version=1, stage="paper")
+        == []
+    ), "no phantom window was realised for a version the record does not hold"
+
+
 def test_show_on_an_undeployed_workspace_reports_two_empty_stages(
     ws: Workspace, store: StateStore
 ) -> None:

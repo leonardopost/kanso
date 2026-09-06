@@ -33,7 +33,7 @@ CARDS = 3
 
 @pytest.fixture(scope="module")
 def demo(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The demo workspace, scaffolded, loaded, snapshotted and registered for this module.
+    """The demo workspace, scaffolded, loaded, resolved, snapshotted and registered.
 
     Built once because the load and the freeze are the slow half and every test here
     wants exactly the same starting point. Registration is part of it so that each test
@@ -44,6 +44,8 @@ def demo(tmp_path_factory: pytest.TempPathFactory) -> Path:
     assert run(runner, "init", root, "--demo").exit_code == Exit.OK
     loaded = at(runner, root, "data", "load", "--loader", "synthetic", "--spec", root / "demo.yaml")
     assert loaded.exit_code == Exit.OK, loaded.stdout
+    resolve = ("data", "instruments", "resolve", "--as-of", "2024-01-02")
+    assert at(runner, root, *resolve).exit_code == Exit.OK
     assert at(runner, root, "data", "snapshot").exit_code == Exit.OK
     registered = at(runner, root, "hyp", "add", root / "hypotheses" / DEMO_ID / "hypothesis.yaml")
     assert registered.exit_code == Exit.OK, registered.stdout

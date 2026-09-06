@@ -259,12 +259,22 @@ def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> 
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
 
 
-def test_the_resolved_instruments_reach_the_catalog_store(ws: Workspace) -> None:
+def test_validation_writes_neither_the_store_nor_the_cache(ws: Workspace) -> None:
+    """A validation that left something behind would not be one.
+
+    The universe is resolved to be checked, and afterwards the catalog's instrument
+    store — the registry of record, which `kanso data instruments resolve` alone writes —
+    and the cache are exactly as they were.
+    """
     from kanso.data.instruments import read_store
+
+    before = ws.path("instruments.yaml").read_bytes()
 
     accepted(ws, DOCUMENT)
 
-    assert [str(held.id) for held in read_store(ws).values()] == ["DEMO.SIM"]
+    assert not ws.path("catalog", "data").exists()
+    assert read_store(ws) == {}
+    assert ws.path("instruments.yaml").read_bytes() == before
 
 
 # -- where the file lives ------------------------------------------------------

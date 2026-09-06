@@ -14,7 +14,7 @@ metadata:
 - Decide the semver level from the merged changes: patch (fixes) · minor (features, gates/loaders, `nautilus_trader` range bump, additive migration) · major (incompatible schema or CLI). If unsure, list the merged commits to the maintainer and ask once.
 
 ## Steps
-1. If a migration was added since the last tag: confirm `schema_version` was bumped and `uv run pytest tests/state` passes on a workspace created by the previous release (the migration test fixture).
+1. If a migration was added since the last tag: confirm it is numbered after the newest (the package's schema version follows from the newest migration file; nothing is bumped by hand, and the `schema_version` key in `kanso.toml` is not the guard) and `uv run pytest tests/state` passes on a workspace created by the previous release (the migration test fixture).
 2. If the `nautilus_trader` range changed: confirm the demo e2e and parity tests passed on the new upper bound in CI, and note the wheel/OS constraint in the changelog line.
 3. Bump the version in `pyproject.toml` and `src/kanso/__init__.py` (same string).
 4. Add the `CHANGELOG.md` section `## vX.Y.Z — YYYY-MM-DD`: one line per user-visible change, imperative, no prose; skills/templates changes listed since they affect every workspace.

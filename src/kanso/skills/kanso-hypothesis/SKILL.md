@@ -17,7 +17,8 @@ Deterministic procedure. The CLI validates; you only fill the fields.
    - `mechanism`: one of `mean_reversion | momentum | microstructure | stat_arb | event | carry | vol | other`.
    - `universe`: ids that exist in `instruments.yaml` (`kanso hyp validate` checks them; add instruments first if missing — skill `kanso-data`).
    - `horizon` (holding period) and `resolution` (bar/tick spec) as durations `30m`, `1d`, or `tick|quote|trade`.
-   - `data_requirements`: only what the thesis needs. `costs`, `risk_limits`: keep defaults unless the operator specified.
+   - `data_requirements`: only what the thesis needs. `risk_limits`: keep defaults unless the operator specified.
+   - `costs`: keep the venue's defaults when the thesis requires `quote` data. Without `quote` there are no quotes to take a spread from, so set `costs: {spread: fixed_bps, fixed_bps: <width>}` (or rely on `venues.<MIC>.costs.fixed_bps` in `portfolio.yaml`); otherwise step 3 exits 3 naming `costs.fixed_bps`. State the width you chose.
    - `windows`: research → embargo → certification → forward. Embargo ≥ `max(5 × horizon, 1d)`. Certification strictly after research. `forward.start` is where paper/live replay begins; no end.
    - Leave `construct`, `objective`, `constraints` empty — `kanso classify` fills them; certification gates are planned later at runtime.
 3. `kanso hyp validate hypotheses/<id>/hypothesis.yaml` → fix every reported error (exit 3) until clean.

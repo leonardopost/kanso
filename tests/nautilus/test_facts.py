@@ -1,9 +1,9 @@
 """The engine facts are checked against the engine actually installed here.
 
 These tests are the guard on the module docstring: they assert that every claim
-is checked, that the checks agree with the docstring's record, and that the four
-claims known not to hold are exactly the four that fail. An engine upgrade that
-closes one of those gaps, or opens a new one, fails here first.
+is checked, that the checks agree with the docstring's record, and that the claims
+the package records as design constraints are exactly the ones that fail. An engine
+upgrade that closes one of those gaps, or opens a new one, fails here first.
 """
 
 from __future__ import annotations
@@ -12,17 +12,7 @@ import nautilus_trader
 import pytest
 
 from kanso.nautilus import facts
-from kanso.nautilus.facts import ENGINE_VERSION, Fact, claims, verify
-
-# The claims that do NOT hold against nautilus_trader 1.231.0. Each is a design
-# constraint recorded in the module docstring, not a defect to be fixed here.
-KNOWN_GAPS = {
-    "the engine pairs a component with its config through a config_cls class attribute",
-    "ParquetDataCatalog accepts pyarrow tables or record batches on its write path",
-    "customdataclass reads a module that postpones annotation evaluation",
-    "a persisted session is discoverable through the catalog's run listings for every "
-    "node environment",
-}
+from kanso.nautilus.facts import DESIGN_CONSTRAINTS, ENGINE_VERSION, Fact, claims, verify
 
 
 @pytest.fixture(scope="module")
@@ -63,13 +53,14 @@ def test_facts_are_immutable(verified: list[Fact]) -> None:
         verified[0].holds = True  # type: ignore[misc]
 
 
-def test_every_claim_but_the_known_gaps_holds(verified: list[Fact]) -> None:
+def test_every_claim_but_the_design_constraints_holds(verified: list[Fact]) -> None:
     failed = {fact.claim: fact.evidence for fact in verified if not fact.holds}
-    assert set(failed) == KNOWN_GAPS, failed
+    assert set(failed) == DESIGN_CONSTRAINTS, failed
 
 
-def test_known_gaps_are_claims(verified: list[Fact]) -> None:
-    assert set(claims()) >= KNOWN_GAPS
+def test_design_constraints_are_claims(verified: list[Fact]) -> None:
+    assert set(claims()) >= DESIGN_CONSTRAINTS
+    assert len(DESIGN_CONSTRAINTS) == 4
 
 
 def test_verify_is_repeatable() -> None:

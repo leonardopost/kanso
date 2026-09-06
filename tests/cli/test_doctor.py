@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
+import json
+import shutil
 import socket
 import sqlite3
 from pathlib import Path
@@ -13,14 +16,17 @@ from typer.testing import CliRunner
 
 from kanso import env
 from kanso.cli import doctor as doctor_module
+from kanso.data.snapshot import InstrumentDrift, newest
 from kanso.errors import Exit, PreconditionError
 from kanso.ext import KINDS
+from kanso.nautilus import facts
 from kanso.nautilus.adapters import exec_clients
 from kanso.skills_sync import packaged_skills
 from kanso.state import StateStore
+from kanso.workspace import find
 
 from ..data.adapters.massive import Replay, refused
-from .conftest import at, payload, run
+from .conftest import HYP_ID, INSTRUMENT, RESEARCH, at, lane, payload, run
 
 CHECKS = (
     "versions",
@@ -30,10 +36,15 @@ CHECKS = (
     "envelope",
     "repository",
     "gitignore",
+    "best",
+    "certificates",
+    "record",
     "skills",
     "credentials",
     "adapters",
     "execution",
+    "instruments",
+    "lanes",
     "extensions",
     "engine facts",
 )
@@ -497,14 +508,39 @@ def test_doctor_makes_no_network_call(
     assert at(runner, workspace, "doctor", "--check-adapters").exit_code == Exit.OK
 
 
-def test_engine_facts_report_the_claims_that_do_not_hold(
+def test_engine_facts_list_the_design_constraints_and_grade_ok(
     runner: CliRunner, workspace: Path
 ) -> None:
     result = at(runner, workspace, "doctor", "--json")
 
     check = checks(result)["engine facts"]
+    assert check["status"] == "ok"
     assert "claims hold on nautilus_trader" in str(check["detail"])
-    assert all(item.startswith("does not hold: ") for item in items(result, "engine facts"))
+    listed = items(result, "engine facts")
+    assert all(item.startswith("by design: ") for item in listed)
+    assert {item.removeprefix("by design: ") for item in listed} == facts.DESIGN_CONSTRAINTS
+
+
+def test_a_binding_that_no_longer_holds_fails_the_engine_facts(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gap outside the design constraints is a broken binding, evidence and all."""
+    verified = facts.verify()
+    broken = facts.Fact(
+        claim="a claim kanso binds to", holds=False, evidence="RuntimeError: engine gone"
+    )
+    monkeypatch.setattr(facts, "verify", lambda: [*verified, broken])
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    check = checks(result)["engine facts"]
+    assert check["status"] == "fail"
+    assert "1 binding(s) broken" in str(check["detail"])
+    assert "reinstall nautilus_trader" in str(check["remedy"])
+    assert items(result, "engine facts")[-1] == (
+        "does not hold: a claim kanso binds to — RuntimeError: engine gone"
+    )
 
 
 # -- the redacted report ---------------------------------------------------------------
@@ -762,3 +798,469 @@ def test_a_state_database_ahead_of_the_package_fails_rather_than_reading_as_up_t
     schema = next(c for c in payload(result)["checks"] if c["name"] == "schema")
     assert schema["status"] == "fail"
     assert "past the newest this package ships" in schema["detail"]
+
+
+# -- the files against the records ----------------------------------------------------
+
+
+def _remedy(result: Any, name: str) -> str:
+    return str(checks(result)[name].get("remedy", ""))
+
+
+def _best_sha(root: Path) -> str:
+    with StateStore(root / "state.db") as store:
+        row = store.connection.execute(
+            "SELECT best_sha FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+        ).fetchone()
+    return str(row["best_sha"])
+
+
+def _certified_sha(root: Path) -> str:
+    with StateStore(root / "state.db") as store:
+        row = store.connection.execute("SELECT strategy_sha FROM certificates").fetchone()
+    return str(row["strategy_sha"])
+
+
+def _drop_blob(root: Path, sha: str) -> None:
+    with sqlite3.connect(root / "state.db") as conn:
+        conn.execute("DELETE FROM blobs WHERE sha = ?", (sha,))
+
+
+def test_best_warns_and_never_fails_when_the_workspace_strategy_differs_from_best(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """Editing `hypotheses/<id>/strategy.py` is how an operator prepares `--from-workspace`,
+    so the file kanso owns once `best` exists is graded against the best blob and warns."""
+    path = deployed / "hypotheses" / HYP_ID / "strategy.py"
+    best = _best_sha(deployed)
+    before = at(runner, deployed, "doctor", "--json")
+    assert status(before, "best") == "ok"
+    assert items(before, "best") == [f"{HYP_ID}: strategy.py is best {best[:7]}"]
+
+    path.write_text(path.read_text(encoding="utf-8") + "# edited by hand\n", encoding="utf-8")
+    result = at(runner, deployed, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert status(result, "best") == "warn"
+    assert items(result, "best") == [f"{HYP_ID}: strategy.py is {_sha(path)[:7]} · best {best[:7]}"]
+    assert f"kanso research begin {HYP_ID} --from-workspace" in _remedy(result, "best")
+    assert f"kanso research show {HYP_ID} > hypotheses/{HYP_ID}/strategy.py" in _remedy(
+        result, "best"
+    )
+
+    shown = at(runner, deployed, "research", "show", HYP_ID)
+    path.write_text(shown.stdout, encoding="utf-8")
+    assert status(at(runner, deployed, "doctor", "--json"), "best") == "ok"
+
+
+def test_a_missing_workspace_strategy_is_the_same_warning(
+    runner: CliRunner, deployed: Path
+) -> None:
+    (deployed / "hypotheses" / HYP_ID / "strategy.py").unlink()
+
+    result = at(runner, deployed, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert status(result, "best") == "warn"
+    assert items(result, "best") == [
+        f"{HYP_ID}: strategy.py is missing · best {_best_sha(deployed)[:7]}"
+    ]
+
+
+def test_certificates_fail_only_when_a_subject_s_bytes_are_held_nowhere(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The bytes are held twice, as a blob and as `<sha7>.py` beside the certificate, so
+    losing one is nothing; losing both stops every command that reads the subject."""
+    sha = _certified_sha(deployed)
+    beside = deployed / "certificates" / HYP_ID / f"{sha[:7]}.py"
+    before = at(runner, deployed, "doctor", "--json")
+    assert status(before, "certificates") == "ok"
+    assert checks(before)["certificates"]["detail"] == (
+        "1 certificate(s) · 1 version(s) · 1 subject(s) · every one held"
+    )
+
+    _drop_blob(deployed, sha)
+    assert status(at(runner, deployed, "doctor", "--json"), "certificates") == "ok"
+
+    beside.unlink()
+    result = at(runner, deployed, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert status(result, "certificates") == "fail"
+    [item] = items(result, "certificates")
+    assert item.startswith(f"{HYP_ID} {sha[:7]}: certificate certificates/{HYP_ID}/{sha[:7]}-")
+    assert f", {HYP_ID}@1 · no blob in state · no certificates/{HYP_ID}/{sha[:7]}.py" in item
+    assert item.endswith(f" · bytes held by hypotheses/{HYP_ID}/strategy.py")
+    assert _remedy(result, "certificates") == (
+        f"copy hypotheses/{HYP_ID}/strategy.py to certificates/{HYP_ID}/{sha[:7]}.py, or "
+        f"certify anew with `kanso cert run {HYP_ID}`"
+    )
+
+    shutil.copy(deployed / "hypotheses" / HYP_ID / "strategy.py", beside)
+    assert status(at(runner, deployed, "doctor", "--json"), "certificates") == "ok"
+
+
+def test_a_source_file_holding_other_bytes_is_no_copy_of_the_subject(
+    runner: CliRunner, deployed: Path
+) -> None:
+    sha = _certified_sha(deployed)
+    _drop_blob(deployed, sha)
+    (deployed / "certificates" / HYP_ID / f"{sha[:7]}.py").write_text("# not it\n")
+    (deployed / "hypotheses" / HYP_ID / "strategy.py").unlink()
+
+    result = at(runner, deployed, "doctor", "--json")
+
+    assert status(result, "certificates") == "fail"
+    [item] = items(result, "certificates")
+    assert f"certificates/{HYP_ID}/{sha[:7]}.py holds other bytes" in item
+    assert item.endswith(
+        f" · bytes held by strategies/{HYP_ID}/impl/1/kanso_impl_sleeve_{HYP_ID}_{sha[:12]}.py"
+    )
+    assert _remedy(result, "certificates").startswith(
+        f"copy strategies/{HYP_ID}/impl/1/kanso_impl_sleeve_{HYP_ID}_{sha[:12]}.py to "
+    )
+
+
+def test_a_version_citing_bytes_held_nowhere_is_named_by_its_construct(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """A strategy version cites its sleeve and every attached construct by sha; each is a
+    subject of its own, and one held nowhere in the workspace is reported by that name."""
+    attached = [
+        {"hyp_id": "demo_filter", "strategy_sha": "c" * 64, "construct": "filter", "params": {}}
+    ]
+    with sqlite3.connect(deployed / "state.db") as conn:
+        conn.execute(
+            "INSERT INTO strategy_versions (strategy_id, version, state, sleeve, attached, config,"
+            " pins, expectation, created_at) SELECT strategy_id, 2, 'composed', sleeve, ?, config,"
+            " pins, expectation, created_at FROM strategy_versions WHERE version = 1",
+            (json.dumps(attached),),
+        )
+
+    result = at(runner, deployed, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert "1 certificate(s) · 2 version(s) · 2 subject(s)" in str(
+        checks(result)["certificates"]["detail"]
+    )
+    [item] = items(result, "certificates")
+    assert item.startswith(f"demo_filter ccccccc: {HYP_ID}@2 filter · no blob in state · no ")
+    assert "bytes held by" not in item
+    assert _remedy(result, "certificates") == (
+        "restore certificates/demo_filter/ccccccc.py from a copy of the workspace, or certify "
+        "anew with `kanso cert run demo_filter`"
+    )
+
+
+def test_instruments_lists_the_operator_s_entries_and_resolves_every_universe(
+    runner: CliRunner, registered: Path
+) -> None:
+    result = at(runner, registered, "doctor", "--json")
+
+    assert status(result, "instruments") == "ok"
+    assert checks(result)["instruments"]["detail"] == (
+        "1 entry · 1 manual · 1 overridden · 1 universe id(s) across 1 hypothesis(es) · the "
+        "store matches the newest snapshot"
+    )
+    assert items(result, "instruments") == [
+        f"{INSTRUMENT}: manual · override currency, lot_size, price_increment",
+        f"{HYP_ID} {INSTRUMENT}: manual, built · as of {RESEARCH[0]}",
+    ]
+
+
+def test_a_resolved_entry_answers_from_the_store_for_the_date_it_was_resolved_as_of(
+    runner: CliRunner, registered: Path
+) -> None:
+    """A vendor-resolved entry needs no vendor again while the store holds the definition
+    its `resolved` block names, as of the date the hypothesis researches from."""
+    shown = payload(at(runner, registered, "data", "instruments", "show", "--json"))
+    [held] = shown["instruments"]
+    path = registered / "instruments.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "manual: true",
+            "manual: false\n  resolved:\n    adapter: acme\n    as_of: 2024-01-02\n"
+            f"    at: 2026-01-01T00:00:00+00:00\n    checksum: {held['checksum']}",
+        ),
+        encoding="utf-8",
+    )
+
+    result = at(runner, registered, "doctor", "--json")
+
+    assert status(result, "instruments") == "ok"
+    assert items(result, "instruments") == [
+        f"{INSTRUMENT}: override currency, lot_size, price_increment · resolved by acme as of "
+        "2024-01-02",
+        f"{HYP_ID} {INSTRUMENT}: resolved by acme, in the store · as of {RESEARCH[0]}",
+    ]
+
+
+def test_a_manual_entry_the_engine_rejects_fails_by_name(
+    runner: CliRunner, registered: Path
+) -> None:
+    path = registered / "instruments.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("  override:\n", "  override:\n    nonsense: 1\n"),
+        encoding="utf-8",
+    )
+
+    result = at(runner, registered, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert status(result, "instruments") == "fail"
+    assert any(
+        item.startswith(f"{HYP_ID} {INSTRUMENT}: {INSTRUMENT}: Equity has no field nonsense")
+        for item in items(result, "instruments")
+    )
+
+
+def test_a_universe_id_the_registry_no_longer_names_fails(
+    runner: CliRunner, registered: Path
+) -> None:
+    path = registered / "instruments.yaml"
+    path.write_text(path.read_text(encoding="utf-8").replace(INSTRUMENT, "OTHER.SIM"))
+
+    result = at(runner, registered, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert status(result, "instruments") == "fail"
+    assert f"{HYP_ID} {INSTRUMENT}: unknown: no entry in instruments.yaml · as of" in " ".join(
+        items(result, "instruments")
+    )
+    assert _remedy(result, "instruments") == (
+        f"correct {INSTRUMENT} in instruments.yaml, then run `kanso data instruments resolve`"
+    )
+
+
+def test_an_id_only_a_reference_adapter_could_resolve_is_reported_and_never_fetched(
+    runner: CliRunner, registered: Path
+) -> None:
+    """`doctor` makes no network call, so such an id is a warning naming the resolve to
+    run — and a failure when no adapter is configured, since resolution would refuse."""
+    path = registered / "instruments.yaml"
+    path.write_text(path.read_text(encoding="utf-8").replace("manual: true", "manual: false"))
+
+    refused = at(runner, registered, "doctor", "--json")
+    assert status(refused, "instruments") == "fail"
+    assert any(
+        "no reference adapter is configured ([data] reference)" in item
+        for item in items(refused, "instruments")
+    )
+
+    config = registered / "kanso.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + '\n[data]\nreference = "massive"\n', encoding="utf-8"
+    )
+    result = at(runner, registered, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert status(result, "instruments") == "warn"
+    assert f"{INSTRUMENT}: override currency, lot_size, price_increment · unresolved" in items(
+        result, "instruments"
+    )
+    assert (
+        f"{HYP_ID} {INSTRUMENT}: would resolve through massive, which doctor does not call · "
+        f"as of {RESEARCH[0]}"
+    ) in items(result, "instruments")
+    assert _remedy(result, "instruments") == (
+        f"run `kanso data instruments resolve {INSTRUMENT}` to resolve them"
+    )
+
+
+def test_a_resolution_since_the_newest_snapshot_is_drift_a_new_snapshot_clears(
+    runner: CliRunner, registered: Path
+) -> None:
+    assert (
+        at(runner, registered, "data", "instruments", "resolve", "--as-of", "2024-02-01").exit_code
+        == Exit.OK
+    )
+
+    result = at(runner, registered, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert status(result, "instruments") == "warn"
+    assert "the store differs from what the newest snapshot pinned" in str(
+        checks(result)["instruments"]["detail"]
+    )
+    assert any(
+        item.startswith("store ") and "pinned" in item for item in items(result, "instruments")
+    )
+    assert _remedy(result, "instruments") == (
+        "run `kanso data snapshot` to pin the definitions the store holds now"
+    )
+
+    assert at(runner, registered, "data", "snapshot").exit_code == Exit.OK
+    assert status(at(runner, registered, "doctor", "--json"), "instruments") == "ok"
+
+
+def test_instrument_drift_is_the_comparison_a_run_is_pinned_by(
+    runner: CliRunner, registered: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`doctor` asks the comparison `research begin` pins a run by, and reports its answer.
+
+    The comparison is stubbed both ways: a store that did move is reported as matching
+    when the package's comparison says it does, and a store that did not move is reported
+    as drifted, with the snapshot and both checksums the comparison named, when it says
+    so. A comparison of doctor's own would answer from the files and disagree.
+    """
+    taken = newest(find(registered))
+    assert taken is not None
+    resolve = ("data", "instruments", "resolve", "--as-of", "2024-02-01")
+    assert at(runner, registered, *resolve).exit_code == Exit.OK
+
+    monkeypatch.setattr(doctor_module, "instrument_drift", lambda ws, snapshot: None)
+    agreed = at(runner, registered, "doctor", "--json")
+
+    assert status(agreed, "instruments") == "ok"
+    assert "the store matches the newest snapshot" in str(checks(agreed)["instruments"]["detail"])
+
+    assert at(runner, registered, "data", "snapshot").exit_code == Exit.OK
+    stub = InstrumentDrift(snapshot_id=taken.snapshot_id, pinned="p" * 64, held="h" * 64)
+    monkeypatch.setattr(doctor_module, "instrument_drift", lambda ws, snapshot: stub)
+    moved = at(runner, registered, "doctor", "--json")
+
+    assert status(moved, "instruments") == "warn"
+    assert f"store {'h' * 12} · newest snapshot {taken.snapshot_id[:7]} pinned {'p' * 12}" in items(
+        moved, "instruments"
+    )
+    assert _remedy(moved, "instruments") == (
+        "run `kanso data snapshot` to pin the definitions the store holds now"
+    )
+
+
+def test_instruments_makes_no_catalog_where_there_is_none(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """A workspace that never loaded data has no `catalog/`, and diagnosing it creates none."""
+    shutil.rmtree(workspace / "catalog", ignore_errors=True)
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert str(checks(result)["instruments"]["detail"]).endswith(" · no snapshot yet")
+    assert not (workspace / "catalog").exists()
+
+
+def test_lanes_grade_an_open_run_by_what_its_directory_holds(
+    runner: CliRunner, registered: Path
+) -> None:
+    """The three scoped files as pinned are `ok`; a departure warns before the next card's
+    `strategy_integrity` refuses it; a directory gone under the run fails, since no card
+    can run there; ending the run clears all three."""
+    assert at(runner, registered, "research", "begin", HYP_ID).exit_code == Exit.OK
+    directory = lane(registered)
+    relative = f"runs/op/{HYP_ID}"
+    opened = at(runner, registered, "doctor", "--json")
+    assert status(opened, "lanes") == "ok"
+    assert items(opened, "lanes") == [f"op {HYP_ID}: {relative} holds the three scoped files"]
+
+    (directory / "extra.txt").write_text("junk\n", encoding="utf-8")
+    (directory / "program.md").unlink()
+    departed = at(runner, registered, "doctor", "--json")
+    assert departed.exit_code == Exit.OK
+    assert status(departed, "lanes") == "warn"
+    [item] = items(departed, "lanes")
+    assert "'extra.txt' is not one of the three scoped files" in item
+    assert "'program.md' is missing from the lane directory" in item
+    assert _remedy(departed, "lanes").startswith(
+        f"run `kanso research end {HYP_ID}` and begin again"
+    )
+
+    shutil.rmtree(directory)
+    gone = at(runner, registered, "doctor", "--json")
+    assert gone.exit_code == Exit.PRECONDITION
+    assert status(gone, "lanes") == "fail"
+    assert items(gone, "lanes") == [f"op {HYP_ID}: {relative} is gone"]
+    assert _remedy(gone, "lanes").startswith(f"run `kanso research end {HYP_ID}`")
+
+    assert at(runner, registered, "research", "end", HYP_ID).exit_code == Exit.OK
+    ended = at(runner, registered, "doctor", "--json")
+    assert status(ended, "lanes") == "ok"
+    assert checks(ended)["lanes"]["detail"] == "0 open run(s) · 0 lane directories"
+
+
+def test_a_lane_directory_with_no_open_run_behind_it_warns(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """Files beside the lanes — the daemon's log, a run's log — are not lane directories."""
+    (workspace / "runs" / "l1" / "ghost").mkdir(parents=True)
+    (workspace / "runs" / "daemon.log").write_text("", encoding="utf-8")
+    (workspace / "runs" / "l1" / "ghost-20260906-1.jsonl").write_text("", encoding="utf-8")
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert status(result, "lanes") == "warn"
+    assert items(result, "lanes") == ["runs/l1/ghost: no open run behind it"]
+    assert _remedy(result, "lanes") == (
+        "`rm -r runs/l1/ghost`; a lane directory holds only copies of blobs in state"
+    )
+
+
+def test_the_record_checks_have_nothing_to_grade_without_a_state_database(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """An absent `state.db` is the schema check's warning; the checks that read records
+    report that nothing is recorded, and never create the database they would read."""
+    (workspace / "state.db").unlink()
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    for name in ("best", "certificates", "lanes"):
+        assert status(result, name) == "ok"
+        assert checks(result)[name]["detail"] == "nothing recorded yet · no state.db"
+    assert "universes not checked: no state.db" in items(result, "instruments")
+    assert not (workspace / "state.db").exists()
+
+
+def test_the_record_checks_are_not_graded_against_a_database_this_package_cannot_read(
+    runner: CliRunner, workspace: Path
+) -> None:
+    with sqlite3.connect(workspace / "state.db") as conn:
+        conn.execute("PRAGMA user_version = 0")
+    behind = at(runner, workspace, "doctor", "--json")
+    for name in ("best", "certificates", "lanes"):
+        assert status(behind, name) == "warn"
+        assert checks(behind)[name]["detail"] == "not checked: state.db is 2 migration(s) behind"
+        assert _remedy(behind, name) == "run `kanso migrate`"
+    assert "universes not checked: state.db is 2 migration(s) behind" in items(
+        behind, "instruments"
+    )
+
+    (workspace / "state.db").write_bytes(b"not a database at all")
+    broken = at(runner, workspace, "doctor", "--json")
+    assert status(broken, "schema") == "fail"
+    for name in ("best", "certificates", "lanes"):
+        assert status(broken, name) == "warn"
+        assert str(checks(broken)[name]["detail"]).startswith(
+            "not checked: state.db could not be opened"
+        )
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_certified_files_the_record_has_no_memory_of_are_named_as_a_fresh_start(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """A clone carries the files and not `state.db`, by design: `doctor` says so once,
+    warns rather than fails, and names what did not travel and what re-establishes it."""
+    before = at(runner, deployed, "doctor", "--json")
+    record = next(c for c in payload(before)["checks"] if c["name"] == "record")
+    assert record["status"] == "ok"
+
+    (deployed / "state.db").unlink()
+    for suffix in ("-journal", "-wal", "-shm"):
+        (deployed / f"state.db{suffix}").unlink(missing_ok=True)
+    assert at(runner, deployed, "migrate").exit_code == Exit.OK  # a fresh, empty record
+
+    after = at(runner, deployed, "doctor", "--json")
+    record = next(c for c in payload(after)["checks"] if c["name"] == "record")
+    assert record["status"] == "warn"
+    assert any("certificate(s) on disk" in item for item in record["items"])
+    assert any("version(s) on disk" in item for item in record["items"])
+    assert "did not travel" in record["remedy"]
+    assert "--as NAME" in record["remedy"], "approvals are re-made by a person, never carried"

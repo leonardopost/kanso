@@ -463,6 +463,32 @@ def test_certified_bytes_are_never_written_over_another_subject_bytes(
         certify(ws, store, HYP_ID)
 
 
+def test_a_certificate_on_disk_refuses_a_repeat_when_state_has_no_record(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A clone certifies from an empty state.db, so the refusal must read the files it has.
+
+    The committed certificate is named with the trial count that stood when it was minted;
+    a clone re-certifying the same bytes from trial one would write a second file under a
+    different name unless the refusal ignores the trial count and matches the subject, the
+    plan and the engine — which is what keeps the count from being laundered.
+    """
+    classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING)
+    write_plan(ws)
+    directory = certificate.certificates_dir(ws, HYP_ID)
+    directory.mkdir(parents=True, exist_ok=True)
+    committed = directory / certificate.filename(sha, 4, 1, run.engine_version())
+    committed.write_text("verdict: pass\n", encoding="utf-8")
+
+    with pytest.raises(PreconditionError, match="immutable") as refused:
+        certify(ws, store, HYP_ID)
+
+    assert committed.name in refused.value.message
+    assert certificate.filename(sha, 1, 1, run.engine_version()) != committed.name
+    assert {path.name for path in directory.glob("*.yaml")} == {committed.name, "plan.yaml"}
+
+
 # --- what the pinned data has to support --------------------------------------
 
 

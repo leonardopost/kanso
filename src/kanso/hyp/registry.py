@@ -14,9 +14,13 @@ Either way it is refused outright while a run is active: the run is pinned to th
 that were registered when it began, and moving the pin under it would make the lane's
 copy disagree with the run without anything having changed in the lane.
 
-The scope a `best` is comparable under is the universe, the resolution and the data
-requirements. A card's metric means nothing across a change to any of the three, so a
-re-pin that changes one clears the hypothesis's `best` and says so in the event log.
+The scope a `best` is comparable under is the universe, the resolution, the data
+requirements and the construct. A card's metric means nothing across a change to any of
+the four, so a re-pin that changes one clears the hypothesis's `best` and says which in
+the event log. Clearing the classification counts as a change of construct: a draft has
+none, and the best was earned as something. It is the re-pin that clears, whichever
+command re-pins, so `classify` writing another construct clears on the same terms as an
+operator stating one.
 """
 
 from __future__ import annotations
@@ -48,8 +52,11 @@ DRAFT: Final[Status] = "draft"
 CLASSIFIED: Final[Status] = "classified"
 RETIRED: Final[Status] = "retired"
 
-SCOPE: Final = ("universe", "resolution", "data_requirements")
+SCOPE: Final = ("universe", "resolution", "data_requirements", "construct")
 """What a `best` is comparable under; a change to any of them clears it."""
+
+CONSTRUCT: Final = "construct"
+"""The scope field that joined after the first release; a row pinned before it has none."""
 
 REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"
@@ -155,13 +162,14 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     thesis is needs no model to say so, which is the same override that is open to them
     after a classification. A re-pin keeps the status while the file is still classified
     and returns it to `draft` otherwise, and clears the hypothesis's `best` when the
-    universe, the resolution or the data requirements changed.
+    universe, the resolution, the data requirements or the construct changed.
     """
     refuse_active_run(store, hyp.id, "re-pin")
     held = _row(store, hyp.id)
     sha = store.put_blob(source)
     scope = _scope(hyp)
-    cleared = held is not None and _scope_of(held) != scope
+    before = {} if held is None else _scope_of(held)
+    cleared = held is not None and held["best_sha"] is not None and before != scope
     status: Status
     if hyp.construct is None:
         status = DRAFT
@@ -186,7 +194,7 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     )
     store.connection.execute(_UPSERT, values)
     if cleared:
-        store.event(BEST_CLEARED, hyp.id, {"reason": "scope changed", "scope": scope})
+        store.event(BEST_CLEARED, hyp.id, {"reason": _moved(before, scope), "scope": scope})
     store.event(
         REGISTERED if held is None else REPINNED,
         hyp.id,
@@ -285,17 +293,35 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def _scope(hyp: Hypothesis) -> dict[str, Any]:
-    """The three fields a metric is only comparable within, in a stable order."""
+    """The four fields a metric is only comparable within, in a stable order."""
     return {
         "universe": sorted(hyp.universe),
         "resolution": hyp.resolution,
         "data_requirements": sorted(hyp.data_requirements),
+        CONSTRUCT: hyp.construct.id if hyp.construct else None,
     }
 
 
 def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
+    """The scope the row was pinned under.
+
+    The construct was pinned in its own column before it joined the pins, and the two are
+    written together, so a row from before then answers from the column.
+    """
     pins = _pins(held)
-    return {name: pins.get(name) for name in SCOPE}
+    scope = {name: pins.get(name) for name in SCOPE}
+    if CONSTRUCT not in pins:
+        scope[CONSTRUCT] = _optional(held["construct_id"])
+    return scope
+
+
+def _moved(before: dict[str, Any], after: dict[str, Any]) -> str:
+    """Which of the scope's fields changed, and from what to what."""
+    return "; ".join(
+        f"{name} changed from {before.get(name)!r} to {after[name]!r}"
+        for name in SCOPE
+        if before.get(name) != after[name]
+    )
 
 
 def _optional(value: Any) -> str | None:

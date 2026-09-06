@@ -274,6 +274,22 @@ from itertools import count
 ENGINE_VERSION = "1.231.0"
 """The `nautilus_trader` version every fact in this module was verified against."""
 
+DESIGN_CONSTRAINTS: frozenset[str] = frozenset(
+    {
+        "the engine pairs a component with its config through a config_cls class attribute",
+        "ParquetDataCatalog accepts pyarrow tables or record batches on its write path",
+        "customdataclass reads a module that postpones annotation evaluation",
+        "a persisted session is discoverable through the catalog's run listings for every "
+        "node environment",
+    }
+)
+"""The claims that do **not** hold against `ENGINE_VERSION`, by design.
+
+Each is a constraint recorded in the module docstring, not a defect. `doctor` lists
+them as such and grades any other claim that fails to hold as a broken binding, which
+is what keeps a raising check from reading as one more design constraint.
+"""
+
 
 @dataclass(frozen=True)
 class Fact:

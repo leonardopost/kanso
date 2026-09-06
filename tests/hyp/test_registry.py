@@ -6,6 +6,7 @@ the bytes registered when it began.
 
 from __future__ import annotations
 
+import json
 from hashlib import sha256
 from typing import Any
 
@@ -17,11 +18,14 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.hyp.conftest import (
     DOCUMENT,
+    FILTER_CLASSIFICATION,
+    HOST_ID,
     HYP_ID,
     SLEEVE_CLASSIFICATION,
     begin_run,
     document,
     write_hypothesis,
+    write_strategy,
 )
 
 
@@ -91,6 +95,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
         "universe": ["DEMO"],
         "resolution": "1m",
         "data_requirements": ["bar"],
+        "construct": None,
     }
 
 
@@ -212,14 +217,75 @@ def test_a_change_of_scope_clears_the_best(
     assert found.best_run_id is None
 
 
+def test_a_change_of_construct_clears_the_best(ws: Workspace, store: StateStore) -> None:
+    """The override path: the operator states another construct and re-pins."""
+    write_strategy(ws, HOST_ID)
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+
+    register(ws, store, document(**FILTER_CLASSIFICATION))
+
+    found = record(ws, store)
+    assert found.construct == "filter"
+    assert found.best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["reason"] for event in cleared] == [
+        "construct changed from 'sleeve' to 'filter'"
+    ]
+
+
+def test_clearing_the_classification_clears_the_best(ws: Workspace, store: StateStore) -> None:
+    """A draft has no construct, and the best was earned as one."""
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+
+    register(ws, store, DOCUMENT)
+
+    found = record(ws, store)
+    assert found.status == "draft"
+    assert found.best_sha is None
+
+
+def test_a_re_registration_under_the_same_construct_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+
+    register(ws, store, document(title="A better title", **SLEEVE_CLASSIFICATION))
+
+    assert record(ws, store).best_sha == "c" * 64
+
+
+def test_a_row_pinned_before_the_construct_joined_the_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A row from the first release pinned the construct in its column only."""
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    held = store.connection.execute(
+        "SELECT pins FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    pins = json.loads(held["pins"])
+    del pins["construct"]
+    store.connection.execute(
+        "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
+    )
+
+    register(ws, store, document(title="A better title", **SLEEVE_CLASSIFICATION))
+
+    assert record(ws, store).best_sha == "c" * 64
+
+
 def test_clearing_the_best_says_so_in_the_event_log(ws: Workspace, store: StateStore) -> None:
     register(ws, store)
     set_best(store)
 
     register(ws, store, document(resolution="5m"))
 
-    kinds = [event.kind for event in store.events(subject=HYP_ID)]
-    assert kinds == ["registered", "best_cleared", "repinned"]
+    events = store.events(subject=HYP_ID)
+    assert [event.kind for event in events] == ["registered", "best_cleared", "repinned"]
+    assert events[1].detail["reason"] == "resolution changed from '1m' to '5m'"
 
 
 def test_a_registration_whose_pins_record_no_scope_clears_the_best(

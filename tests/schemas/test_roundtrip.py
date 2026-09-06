@@ -6,6 +6,7 @@ import pytest
 from hypothesis import given
 
 from kanso.errors import ValidationError
+from kanso.replay.record import Session
 from kanso.schemas import (
     Card,
     Certificate,
@@ -90,6 +91,14 @@ def test_criteria_item_round_trips(value: CriteriaItem) -> None:
 @given(gen.venue_models())
 def test_venue_model_round_trips(value: VenueModel) -> None:
     assert parse_yaml(VenueModel, dump_yaml(value)) == value
+
+
+@given(gen.sessions())
+def test_session_round_trips(value: Session) -> None:
+    """`sessions/<id>/session.yaml` spells `from` and `exec` as written, and reads back whole."""
+    text = dump_yaml(value)
+    assert parse_yaml(Session, text) == value
+    assert "from:" in text and "exec:" in text and "from_:" not in text and "exec_:" not in text
 
 
 @pytest.mark.parametrize(

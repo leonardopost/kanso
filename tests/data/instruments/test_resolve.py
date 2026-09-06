@@ -14,12 +14,13 @@ from kanso.data.instruments import (
     ResolveError,
     build,
     conventions_for,
+    current_definitions,
     definition_checksum,
     read_store,
     resolve_universe,
     write_store,
 )
-from kanso.errors import Exit, ValidationError
+from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
 from kanso.schemas import InstrumentEntry, InstrumentsFile, load_yaml
 from kanso.workspace import Workspace, init
 
@@ -32,11 +33,15 @@ def cache(ws: Workspace) -> InstrumentsFile:
     return load_yaml(InstrumentsFile, ws.path("instruments.yaml"))
 
 
-def equity(nautilus_id: str = "AAPL.XNAS", increment: str = "0.01") -> Any:
+def equity(nautilus_id: str = "AAPL.XNAS", increment: str = "0.01", as_of: date = AS_OF) -> Any:
     entry = InstrumentEntry.model_validate(
         {**EQUITY, "nautilus_id": nautilus_id, "override": {"currency": "USD"}}
     )
-    return build(entry, {**conventions_for(entry, AS_OF), "price_increment": increment})
+    return build(entry, {**conventions_for(entry, as_of), "price_increment": increment})
+
+
+CORRECTED: dict[str, Any] = {**EQUITY, "override": {"currency": "USD", "price_increment": "0.05"}}
+"""The AAPL entry with its tick corrected by hand: a same-dated resolution now differs."""
 
 
 def probing(ws: Workspace, probe: Probe, monkeypatch: pytest.MonkeyPatch) -> Workspace:
@@ -313,9 +318,28 @@ def test_an_override_edited_since_the_resolution_makes_the_cache_stale(
             "override": {"price_increment": "0.05"},
         },
     )
-    resolved = resolve_universe(configured, ["MSFT"], AS_OF)
+    with pytest.raises(PreconditionError, match="MSFT.XNAS: the store already holds"):
+        resolve_universe(configured, ["MSFT"], AS_OF)
     assert probe.asked == [("MSFT",)]
+
+    resolved = resolve_universe(configured, ["MSFT"], AS_OF, refresh=True)
     assert str(resolved["MSFT"].price_increment) == "0.05"
+    assert str(current_definitions(ws)["MSFT.XNAS"].price_increment) == "0.05"
+
+
+def test_resolving_without_recording_writes_nothing(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The question is answered, and the store and the cache are as they were."""
+    probe = Probe(answers={"MSFT": equity("MSFT.XNAS")})
+    before = ws.path("instruments.yaml").read_bytes()
+
+    resolved = resolve_universe(probing(ws, probe, monkeypatch), ["MSFT"], AS_OF, record=False)
+
+    assert probe.asked == [("MSFT",)]
+    assert resolved["MSFT"].id.value == "MSFT.XNAS"
+    assert read_store(ws) == {}
+    assert ws.path("instruments.yaml").read_bytes() == before
 
 
 # --- the provider protocol ----------------------------------------------------
@@ -398,6 +422,83 @@ def test_the_core_ships_no_reference_provider() -> None:
 def test_a_definition_written_by_hand_is_still_written(ws: Workspace) -> None:
     write_store(ws, [equity()])
     assert len(read_store(ws)) == 1
+
+
+# --- the store as the registry of record --------------------------------------
+
+
+def test_a_same_dated_correction_is_refused_until_refreshed(ws: Workspace) -> None:
+    """What an instrument was on a date is one fact, so correcting it is explicit."""
+    write(ws, AAPL=EQUITY)
+    first = resolve_universe(ws, ["AAPL"], AS_OF)["AAPL"]
+    write(ws, AAPL=CORRECTED)
+
+    with pytest.raises(PreconditionError) as raised:
+        resolve_universe(ws, ["AAPL"], AS_OF)
+
+    assert raised.value.code is Exit.PRECONDITION
+    assert raised.value.message.startswith(
+        f"AAPL.XNAS: the store already holds a definition as of {AS_OF}"
+    )
+    assert "--refresh" in str(raised.value.remedy)
+    assert set(read_store(ws)) == {definition_checksum(first)}
+
+
+def test_a_refresh_replaces_the_same_dated_definition_in_the_store(
+    ws: Workspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The store holds what the refresh reported — one definition, and the engine says nothing."""
+    write(ws, AAPL=EQUITY)
+    resolve_universe(ws, ["AAPL"], AS_OF)
+    write(ws, AAPL=CORRECTED)
+    capsys.readouterr()
+
+    corrected = resolve_universe(ws, ["AAPL"], AS_OF, refresh=True)["AAPL"]
+
+    assert set(read_store(ws)) == {definition_checksum(corrected)}
+    assert str(current_definitions(ws)["AAPL.XNAS"].price_increment) == "0.05"
+    assert capsys.readouterr().out == ""
+
+
+def test_a_definition_dated_otherwise_is_added_beside_the_held_one(ws: Workspace) -> None:
+    write(ws, AAPL=EQUITY)
+    earlier = resolve_universe(ws, ["AAPL"], AS_OF)["AAPL"]
+    write(ws, AAPL=CORRECTED)
+
+    later = resolve_universe(ws, ["AAPL"], date(2024, 6, 4))["AAPL"]
+
+    assert set(read_store(ws)) == {definition_checksum(earlier), definition_checksum(later)}
+    assert current_definitions(ws)["AAPL.XNAS"].ts_init == later.ts_init
+
+
+def test_current_definitions_keep_the_newest_dated_definition_of_each_id(ws: Workspace) -> None:
+    older = equity(increment="0.01", as_of=date(2024, 1, 2))
+    newer = equity(increment="0.05", as_of=date(2025, 3, 3))
+    other = equity("MSFT.XNAS")
+    write_store(ws, [newer, older, other])
+
+    current = current_definitions(ws)
+
+    assert set(current) == {"AAPL.XNAS", "MSFT.XNAS"}
+    assert definition_checksum(current["AAPL.XNAS"]) == definition_checksum(newer)
+    assert len(read_store(ws)) == 3
+
+
+def test_a_write_the_engine_skipped_is_a_failure(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine skips a write whose file exists and says so on stdout; here it is an error."""
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    write_store(ws, [equity()])
+    monkeypatch.setattr(ParquetDataCatalog, "delete_data_range", lambda *args, **kw: None)
+
+    with pytest.raises(KansoError) as raised:
+        write_store(ws, [equity(increment="0.05")], replace=True)
+
+    assert raised.value.code is Exit.ERROR
+    assert "AAPL.XNAS" in raised.value.message
+    assert "skipped the write" in raised.value.message
 
 
 def test_the_demo_workspace_resolves_its_instrument(tmp_path: Path) -> None:

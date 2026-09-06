@@ -146,6 +146,20 @@ def test_gitignore_created_with_every_entry(fresh: Path) -> None:
     assert "# catalog/" in [ln.strip() for ln in lines], "the catalog choice stays commented"
 
 
+def test_the_envelope_is_kept_out_of_git(fresh: Path) -> None:
+    """`envelope.yaml` measures the host, so a clone must detect its own rather than inherit
+    a committed one — the workspace template excludes it.
+    """
+    assert "envelope.yaml" in gitignore_entries()
+
+    ws = init(fresh)
+
+    lines = [
+        line.strip() for line in ws.path(".gitignore").read_text(encoding="utf-8").splitlines()
+    ]
+    assert "envelope.yaml" in lines
+
+
 def test_gitignore_appends_only_what_is_missing(fresh: Path) -> None:
     (fresh / ".gitignore").write_text("*.pyc\n.env\n", encoding="utf-8")
 
@@ -228,3 +242,55 @@ def test_without_demo_nothing_demo_is_written(fresh: Path) -> None:
     assert not ws.path("mock").exists()
     assert list(ws.path("hypotheses").iterdir()) == []
     assert "<frontier-model-id>" in ws.path("models.yaml").read_text(encoding="utf-8")
+
+
+def test_a_commented_entry_does_not_count_as_present(fresh: Path) -> None:
+    """`# state.db` ignores nothing, so the bare entry is appended beside it."""
+    (fresh / ".gitignore").write_text("# state.db\n", encoding="utf-8")
+
+    appended = append_gitignore(fresh, ["state.db"])
+
+    lines = (fresh / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert appended == ["state.db"]
+    assert lines.count("state.db") == 1 and "# state.db" in lines
+
+
+def test_an_existing_gitignore_is_offered_the_catalog_choice_once(fresh: Path) -> None:
+    """`init` into a directory that already has a `.gitignore` — every `uv init` project —
+    used to write only the normative entries, so the commented `catalog/` line the docs call
+    the operator's to decide never reached them. It is appended commented, once, and left
+    alone when the file already mentions `catalog/` either way. `append_gitignore` itself
+    stays a plain append: `skills sync` calls it too."""
+    from kanso.workspace import _write_gitignore, init
+
+    (fresh / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    init(fresh)
+    first = (fresh / ".gitignore").read_text(encoding="utf-8")
+    _write_gitignore(fresh)
+    second = (fresh / ".gitignore").read_text(encoding="utf-8")
+
+    assert first.count("# catalog/") == 1
+    assert "catalog/.cache/" in first, "the normative entries still arrive"
+    assert second == first, "a second pass changes nothing"
+
+    decided = fresh / "decided"
+    decided.mkdir()
+    (decided / ".gitignore").write_text("catalog/\n", encoding="utf-8")
+    _write_gitignore(decided)
+    assert "# catalog/" not in (decided / ".gitignore").read_text(encoding="utf-8")
+
+    untouched = fresh / "plain"
+    untouched.mkdir()
+    (untouched / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    append_gitignore(untouched, ["runs/"])
+    assert "catalog" not in (untouched / ".gitignore").read_text(encoding="utf-8")
+
+    # Every normative entry already present and no final newline: nothing to append, so
+    # the choice is the only thing written, and it must start on its own line.
+    complete = fresh / "complete"
+    complete.mkdir()
+    (complete / ".gitignore").write_text("\n".join(gitignore_entries()), encoding="utf-8")
+    _write_gitignore(complete)
+    text = (complete / ".gitignore").read_text(encoding="utf-8")
+    assert text.endswith("# catalog/\n")
+    assert f"{gitignore_entries()[-1]}\n" in text, "the last entry keeps its own line"

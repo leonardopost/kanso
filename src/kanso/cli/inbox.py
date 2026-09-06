@@ -29,8 +29,12 @@ app = typer.Typer(help="Unread escalations, and acknowledging one.", invoke_with
 
 JsonOption = Annotated[bool, typer.Option("--json", help="Print one JSON object.")]
 
-KIND, SUBJECT = 14, 20
-"""Widths of the kind and subject columns of the human list."""
+KIND, SUBJECT = max(map(len, inbox.KINDS)) + 1, 20
+"""Widths of the kind and subject columns of the human list.
+
+The kind column is one wider than the longest kind, so every kind — `deploy_blocked`
+included — keeps a space before its subject.
+"""
 
 
 @app.callback(invoke_without_command=True)

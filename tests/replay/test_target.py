@@ -17,6 +17,7 @@ from tests.replay.conftest import (
     BLOCKING_FILTER,
     CERTIFICATION,
     FLAT,
+    FORWARD_START,
     INSTRUMENT,
     REVERTING,
     carded,
@@ -206,6 +207,39 @@ def test_an_unknown_strategy_is_refused(ws: Workspace, store: StateStore) -> Non
     """A strategy that was never composed cannot be replayed."""
     with pytest.raises(PreconditionError, match="is not a composed strategy"):
         resolve(ws, store, strategy="never_composed")
+
+
+def test_a_version_resolves_from_the_files_when_the_registry_forgot_its_hypothesis(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A clone has `strategy.yaml`, `impl/` and `hypothesis.yaml` but no registry row.
+
+    The version was composed from the committed hypothesis, whose file travels with the
+    repository, so its universe and forward window are recovered from that file rather than
+    demanding the hypothesis be re-registered before a committed version can be replayed.
+    """
+    write_hypothesis(ws, document())
+    composed(ws, store, "demo_mr")
+    assert store.connection.execute("SELECT COUNT(*) FROM hypotheses").fetchone()[0] == 0
+
+    target = resolve(ws, store, strategy="demo_mr")
+
+    assert target.label == "demo_mr@1"
+    assert target.universe == (INSTRUMENT,)
+    assert target.hyp.windows.forward.start == FORWARD_START
+    assert target.strategy_source == REVERTING
+
+
+def test_a_version_whose_hypothesis_is_neither_registered_nor_on_disk_is_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    """With no registry row and no committed hypothesis file, there is nothing to recover."""
+    write_hypothesis(ws, document())
+    composed(ws, store, "demo_mr")
+    ws.path("hypotheses", "demo_mr", "hypothesis.yaml").unlink()
+
+    with pytest.raises(PreconditionError, match="neither registered nor present"):
+        resolve(ws, store, strategy="demo_mr")
 
 
 # --- naming exactly one thing -------------------------------------------------

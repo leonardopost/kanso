@@ -47,6 +47,7 @@ state.db
 state.db-journal
 state.db-wal
 state.db-shm
+envelope.yaml
 runs/
 sessions/
 strategies/*/impl/*/__pycache__/
@@ -71,6 +72,7 @@ never edits the file.
 | `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify` | **yes**, between runs |
 | `hypotheses/<id>/program.md` | `hyp new` | **yes**, between runs |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
+| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; the script wraps, so a second hypothesis classified against it gets the first one's answer |
 | `kanso_ext/` | you | **yes** |
 | `AGENTS.md`, `CLAUDE.md` | `init`, if absent | **yes** |
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
@@ -80,7 +82,7 @@ never edits the file.
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
-| `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` | no |
+| `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` — and the instrument store by `instruments resolve` alone: a validation, a registration and a card resolve in memory | no |
 | `runs/` | `research begin`, the daemon | no |
 | `sessions/` | replay, parity, stage nodes | no |
 | `certificates/` | `cert plan`, `cert run` | no |
@@ -117,11 +119,16 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | leave a typo in `kanso.toml` | 3 · `unknown key '<section>.<key>'`, from every command |
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
+| leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
 | `data load` over a dataset a snapshot names | 2 · **with or without `--replace`** |
 | `data load` over unpinned data | 2 · until you pass `--replace` |
+| `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
+| `data instruments resolve` that would change a definition the store holds for the same date | 2 · a correction is explicit: `--refresh` |
+| `research begin` after the store's definitions moved from what the newest covering snapshot pins | 2 · by name; `kanso data snapshot` pins what is held now |
 | `cert run` on bytes already certified under the same plan and engine | 2 · a certificate is immutable |
 | `models check` or `cert plan` with no `models.yaml` | 2 · there is no default plan |
 | edit a file under `strategies/<id>/impl/<version>/` | 3 · at `deploy` and at `replay`, before either runs it |
@@ -146,9 +153,17 @@ remedy: run `kanso skills sync` and `kanso env detect` to refresh this workspace
 
 The rendered file is the reference for the keys and their defaults: each is commented where
 it is defined. The sections are `[extensions]`, `[skills]`, `[research]`, `[certify]`,
-`[env]`, `[monitor]`, `[webhook]`, and `[adapters.<id>]`. Two keys the template does not
-render but the parser accepts belong to `[data]`: `reference`, naming the adapter that
-resolves instruments (default `none`), and `adjusted` (default `false`).
+`[data]`, `[env]`, `[monitor]`, `[webhook]`, and `[adapters.<id>]`; `[data]` is rendered
+commented out, header included, because its two keys — `reference`, naming the adapter that
+resolves instruments (default `none`), and `adjusted` (default `false`) — are the defaults
+until a vendor is configured, and the table you then append is not declared twice.
+
+The two top-level keys are written by `init` and read by nothing: `kanso_version` records
+the kanso that scaffolded the workspace, and `schema_version` is not the schema guard —
+the version a `state.db` is at is its own `PRAGMA user_version`, which `kanso migrate`
+advances and `kanso doctor` compares against the package. Any value of either key that
+parses changes nothing, and deleting `schema_version` is a validation failure like any
+other missing key.
 
 **An unknown key is a validation failure, not a shrug.**
 
@@ -168,6 +183,13 @@ vendor key out of a kanso-owned schema.
 `[research] broker` is the single place the core lets a broker's name in: it says whose venue
 model — account type, currency, costs — research inherits. A workspace naming a broker it has
 no adapter for falls back to the shipped venue defaults rather than refusing.
+
+`currency` is the **account** currency of every venue the broker does not override, and it
+is the account currency that `kanso hyp validate` checks: a universe whose instruments sit
+on venues with more than one account currency is refused (exit 3), because a hypothesis
+trades one. An instrument's own quote currency is not compared against its venue's account
+currency, so a `manual` entry or a resolved definition quoted in another currency is
+accepted and funded from the account as configured.
 
 ## `.env`
 
@@ -224,10 +246,15 @@ the workspace has no
 registered hypotheses, no cards, no best pointer, no certificate of record and no approvals.
 What survives is what is file-backed: `catalog/` still serves its data, `certificates/<hyp>/`
 still holds the certificate YAML and the certified `<sha7>.py`, `strategies/<id>/` still holds
-`strategy.yaml` and its `impl/` directories, and `kanso strat show` still answers from them.
-Re-running `kanso hyp add` re-registers the hypothesis as `classified` with no best and no
-certificate. Back it up with the workspace or accept that the research history is the part
-that does not travel.
+`strategy.yaml` and its `impl/` directories, and `kanso strat show` and `kanso replay
+--strategy` both answer from those files — a committed version replays from its `impl/` and
+its committed `hypothesis.yaml` without the record. Re-running `kanso hyp add` re-registers
+the hypothesis as `classified` with no best and no certificate. Two things the record kept
+are enforced by the files instead: re-certifying the same bytes under the same plan and
+engine is refused by the certificate already on disk, not only by the row that is gone (so
+the trial count in the filename cannot be quietly reset), and a version the record no longer
+knows is not deployed — `deploy` and `portfolio show` agree it is down. Back it up with the
+workspace or accept that the research history is the part that does not travel.
 
 ## `hypotheses/<id>/`
 
@@ -238,6 +265,14 @@ the horizon and resolution, the data requirements, the risk limits, the three wi
 once classified — the construct, the objective and the card-stage constraints. `kanso classify`
 writes those last three and nothing else; you can equally write them yourself and run
 `kanso hyp add`, which needs no model at all. The file's own comments are its field reference.
+
+`costs` is optional, with one case the scaffold's comment names: a hypothesis whose
+`data_requirements` do not include `quote` has no quotes to take a spread from, so it must
+set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
+`venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
+commission and no spread, so under the defaults a bar-only hypothesis is refused at
+`hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
+the block for exactly that reason.
 
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 
@@ -276,6 +311,14 @@ remedy: end the run with `kanso research end demo_mr` first
 (exit 2). A run is pinned to the bytes it began with, which is what makes its cards
 comparable to each other; re-pinning underneath it would silently change the question the
 cards were answering.
+
+A re-pin keeps `best` while the file still asks the same question. A change to the
+`universe`, the `resolution`, the `data_requirements` or `construct.id` clears it —
+stripping the classification counts, since a draft has no construct and the best was earned
+as one — and the event log records `best_cleared` naming the field that moved. `kanso
+classify` re-pins on the same terms, so classifying onto another construct clears it too.
+The cards and their blobs stay in state, and `strategy.py` still holds the best-so-far
+bytes, so the next `research begin` starts from them.
 
 `program.md` is yours on the same terms: it is copied into the lane and pinned at
 `research begin`.
@@ -334,6 +377,14 @@ may read), `corporate_actions`, and `manual`. **kanso's:** `nautilus_id`, `asset
 `resolved` and `sources`, rewritten by `kanso data instruments resolve` and only when a
 resolution actually changed them.
 
+An edit to `override` reaches the store at the next `kanso data instruments resolve` and
+never before: `hyp validate`, `hyp add` and every card build the definition in memory to
+check it, and a run is priced under what the store holds. Resolved as of a date the store
+already holds a definition for, an edited override is a correction of that definition, and
+a correction is explicit — the plain command refuses by name (exit 2) and `--refresh`
+replaces it. Resolved as of another date it is added beside what is held, since what an
+instrument was on each date is its own fact.
+
 `manual: true` suppresses resolution entirely and requires you to supply the constructor
 fields yourself. That is the path the file loaders, the synthetic loader and the demo take,
 and it is why a workspace can run end to end with no reference adapter and no credential.
@@ -345,8 +396,9 @@ resolves the credential. Name the vendor you will eventually resolve through; yo
 configured on the day you first ask it something.
 
 The registry of record is the catalog's instrument store, not this file — `kanso data
-instruments show <ID>` reads the store. The file is the cache and the place your overrides
-live, so deleting it costs you the overrides and a round of resolution, not the definitions.
+instruments show <ID>` reads the store and renders the definition a run would use, the
+newest-dated one it holds. The file is the cache and the place your overrides live, so
+deleting it costs you the overrides and a round of resolution, not the definitions.
 
 ## `catalog/`
 
@@ -369,7 +421,12 @@ never the span that was asked for, because a source may answer a five-year reque
 years, HTTP 200 and no warning.
 
 A **snapshot** freezes what is held: the dataset checksums plus the checksum of the resolved
-instruments. Every run is pinned to one.
+instruments. Every run is pinned to one, and to the instruments as much as to the data:
+`research begin` hands out only a snapshot whose instrument checksum is the store's own, and
+refuses by name when the definitions have moved since the newest covering one was taken.
+The store is resolved before it is frozen — a snapshot over instrument data is refused while
+the store holds no definition, because a run reads its definitions from the store and a
+snapshot pinning none is a promise no run can keep.
 
 **A dataset a snapshot names cannot be rewritten. At all.**
 
@@ -409,8 +466,10 @@ remedy: run `kanso data load` for the window, then take a snapshot
 
 The card runs in a process of its own, and the remedy is the one the failure inside it
 raised rather than one remedy for every way a baseline can fail — a baseline that fails
-because the strategy raised still says to fix `strategy.py`. The catalog is a directory you
-back up, not one you prune.
+because the strategy raised still says to fix `strategy.py`, and to begin again with
+`--from-workspace` when the strategy that raised was the best card's, since `research begin`
+would otherwise take that blob again. The catalog is a directory you back up, not one you
+prune.
 
 ## `runs/`
 
@@ -421,6 +480,14 @@ runs/<lane>/<hyp>/   hypothesis.yaml, program.md, strategy.py — and nothing el
 runs/daemon.pid      the supervisor's pid, and its lock
 runs/daemon.log      whatever the daemon and its children write to a stream
 ```
+
+A lane writes no log of its own, and no file under `runs/` records what a run did. The
+record of a run is in `state.db` — the run row, every card with its metric and verdict, and
+the `events` table every state change appends to — and it is read back with
+`kanso research show` (a card's source, or the diff between two), `kanso research status`,
+`hypotheses/<id>/results.tsv` and `kanso status`. `daemon.log` is one plain stream that the
+supervisor and every lane it spawns share, for whatever they print; it is not structured and
+not per lane.
 
 `kanso research begin` prints the lane directory, copies the three scoped files into it and
 pins them. Exactly those three files are there; a card runs in a subprocess with its cwd set
@@ -543,6 +610,13 @@ on certification and rewritten by `deploy`, `promote`, `demote` and `strat retir
 rewrites the whole file when it writes it, so **your comments do not survive** the first
 deployment. Keep your notes elsewhere.
 
+`speed` is validated against the execution client's clock — a `clock: wall` client needs
+`1` — recorded on the stage's session and printed by `portfolio show`, and in this version
+it paces nothing: a stage node is a bounded catch-up over the catalog and replays it
+unpaced whatever the value says, so the demo's three months of minute bars pass in seconds
+at `speed: 1`. Only `kanso replay run --speed` paces a replay. The value will take effect
+when a stage node outlives the command that starts it, which the backlog tracks.
+
 Everything the file can say about a stage's execution reduces to one id, and everything that
 matters about that id is the pair of declarations behind it: `capital` is `simulated`,
 `broker_paper` or `real`, and `clock` is `replay` or `wall`. `kanso portfolio clients` prints
@@ -589,6 +663,12 @@ The live stage admits only what `promote` moved there. `kanso portfolio show` re
 record, so it marks the entry rather than printing it as a deployed version: it is counted in
 neither the stage's `allocated` nor its P&L, the stage is not `up` for it, and `--json` gives
 it `"recorded": false`.
+
+`deploy` reads that record too, so the two never disagree. A version the record does not know
+— one `strategies/<id>/strategy.yaml` marks deployed while `state.db` never travelled, which
+is the state of a fresh clone — is admitted by neither: `deploy` runs no node for it (so the
+monitor finds no window to judge) and `portfolio show` reports the stage down, rather than one
+command trusting the file while the other trusts the record.
 
 ```
 $ kanso portfolio show                    # the paper stage and the limits line are elided
@@ -648,8 +728,13 @@ It is honest about what it is: a hand-edited `lanes: 9` **is** believed, and
 validated, which is why the durable override lives somewhere else: `[env] reserved_cores`,
 `reserved_mem_gb` and `cores_per_lane` in `kanso.toml` are read on every detection.
 
+Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
+`env detect` rewrites it, but it is not committed, so a clone of the repository on another
+machine detects its own rather than inheriting one that describes a machine it never ran on.
+
 A missing envelope is a `warn` in `kanso doctor` and leaves `research status` reporting
-`lanes none (run kanso env detect)`.
+`lanes none (run kanso env detect)`. A clone therefore detects its own once, with
+`kanso env detect` (or `kanso init`), rather than reading a foreign measurement.
 
 ## `kanso_ext/`
 
@@ -727,11 +812,21 @@ was written at, but that column is written and never read — a snapshot is foun
 under `catalog/snapshots/`.) Two things are worth knowing before you copy one.
 
 **The skill links point at the installed package**, not into the workspace, so a copy taken to
-another machine has dangling links until `kanso skills sync` runs there.
+another machine has dangling links until `kanso skills sync` runs there. `envelope.yaml`
+measures the host, and the rendered `.gitignore` keeps it out of the repository, so a clone
+on another machine has none until `kanso env detect` runs there — a filesystem copy carries
+it, but it then describes the machine it came from, which is why re-detecting is the honest
+step on a new host.
 
-**`state.db` is the half that does not regenerate.** Copy the directory and you have
-everything; copy everything *but* `state.db` and you have the data, the certificate files, the
-composed implementations and the source of every hypothesis — but no research history, no
-best pointer, no certificate of record and no approvals. If you are choosing what to commit,
-that is the trade the rendered `.gitignore` makes for you by default, and it is the one line
-of it worth reconsidering deliberately rather than by habit.
+**`state.db` is the half that does not travel, and a clone is a fresh workspace that
+inherits your certified work.** Copy the directory and you have everything. Clone the
+repository and you have the data, every certificate, the composed implementations and the
+source of every hypothesis — reproduced to the digit — but not the record: no research
+history, no `best` pointer, no trial count, no approvals, no version or session index. That is
+the design rather than an accident: the record is what one machine did, and approvals in
+particular must never travel, because real capital always needs a person to say so again on
+the machine that will trade. `kanso doctor` names the situation when it meets it — the
+`record` check — and what a clone does next is small: `kanso hyp add
+hypotheses/<id>/hypothesis.yaml` re-registers a hypothesis from its committed best-so-far, a
+certificate on disk stays the certificate of record and a repeat is refused, and
+`kanso promote … --as NAME` is asked again by whoever is present.

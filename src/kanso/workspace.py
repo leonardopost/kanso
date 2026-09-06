@@ -123,10 +123,20 @@ def gitignore_entries() -> list[str]:
     return [ln.strip() for ln in lines if ln.strip() and not ln.lstrip().startswith("#")]
 
 
+CATALOG_CHOICE: tuple[str, ...] = (
+    "# Uncomment to keep market data out of git (recommended for anything beyond demos):",
+    "# catalog/",
+)
+"""The one entry the template leaves to the operator."""
+
+
 def append_gitignore(root: Path, entries: Iterable[str]) -> list[str]:
     """Append the entries `.gitignore` lacks and return them; create the file if absent.
 
-    Idempotent: an entry already present, commented or not, is never added twice.
+    Idempotent: an entry already present as a bare line is never added twice. A commented
+    line does not count as present — `# state.db` ignores nothing — so the bare entry is
+    still appended beside it, which is the only reading under which the file does what
+    `doctor` says it does.
     """
     path = root / ".gitignore"
     text = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -240,8 +250,36 @@ def _write_gitignore(root: Path) -> None:
     path = root / ".gitignore"
     if path.exists():
         append_gitignore(root, gitignore_entries())
+        _offer_catalog_choice(path)
         return
     _write(path, _template("gitignore"))
+
+
+def _offer_catalog_choice(path: Path) -> None:
+    """Carry the template's one operator choice into a `.gitignore` that already existed.
+
+    A directory that already has one — every `uv init` project — takes the append path,
+    which writes only the normative entries, so without this the commented `catalog/` line
+    the docs call the operator's to decide would never reach them. It is appended once,
+    commented, and only when the file mentions `catalog/` nowhere: a decision already made
+    either way is left alone. `append_gitignore` itself stays a plain append, because
+    `skills sync` calls it too and a skill link is not the place to raise the question.
+    """
+    text = path.read_text(encoding="utf-8")
+    if any(_decides_catalog(ln) for ln in text.splitlines()):
+        return
+    if not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text + "\n".join(CATALOG_CHOICE) + "\n", encoding="utf-8")
+
+
+def _decides_catalog(line: str) -> bool:
+    """Whether a line is the `catalog/` entry itself, kept or commented out.
+
+    Exactly that entry, because `catalog/.cache/` is a normative line that merely contains
+    the substring and would otherwise read as a decision already made.
+    """
+    return line.strip().lstrip("#").strip() == "catalog/"
 
 
 def _write_env(root: Path) -> None:

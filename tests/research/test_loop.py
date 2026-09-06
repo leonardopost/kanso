@@ -114,8 +114,25 @@ def test_a_baseline_that_raises_leaves_no_run_and_no_lane_directory(
     assert not ws.path("runs", "op", hyp_id).exists()
     assert [event.kind for event in store.events(subject=hyp_id)][-1] == loop.BASELINE_FAILED
     # The strategy raised, so the strategy is what there is to fix; a failure that named
-    # no remedy of its own is the only case this one answers for.
+    # no remedy of its own is the only case this one answers for. The run started from
+    # the workspace file, so beginning again is enough.
     assert "strategy.py" in (caught.value.remedy or "")
+    assert "--from-workspace" not in (caught.value.remedy or "")
+
+
+def test_a_baseline_taken_from_the_best_that_fails_names_from_workspace(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Beginning again would take the best blob again, so the refusal says how not to."""
+    run = loop.begin(ws, store, registered)
+    loop.end(ws, store, registered)
+    records.set_best(store, run, store.put_blob(RAISING), 9.0)
+
+    with pytest.raises(PreconditionError, match="baseline card of demo_mr did not run") as caught:
+        loop.begin(ws, store, registered)
+
+    assert f"kanso research begin {registered} --from-workspace" in (caught.value.remedy or "")
+    assert records.active(store, registered) is None
 
 
 def test_a_baseline_whose_rows_are_gone_carries_the_data_remedy(

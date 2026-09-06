@@ -230,6 +230,11 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
 
     `version` is the host version the run is pinned to, so every card of a run differences
     against the same host however often the host is re-certified while the run is open.
+
+    The universe is resolved for the venue model and recorded nowhere: the card is priced
+    under the definitions the store holds, which its snapshot pins, and a definition
+    written here would move the store under that pin without changing what the card runs
+    against. Only `kanso data instruments resolve` writes the store.
     """
     ref = hyp.construct
     if ref is None:
@@ -239,7 +244,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
         )
     impl = construct_for(ref.id, ws)
     harness = impl.harness(hyp, _host(ws, hyp), version=version)
-    instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start)
+    instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
     model = _one_venue_model(venue_models(ws, hyp, instruments))
     research = ws.config.research
     host_source: bytes | None = None
@@ -657,7 +662,7 @@ def begin(
             f"{program} is missing, and a run pins the program it follows",
             remedy=f"run `kanso hyp new {hyp_id}` in another directory and copy program.md over",
         )
-    base = _base_source(ws, store, hyp_id, from_workspace=from_workspace)
+    base, from_best = _base_source(ws, store, hyp_id, from_workspace=from_workspace)
     pins = {
         HYPOTHESIS_FILE: store.put_blob(source),
         PROGRAM_FILE: store.put_blob(program.read_bytes()),
@@ -674,7 +679,7 @@ def begin(
             directory=directory,
             cache=host_cache,
         )
-        result = _baseline(ws, setup, snapshot.snapshot_id, directory, pins)
+        result = _baseline(ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best)
     except KansoError as exc:
         # Nothing a card could be judged against ran, so the run leaves no trace but the
         # event the scheduler reads to requeue the hypothesis at a lower priority.
@@ -721,11 +726,18 @@ def begin(
     return records.require_active(store, hyp_id)
 
 
-def _base_source(ws: Workspace, store: StateStore, hyp_id: str, *, from_workspace: bool) -> bytes:
-    """The `strategy.py` a run starts from: the hypothesis's best, or the workspace copy."""
+def _base_source(
+    ws: Workspace, store: StateStore, hyp_id: str, *, from_workspace: bool
+) -> tuple[bytes, bool]:
+    """The `strategy.py` a run starts from, and whether it is the hypothesis's best.
+
+    The best blob when one exists and the workspace copy otherwise; `--from-workspace`
+    takes the workspace copy regardless and clears the best, so the history says the
+    run started over.
+    """
     best, _ = records.best_of(store, hyp_id)
     if best is not None and not from_workspace:
-        return store.get_blob(best)
+        return store.get_blob(best), True
     path = hypothesis_dir(ws, hyp_id) / STRATEGY_FILE
     if not path.is_file():
         raise PreconditionError(
@@ -737,7 +749,7 @@ def _base_source(ws: Workspace, store: StateStore, hyp_id: str, *, from_workspac
         store.event(
             "best_cleared", hyp_id, {"reason": "the run starts from the workspace strategy"}
         )
-    return path.read_bytes()
+    return path.read_bytes(), False
 
 
 def _baseline(
@@ -746,17 +758,20 @@ def _baseline(
     snapshot_id: str,
     directory: Path,
     pins: Mapping[str, str],
+    *,
+    from_best: bool,
 ) -> backtest.RunResult:
     """Run the unmodified `strategy.py`, or refuse the run outright.
 
     The static half of `strategy_integrity` is checked here too, and for the same reason
     as on a card: a starting point that reaches outside the lane must not be executed.
     Anything wrong here refuses the run outright, because a run whose baseline did not
-    run has no budget to give its cards.
+    run has no budget to give its cards. `from_best` says whether the file that did not
+    run was the best card's, which decides what beginning again would take.
     """
     problems = check_integrity(directory, dict(pins))
     if problems:
-        _refuse_baseline(setup.hyp.id, "; ".join(problems[:5]))
+        _refuse_baseline(setup.hyp.id, "; ".join(problems[:5]), from_best=from_best)
     result = backtest.run_subprocess(
         _request(
             setup,
@@ -773,23 +788,32 @@ def _baseline(
             setup.hyp.id,
             f"{result.reason}: {result.traceback_tail or 'no output'}",
             result.remedy,
+            from_best=from_best,
         )
     return result
 
 
-def _refuse_baseline(hyp_id: str, why: str, remedy: str | None = None) -> NoReturn:
+def _refuse_baseline(
+    hyp_id: str, why: str, remedy: str | None = None, *, from_best: bool = False
+) -> NoReturn:
     """Refuse the run, naming what the baseline did instead of running.
 
     A baseline fails for causes that are not the strategy's — a catalog that no longer
     holds the window's rows is the one an operator meets — and each wants a different
     next action. Where the cause named its own remedy and that remedy crossed the card's
     process boundary, it is the one reported; fixing `strategy.py` is what is left when
-    nothing else was named, which is the case for a strategy that raised.
+    nothing else was named, which is the case for a strategy that raised. When the
+    strategy that raised was the best card's, beginning again would take that blob
+    again, so the remedy names the flag that starts from the workspace file instead.
     """
-    raise PreconditionError(
-        f"the baseline card of {hyp_id} did not run: {why}",
-        remedy=remedy or f"fix hypotheses/{hyp_id}/{STRATEGY_FILE} and begin again",
-    )
+    if remedy is None:
+        remedy = f"fix hypotheses/{hyp_id}/{STRATEGY_FILE} and begin again"
+        if from_best:
+            remedy += (
+                f" with `kanso research begin {hyp_id} --from-workspace`, since a run "
+                "otherwise starts from the best card's strategy, which is what did not run"
+            )
+    raise PreconditionError(f"the baseline card of {hyp_id} did not run: {why}", remedy=remedy)
 
 
 def card(
