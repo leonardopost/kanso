@@ -64,8 +64,11 @@ class GateContext:
 
     * `research_run` (and `host_research_run`) is the research window, for the gates that
       compare a certification result against the estimate selection acted on;
-    * `card_metrics` are the metrics of this hypothesis's non-crash cards, whose spread is
-      how wide the search that produced the candidate was;
+    * `trial_metrics` are the metrics of this hypothesis's trials — the cards that ran to
+      a result and traded — whose count and spread are how wide the search that produced
+      the candidate was. A crash and a card that placed no order are edits that failed,
+      not attempts at the hypothesis, so neither is a trial here even though both are
+      cards and both are counted by the `n_trials` a certificate records;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
       pinned, which is what the scope rule is checked against;
     * `datasets` are the pinned snapshot's datasets with their observed and documented
@@ -88,7 +91,6 @@ class GateContext:
     run: CardRun
     host_run: CardRun | None = None
     research_folds: int = 1
-    n_trials: int = 1
     snapshot_id: str = ""
     strategy_sha: str = ""
     expectation: Mapping[str, object] | None = None
@@ -96,7 +98,7 @@ class GateContext:
     session: object | None = None
     research_run: CardRun | None = None
     host_research_run: CardRun | None = None
-    card_metrics: Sequence[float] = ()
+    trial_metrics: Sequence[float] = ()
     lane_dir: Path | None = None
     pinned: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     datasets: Sequence[DatasetFacts] = ()

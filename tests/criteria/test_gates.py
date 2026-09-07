@@ -211,8 +211,7 @@ def sharpe_context(**overrides: Any) -> Any:
         "hyp": make_hyp(**SHARPE_HYP),
         "params": {"min_dsr": 0.5},
         "research_run": research,
-        "card_metrics": (1.0, 1.2, 0.9, 1.1),
-        "n_trials": 40,
+        "trial_metrics": (1.0, 1.2, 0.9, 1.1),
     }
     return context(research, **{**fields, **overrides})
 
@@ -220,25 +219,25 @@ def sharpe_context(**overrides: Any) -> Any:
 def test_deflated_sharpe_deflates_the_research_window_estimate() -> None:
     result = deflated_sharpe.evaluate(sharpe_context())
     assert 0.0 <= result.evidence["dsr"] <= 1.0
-    assert result.evidence["n_trials"] == 40
-    assert result.evidence["n_cards"] == 4
+    assert result.evidence["trials"] == 4
 
 
 def test_a_wider_search_deflates_a_sharpe_further() -> None:
-    narrow = deflated_sharpe.evaluate(sharpe_context(n_trials=2)).evidence["dsr"]
-    wide = deflated_sharpe.evaluate(sharpe_context(n_trials=5000)).evidence["dsr"]
+    """The same spread of results, arrived at over more trials, deflates further."""
+    narrow = deflated_sharpe.evaluate(sharpe_context(trial_metrics=(1.0, 1.2))).evidence["dsr"]
+    wide = deflated_sharpe.evaluate(sharpe_context(trial_metrics=(1.0, 1.2) * 2500)).evidence["dsr"]
     assert wide < narrow
 
 
 def test_a_noisier_search_deflates_a_sharpe_further() -> None:
-    tight = deflated_sharpe.evaluate(sharpe_context(card_metrics=(1.0, 1.01))).evidence["dsr"]
-    loose = deflated_sharpe.evaluate(sharpe_context(card_metrics=(-40.0, 40.0))).evidence["dsr"]
+    tight = deflated_sharpe.evaluate(sharpe_context(trial_metrics=(1.0, 1.01))).evidence["dsr"]
+    loose = deflated_sharpe.evaluate(sharpe_context(trial_metrics=(-40.0, 40.0))).evidence["dsr"]
     assert loose < tight
 
 
 def test_deflated_sharpe_fails_below_the_floor() -> None:
     assert not deflated_sharpe.evaluate(
-        sharpe_context(params={"min_dsr": 0.999}, card_metrics=(-40.0, 40.0))
+        sharpe_context(params={"min_dsr": 0.999}, trial_metrics=(-40.0, 40.0))
     ).passed
 
 
@@ -253,7 +252,7 @@ def test_deflated_sharpe_is_skipped_on_a_per_trade_objective() -> None:
     [
         {"params": {}},
         {"hyp": make_hyp(objective=None, constraints=None)},
-        {"card_metrics": (1.0,)},
+        {"trial_metrics": (1.0,)},
         {"research_run": None},
         {"research_run": build_run((1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0))},
     ],
