@@ -183,6 +183,20 @@ def test_retire_ends_a_hypothesis_and_leaves_its_records(
     assert (registered / "hypotheses" / HYP_ID / "hypothesis.yaml").is_file()
 
 
+def test_resume_puts_a_retired_hypothesis_back_and_names_the_next_step(
+    runner: CliRunner, registered: Path
+) -> None:
+    at(runner, registered, "hyp", "retire", HYP_ID, "--json")
+
+    result = at(runner, registered, "hyp", "resume", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK
+    assert payload(result)["status"] == "researching"
+    assert payload(result)["was"] == "retired"
+    plain = at(runner, registered, "hyp", "resume", HYP_ID)
+    assert plain.exit_code == Exit.PRECONDITION, "twice is a no-op it says out loud"
+
+
 def test_retire_of_an_unregistered_id_is_a_precondition_failure(
     runner: CliRunner, workspace: Path
 ) -> None:

@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from kanso import hyp
+from kanso.certify import run as certify_run
 from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
 from kanso.inbox import unread
@@ -148,7 +150,13 @@ def test_only_a_registered_and_living_hypothesis_may_be_queued(
         scheduler.enqueue(store, "nobody")
 
     set_status(store, hyp_id, "failed")
-    with pytest.raises(PreconditionError, match="research does not resume"):
+    assert scheduler.enqueue(store, hyp_id).hyp_id == hyp_id, (
+        "a hypothesis an older kanso ended comes back; only an operator ends one now"
+    )
+
+    scheduler.drop(store, hyp_id)
+    set_status(store, hyp_id, "retired")
+    with pytest.raises(PreconditionError, match="resumes it only when you say so"):
         scheduler.enqueue(store, hyp_id)
 
 
@@ -197,10 +205,10 @@ def test_a_stall_whose_certificate_fails_returns_the_hypothesis_to_research(
     assert not unread(store), "one failure is not yet an escalation"
 
 
-def test_a_stall_whose_certificate_ends_the_hypothesis_leaves_the_queue(
+def test_a_stall_whose_certificate_fails_comes_back_to_the_queue(
     ws: Workspace, store: StateStore
 ) -> None:
-    """Death is the one way out of the queue, and the failure run is the way to death."""
+    """A failing verdict is a result, not a sentence. Only an operator ends a hypothesis."""
     hyp_id = classify(ws, store, DOCUMENT, FLAT)
     a_card(ws, store, FLAT)
     write_plan(ws)
@@ -209,10 +217,79 @@ def test_a_stall_whose_certificate_ends_the_hypothesis_leaves_the_queue(
     stall = scheduler.on_stall(with_n_fail(ws, 1), store, hyp_id)
 
     assert stall.verdict == "fail"
-    assert stall.priority is None
-    assert show(ws, store, hyp_id).status == "failed"  # type: ignore[union-attr]
-    assert ids(store) == []
+    assert stall.priority == scheduler.STALL_PRIORITY
+    assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
+    assert ids(store) == [hyp_id], "back in the queue, so a free lane takes it again"
     assert [entry.kind for entry in unread(store)] == ["cert_failed"]
+
+
+def test_a_retire_that_lands_during_the_certification_is_still_honoured(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run ended before the stall, so the operator is free to retire while it certifies.
+
+    Requeueing one anyway would raise out of `_alive` and take the lane down with it, so
+    the retire is checked on the far side of the certification as well as the near side.
+    """
+    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    a_card(ws, store, FLAT)
+    write_plan(ws)
+    scheduler.enqueue(store, hyp_id)
+    real = certify_run.certify
+
+    def retiring(*args: Any, **kwargs: Any) -> Any:
+        made = real(*args, **kwargs)
+        hyp.retire(ws, store, hyp_id)
+        return made
+
+    monkeypatch.setattr(certify_run, "certify", retiring)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.verdict == "fail", "the certification ran and its verdict stands"
+    assert stall.priority is None
+    assert ids(store) == []
+    assert show(ws, store, hyp_id).status == "retired"  # type: ignore[union-attr]
+
+
+def test_a_hypothesis_that_keeps_failing_keeps_getting_lanes(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The lane never runs out. Research is indefinite, and this is where that is true.
+
+    Five stalls in a row, each certifying and each failing. Before, the third ended the
+    hypothesis and the queue dropped it; a lane that came free afterwards had nothing of
+    it to take, and no command anywhere could give it back.
+    """
+    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    write_plan(ws)
+    policy = with_n_fail(ws, 3)
+
+    for attempt in range(1, 6):
+        a_card(ws, store, FLAT + f"# attempt {attempt}\n".encode(), seq=attempt)
+        scheduler.enqueue(store, hyp_id)
+        stall = scheduler.on_stall(policy, store, hyp_id)
+        assert stall.verdict == "fail"
+        assert ids(store) == [hyp_id], f"still queued after {attempt} failing certificates"
+
+    assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
+    assert [entry.kind for entry in unread(store)] == ["cert_failed"], "escalated at 3, not 5"
+
+
+def test_a_retired_hypothesis_is_the_one_thing_a_stall_leaves_out(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The operator retired it mid-certification, and the scheduler honours that."""
+    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    a_card(ws, store, FLAT)
+    write_plan(ws)
+    scheduler.enqueue(store, hyp_id)
+    set_status(store, hyp_id, "retired")
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.priority is None
+    assert ids(store) == []
 
 
 def test_a_stall_with_no_keep_only_requeues(ws: Workspace, store: StateStore) -> None:

@@ -353,34 +353,63 @@ def test_a_failing_gate_returns_the_hypothesis_to_research(
     assert not unread(store), "one failure is not an escalation"
 
 
-def test_the_configured_number_of_failures_ends_the_hypothesis_and_escalates(
-    ws: Workspace, store: StateStore
-) -> None:
+def test_a_failing_certificate_never_ends_a_hypothesis(ws: Workspace, store: StateStore) -> None:
+    """Whether an idea is worth another lane is the operator's call, not the framework's."""
     classify(ws, store, DOCUMENT, FLAT)
     a_card(ws, store, FLAT)
     write_plan(ws)
 
-    certify(with_n_fail(ws, 1), store, HYP_ID)
+    made = certify(with_n_fail(ws, 1), store, HYP_ID)
 
-    assert _status(store, HYP_ID) == "failed"
+    assert made.verdict == "fail"
+    assert _status(store, HYP_ID) == "researching", "a fail returns it to research"
     (entry,) = unread(store)
     assert entry.kind == "cert_failed"
     assert entry.subject == HYP_ID
     assert "embargoed_window" in entry.summary
+    assert f"{made.n_trials} trials" in entry.summary
     assert entry.escalation_id in inbox_file(ws).read_text(encoding="utf-8")
 
 
-def test_a_failing_certificate_hands_its_gates_to_the_next_proposal(
+def test_the_failure_count_escalates_on_a_cadence_rather_than_once(
     ws: Workspace, store: StateStore
 ) -> None:
+    """Every `n_fail`-th failure speaks. A threshold would have spoken once and stopped."""
+    classify(ws, store, DOCUMENT, FLAT)
+    write_plan(ws)
+    policy = with_n_fail(ws, 2)
+
+    seen: list[int] = []
+    for attempt in range(1, 5):
+        a_card(ws, store, FLAT + f"# attempt {attempt}\n".encode(), seq=attempt)
+        certify(policy, store, HYP_ID)
+        seen.append(len(unread(store)))
+
+    assert seen == [0, 1, 1, 2], "escalates on the 2nd and 4th failure, and on no other"
+    assert _status(store, HYP_ID) == "researching", "four failures still end nothing"
+
+
+def test_a_failing_certificate_hands_the_proposer_gate_ids_and_no_measurement(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The proposer learns which gate to work on. It never learns what the gate measured.
+
+    `embargoed_window` and `walk_forward_consistency` both record the objective over the
+    certification window in their evidence, and the proposer writes the next
+    `strategy.py`. Handing it that dict is a route from the embargoed window into
+    research, arriving as feedback rather than as a backtest request.
+    """
     classify(ws, store, DOCUMENT, FLAT)
     a_card(ws, store, FLAT)
     write_plan(ws)
 
-    certify(ws, store, HYP_ID)
+    made = certify(ws, store, HYP_ID)
 
     (line,) = driver._failing_gates(store, HYP_ID)
-    assert line.startswith("embargoed_window: ")
+    assert line == "embargoed_window"
+    (gate,) = [found for found in made.gates if found.id == "embargoed_window"]
+    assert "certification" in gate.evidence, "the gate does record it, on the certificate"
+    assert str(gate.evidence["certification"]) not in line
 
 
 def test_a_pass_clears_the_failures_a_hypothesis_had_run_up(

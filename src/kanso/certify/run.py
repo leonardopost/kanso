@@ -35,9 +35,12 @@ arithmetic the unperturbed one was. Only the subject's own parameters can move â
 sleeve's own configuration fields, or the construct parameters an attached modifier was
 composed with â€” never the capital, the risk limits or anything else the hypothesis injects.
 
-The verdict drives the lifecycle and nothing else does: a pass certifies the hypothesis, a
-fail returns it to research with its failing gates recorded where the proposer reads them,
-and the configured number of consecutive failures ends it and escalates. A pass also
+The verdict moves the hypothesis and never ends it: a pass certifies it, a fail returns it
+to research with the ids of its failing gates recorded where the proposer reads them, and
+every `n_fail`-th consecutive failure escalates. The ids alone, because a certification
+gate measures the certification window and its evidence carries those numbers; the embargo
+does not have an exception for feedback. Ending a line of research is the operator's
+decision and `kanso hyp retire` is the whole of it. A pass also
 composes the version the certificate implies and offers it to the paper stage, because both
 acts follow from the certificate with no decision left in them; a stage that cannot take it
 escalates and the verdict still stands.
@@ -120,13 +123,12 @@ CERTIFIABLE: Final = frozenset({"classified", "researching", "candidate", "certi
 CANDIDATE: Final = "candidate"
 CERTIFIED: Final = "certified"
 RESEARCHING: Final = "researching"
-FAILED: Final = "failed"
 
 CERTIFICATE: Final = "certificate"
 """The event kind a finished certification appends, under the hypothesis id."""
 
 CERT_FAILED: Final = "cert_failed"
-"""The escalation a hypothesis that has run out of attempts raises."""
+"""The escalation raised on every `n_fail`-th consecutive certification failure."""
 
 UNIMPLEMENTED: Final = (
     "the toolbox declares this gate but nothing implements it yet, so it judged nothing"
@@ -764,7 +766,13 @@ def _verdict(evaluated: Sequence[EvaluatedGate]) -> Verdict:
 
 
 def _apply(ws: Workspace, store: StateStore, made: Certificate) -> None:
-    """Move the hypothesis, and escalate when it has run out of attempts."""
+    """Move the hypothesis, and tell the operator on the failure cadence.
+
+    A failing verdict never ends anything. It returns the hypothesis to research and
+    escalates on every `n_fail`-th consecutive failure, because how many times an idea
+    has failed to certify is worth saying out loud and is not the framework's decision to
+    act on. Only an operator ends a line of research, with `kanso hyp retire`.
+    """
     hyp_id = made.hyp_id
     store.event(
         CERTIFICATE,
@@ -786,17 +794,17 @@ def _apply(ws: Workspace, store: StateStore, made: Certificate) -> None:
         on_certified(ws, store, made)
         return
     failures = _set_failures(store, hyp_id, _failures(store, hyp_id) + 1)
-    if failures < ws.config.certify.n_fail:
-        set_status(store, hyp_id, RESEARCHING)
+    set_status(store, hyp_id, RESEARCHING)
+    if failures % ws.config.certify.n_fail:
         return
-    set_status(store, hyp_id, FAILED)
     failing = ", ".join(gate.id for gate in made.gates if gate.skipped is None and not gate.passed)
     escalate(
         ws,
         store,
         CERT_FAILED,
         hyp_id,
-        f"{failures} consecutive certification failures; {made.sha7} failed on {failing}",
+        f"{failures} consecutive certification failures over {made.n_trials} trials;"
+        f" {made.sha7} failed on {failing}",
     )
 
 

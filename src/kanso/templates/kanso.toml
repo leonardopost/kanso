@@ -25,7 +25,7 @@ max_lines_per_keep = 40   # complexity rule: a keep growing strategy.py by more 
 baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s = max(60, 3 × baseline_wall_s)
 
 [certify]
-n_fail = 3                # consecutive certification failures before `failed`
+n_fail = 3                # escalate on every n-th consecutive certification failure (never ends it)
 
 # [data]                  # commented out whole, so a `[data]` table you append (docs/adapters.md) is not declared twice
 # reference = "none"      # the adapter `kanso data instruments resolve` resolves through; none = manual entries and the cache only

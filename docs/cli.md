@@ -52,7 +52,8 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
 | `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with. A re-pin that changes the `universe`, the `resolution`, the `data_requirements` or `construct.id` — stripping the classification included — clears the hypothesis's best and records `best_cleared` naming the field, because a card's metric means nothing across any of them; the cards and their blobs stay in state |
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
-| `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state |
+| `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state, and it is the only way research ends: no verdict and no run of failures ends one |
+| `kanso hyp resume ID` | undo an ending — a hypothesis you retired, or one an older kanso turned `failed` — back to `researching`, clearing the consecutive-failure count. Refused (exit 2) on a hypothesis research has not ended. Give it a lane with `kanso research queue add ID` |
 | `kanso classify ID` | decide what the hypothesis **is** — construct, host, the keep rule's two parameters and the card-stage constraints — in one call to the best model on the register, and write the three keys into `hypothesis.yaml`, re-pinning it. The objective is not asked for: it follows from the hypothesis and the construct. A construct this build cannot run is recorded honestly and refused at `research begin`. `strategy.py` is replaced by the construct's stub only while the file is still one kanso wrote. A classification onto another construct clears the hypothesis's best on the same terms as `hyp add` |
 
 Editing `construct`, `objective` and `constraints` by hand and running `kanso hyp add` is
@@ -97,13 +98,15 @@ consecutive non-keeps end it. Both are `[research]` keys of `kanso.toml`.
 **A failing verdict is not an error.** `cert run` exits 0 and says `fail`, because the
 certificate is what the command produces and a fail is evidence: it counts toward the
 `[certify] n_fail` run, its failing gates are fed back into the next proposal, and the run
-that exhausts the allowance turns the hypothesis `failed` and writes an inbox entry. A
+that reaches a multiple of the allowance writes an inbox entry and returns the hypothesis
+to research; nothing about a verdict ends it. A
 snapshot holding a dataset of unknown publication, or a vendor-adjusted one, is a recorded
 fail for the same reason — it reaches the operator the way every other failure does.
 
 A run that stalls with a keep nothing has certified certifies it there and then, so the
 autonomous loop reaches a certificate without an operator. Either verdict returns the
-hypothesis to the queue at priority −1; only `failed` and `retired` leave it.
+hypothesis to the queue at priority −1; only a hypothesis the operator has retired leaves
+it, and `kanso hyp resume` brings that one back.
 
 **A plan that names `parity_replay` makes `cert run` replay.** That gate is the comparison
 of the two code paths over the certification window, so the runner replays the subject on

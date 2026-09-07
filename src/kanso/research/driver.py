@@ -303,7 +303,16 @@ def _tail(text: str, lines: int) -> str:
 
 
 def _failing_gates(store: StateStore, hyp_id: str) -> list[str]:
-    """The gates the newest failed certificate of this hypothesis reported as failing."""
+    """Which gates the newest failed certificate reported as failing — the ids alone.
+
+    Never the evidence. A certification gate measures the certification window, and its
+    evidence says so in numbers: `embargoed_window` records `certification`, and
+    `walk_forward_consistency` records `certification` and the value of every fold. This
+    list is read by the proposer, which writes the next `strategy.py`, so handing it that
+    dict is a route from the embargoed window into research — the one thing the embargo
+    exists to refuse, arriving through the door marked feedback rather than through a
+    backtest request. An id names what to work on and measures nothing.
+    """
     row = store.connection.execute(
         "SELECT gates FROM certificates WHERE hyp_id = ? AND verdict = 'fail'"
         " ORDER BY created_at DESC LIMIT 1",
@@ -313,7 +322,7 @@ def _failing_gates(store: StateStore, hyp_id: str) -> list[str]:
         return []
     gates: Any = json.loads(str(row["gates"]))
     failed = [gate for gate in gates if not gate.get("pass", True)]
-    return [f"{gate['id']}: {gate.get('evidence', {})}" for gate in failed[:GATE_LINES]]
+    return [str(gate["id"]) for gate in failed[:GATE_LINES]]
 
 
 def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Row]:
