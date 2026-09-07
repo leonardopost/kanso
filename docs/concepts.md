@@ -61,10 +61,20 @@ error: demo_filter has an active run (f922aba53c5d48f3a3f40b45f850fb72), so it c
 remedy: end the run with `kanso research end demo_filter` first
 ```
 
-A hypothesis moves through `draft → classified → researching → candidate → certified`, with
-`failed` and `retired` as the two ends. Only those last two leave the queue: a certificate,
-pass or fail, is a milestone in a hypothesis's life and not its end, so a certified
-hypothesis returns to the queue at lowered priority and keeps being researched.
+A hypothesis moves through `draft → classified → researching → candidate → certified`, and
+`retired` is the one end. **Only an operator ends a line of research**, with `kanso hyp
+retire`, and `kanso hyp resume` takes it back. A certificate, pass or fail, is a milestone
+in a hypothesis's life and not its end, so a certified hypothesis returns to the queue at
+lowered priority and keeps being researched, and so does one whose certificate failed. Every
+`n_fail`-th consecutive failure escalates instead, because how many times an idea has failed
+to certify is worth saying out loud and is not kanso's to act on.
+
+`failed` survives as a status on hypotheses ended by a version of kanso that ended them:
+`n_fail` consecutive failing certificates wrote it, the queue treated it as over, and no
+command could bring one back — the remedy printed was to register the idea again under a new
+id, which resets the trial count `deflated_sharpe` prices the search by. Nothing writes it
+now, `kanso research queue add` takes such a hypothesis back, and `kanso hyp resume` clears
+the failure count with it.
 
 ## Construct
 
@@ -423,10 +433,18 @@ The engine version is in that condition on purpose. A certificate is a claim abo
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
 
-**A failing verdict is not an error.** `cert run` exits 0 and says `fail`, because the
-certificate is what the command produces and a fail is evidence: it counts toward the
-`[certify] n_fail` run, its failing gates are fed back into the next proposal, and the run
-that exhausts the allowance turns the hypothesis `failed` and writes an inbox entry.
+**A failing verdict is not an error, and it ends nothing.** `cert run` exits 0 and says
+`fail`, because the certificate is what the command produces and a fail is evidence: it
+counts toward the `[certify] n_fail` run, the **ids** of its failing gates are fed back into
+the next proposal, and every `n_fail`-th consecutive failure writes an inbox entry. The
+hypothesis returns to research either way; only `kanso hyp retire` ends one.
+
+The ids alone, and never the evidence. A certification gate measures the certification
+window and records what it measured — `embargoed_window` and `walk_forward_consistency` both
+put the objective's value over that window in theirs — while the proposer that reads this
+feedback writes the next `strategy.py`. Handing it those numbers is a route from the
+embargoed window into research, arriving as feedback rather than as a backtest request, and
+the embargo has no exception for feedback.
 
 The certified bytes are written beside the certificate as `<sha7>.py`, so a certified
 subject travels with the files even where `state.db` does not.

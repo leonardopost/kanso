@@ -16,7 +16,7 @@ metadata:
 ## Reading results
 - `hypotheses/<id>/results.tsv` (rendered from state): `sha7 metric metric_se n_trials n_trades wall_s peak_mem_gb status desc` (`sha7` = the first 7 characters of the card's `strategy_sha`). Best-so-far is `best_sha`; it is unset until the first keep, and `hypotheses/<id>/strategy.py` is rewritten to it on every keep. `kanso research show <id> --sha <sha7>` prints any card's `strategy.py`; commands taking a sha accept any unique prefix.
 - `keep` = beat the noise floor and passed card gates; `discard` = equal/worse or a card gate failed (including `strategy_integrity`); `crash` = an exception (the traceback tail is fed to the next proposal) or over budget.
-- Stalls (`stall_k` consecutive non-keeps) end the run automatically: certification if there is a keep not yet certified, and in every case — pass, fail or nothing to certify — the hypothesis is requeued at lower priority. Only `failed` and `retired` hypotheses leave the queue; a certificate is a milestone in a hypothesis's life, not its end.
+- Stalls (`stall_k` consecutive non-keeps) end the run automatically: certification if there is a keep not yet certified, and in every case — pass, fail or nothing to certify — the hypothesis is requeued at lower priority. Only a hypothesis the operator retired leaves the queue (`kanso hyp resume` brings it back); a certificate is a milestone in a hypothesis's life, not its end, and a failing one escalates rather than ending anything.
 
 ## Rules
 - Only `strategy.py` changes, only inside the run's lane directory `runs/<lane>/<id>/`; kanso writes each kept version back to `hypotheses/<id>/strategy.py`. kanso never runs git.

@@ -71,6 +71,12 @@ def retire_command(ctx: typer.Context, hyp_id: IdArgument, as_json: JsonOption =
     emit(as_json or global_json(ctx), lambda: _retire(open_workspace(ctx), hyp_id))
 
 
+@app.command("resume")
+def resume_command(ctx: typer.Context, hyp_id: IdArgument, as_json: JsonOption = False) -> None:
+    """Put a retired hypothesis back to `researching`, and clear its failure count."""
+    emit(as_json or global_json(ctx), lambda: _resume(open_workspace(ctx), hyp_id))
+
+
 # -- command bodies ---------------------------------------------------------------
 
 
@@ -139,6 +145,20 @@ def _retire(ws: Workspace, hyp_id: str) -> Report:
     return Report(
         data=registration.payload(),
         lines=(field("hypothesis", hyp_id), field("status", registration.status)),
+    )
+
+
+def _resume(ws: Workspace, hyp_id: str) -> Report:
+    with store(ws) as opened:
+        was = hyp.resume(ws, opened, hyp_id)
+        registration = _registration(ws, opened, hyp_id)
+    return Report(
+        data={**registration.payload(), "was": was},
+        lines=(
+            field("hypothesis", hyp_id),
+            field("status", f"{was} -> {registration.status}"),
+            field("next", f"kanso research queue add {hyp_id}"),
+        ),
     )
 
 

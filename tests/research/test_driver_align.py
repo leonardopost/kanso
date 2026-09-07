@@ -82,11 +82,20 @@ def test_a_source_that_still_tests_the_idea_marks_its_cards_aligned(
     assert [e.kind for e in store.events(subject=hyp_id)].count(align.ALIGNED) == 1
 
 
-def test_drift_before_any_aligned_keep_rewinds_to_the_bytes_the_run_began_with(
+def test_drift_before_any_proposal_kept_rewinds_to_the_baseline_and_keeps_its_bar(
     ws: Workspace, store: StateStore
 ) -> None:
+    """A run's first check may drift, and the run still has its own starting point.
+
+    No model proposed the baseline card, so no check judges it. That is what leaves a
+    rewind something to fall back on: without it `_last_aligned_keep` finds nothing, the
+    best is cleared, and the next card that passes its constraints keeps at any metric —
+    which is how a hypothesis's best fell from 5.3976 to 5.0256 twenty-three seconds
+    after a drift.
+    """
     scripted(ws, align_check=[DRIFTED])
     hyp_id = started(ws, store)
+    baseline_sha, baseline_metric = records.best_of(store, hyp_id)
     write_lane(ws, hyp_id, REVERTING)
 
     ok, reason = align.check(ws, store, hyp_id)
@@ -94,9 +103,9 @@ def test_drift_before_any_aligned_keep_rewinds_to_the_bytes_the_run_began_with(
     assert (ok, reason) == (False, DRIFTED["reason"])
     assert lane_file(ws, hyp_id) == SEED
     assert workspace_file(ws, hyp_id) == SEED
-    assert records.best_of(store, hyp_id) == (None, None)
-    assert records.require_active(store, hyp_id).best_sha is None
-    assert aligned_flags(store, hyp_id) == [0]
+    assert records.best_of(store, hyp_id) == (baseline_sha, baseline_metric)
+    assert records.require_active(store, hyp_id).best_sha == baseline_sha
+    assert aligned_flags(store, hyp_id) == [1], "the baseline is not a proposal to judge"
 
 
 def test_drift_rewinds_to_the_last_keep_a_check_had_already_passed(

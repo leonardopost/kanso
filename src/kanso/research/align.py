@@ -251,6 +251,9 @@ def align_static(hyp: Hypothesis, source: bytes) -> tuple[bool, str | None]:
 TASK: Final = "align_check"
 """The task class the model half is routed under."""
 
+BASELINE_SEQ: Final = 1
+"""The run's baseline card, which no check judges: no model proposed those bytes."""
+
 ALIGNED: Final = "aligned"
 DRIFTED: Final = "drifted"
 """The two events one check can append, under the hypothesis id as subject."""
@@ -401,10 +404,20 @@ def _last_aligned_keep(store: StateStore, run: RunRecord) -> tuple[str, float] |
 
 
 def _mark(store: StateStore, run: RunRecord, after: int, *, aligned: bool) -> None:
-    """Mark every card recorded since the last check with this check's verdict."""
+    """Mark every card *proposed* since the last check with this check's verdict.
+
+    Never the run's baseline card. A check judges what the loop proposed, and no model
+    proposed the bytes a run was handed: they are its base, and the run exists to climb
+    from them. Marking that card drifted is what left a rewound run with nothing to fall
+    back on — `_last_aligned_keep` looks for a keep with `aligned = 1`, the baseline is
+    the only keep a young run has, and without it `_revert` clears the best and the next
+    card that passes its constraints keeps at any metric at all. Reachable only when a
+    run's *first* check drifts, which is why runs that had already been checked survived
+    the same verdict untouched.
+    """
     store.connection.execute(
         "UPDATE cards SET aligned = ? WHERE run_id = ? AND seq > ?",
-        (int(aligned), run.run_id, after),
+        (int(aligned), run.run_id, max(after, BASELINE_SEQ)),
     )
 
 

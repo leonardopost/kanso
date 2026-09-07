@@ -420,6 +420,68 @@ def test_retiring_is_refused_while_a_run_is_active(ws: Workspace, store: StateSt
     assert record(ws, store).status == "draft"
 
 
+def test_resuming_undoes_a_retire_and_clears_the_failure_count(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The inverse of `retire`, which for a while did not exist."""
+    register(ws, store)
+    store.connection.execute(
+        "UPDATE hypotheses SET consecutive_cert_failures = 4 WHERE hyp_id = ?", (HYP_ID,)
+    )
+    hyp.retire(ws, store, HYP_ID)
+
+    assert hyp.resume(ws, store, HYP_ID) == "retired"
+
+    assert record(ws, store).status == "researching"
+    assert store.events(subject=HYP_ID)[-1].kind == "researching"
+    held = store.connection.execute(
+        "SELECT consecutive_cert_failures FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    assert int(held[0]) == 0, "saying keep going is saying the failures are not the reason to stop"
+
+
+def test_resuming_takes_back_a_hypothesis_an_older_kanso_ended(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`failed` was written by a version that ended a hypothesis on n_fail failures."""
+    register(ws, store)
+    hyp.set_status(store, HYP_ID, "failed")
+
+    assert hyp.resume(ws, store, HYP_ID) == "failed"
+    assert record(ws, store).status == "researching"
+
+
+def test_resuming_something_research_has_not_ended_is_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    register(ws, store)
+
+    with pytest.raises(KansoError) as failure:
+        hyp.resume(ws, store, HYP_ID)
+
+    assert failure.value.code is Exit.PRECONDITION
+    assert "nothing to resume" in str(failure.value)
+
+
+def test_resuming_an_unregistered_id_is_refused(ws: Workspace, store: StateStore) -> None:
+    with pytest.raises(KansoError) as failure:
+        hyp.resume(ws, store, "never_seen")
+
+    assert failure.value.code is Exit.PRECONDITION
+
+
+def test_a_retired_hypothesis_does_not_move_until_it_is_resumed(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Work in flight must not undo the operator's own ending."""
+    register(ws, store)
+    hyp.retire(ws, store, HYP_ID)
+
+    hyp.set_status(store, HYP_ID, "researching")
+
+    assert record(ws, store).status == "retired"
+
+
 def test_retiring_an_unregistered_id_is_refused(ws: Workspace, store: StateStore) -> None:
     with pytest.raises(KansoError) as failure:
         hyp.retire(ws, store, "never_seen")

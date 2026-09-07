@@ -1,8 +1,8 @@
 """The queue: which hypothesis a free lane takes next, and what a stalled run does.
 
 Research is indefinite, so the queue is not a backlog that drains. A hypothesis enters it
-and leaves it only by dying — `failed` or `retired` — and everything else that can happen
-to one puts it back. A run that stalls goes back. A certificate that fails goes back. A
+and leaves it only when an operator retires it, and everything else that can happen to one
+puts it back. A run that stalls goes back. A certificate that fails goes back. A
 certificate that *passes* goes back too, because a certificate is a milestone in a
 hypothesis's life rather than the end of it: there is always a better version of an idea
 that already works.
@@ -61,8 +61,15 @@ BASELINE_PRIORITY: Final = -2
 """Where a hypothesis whose baseline would not run returns: behind a stalled one, since
 its starting point needs an operator rather than another lane."""
 
-DEAD: Final = frozenset({"failed", "retired"})
-"""The two statuses that leave the queue. Every other one comes back."""
+DEAD: Final = frozenset({"retired"})
+"""The one status that leaves the queue, and only an operator writes it.
+
+`failed` was here, and the framework wrote it: `n_fail` consecutive failing certificates
+ended a hypothesis and no command could bring one back. Whether an idea is worth another
+lane is the operator's call, so a failing certificate now escalates and the hypothesis
+returns to the queue. The status survives on hypotheses ended under an older version and
+means only that: their last certificate failed, and `kanso research queue add` takes them
+back."""
 
 QUEUED: Final = "queued"
 STALLED: Final = "stalled"
@@ -178,12 +185,16 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
 
     A `best` this hypothesis has not certified makes it a candidate, and certification is
     what happens next — here, on those bytes, before anything else takes a lane. The
-    verdict then decides where the hypothesis stands: a pass certifies it, a fail returns
-    it to research, and the run of failures the configuration allows ends it.
+    verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
+    fail returns it to research, and either way it is requeued at −1, because the queue is
+    left only when an operator retires something.
 
-    Either way it is requeued at −1, because a hypothesis leaves the queue only by dying;
-    the one that just died in the certification leaves instead. `ws` names the workspace
-    the certification runs in and `lane` is the lane its model call is billed to.
+    The retire is checked twice, before the certification and after it, because a run ends
+    before this is called and an operator is free to retire in the seconds a certification
+    takes. Certification refuses a retired subject outright, so without the first check
+    this raises; without the second, a retire that landed mid-certification would be lost.
+    `ws` names the workspace the certification runs in and `lane` is the lane its model
+    call is billed to.
 
     A certification that cannot run at all — no model on the planner's tier, a plan this
     version can no longer honour — raises out of here rather than being swallowed. The
@@ -194,6 +205,9 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     # deferred so the cycle exists only while this function runs.
     from kanso.certify.run import certify
 
+    if _status(store, hyp_id) in DEAD:
+        drop(store, hyp_id)
+        return Stall(hyp_id, None, False, None, None)
     best, _ = records.best_of(store, hyp_id)
     certifiable = best is not None and best != _certified_sha(store, hyp_id)
     verdict: str | None = None
@@ -240,8 +254,8 @@ def _alive(store: StateStore, hyp_id: str) -> None:
         )
     if status in DEAD:
         raise PreconditionError(
-            f"{hyp_id} is {status}, and research does not resume a hypothesis that is over",
-            remedy="register a new hypothesis for the idea",
+            f"{hyp_id} is retired, and research resumes it only when you say so",
+            remedy=f"run `kanso hyp resume {hyp_id}`",
         )
 
 

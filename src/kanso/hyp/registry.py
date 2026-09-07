@@ -51,6 +51,10 @@ Status = Literal[
 DRAFT: Final[Status] = "draft"
 CLASSIFIED: Final[Status] = "classified"
 RETIRED: Final[Status] = "retired"
+RESEARCHING: Final[Status] = "researching"
+
+ENDED: Final[frozenset[str]] = frozenset({"retired", "failed"})
+"""The statuses `resume` undoes: the operator's own, and the one kanso used to write."""
 
 SCOPE: Final = ("universe", "resolution", "data_requirements", "construct")
 """What a `best` is comparable under; a change to any of them clears it."""
@@ -226,8 +230,54 @@ def retire(ws: Workspace, store: StateStore, hyp_id: str) -> None:
     set_status(store, hyp_id, RETIRED)
 
 
+def resume(ws: Workspace, store: StateStore, hyp_id: str) -> str:
+    """Undo an ending: put a retired or failed hypothesis back to `researching`.
+
+    The inverse of `retire`, and the reason it exists is that for a while there was none.
+    kanso could end a line of research — `n_fail` consecutive failing certificates wrote
+    `failed`, which the queue treated as over — and no command anywhere could bring one
+    back; the remedy it printed was to register the idea again under a new id, which
+    silently resets the trial count the deflated-Sharpe gate prices the search by. The
+    framework no longer ends anything, and this is how a hypothesis ended by a version
+    that did comes back. The consecutive-failure count is cleared with it, because the
+    operator saying "keep going" is the same act as saying the run of failures is not the
+    reason to stop. Returns the status it moved away from.
+    """
+    row = _row(store, hyp_id)
+    if row is None:
+        raise PreconditionError(
+            f"{hyp_id!r} is not a registered hypothesis",
+            remedy=f"run `kanso hyp add hypotheses/{hyp_id}/hypothesis.yaml` to register it",
+        )
+    was = str(row["status"])
+    if was not in ENDED:
+        raise PreconditionError(
+            f"{hyp_id} is {was}, which research has not ended, so there is nothing to resume",
+            remedy=f"run `kanso research queue add {hyp_id}` to give it a lane",
+        )
+    store.connection.execute(
+        "UPDATE hypotheses SET consecutive_cert_failures = 0 WHERE hyp_id = ?", (hyp_id,)
+    )
+    _write_status(store, hyp_id, RESEARCHING)
+    return was
+
+
 def set_status(store: StateStore, hyp_id: str, status: Status) -> None:
-    """Move a registered hypothesis to `status` and record the move."""
+    """Move a registered hypothesis to `status` and record the move.
+
+    A retired one does not move. Retiring is the operator's decision and the only ending
+    kanso has, and work already in flight must not quietly undo it: a certification that
+    began before the retire ends by returning its subject to `researching`, which
+    resurrected it. `resume` is the one way back and it is a command, not a side effect.
+    """
+    row = _row(store, hyp_id)
+    if row is not None and str(row["status"]) == RETIRED and status != RETIRED:
+        return
+    _write_status(store, hyp_id, status)
+
+
+def _write_status(store: StateStore, hyp_id: str, status: Status) -> None:
+    """Write the status and append its event, with no rule about which moves are allowed."""
     store.connection.execute(
         "UPDATE hypotheses SET status = ?, updated_at = ? WHERE hyp_id = ?",
         (status, _now(), hyp_id),

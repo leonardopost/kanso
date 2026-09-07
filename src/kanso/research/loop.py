@@ -103,8 +103,13 @@ MIN_CARD_BUDGET_S: Final = 60.0
 HEADROOM: Final = 3.0
 """What a card is allowed over what the baseline needed, in time and in memory alike."""
 
-RESEARCHABLE: Final = frozenset({"classified", "researching", "candidate", "certified"})
-"""The statuses a run may begin from: a draft is unclassified, and the rest are over."""
+RESEARCHABLE: Final = frozenset({"classified", "researching", "candidate", "certified", "failed"})
+"""The statuses a run may begin from: every one but a draft, which has no construct yet.
+
+`failed` is here because a hypothesis carrying it was ended by a version of kanso that
+ended one, and the queue now takes it back (`research/scheduler.py`). Leaving it out would
+let such a hypothesis be queued and then refused at `begin`, which is a lane spinning
+rather than a refusal anyone reads."""
 
 BEGUN: Final = "run_begun"
 CARDED: Final = "card"
