@@ -226,8 +226,8 @@ def _read(
     `models/tasks.py` sends `min_delta` and `k_se` as bare numbers and this refusal is
     the only thing standing between a model's `k_se: 0` and the file. It earns the same
     `objective.params.<field>: <problem>` a value outside the toolbox's range earns,
-    naming the field and the bound it missed, so the retry has something to correct
-    rather than the news that the answer was unreadable.
+    naming the field and the bound it missed. The bound was named before this too; what
+    the retry gains is where in the answer to look, and one line per field.
     """
     proposal = _object(data.get("construct"))
     try:

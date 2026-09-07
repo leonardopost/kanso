@@ -33,6 +33,38 @@ def test_every_task_class_has_an_instruction_and_a_schema() -> None:
     assert set(ANSWER_SCHEMAS) == set(TASK_CLASSES)
 
 
+def test_the_classify_instruction_states_the_keep_rule_bounds_the_wire_no_longer_can() -> None:
+    """The two bounds left the schema when a provider refused the keyword that carried them.
+
+    `minimum` is not a keyword a provider accepts, so `min_delta` and `k_se` go out as bare
+    numbers and the only place a model is told their range is the instruction. Prose is not
+    machine-checked, so this reads the range off `ObjectiveParams` itself: a bound loosened
+    or tightened in the data model and not mirrored here fails, and so does deleting the
+    sentence, which would otherwise leave the model told neither bound by anything.
+    """
+    from kanso.schemas.hypothesis import ObjectiveParams
+
+    bounds = {
+        name: {
+            key: getattr(meta, key)
+            for meta in field.metadata
+            for key in ("ge", "gt")
+            if hasattr(meta, key)
+        }
+        for name, field in ObjectiveParams.model_fields.items()
+    }
+    assert bounds["min_delta"] == {"ge": 0} and bounds["k_se"] == {"gt": 0}, (
+        "the keep rule's bounds moved; the instruction below must move with them"
+    )
+    said = INSTRUCTIONS["classify"]
+    assert "`min_delta` is zero or more" in said
+    assert "`k_se` is above zero" in said
+    assert "the schema states no numeric range" in said, (
+        "the instruction must say why it carries the bounds, or a reader will put them back "
+        "on the wire and earn a 400"
+    )
+
+
 def test_no_prompt_or_schema_mentions_the_spec() -> None:
     """Nothing that outlives the build may point at the document that drove it."""
     for text in INSTRUCTIONS.values():

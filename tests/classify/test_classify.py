@@ -471,9 +471,9 @@ def test_a_keep_rule_the_wire_no_longer_bounds_is_named_in_the_retry(
     The bound is stated once, and no longer on the wire: `minimum` is a keyword the
     provider was measured to refuse on a number, so nothing in the document the model
     answers against says `k_se` is positive and this local refusal is the whole of it.
-    That makes what the refusal says load-bearing — a complaint naming the field and the
-    range is one the next attempt can act on, where `the answer is not a classification`
-    would have spent the ladder's one retry saying nothing.
+    That makes what the refusal says load-bearing. The bound was named before this too;
+    what is new is that the complaint locates the field in the answer document, so the
+    next attempt is told where to look and not only what was wrong.
     """
     register(ws, store, HYP_ID, DRAFT)
     script(ws, classify=[answer(objective_params={"min_delta": 0.0, "k_se": 0.0}), answer()])
