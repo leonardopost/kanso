@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.2.0 — 2026-09-08
 
 - **A hypothesis is never ended by kanso.** `n_fail` consecutive failing certificates used to write the status `failed`, which the queue treated as terminal — `dequeue` dropped it on sight, `enqueue` refused it, and the remedy printed was to register the idea again under a new id, which resets the trial count `deflated_sharpe` prices the search width by. A failing verdict now returns the hypothesis to `researching` every time and escalates on every `n_fail`-th failure. Ending a line of research is the operator's decision and `kanso hyp retire` is the whole of it.
 - `kanso hyp resume ID` is the inverse `retire` never had: it takes a retired hypothesis, or one an older kanso turned `failed`, back to `researching` and clears its consecutive-failure count. `kanso research queue add ID` then gives it a lane. Refused (exit 2) on a hypothesis research has not ended.
