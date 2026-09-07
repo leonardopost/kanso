@@ -463,6 +463,30 @@ def test_a_rejected_answer_is_retried_with_the_reason(
     assert store.connection.execute("SELECT COUNT(*) c FROM spend").fetchone()["c"] == 2
 
 
+def test_a_keep_rule_the_wire_no_longer_bounds_is_named_in_the_retry(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`k_se: 0` satisfies the schema kanso sent and is refused by `ObjectiveParams`.
+
+    The bound is stated once, and no longer on the wire: `minimum` is a keyword the
+    provider was measured to refuse on a number, so nothing in the document the model
+    answers against says `k_se` is positive and this local refusal is the whole of it.
+    That makes what the refusal says load-bearing — a complaint naming the field and the
+    range is one the next attempt can act on, where `the answer is not a classification`
+    would have spent the ladder's one retry saying nothing.
+    """
+    register(ws, store, HYP_ID, DRAFT)
+    script(ws, classify=[answer(objective_params={"min_delta": 0.0, "k_se": 0.0}), answer()])
+    seen = prompts(monkeypatch)
+
+    classified = classify(ws, store, HYP_ID)
+
+    assert classified.objective is not None
+    assert classified.objective.params.k_se == 1.0
+    assert len(seen) == 2
+    assert "objective.params.k_se: Input should be greater than 0" in seen[1].user
+
+
 def test_a_frontier_class_makes_two_attempts_and_then_refuses(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -480,6 +504,10 @@ def test_a_frontier_class_makes_two_attempts_and_then_refuses(
     ("given", "complaint"),
     [
         ({"construct": {"id": "nonsense"}}, "is not in the catalogue"),
+        (
+            {"construct": {"id": "Sleeve"}},
+            "the answer is not a classification: id: String should match pattern",
+        ),
         ({"construct": {"id": "sleeve", "host": HOST_ID}}, "attaches to nothing"),
         ({"construct": {"id": "filter"}}, "so it names one of demo_sleeve"),
         ({"construct": {"id": "filter", "host": "other"}}, "is not one of demo_sleeve"),
@@ -498,7 +526,11 @@ def test_a_frontier_class_makes_two_attempts_and_then_refuses(
         ),
         (
             {"objective_params": {"min_delta": 0.0, "k_se": 0.0}},
-            "the answer is not a classification",
+            "objective.params.k_se: Input should be greater than 0",
+        ),
+        (
+            {"objective_params": {"min_delta": -1.0, "k_se": 0.0}},
+            "objective.params.min_delta: Input should be greater than or equal to 0",
         ),
         ({"objective_params": {"min_delta": 0.0, "k_se": 9.0}}, "objective.params.k_se"),
         (

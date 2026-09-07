@@ -5,7 +5,7 @@ the routing table. There are four, they are named in the register's routing tabl
 fifth would be a call site the package does not have — so this module is closed, and the
 schemas here are the whole of what any model in any workspace is ever asked to produce.
 
-Three rules shape every prompt built here.
+Four rules shape every prompt built here.
 
 **The stable half carries the subject, the dynamic half carries the moment.** The system
 turn is the instruction, the answer schema and the facts that do not move for one subject,
@@ -22,6 +22,15 @@ keyed by names kanso does not own, and a free-form object is precisely what a pr
 constraining an answer to a schema refuses — measured, not assumed; `PARAM_PAIRS` records
 what each candidate shape cost. The pairs are undone by `collapse` before any step sees
 them, so the encoding lives in this module and the router and nowhere else.
+
+**A numeric range is not something these schemas may say.** `minimum` on a `number` or an
+`integer` is refused outright by the provider these documents were driven against, and so
+is `exclusiveMinimum` — measured one keyword at a time on 2026-09-07, and recorded with
+the rest of that measurement in `models/jsonschema.py`'s `ADMISSIBLE`. So `objective_params`
+sends two bare numbers: the keep rule's bounds live in `schemas.ObjectiveParams`, where
+they are enforced, the classify instruction states them in words because the schema cannot,
+and `classify._read` names the field and the bound when an answer misses one. A bound
+stated in a document a provider refuses is not a bound; it is a 400.
 
 `classify` and `certify_plan` decide what a hypothesis is and what would count as proof
 of it. Neither is shown a card metric, a certificate or the strategy source, because a
@@ -103,8 +112,8 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
             "objective_params": {
                 "type": "object",
                 "properties": {
-                    "min_delta": {"type": "number", "minimum": 0},
-                    "k_se": {"type": "number", "minimum": 0},
+                    "min_delta": {"type": "number"},
+                    "k_se": {"type": "number"},
                 },
                 "required": ["min_delta", "k_se"],
                 "additionalProperties": False,
@@ -190,7 +199,9 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "2. The keep rule's parameters. `min_delta` is the smallest improvement in the "
         "objective worth keeping and `k_se` how many standard errors an improvement must "
         "clear, so both are noise floors: set them from how noisy this hypothesis's "
-        "objective will be, not from ambition.\n"
+        "objective will be, not from ambition. `min_delta` is zero or more and `k_se` is "
+        "above zero; the schema states no numeric range, so those two bounds are stated "
+        "here.\n"
         "3. The constraints every card of this hypothesis must satisfy. Choose ids from "
         "the card-stage gate catalogue and stay inside each parameter's stated range. "
         "Include every gate the catalogue marks required.\n\n"

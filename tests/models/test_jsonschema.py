@@ -9,7 +9,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from kanso.models import validate
-from kanso.models.jsonschema import VOCABULARY
+from kanso.models.jsonschema import ADMISSIBLE, VOCABULARY
 from kanso.models.router import CHECK_SCHEMA, CHECK_TASK
 from kanso.models.tasks import ANSWER_SCHEMAS
 
@@ -165,13 +165,20 @@ SHIPPED: list[tuple[str, dict[str, Any]]] = [
 
 
 def test_every_shipped_schema_node_is_one_a_provider_accepts() -> None:
-    """The three shapes measured to earn a 400, refused here instead of on the wire.
+    """The shapes and the keywords measured to earn a 400, refused here instead of there.
 
     `classify` and `certify_plan` shipped in 0.1.1 with a free-form `{"type": "object"}`
     for their parameter maps and were answered 400 by the provider they were sent to,
     every time, for the life of the release: the model layer had only ever been driven
-    against the `mock` protocol, and offline nothing could see it. This is what would
-    have seen it, and it costs no network to run.
+    against the `mock` protocol, and offline nothing could see it.
+
+    Correcting the shape was not the whole of it. `classify` kept `{"minimum": 0}` on its
+    two keep-rule numbers and was answered 400 again — `For 'number' type, property
+    'minimum' is not supported` — because the first refusal named the parameter object
+    and naming one fault is not naming them all. The keyword half of this guard is why
+    the second round is a test rather than a third round: `minimum` is in `VOCABULARY`,
+    so a guard that read only the checker's own vocabulary was blind to it by
+    construction, and `ADMISSIBLE` is the set that a response, not a reading, decides.
     """
     for where, node in SHIPPED:
         assert node, f"{where}: an empty schema accepts any JSON value and is refused"
@@ -182,6 +189,11 @@ def test_every_shipped_schema_node_is_one_a_provider_accepts() -> None:
         assert node.get("additionalProperties") is not True, (
             f"{where}: additionalProperties: true is not supported"
         )
+        refused = sorted(set(node) - ADMISSIBLE)
+        assert refused == [], (
+            f"{where}: {', '.join(refused)} is not a keyword a provider was measured to "
+            "accept; ADMISSIBLE in models/jsonschema.py records what was"
+        )
 
 
 def test_every_shipped_schema_keyword_is_one_this_checker_reads() -> None:
@@ -189,6 +201,17 @@ def test_every_shipped_schema_keyword_is_one_this_checker_reads() -> None:
     for where, node in SHIPPED:
         unknown = sorted(set(node) - VOCABULARY)
         assert unknown == [], f"{where}: {', '.join(unknown)} is outside the vocabulary"
+
+
+def test_what_the_checker_reads_and_what_a_provider_accepts_are_different_sets() -> None:
+    """Neither contains the other, which is why both guards above have to run.
+
+    A keyword in `VOCABULARY` alone is one kanso can enforce and may not send; a keyword
+    in `ADMISSIBLE` alone is one a provider will take and kanso would never check. A
+    schema may use only what is in both.
+    """
+    assert "minimum" in VOCABULARY and "minimum" not in ADMISSIBLE
+    assert "description" in ADMISSIBLE and "description" not in VOCABULARY
 
 
 def test_an_arbitrary_object_never_validates_against_a_task_schema() -> None:

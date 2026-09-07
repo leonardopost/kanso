@@ -220,6 +220,14 @@ def _read(
     The three references are built first, so a value the data model cannot hold is one
     complaint rather than an exception; the catalogue, the applicability and the ranges
     are checked on the objects that survived.
+
+    The keep rule is read on its own because it is the one part of the answer the wire
+    does not constrain: a numeric range is a keyword the provider refuses, so
+    `models/tasks.py` sends `min_delta` and `k_se` as bare numbers and this refusal is
+    the only thing standing between a model's `k_se: 0` and the file. It earns the same
+    `objective.params.<field>: <problem>` a value outside the toolbox's range earns,
+    naming the field and the bound it missed, so the retry has something to correct
+    rather than the news that the answer was unreadable.
     """
     proposal = _object(data.get("construct"))
     try:
@@ -231,13 +239,18 @@ def _read(
                 "rationale": data.get("rationale"),
             }
         )
-        parameters = ObjectiveParams.model_validate(_object(data.get("objective_params")))
         constraints = tuple(
             ConstraintRef.model_validate(_object(entry))
             for entry in _sequence(data.get("constraints"))
         )
     except ValidationError as exc:
         return None, [f"the answer is not a classification: {exc.message}"]
+    try:
+        parameters = ObjectiveParams.model_validate(_object(data.get("objective_params")))
+    except ValidationError as exc:
+        # `schemas.render_errors` renders one field per error and joins them with "; ",
+        # so splitting there is one complaint per field rather than one for the pair.
+        return None, [f"objective.params.{problem}" for problem in exc.message.split("; ")]
 
     entry = constructs.entries.get(construct.id)
     if entry is None:

@@ -12,15 +12,20 @@ running on the operator's own machine speaks too. The facts this client relies o
 * `strict: true` requires every object in that document to set
   `additionalProperties: false`, and requires every key of `properties` to appear in
   `required`. The document sent is `call.schema` exactly — nothing here rewrites it — so
-  whatever `models/tasks.py` declares is what goes out on both wires, and the free-form
-  parameter object that earned a 400 on the Anthropic wire would have been refused here
-  for the same reason. **Only that first requirement has been measured, and only there**
-  (`models/tasks.py`, `PARAM_PAIRS`): no request from this client has ever been sent to a
-  server speaking this protocol. The second is not met today — `classify.construct` leaves
-  `host` and `params` out of `required`, and `classify.constraints[]` leaves out `params` —
-  so a strict server may refuse `classify` for a reason the Anthropic wire does not have.
-  `docs/backlog.md` row 57 holds that half open; what closes it is a measurement, since
-  making the two keys required changes what a model must answer.
+  whatever `models/tasks.py` declares is what goes out on both wires, and what one wire
+  refuses is worth reading here. On the Anthropic wire, on 2026-09-07: `certify_plan`,
+  `propose` and `align_check` were answered 200 with the schemas this package ships, and
+  `classify` was answered 400 twice over — first for a free-form parameter object, then
+  for the `minimum` on its two keep-rule numbers, which is a keyword no numeric type
+  accepts there (`models/jsonschema.py`, `ADMISSIBLE`). Both are gone, and every keyword
+  `classify` still carries was measured accepted.
+  **Nothing here has been measured at all**: no request from this client has ever been
+  sent to a server speaking this protocol, so the first requirement is met by reading its
+  rules rather than by a response. The second is not met today — `classify.construct`
+  leaves `host` and `params` out of `required`, and `classify.constraints[]` leaves out
+  `params` — so a strict server may refuse `classify` for a reason the Anthropic wire
+  does not have. `docs/backlog.md` row 57 holds that half open; what closes it is a
+  measurement, since making the two keys required changes what a model must answer.
 * Thinking depth is `reasoning_effort`, a `low` / `medium` / `high` scale that kanso's own
   effort maps onto one for one. A server with no reasoning control ignores the field.
 * The output cap is `max_tokens`. The newer `max_completion_tokens` is not universally

@@ -3,19 +3,23 @@
 The four task classes answer with small, closed objects, and the same document is both
 what goes on the wire as a schema and what the reply is checked against here. Keeping the
 checker in-package rather than taking a dependency on a general JSON Schema library is a
-deliberate trade: the vocabulary below is the whole of what the schemas use, a provider
+deliberate trade: the vocabulary below covers everything the schemas use, a provider
 that ignores the constraint is caught by the same code that would have caught a provider
 that has no constraint at all, and the complaints are written for a model to act on
 rather than for a human to debug a schema with.
 
-The vocabulary is `type`, `properties`, `required`, `additionalProperties: false`,
-`items`, `anyOf`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength` and `minItems`,
-and `VOCABULARY` below is that list in a form the suite can hold the shipped schemas to.
-Anything else in a schema is ignored rather than refused, because the schemas are this
-package's own and an unknown keyword there is a mistake to fix at the source — but
-"ignored here" is not "accepted there": a provider constraining an answer reads the whole
-document and refuses what it does not support, which is how a free-form parameter object
-shipped and was answered 400.
+Two keyword sets live below, and confusing them is what shipped the last two defects.
+`VOCABULARY` is what this checker reads: the whole of what a schema may rely on being
+enforced locally. `ADMISSIBLE` is what a provider was measured to accept in a document
+kanso sends. Neither contains the other — `minimum` and `maximum` are checked here and
+refused on the wire, `description` and `pattern` are accepted on the wire and unread here
+— so a schema keyword must be in both, and the suite holds every shipped node to each set
+separately. Anything outside `VOCABULARY` is ignored rather than refused when an answer is
+checked, because the schemas are this package's own and an unknown keyword there is a
+mistake to fix at the source; but "ignored here" is not "accepted there": a provider
+constraining an answer reads the whole document and refuses what it does not support,
+which is how a free-form parameter object and then a numeric bound each shipped and were
+answered 400.
 
 Validation never stops at the first problem: a model correcting one field at a time would
 burn the single retry the ladder allows, so every complaint the answer earns is collected
@@ -27,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-__all__ = ["VOCABULARY", "validate"]
+__all__ = ["ADMISSIBLE", "VOCABULARY", "validate"]
 
 VOCABULARY: Final[frozenset[str]] = frozenset(
     {
@@ -45,7 +49,58 @@ VOCABULARY: Final[frozenset[str]] = frozenset(
         "minItems",
     }
 )
-"""Every keyword the answer schemas may use, and the whole of what this checker reads."""
+"""Every keyword this checker reads, and the whole of what it enforces on an answer.
+
+A property of this package, and settled by reading the code below. It is not the set a
+schema may be *written* from: that is this set intersected with `ADMISSIBLE`, which is a
+property of a provider instead.
+"""
+
+ADMISSIBLE: Final[frozenset[str]] = frozenset(
+    {
+        "additionalProperties",
+        "anyOf",
+        "description",
+        "enum",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "pattern",
+        "properties",
+        "required",
+        "type",
+    }
+)
+"""Every keyword a provider was measured to accept in a schema kanso sends.
+
+Not a property of this package: it is what a provider's parser was observed to do, it
+moves when that provider moves, and a keyword joins it when a response says it may and
+never when a specification says it should. Measured against
+`https://api.anthropic.com/v1/messages` on 2026-09-07, one request per row, the schema in
+`output_config.format` with a single property carrying the keyword:
+
+* `{"type": "number"}` — 200.
+* `{"type": "number", "minimum": 0}` — 400,
+  `For 'number' type, property 'minimum' is not supported`.
+* `{"type": "number", "exclusiveMinimum": 0}` — 400, the same refusal.
+* `{"type": "integer", "minimum": 1}` — 400, the same refusal, so it is the keyword that
+  is refused and not the type it sits on.
+* `{"type": "string"}`, and the same with `minLength`, `maxLength`, `enum` and `pattern`
+  — 200, all four constraints.
+* `{"type": "array", "items": {...}, "minItems": 1}` — 200.
+* `{"type": "number", "description": "..."}` — 200.
+
+String, array and annotation constraints are accepted; numeric range constraints are not.
+`type`, `properties`, `required`, `additionalProperties` and `anyOf` are measured by whole
+documents rather than one keyword at a time: on the same day `certify_plan`, `propose` and
+`align_check` were answered 200 with the schemas this package ships, and every one of the
+five is in them. `models/tasks.py`'s `PARAM_PAIRS` records the rest of that session —
+`additionalProperties` is accepted at `false` and refused at `true`.
+
+`maximum` is absent because nothing measured it, not because anything refused it, and
+`exclusiveMinimum` is absent because something did.
+"""
 
 _TYPES: dict[str, tuple[type, ...]] = {
     "object": (dict,),
