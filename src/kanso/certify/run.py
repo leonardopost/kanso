@@ -233,7 +233,7 @@ def certify(
     )
     if registration.status != CANDIDATE:
         set_status(store, hyp_id, CANDIDATE)
-    evaluated, objective = _judge(ws, store, plan, subject, n_trials)
+    evaluated, objective = _judge(ws, store, plan, subject)
     made = Certificate(
         hyp_id=hyp_id,
         strategy_sha=subject.strategy_sha,
@@ -650,7 +650,6 @@ def _judge(
     store: StateStore,
     plan: CertificationPlan,
     subject: Subject,
-    n_trials: int,
 ) -> tuple[list[EvaluatedGate], ObjectiveResult]:
     """Evaluate the plan's certification gates, and measure the objective they judged."""
     planned = plan.stage_gates(CERT_STAGE)
@@ -672,9 +671,7 @@ def _judge(
     value, se = objective.compute(
         measured.certification, subject.folds, measured.host_certification
     )
-    metrics = [
-        card.metric for card in records.cards_of(store, subject.hyp.id) if card.status != "crash"
-    ]
+    metrics = records.trial_metrics(store, subject.hyp.id)
     facts = _dataset_facts(ws, snapshot, measured.groups)
     volume = _daily_volume(measured.groups)
     parameters = _tunable(subject)
@@ -702,12 +699,11 @@ def _judge(
             run=measured.certification,
             host_run=measured.host_certification,
             research_folds=subject.folds,
-            n_trials=n_trials,
             snapshot_id=subject.snapshot_id,
             strategy_sha=subject.strategy_sha,
             research_run=measured.research,
             host_research_run=measured.host_research,
-            card_metrics=metrics,
+            trial_metrics=metrics,
             datasets=facts,
             daily_volume=volume,
             tunable=parameters,

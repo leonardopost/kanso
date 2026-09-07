@@ -140,6 +140,7 @@ def a_card(
     metric: float = 1.0,
     best: bool = True,
     status: str = "keep",
+    n_trades: int = 4,
 ) -> str:
     """One recorded card of a closed run, and the run record that pinned its data."""
     pinned = yaml.safe_dump(document or DOCUMENT, sort_keys=False).encode("utf-8")
@@ -176,7 +177,7 @@ def a_card(
                 "metric": metric,
                 "metric_se": 0.25,
                 "n_trials": seq,
-                "n_trades": 4,
+                "n_trades": n_trades,
                 "wall_s": 1.0,
                 "peak_mem_gb": 0.5,
                 "status": status,
@@ -781,13 +782,15 @@ def test_a_replay_that_cannot_be_set_up_leaves_the_gate_without_its_evidence(
     assert made.verdict == "pass"
 
 
-def test_a_planned_deflated_sharpe_consumes_the_trial_count(
+def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
     ws: Workspace, store: StateStore
 ) -> None:
+    """A crash and a card that placed no order are edits that failed, not candidates."""
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, FLAT, seq=1, metric=0.5, best=False)
     a_card(ws, store, REVERTING, seq=2, metric=1.5)
-    a_card(ws, store, b"# a card that crashed\n", seq=3, metric=0.0, best=False, status="crash")
+    a_card(ws, store, b"# no order\n", seq=3, metric=0.0, best=False, status="discard", n_trades=0)
+    a_card(ws, store, b"# a card that crashed\n", seq=4, metric=0.0, best=False, status="crash")
     write_plan(
         ws,
         gates=[
@@ -804,9 +807,8 @@ def test_a_planned_deflated_sharpe_consumes_the_trial_count(
     made = certify(ws, store, HYP_ID)
 
     (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
-    assert deflated.evidence["n_trials"] == records.n_trials(store, HYP_ID) == 3
-    assert deflated.evidence["n_cards"] == 2, "a crash is a trial, but it measured nothing"
-    assert made.n_trials == 3
+    assert deflated.evidence["trials"] == len(records.trial_metrics(store, HYP_ID)) == 2
+    assert records.n_trials(store, HYP_ID) == made.n_trials == 4
 
 
 # --- a construct attached to a host -------------------------------------------

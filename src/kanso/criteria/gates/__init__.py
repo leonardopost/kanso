@@ -191,12 +191,15 @@ class _DeflatedSharpe:
     """The research Sharpe, deflated by how many trials went into selecting it.
 
     The estimate deflated is the one selection acted on — the research-window metric the
-    keep rule compared, which is what the trial count counts. The expected maximum it is
-    measured against is built from that trial count and the spread of the non-crash cards'
-    own metrics, with the length, skewness and kurtosis of the research return series
-    supplying the sampling distribution. Both the estimate and the spread are taken back
-    out of annualised units first, so the deflation is done in the units the return series
-    was actually sampled in.
+    keep rule compared. The expected maximum it is measured against is built from the
+    trials' own metrics: their count is how many candidates the maximum was taken over
+    and their spread is the distribution it was taken from, so both must describe the
+    same set or the bar is measured against a search that never happened. That set is
+    `trial_metrics`, which excludes a crash and a card that placed no order — those are
+    edits that failed rather than candidates the selection could have chosen. The length,
+    skewness and kurtosis of the research return series supply the sampling distribution.
+    Both the estimate and the spread are taken back out of annualised units first, so the
+    deflation is done in the units the return series was actually sampled in.
     """
 
     id: ClassVar[str] = "deflated_sharpe"
@@ -215,9 +218,9 @@ class _DeflatedSharpe:
             )
         if ctx.research_run is None:
             return skipped(self.id, NO_RESEARCH_RUN)
-        metrics = list(ctx.card_metrics)
+        metrics = list(ctx.trial_metrics)
         if len(metrics) < 2:
-            return skipped(self.id, "fewer than two non-crash cards, so trial spread is unknown")
+            return skipped(self.id, "fewer than two trials, so the trial spread is unknown")
         returns = ctx.research_run.returns
         shape = moments(returns)
         if len(returns) < 3 or shape is None:
@@ -225,7 +228,7 @@ class _DeflatedSharpe:
         scale = sqrt(periods_per_year(ctx.research_run))
         estimate = _metric(objective, ctx.research_run, ctx, ctx.host_research_run) / scale
         expected = self._expected_maximum(
-            variance(metrics) / periods_per_year(ctx.research_run), ctx.n_trials
+            variance(metrics) / periods_per_year(ctx.research_run), len(metrics)
         )
         skewness, kurtosis = shape
         denominator = 1 - skewness * estimate + (kurtosis - 1) / 4 * estimate**2
@@ -240,8 +243,7 @@ class _DeflatedSharpe:
                 "min_dsr": floor,
                 "sharpe": estimate,
                 "expected_maximum": expected,
-                "n_trials": ctx.n_trials,
-                "n_cards": len(metrics),
+                "trials": len(metrics),
                 "skew": skewness,
                 "kurtosis": kurtosis,
             },

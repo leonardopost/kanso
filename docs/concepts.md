@@ -199,7 +199,13 @@ memory and kills the process group on breach.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search
-that found the result, and one certification gate exists to deflate the result by it.
+that found the result, and no card may be dropped from a number that is part of a filename.
+
+One certification gate deflates the result by that search, and it counts a narrower set: a
+**trial** is a card that ran to a result and traded. A crash produced no metric to compare
+and a card that placed no order did not trade the hypothesis, so neither is a candidate the
+selection could have kept. The gate's count and the spread it deflates by are the same set —
+it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 ## The keep rule
 
