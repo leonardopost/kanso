@@ -36,6 +36,15 @@ run can name the fault that occurred rather than assume every one of them is the
 from the snapshot id, every aggregation is over a sorted sequence, and no set or dict
 iteration order reaches a number.
 
+**A split is applied, not traded through.** The sleeve adjusts its positions at each
+ex-date its instruments schedule (`kanso.nautilus.splits`), and this extraction reads that
+adjustment back off the positions' own ledger: the equity curve folds the quantity change
+into what is held, and a trade's size, prices and profit come from its fills and that
+ledger rather than from `peak_qty`, `avg_px_open` and `realized_pnl`, which the engine
+leaves in the share count the position opened in. A window holding a split the definition
+does not schedule is refused before an engine is built, because the alternative is a card
+reporting a one-for-ten reverse split as a 905% return.
+
 Engine facts this module relies on (nautilus_trader 1.231.0): `BacktestEngine` accepts
 data objects directly through `add_data`, which assumes one type per call, requires the
 instrument in the cache first, and needs a `client_id` for anything that is not a `Bar`,
@@ -43,10 +52,10 @@ instrument in the cache first, and needs a `client_id` for anything that is not 
 `run(start, end)` bounds the stream by `ts_init`; an exception raised in a strategy
 handler is logged and re-raised, so a failing card fails the run rather than passing
 quietly; the engine's simulated exchange processes an order on the next data instant, so
-every fill is stamped at a data instant; `Position` carries `ts_opened`, `ts_closed`,
-`avg_px_open`, `avg_px_close`, `peak_qty`, `realized_pnl` and the `OrderFilled` events
-that made it, which is the whole trade record; with `use_random_ids` left off the
-exchange generates deterministic trade ids.
+every fill is stamped at a data instant; `Position` carries `ts_opened`, `ts_closed`, the
+`OrderFilled` events that made it and the `PositionAdjusted` events applied to it, which
+together are the whole trade record; with `use_random_ids` left off the exchange generates
+deterministic trade ids.
 """
 
 from __future__ import annotations
@@ -68,6 +77,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
+from itertools import chain
 from math import fsum
 from pathlib import Path
 from types import ModuleType
@@ -76,6 +86,7 @@ from typing import Any, Final
 from kanso.criteria import CardRun, Fill, Trade
 from kanso.criteria.run import BPS, NS_PER_DAY, NS_PER_SECOND, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
+from kanso.nautilus import splits
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
 
@@ -88,6 +99,7 @@ __all__ = [
     "MEMORY",
     "RunRequest",
     "RunResult",
+    "checked",
     "child_env",
     "execute",
     "main",
@@ -444,7 +456,9 @@ def execute(
     from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
     from nautilus_trader.model.identifiers import ClientId, Venue
 
-    stream = _stream(request, groups)
+    from kanso.nautilus.actions import modules
+
+    stream = checked(request, instruments, groups)
     _seed_globals(request.snapshot_id)
     started = time.perf_counter()
     engine = BacktestEngine(
@@ -465,6 +479,9 @@ def execute(
                 # than the binary float that happens to be nearest to it.
                 default_leverage=Decimal(str(venue.default_leverage)),
                 bar_execution=venue.bar_execution,
+                # The venue applies a corporate action one call before it matches the point
+                # that carried the market past it; see `kanso.nautilus.actions`.
+                modules=modules(venue.name),
             )
         for instrument in instruments:
             engine.add_instrument(instrument)
@@ -503,6 +520,30 @@ def execute(
 def _own_peak_gb() -> float:
     """The peak resident size of the process that ran this, in gibibytes."""
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _MAXRSS_BYTES / GIB
+
+
+def checked(
+    request: RunRequest,
+    instruments: Sequence[object],
+    groups: Sequence[Sequence[object]],
+) -> tuple[tuple[int, str, float | None], ...]:
+    """Everything a run refuses before it builds an engine, and then its clock.
+
+    Two refusals, both about data the run was handed rather than about the strategy. A
+    point published outside the requested window is the embargo, re-checked here because
+    a card is handed its points across a process boundary. A split the window holds and
+    the instrument's definition does not schedule is the other: the run would trade
+    through the corporate action and report it as return, so it is refused with the entry
+    the operator has to write.
+
+    Every path that extracts a run calls this — `execute` here, `session.run_node` and
+    `node._realised` — because a refusal one path makes and another does not is a
+    divergence waiting to happen. `run_subprocess` makes the split half of it once more in
+    the parent, before the child exists, so a card refuses with a message an operator can
+    read instead of crashing with one only the run records.
+    """
+    splits.unscheduled(instruments, chain.from_iterable(groups), request.window)
+    return _stream(request, groups)
 
 
 def _stream(
@@ -572,8 +613,8 @@ def _extract(
     by_position: dict[int, list[Fill]] = {}
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
-    trades = _trades(positions, by_position)
-    ends, equity = _equity(request, stream, fills, multipliers)
+    trades = _trades(positions, by_position, multipliers)
+    ends, equity = _equity(request, stream, fills, multipliers, _adjusted(positions))
     opening = request.capital
     returns = tuple(
         value - previous for value, previous in zip(equity, (opening, *equity), strict=False)
@@ -708,32 +749,42 @@ def _fill(
 
 
 def _trades(
-    positions: Sequence[Any], by_position: Mapping[int, Sequence[Fill]]
+    positions: Sequence[Any],
+    by_position: Mapping[int, Sequence[Fill]],
+    multipliers: Mapping[str, float],
 ) -> tuple[Trade, ...]:
     """Closed positions as trades, netted of the costs of the fills that made them.
 
     A position still open when the window closes is not a trade: its profit is in the
     equity curve as an unrealised mark, and it becomes a trade only when it closes.
-    """
-    from nautilus_trader.model.enums import OrderSide
 
+    The size, the two average prices and the profit are computed from the position's own
+    fills and its split adjustments (`kanso.nautilus.splits.ledger`) rather than read off
+    the engine's `peak_qty`, `avg_px_open` and `realized_pnl`. Those three are what a
+    position *would* have been had no corporate action touched it: the first two are
+    `cdef readonly` and stay in the share count the position opened in, and the third is
+    computed against the second, so a position that spanned a one-for-ten reverse split
+    reported a 9,000 profit on a 50 loss. With no adjustment the ledger reproduces the
+    engine's own numbers exactly, which is why there is one arithmetic here and not two.
+    """
     trades: list[Trade] = []
     for index, position in enumerate(positions):
         if not position.is_closed:
             continue
         fills = tuple(by_position.get(index, ()))
         cost = fsum(fill.cost for fill in fills)
-        realized = position.realized_pnl
-        peak = float(position.peak_qty)
+        name = str(position.instrument_id)
+        book = splits.ledger(splits.moves_of(position), multipliers.get(name, 1.0))
+        opened = min(fills, key=lambda fill: fill.ts_ns) if fills else None
         trades.append(
             Trade(
                 opened_ns=int(position.ts_opened),
                 closed_ns=int(position.ts_closed),
-                instrument_id=str(position.instrument_id),
-                qty=peak if position.entry == OrderSide.BUY else -peak,
-                avg_open=float(position.avg_px_open),
-                avg_close=float(position.avg_px_close),
-                pnl_net=(0.0 if realized is None else float(realized)) - cost,
+                instrument_id=name,
+                qty=book.peak if opened is None or opened.side == "BUY" else -book.peak,
+                avg_open=book.avg_open,
+                avg_close=book.avg_close,
+                pnl_net=book.realized - cost,
                 cost=cost,
                 fills=fills,
             )
@@ -741,11 +792,33 @@ def _trades(
     return tuple(trades)
 
 
+def _adjusted(positions: Sequence[Any]) -> tuple[tuple[int, str, float], ...]:
+    """Every split adjustment the run applied, once each, as `(ts, instrument, change)`.
+
+    Read off the positions the same way the fills are, and deduplicated by event id for
+    the same reason: a netting position that closed and reopened lives in the cache twice,
+    once as the snapshot taken before the reset and once as the live object.
+    """
+    seen: set[str] = set()
+    found: list[tuple[int, str, float]] = []
+    for position in positions:
+        for event in position.adjustments:
+            key = str(event.id)
+            if key in seen or event.quantity_change is None:
+                continue
+            seen.add(key)
+            found.append(
+                (int(event.ts_event), str(event.instrument_id), float(event.quantity_change))
+            )
+    return tuple(sorted(found))
+
+
 def _equity(
     request: RunRequest,
     stream: Sequence[tuple[int, str, float | None]],
     fills: Sequence[Fill],
     multipliers: Mapping[str, float],
+    adjustments: Sequence[tuple[int, str, float]] = (),
 ) -> tuple[tuple[int, ...], list[float]]:
     """The period ends and the equity struck at each, from cash and marked positions.
 
@@ -754,6 +827,13 @@ def _equity(
     less the costs they were charged, plus every open position marked at the last price
     published for it. That is cash plus market value: the number a drawdown, a return and
     a Sharpe are all read from.
+
+    A split changes what is held without any fill saying so, so the adjustments the run
+    applied are folded into the same running count: the quantity change is taken from the
+    position's own ledger rather than recomputed from a ratio, so what the curve marks is
+    exactly the share count the engine went on to trade. Without it the ex-day's price is
+    marked against the pre-split count and the curve reports the whole action as return —
+    measured on a one-for-ten reverse split, 190,450 against a true 99,950.
     """
     opens, _ = request.bounds
     period_ns = int(parse_duration(request.period, "period").total_seconds() * NS_PER_SECOND)
@@ -772,6 +852,7 @@ def _equity(
     equity: list[float] = []
     point = 0
     fill = 0
+    split = 0
     for end in ends:
         while point < len(stream) and stream[point][0] <= end:
             _ts, key, price = stream[point]
@@ -785,6 +866,10 @@ def _equity(
             cash -= signed * made.px * multiplier + made.cost
             held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
             fill += 1
+        while split < len(adjustments) and adjustments[split][0] <= end:
+            _ts, key, change = adjustments[split]
+            held[key] = held.get(key, 0.0) + change
+            split += 1
         value = fsum(
             held[key] * marks.get(key, 0.0) * multipliers.get(key, 1.0) for key in sorted(held)
         )
@@ -824,6 +909,9 @@ def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> Ru
             f"{request.hyp.windows.research.end}",
         )
     instruments, groups = window_data(request, catalog_path)
+    # In the parent, where a refusal is a refusal: the child is a card, and an exception
+    # inside one is a crash the run records rather than a message the operator reads.
+    splits.unscheduled(instruments, chain.from_iterable(groups), request.window)
     payload = pickle.dumps(
         {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)},
         protocol=pickle.HIGHEST_PROTOCOL,

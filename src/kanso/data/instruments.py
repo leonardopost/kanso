@@ -80,6 +80,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from kanso.data import conventions
 from kanso.errors import KansoError, PreconditionError, ValidationError
+from kanso.nautilus import splits
 from kanso.schemas import InstrumentEntry, InstrumentsFile, Resolved, load_yaml, write_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -218,7 +219,7 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
 _FEES = ("margin_init", "margin_maint", "maker_fee", "taker_fee")
 
 _OPTIONAL: dict[str, tuple[str, ...]] = {
-    "Equity": (*_FEES, "max_quantity", "min_quantity", "isin", "tick_scheme_name"),
+    "Equity": (*_FEES, "max_quantity", "min_quantity", "isin", "tick_scheme_name", "info"),
     "OptionContract": (*_FEES, "exchange", "tick_scheme_name"),
     "FuturesContract": (*_FEES, "exchange", "tick_scheme_name"),
     "CurrencyPair": (
@@ -233,7 +234,14 @@ _OPTIONAL: dict[str, tuple[str, ...]] = {
     ),
     "IndexInstrument": ("tick_scheme_name",),
 }
-"""What each class also accepts, so an override may correct a fee, a bound or an isin."""
+"""What each class also accepts, so an override may correct a fee, a bound or an isin.
+
+`info` is an equity's free-form map and is where a split schedule lives — `info.splits`,
+read by `kanso.nautilus.splits`. It is here and not on the other four because a split is an
+equity's corporate action; a dated derivative expires instead. Because `engine_fields` is
+`to_dict` and `info` is one of its keys, a schedule is content-addressed into
+`definition_checksum`, `instruments_checksum` and the run's `snapshot_id` for free.
+"""
 
 _BY_ASSET_CLASS: dict[str, str] = {
     "EQUITY": "Equity",
@@ -323,6 +331,20 @@ def _symbol(value: object) -> Any:
     return Symbol(str(value))
 
 
+def _info(value: object) -> dict[str, Any]:
+    """An instrument's free-form map, canonicalised so its content address is stable.
+
+    A YAML date and the ISO string the engine stores are the same fact written two ways,
+    and a definition addressed by one of them would miss a cache built on the other, so the
+    map is put through JSON with every non-JSON scalar rendered as its own string. That is
+    also exactly what `definition_checksum` does to it afterwards.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{value!r} is not a mapping")
+    canonical: dict[str, Any] = json.loads(json.dumps(dict(value), sort_keys=True, default=str))
+    return canonical
+
+
 def _asset_class(value: object) -> Any:
     from nautilus_trader.model.enums import AssetClass
 
@@ -392,6 +414,7 @@ _COERCE: dict[str, Callable[[object], Any]] = {
     "isin": _text,
     "exchange": _text,
     "tick_scheme_name": _text,
+    "info": _info,
 }
 """How a YAML scalar becomes the engine type each constructor argument requires."""
 
@@ -505,6 +528,10 @@ def build(entry: InstrumentEntry, conventions: Mapping[str, object]) -> object:
 
     try:
         arguments = {field: _COERCE[field](fields[field]) for field in accepted if field in fields}
+    except (TypeError, ValueError) as exc:
+        raise _rejected(entry, name, exc) from None
+    splits.schedule(arguments.get("info"), entry.nautilus_id)
+    try:
         instrument: object = _engine(name)(**arguments)
     except (TypeError, ValueError) as exc:
         raise _rejected(entry, name, exc) from None
@@ -866,9 +893,22 @@ def _from_cache(entry: InstrumentEntry, cached: Mapping[str, object], as_of: dat
     for field, value in entry.override.items():
         if field in _CONSUMED:
             continue
-        if field not in stored or str(stored[field]) != str(value):
+        if field not in stored or _comparable(stored[field]) != _comparable(value):
             return None
     return held
+
+
+def _comparable(value: object) -> str:
+    """One field of an override and of a stored definition, in a form that compares.
+
+    A scalar compares as it is written. A structured field — `info`, and only `info`
+    today — is put through the same canonicalisation construction gives it, so a schedule
+    whose ex-date YAML parsed into a `date` still matches the ISO string the engine stored
+    it as, and the cache is stale only when the operator actually changed something.
+    """
+    if isinstance(value, Mapping | list):
+        return json.dumps(value, sort_keys=True, default=str)
+    return str(value)
 
 
 def _reference_provider(ws: Workspace) -> InstrumentProvider | None:

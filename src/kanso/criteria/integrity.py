@@ -28,6 +28,29 @@ the component clock with its timer API, since a strategy reads data time and wal
 logic cannot survive replay parity. The builtins are refused as names only: `Bar.open` and
 the other OHLC attributes are ordinary data, and the ban is on the builtin, not the word.
 
+Two attribute sets are refused for reasons that are about corporate actions rather than
+about capability, and both carry the reason in the refusal, because a discarded card whose
+author is a model is worth nothing unless the model is told what it did.
+
+**The cache.** An instrument's `info` carries every split of its life, including ones dated
+after the window a card is judged on (`kanso.nautilus.splits`), and `cache.instrument(id)`
+is the only route by which a `strategy.py` can hold an instrument at all — a subscription
+delivers none in a backtest, and `HookContext` carries prices rather than definitions. So
+the cache is denied and the schedule is out of reach with it. The word `info` is *not*
+denied: `self.log.info(...)` is the engine's own logging call, and refusing it would refuse
+the most ordinary line a strategy writes.
+
+**Anything the engine derives from a position's opening basis.** `Position.avg_px_open` is
+`cdef readonly` and `apply_adjustment` does not rescale it, so after a split it is a price
+per share that no longer exists; `peak_qty` is a count of shares that no longer exist; and
+`realized_pnl`, `realized_return`, the portfolio's P&L views and every account balance
+credited from them are computed against those two. Measured on a one-for-ten reverse split
+under kanso's own venue: a position that lost 50 reported a profit of 9,000, and a $100,000
+account read $109,000 from the closing fill onwards. Those are reachable through
+`self.portfolio` and through a position event, which is why they are named rather than left
+to the cache's denial. kanso's own extraction reads none of them, computing a trade from
+its fills and the split ledger instead; a researched strategy may not read them either.
+
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
 — dot-files and `__pycache__` — are ignored, because the interpreter writes them and the
@@ -123,10 +146,51 @@ DENIED_CLOCK: Final = frozenset(
 )
 """The component clock and its timer API, reachable only as an attribute."""
 
+DENIED_SCHEDULE: Final = frozenset({"cache"})
+"""The one route by which a `strategy.py` can hold an instrument, and so its `info.splits`:
+every split of that instrument's life, which is the certification window and beyond."""
+
+DENIED_STALE_BASIS: Final = frozenset(
+    {
+        "account",
+        "account_for_venue",
+        "accounts",
+        "analyzer",
+        "avg_px_close",
+        "avg_px_open",
+        "equity",
+        "peak_qty",
+        "realized_pnl",
+        "realized_pnls",
+        "realized_return",
+        "total_pnl",
+        "total_pnls",
+        "unrealized_pnl",
+        "unrealized_pnls",
+    }
+)
+"""Every quantity the engine computes against a position's opening basis, which a split
+leaves in the share count the position opened in and which nothing can rewrite."""
+
+WHY: Final = {
+    **dict.fromkeys(
+        DENIED_SCHEDULE,
+        "it hands out the instrument whose `info.splits` names every split of its life, "
+        "including ones after the window this card is judged on",
+    ),
+    **dict.fromkeys(
+        DENIED_STALE_BASIS,
+        "the engine computes it against a position's opening basis, which a corporate "
+        "action leaves in a share count that no longer exists; size from `last_price`, "
+        "`portfolio.net_position` and the capital the config carries instead",
+    ),
+}
+"""Why each corporate-action denial exists, said in the refusal so a proposer can act on it."""
+
 DENIED_IDENTIFIERS: Final = DENIED_MODULES | DENIED_DUNDERS | DENIED_BRIDGE | DENIED_NUMPY_FILE
 """Refused as a name, an attribute or an import alias alike."""
 
-DENIED_ATTRIBUTES: Final = DENIED_IDENTIFIERS | DENIED_CLOCK
+DENIED_ATTRIBUTES: Final = DENIED_IDENTIFIERS | DENIED_CLOCK | DENIED_SCHEDULE | DENIED_STALE_BASIS
 
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
@@ -207,7 +271,11 @@ def scan(source: str, origin: str = STRATEGY) -> list[str]:
             if problem is not None:
                 problems.append(problem)
         elif isinstance(node, ast.Attribute) and node.attr in DENIED_ATTRIBUTES:
-            problems.append(f"line {node.lineno}: attribute '.{node.attr}' is denied")
+            why = WHY.get(node.attr)
+            problems.append(
+                f"line {node.lineno}: attribute '.{node.attr}' is denied"
+                + ("" if why is None else f", because {why}")
+            )
     return sorted(set(problems), key=problems.index)
 
 

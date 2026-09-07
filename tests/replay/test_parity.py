@@ -8,7 +8,15 @@ from kanso import replay
 from kanso.replay.parity import Intent, Parity, compare
 from kanso.state import StateStore
 from kanso.workspace import Workspace
-from tests.replay.conftest import BLOCKING_FILTER, FLAT, RAISING, carded, composed, document
+from tests.replay.conftest import (
+    BLOCKING_FILTER,
+    FLAT,
+    HOLDING,
+    RAISING,
+    carded,
+    composed,
+    document,
+)
 
 
 def intent(**changes: object) -> Intent:
@@ -239,3 +247,24 @@ def test_the_payload_carries_no_explanation_for_a_divergence() -> None:
 
     assert "likely_cause" not in parted.payload()
     assert parted.payload()["divergence"] == parted.divergence.render()  # type: ignore[union-attr]
+
+
+def test_parity_holds_across_a_split(ws_split: Workspace, store_split: StateStore) -> None:
+    """A corporate action is applied by the venue, and both code paths run the same venue.
+
+    That is why it is a simulation module rather than anything in the strategy: the module
+    is loaded by `BacktestEngine.add_venue` on the research path and by
+    `kanso.nautilus.sandbox` on the node path, and it acts one call before the exchange
+    matches the point that carried the market past the ex-date. A quantity that changed on
+    one path and not the other would diverge here at a tolerance of zero.
+    """
+    hyp_id = carded(ws_split, store_split, strategy=HOLDING)
+
+    result = replay.parity(ws_split, store_split, hyp=hyp_id)
+
+    assert result.identical, result.divergence and result.divergence.render()
+    assert result.max_ts_delta_ns == 0
+    assert [(order.side, order.qty) for order in result.node_orders] == [
+        ("BUY", 1_005.0),
+        ("SELL", 100.0),
+    ]

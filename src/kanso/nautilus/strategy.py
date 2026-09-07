@@ -30,6 +30,14 @@ because the engine has nowhere else to enforce it: `RiskEngineConfig` offers exa
 limit, `max_notional_per_order` keyed by instrument, which is a per-order backstop and
 knows nothing of a position, a strategy or a book.
 
+**It does not apply corporate actions, and must not.** A split is applied by the venue,
+one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
+sleeve handles a point only after the exchange has already matched against it — measured, a
+take-profit resting at fifty was filled for 1,005 shares on the ex-date bar of a one-for-ten
+reverse split that restated the price to a hundred, and the card reported the bookkeeping
+change as a 40% return. By the time `on_bar` runs, the positions this sleeve holds are
+already in post-split shares and its resting orders in that instrument are already cancelled.
+
 **It consults the constructs attached to it.** A filter, an overlay or an exit rule is a
 `KansoModifier` — an engine actor, because a strategy config cannot configure an actor and
 an actor config cannot configure a strategy; the two are sibling types and the engine
@@ -73,6 +81,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
 from kanso.errors import ValidationError
+from kanso.nautilus import splits
 from kanso.nautilus.hooks import (
     EXIT,
     FILTER,
@@ -604,11 +613,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return room / (1.0 + ROUND_TRIP * self.cost_rate)
 
     def _gross_exposure(self) -> float:
+        """What this sleeve holds, marked at the last price seen and at cost where none was.
+
+        The fallback is the position's own split-aware cost basis rather than
+        `Position.avg_px_open`, which a corporate action leaves quoted in shares the
+        position no longer holds and which would understate the exposure by the ratio.
+        """
         total = 0.0
         for position in self.cache.positions_open(strategy_id=self.id):
             price = self._last_price.get(position.instrument_id.value)
             if price is None:
-                price = float(position.avg_px_open)
+                price = splits.ledger(splits.moves_of(position)).basis
             total += abs(float(position.signed_qty)) * price
         return total
 

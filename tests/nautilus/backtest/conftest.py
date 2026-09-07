@@ -252,8 +252,11 @@ class Modifier(KansoModifier):
 """
 
 
-def instrument(symbol: str = SYMBOL) -> Equity:
-    """One US equity, priced in cents and traded in whole shares."""
+def instrument(symbol: str = SYMBOL, **extra: object) -> Equity:
+    """One US equity, priced in cents and traded in whole shares.
+
+    `extra` is whatever else the class accepts — `info`, and so the split schedule.
+    """
     return Equity(
         instrument_id=InstrumentId(Symbol(symbol), _venue()),
         raw_symbol=Symbol(symbol),
@@ -263,6 +266,7 @@ def instrument(symbol: str = SYMBOL) -> Equity:
         lot_size=Quantity.from_int(1),
         ts_event=0,
         ts_init=0,
+        **extra,
     )
 
 

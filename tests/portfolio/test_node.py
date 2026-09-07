@@ -185,12 +185,51 @@ def test_a_version_with_nothing_new_gets_an_empty_window_rather_than_a_refusal(
 ) -> None:
     request = placement.request((date(2024, 3, 1), date(2024, 3, 2)))
 
-    realised = node._realised(placement, request, None, ((),), {})
+    realised = node._realised(placement, request, None, ((),), {}, ())
 
     assert realised.run.returns == ()
     assert realised.run.trades == ()
     assert realised.positions == ()
     assert realised.pnl == 0.0
+
+
+def test_a_stage_window_holding_an_undeclared_split_is_refused_like_any_other(
+    placement: Placement,
+) -> None:
+    """A stage extracts through the same gate a card and a replay do.
+
+    A stage that reported a corporate action as return would promote on it, and a refusal
+    one path makes and another does not is a divergence waiting to happen.
+    """
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    from kanso.data.types import CorporateAction
+    from tests.replay.conftest import instrument
+
+    window = (date(2024, 3, 1), date(2024, 3, 2))
+    effective = 1_709_251_200_000_000_000  # 2024-03-01T00:00:00Z
+    action = CorporateAction(
+        instrument_id=InstrumentId.from_str(INSTRUMENT),
+        kind="split",
+        ratio=0.1,
+        cash=0.0,
+        currency="USD",
+        ex_date_ns=effective,
+        ts_event=effective,
+        ts_init=effective,
+    )
+
+    with pytest.raises(KansoError) as raised:
+        node._realised(
+            placement,
+            placement.request(window),
+            None,
+            ((action,),),
+            {},
+            (instrument(),),
+        )
+
+    assert "the window holds a split effective 2024-03-01" in raised.value.message
 
 
 def test_a_book_carries_its_signed_exposure() -> None:

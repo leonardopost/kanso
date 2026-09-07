@@ -217,8 +217,11 @@ def document(**changes: Any) -> dict[str, Any]:
     return {**DOCUMENT, **changes}
 
 
-def instrument(symbol: str = SYMBOL) -> Equity:
-    """One US equity, priced in cents and traded in whole shares."""
+def instrument(symbol: str = SYMBOL, **extra: Any) -> Equity:
+    """One US equity, priced in cents and traded in whole shares.
+
+    `extra` is whatever else the class accepts — `info`, and so a split schedule.
+    """
     return Equity(
         instrument_id=InstrumentId(Symbol(symbol), Venue(VENUE)),
         raw_symbol=Symbol(symbol),
@@ -228,6 +231,7 @@ def instrument(symbol: str = SYMBOL) -> Equity:
         lot_size=Quantity.from_int(1),
         ts_event=0,
         ts_init=0,
+        **extra,
     )
 
 
@@ -354,7 +358,11 @@ def venue_model() -> Any:
     )
 
 
-def write_instruments(ws: Workspace, ids: tuple[str, ...] = (INSTRUMENT,)) -> None:
+def write_instruments(
+    ws: Workspace,
+    ids: tuple[str, ...] = (INSTRUMENT,),
+    override: dict[str, Any] | None = None,
+) -> None:
     """Manual entries, so resolution never reaches a reference adapter."""
     entries = {
         identifier: {
@@ -362,7 +370,12 @@ def write_instruments(ws: Workspace, ids: tuple[str, ...] = (INSTRUMENT,)) -> No
             "asset_class": "EQUITY",
             "manual": True,
             "corporate_actions": "none",
-            "override": {"currency": "USD", "price_increment": "0.01", "lot_size": "1"},
+            "override": {
+                "currency": "USD",
+                "price_increment": "0.01",
+                "lot_size": "1",
+                **(override or {}),
+            },
         }
         for identifier in ids
     }
@@ -382,6 +395,111 @@ def write_hypothesis(
     (directory / "program.md").write_bytes(PROGRAM)
     (directory / "strategy.py").write_bytes(strategy)
     return path
+
+
+SPLIT_EX = date(2024, 3, 15)
+"""A one-for-ten reverse split inside the forward window, which is what replay covers."""
+
+SPLIT_SCHEDULE: dict[str, Any] = {"splits": [{"ex_date": SPLIT_EX.isoformat(), "ratio": 0.1}]}
+
+HOLDING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    exit_after: int = 20
+
+
+class Strategy(KansoStrategy):
+    """Buys the first session and holds across the ex-date, so a position spans the split."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.seen = 0
+
+    def on_bar(self, bar) -> None:
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+        elif self.seen == self.kanso_config.exit_after:
+            self.submit_exit(bar.bar_type.instrument_id)
+'''
+
+
+RESTING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    take_profit: float = 50.0
+
+
+class Strategy(KansoStrategy):
+    """Buys the first session and rests a take-profit only a restated price could reach."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.seen = 0
+
+    def on_bar(self, bar) -> None:
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+        elif self.seen == 2:
+            self.submit_exit(bar.bar_type.instrument_id, price=self.kanso_config.take_profit)
+'''
+
+
+def restated(window: tuple[date, date] = SPAN, symbol: str = SYMBOL) -> list[Bar]:
+    """The same saw-tooth, ten times higher from the ex-date: a one-for-ten reverse split."""
+    made: list[Bar] = []
+    for index in range((window[1] - window[0]).days + 1):
+        ts_event = midnight_ns(window[0]) + index * 86_400 * SECOND_NS + CLOSE_NS
+        close = price(index) * (10.0 if ts_event >= midnight_ns(SPLIT_EX) else 1.0)
+        made.append(
+            Bar(
+                bar_type(symbol),
+                Price(close, 2),
+                Price(close + 0.25, 2),
+                Price(close - 0.25, 2),
+                Price(close, 2),
+                Quantity.from_int(100_000),
+                ts_event=ts_event,
+                ts_init=ts_event + SECOND_NS,
+            )
+        )
+    return made
+
+
+@pytest.fixture(scope="session")
+def prepared_split(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A workspace whose one instrument reverse-splits inside the window replay covers."""
+    root = tmp_path_factory.mktemp("prepared-split") / "ws"
+    ws = init(root)
+    write_instruments(ws, override={"info": SPLIT_SCHEDULE})
+    resolve_universe(ws, [INSTRUMENT], RESEARCH[0])
+    catalog.write(ws, restated(), ref=dataset(), source="synthetic")
+    snapshot.freeze(ws)
+    write_envelope(ws, ENVELOPE)
+    return root
+
+
+@pytest.fixture
+def ws_split(prepared_split: Path, tmp_path: Path) -> Workspace:
+    """A fresh copy of the splitting workspace."""
+    root = tmp_path / "split"
+    shutil.copytree(prepared_split, root)
+    return find(root)
+
+
+@pytest.fixture
+def store_split(ws_split: Workspace) -> Iterator[StateStore]:
+    """A migrated state store for the splitting workspace."""
+    with StateStore(ws_split.path("state.db")) as opened:
+        opened.migrate()
+        yield opened
 
 
 @pytest.fixture(scope="session")

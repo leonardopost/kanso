@@ -235,11 +235,12 @@ def test_a_custom_type_is_loaded_for_the_universe_and_for_nobody_else(
     ts = midnight_ns(RESEARCH[0]) + 5 * 86_400 * SECOND_NS
 
     def action(instrument_id: str) -> CorporateAction:
+        """A dividend, so that this is a test of loading and not of the split refusal."""
         return CorporateAction(
             instrument_id=InstrumentId.from_str(instrument_id),
-            kind="split",
-            ratio=2.0,
-            cash=0.0,
+            kind="dividend",
+            ratio=1.0,
+            cash=0.25,
             currency="USD",
             ex_date_ns=ts,
             ts_event=ts,

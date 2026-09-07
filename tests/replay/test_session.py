@@ -21,13 +21,17 @@ from tests.replay.conftest import (
     BLOCKING_FILTER,
     FLAT,
     FORWARD,
+    HOLDING,
     INSTRUMENT,
     RAISING,
+    RESTING,
+    SPLIT_SCHEDULE,
     bars,
     hypothesis,
     instrument,
     quotes,
     request_for,
+    restated,
     trades,
 )
 
@@ -54,6 +58,39 @@ def test_the_live_path_submits_what_the_research_path_submits() -> None:
 
     assert node.intents == engine.intents
     assert node.intents
+
+
+def test_the_two_paths_apply_a_corporate_action_identically() -> None:
+    """A split is applied by the venue, and both paths run the same simulated venue."""
+    node, engine = both(
+        request_for(source=HOLDING),
+        [instrument(info=SPLIT_SCHEDULE)],
+        [tuple(restated(FORWARD))],
+    )
+
+    assert node.intents == engine.intents
+    assert [(order[2], order[3]) for order in node.intents] == [("BUY", 1_005.0), ("SELL", 100.0)]
+    assert node.run.equity == engine.run.equity
+
+
+def test_the_two_paths_cancel_across_a_corporate_action_identically() -> None:
+    """The order the venue has to reach before the exchange does, on both paths.
+
+    A take-profit resting at fifty is unreachable at ten and marketable at a hundred, so a
+    path that cancelled a bar late would fill 1,005 shares at fifty and end tens of
+    thousands richer than the other. Both cancel before the ex-date's bar is matched, so
+    neither fills and the equity curves are the same number at every period end.
+    """
+    node, engine = both(
+        request_for(source=RESTING),
+        [instrument(info=SPLIT_SCHEDULE)],
+        [tuple(restated(FORWARD))],
+    )
+
+    assert node.intents == engine.intents
+    assert [(order[2], order[3]) for order in node.intents] == [("BUY", 1_005.0), ("SELL", 1_005.0)]
+    assert [(fill.side, fill.qty) for fill in node.run.fills] == [("BUY", 1_005.0)]
+    assert node.run.equity == engine.run.equity
 
 
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:

@@ -27,10 +27,13 @@ from .conftest import (
     REVERTING,
     WEAK,
     at,
+    classify,
     edit,
     lane,
     payload,
+    schedule_split,
     write_hypothesis,
+    write_split,
 )
 
 
@@ -483,3 +486,47 @@ def test_a_run_writes_nothing_to_the_instrument_store(runner: CliRunner, registe
 
     assert resolved_instruments_checksum(ws) == pinned
     assert (registered / "instruments.yaml").read_bytes() == cache
+
+
+def test_a_window_holding_a_split_the_definition_does_not_schedule_is_refused(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The half that protects an operator who has not adopted the schedule.
+
+    The refusal is made in the parent process, before the card's child is spawned, so it
+    reaches the operator as a refusal with a remedy rather than as a crash the run records.
+    The split point is loadable here because it carries the instant its action was
+    announced, which is what an honest `corporate_action` dataset carries; the shipped
+    `massive_corporate_actions` loader cannot supply one for a split, so it marks any spec
+    including splits `unknown` and no snapshot relies on it in the first place.
+    """
+    path = write_hypothesis(loaded, REVERTING, data_requirements=["bar", "corporate_action"])
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+    write_split(loaded)
+    assert at(runner, loaded, "data", "snapshot").exit_code == Exit.OK
+
+    result = at(runner, loaded, "research", "begin", HYP_ID, "--tag", "20240101-1")
+
+    assert result.exit_code == Exit.PRECONDITION, result.output
+    assert result.output == (
+        f"error: {INSTRUMENT}: the window holds a split effective 2024-02-01 at a ratio of "
+        "0.1, and its definition schedules none\n"
+        "remedy: add the split to `info.splits` in this instrument's `override` in "
+        "instruments.yaml, then re-resolve and re-snapshot\n"
+    )
+
+
+def test_a_scheduled_split_the_window_also_carries_runs(runner: CliRunner, loaded: Path) -> None:
+    """Agreement is silence: the definition and the data say the same thing, so the card runs."""
+    path = write_hypothesis(loaded, REVERTING, data_requirements=["bar", "corporate_action"])
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+    write_split(loaded)
+    schedule_split(runner, loaded)
+
+    begun = at(runner, loaded, "research", "begin", HYP_ID, "--tag", "20240101-1")
+    result = at(runner, loaded, "research", "card", HYP_ID, "--desc", "fade a declared split")
+
+    assert begun.exit_code == Exit.OK, begun.output
+    assert result.exit_code == Exit.OK, result.output

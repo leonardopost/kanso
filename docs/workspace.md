@@ -401,6 +401,54 @@ instruments show <ID>` reads the store and renders the definition a run would us
 newest-dated one it holds. The file is the cache and the place your overrides live, so
 deleting it costs you the overrides and a round of resolution, not the definitions.
 
+### The split schedule
+
+An equity's `override.info.splits` is where you declare the splits it has been through. It
+is the only structured override, and it is the one thing that makes a window containing a
+corporate action researchable: kanso applies a split at its ex-date — cancelling resting
+orders, rescaling every open position, resyncing the portfolio behind it — instead of
+reading the restated price as a return.
+
+```yaml
+SOXS:
+  nautilus_id: SOXS.ARCX
+  asset_class: EQUITY
+  corporate_actions: adjust_all
+  override:
+    info:
+      splits:
+        - {ex_date: 2026-07-15, ratio: 0.1}     # a one-for-ten reverse split
+        - {ex_date: 2021-03-02, ratio: 4.0}     # a four-for-one split
+```
+
+`ratio` is shares held **after** per share held **before**, the same convention the
+`corporate_action` data type uses: `0.1` for one-for-ten reverse, `4.0` for four-for-one.
+An entry holds `ex_date` and `ratio` and nothing else — a ratio of `1.0`, a repeated
+ex-date and any other key are refused by name (exit 3). In particular a schedule carries no
+**cash**: money moves in exactly one place in kanso, the runner's extraction, and a cash
+event has an announcement date, so it belongs in the data as a `corporate_action` point.
+
+Two consequences worth knowing. A schedule is part of the definition, so it is part of
+`definition_checksum` and therefore of the snapshot a run is pinned to: adding one to an
+instrument already resolved as of that date is a *correction*, which the plain command
+refuses (exit 2) and `--refresh` performs, and re-snapshotting afterwards is what a later
+run reproduces. And a position too small to survive a reverse split — under one lot after
+the ratio — is refused rather than silently deleted, because kanso holds no cash to pay it
+out in lieu.
+
+The schedule goes here rather than in the data because a split is the one corporate action
+with no honest publication instant. A dividend carries the day it was declared; a split
+carries only the day it takes effect, so kanso cannot say when it became knowable, a
+corporate-actions dataset that has only effective dates declares `publication: unknown` and
+no snapshot will rely on it. A definition is a *dated assertion you make*, which is a different kind of
+claim, and the store already keeps one per date.
+
+The schedule is applied by the simulated venue rather than by a strategy, and no researched
+`strategy.py` can read it: it names every split of the instrument's life, including ones
+after the window a card is judged on, so `.cache` — the one route to an instrument — is
+denied by `strategy_integrity`, along with everything the engine computes against a
+position's opening basis (see `docs/concepts.md`).
+
 ## `catalog/`
 
 The market data, and the only directory in the workspace measured in gigabytes.
