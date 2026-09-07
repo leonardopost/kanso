@@ -364,7 +364,6 @@ def _context(
     *,
     host_run: CardRun | None,
     strategy_sha: str,
-    n_trials: int,
     directory: Path,
     params: Mapping[str, Any] | None = None,
 ) -> GateContext:
@@ -377,7 +376,6 @@ def _context(
         run=card_run,
         host_run=host_run,
         research_folds=setup.folds,
-        n_trials=n_trials,
         snapshot_id=run.snapshot_id,
         strategy_sha=strategy_sha,
         lane_dir=directory,
@@ -409,7 +407,6 @@ def _integrity(setup: Setup, run: RunRecord, strategy_sha: str, directory: Path)
         _empty_run(setup),
         host_run=None,
         strategy_sha=strategy_sha,
-        n_trials=1,
         directory=directory,
     )
     return strategy_integrity.evaluate(ctx)
@@ -422,7 +419,6 @@ def _constraints(
     *,
     host_run: CardRun | None,
     strategy_sha: str,
-    n_trials: int,
     directory: Path,
 ) -> list[GateResult]:
     """Every card-stage gate the classification chose, apart from the one already run."""
@@ -437,7 +433,6 @@ def _constraints(
             card_run,
             host_run=host_run,
             strategy_sha=strategy_sha,
-            n_trials=n_trials,
             directory=directory,
             params=ref.params,
         )
@@ -576,7 +571,6 @@ def _judge(
         result.run,
         host_run=host_run,
         strategy_sha=strategy_sha,
-        n_trials=n_trials,
         directory=directory,
     )
     metric, se = _measure(setup, result.run, host_run)

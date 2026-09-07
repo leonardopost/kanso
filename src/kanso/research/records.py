@@ -12,8 +12,11 @@ card can only name bytes the store actually holds. `(run_id, seq)` is unique, so
 one run are ordered and countable without a scan.
 
 `n_trials` counts every card of every run of the hypothesis — baselines and crashes
-included — because it is the multiple-comparisons count a deflated Sharpe consumes, and
-a trial that failed is still a trial that was tried.
+included — because it numbers the cards and stamps the certificate, and no card may be
+dropped from a count that is part of a filename. `trial_metrics` is the narrower set the
+deflated Sharpe consumes: the cards that ran to a result and traded. A crash and a card
+that placed no order are edits that failed, not candidates the selection could have
+chosen, so counting them widens the search on paper without widening it in fact.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ __all__ = [
     "require_active",
     "runs_of",
     "set_best",
+    "trial_metrics",
     "unset_best",
 ]
 
@@ -225,6 +229,22 @@ def n_trials(store: StateStore, hyp_id: str) -> int:
         "SELECT COUNT(*) FROM cards WHERE hyp_id = ?", (hyp_id,)
     ).fetchone()
     return int(row[0])
+
+
+def trial_metrics(store: StateStore, hyp_id: str) -> list[float]:
+    """The metric of every card of this hypothesis that ran to a result and traded.
+
+    The multiple-comparisons set: one entry per candidate the selection could have kept,
+    so its count and its spread describe the same search. A crash produced no metric to
+    compare and a card that placed no order did not trade the hypothesis, and neither is
+    excluded from `n_trials`, which counts cards.
+    """
+    rows = store.connection.execute(
+        "SELECT metric FROM cards WHERE hyp_id = ? AND status != 'crash' AND n_trades > 0"
+        " ORDER BY card_id",
+        (hyp_id,),
+    ).fetchall()
+    return [float(row["metric"]) for row in rows]
 
 
 def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:

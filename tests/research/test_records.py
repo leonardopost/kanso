@@ -9,7 +9,7 @@ from kanso.research import loop, records
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
-from .conftest import RAISING, REVERTING
+from .conftest import FLAT, RAISING, REVERTING
 
 
 def test_a_hypothesis_that_never_ran_has_no_run_and_no_best(store: StateStore) -> None:
@@ -53,6 +53,27 @@ def test_a_card_comes_back_as_it_was_written(
     assert read.venue_model.venue == "XNAS"
     assert read.aligned is True
     assert read.crash_tail is None
+
+
+def test_only_a_card_that_ran_and_traded_is_a_trial(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """`n_trials` counts cards; `trial_metrics` counts the candidates selection could keep."""
+    run = loop.begin(ws, store, registered)
+    strategy = ws.root / run.dir / "strategy.py"
+    for source, desc in ((REVERTING, "trades it"), (FLAT, "trades nothing"), (RAISING, "crashes")):
+        strategy.write_bytes(source)
+        loop.card(ws, store, registered, desc)
+
+    cards = records.cards_of(store, registered)
+    assert [(card.status, card.n_trades) for card in cards[-3:]] == [
+        ("keep", cards[-3].n_trades),
+        ("discard", 0),
+        ("crash", 0),
+    ]
+    assert cards[-3].n_trades > 0
+    assert records.n_trials(store, registered) == len(cards)
+    assert records.trial_metrics(store, registered) == [cards[-3].metric]
 
 
 def test_a_crashed_card_keeps_its_tail(ws: Workspace, store: StateStore, registered: str) -> None:
