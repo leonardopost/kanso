@@ -13,6 +13,8 @@ from kanso.criteria.integrity import (
     DENIED_DUNDERS,
     DENIED_MODULES,
     DENIED_NUMPY_FILE,
+    DENIED_SCHEDULE,
+    DENIED_STALE_BASIS,
     check,
     import_allowed,
     scan,
@@ -140,6 +142,62 @@ def test_the_bridge_names_are_refused(name: str) -> None:
 @pytest.mark.parametrize("name", sorted(DENIED_CLOCK))
 def test_the_component_clock_and_its_timer_api_are_refused(name: str) -> None:
     assert scan(f"x = self.{name}"), f"self.{name} was allowed"
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_SCHEDULE))
+def test_the_route_to_the_split_schedule_is_out_of_reach(name: str) -> None:
+    """`info.splits` names splits after the window a card is judged on, and the cache
+    hands out the instrument that carries it."""
+    assert scan(f"x = self.{name}"), f"self.{name} was allowed"
+
+
+def test_a_strategy_reaching_for_the_schedule_is_refused_by_the_route_it_took() -> None:
+    """The lookahead a schedule would otherwise open, and the only spelling that reaches it."""
+    source = (
+        "class Strategy:\n"
+        "    def on_bar(self, bar):\n"
+        "        held = self.cache.instrument(bar.bar_type.instrument_id)\n"
+        "        return held.info\n"
+    )
+
+    problems = scan(source)
+
+    assert len(problems) == 1
+    assert "attribute '.cache' is denied" in problems[0]
+    assert "every split of its life" in problems[0]
+
+
+def test_the_logging_call_every_strategy_writes_is_not_a_denial() -> None:
+    """`.info` is the engine's own logger method, so the word is not what is denied."""
+    assert (
+        scan('class Strategy:\n    def on_bar(self, bar):\n        self.log.info("hello")\n') == []
+    )
+
+
+def test_a_sleeve_holds_no_split_schedule_to_deny() -> None:
+    """The schedule lives in the venue's simulation module, which `strategy.py` cannot name.
+
+    A private attribute on the base class would not have closed the channel — `self._x` is
+    spellable and so is `self._KansoStrategy__x` — so the sleeve holds none at all.
+    """
+    from kanso.nautilus.strategy import KansoStrategy
+
+    assert not [name for name in vars(KansoStrategy) if "split" in name.lower()]
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_STALE_BASIS))
+def test_every_quantity_the_engine_derives_from_a_stale_basis_is_refused(name: str) -> None:
+    """`avg_px_open` survives a split unrescaled, so nothing computed from it may be read."""
+    assert scan(f"x = self.portfolio.{name}"), f".{name} was allowed"
+
+
+def test_a_sleeve_sizing_off_the_account_balance_is_refused() -> None:
+    """Measured under kanso's own venue: a $100,000 account read $109,000 once a position
+    that had spanned a one-for-ten reverse split closed."""
+    (problem,) = scan("qty = self.portfolio.account(venue).balance_free()")
+
+    assert "attribute '.account' is denied" in problem
+    assert "size from `last_price`" in problem
 
 
 def test_an_alias_cannot_smuggle_a_denied_name_in() -> None:

@@ -4,6 +4,9 @@ Every test in this package runs the engine rather than a stand-in, because what 
 test is a binding to it: which handler the engine calls, which clock it hands out, whether
 an override is dispatched at all. A mock would agree with any of those.
 
+The venue is built as `kanso.nautilus.backtest` builds one, corporate-action module
+included, so what a sleeve trades against here is what it trades against in a card.
+
 The series is a deterministic saw-tooth on one instrument plus a flat hedge instrument,
 seeded by nothing at all: the same bars every run, on every host.
 """
@@ -30,6 +33,8 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId, Ven
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.objects import Money, Price, Quantity
 
+from kanso.nautilus import actions
+
 VENUE = Venue("XNAS")
 DEMO = InstrumentId(Symbol("DEMO"), VENUE)
 HEDGE = InstrumentId(Symbol("HEDGE"), VENUE)
@@ -38,7 +43,8 @@ LATENCY_NS = 1_000
 """Every bar is published a microsecond after it closes, so ts_init > ts_event."""
 
 
-def equity(instrument_id: InstrumentId) -> Equity:
+def equity(instrument_id: InstrumentId, **extra: object) -> Equity:
+    """One US equity; `extra` is whatever else the class accepts, such as `info`."""
     return Equity(
         instrument_id=instrument_id,
         raw_symbol=instrument_id.symbol,
@@ -48,6 +54,7 @@ def equity(instrument_id: InstrumentId) -> Equity:
         lot_size=Quantity.from_int(1),
         ts_event=0,
         ts_init=0,
+        **extra,
     )
 
 
@@ -127,6 +134,7 @@ class Run:
     engine: BacktestEngine
     strategy: object
     modifiers: tuple[object, ...]
+    actions: tuple[object, ...]
 
 
 @pytest.fixture
@@ -138,28 +146,37 @@ def backtest():
         strategy: object,
         modifiers: Sequence[object] = (),
         data: Iterable[Bar] | None = None,
-        instruments: Sequence[InstrumentId] = (DEMO,),
+        instruments: Sequence[InstrumentId | Equity] = (DEMO,),
         capital: int = 100_000,
     ) -> Run:
         engine = BacktestEngine(
             config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)),
         )
         engines.append(engine)
+        loaded = actions.modules(VENUE.value)
         engine.add_venue(
             venue=VENUE,
             oms_type=OmsType.NETTING,
             account_type=AccountType.MARGIN,
             base_currency=USD,
             starting_balances=[Money(capital, USD)],
+            # The venue kanso builds, corporate-action module and all, so a test of a sleeve
+            # is a test of the exchange the sleeve actually runs against.
+            modules=loaded,
         )
-        for instrument_id in instruments:
-            engine.add_instrument(equity(instrument_id))
+        for named in instruments:
+            engine.add_instrument(equity(named) if isinstance(named, InstrumentId) else named)
         engine.add_data(list(saw_tooth(DEMO) if data is None else data))
         for modifier in modifiers:
             engine.add_actor(modifier)
         engine.add_strategy(strategy)
         engine.run()
-        return Run(engine=engine, strategy=strategy, modifiers=tuple(modifiers))
+        return Run(
+            engine=engine,
+            strategy=strategy,
+            modifiers=tuple(modifiers),
+            actions=tuple(loaded),
+        )
 
     yield run
     for engine in engines:

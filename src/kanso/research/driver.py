@@ -252,14 +252,32 @@ def _dynamic(
 
 
 def _summary(row: sqlite3.Row) -> dict[str, object]:
-    """One card as the proposer sees it: what was tried, and what it scored."""
-    return {
+    """One card as the proposer sees it: what was tried, what it scored, and what refused it.
+
+    The gates that did not pass carry their evidence, because a card discarded before any
+    backtest ran — the whole of `strategy_integrity` — otherwise reaches the proposer as a
+    metric of zero with no reason, and a proposer told nothing repeats itself.
+    """
+    made: dict[str, object] = {
         "sha7": str(row["strategy_sha"])[:7],
         "status": str(row["status"]),
         "metric": float(row["metric"]),
         "metric_se": float(row["metric_se"] or 0.0),
         "desc": str(row["description"]),
     }
+    refused = _refused(row)
+    if refused:
+        made["failed_gates"] = refused
+    return made
+
+
+def _refused(row: sqlite3.Row) -> list[dict[str, object]]:
+    """The gates this card failed, each with the evidence the gate recorded."""
+    return [
+        {"id": gate["id"], "evidence": gate.get("evidence", {})}
+        for gate in json.loads(str(row["gate_results"]))
+        if not gate.get("pass", True)
+    ]
 
 
 def _objective(hyp: Hypothesis) -> dict[str, object]:
@@ -305,7 +323,8 @@ def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Ro
     a run is unbounded and a proposer is shown a fixed window of it either way.
     """
     rows = store.connection.execute(
-        "SELECT strategy_sha, status, metric, metric_se, description, crash_tail FROM cards"
+        "SELECT strategy_sha, status, metric, metric_se, description, crash_tail, gate_results"
+        " FROM cards"
         " WHERE run_id = ? ORDER BY seq DESC LIMIT ?",
         (active.run_id, limit),
     ).fetchall()

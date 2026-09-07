@@ -281,6 +281,79 @@ own proposer reward-hacking its way to a better number, layered with the data is
 the card subprocess. It is not a sandbox against a hostile actor and does not claim to be
 one.
 
+Two further denials are about corporate actions rather than about capability, both are
+listed in the same gate's output, and both name their reason there so a proposer can act on
+it. **`.cache`** is denied because it is the one route by which a `strategy.py` can hold an
+instrument, and an instrument carries `info.splits` — every split of its life, including
+ones after the window this card is judged on. (The word `info` is not itself denied:
+`self.log.info(...)` is the engine's own logging call.) **Anything the engine derives from a
+position's opening basis** — the account, `avg_px_open`, `peak_qty`, `realized_pnl`,
+`equity` and the portfolio's P&L views — is denied because the engine leaves that basis in
+the share count the position opened in, so after a split it is a price per share that no
+longer exists. kanso's own extraction reads none of them, and `program.md` lists them for
+the author.
+
+## Corporate actions
+
+A split is a bookkeeping change: a thousand shares at four dollars become a hundred at
+forty, and nothing is bought, sold or earned. kanso **applies** the action rather than
+trading through it, because the alternative is reading a one-for-ten reverse split as a
+905% return — and on a leveraged ETF that teaches the loop to buy an inverse fund the week
+before one.
+
+You declare the splits an equity has been through in its own definition, as
+`override.info.splits` in `instruments.yaml` (`docs/workspace.md`). The **venue** applies
+them: on the first market point whose reference time reaches an ex-date, and one call
+before that point is matched against anything, the simulated exchange cancels every resting
+order in that instrument, rescales every open position, and resyncs the portfolio index
+behind the change.
+
+It is the venue and not the strategy because a strategy is too late. A sleeve handles a
+point only after the exchange has already matched against it, so a take-profit resting
+above the market is filled at the restated price on the ex-date bar before any strategy
+code runs — measured, 1,005 shares sold at fifty into a one-for-ten reverse split, a 40%
+return on a bookkeeping change. Cancelling standing orders across a corporate action is
+what a broker does anyway, which is why a deployment against a real broker loads none of
+this. Both of kanso's simulated venues load the same module, so a backtest, a replay and a
+paper stage apply a split at the same instant, and `kanso replay parity` compares the two
+code paths across one at a tolerance of zero.
+
+The account is not repaired, and cannot be. `Position.avg_px_open` is read-only in the
+engine and no adjustment rescales it, so from the closing fill onwards the engine's own
+realised P&L — and every balance credited from it — is wrong by the ratio. kanso reads none
+of those numbers, `strategy_integrity` denies them to a researched strategy, and the card's
+numbers come from the fills and the adjustments instead.
+
+The card's own numbers come out of that: the equity curve folds the quantity change in at
+the ex-date, and a trade is measured in the shares it opened with — its size and `avg_open`
+are what was actually bought, `avg_close` is what came back per opening share, and the only
+profit or loss a split itself produces is the fractional residue a reverse split truncates
+away. A position too small to survive one — under a lot after the ratio — is refused rather
+than deleted, since kanso holds no cash to pay it out in lieu.
+
+**A window holding a split you have not declared is refused.** When the run's data carries a
+`corporate_action` point of kind `split` whose ex-date falls inside the window, and the
+instrument's definition schedules none — or schedules a different ratio — the run stops in
+the parent process, before a card's child is spawned:
+
+```
+$ kanso research begin demo_mr --tag 20240101-1
+error: DEMO.SIM: the window holds a split effective 2024-02-01 at a ratio of 0.1, and its definition schedules none
+remedy: add the split to `info.splits` in this instrument's `override` in instruments.yaml, then re-resolve and re-snapshot
+$ echo $?
+2
+```
+
+How far that reaches depends on where a workspace's corporate actions came from. A dataset
+whose points carry the instant each action was **announced** is snapshot-covered like any
+other, and its splits reach this check. A source that serves only effective dates cannot
+say when a split became knowable, so such a dataset declares no publication instant at all
+and no snapshot will rely on it — which is the same refusal one step earlier, and is why
+the shipped `massive_corporate_actions` loader marks any spec including splits `unknown`.
+And a workspace that loads no corporate actions has told kanso nothing about its
+instruments' history: kanso invents none, and the schedule on the definition is what makes
+a window spanning one researchable at all.
+
 ## Certification, the plan and the certificate
 
 Research produces a candidate. Certification decides whether it survives data it has never

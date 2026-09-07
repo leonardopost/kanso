@@ -13,7 +13,8 @@ import os
 import shutil
 import sys
 from collections.abc import Iterator
-from datetime import date
+from copy import deepcopy
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -339,6 +340,84 @@ def write_hypothesis(
     (directory / "program.md").write_text("# program\n\nEdit strategy.py, run a card.\n")
     (directory / "strategy.py").write_text(strategy, encoding="utf-8")
     return path
+
+
+SPLIT_EX = date(2024, 2, 1)
+"""When the corporate action below takes effect: inside the research window."""
+
+SPLIT_ANNOUNCED = date(2024, 1, 15)
+"""When it was announced, which is when it became public and so its two timestamps."""
+
+
+def write_split(root: Path, ratio: float = 0.1) -> None:
+    """Load one announced split into the catalog, as a source with announcement dates gives it.
+
+    `publication: realtime` is the honest class for such a dataset — an announcement is
+    public the instant it is made, so `ts_init == ts_event` — and it is what lets a snapshot
+    rely on it. The shipped `massive_corporate_actions` loader cannot produce this shape for
+    a split, because its source serves no announcement date, and marks any spec including
+    splits `unknown` instead.
+    """
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    from kanso.data import catalog
+    from kanso.data.loader import DatasetRef
+    from kanso.data.types import CorporateAction
+    from kanso.workspace import find
+
+    def announced(day: date, kind: str, ratio: float, ex_date: date) -> CorporateAction:
+        instant = day_start(day)
+        return CorporateAction(
+            instrument_id=InstrumentId.from_str(INSTRUMENT),
+            kind=kind,
+            ratio=ratio,
+            cash=0.0,
+            currency="USD",
+            ex_date_ns=day_start(ex_date),
+            ts_event=instant,
+            ts_init=instant,
+        )
+
+    # Three points, because a manifest's span is the span its points served: the dataset has
+    # to reach both ends of the window it is to cover, which a real one does by carrying
+    # every action of the period rather than only the interesting one.
+    points = [
+        announced(FIRST, "dividend", 1.0, FIRST),
+        announced(SPLIT_ANNOUNCED, "split", ratio, SPLIT_EX),
+        announced(LAST, "dividend", 1.0, LAST),
+    ]
+    catalog.write(
+        find(root),
+        points,
+        ref=DatasetRef(
+            dataset_id="",
+            instrument=INSTRUMENT,
+            type="corporate_action",
+            resolution=None,
+            span=(FIRST, LAST),
+            adjusted=False,
+            publication="realtime",
+        ),
+        source="synthetic",
+    )
+
+
+def day_start(day: date) -> int:
+    """The UTC midnight opening a calendar day, in nanoseconds."""
+    return int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp()) * 1_000_000_000
+
+
+def schedule_split(runner: CliRunner, root: Path, ratio: float = 0.1) -> None:
+    """Declare that split, re-resolving and re-snapshotting as an operator does."""
+    entry = deepcopy(INSTRUMENTS)
+    entry[INSTRUMENT]["override"]["info"] = {"splits": [{"ex_date": str(SPLIT_EX), "ratio": ratio}]}
+    (root / "instruments.yaml").write_text(yaml.safe_dump(entry, sort_keys=False), encoding="utf-8")
+    resolved = at(
+        runner, root, "data", "instruments", "resolve", "--refresh", "--as-of", str(FIRST)
+    )
+    assert resolved.exit_code == 0, resolved.stdout
+    frozen = at(runner, root, "data", "snapshot")
+    assert frozen.exit_code == 0, frozen.stdout
 
 
 HOST_ID = "demo_host"

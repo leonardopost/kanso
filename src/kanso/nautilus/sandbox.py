@@ -135,6 +135,8 @@ from nautilus_trader.model.data import (
 from nautilus_trader.model.identifiers import AccountId, ClientId, Venue
 from nautilus_trader.model.instruments import Instrument
 
+from kanso.nautilus import actions
+
 __all__ = [
     "ACCOUNT_SUFFIX",
     "BAR_TOPIC",
@@ -264,7 +266,9 @@ class SimulatedVenue(LiveExecutionClient):
             default_leverage=Decimal(str(venue.default_leverage)),
             leverages={},
             margin_model=LeveragedMarginModel(),
-            modules=[],
+            # The same corporate-action module the research venue loads, so a split is
+            # applied at the same instant on both code paths; see `kanso.nautilus.actions`.
+            modules=actions.modules(venue.name),
             portfolio=kernel.portfolio,
             msgbus=self.relay,
             cache=kernel.cache,

@@ -23,13 +23,30 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace
 
 from .conftest import DOCUMENT, classify, document
-from .mocked import CYCLE, SEED, fresh_cursors, proposal, scripted, tuned  # noqa: F401
+from .mocked import (  # noqa: F401
+    CYCLE,
+    MARKER,
+    SEED,
+    fresh_cursors,
+    proposal,
+    scripted,
+    tuned,
+)
 
 NOWHERE = "--- a/strategy.py\n+++ b/strategy.py\n@@ -1,1 +1,1 @@\n-nowhere\n+here\n"
 """A diff whose context is in no version of any file."""
 
 NOOP = "--- a/strategy.py\n+++ b/strategy.py\n@@ -40,1 +40,1 @@\n # end\n"
 """A diff that applies and changes nothing, which is not an experiment."""
+
+DENIED = (
+    "--- a/strategy.py\n"
+    "+++ b/strategy.py\n"
+    "@@ -40,1 +40,2 @@\n"
+    "+Strategy.peek = lambda self: self.cache\n"
+    f" {MARKER}\n"
+)
+"""A diff that applies and reaches for the cache, which `strategy_integrity` refuses."""
 
 SECOND_SEED = SEED.replace(b'mode = "flat"', b'mode = "flat"  # the second hypothesis')
 
@@ -240,6 +257,26 @@ def test_failing_certification_gates_reach_the_next_proposal(
     assert "failing_certification_gates" in user
     assert "deflated_sharpe" in user
     assert "embargoed_window" not in user
+
+
+def test_the_gate_that_refused_a_card_reaches_the_next_proposal(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A card discarded before any backtest ran must tell the proposer what it did wrong.
+
+    `strategy_integrity` refuses statically, so the card carries a metric of zero and no
+    traceback; without the gate's own evidence the proposer sees a discard with no reason
+    and writes the same line again.
+    """
+    scripted(ws, propose=[{"desc": "reach for the cache", "diff": DENIED}, *CYCLE])
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+
+    user = recorded.of("propose")[1].user
+    assert "discard" in statuses(store, prepared_hyp)
+    assert "failed_gates" in user
+    assert "strategy_integrity" in user
+    assert "attribute '.cache' is denied" in user
 
 
 def test_a_lane_that_lost_its_strategy_is_given_it_back_and_carries_on(

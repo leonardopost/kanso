@@ -73,7 +73,7 @@ from nautilus_trader.model.identifiers import TraderId
 
 from kanso.criteria.run import CardRun
 from kanso.errors import PreconditionError, ValidationError
-from kanso.nautilus import backtest, sandbox
+from kanso.nautilus import backtest, sandbox, splits
 from kanso.nautilus.backtest import RunRequest
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, ordered
@@ -405,7 +405,7 @@ def run(
         strategies = _components(built, node.placements)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points))
         realised = tuple(
-            _realised(placed, request, kernel, groups, books)
+            _realised(placed, request, kernel, groups, books, window.instruments)
             for placed, request, groups in zip(
                 node.placements, requests, window.per_version, strict=True
             )
@@ -608,7 +608,10 @@ def _books(
         found[owner, name] = Book(
             instrument_id=name,
             qty=float(position.signed_qty),
-            price=marks.get(name, float(position.avg_px_open)),
+            # At cost where the window published no price, and at the position's own
+            # split-aware basis rather than `avg_px_open`, which a corporate action leaves
+            # quoted in shares the position no longer holds.
+            price=marks.get(name, splits.ledger(splits.moves_of(position)).basis),
         )
     return found
 
@@ -619,12 +622,17 @@ def _realised(
     kernel: Any,
     groups: Sequence[Sequence[Any]],
     books: Mapping[tuple[str, str], Book],
+    instruments: Sequence[Any],
 ) -> Realised:
     """One version's window, extracted from the shared cache as if it had run alone.
 
     A version whose own universe held nothing new gets an empty window rather than a
     refusal: the stage ran, this version simply had no market to act on, and a stage that
     could not restart because one of its versions was quiet would be the worse failure.
+
+    What the window *did* hold goes through `backtest.checked`, the same gate the research
+    and replay paths pass, so a stage measuring a window whose corporate actions its
+    definitions do not schedule refuses rather than reporting the action as return.
     """
     if not any(groups):
         return Realised(
@@ -634,7 +642,7 @@ def _realised(
             run=backtest._empty(request),
             positions=(),
         )
-    stream = backtest._stream(request, groups)
+    stream = backtest.checked(request, instruments, groups)
     view = _StrategyView(kernel.cache, placed.identity)
     return Realised(
         strategy_id=placed.strategy_id,

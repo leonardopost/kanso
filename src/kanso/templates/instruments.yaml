@@ -8,6 +8,7 @@
 #   asset_class: <Nautilus asset class>
 #   resolved: {adapter: <id>, as_of: <date>, at: <timestamp>, checksum: <sha256>}   # written by resolve
 #   override: {}                    # optional: fields to correct after resolution, before the instrument is constructed
+#     info: {splits: [{ex_date: 2026-07-15, ratio: 0.1}]}   # equities only: the splits kanso applies at their ex-date (docs/workspace.md)
 #   manual: true                    # suppresses resolution; then you must supply the full field set for the asset class
 #   corporate_actions: adjust_all   # adjust_all | none
 #   attributes: {}                  # optional, free-form asset-specific facts strategies/gates may read

@@ -195,6 +195,47 @@ offers `request`, `get`, `post`, `patch` and `delete`; `HttpResponse` carries
 `status`, `headers` and `body`. `http_download(url, filepath, params=None,
 headers=None, timeout_secs=None)` streams a response straight to disk without
 holding it in memory, which is the transport for bulk history objects.
+
+Corporate actions
+-----------------
+The engine has **no corporate-action concept**. `PositionAdjustmentType` has
+exactly two members, `COMMISSION` and `FUNDING`; `PositionAdjusted` is
+constructed in one place, consumed nowhere, is not a `PositionEvent` and is
+never published to the bus, and `Position.apply_adjustment`'s own docstring is
+about crypto commissions and perpetual funding. kanso uses it for a split
+anyway, and the use is **off-label**: an engine release that gives
+`PositionAdjusted` a meaning of its own is a reason to re-measure
+`kanso.nautilus.splits` and `kanso.nautilus.actions`.
+
+What it does is exact and free. `apply_adjustment` adds `quantity_change` to
+`signed_qty`, recomputes `quantity`, `peak_qty` and the side, appends the event
+to the position's own `adjustments`, and touches neither `events` nor
+`_trade_ids` nor `_commissions` — so a split places no order, charges no
+commission and leaves the fill record the runner's extraction reads exactly as
+it was. What it does **not** do is rescale `avg_px_open`, which is `cdef
+readonly`: after an adjustment the position's opening basis is still quoted in
+shares that no longer exist, so `realized_pnl`, `realized_return` and every
+account balance credited from them are wrong from the closing fill onwards.
+That is a design constraint and nothing in kanso can repair it; the runner reads
+none of those numbers and `criteria.integrity` denies a researched strategy all
+of them.
+
+`Portfolio.initialize_positions()` resyncs the net-position index behind such an
+adjustment. It is declared on the kernel's `Portfolio` and **not** on the
+read-only `PortfolioFacade` that a component's `portfolio` attribute is typed
+as; in every environment kanso runs, that attribute is the kernel's own
+`Portfolio`.
+
+A `SimulationModule` is handed every market point through `pre_process(data)`
+*before* the venue's matching engine sees it — `SimulatedExchange.process_bar`,
+`process_quote_tick`, `process_trade_tick`, the three order-book variants,
+`process_instrument_status` and `process_instrument_close` each loop the modules
+first — and `SimulatedExchange.__init__` calls `module.register_base(portfolio,
+msgbus, cache, clock)` and then `module.register_venue(self)`, so a module holds
+the kernel's portfolio and cache and the exchange itself. That call is the only
+place kanso can act between a point arriving and an order being matched against
+it, and both of kanso's venues are a `SimulatedExchange`, which is why the
+corporate action lives there rather than in a strategy.
 """
 
 from __future__ import annotations
@@ -203,6 +244,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import count
+from typing import Any
 
 ENGINE_VERSION = "1.231.0"
 """The `nautilus_trader` version every fact in this module was verified against."""
@@ -341,7 +383,8 @@ def _sample_equity() -> object:
     )
 
 
-def _sample_bar(ts_event: int = 1_000, ts_init: int = 2_000) -> object:
+def _sample_bar(ts_event: int = 1_000, ts_init: int = 2_000, close: float | None = None) -> object:
+    """One daily bar. `close` flattens the four prices onto it, so a probe reads one number."""
     from nautilus_trader.model.data import Bar, BarSpecification, BarType
     from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
     from nautilus_trader.model.identifiers import InstrumentId
@@ -352,12 +395,19 @@ def _sample_bar(ts_event: int = 1_000, ts_init: int = 2_000) -> object:
         BarSpecification(1, BarAggregation.DAY, PriceType.LAST),
         AggregationSource.EXTERNAL,
     )
+    prices = (
+        (
+            Price.from_str("1.00"),
+            Price.from_str("2.00"),
+            Price.from_str("0.50"),
+            Price.from_str("1.50"),
+        )
+        if close is None
+        else (Price(close, 2),) * 4
+    )
     return Bar(
         bar_type,
-        Price.from_str("1.00"),
-        Price.from_str("2.00"),
-        Price.from_str("0.50"),
-        Price.from_str("1.50"),
+        *prices,
         Quantity.from_int(10),
         ts_event=ts_event,
         ts_init=ts_init,
@@ -923,6 +973,175 @@ def _check_http_download() -> tuple[bool, str]:
     )
 
 
+def _check_position_adjustment() -> tuple[bool, str]:
+    """A split is applied as a `PositionAdjusted`, which must cost the position nothing."""
+    from decimal import Decimal
+
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.enums import (
+        OrderSide,
+        OrderType,
+        PositionAdjustmentType,
+    )
+    from nautilus_trader.model.events import OrderFilled, PositionAdjusted
+    from nautilus_trader.model.identifiers import (
+        AccountId,
+        ClientOrderId,
+        PositionId,
+        StrategyId,
+        TradeId,
+        TraderId,
+        VenueOrderId,
+    )
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.model.position import Position
+
+    instrument: Any = _sample_equity()
+    trader_id, strategy_id = TraderId("KANSO-001"), StrategyId("S-1")
+    account_id = AccountId("XNAS-001")
+    filled = OrderFilled(
+        trader_id=trader_id,
+        strategy_id=strategy_id,
+        instrument_id=instrument.id,
+        client_order_id=ClientOrderId("O-1"),
+        venue_order_id=VenueOrderId("1"),
+        account_id=account_id,
+        trade_id=TradeId("T-1"),
+        position_id=PositionId("P-1"),
+        order_side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        last_qty=Quantity.from_int(1_005),
+        last_px=Price.from_str("10.00"),
+        currency=instrument.quote_currency,
+        commission=Money(0, instrument.quote_currency),
+        liquidity_side=1,
+        event_id=UUID4(),
+        ts_event=0,
+        ts_init=0,
+    )
+    position = Position(instrument=instrument, fill=filled)
+    position.apply_adjustment(
+        PositionAdjusted(
+            trader_id=trader_id,
+            strategy_id=strategy_id,
+            instrument_id=instrument.id,
+            position_id=position.id,
+            account_id=account_id,
+            adjustment_type=PositionAdjustmentType.COMMISSION,
+            quantity_change=Decimal("-905"),
+            pnl_change=None,
+            reason="split",
+            event_id=UUID4(),
+            ts_event=1,
+            ts_init=1,
+        )
+    )
+    members = sorted(member.name for member in PositionAdjustmentType)
+    holds = (
+        float(position.quantity) == 100.0
+        and len(position.events) == 1
+        and [float(money) for money in position.commissions()] == [0.0]
+        and len(position.adjustments) == 1
+        and members == ["COMMISSION", "FUNDING"]
+        and float(position.avg_px_open) == 10.0
+        and float(position.peak_qty) == 1_005.0
+    )
+    return holds, (
+        f"a 1,005-share position adjusted by -905 holds {position.quantity} with "
+        f"{len(position.events)} fill(s) and {[str(m) for m in position.commissions()]} of "
+        f"commission, and keeps avg_px_open={position.avg_px_open} peak_qty={position.peak_qty}; "
+        f"PositionAdjustmentType is {members}, so a split has no member of its own and the "
+        f"use is off-label but free, and the opening basis stays in pre-split units"
+    )
+
+
+def _check_portfolio_resync() -> tuple[bool, str]:
+    """The portfolio's net-position index has to be told a position changed outside a fill."""
+    from nautilus_trader.portfolio.base import PortfolioFacade
+    from nautilus_trader.portfolio.portfolio import Portfolio
+
+    on_portfolio = hasattr(Portfolio, "initialize_positions")
+    on_facade = hasattr(PortfolioFacade, "initialize_positions")
+    return on_portfolio and not on_facade, (
+        f"Portfolio.initialize_positions exists: {on_portfolio}; PortfolioFacade declares it: "
+        f"{on_facade}. A component's `portfolio` is typed as the facade and is the kernel's "
+        f"Portfolio in every environment kanso runs, which is what makes the resync reachable"
+    )
+
+
+def _check_simulation_module_precedes_matching() -> tuple[bool, str]:
+    """The whole of `kanso.nautilus.actions`: the venue acts before it matches."""
+    from decimal import Decimal
+
+    from nautilus_trader.accounting.margin_models import LeveragedMarginModel
+    from nautilus_trader.backtest.config import SimulationModuleConfig
+    from nautilus_trader.backtest.engine import SimulatedExchange
+    from nautilus_trader.backtest.models import FillModel, MakerTakerFeeModel
+    from nautilus_trader.backtest.modules import SimulationModule
+    from nautilus_trader.cache.cache import Cache
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType
+    from nautilus_trader.model.identifiers import TraderId, Venue
+    from nautilus_trader.model.objects import Money
+    from nautilus_trader.portfolio.portfolio import Portfolio
+
+    seen: list[object] = []
+
+    class _Probe(SimulationModule):  # type: ignore[misc]
+        def pre_process(self, data: object) -> None:
+            seen.append(exchange.best_bid_price(instrument.id))
+
+        def process(self, ts_now: int) -> None:
+            pass
+
+        def log_diagnostics(self, logger: object) -> None:
+            pass
+
+        def reset(self) -> None:
+            pass
+
+    probe = _Probe(SimulationModuleConfig())
+    instrument: Any = _sample_equity()
+    clock = TestClock()
+    cache = Cache()
+    msgbus = MessageBus(trader_id=TraderId("KANSO-001"), clock=clock)
+    exchange = SimulatedExchange(
+        venue=Venue("XNAS"),
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        starting_balances=[Money(100_000, USD)],
+        base_currency=USD,
+        default_leverage=Decimal(1),
+        leverages={},
+        margin_model=LeveragedMarginModel(),
+        modules=[probe],
+        portfolio=Portfolio(msgbus, cache, clock),
+        msgbus=msgbus,
+        cache=cache,
+        clock=clock,
+        fill_model=FillModel(),
+        fee_model=MakerTakerFeeModel(),
+        bar_execution=True,
+    )
+    exchange.add_instrument(instrument)
+    exchange.process_bar(_sample_bar(ts_event=1_000, ts_init=1_000, close=10.0))
+    exchange.process_bar(_sample_bar(ts_event=2_000, ts_init=2_000, close=100.0))
+    # The other three of a module's four calls, so this check fails if any of them stops
+    # being reachable: the clock tick the venue makes after it settles, and the two the
+    # engine's own reset and diagnostics paths make.
+    exchange.process(2_000)
+    probe.log_diagnostics(None)
+    probe.reset()
+    marks = [None if price is None else float(price) for price in seen]  # type: ignore[arg-type]
+    holds = marks == [None, 10.0]
+    return holds, (
+        f"a module's pre_process saw the venue's best bid at {marks} while processing bars "
+        f"priced 10.00 then 100.00: the second call reached it before the matching engine "
+        f"had moved the book, so a module acts on a point before the venue matches against it"
+    )
+
+
 def _check_live_exec_engine_queues_events() -> tuple[bool, str]:
     """`LiveExecutionEngine.process` overrides the synchronous implementation.
 
@@ -1048,6 +1267,19 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "a live execution engine queues an order event where a backtest's applies it",
         _check_live_exec_engine_queues_events,
+    ),
+    (
+        "a position adjustment changes the quantity and leaves the fills, the commissions "
+        "and the opening basis alone",
+        _check_position_adjustment,
+    ),
+    (
+        "Portfolio.initialize_positions resyncs the net-position index the facade does not declare",
+        _check_portfolio_resync,
+    ),
+    (
+        "a simulation module is handed every market point before the venue matches against it",
+        _check_simulation_module_precedes_matching,
     ),
 )
 

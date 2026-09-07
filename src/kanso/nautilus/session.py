@@ -169,7 +169,7 @@ def run_node(
     The data is checked against the requested window before anything is built, so a session
     handed points from outside its range refuses them rather than trading on them.
     """
-    stream = backtest._stream(request, groups)
+    stream = backtest.checked(request, instruments, groups)
     points = ordered(groups)
     backtest._seed_globals(request.snapshot_id)
     started = time.perf_counter()
