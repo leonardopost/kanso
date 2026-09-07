@@ -21,6 +21,7 @@ import yaml
 from kanso.models import reset_mock
 from kanso.state import StateStore
 from kanso.workspace import Workspace, init
+from tests.params import pairs
 
 TIER_MODELS: dict[str, str] = {
     "cheap": "cheap_mock",
@@ -92,15 +93,15 @@ ALIGNED: dict[str, Any] = {"aligned": True, "reason": "same mechanism and univer
 CLASSIFIED: dict[str, Any] = {
     "construct": {"id": "sleeve"},
     "objective_params": {"min_delta": 0.0, "k_se": 1.0},
-    "constraints": [{"id": "strategy_integrity", "params": {}}],
+    "constraints": [{"id": "strategy_integrity", "params": pairs()}],
     "rationale": "a complete signal-to-trade thesis with nothing to attach to",
 }
 PROPOSED: dict[str, Any] = {"desc": "fade two-sigma deviations", "diff": "--- a\n+++ b\n"}
 PLANNED: dict[str, Any] = {
     "gates": [
-        {"id": "embargoed_window", "stage": "cert", "params": {}, "rationale": "required"},
-        {"id": "paper_forward", "stage": "paper", "params": {}, "rationale": "required"},
-        {"id": "live_drift", "stage": "live", "params": {}, "rationale": "required"},
+        {"id": "embargoed_window", "stage": "cert", "params": pairs(), "rationale": "required"},
+        {"id": "paper_forward", "stage": "paper", "params": pairs(), "rationale": "required"},
+        {"id": "live_drift", "stage": "live", "params": pairs(), "rationale": "required"},
     ],
     "excluded": [],
 }

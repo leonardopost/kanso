@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 from kanso.errors import Exit
 from kanso.research import records
 from kanso.state import StateStore
+from tests.params import pairs
 
 from . import mocked
 from .conftest import DRAFT, HYP_ID, at, payload, write_hypothesis
@@ -111,7 +112,7 @@ def test_the_plan_reads_as_the_gates_the_stages_and_the_reasons(
 def sized(min_duration: str) -> dict[str, Any]:
     """The fixture's plan with its paper window set, which is the operator's real choice."""
     gates = [
-        dict(gate, params={"min_duration": min_duration, "horizon_mult": 20.0})
+        dict(gate, params=pairs({"min_duration": min_duration, "horizon_mult": 20.0}))
         if gate["id"] == "paper_forward"
         else gate
         for gate in mocked.PLAN["gates"]
@@ -182,7 +183,7 @@ def test_a_plan_naming_a_gate_this_version_cannot_run_is_refused(
 ) -> None:
     unrunnable: dict[str, Any] = {
         "gates": [
-            {**gate, "id": "parity_replay", "params": {"ts_ns": 0}}
+            {**gate, "id": "parity_replay", "params": pairs({"ts_ns": 0})}
             if gate["id"] == "embargoed_window"
             else gate
             for gate in mocked.PLAN["gates"]

@@ -30,6 +30,7 @@ from typing import Any
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from tests.params import pairs
 
 from . import mocked
 from .conftest import (
@@ -76,9 +77,9 @@ FILTER_DRAFT: dict[str, Any] = {
 }
 
 FILTER_CLASSIFICATION: dict[str, Any] = {
-    "construct": {"id": "filter", "host": HYP_ID, "params": {"scope": "time"}},
+    "construct": {"id": "filter", "host": HYP_ID, "params": pairs({"scope": "time"})},
     "objective_params": {"min_delta": 0.0, "k_se": 0.5},
-    "constraints": [{"id": "strategy_integrity", "params": {}}],
+    "constraints": [{"id": "strategy_integrity", "params": pairs()}],
     "rationale": "A conditioning rule on an existing sleeve's entries: a filter.",
 }
 

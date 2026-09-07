@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 from hypothesis import given
 from hypothesis import strategies as st
 
 from kanso.models import validate
+from kanso.models.jsonschema import ADMISSIBLE, VOCABULARY
+from kanso.models.router import CHECK_SCHEMA, CHECK_TASK
 from kanso.models.tasks import ANSWER_SCHEMAS
 
 OBJECT: dict[str, Any] = {
@@ -91,6 +94,20 @@ def test_every_json_type_is_named_the_way_json_names_it() -> None:
     assert validate("s", {"type": "object"}) == ["the answer: expected object, got string"]
 
 
+def test_alternatives_are_satisfied_by_one_branch_and_name_them_all_when_none_fits() -> None:
+    """`anyOf` is how a parameter value says scalar without saying which scalar."""
+    scalar: dict[str, Any] = {
+        "anyOf": [{"type": "number"}, {"type": "string"}, {"type": "boolean"}]
+    }
+    assert validate(1.5, scalar) == []
+    assert validate("two", scalar) == []
+    assert validate(True, scalar) == []
+    assert validate([1], scalar) == ["the answer: expected number or string or boolean, got array"]
+    assert validate({"a": 1}, scalar) == [
+        "the answer: expected number or string or boolean, got object"
+    ]
+
+
 def test_an_unknown_type_keyword_constrains_nothing() -> None:
     assert validate("anything", {"type": "null"}) == []
 
@@ -110,6 +127,91 @@ def test_a_property_schema_that_is_not_a_mapping_is_ignored() -> None:
 
 def test_a_required_list_that_is_a_string_is_ignored() -> None:
     assert validate({}, {"type": "object", "required": "name"}) == []
+
+
+# --- the shipped schemas are the ones a provider will accept ------------------
+
+
+def nodes(schema: Any, where: str = "the schema") -> Iterator[tuple[str, dict[str, Any]]]:
+    """Every schema document inside `schema`, itself first, with the path that reached it."""
+    if not isinstance(schema, dict):
+        return
+    yield where, schema
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for name, sub in properties.items():
+            yield from nodes(sub, f"{where}.{name}")
+    yield from nodes(schema.get("items"), f"{where}[]")
+    for index, branch in enumerate(schema.get("anyOf") or []):
+        yield from nodes(branch, f"{where}|{index}")
+
+
+ON_THE_WIRE: list[tuple[str, dict[str, Any]]] = [
+    *ANSWER_SCHEMAS.items(),
+    (CHECK_TASK, CHECK_SCHEMA),
+]
+"""Every schema this package sends to a provider.
+
+The four task classes and the register check. `check` is not a task class, but it is sent
+the same way — `route`'s sibling builds a `Call` around `CHECK_SCHEMA` and both clients put
+`call.schema` into their request unchanged — so a guard that skipped it would leave one
+document reaching a provider unexamined.
+"""
+
+SHIPPED: list[tuple[str, dict[str, Any]]] = [
+    node for task, schema in ON_THE_WIRE for node in nodes(schema, task)
+]
+"""Every document inside every schema this package puts on a wire."""
+
+
+def test_every_shipped_schema_node_is_one_a_provider_accepts() -> None:
+    """The shapes and the keywords measured to earn a 400, refused here instead of there.
+
+    `classify` and `certify_plan` shipped in 0.1.1 with a free-form `{"type": "object"}`
+    for their parameter maps and were answered 400 by the provider they were sent to,
+    every time, for the life of the release: the model layer had only ever been driven
+    against the `mock` protocol, and offline nothing could see it.
+
+    Correcting the shape was not the whole of it. `classify` kept `{"minimum": 0}` on its
+    two keep-rule numbers and was answered 400 again — `For 'number' type, property
+    'minimum' is not supported` — because the first refusal named the parameter object
+    and naming one fault is not naming them all. The keyword half of this guard is why
+    the second round is a test rather than a third round: `minimum` is in `VOCABULARY`,
+    so a guard that read only the checker's own vocabulary was blind to it by
+    construction, and `ADMISSIBLE` is the set that a response, not a reading, decides.
+    """
+    for where, node in SHIPPED:
+        assert node, f"{where}: an empty schema accepts any JSON value and is refused"
+        if node.get("type") == "object":
+            assert node.get("additionalProperties") is False, (
+                f"{where}: an object must set additionalProperties to false"
+            )
+        assert node.get("additionalProperties") is not True, (
+            f"{where}: additionalProperties: true is not supported"
+        )
+        refused = sorted(set(node) - ADMISSIBLE)
+        assert refused == [], (
+            f"{where}: {', '.join(refused)} is not a keyword a provider was measured to "
+            "accept; ADMISSIBLE in models/jsonschema.py records what was"
+        )
+
+
+def test_every_shipped_schema_keyword_is_one_this_checker_reads() -> None:
+    """A keyword outside the vocabulary is a constraint kanso asks for and never checks."""
+    for where, node in SHIPPED:
+        unknown = sorted(set(node) - VOCABULARY)
+        assert unknown == [], f"{where}: {', '.join(unknown)} is outside the vocabulary"
+
+
+def test_what_the_checker_reads_and_what_a_provider_accepts_are_different_sets() -> None:
+    """Neither contains the other, which is why both guards above have to run.
+
+    A keyword in `VOCABULARY` alone is one kanso can enforce and may not send; a keyword
+    in `ADMISSIBLE` alone is one a provider will take and kanso would never check. A
+    schema may use only what is in both.
+    """
+    assert "minimum" in VOCABULARY and "minimum" not in ADMISSIBLE
+    assert "description" in ADMISSIBLE and "description" not in VOCABULARY
 
 
 def test_an_arbitrary_object_never_validates_against_a_task_schema() -> None:

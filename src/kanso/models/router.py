@@ -17,6 +17,13 @@ is an attempt that is not recorded, and there is no way to make one.
    attempts.
 4. If it still does not, the calling step fails.
 
+**The wire shape is not the shape a step reads.** A parameter map travels as a list of
+`{name, value}` pairs, because a provider constraining an answer to a schema refuses a
+free-form object, and it is read back into a mapping here — after the schema, so the
+pairs are known to be pairs, and before the calling step's own check, so every step
+inland sees the mapping it has always seen. A name the model gave twice is one more
+complaint on the same ladder.
+
 The escalation carries the original user turn rather than the complaints. The retry exists
 to correct a model that nearly answered; the escalation exists because the model was the
 wrong size for the question, and priming a better model with a worse one's mistakes
@@ -37,7 +44,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
@@ -50,7 +57,7 @@ from kanso.models.ledger import LedgerEntry, ledger
 from kanso.models.mock import MockClient
 from kanso.models.openai_compat import OpenAICompatClient
 from kanso.models.register import covered, escalation, first_for_tier, read_register, route_for
-from kanso.models.tasks import build
+from kanso.models.tasks import build, collapse
 from kanso.schemas.models import TASK_CLASSES, ModelsFile, ModelSpec, TaskClass, Tier
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -123,7 +130,7 @@ def route(
         spec = first_for_tier(register, tier)
         tried.append(f"{spec.id} on {tier}")
         answer = _attempt(ws, store, spec, this, lane, secrets)
-        return answer, _complaints(answer, this, call_inputs.check)
+        return _usable(answer, this, call_inputs.check)
 
     answer, complaints = attempt(resolved.tier, call)
     if not complaints:
@@ -237,22 +244,30 @@ def _attempt(
     return answer
 
 
-def _complaints(
+def _usable(
     answer: Answer,
     call: Call,
     extra: Callable[[Mapping[str, object]], Sequence[str]] | None,
-) -> list[str]:
-    """Everything wrong with an answer: the schema first, then the caller's own check.
+) -> tuple[Answer, list[str]]:
+    """The answer as the calling step will read it, and everything wrong with it.
 
-    The caller's check runs only on an answer that already satisfies the schema, so a
-    step that reads a field is never handed one that is missing or of the wrong type. It
-    is on the same ladder as the schema because a construct id that is not in the
-    catalogue is as wrong as a missing field, and just as correctable by asking again.
+    Three judgements in order, each on what the one before it left. The schema first, so
+    a step that reads a field is never handed one that is missing or of the wrong type.
+    Then the parameter lists are read back as mappings, which is a judgement too: a name
+    the model gave twice is a wrong answer and says so here. The caller's own check runs
+    last, on the collapsed answer, because a construct id or a parameter range is checked
+    against the mapping and not against the encoding. All three are on one ladder because
+    a construct id that is not in the catalogue is as wrong as a missing field, and just
+    as correctable by asking again.
     """
-    found = validate(answer.data, call.schema)
-    if found or extra is None:
-        return found
-    return list(extra(answer.data))
+    complaints = validate(answer.data, call.schema)
+    if complaints:
+        return answer, complaints
+    data, complaints = collapse(answer.data, call.schema)
+    if complaints:
+        return answer, complaints
+    settled = replace(answer, data=data)
+    return settled, [] if extra is None else list(extra(data))
 
 
 def _secrets(ws: Workspace, register: ModelsFile) -> dict[str, str]:
