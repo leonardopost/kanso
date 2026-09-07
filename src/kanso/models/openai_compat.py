@@ -9,6 +9,18 @@ running on the operator's own machine speaks too. The facts this client relies o
 * A schema-constrained answer is requested with `response_format`, a
   `{"type": "json_schema", "json_schema": {"name", "strict", "schema"}}` document. The
   reply's message content is then JSON matching it.
+* `strict: true` requires every object in that document to set
+  `additionalProperties: false`, and requires every key of `properties` to appear in
+  `required`. The document sent is `call.schema` exactly — nothing here rewrites it — so
+  whatever `models/tasks.py` declares is what goes out on both wires, and the free-form
+  parameter object that earned a 400 on the Anthropic wire would have been refused here
+  for the same reason. **Only that first requirement has been measured, and only there**
+  (`models/tasks.py`, `PARAM_PAIRS`): no request from this client has ever been sent to a
+  server speaking this protocol. The second is not met today — `classify.construct` leaves
+  `host` and `params` out of `required`, and `classify.constraints[]` leaves out `params` —
+  so a strict server may refuse `classify` for a reason the Anthropic wire does not have.
+  `docs/backlog.md` row 57 holds that half open; what closes it is a measurement, since
+  making the two keys required changes what a model must answer.
 * Thinking depth is `reasoning_effort`, a `low` / `medium` / `high` scale that kanso's own
   effort maps onto one for one. A server with no reasoning control ignores the field.
 * The output cap is `max_tokens`. The newer `max_completion_tokens` is not universally

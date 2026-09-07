@@ -31,6 +31,7 @@ import yaml
 
 from kanso.models import reset_mock
 from kanso.workspace import Workspace, find
+from tests.params import pairs
 
 TIER_MODELS: dict[str, str] = {
     "cheap": "cheap_mock",
@@ -119,31 +120,31 @@ PLAN: dict[str, Any] = {
         {
             "id": "embargoed_window",
             "stage": "cert",
-            "params": {"min_fraction": 0.0},
+            "params": pairs({"min_fraction": 0.0}),
             "rationale": "required; the only out-of-sample evidence there is",
         },
         {
             "id": "publication_lag",
             "stage": "cert",
-            "params": {"tolerance_s": 0.0},
+            "params": pairs({"tolerance_s": 0.0}),
             "rationale": "required; the saw-tooth is published a second after each close",
         },
         {
             "id": "parity_replay",
             "stage": "cert",
-            "params": {"ts_ns": 0},
+            "params": pairs({"ts_ns": 0}),
             "rationale": "required; the deployed code path must be the researched one",
         },
         {
             "id": "paper_forward",
             "stage": "paper",
-            "params": {"min_duration": "5d", "horizon_mult": 20.0},
+            "params": pairs({"min_duration": "5d", "horizon_mult": 20.0}),
             "rationale": "a plan reaches the paper stage",
         },
         {
             "id": "live_drift",
             "stage": "live",
-            "params": {},
+            "params": pairs(),
             "rationale": "a plan reaches the live stage",
         },
     ],

@@ -9,9 +9,13 @@ that has no constraint at all, and the complaints are written for a model to act
 rather than for a human to debug a schema with.
 
 The vocabulary is `type`, `properties`, `required`, `additionalProperties: false`,
-`items`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength` and `minItems`. Anything
-else in a schema is ignored rather than refused, because the schemas are this package's
-own and an unknown keyword there is a mistake to fix at the source.
+`items`, `anyOf`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength` and `minItems`,
+and `VOCABULARY` below is that list in a form the suite can hold the shipped schemas to.
+Anything else in a schema is ignored rather than refused, because the schemas are this
+package's own and an unknown keyword there is a mistake to fix at the source — but
+"ignored here" is not "accepted there": a provider constraining an answer reads the whole
+document and refuses what it does not support, which is how a free-form parameter object
+shipped and was answered 400.
 
 Validation never stops at the first problem: a model correcting one field at a time would
 burn the single retry the ladder allows, so every complaint the answer earns is collected
@@ -21,8 +25,27 @@ and sent back together.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Final
 
-__all__ = ["validate"]
+__all__ = ["VOCABULARY", "validate"]
+
+VOCABULARY: Final[frozenset[str]] = frozenset(
+    {
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "anyOf",
+        "enum",
+        "minimum",
+        "maximum",
+        "minLength",
+        "maxLength",
+        "minItems",
+    }
+)
+"""Every keyword the answer schemas may use, and the whole of what this checker reads."""
 
 _TYPES: dict[str, tuple[type, ...]] = {
     "object": (dict,),
@@ -42,6 +65,10 @@ def validate(value: object, schema: Mapping[str, object], where: str = "the answ
 
 
 def _check(value: object, schema: Mapping[str, object], where: str, out: list[str]) -> None:
+    alternatives = schema.get("anyOf")
+    if isinstance(alternatives, list):
+        _alternatives(value, alternatives, where, out)
+        return
     expected = schema.get("type")
     if isinstance(expected, str) and not _is_type(value, expected):
         out.append(f"{where}: expected {expected}, got {_name(value)}")
@@ -52,6 +79,23 @@ def _check(value: object, schema: Mapping[str, object], where: str, out: list[st
         _object(value, schema, where, out)
     elif isinstance(value, list):
         _array(value, schema, where, out)
+
+
+def _alternatives(value: object, branches: Sequence[object], where: str, out: list[str]) -> None:
+    """A value that must satisfy one of several schemas, or one sentence saying it does none.
+
+    A node states alternatives or a type, never both, so nothing else on it is read. The
+    branches' own complaints are dropped: a value that is the wrong type for all three
+    alternatives earns three sentences saying the same thing, and a model correcting the
+    answer needs one that names what was allowed.
+    """
+    for branch in branches:
+        if isinstance(branch, Mapping) and not validate(value, branch, where):
+            return
+    named = " or ".join(
+        str(branch.get("type", "any")) for branch in branches if isinstance(branch, Mapping)
+    )
+    out.append(f"{where}: expected {named}, got {_name(value)}")
 
 
 def _is_type(value: object, expected: str) -> bool:

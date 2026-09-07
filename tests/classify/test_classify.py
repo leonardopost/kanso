@@ -43,6 +43,7 @@ from tests.classify.test_classify_features import (
     workspace,
     write_hypothesis,
 )
+from tests.params import pairs
 
 
 @pytest.fixture(autouse=True)
@@ -83,8 +84,8 @@ def answer(**changes: Any) -> dict[str, Any]:
         "construct": {"id": "sleeve"},
         "objective_params": {"min_delta": 0.0, "k_se": 1.0},
         "constraints": [
-            {"id": "strategy_integrity", "params": {}},
-            {"id": "min_trades", "params": {"min": 30}},
+            {"id": "strategy_integrity", "params": pairs()},
+            {"id": "min_trades", "params": pairs({"min": 30})},
         ],
         "rationale": "a complete signal-to-trade thesis with nothing to attach to",
         **changes,
@@ -156,6 +157,38 @@ def test_a_sleeve_is_written_pinned_and_left_readable(ws: Workspace, store: Stat
     assert registered.objective == "net_edge_bps"
     assert registered.pinned
     assert registered.hypothesis_sha == sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_the_parameters_the_model_chose_survive_the_wire_whole(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The one failure the pairs shape exists to prevent, pinned.
+
+    An object closed to additional properties is accepted by a provider and answered
+    `{}`, so a classification would be written with every parameter the model chose
+    silently gone — a filter with no scope, a gate on its default. This asserts they
+    arrive, of both types, in the file an operator reads.
+    """
+    certify(ws, store)
+    register(ws, store, HYP_ID, DRAFT)
+    script(
+        ws,
+        classify=[
+            answer(construct={"id": "filter", "host": HOST_ID, "params": pairs({"scope": "time"})})
+        ],
+    )
+
+    classified = classify(ws, store, HYP_ID)
+
+    assert classified.construct is not None
+    assert classified.construct.params == {"scope": "time"}
+    assert {one.id: one.params for one in classified.constraints or ()} == {
+        "strategy_integrity": {},
+        "min_trades": {"min": 30},
+    }
+    written = hypothesis_file(ws, HYP_ID).read_text(encoding="utf-8")
+    assert "scope: time" in written
+    assert "min: 30" in written
 
 
 def test_the_objective_follows_from_the_horizon_not_from_the_model(
@@ -264,7 +297,9 @@ def test_an_attached_construct_gets_its_modifier_stub(ws: Workspace, store: Stat
     register(ws, store, HYP_ID, DRAFT)
     script(
         ws,
-        classify=[answer(construct={"id": "filter", "host": HOST_ID, "params": {"scope": "time"}})],
+        classify=[
+            answer(construct={"id": "filter", "host": HOST_ID, "params": pairs({"scope": "time"})})
+        ],
     )
 
     classify(ws, store, HYP_ID)
@@ -450,15 +485,19 @@ def test_a_frontier_class_makes_two_attempts_and_then_refuses(
         ({"construct": {"id": "filter", "host": "other"}}, "is not one of demo_sleeve"),
         ({"construct": {"id": "allocation", "host": HOST_ID}}, "is not one of portfolio"),
         (
-            {"construct": {"id": "filter", "host": HOST_ID, "params": {"speed": "fast"}}},
+            {"construct": {"id": "filter", "host": HOST_ID, "params": pairs({"speed": "fast"})}},
             "has no parameter 'speed'",
         ),
         (
-            {"construct": {"id": "filter", "host": HOST_ID, "params": {"scope": "price"}}},
+            {"construct": {"id": "filter", "host": HOST_ID, "params": pairs({"scope": "price"})}},
             "is not one of time, instrument",
         ),
         (
-            {"construct": {"id": "filter", "host": HOST_ID, "params": {"scope": ["time"]}}},
+            {"construct": {"id": "filter", "host": HOST_ID, "params": pairs({"scope": ["time"]})}},
+            "expected number or string or boolean, got array",
+        ),
+        (
+            {"objective_params": {"min_delta": 0.0, "k_se": 0.0}},
             "the answer is not a classification",
         ),
         ({"objective_params": {"min_delta": 0.0, "k_se": 9.0}}, "objective.params.k_se"),
@@ -474,8 +513,8 @@ def test_a_frontier_class_makes_two_attempts_and_then_refuses(
             {
                 "constraints": [
                     {"id": "strategy_integrity"},
-                    {"id": "min_trades", "params": {"min": 30}},
-                    {"id": "min_trades", "params": {"min": 40}},
+                    {"id": "min_trades", "params": pairs({"min": 30})},
+                    {"id": "min_trades", "params": pairs({"min": 40})},
                 ]
             },
             "is named twice",
@@ -484,12 +523,15 @@ def test_a_frontier_class_makes_two_attempts_and_then_refuses(
             {
                 "constraints": [
                     {"id": "strategy_integrity"},
-                    {"id": "min_trades", "params": {"min": 0}},
+                    {"id": "min_trades", "params": pairs({"min": 0})},
                 ]
             },
             "outside the range [1, 10000]",
         ),
-        ({"constraints": [{"id": "min_trades", "params": {"min": 30}}]}, "strategy_integrity"),
+        (
+            {"constraints": [{"id": "min_trades", "params": pairs({"min": 30})}]},
+            "strategy_integrity",
+        ),
     ],
 )
 def test_an_unusable_answer_is_refused_with_the_reason(

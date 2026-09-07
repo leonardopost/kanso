@@ -27,6 +27,8 @@ from typing import Any
 
 import yaml
 
+from tests.params import pairs
+
 TIER_MODELS: dict[str, str] = {
     "cheap": "cheap_mock",
     "mid": "mid_mock",
@@ -119,37 +121,37 @@ PLAN: dict[str, Any] = {
         {
             "id": "embargoed_window",
             "stage": "cert",
-            "params": {"min_fraction": 0.0},
+            "params": pairs({"min_fraction": 0.0}),
             "rationale": "required; the only out-of-sample evidence there is",
         },
         {
             "id": "publication_lag",
             "stage": "cert",
-            "params": {"tolerance_s": 0.0},
+            "params": pairs({"tolerance_s": 0.0}),
             "rationale": "required; the synthetic series is realtime, so any lag is a surprise",
         },
         {
             "id": "parity_replay",
             "stage": "cert",
-            "params": {"ts_ns": 0},
+            "params": pairs({"ts_ns": 0}),
             "rationale": "required; the deployed code path must be the researched one",
         },
         {
             "id": "book_correlation",
             "stage": "cert",
-            "params": {"max_corr": 0.8},
+            "params": pairs({"max_corr": 0.8}),
             "rationale": "a candidate that repeats a deployed book adds risk, not return",
         },
         {
             "id": "paper_forward",
             "stage": "paper",
-            "params": {"min_duration": "5d", "horizon_mult": 20.0},
+            "params": pairs({"min_duration": "5d", "horizon_mult": 20.0}),
             "rationale": "a plan reaches the paper stage",
         },
         {
             "id": "live_drift",
             "stage": "live",
-            "params": {},
+            "params": pairs(),
             "rationale": "a plan reaches the live stage",
         },
     ],
@@ -167,8 +169,8 @@ CLASSIFICATION: dict[str, Any] = {
     "construct": {"id": "sleeve"},
     "objective_params": {"min_delta": 0.0, "k_se": 0.5},
     "constraints": [
-        {"id": "strategy_integrity", "params": {}},
-        {"id": "min_trades", "params": {"min": 4}},
+        {"id": "strategy_integrity", "params": pairs()},
+        {"id": "min_trades", "params": pairs({"min": 4})},
     ],
     "rationale": "A complete signal-to-trade thesis with nothing to attach to: a sleeve.",
 }

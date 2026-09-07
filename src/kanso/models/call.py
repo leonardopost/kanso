@@ -67,7 +67,15 @@ class Call:
 
 @dataclass(frozen=True)
 class Answer:
-    """One model's reply: the parsed object, what it cost and whether the cache hit.
+    """One model's reply: the object a calling step reads, what it cost and whether the
+    cache hit.
+
+    `data` is not always the object the model sent. Where a task class encodes a
+    parameter map as a list of `{name, value}` pairs — `classify` and `certify_plan` —
+    the router has already read those lists back into mappings (`models/router.py`,
+    `models/tasks.collapse`), after the schema and before the calling step's check, so a
+    step never meets the wire encoding. The reply's own bytes are not kept anywhere: the
+    ledger records that the attempt happened and what it cost, not its text.
 
     `data` is an empty mapping when the reply was not a JSON object at all, which is not
     a special case — an empty object fails every task class's schema and takes the same

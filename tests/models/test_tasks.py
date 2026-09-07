@@ -11,6 +11,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from kanso.models import ANSWER_SCHEMAS, INSTRUCTIONS, CallInputs, build, canonical, validate
+from kanso.models.tasks import PARAM_PAIRS, collapse
 from kanso.schemas.models import ROUTING_DEFAULTS, TASK_CLASSES, Route, TaskClass
 from kanso.workspace import TEMPLATES
 
@@ -104,6 +105,87 @@ def test_canonical_renders_a_date_rather_than_failing() -> None:
 def test_a_dated_value_anywhere_in_the_facts_still_builds(task: TaskClass) -> None:
     call = build(task, ROUTE, inputs(stable={"window": {"start": date(2024, 1, 1)}}))
     assert "2024-01-01" in call.system
+
+
+# --- the parameter map, on the wire and back -----------------------------------
+
+CLASSIFY: dict[str, Any] = ANSWER_SCHEMAS["classify"]
+
+
+def classification(construct_params: Any, constraint_params: Any) -> dict[str, Any]:
+    """A classify answer carrying those two parameter values, whatever shape they are."""
+    return {
+        "construct": {"id": "sleeve", "params": construct_params},
+        "objective_params": {"min_delta": 0.0, "k_se": 1.0},
+        "constraints": [{"id": "min_trades", "params": constraint_params}],
+        "rationale": "a sleeve",
+    }
+
+
+def test_a_parameter_list_is_read_back_as_the_mapping_every_step_expects() -> None:
+    """The pairs are transport: nothing past the router has ever seen one."""
+    answer = classification(
+        [{"name": "scope", "value": "time"}],
+        [{"name": "min", "value": 30}, {"name": "strict", "value": True}],
+    )
+    assert validate(answer, CLASSIFY) == []
+
+    collapsed, complaints = collapse(answer, CLASSIFY)
+
+    assert complaints == []
+    assert collapsed["construct"] == {"id": "sleeve", "params": {"scope": "time"}}
+    assert collapsed["constraints"] == [{"id": "min_trades", "params": {"min": 30, "strict": True}}]
+    assert collapsed["rationale"] == "a sleeve"
+
+
+def test_an_empty_parameter_list_reads_back_as_an_empty_mapping() -> None:
+    collapsed, complaints = collapse(classification([], []), CLASSIFY)
+    assert complaints == []
+    assert collapsed["construct"] == {"id": "sleeve", "params": {}}
+
+
+def test_a_name_given_twice_is_a_complaint_rather_than_a_quiet_winner() -> None:
+    """kanso has no rule saying the first wins, so the model is asked again instead."""
+    answer = classification([], [{"name": "min", "value": 30}, {"name": "min", "value": 40}])
+    assert validate(answer, CLASSIFY) == []
+
+    _, complaints = collapse(answer, CLASSIFY)
+
+    assert complaints == [
+        "the answer.constraints[0].params: 'min' is named twice; give each parameter once"
+    ]
+
+
+def test_a_value_the_schema_says_nothing_about_is_carried_through() -> None:
+    """Collapsing reads the parameter lists and rewrites nothing else."""
+    collapsed, complaints = collapse({"kept": [1, 2], "also": {"a": "b"}}, {})
+    assert (collapsed, complaints) == ({"kept": [1, 2], "also": {"a": "b"}}, [])
+
+
+def test_a_parameter_value_that_is_not_a_list_of_pairs_is_left_where_it_is() -> None:
+    """Only a caller that skipped the schema can produce one, and the schema reports it."""
+    schema: dict[str, Any] = {"type": "object", "properties": {"params": PARAM_PAIRS}}
+    assert collapse({"params": "not a list"}, schema) == ({"params": "not a list"}, [])
+    assert collapse({"params": [7]}, schema) == ({"params": [7]}, [])
+
+
+@given(
+    st.dictionaries(
+        st.text(min_size=1, max_size=8),
+        st.one_of(st.integers(), st.text(max_size=8), st.booleans()),
+        max_size=6,
+    )
+)
+def test_a_parameter_mapping_survives_the_wire_shape_whole(params: dict[str, Any]) -> None:
+    """What the model decided is what the step receives: every name, every type."""
+    pairs = [{"name": name, "value": value} for name, value in params.items()]
+    answer = classification(pairs, [])
+    assert validate(answer, CLASSIFY) == []
+    collapsed, complaints = collapse(answer, CLASSIFY)
+    construct = collapsed["construct"]
+    assert isinstance(construct, dict)
+    assert construct["params"] == params
+    assert complaints == []
 
 
 def test_the_shipped_demo_script_answers_every_class_it_lists() -> None:

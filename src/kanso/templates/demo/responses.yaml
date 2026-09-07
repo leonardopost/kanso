@@ -1,6 +1,8 @@
 # mock/responses.yaml — scripted responses for the shipped `mock` model protocol.
 # The mock client answers each task class from its list in order and wraps around; unlisted task classes
-# return `{}`. `diff` values are unified diffs against strategy.py: the first against the stub rendered by
+# return `{}`. Every `params` is a list of `{name, value}` pairs, because that is the shape a provider
+# constraining an answer to a schema accepts — a free-form object is refused outright — and kanso reads
+# the pairs back into a map before anything sees them. Write a real model's answers the same way. `diff` values are unified diffs against strategy.py: the first against the stub rendered by
 # `kanso init --demo`, the second and third against the state that first one leaves behind — which is what
 # the lane holds again after each of them, since a discard and a crash both restore the run's best.
 # So `kanso research run demo_mr --cards 3` in a freshly initialised demo is a keep, a discard and a crash,
@@ -9,16 +11,16 @@
 # scripted answer does fit. That is the point at which the demo has shown what it can and you want a real
 # model in models.yaml.
 classify:
-  - {construct: {id: sleeve}, objective_params: {min_delta: 0.0, k_se: 1.0}, constraints: [{id: strategy_integrity, params: {}}, {id: min_trades, params: {min: 30}}, {id: max_drawdown, params: {}}], rationale: "A complete signal-to-trade thesis with nothing deployed to attach to: a sleeve."}
+  - {construct: {id: sleeve}, objective_params: {min_delta: 0.0, k_se: 1.0}, constraints: [{id: strategy_integrity, params: []}, {id: min_trades, params: [{name: min, value: 30}]}, {id: max_drawdown, params: []}], rationale: "A complete signal-to-trade thesis with nothing deployed to attach to: a sleeve."}
 certify_plan:
   - gates:
-      - {id: embargoed_window, stage: cert, params: {min_fraction: 0.5}, rationale: "required; the only out-of-sample evidence"}
-      - {id: publication_lag, stage: cert, params: {tolerance_s: 0}, rationale: "required; the synthetic series is realtime, so any lag at all is a surprise"}
-      - {id: parity_replay, stage: cert, params: {ts_ns: 0}, rationale: "required; the live code path and the research one must submit the same orders"}
-      - {id: cost_stress, stage: cert, params: {mult_a: 2, mult_b: 3}, rationale: "30m horizon: edge is cost-sensitive"}
-      - {id: bootstrap, stage: cert, params: {n: 1000}, rationale: "drawdown band and objective CI for paper/live gates"}
-      - {id: paper_forward, stage: paper, params: {min_duration: 5d, horizon_mult: 20}, rationale: "≥1 paper gate required"}
-      - {id: live_drift, stage: live, params: {}, rationale: "≥1 live gate required"}
+      - {id: embargoed_window, stage: cert, params: [{name: min_fraction, value: 0.5}], rationale: "required; the only out-of-sample evidence"}
+      - {id: publication_lag, stage: cert, params: [{name: tolerance_s, value: 0}], rationale: "required; the synthetic series is realtime, so any lag at all is a surprise"}
+      - {id: parity_replay, stage: cert, params: [{name: ts_ns, value: 0}], rationale: "required; the live code path and the research one must submit the same orders"}
+      - {id: cost_stress, stage: cert, params: [{name: mult_a, value: 2}, {name: mult_b, value: 3}], rationale: "30m horizon: edge is cost-sensitive"}
+      - {id: bootstrap, stage: cert, params: [{name: n, value: 1000}], rationale: "drawdown band and objective CI for paper/live gates"}
+      - {id: paper_forward, stage: paper, params: [{name: min_duration, value: 5d}, {name: horizon_mult, value: 20}], rationale: "≥1 paper gate required"}
+      - {id: live_drift, stage: live, params: [], rationale: "≥1 live gate required"}
     excluded:
       - {id: deflated_sharpe, reason: "intraday objective is per-trade edge, not Sharpe"}
       - {id: capacity_vs_adv, reason: "the synthetic series carries no volume to size participation against"}

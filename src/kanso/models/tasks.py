@@ -5,7 +5,7 @@ the routing table. There are four, they are named in the register's routing tabl
 fifth would be a call site the package does not have — so this module is closed, and the
 schemas here are the whole of what any model in any workspace is ever asked to produce.
 
-Two rules shape every prompt built here.
+Three rules shape every prompt built here.
 
 **The stable half carries the subject, the dynamic half carries the moment.** The system
 turn is the instruction, the answer schema and the facts that do not move for one subject,
@@ -16,6 +16,12 @@ cache on every call of a run.
 
 **A prompt states facts, never secrets.** Nothing here reaches a credential, and the
 router refuses to send a prompt in which one appears anyway.
+
+**A parameter map travels as a list of pairs.** A gate's and a construct's parameters are
+keyed by names kanso does not own, and a free-form object is precisely what a provider
+constraining an answer to a schema refuses — measured, not assumed; `PARAM_PAIRS` records
+what each candidate shape cost. The pairs are undone by `collapse` before any step sees
+them, so the encoding lives in this module and the router and nowhere else.
 
 `classify` and `certify_plan` decide what a hypothesis is and what would count as proof
 of it. Neither is shown a card metric, a certificate or the strategy source, because a
@@ -34,10 +40,50 @@ from typing import Final
 from kanso.models.call import Call, CallInputs
 from kanso.schemas.models import Route, TaskClass
 
-__all__ = ["ANSWER_SCHEMAS", "INSTRUCTIONS", "build", "canonical"]
+__all__ = ["ANSWER_SCHEMAS", "INSTRUCTIONS", "PARAM_PAIRS", "build", "canonical", "collapse"]
 
-_PARAMS: Final[dict[str, object]] = {"type": "object"}
-"""A free-form parameter map: the keys belong to the gate or construct, not to kanso."""
+PARAM_PAIRS: Final[dict[str, object]] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "value": {"anyOf": [{"type": "number"}, {"type": "string"}, {"type": "boolean"}]},
+        },
+        "required": ["name", "value"],
+        "additionalProperties": False,
+    },
+}
+"""A gate's or a construct's parameters on the wire: a list of `{name, value}` pairs.
+
+The keys belong to the gate or the construct rather than to kanso, so the shape this
+wants to be is a free-form object — and a free-form object is the one shape a
+schema-constrained answer cannot carry. Measured against the Anthropic messages API on
+2026-09-07, one request per shape, with the schema in `output_config.format`:
+
+* `{"type": "object"}` — 400, `additionalProperties` must be explicitly set to false.
+* `{"type": "object", "additionalProperties": true}` — 400, not supported.
+* `{}` — 400, an empty schema that accepts any JSON value is not supported.
+* `{"type": "object", "additionalProperties": false}` — 200, and the model answered
+  `"params": {}`. It is accepted because it is a closed object with no properties, so
+  every parameter the model chose is dropped on the way out. A gate would then run on
+  its defaults and a construct would be classified with nothing, silently.
+* this shape — 200, and the model answered
+  `[{"name": "lookback", "value": 20}, {"name": "threshold", "value": 1.5},
+  {"name": "scope", "value": "entries"}, {"name": "enabled", "value": true}]`, every
+  name and every type intact.
+
+OpenAI-compatible structured outputs demand `additionalProperties: false` on every
+object too, so this one shape is admissible on that wire as well — read, not measured,
+and `models/openai_compat.py` records the second requirement of that protocol which the
+`classify` schema does not meet and which nothing here has been driven against. The three
+value types are `kanso.schemas.ParamValue` exactly — `bool | int | float | str` — so the
+encoding loses nothing the data model could have held.
+
+`collapse` reads the pairs back into the mapping every step inland receives, so the list
+never leaves this layer. Anything that turns it back into an object earns the 400 above
+or, worse, the silent drop below it.
+"""
 
 
 ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
@@ -49,7 +95,7 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
                 "properties": {
                     "id": {"type": "string", "minLength": 1},
                     "host": {"type": "string", "minLength": 1},
-                    "params": _PARAMS,
+                    "params": PARAM_PAIRS,
                 },
                 "required": ["id"],
                 "additionalProperties": False,
@@ -67,7 +113,7 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "properties": {"id": {"type": "string", "minLength": 1}, "params": _PARAMS},
+                    "properties": {"id": {"type": "string", "minLength": 1}, "params": PARAM_PAIRS},
                     "required": ["id"],
                     "additionalProperties": False,
                 },
@@ -106,7 +152,7 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
                     "properties": {
                         "id": {"type": "string", "minLength": 1},
                         "stage": {"type": "string", "enum": ["cert", "paper", "live"]},
-                        "params": _PARAMS,
+                        "params": PARAM_PAIRS,
                         "rationale": {"type": "string", "maxLength": 200},
                     },
                     "required": ["id", "stage", "params", "rationale"],
@@ -148,6 +194,9 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "3. The constraints every card of this hypothesis must satisfy. Choose ids from "
         "the card-stage gate catalogue and stay inside each parameter's stated range. "
         "Include every gate the catalogue marks required.\n\n"
+        "Every `params` is a list of `{name, value}` pairs — one entry per parameter "
+        "you choose, each name given once, and an empty list where a construct or a gate "
+        "takes none. A parameter you leave out is a parameter left at its default.\n\n"
         "Judge the idea as stated. You are shown no result, no certificate and no strategy "
         "source, and you must not ask for any: a classification conditioned on results is "
         "a classification fitted to them. Keep the rationale under 240 characters."
@@ -185,6 +234,9 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "toolbox states when each one is. Include every gate the toolbox marks required. "
         "The plan must reach all three stages: at least one `cert` gate, at least one "
         "`paper` gate and at least one `live` gate. Name each gate at most once.\n\n"
+        "Every gate's `params` is a list of `{name, value}` pairs — one entry per "
+        "parameter you choose, each name given once, and an empty list where a gate takes "
+        "none. A parameter you leave out is a parameter left at its default.\n\n"
         "List in `excluded` every toolbox gate you deliberately left out, with the reason. "
         "A gate that is neither included nor excluded is an oversight, not a decision.\n\n"
         "You are shown no result, no card metric, no certificate and no strategy source, "
@@ -236,6 +288,82 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
         user=user,
         schema=schema,
     )
+
+
+def collapse(
+    answer: Mapping[str, object], schema: Mapping[str, object]
+) -> tuple[dict[str, object], list[str]]:
+    """`answer` with every parameter list read back as a mapping, and what that cost.
+
+    The pairs of `PARAM_PAIRS` are a transport encoding and nothing else: this is where
+    they stop, so `classify` and `plan` receive the `{name: value}` mapping they have
+    always received and no step inland knows the wire has a shape at all. Every other
+    value is carried through untouched, and a node the schema says nothing about is
+    carried through too rather than dropped.
+
+    Call it on an answer that has already satisfied `schema` — the router does — so each
+    pair here is a `{name, value}` object. What that does not settle is whether the names
+    are distinct, and a name given twice is a wrong answer: kanso has no rule saying the
+    first wins or the last does, the model has said two things about one parameter, and
+    repairing that quietly would put a value nobody chose into a gate. It earns a
+    complaint instead, and a complaint is the retry ladder, where the model is told which
+    name to say once.
+    """
+    complaints: list[str] = []
+    collapsed = {
+        name: _collapsed(value, _sub(schema, name), f"the answer.{name}", complaints)
+        for name, value in answer.items()
+    }
+    return collapsed, complaints
+
+
+def _collapsed(value: object, schema: Mapping[str, object], where: str, out: list[str]) -> object:
+    """`value` under `schema`, with any parameter list at or below it made a mapping."""
+    if schema == PARAM_PAIRS:
+        return _mapped(value, where, out)
+    if isinstance(value, dict):
+        return {
+            name: _collapsed(item, _sub(schema, name), f"{where}.{name}", out)
+            for name, item in value.items()
+        }
+    if isinstance(value, list):
+        items = schema.get("items")
+        each = items if isinstance(items, Mapping) else {}
+        return [
+            _collapsed(item, each, f"{where}[{index}]", out) for index, item in enumerate(value)
+        ]
+    return value
+
+
+def _mapped(value: object, where: str, out: list[str]) -> object:
+    """One list of pairs as the mapping it encodes, or the value as it came.
+
+    A value that is not a list of named pairs cannot have satisfied `PARAM_PAIRS`, so
+    this is reached only by a caller that skipped the schema; it hands the value back
+    rather than inventing a mapping, and the schema is where that is reported.
+    """
+    if not isinstance(value, list):
+        return value
+    mapping: dict[str, object] = {}
+    for pair in value:
+        if not isinstance(pair, Mapping) or not isinstance(pair.get("name"), str):
+            return value
+        name = str(pair["name"])
+        if name in mapping:
+            out.append(f"{where}: {name!r} is named twice; give each parameter once")
+            continue
+        mapping[name] = pair.get("value")
+    return mapping
+
+
+def _sub(schema: Mapping[str, object], name: str) -> Mapping[str, object]:
+    """The schema for one property, or an empty one when the schema declares none."""
+    properties = schema.get("properties")
+    if isinstance(properties, Mapping):
+        found = properties.get(name)
+        if isinstance(found, Mapping):
+            return found
+    return {}
 
 
 def _plain(value: Mapping[str, object]) -> dict[str, object]:

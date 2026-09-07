@@ -292,7 +292,10 @@ def test_the_callers_check_puts_a_wrong_answer_on_the_same_ladder(
         return []
 
     answer = route(ws, store, "classify", CallInputs(subject="demo_mr", check=catalogue))
-    assert answer.data == CLASSIFIED
+    assert answer.data == {
+        **CLASSIFIED,
+        "constraints": [{"id": "strategy_integrity", "params": {}}],
+    }
     assert len(watched.calls) == 2
     assert "not in the catalogue" in watched.calls[1][1].user
 
@@ -310,6 +313,59 @@ def test_the_callers_check_runs_only_on_an_answer_the_schema_accepted(
     with pytest.raises(PreconditionError):
         route(ws, store, "classify", CallInputs(subject="demo_mr", check=never))
     assert seen == []
+
+
+# -- the wire shape ------------------------------------------------------------------
+
+
+def scoped(*params: dict[str, Any]) -> dict[str, Any]:
+    """The usable classification, with those parameters on its one constraint."""
+    return {**CLASSIFIED, "constraints": [{"id": "min_trades", "params": list(params)}]}
+
+
+def test_a_parameter_list_reaches_the_calling_step_as_a_mapping(
+    ws: Workspace, store: StateStore, watched: Watched
+) -> None:
+    """The router is where the pairs stop: no step inland has ever seen one."""
+    write_scripts(
+        ws,
+        frontier={
+            "classify": [scoped({"name": "min", "value": 30}, {"name": "strict", "value": True})]
+        },
+    )
+    seen: list[Mapping[str, object]] = []
+
+    def watchful(data: Mapping[str, object]) -> Sequence[str]:
+        seen.append(data)
+        return []
+
+    answer = route(ws, store, "classify", CallInputs(subject="demo_mr", check=watchful))
+
+    assert answer.data["constraints"] == [
+        {"id": "min_trades", "params": {"min": 30, "strict": True}}
+    ]
+    assert seen == [answer.data]
+    assert len(watched.calls) == 1
+
+
+def test_a_parameter_named_twice_takes_the_ladder_rather_than_a_quiet_repair(
+    ws: Workspace, store: StateStore, watched: Watched
+) -> None:
+    """Two values for one parameter is a wrong answer; picking one would be kanso deciding."""
+    twice = scoped({"name": "min", "value": 30}, {"name": "min", "value": 40})
+    write_scripts(ws, frontier={"classify": [twice, scoped({"name": "min", "value": 30})]})
+    seen: list[Mapping[str, object]] = []
+
+    def watchful(data: Mapping[str, object]) -> Sequence[str]:
+        seen.append(data)
+        return []
+
+    answer = route(ws, store, "classify", CallInputs(subject="demo_mr", check=watchful))
+
+    assert answer.data["constraints"] == [{"id": "min_trades", "params": {"min": 30}}]
+    assert len(watched.calls) == 2
+    assert "'min' is named twice" in watched.calls[1][1].user
+    assert len(seen) == 1
 
 
 # -- credentials ---------------------------------------------------------------------

@@ -50,6 +50,7 @@ from kanso.schemas import (
 )
 from kanso.state import StateStore
 from kanso.workspace import TEMPLATES, Workspace, init
+from tests.params import pairs
 
 HYP_ID = "demo_mr"
 INSTRUMENT = "DEMO.SIM"
@@ -109,34 +110,34 @@ def answer(**changes: Any) -> dict[str, Any]:
             {
                 "id": "embargoed_window",
                 "stage": "cert",
-                "params": {"min_fraction": 0.5},
+                "params": pairs({"min_fraction": 0.5}),
                 "rationale": "the only out-of-sample evidence",
             },
             {
                 "id": "publication_lag",
                 "stage": "cert",
-                "params": {"tolerance_s": 0.0},
+                "params": pairs({"tolerance_s": 0.0}),
                 "rationale": "availability is the load-bearing invariant",
             },
             {
                 "id": "parity_replay",
                 "stage": "cert",
-                "params": {"ts_ns": 0},
+                "params": pairs({"ts_ns": 0}),
                 "rationale": "the deployed code path must be the researched one",
             },
             {
                 "id": "bootstrap",
                 "stage": "cert",
-                "params": {"n": 1000},
+                "params": pairs({"n": 1000}),
                 "rationale": "path risk",
             },
             {
                 "id": "paper_forward",
                 "stage": "paper",
-                "params": {"min_duration": "30d", "horizon_mult": 10.0},
+                "params": pairs({"min_duration": "30d", "horizon_mult": 10.0}),
                 "rationale": "forward evidence",
             },
-            {"id": "live_drift", "stage": "live", "params": {}, "rationale": "drift"},
+            {"id": "live_drift", "stage": "live", "params": pairs(), "rationale": "drift"},
         ],
         "excluded": [{"id": "deflated_sharpe", "reason": "a per-trade objective, not a Sharpe"}],
         **changes,
@@ -508,6 +509,27 @@ def test_an_unbounded_range_reaches_the_prompt_as_null(ws: Workspace) -> None:
     assert _ranges(item, the_hypothesis(ws), 4) == {"budget": {"min": 0.0, "max": None}}
 
 
+def test_the_parameters_the_planner_chose_survive_the_wire_whole(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The one failure the pairs shape exists to prevent, pinned.
+
+    An object closed to additional properties is accepted by a provider and answered
+    `{}`, so every gate would be pinned on its defaults and the certificate would claim
+    a test nobody chose. This asserts the chosen values arrive, of every type a gate
+    takes.
+    """
+    script(ws, certify_plan=[answer()])
+
+    written = plan(ws, store, HYP_ID)
+
+    chosen = {gate.id: gate.params for gate in written.gates}
+    assert chosen["bootstrap"] == {"n": 1000}
+    assert chosen["paper_forward"] == {"min_duration": "30d", "horizon_mult": 10.0}
+    assert chosen["embargoed_window"] == {"min_fraction": 0.5}
+    assert chosen["live_drift"] == {}
+
+
 # --- the answer is checked before it is believed ------------------------------
 
 
@@ -550,11 +572,11 @@ def test_without_a_scripted_answer_the_step_refuses(ws: Workspace, store: StateS
     [
         ({"gates": gates_of(drop="publication_lag")}, "is a structural invariant"),
         ({"gates": gates_of(drop="live_drift")}, "no live gate"),
-        ({"gates": replacing("bootstrap", params={"n": 5})}, "outside the range"),
+        ({"gates": replacing("bootstrap", params=pairs({"n": 5}))}, "outside the range"),
         (
             {
                 "gates": gates_of(
-                    {"id": "vibes", "stage": "cert", "params": {}, "rationale": "hunch"}
+                    {"id": "vibes", "stage": "cert", "params": pairs(), "rationale": "hunch"}
                 )
             },
             "gates.vibes: is not a gate in the toolbox",
@@ -562,7 +584,12 @@ def test_without_a_scripted_answer_the_step_refuses(ws: Workspace, store: StateS
         (
             {
                 "gates": gates_of(
-                    {"id": "net_edge_bps", "stage": "cert", "params": {}, "rationale": "objective"}
+                    {
+                        "id": "net_edge_bps",
+                        "stage": "cert",
+                        "params": pairs(),
+                        "rationale": "objective",
+                    }
                 )
             },
             "is not a gate in the toolbox",
@@ -574,7 +601,7 @@ def test_without_a_scripted_answer_the_step_refuses(ws: Workspace, store: StateS
                     {
                         "id": "bootstrap",
                         "stage": "cert",
-                        "params": {"n": 200},
+                        "params": pairs({"n": 200}),
                         "rationale": "again",
                     }
                 )
@@ -594,7 +621,11 @@ def test_without_a_scripted_answer_the_step_refuses(ws: Workspace, store: StateS
             "is both included and excluded",
         ),
         (
-            {"gates": replacing("bootstrap", params={"n": [1000]})},
+            {"gates": replacing("bootstrap", params=pairs({"n": [1000]}))},
+            "expected number or string or boolean, got array",
+        ),
+        (
+            {"gates": replacing("bootstrap", id="Bootstrap")},
             "the answer is not a plan",
         ),
     ],
@@ -616,7 +647,12 @@ def test_a_plan_naming_a_gate_with_no_implementation_is_refused(
     """A certificate must never claim a test that could not have run."""
     named = answer(
         gates=gates_of(
-            {"id": withheld, "stage": "cert", "params": {"ts_ns": 0}, "rationale": "one code path"},
+            {
+                "id": withheld,
+                "stage": "cert",
+                "params": pairs({"ts_ns": 0}),
+                "rationale": "one code path",
+            },
             drop=withheld,
         )
     )
@@ -657,8 +693,13 @@ def test_every_problem_in_a_plan_is_reported_at_once(
 ) -> None:
     broken = answer(
         gates=[
-            {"id": "vibes", "stage": "cert", "params": {}, "rationale": "hunch"},
-            {"id": "bootstrap", "stage": "paper", "params": {"n": 1}, "rationale": "wrong twice"},
+            {"id": "vibes", "stage": "cert", "params": pairs(), "rationale": "hunch"},
+            {
+                "id": "bootstrap",
+                "stage": "paper",
+                "params": pairs({"n": 1}),
+                "rationale": "wrong twice",
+            },
         ],
         excluded=[{"id": "embargoed_window", "reason": "slow"}],
     )
@@ -789,7 +830,10 @@ def test_a_paper_window_far_shorter_than_the_certification_window_is_warned_abou
 ) -> None:
     """The demo certifies over 145 days; a five-day paper window is judged by that band."""
     script(
-        ws, certify_plan=[answer(gates=replacing("paper_forward", params={"min_duration": "5d"}))]
+        ws,
+        certify_plan=[
+            answer(gates=replacing("paper_forward", params=pairs({"min_duration": "5d"})))
+        ],
     )
     pinned = plan(ws, store, HYP_ID)
 
@@ -816,7 +860,7 @@ def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
     ws: Workspace, store: StateStore
 ) -> None:
     """`paper_forward` reports an absent window itself, when it runs; there is nothing to size."""
-    bare = replacing("paper_forward", params={})
+    bare = replacing("paper_forward", params=pairs())
     script(ws, certify_plan=[answer(gates=bare)])
     pinned = plan(ws, store, HYP_ID)
 
