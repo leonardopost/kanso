@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.1.2 — 2026-09-07
 
 - The parameter map `kanso classify` and `kanso cert plan` ask a model for is a shape a provider will accept. Both declared theirs as a free-form `{"type": "object"}`, and the Anthropic messages API refuses that document outright — `400 output_config.format.schema: For 'object' type, 'additionalProperties' must be explicitly set to false`, measured on 2026-09-07, one request per candidate shape. A gate's and a construct's parameters now travel as a list of `{name, value}` pairs, the one shape measured both to be accepted **and** to come back filled in; the obvious repair, a closed object with no properties, is accepted and answers `params: {}`, dropping every parameter the model chose. kanso reads the pairs back into a mapping before any step sees them, so a classification, a plan and every gate hold what they always held.
 - What that cost a workspace on the `anthropic` protocol: `classify` and `cert plan` are the first two steps of the pipeline, and both were refused on every call, in every workspace, for the life of 0.1.1. What was measured then is the parameter shape; that it was the *only* thing wrong with those two documents was an inference from a refusal that named only it, and sending the corrected documents disproved it — the next entry is what came back. `propose` and `align_check` carry no parameter map and answered 200 before and after. The `mock` protocol, which is what the demo and the suite drive, never had the problem — which is why nothing offline saw it.
