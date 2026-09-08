@@ -214,6 +214,43 @@ def test_the_classification_is_exposed_under_its_own_name() -> None:
     assert hyp.model_dump(by_alias=True)["construct"]["id"] == "filter"
 
 
+def test_the_card_gates_put_the_operator_first_and_drop_a_repriced_one() -> None:
+    """The whole authority rule: a model may add to what an operator requires."""
+    hyp = build(
+        required_constraints=[{"id": "min_trades", "params": {"min": 500}}],
+        construct={"id": "sleeve", "rationale": "stands alone"},
+        objective={"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}},
+        constraints=[
+            {"id": "min_trades", "params": {"min": 12}},
+            {"id": "strategy_integrity"},
+        ],
+    )
+
+    gates = hyp.card_gates
+
+    assert [ref.id for ref in gates] == ["min_trades", "strategy_integrity"]
+    assert gates[0].params == {"min": 500}, "the operator's number, not the model's 12"
+    assert hyp.constraints is not None
+    assert hyp.constraints[0].params == {"min": 12}, "and the model's answer is still on file"
+
+
+def test_card_gates_is_the_classifier_s_list_when_the_operator_required_nothing() -> None:
+    hyp = build(
+        construct={"id": "sleeve", "rationale": "stands alone"},
+        objective={"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}},
+        constraints=[{"id": "strategy_integrity"}],
+    )
+    assert [ref.id for ref in hyp.card_gates] == ["strategy_integrity"]
+    assert hyp.required_constraints is None
+
+
+def test_an_unclassified_hypothesis_may_still_require_gates() -> None:
+    """They are the operator's, so they do not wait on a classification."""
+    hyp = build(required_constraints=[{"id": "max_drawdown"}])
+    assert [ref.id for ref in hyp.card_gates] == ["max_drawdown"]
+    assert hyp.constraints is None
+
+
 def test_a_rationale_is_bounded() -> None:
     with pytest.raises(ValidationError, match="rationale"):
         build(construct={"id": "sleeve", "rationale": "x" * 241})

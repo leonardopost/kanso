@@ -217,6 +217,39 @@ and a card that placed no order did not trade the hypothesis, so neither is a ca
 selection could have kept. The gate's count and the spread it deflates by are the same set —
 it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
+## What a card must satisfy
+
+Card-stage gates, and they are the only judgement that reaches a strategy while it is being
+researched: everything else in the toolbox runs at certification or later, when the search is
+already over. There are four.
+
+| gate | what it refuses |
+|---|---|
+| `strategy_integrity` | a file that reads what the embargo hides, or imports outside the allow-list |
+| `min_trades` | a metric earned on too few trades, or on one fold alone |
+| `max_drawdown` | a run that fell further than the hypothesis permits |
+| `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
+
+The last of those is the only one that carries a floor. `risk_limits` are three ceilings — a
+position may not exceed `max_position_pct`, the book may not exceed `max_leverage` — so a
+strategy holding a tenth of what its operator asked for satisfies all of them, and nothing in
+the package could say otherwise. `position_size` is measured on `run.held`: what each
+instrument was worth at each period end, marked at that period's price. Neither notional a run
+already carried says that. A fill's is traded value struck at one price, so a strategy that
+tops up in three orders looks like three small positions; a trade's is `peak_qty x avg_open`,
+an opening cost basis, which is biased upward by the strategy that rebalances toward a target
+as the price falls and blind to the drift of one entered once and left alone. A gate built on
+either would refuse the compliant strategy and pass the drifting one.
+
+Every held period is judged rather than an average of them, because a size instruction is
+broken by one period that breaks it. For a construct attached to a host, the host's quantity is
+subtracted first and the remainder re-marked, so what is judged is what the modifier added.
+
+**Who chooses them.** `constraints` is the classifier's list, rewritten on every
+classification. `required_constraints` is yours, and classification does not read or write it.
+Both are evaluated, yours first, and a gate you require is not reprised by a model that names
+it too. See `docs/workspace.md`.
+
 ## The keep rule
 
 When a card's number is an improvement rather than an accident. Three clauses, and together

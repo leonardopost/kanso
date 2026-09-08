@@ -500,6 +500,63 @@ def test_a_constraint_that_is_not_a_gate_is_refused(ws: Workspace) -> None:
     assert "not a gate" in failure.message
 
 
+def test_a_required_constraint_is_held_to_the_same_rules_and_says_which_list(
+    ws: Workspace,
+) -> None:
+    failure = refused(ws, document(required_constraints=[{"id": "net_edge_bps"}]))
+
+    assert failure.message.startswith("required_constraints.net_edge_bps:")
+    assert "not a gate" in failure.message
+
+
+def test_a_required_constraint_from_another_stage_is_refused(ws: Workspace) -> None:
+    failure = refused(ws, document(required_constraints=[{"id": "bootstrap", "params": {"n": 10}}]))
+
+    assert "required_constraints.bootstrap" in failure.message
+    assert "cert stage" in failure.message
+
+
+def test_a_required_constraint_parameter_outside_its_range_is_refused(ws: Workspace) -> None:
+    failure = refused(
+        ws, document(required_constraints=[{"id": "min_trades", "params": {"min": 0}}])
+    )
+
+    assert "required_constraints.min_trades.min" in failure.message
+
+
+def test_a_gate_required_twice_is_refused_because_the_two_would_disagree(
+    ws: Workspace,
+) -> None:
+    failure = refused(
+        ws,
+        document(
+            required_constraints=[
+                {"id": "min_trades", "params": {"min": 10}},
+                {"id": "min_trades", "params": {"min": 20}},
+            ]
+        ),
+    )
+
+    assert "named more than once" in failure.message
+    assert "min_trades" in failure.message
+
+
+def test_an_unclassified_hypothesis_may_require_gates(ws: Workspace) -> None:
+    """They are the operator's, so they do not wait on a classification to be checked."""
+    doc = {
+        key: value
+        for key, value in document().items()
+        if key not in {"construct", "objective", "constraints"}
+    }
+    doc["required_constraints"] = [{"id": "min_trades", "params": {"min": 20}}]
+
+    parsed = accepted(ws, doc)
+
+    assert parsed.required_constraints is not None
+    assert parsed.required_constraints[0].params == {"min": 20}
+    assert parsed.constraints is None
+
+
 def test_a_constraint_from_another_stage_is_refused(ws: Workspace) -> None:
     classification = {
         **SLEEVE_CLASSIFICATION,

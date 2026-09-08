@@ -97,7 +97,7 @@ def _constraints(ctx: GateContext, observed: float, limit: float) -> tuple[dict[
     """The sleeve's card-stage constraints as a paper window is able to judge them."""
     judged: dict[str, object] = {}
     within = True
-    for constraint in ctx.hyp.constraints or ():
+    for constraint in ctx.hyp.card_gates:
         if constraint.id == MAX_DRAWDOWN:
             held = observed <= limit
             judged[MAX_DRAWDOWN] = held

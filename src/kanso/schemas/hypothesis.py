@@ -148,7 +148,7 @@ class ObjectiveRef(KansoModel):
 
 
 class ConstraintRef(KansoModel):
-    """A card-stage gate and the values the classifier chose for it."""
+    """A card-stage gate and the values chosen for it."""
 
     id: CatalogueId
     params: Params = Field(default_factory=dict)
@@ -169,6 +169,7 @@ class Hypothesis(Versioned):
     capital: float | None = Field(default=None, gt=0)
     risk_limits: RiskLimits
     windows: Windows
+    required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")
     objective: ObjectiveRef | None = None
     constraints: list[ConstraintRef] | None = None
@@ -177,6 +178,21 @@ class Hypothesis(Versioned):
     def construct(self) -> ConstructRef | None:  # type: ignore[override]
         """The classification, if `classify` has run. Aliased: `construct` is taken."""
         return self.construct_
+
+    @property
+    def card_gates(self) -> tuple[ConstraintRef, ...]:
+        """Every card-stage gate this hypothesis is judged by, the operator's first.
+
+        `constraints` is the classifier's, rewritten on every classification.
+        `required_constraints` is the operator's, and classification does not read or
+        write it: `classify` owns three keys of the file and this is a fourth, so it
+        survives a re-classification byte for byte. Where both name a gate the operator's
+        entry stands and the classifier's is dropped, which is the whole of the rule —
+        a model may add to what an operator requires and may not remove or reprice it.
+        """
+        required = tuple(self.required_constraints or ())
+        named = {ref.id for ref in required}
+        return required + tuple(ref for ref in self.constraints or () if ref.id not in named)
 
     @property
     def embargo(self) -> timedelta:

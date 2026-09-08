@@ -33,8 +33,8 @@ from bisect import bisect_left
 from dataclasses import replace
 from datetime import date
 from hashlib import sha256
-from math import e, sqrt
-from statistics import NormalDist
+from math import e, inf, sqrt
+from statistics import NormalDist, median
 from typing import ClassVar, Final
 
 import numpy as np
@@ -58,8 +58,11 @@ from kanso.criteria.quantities import (
     variance,
     years,
 )
-from kanso.criteria.run import BPS, CardRun, day_of
+from kanso.criteria.run import BPS, CardRun, Held, day_of
 from kanso.schemas import GateResult
+
+PERCENT: Final = 100.0
+"""A share of capital is reported the way a risk limit states one."""
 
 EULER_MASCHERONI: Final = 0.5772156649015329
 """The constant in the expected maximum of a sample of Sharpe ratios."""
@@ -112,6 +115,97 @@ class _MinTrades:
             total >= minimum and all(n >= 1 for n in per_fold),
             {"n_trades": total, "min": minimum, "trades_per_fold": per_fold},
         )
+
+
+class _PositionSize:
+    """What a position was worth while it was held, as a share of the capital.
+
+    The one thing a hypothesis could not say. `risk_limits` are three ceilings — a
+    position may not exceed `max_position_pct`, the book may not exceed `max_leverage` —
+    and a strategy that holds a tenth of what its operator asked for satisfies every one
+    of them. This gate carries a floor as well, so "a position is worth about this much"
+    becomes a refusal rather than a sentence in a brief no code reads.
+
+    Measured on `run.held`: quantity times that period's mark, per instrument, per period
+    end, over the capital the window opened at, which a `CardRun` guarantees is above
+    zero. Neither notional a run already carried says this. `Fill.notional` is traded value
+    struck at one price, so it says nothing about what was held afterwards, and a strategy
+    that tops up in three orders looks like three small positions. `Trade.notional` is
+    `peak_qty x avg_open`, an opening cost basis: it is biased upward by exactly the
+    strategy that rebalances toward a target as the price falls — the behaviour an
+    operator asking for a fixed size most likely wants — and it is blind to the drift of a
+    position entered once and left alone, which is the behaviour they least want. A gate
+    built on either would refuse the compliant strategy and pass the drifting one.
+
+    Every held period is judged, not a median: a size instruction is broken by one period
+    that breaks it, and a strategy that sizes correctly has none. An instrument at zero is
+    not a position and is not judged, so a strategy that is flat is out of scope here —
+    whether it should be deployed at all is a different question and belongs to a
+    different gate.
+    """
+
+    id: ClassVar[str] = "position_size"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        low, high = number(ctx, "min_pct"), number(ctx, "max_pct")
+        if low is None and high is None:
+            return skipped(self.id, "no band was chosen, so no size was required")
+        floor = 0.0 if low is None else low
+        ceiling = inf if high is None else high
+        if floor > ceiling:
+            return verdict(
+                self.id,
+                False,
+                {
+                    "refused": "min_pct is above max_pct, so no position can satisfy it",
+                    "min_pct": floor,
+                    "max_pct": high,
+                },
+            )
+        marked = ctx.run.held if ctx.host_run is None else _own(ctx)
+        if not marked:
+            return skipped(
+                self.id, "no instrument was held at any period end, so nothing was sized"
+            )
+        shares = [held.notional / ctx.run.capital * PERCENT for held in marked]
+        outside = [share for share in shares if not floor <= share <= ceiling]
+        return verdict(
+            self.id,
+            not outside,
+            {
+                "min_pct": floor,
+                "max_pct": high,
+                "n_held": len(shares),
+                "n_outside": len(outside),
+                "smallest_pct": min(shares),
+                "largest_pct": max(shares),
+                "median_pct": median(shares),
+            },
+        )
+
+
+def _own(ctx: GateContext) -> tuple[Held, ...]:
+    """What the candidate added to its host, marked at the same prices.
+
+    A modifier's run is the host and the modifier together — the runner reads every
+    position in the cache — so judging `run.held` would judge the host's sizing as much as
+    the candidate's. The host is measured over the same window at the same period ends, so
+    the quantity it held is subtracted and the remainder re-marked at the price the pair
+    was already marked at. A period where the modifier changed nothing holds nothing of
+    its own and is not judged.
+    """
+    host = ctx.host_run
+    if host is None:  # pragma: no cover - the caller checks this first
+        return ctx.run.held
+    theirs = {(item.ts_ns, item.instrument_id): item.qty for item in host.held}
+    mine: list[Held] = []
+    for item in ctx.run.held:
+        qty = item.qty - theirs.get((item.ts_ns, item.instrument_id), 0.0)
+        if not qty:
+            continue
+        price = abs(item.notional / item.qty)
+        mine.append(replace(item, qty=qty, notional=abs(qty) * price))
+    return tuple(mine)
 
 
 class _MaxDrawdown:
@@ -501,6 +595,7 @@ def _peak_daily_notional(ctx: GateContext) -> dict[str, float]:
 
 strategy_integrity: Final[Gate] = _StrategyIntegrity()
 min_trades: Final[Gate] = _MinTrades()
+position_size: Final[Gate] = _PositionSize()
 max_drawdown: Final[Gate] = _MaxDrawdown()
 embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()

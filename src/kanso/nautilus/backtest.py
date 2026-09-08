@@ -84,7 +84,7 @@ from types import ModuleType
 from typing import Any, Final
 
 from kanso.criteria import CardRun, Fill, Trade
-from kanso.criteria.run import BPS, NS_PER_DAY, NS_PER_SECOND, midnight_ns
+from kanso.criteria.run import BPS, NS_PER_DAY, NS_PER_SECOND, Held, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
 from kanso.nautilus.venue import venue_configs
@@ -614,7 +614,7 @@ def _extract(
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
     trades = _trades(positions, by_position, multipliers)
-    ends, equity = _equity(request, stream, fills, multipliers, _adjusted(positions))
+    ends, equity, held = _equity(request, stream, fills, multipliers, _adjusted(positions))
     opening = request.capital
     returns = tuple(
         value - previous for value, previous in zip(equity, (opening, *equity), strict=False)
@@ -630,6 +630,7 @@ def _extract(
         capital=opening,
         currency=model.currency,
         venue_model=dict(request.venue_model),
+        held=held,
     )
 
 
@@ -819,7 +820,7 @@ def _equity(
     fills: Sequence[Fill],
     multipliers: Mapping[str, float],
     adjustments: Sequence[tuple[int, str, float]] = (),
-) -> tuple[tuple[int, ...], list[float]]:
+) -> tuple[tuple[int, ...], list[float], tuple[Held, ...]]:
     """The period ends and the equity struck at each, from cash and marked positions.
 
     A period exists when it holds at least one data event, and ends at the last one it
@@ -850,6 +851,7 @@ def _equity(
     held: dict[str, float] = {}
     cash = request.capital
     equity: list[float] = []
+    open_at: list[Held] = []
     point = 0
     fill = 0
     split = 0
@@ -870,11 +872,15 @@ def _equity(
             _ts, key, change = adjustments[split]
             held[key] = held.get(key, 0.0) + change
             split += 1
-        value = fsum(
-            held[key] * marks.get(key, 0.0) * multipliers.get(key, 1.0) for key in sorted(held)
-        )
-        equity.append(cash + value)
-    return ends, equity
+        marked: list[float] = []
+        for key in sorted(held):
+            qty = held[key]
+            worth = qty * marks.get(key, 0.0) * multipliers.get(key, 1.0)
+            marked.append(worth)
+            if qty:
+                open_at.append(Held(ts_ns=end, instrument_id=key, qty=qty, notional=abs(worth)))
+        equity.append(cash + fsum(marked))
+    return ends, equity, tuple(open_at)
 
 
 # --- the two entry points ----------------------------------------------------

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +18,22 @@ from kanso.criteria.gates import (
     embargoed_window,
     max_drawdown,
     min_trades,
+    position_size,
     publication_lag,
     strategy_integrity,
     stressed,
     walk_forward_consistency,
 )
-from tests.criteria.builders import book, build_run, context, fill, make_hyp, trade
+from tests.criteria.builders import (
+    START,
+    book,
+    build_run,
+    context,
+    fill,
+    held,
+    make_hyp,
+    trade,
+)
 
 DAYS = [date(2024, 1, 1 + i) for i in range(4)]
 FLAT = (0.0, 0.0, 0.0, 0.0)
@@ -200,6 +210,107 @@ def test_walk_forward_consistency_without_its_context_judges_nothing(overrides: 
         context(trading_run(1.0, 1.0, 1.0, 1.0), **overrides)
     )
     assert result.passed and result.skipped is not None
+
+
+# --- position_size ------------------------------------------------------------------
+
+
+def sized(*notionals: float, capital: float = 10_000.0, **overrides: Any) -> Any:
+    """A run holding one instrument at each of these marked values."""
+    run = build_run(
+        (0.0,) * max(len(notionals), 1),
+        capital=capital,
+        holdings=tuple(held(START + timedelta(days=i), n) for i, n in enumerate(notionals)),
+    )
+    return context(run, **overrides)
+
+
+def test_position_size_passes_a_position_held_inside_the_band() -> None:
+    result = position_size.evaluate(
+        sized(9_900.0, 10_000.0, 10_050.0, params={"min_pct": 95.0, "max_pct": 105.0})
+    )
+    assert result.passed
+    assert result.evidence["n_held"] == 3
+    assert result.evidence["n_outside"] == 0
+
+
+def test_position_size_refuses_a_strategy_holding_a_fraction_of_what_was_asked() -> None:
+    """The defect it exists for: every risk limit is a ceiling, so a tenth satisfies them."""
+    result = position_size.evaluate(
+        sized(1_761.75, 2_099.98, params={"min_pct": 95.0, "max_pct": 105.0})
+    )
+    assert not result.passed
+    assert result.evidence["n_outside"] == 2
+    assert result.evidence["largest_pct"] < 95.0
+
+
+def test_position_size_judges_every_period_and_not_the_middle_one() -> None:
+    """A size instruction is broken by one period that breaks it."""
+    result = position_size.evaluate(
+        sized(10_000.0, 10_000.0, 3_000.0, params={"min_pct": 95.0, "max_pct": 105.0})
+    )
+    assert not result.passed
+    assert result.evidence["n_outside"] == 1
+    assert result.evidence["median_pct"] == 100.0, "the median would have passed it"
+
+
+def test_position_size_reads_a_floor_on_its_own() -> None:
+    """`risk_limits` can already say 'no larger than'. Only this can say 'no smaller'."""
+    result = position_size.evaluate(sized(3_000.0, params={"min_pct": 95.0}))
+    assert not result.passed
+    assert result.evidence["max_pct"] is None
+
+
+def test_position_size_refuses_a_band_no_position_could_satisfy(caplog: Any) -> None:
+    """An inverted band would otherwise discard every card forever and say nothing."""
+    result = position_size.evaluate(sized(10_000.0, params={"min_pct": 100.0, "max_pct": 99.0}))
+    assert not result.passed
+    assert "above max_pct" in str(result.evidence["refused"])
+
+
+def test_position_size_measures_only_what_a_modifier_added_to_its_host() -> None:
+    """A modifier's run holds the host's positions too, so the host's are subtracted."""
+    day = START
+    host = build_run((0.0,), capital=10_000.0, holdings=(held(day, 10_000.0, qty=100.0),))
+    both = build_run((0.0,), capital=10_000.0, holdings=(held(day, 12_000.0, qty=120.0),))
+
+    result = position_size.evaluate(
+        context(both, host_run=host, params={"min_pct": 15.0, "max_pct": 25.0})
+    )
+
+    assert result.passed, "20 shares of its own at 100, not the host's 120"
+    assert result.evidence["n_held"] == 1
+    assert result.evidence["largest_pct"] == 20.0
+    assert not position_size.evaluate(
+        context(both, params={"min_pct": 15.0, "max_pct": 25.0})
+    ).passed, "without the host it would judge the host's 120% as the candidate's"
+
+
+def test_position_size_ignores_a_period_where_a_modifier_changed_nothing() -> None:
+    """Holding exactly what the host holds is holding nothing of your own."""
+    first, second = START, START + timedelta(days=1)
+    host = build_run(
+        (0.0, 0.0),
+        capital=10_000.0,
+        holdings=(held(first, 10_000.0, qty=100.0), held(second, 10_000.0, qty=100.0)),
+    )
+    both = build_run(
+        (0.0, 0.0),
+        capital=10_000.0,
+        holdings=(held(first, 10_000.0, qty=100.0), held(second, 12_000.0, qty=120.0)),
+    )
+
+    result = position_size.evaluate(
+        context(both, host_run=host, params={"min_pct": 15.0, "max_pct": 25.0})
+    )
+
+    assert result.passed
+    assert result.evidence["n_held"] == 1, "the first period was all the host's"
+
+
+def test_position_size_without_a_band_or_a_holding_judges_nothing() -> None:
+    assert position_size.evaluate(sized(10_000.0)).skipped is not None
+    assert position_size.evaluate(sized(params={"min_pct": 95.0})).skipped is not None
 
 
 # --- deflated_sharpe --------------------------------------------------------------
