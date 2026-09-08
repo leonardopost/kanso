@@ -308,6 +308,22 @@ def test_position_size_ignores_a_period_where_a_modifier_changed_nothing() -> No
     assert result.evidence["n_held"] == 1, "the first period was all the host's"
 
 
+def test_a_fold_carries_only_the_holdings_inside_it() -> None:
+    """`between` rebuilds every fold, and `replace` would hand each one the whole run."""
+    run = build_run(
+        (0.0, 0.0, 0.0, 0.0),
+        capital=10_000.0,
+        holdings=tuple(held(START + timedelta(days=i), 10_000.0) for i in range(4)),
+    )
+
+    folds = run.folds(2)
+
+    assert [len(fold.held) for fold in folds] == [2, 2], "not four in each"
+    first, second = ({item.ts_ns for item in fold.held} for fold in folds)
+    assert first.isdisjoint(second), "each fold holds its own periods and no others"
+    assert first | second == {item.ts_ns for item in run.held}, "and between them, all of it"
+
+
 def test_position_size_without_a_band_or_a_holding_judges_nothing() -> None:
     assert position_size.evaluate(sized(10_000.0)).skipped is not None
     assert position_size.evaluate(sized(params={"min_pct": 95.0})).skipped is not None

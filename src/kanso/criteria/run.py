@@ -159,7 +159,12 @@ class CardRun:
         return tuple(self.between(edges[i], edges[i + 1]) for i in range(n))
 
     def between(self, opens: int, closes: int) -> CardRun:
-        """This run restricted to the half-open instant span `[opens, closes)`."""
+        """This run restricted to the half-open instant span `[opens, closes)`.
+
+        Every series is filtered, `held` included: `replace` would carry the whole run's
+        holdings into each fold, so a gate reading them fold-wise would judge periods the
+        fold does not contain.
+        """
         kept = [i for i, ts in enumerate(self.period_ends_ns) if opens <= ts < closes]
         return replace(
             self,
@@ -169,4 +174,5 @@ class CardRun:
             equity=tuple(self.equity[i] for i in kept),
             trades=tuple(t for t in self.trades if opens <= t.closed_ns < closes),
             fills=tuple(f for f in self.fills if opens <= f.ts_ns < closes),
+            held=tuple(h for h in self.held if opens <= h.ts_ns < closes),
         )
