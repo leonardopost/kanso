@@ -3,6 +3,14 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A hypothesis can say what a position is worth, and a model cannot talk it down.** `required_constraints` is a fourth top-level key in `hypothesis.yaml`, holding card-stage gates the operator requires. Classification owns three keys of that file and this is not one of them, so it survives a re-classification with comments and ordering intact; both lists are evaluated on every card, the operator's first, and where both name a gate the operator's entry stands and the classifier's is dropped. Naming one twice is refused (exit 3). A draft may carry it.
+- `position_size {min_pct, max_pct}` is a fourth card-stage gate, and the only one in the package that carries a **floor**. `risk_limits` are three ceilings, so a strategy holding a tenth of what its hypothesis asked for satisfied every one of them and nothing could say otherwise — measured in a live workspace, a sleeve briefed for \$10,000 positions sized a flat \$3,000 — `capital * 0.3` — and passed every limit it had.
+- A run records what it held. `CardRun.held` is what each instrument was worth at each period end, marked at that period's price — the equity curve already computed it per instrument and summed it away. It is the only quantity in a run that answers what a position was worth while it was open: `Fill.notional` is traded value struck at one price, and `Trade.notional` is an opening cost basis, biased upward by a strategy that rebalances toward a target as price falls and blind to the drift of one entered once and left alone.
+- For a construct attached to a host, `position_size` subtracts the host's quantity and re-marks the remainder, so a modifier is judged on what it added rather than on what its host holds.
+- Docs: `docs/concepts.md` gains a `What a card must satisfy` section listing the four card-stage gates and why the new one is measured where it is; `docs/workspace.md` documents `required_constraints` and shows one.
+
 ## v0.2.0 — 2026-09-08
 
 - **A hypothesis is never ended by kanso.** `n_fail` consecutive failing certificates used to write the status `failed`, which the queue treated as terminal — `dequeue` dropped it on sight, `enqueue` refused it, and the remedy printed was to register the idea again under a new id, which resets the trial count `deflated_sharpe` prices the search width by. A failing verdict now returns the hypothesis to `researching` every time and escalates on every `n_fail`-th failure. Ending a line of research is the operator's decision and `kanso hyp retire` is the whole of it.

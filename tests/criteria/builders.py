@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from kanso.criteria import CardRun, DeployedBook, Fill, GateContext, Trade
+from kanso.criteria import CardRun, DeployedBook, Fill, GateContext, Held, Trade
 from kanso.criteria.run import NS_PER_SECOND, midnight_ns
 from kanso.schemas import Hypothesis, embargo_days
 
@@ -84,6 +84,11 @@ def trade(day: date, pnl: float, notional: float = 10_000.0, cost: float = 0.0) 
     )
 
 
+def held(day: date, notional: float, instrument_id: str = "DEMO", qty: float = 100.0) -> Held:
+    """One instrument marked at one period end, worth `notional`."""
+    return Held(ts_ns=at(day, 15), instrument_id=instrument_id, qty=qty, notional=notional)
+
+
 def build_run(
     returns: tuple[float, ...] = (),
     *,
@@ -93,6 +98,7 @@ def build_run(
     fills: tuple[Fill, ...] = (),
     capital: float = CAPITAL,
     equity: tuple[float, ...] | None = None,
+    holdings: tuple[Held, ...] = (),
 ) -> CardRun:
     """A daily run: one return period per day, equity compounded from the returns."""
     span = len(returns) if days is None else days
@@ -114,6 +120,7 @@ def build_run(
         capital=capital,
         currency="USD",
         venue_model={},
+        held=holdings,
     )
 
 

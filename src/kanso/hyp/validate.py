@@ -47,6 +47,7 @@ resolved for.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
@@ -119,6 +120,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_data_requirements(ws, hyp)
     instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
     venue_models(ws, hyp, instruments)
+    _check_required(ws, hyp)
     _check_classification(ws, hyp)
     return hyp
 
@@ -229,6 +231,28 @@ def _known_types(ws: Workspace) -> dict[str, type]:
     return data_types()
 
 
+def _check_required(ws: Workspace, hyp: Hypothesis) -> None:
+    """The card-stage gates the operator requires, checked whenever the file is read.
+
+    Unlike the classification's three fields these stand alone: a draft may carry them and
+    a classified hypothesis may not have been re-read since they were written, so they are
+    checked here rather than inside `_check_classification`. Naming one twice is refused,
+    because the two entries would disagree about the parameters and nothing says which
+    wins.
+    """
+    required = hyp.required_constraints
+    if not required:
+        return
+    counted = Counter(ref.id for ref in required)
+    twice = sorted(name for name, n in counted.items() if n > 1)
+    if twice:
+        raise ValidationError(
+            f"required_constraints: {', '.join(twice)} named more than once",
+            remedy="give each gate one entry, with the parameters it is to run under",
+        )
+    _check_constraints(ws, hyp, required, where="required_constraints")
+
+
 def _check_classification(ws: Workspace, hyp: Hypothesis) -> None:
     """The three fields classification writes, when they are written."""
     written = (hyp.construct, hyp.objective, hyp.constraints)
@@ -319,23 +343,29 @@ def _check_objective(ws: Workspace, hyp: Hypothesis, ref: ObjectiveRef, mode: st
 
 
 def _check_constraints(
-    ws: Workspace, hyp: Hypothesis, constraints: Sequence[ConstraintRef]
+    ws: Workspace, hyp: Hypothesis, constraints: Sequence[ConstraintRef], where: str = "constraints"
 ) -> None:
+    """Every named gate is a card-stage gate of the toolbox and its parameters fit.
+
+    `where` names the list being checked, because a hypothesis has two: `constraints`,
+    which classification writes, and `required_constraints`, which only the operator does.
+    The rules are the same for both and the complaint has to say which list it is about.
+    """
     items = criteria_catalogue()
     folds = ws.config.research.folds
     problems: list[str] = []
     for constraint in constraints:
         item = items.get(constraint.id)
         if item is None or item.kind != "gate":
-            problems.append(f"constraints.{constraint.id}: is not a gate in the toolbox")
+            problems.append(f"{where}.{constraint.id}: is not a gate in the toolbox")
         elif item.stage != CARD_STAGE:
             problems.append(
-                f"constraints.{constraint.id}: runs at the {item.stage} stage, and a "
+                f"{where}.{constraint.id}: runs at the {item.stage} stage, and a "
                 f"hypothesis constrains only the {CARD_STAGE} stage"
             )
         else:
             problems.extend(
-                f"constraints.{constraint.id}.{problem}"
+                f"{where}.{constraint.id}.{problem}"
                 for problem in check_params(item, constraint.params, hyp, folds)
             )
     if problems:

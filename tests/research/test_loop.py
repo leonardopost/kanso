@@ -298,6 +298,34 @@ def test_a_discard_before_the_first_keep_restores_the_run_s_base(
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
 
 
+def test_a_gate_the_operator_required_judges_the_card_and_the_model_cannot_loosen_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The authority rule where it has to hold: the loop, on a real card.
+
+    The classification asks for four trades and the operator requires ninety-nine. The
+    card trades and is discarded, so what ran is the operator's number.
+    """
+    hyp_id = classify(
+        ws,
+        store,
+        document(
+            required_constraints=[{"id": "min_trades", "params": {"min": 99}}],
+            constraints=[{"id": "strategy_integrity"}, {"id": "min_trades", "params": {"min": 4}}],
+        ),
+    )
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, WEAK)
+
+    made = loop.card(ws, store, hyp_id, "trades, but not ninety-nine times")
+
+    assert made.status == "discard"
+    (gate,) = [found for found in made.gate_results if found.id == "min_trades"]
+    assert gate.passed is False
+    assert gate.evidence["min"] == 99, "the operator's floor ran, not the classifier's 4"
+    assert made.n_trades > 4, "and it would have passed the number the model chose"
+
+
 def test_a_card_that_raises_is_a_crash_carrying_its_traceback_tail(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:

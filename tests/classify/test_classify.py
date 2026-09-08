@@ -217,6 +217,43 @@ def test_a_second_classification_replaces_the_first(ws: Workspace, store: StateS
     assert hypothesis_file(ws, HYP_ID).read_text(encoding="utf-8").count("min_trades") == 0
 
 
+def test_what_the_operator_requires_survives_every_classification(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The point of the fourth key: classification owns three, and this is not one of them.
+
+    Comments, ordering and the operator's own block come back byte for byte, because
+    `_without` drops a top-level key only while it is one of the three it rewrites.
+    """
+    register(ws, store, HYP_ID, DRAFT)
+    path = hypothesis_file(ws, HYP_ID)
+    path.write_text(
+        path.read_text(encoding="utf-8") + "required_constraints:\n"
+        "# the operator's, and not the classifier's to reprice\n"
+        "- id: min_trades\n"
+        "  params: {min: 500}\n",
+        encoding="utf-8",
+    )
+    script(
+        ws, classify=[answer(), answer(constraints=[{"id": "min_trades", "params": {"min": 12}}])]
+    )
+
+    first = classify(ws, store, HYP_ID)
+    again = classify(ws, store, HYP_ID)
+
+    written = path.read_text(encoding="utf-8")
+    assert "the operator's, and not the classifier's to reprice" in written
+    assert "min: 500" in written
+    for held in (first, again):
+        assert held.required_constraints is not None
+        assert held.required_constraints[0].params == {"min": 500}
+    gates = again.card_gates
+    assert gates[0].id == "min_trades", "the operator's gates are judged first"
+    assert gates[0].params == {"min": 500}, "the model asked for 12 and was dropped"
+    assert [ref.id for ref in gates].count("min_trades") == 1
+    assert "strategy_integrity" in [ref.id for ref in gates], "and the rest of its answer stands"
+
+
 def test_a_classification_whose_host_has_gone_can_be_redone(
     ws: Workspace, store: StateStore
 ) -> None:

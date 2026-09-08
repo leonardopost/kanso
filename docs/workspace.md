@@ -266,6 +266,26 @@ once classified — the construct, the objective and the card-stage constraints.
 writes those last three and nothing else; you can equally write them yourself and run
 `kanso hyp add`, which needs no model at all. The file's own comments are its field reference.
 
+**`required_constraints` is the one classification cannot touch.** It holds card-stage gates
+you require, in the same shape as `constraints`, and classification neither reads it as
+something to rewrite nor writes it: it owns three keys of the file and this is a fourth, so it
+survives a re-classification with your comments and ordering intact. Both lists are evaluated
+on every card, yours first, and where both name a gate yours stands and the classifier's entry
+is dropped — a model may add to what you require and may not remove or reprice it. Naming a
+gate twice in your own list is refused (exit 3), because the two entries would disagree and
+nothing says which wins. A draft may carry it: these are yours, so they do not wait on a
+classification.
+
+```yaml
+required_constraints:
+- id: position_size          # every position worth 95% to 105% of the capital, always
+  params: {min_pct: 95.0, max_pct: 105.0}
+```
+
+Before this existed, an instruction like that could only be prose in `program.md`, which
+nothing enforces: `risk_limits` are three ceilings, and a strategy holding a tenth of what you
+asked for satisfies every one of them.
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
-from kanso.criteria.run import CardRun, Fill, Trade
+from kanso.criteria.run import CardRun, Fill, Held, Trade
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.nautilus.node import Realised
@@ -308,6 +308,7 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         "equity": list(run.equity),
         "trades": [_encode_trade(trade) for trade in run.trades],
         "fills": [_encode_fill(fill) for fill in run.fills],
+        "held": [_encode_held(item) for item in run.held],
         "capital": run.capital,
         "currency": run.currency,
         "venue_model": dict(run.venue_model),
@@ -325,9 +326,28 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
         equity=tuple(float(value) for value in payload["equity"]),
         trades=tuple(_decode_trade(trade) for trade in payload["trades"]),
         fills=tuple(_decode_fill(fill) for fill in payload["fills"]),
+        held=tuple(_decode_held(item) for item in payload.get("held", ())),
         capital=float(payload["capital"]),
         currency=str(payload["currency"]),
         venue_model=dict(payload["venue_model"]),
+    )
+
+
+def _encode_held(item: Held) -> dict[str, Any]:
+    return {
+        "ts_ns": item.ts_ns,
+        "instrument_id": item.instrument_id,
+        "qty": item.qty,
+        "notional": item.notional,
+    }
+
+
+def _decode_held(payload: Mapping[str, Any]) -> Held:
+    return Held(
+        ts_ns=int(payload["ts_ns"]),
+        instrument_id=str(payload["instrument_id"]),
+        qty=float(payload["qty"]),
+        notional=float(payload["notional"]),
     )
 
 

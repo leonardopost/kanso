@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from kanso.criteria.run import CardRun, Fill, Trade
+from kanso.criteria.run import CardRun, Fill, Held, Trade
 from kanso.errors import Exit, KansoError
 from kanso.nautilus import adapters
 from kanso.portfolio import approvals, approve, approved, capital, clients, files, records
@@ -185,6 +185,26 @@ def test_a_measured_window_survives_the_round_trip() -> None:
     run = a_run()
 
     assert records.decode_run(records.encode_run(run)) == run
+
+
+def test_what_each_instrument_was_worth_survives_the_round_trip() -> None:
+    """`encode_run` promises to lose nothing a gate reads, and `position_size` reads this."""
+    run = a_run(
+        held=(
+            Held(ts_ns=1, instrument_id="DEMO.XNAS", qty=100.0, notional=10_000.0),
+            Held(ts_ns=2, instrument_id="OTHER.XNAS", qty=-50.0, notional=2_500.0),
+        )
+    )
+
+    assert records.decode_run(records.encode_run(run)) == run
+
+
+def test_a_record_written_before_holdings_were_kept_still_decodes() -> None:
+    """Every stage record already in a store predates the key and must still read back."""
+    payload = records.encode_run(a_run())
+    del payload["held"]
+
+    assert records.decode_run(payload).held == ()
 
 
 @given(

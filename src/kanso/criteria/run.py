@@ -45,6 +45,25 @@ def day_of(ts_ns: int) -> date:
 
 
 @dataclass(frozen=True)
+class Held:
+    """What one instrument was worth at one period end, marked at that period's price.
+
+    The equity curve already computes this — quantity held times the last mark times the
+    contract multiplier — and used to sum it into a scalar and throw the parts away. It is
+    kept because it is the only quantity in a run that answers "how much was this position
+    worth while it was open", which is what an operator means by a position size and is
+    what neither `Fill.notional` (traded value, struck at one price) nor `Trade.notional`
+    (opening value, a cost basis) says. One entry per instrument per period, and only for
+    an instrument actually held: a flat instrument is not a position.
+    """
+
+    ts_ns: int
+    instrument_id: str
+    qty: float
+    notional: float
+
+
+@dataclass(frozen=True)
 class Fill:
     """One execution, with the cost the runner applied to it once, in the extraction."""
 
@@ -89,6 +108,10 @@ class CardRun:
     `period_ends_ns[i]`, in the account currency, and `equity[i]` is the equity at that
     instant — cash plus positions marked at the period's last price. The three series are
     parallel and ordered; `capital` is the equity the window opened at.
+
+    `held` is that last sum before it was taken: what each instrument was worth at each
+    period end. It is what a size gate has to read, because the two notionals a run
+    already carried are neither of them a position's value while it was open.
     """
 
     window: tuple[date, date]
@@ -101,6 +124,7 @@ class CardRun:
     capital: float
     currency: str
     venue_model: Mapping[str, object]
+    held: tuple[Held, ...] = ()
 
     def __post_init__(self) -> None:
         start, end = self.window
@@ -135,7 +159,12 @@ class CardRun:
         return tuple(self.between(edges[i], edges[i + 1]) for i in range(n))
 
     def between(self, opens: int, closes: int) -> CardRun:
-        """This run restricted to the half-open instant span `[opens, closes)`."""
+        """This run restricted to the half-open instant span `[opens, closes)`.
+
+        Every series is filtered, `held` included: `replace` would carry the whole run's
+        holdings into each fold, so a gate reading them fold-wise would judge periods the
+        fold does not contain.
+        """
         kept = [i for i, ts in enumerate(self.period_ends_ns) if opens <= ts < closes]
         return replace(
             self,
@@ -145,4 +174,5 @@ class CardRun:
             equity=tuple(self.equity[i] for i in kept),
             trades=tuple(t for t in self.trades if opens <= t.closed_ns < closes),
             fills=tuple(f for f in self.fills if opens <= f.ts_ns < closes),
+            held=tuple(h for h in self.held if opens <= h.ts_ns < closes),
         )

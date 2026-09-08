@@ -102,6 +102,12 @@ def combined(results: Sequence[StageResult]) -> CardRun | None:
                 key=lambda fill: fill.ts_ns,
             )
         ),
+        held=tuple(
+            sorted(
+                (item for result in results for item in result.run.held),
+                key=lambda item: (item.ts_ns, item.instrument_id),
+            )
+        ),
         capital=capital,
         currency=last.currency,
         venue_model=last.venue_model,

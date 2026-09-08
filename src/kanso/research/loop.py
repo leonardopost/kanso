@@ -429,7 +429,7 @@ def _constraints(
     """Every card-stage gate the classification chose, apart from the one already run."""
     registry = gates()
     results: list[GateResult] = []
-    for ref in setup.hyp.constraints or []:
+    for ref in setup.hyp.card_gates:
         if ref.id == strategy_integrity.id:
             continue
         ctx = _context(
