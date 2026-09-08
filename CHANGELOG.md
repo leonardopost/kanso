@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.3.0 — 2026-09-08
 
 - **A hypothesis can say what a position is worth, and a model cannot talk it down.** `required_constraints` is a fourth top-level key in `hypothesis.yaml`, holding card-stage gates the operator requires. Classification owns three keys of that file and this is not one of them, so it survives a re-classification with comments and ordering intact; both lists are evaluated on every card, the operator's first, and where both name a gate the operator's entry stands and the classifier's is dropped. Naming one twice is refused (exit 3). A draft may carry it.
 - `position_size {min_pct, max_pct}` is a fourth card-stage gate, and the only one in the package that carries a **floor**. `risk_limits` are three ceilings, so a strategy holding a tenth of what its hypothesis asked for satisfied every one of them and nothing could say otherwise — measured in a live workspace, a sleeve briefed for \$10,000 positions sized a flat \$3,000 — `capital * 0.3` — and passed every limit it had.
