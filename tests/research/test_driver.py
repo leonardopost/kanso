@@ -181,6 +181,37 @@ def test_a_proposer_with_nothing_new_is_a_miss_that_counts_toward_the_stall(
     assert records.active(store, prepared_hyp) is None, "the run stalled and ended"
 
 
+def test_a_repeat_earlier_in_the_ladder_is_still_a_miss(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """Told it repeated itself, the model answered with a diff that does not apply."""
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("weak", tagged=False)])
+    driver.run(workspace, store, prepared_hyp, cards=1)
+    reset_mock()
+    scripted(
+        workspace,
+        propose=[proposal("weak", tagged=False), {"desc": "move the anchor", "diff": NOWHERE}],
+    )
+
+    outcome = driver.run(workspace, store, prepared_hyp)
+
+    assert (outcome.missed, outcome.reason) == (1, "stalled")
+    repeats = store.events(kind=driver.REPEATED, subject=prepared_hyp)
+    assert "already carded under the run's pins" in str(repeats[0].detail["because"])
+
+
+def test_a_ladder_that_never_repeats_still_fails_the_step(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE}])
+
+    with pytest.raises(PreconditionError, match="in 3 attempts"):
+        driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert store.events(kind=driver.REPEATED) == []
+
+
 def test_a_miss_counts_against_the_cards_asked_for_and_survives_a_resume(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:

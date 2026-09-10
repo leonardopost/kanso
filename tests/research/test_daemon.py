@@ -164,14 +164,17 @@ def test_a_hypothesis_whose_baseline_will_not_run_goes_back_behind_the_others(
     scheduler.enqueue(store, hyp_id)
 
     def failing(*_: Any, **__: Any) -> Any:
-        raise PreconditionError("the baseline card did not run")
+        raise PreconditionError(
+            "the baseline card did not run", remedy="try again with a smaller window"
+        )
 
     monkeypatch.setattr(research_driver, "run", failing)
     monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
 
     assert daemon.worker(ws, "l1") == 0
     assert [item.priority for item in scheduler.queued(store)] == [scheduler.BASELINE_PRIORITY]
-    assert daemon.LANE_FAILED in [event.kind for event in store.events(subject=hyp_id)]
+    failed = [event for event in store.events(subject=hyp_id) if event.kind == daemon.LANE_FAILED]
+    assert [event.detail["because"] for event in failed] == ["try again with a smaller window"]
 
 
 def test_a_hypothesis_taken_out_while_a_lane_held_it_does_not_come_back_when_it_fails(
