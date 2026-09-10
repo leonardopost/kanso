@@ -30,6 +30,7 @@ Nothing is declared here and left unimplemented: every gate in the library resol
 from __future__ import annotations
 
 from bisect import bisect_left
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
 from hashlib import sha256
@@ -58,7 +59,7 @@ from kanso.criteria.quantities import (
     variance,
     years,
 )
-from kanso.criteria.run import BPS, CardRun, Held, day_of
+from kanso.criteria.run import BPS, CardRun, Fill, Held, day_of
 from kanso.schemas import GateResult
 
 PERCENT: Final = 100.0
@@ -91,7 +92,9 @@ class _StrategyIntegrity:
     def evaluate(self, ctx: GateContext) -> GateResult:
         if ctx.lane_dir is None:
             return skipped(self.id, "no lane directory was supplied, so nothing was inspected")
-        problems = check_integrity(ctx.lane_dir, ctx.pinned)
+        problems = check_integrity(
+            ctx.lane_dir, ctx.pinned, sized=ctx.hyp.sizing is not None, construct=ctx.construct
+        )
         return verdict(
             self.id,
             not problems,
@@ -162,6 +165,8 @@ class _PositionSize:
                     "max_pct": high,
                 },
             )
+        if ctx.hyp.sizing is not None:
+            return self._on_entry_fills(ctx, floor, ceiling, high)
         marked = ctx.run.held if ctx.host_run is None else _own(ctx)
         if not marked:
             return skipped(
@@ -182,6 +187,71 @@ class _PositionSize:
                 "median_pct": median(shares),
             },
         )
+
+    def _on_entry_fills(
+        self, ctx: GateContext, floor: float, ceiling: float, high: float | None
+    ) -> GateResult:
+        """Under a sizing rule: every entry, as a share of the budget it was sized to.
+
+        A period-end mark is the wrong basis here — a leveraged leg drifts through any
+        band between two closes — so the judgement is on what the harness actually
+        placed. Fills are gathered per order first, because the venue fills a market
+        order past a quarter of the bar's volume as two events; for an attached construct
+        the host's orders are subtracted by identity and the remainder are the candidate's.
+        """
+        budget = ctx.hyp.sizing.budget  # type: ignore[union-attr]
+        orders = _orders(ctx.run.fills)
+        if ctx.host_run is not None:
+            hosts = _orders(ctx.host_run.fills)
+            orders = [order for order in orders if order not in hosts]
+        entries = _entries(orders)
+        if not entries:
+            return skipped(self.id, "no entry was filled, so nothing was sized")
+        shares = [notional / budget * PERCENT for notional in entries]
+        outside = [share for share in shares if not floor <= share <= ceiling]
+        return verdict(
+            self.id,
+            not outside,
+            {
+                "basis": "entry_fills",
+                "budget": budget,
+                "min_pct": floor,
+                "max_pct": high,
+                "n_entries": len(shares),
+                "n_outside": len(outside),
+                "smallest_pct": min(shares),
+                "largest_pct": max(shares),
+                "median_pct": median(shares),
+            },
+        )
+
+
+def _orders(fills: Sequence[Fill]) -> list[tuple[int, str, str, float, float]]:
+    """Fills gathered per order — one instant, one instrument, one side — as
+    `(ts_ns, instrument_id, side, signed qty, notional)`, in time order."""
+    gathered: dict[tuple[int, str, str], tuple[float, float]] = {}
+    for fill in fills:
+        key = (fill.ts_ns, fill.instrument_id, fill.side)
+        qty, notional = gathered.get(key, (0.0, 0.0))
+        signed = -fill.qty if fill.side == "SELL" else fill.qty
+        gathered[key] = (qty + signed, notional + abs(fill.qty) * fill.px)
+    return [
+        (ts, instrument_id, side, round(qty, 9), round(notional, 6))
+        for (ts, instrument_id, side), (qty, notional) in sorted(gathered.items())
+    ]
+
+
+def _entries(orders: Sequence[tuple[int, str, str, float, float]]) -> list[float]:
+    """The notional of every order that opened or grew a position, by a running count."""
+    position: dict[str, float] = {}
+    entries: list[float] = []
+    for _, instrument_id, _, qty, notional in orders:
+        before = position.get(instrument_id, 0.0)
+        after = before + qty
+        position[instrument_id] = after
+        if abs(after) > abs(before):
+            entries.append(notional)
+    return entries
 
 
 def _own(ctx: GateContext) -> tuple[Held, ...]:

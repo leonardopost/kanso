@@ -647,6 +647,10 @@ def composed(
     path = strategy.strategy_file(ws, hyp_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_yaml(file, path)
+    for attached_id, _, _, _ in attached:
+        # A composed construct has a hypothesis; the manifest reads its grain from it.
+        if not ws.path("hypotheses", attached_id, "hypothesis.yaml").is_file():
+            write_hypothesis(ws, document(id=attached_id), hyp_id=attached_id)
     generate_impl(
         ws,
         store,

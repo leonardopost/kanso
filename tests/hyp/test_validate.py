@@ -654,3 +654,148 @@ def test_a_workspace_without_a_portfolio_has_no_venue_overrides(ws: Workspace) -
     ws.path("portfolio.yaml").unlink()
 
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
+
+
+# -- sizing: a budget the ceilings can fund, on a construct that places orders --------
+
+
+FULL_BOOK = {"mode": "full_book", "budget": 20_000}
+
+
+def test_a_budget_the_ceilings_fund_is_admissible(ws: Workspace) -> None:
+    parsed = accepted(ws, document(capital=100_000, sizing=FULL_BOOK))
+
+    assert parsed.sizing is not None
+    assert parsed.sizing.budget == 20_000.0
+
+
+def test_a_budget_above_the_position_ceiling_is_refused(ws: Workspace) -> None:
+    failure = refused(ws, document(capital=50_000, sizing=FULL_BOOK))
+
+    assert "sizing.budget: 20000 is more than max_position_pct admits" in failure.message
+    assert "20% of the 50000 capital is 10000" in failure.message
+    assert "max_position_pct" in (failure.remedy or "")
+
+
+def test_a_budget_above_the_leverage_ceiling_is_refused_naming_the_capital_it_used(
+    ws: Workspace,
+) -> None:
+    limits = {"max_position_pct": 500, "max_drawdown_pct": 15, "max_leverage": 1}
+    failure = refused(ws, document(capital=10_000, risk_limits=limits, sizing=FULL_BOOK))
+
+    assert "sizing.budget: 20000 is more than max_leverage funds: 1 x 10000 capital is 10000" in (
+        failure.message
+    )
+    assert "kanso.toml" not in failure.message
+
+    defaulted = refused(
+        ws, document(risk_limits=limits, sizing={"mode": "full_book", "budget": 1e9})
+    )
+
+    assert "(from kanso.toml research.capital)" in defaulted.message
+
+
+def test_sizing_on_a_filter_or_exit_is_refused(ws: Workspace) -> None:
+    write_strategy(ws, HOST_ID)
+
+    failure = refused(ws, document(capital=100_000, sizing=FULL_BOOK, **FILTER_CLASSIFICATION))
+
+    assert "sizing: a filter places no order of its own" in failure.message
+    assert "host sleeve" in (failure.remedy or "")
+
+
+# -- sizing: what an attached construct must agree with its host on ----------------------
+
+
+OVERLAY_CLASSIFICATION: dict[str, Any] = {
+    "construct": {"id": "overlay", "host": HOST_ID},
+    "objective": {"id": "marginal_net_edge_bps", "params": {"min_delta": 0.0, "k_se": 1.0}},
+    "constraints": [{"id": "strategy_integrity"}],
+}
+HOST_BUDGET = {"mode": "full_book", "budget": 30_000}
+OWN_BUDGET = {"mode": "full_book", "budget": 20_000}
+BOOK = {"max_position_pct": 100, "max_drawdown_pct": 15, "max_leverage": 1}
+
+
+def host_with(ws: Workspace, **changes: Any) -> None:
+    """A composed host whose sleeve hypothesis file the workspace holds."""
+    write_strategy(ws, HOST_ID)
+    write_hypothesis(ws, document(id=HOST_ID, **changes), HOST_ID)
+
+
+def test_a_budgeted_overlay_on_a_budgeted_host_is_admissible(ws: Workspace) -> None:
+    host_with(ws, capital=30_000, sizing=HOST_BUDGET, risk_limits=BOOK)
+
+    parsed = accepted(
+        ws, document(capital=50_000, sizing=OWN_BUDGET, risk_limits=BOOK, **OVERLAY_CLASSIFICATION)
+    )
+
+    assert parsed.sizing is not None and parsed.sizing.budget == 20_000.0
+
+
+def test_a_budgeted_overlay_on_an_unbudgeted_host_is_refused(ws: Workspace) -> None:
+    host_with(ws)
+
+    failure = refused(
+        ws, document(capital=50_000, sizing=OWN_BUDGET, risk_limits=BOOK, **OVERLAY_CLASSIFICATION)
+    )
+
+    assert "sizing: host_sleeve@1 was composed without a sizing rule" in failure.message
+    assert "certify and compose it again" in (failure.remedy or "")
+
+
+def test_an_unbudgeted_overlay_on_a_budgeted_host_is_refused(ws: Workspace) -> None:
+    host_with(ws, capital=30_000, sizing=HOST_BUDGET, risk_limits=BOOK)
+
+    failure = refused(ws, document(capital=50_000, **OVERLAY_CLASSIFICATION))
+
+    assert "sizing: host_sleeve@1 sizes to a budget of 30000" in failure.message
+    assert failure.remedy == "add sizing to this file"
+
+
+def test_an_overlay_s_budget_and_its_host_s_must_fit_the_leverage_ceiling(ws: Workspace) -> None:
+    host_with(ws, capital=30_000, sizing=HOST_BUDGET, risk_limits=BOOK)
+
+    failure = refused(
+        ws, document(capital=40_000, sizing=OWN_BUDGET, risk_limits=BOOK, **OVERLAY_CLASSIFICATION)
+    )
+
+    assert "40000 capital x 1 leverage is 40000" in failure.message
+    assert "less than the host's 30000 budget and this one together" in failure.message
+    assert "set capital to at least 50000" in (failure.remedy or "")
+
+
+def test_an_overlay_s_host_budget_must_fit_the_position_ceiling(ws: Workspace) -> None:
+    host_with(ws, capital=30_000, sizing=HOST_BUDGET, risk_limits=BOOK)
+    limits = {**BOOK, "max_position_pct": 50}
+
+    failure = refused(
+        ws,
+        document(capital=50_000, sizing=OWN_BUDGET, risk_limits=limits, **OVERLAY_CLASSIFICATION),
+    )
+
+    assert "risk_limits.max_position_pct: 50% of the 50000 book is 25000" in failure.message
+    assert "set max_position_pct to at least 60" in (failure.remedy or "")
+
+
+def test_a_filter_declares_its_host_s_resolution(ws: Workspace) -> None:
+    host_with(ws, resolution="1d", horizon="1d")
+
+    failure = refused(ws, document(**FILTER_CLASSIFICATION))
+
+    assert "resolution: 1m is not the host's 1d; a filter is consulted on the host's grain" in (
+        failure.message
+    )
+    assert failure.remedy == "set resolution to 1d, or attach as an overlay"
+
+
+def test_an_overlay_may_keep_a_grain_of_its_own(ws: Workspace) -> None:
+    host_with(ws, resolution="1d", horizon="1d")
+
+    assert accepted(ws, document(**OVERLAY_CLASSIFICATION)).resolution == "1m"
+
+
+def test_a_host_without_a_hypothesis_file_is_paired_with_nothing(ws: Workspace) -> None:
+    write_strategy(ws, HOST_ID)
+
+    assert accepted(ws, document(sizing=OWN_BUDGET, capital=100_000, **OVERLAY_CLASSIFICATION))

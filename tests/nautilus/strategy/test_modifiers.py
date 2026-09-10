@@ -7,8 +7,10 @@ construct: the host's `strategy.py` does not know it exists.
 
 from __future__ import annotations
 
-from nautilus_trader.model.enums import OrderSide
-from nautilus_trader.model.objects import Quantity
+import pytest
+from nautilus_trader.model.data import Bar, BarSpecification, BarType
+from nautilus_trader.model.enums import AggregationSource, BarAggregation, OrderSide, PriceType
+from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.errors import ValidationError
 from kanso.nautilus.hooks import EXIT, FILTER, OVERLAY
@@ -20,9 +22,10 @@ from kanso.nautilus.strategy import (
     KansoModifier,
     KansoModifierConfig,
     KansoStrategy,
+    _resolution_of_bar,
 )
 
-from .conftest import DEMO, HEDGE, flat, saw_tooth
+from .conftest import DEMO, HEDGE, flat, saw_tooth, second_bar
 
 
 class Host(KansoStrategy):
@@ -182,8 +185,10 @@ def test_a_filter_sees_the_order_it_is_gating(backtest) -> None:
     assert ctx.position_qty == 0.0
     assert ctx.capital == 100_000.0
     assert ctx.host_strategy_id == "Host-000"
+    assert modifier.host_strategy_id == "Host"
     assert ctx.last_bar is not None
     assert ctx.cache is run.engine.cache
+    assert ctx.book["DEMO.XNAS"] == 0.0
 
 
 # --- overlay: Decision.scale via size ----------------------------------------
@@ -334,6 +339,101 @@ def test_a_hedge_leg_that_floors_to_nothing_is_dropped(backtest) -> None:
     run = backtest(host(), [attached(Crumb)], instruments=(DEMO, HEDGE))
 
     assert [i.instrument_id for i in run.strategy.intents] == ["DEMO.XNAS", "DEMO.XNAS"]
+
+
+def test_an_overlay_can_clip_on_the_data_clock_without_a_host_entry(backtest) -> None:
+    class Clipper(KansoModifier):
+        construct = OVERLAY
+        config_cls = Attached
+
+        def on_data(self, ctx: HookContext) -> Decision:
+            host_qty = ctx.book.get("DEMO.XNAS", 0.0)
+            hedge_qty = ctx.book.get("HEDGE.XNAS", 0.0)
+            if host_qty > 0 and hedge_qty == 0.0:
+                return Decision(scale=1.0, hedges=(Hedge("HEDGE.XNAS", -10.0),))
+            return Decision.neutral(self.construct)
+
+    run = backtest(host(), [attached(Clipper)], instruments=(DEMO, HEDGE))
+    names = [i.instrument_id for i in run.strategy.intents]
+
+    assert names[0] == "DEMO.XNAS"
+    assert "HEDGE.XNAS" in names
+
+
+def test_an_overlay_that_only_hedges_at_entry_does_not_clip_on_the_clock(backtest) -> None:
+    run = backtest(host(), [attached(Hedged)], instruments=(DEMO, HEDGE))
+
+    assert [(i.instrument_id, i.side, i.qty) for i in run.strategy.intents] == [
+        ("DEMO.XNAS", "BUY", 100.0),
+        ("HEDGE.XNAS", "SELL", 40.0),
+        ("DEMO.XNAS", "SELL", 100.0),
+    ]
+
+
+def test_a_finer_overlay_grain_does_not_run_the_host_on_bar(backtest) -> None:
+    minutes = saw_tooth(DEMO)
+    seconds = [second_bar(DEMO, i, 10.0, origin_ns=int(minutes[2].ts_init)) for i in range(4)]
+    strategy = Host(host(extra_resolutions=("1s",)).kanso_config)
+    run = backtest(strategy, data=(*minutes[:3], *seconds, *minutes[3:]))
+
+    assert run.strategy.bars == 20
+
+
+def test_a_bar_that_is_not_a_duration_is_refused_as_a_grain() -> None:
+    """Only duration grains are subscribed, so a volume bar names no resolution."""
+    spec = BarSpecification(100, BarAggregation.VOLUME, PriceType.LAST)
+    volume = Bar(
+        BarType(DEMO, spec, AggregationSource.EXTERNAL),
+        Price(10.0, 2),
+        Price(10.0, 2),
+        Price(10.0, 2),
+        Price(10.0, 2),
+        Quantity.from_int(100),
+        ts_event=0,
+        ts_init=0,
+    )
+
+    with pytest.raises(ValidationError, match="not a duration"):
+        _resolution_of_bar(volume)
+
+
+class Clockless(KansoModifier):
+    """An overlay with no data clock at all; the sleeve's clock consultation skips it."""
+
+    construct = OVERLAY
+    config_cls = Attached
+    on_data = None  # type: ignore[assignment]
+
+
+def test_an_overlay_without_a_data_clock_is_skipped_on_the_clock(backtest) -> None:
+    minutes = saw_tooth(DEMO)
+    seconds = [second_bar(DEMO, i, 10.0, origin_ns=int(minutes[4].ts_init)) for i in range(4)]
+    strategy = Host(host(extra_resolutions=("1s",)).kanso_config)
+    run = backtest(strategy, [attached(Clockless)], data=(*minutes[:5], *seconds, *minutes[5:]))
+
+    assert [(i.side, i.qty) for i in run.strategy.intents] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+def test_evaluate_is_consulted_once_per_host_entry(backtest) -> None:
+    class Counting(KansoModifier):
+        construct = OVERLAY
+        config_cls = Attached
+
+        def on_start(self) -> None:
+            self.asked = 0
+
+        def evaluate(self, ctx: HookContext) -> Decision:
+            self.asked += 1
+            return Decision(scale=0.5, hedges=(Hedge("HEDGE.XNAS", -10.0),))
+
+    overlay = attached(Counting)
+    run = backtest(Host(host().kanso_config), [overlay], instruments=(DEMO, HEDGE))
+
+    assert overlay.asked == 1
+    assert [(i.instrument_id, i.qty) for i in run.strategy.intents][:2] == [
+        ("DEMO.XNAS", 50.0),
+        ("HEDGE.XNAS", 10.0),
+    ]
 
 
 def test_a_hedge_into_an_unknown_instrument_is_refused(backtest) -> None:

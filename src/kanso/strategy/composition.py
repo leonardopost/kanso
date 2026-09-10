@@ -30,6 +30,7 @@ it or a refusal that stops the loop.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -106,7 +107,7 @@ def compose(ws: Workspace, store: StateStore, hyp_id: str) -> StrategyVersion:
         return already
 
     pins = _pins(passed)
-    params = passed.construct.params
+    params = _with_budget(passed.construct.params, _hypothesis(ws, store, hyp_id))
     created = datetime.now(tz=UTC)
     draft = construct.compose(
         held,
@@ -118,7 +119,7 @@ def compose(ws: Workspace, store: StateStore, hyp_id: str) -> StrategyVersion:
         created_at=created,
     )
     sleeve_hyp = _hypothesis(ws, store, draft.sleeve.hyp_id)
-    capital = sleeve_hyp.capital or ws.config.research.capital
+    capital = _book(ws, store, sleeve_hyp, draft)
     manifest = impl.generate(ws, store, strategy_id, draft, sleeve_hyp, capital, created)
     measured = expectation(ws, manifest, draft, sleeve_hyp, capital, passed)
     version = construct.compose(
@@ -267,6 +268,31 @@ def _hypothesis(ws: Workspace, store: StateStore, hyp_id: str) -> Hypothesis:
 # --- measuring it -------------------------------------------------------------
 
 
+def _with_budget(params: Mapping[str, Any] | None, hyp: Hypothesis) -> dict[str, Any] | None:
+    """An attached construct's parameters, its own budget among them when it sizes."""
+    if hyp.sizing is None:
+        return None if params is None else dict(params)
+    return {**dict(params or {}), "sizing_budget": hyp.sizing.budget}
+
+
+def _book(
+    ws: Workspace, store: StateStore, sleeve_hyp: Hypothesis, draft: StrategyVersion
+) -> float:
+    """The capital a composed version runs at: the largest book any sized part declares.
+
+    A sized overlay's hypothesis states the whole book its cards ran on — its own budget
+    beside the host's — so the version that carries it is measured at that book rather
+    than at the sleeve's alone.
+    """
+    default = ws.config.research.capital
+    books = [sleeve_hyp.capital or default]
+    for ref in draft.attached:
+        attached = _hypothesis(ws, store, ref.hyp_id)
+        if attached.sizing is not None:
+            books.append(attached.capital or default)
+    return max(books)
+
+
 def _window(hyp: Hypothesis) -> tuple[date, date]:
     """The embargoed window an expectation is measured over: the sleeve's own."""
     return hyp.windows.certification.start, hyp.windows.certification.end
@@ -290,8 +316,15 @@ def _measure(
         capital=capital,
         modifiers=attached,
         period=ws.config.research.return_period,
+        grains=_grains(manifest.sleeve.config),
+        sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
     )
     return backtest.run(request, catalog_path(ws)).run
+
+
+def _grains(config: Mapping[str, Any]) -> tuple[str, ...]:
+    """The grains a composed version loads: the sleeve's, then its overlays' extra ones."""
+    return (str(config["resolution"]), *(str(g) for g in config.get("extra_resolutions", ())))
 
 
 def _bands(

@@ -285,6 +285,15 @@ def bar_type(symbol: str = SYMBOL) -> BarType:
     )
 
 
+def second_bar_type(symbol: str = SYMBOL) -> BarType:
+    """The 1-second external bar type an overlay grain subscribes to."""
+    return BarType(
+        InstrumentId(Symbol(symbol), _venue()),
+        BarSpecification(1, BarAggregation.SECOND, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+
+
 def price(index: int) -> float:
     """A saw-tooth between 10.00 and 13.00 that never repeats a direction by accident."""
     return 10.0 + 0.5 * min(index % 12, 12 - index % 12)
@@ -309,6 +318,32 @@ def bars(window: tuple[date, date], symbol: str = SYMBOL) -> list[Bar]:
                 ts_init=ts_event + SECOND_NS,
             )
         )
+    return made
+
+
+def second_bars(window: tuple[date, date], symbol: str = SYMBOL) -> list[Bar]:
+    """Two 1s bars per calendar day, stamped after the open so they do not share
+    `ts_init` with the daily close bar."""
+    made: list[Bar] = []
+    days = (window[1] - window[0]).days + 1
+    open_ns = 13 * 3_600 * SECOND_NS
+    for index in range(days):
+        day = midnight_ns(window[0]) + index * 86_400 * SECOND_NS
+        close = price(index)
+        for step in (1, 2):
+            ts_event = day + open_ns + step * SECOND_NS
+            made.append(
+                Bar(
+                    second_bar_type(symbol),
+                    Price(close, 2),
+                    Price(close + 0.25, 2),
+                    Price(close - 0.25, 2),
+                    Price(close, 2),
+                    Quantity.from_int(10_000),
+                    ts_event=ts_event,
+                    ts_init=ts_event + SECOND_NS,
+                )
+            )
     return made
 
 

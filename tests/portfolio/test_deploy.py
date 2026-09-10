@@ -161,6 +161,29 @@ def test_a_stage_with_no_capital_left_blocks_rather_than_deploying_at_nothing(
     assert [(row[0], row[1]) for row in unread] == [("deploy_blocked", f"{composed_strategy.id}@1")]
 
 
+def test_a_share_below_the_version_s_budgets_is_blocked_and_escalated(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """A sized version deployed at less than its budgets would size over its money."""
+    import yaml
+
+    from kanso.strategy import impl
+
+    path = impl.manifest_file(ws, composed_strategy.id, 1)
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    manifest["sleeve"]["config"]["sizing_budget"] = 1e9
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    made = deploy(ws, store, "paper")
+
+    assert made.admitted == ()
+    assert made.blocked == (f"{composed_strategy.id}@1",)
+    (row,) = store.connection.execute("SELECT kind, summary FROM escalations").fetchall()
+    assert row[0] == "deploy_blocked"
+    assert "its budgets sum to 1e+09" in row[1]
+    assert "raise limits.per_strategy_max_pct" in row[1]
+
+
 def test_two_versions_share_a_stage_and_are_measured_apart(
     ws: Workspace, store: StateStore, composed_strategy: StrategyFile
 ) -> None:
@@ -299,3 +322,36 @@ def test_a_name_that_is_not_a_stage_is_refused(ws: Workspace, store: StateStore)
         deploy(ws, store, "shadow")
 
     assert raised.value.code == Exit.VALIDATION
+
+
+def test_a_stage_session_stream_omits_flush_markers(ws: Workspace, store: StateStore) -> None:
+    """`released` is a market-point count; slicing the marked feed by it would drop later bars."""
+    from datetime import date
+
+    from kanso.nautilus.cross_section import with_cross_section, without_markers
+    from kanso.nautilus.node import StageRun
+    from kanso.portfolio.deploy import _session
+    from kanso.replay import record
+    from kanso.schemas import Stage
+    from tests.nautilus.strategy.conftest import DEMO, HEDGE, bar
+
+    first, second = bar(DEMO, 0, 10.0), bar(HEDGE, 0, 11.0)
+    points = with_cross_section((first, second))
+    market = without_markers(points)
+    ran = StageRun(
+        stage="paper",
+        window=(date(2024, 1, 1), date(2024, 1, 2)),
+        points=points,
+        released=len(market),
+        clock_ns=int(points[-1].ts_init),
+        realised=(),
+        intents=(),
+    )
+
+    written = _session(ws, store, "paper", Stage(exec="sandbox", capital=100_000.0), (), ran)
+    stream = record.stream_of(ws, written.session_id)
+
+    assert written.released == 2
+    assert len(stream) == 2
+    assert {point.type for point in stream} == {"Bar"}
+    assert [point.instrument for point in stream] == [str(DEMO), str(HEDGE)]

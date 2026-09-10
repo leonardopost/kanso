@@ -80,6 +80,10 @@ restricted to exactly `InstrumentId`, `str`, `bool`, `float`, `int`, `bytes`,
 raises `TypeError` at class definition. Timestamps must therefore travel as
 `int` nanoseconds and decimals as `float` or `str`. A registered type
 round-trips through the catalog, where it is returned wrapped in `CustomData`.
+`DataEngine._handle_data` publishes only that wrapper among custom types and
+logs `unrecognized type` for a bare `Data` subclass; `_handle_custom_data`
+then publishes the inner `data.data` on the custom-data topic, so a strategy's
+`handle_data` receives the inner object.
 
 Two traps sit in that decorator. First, **it cannot read postponed
 annotations.** It reads `cls.__annotations__` verbatim and resolves nothing on
@@ -170,6 +174,20 @@ backtest's engine has applied the first fill by the time "still open" is read
 and a live engine has not, so the remainder is never filled, never cancelled and
 never reported — which is why kanso's own venue sends its events to the
 synchronous implementation.
+
+Three more facts about matching bind the sleeve's sizing and its in-flight
+guard. `Order.is_closed` is false for a fresh order and true once a terminal
+event — filled, cancelled, rejected, denied, expired — has been applied, on
+both paths alike, where the cache's `orders_inflight` and `orders_open` indexes
+answer differently for the same instant (`SUBMITTED` in a backtest,
+`INITIALIZED` in a node, where the live risk engine queues the order). The
+exchange matches against the finest bar type it has seen for an instrument: once
+a second grain is loaded, a market order from a minute handler fills at the last
+one-second print and a coarser bar no longer moves the book. And a market order
+larger than a quarter of the bar's volume fills as two events — a quarter of the
+volume at the close and the remainder one price increment worse — so a quantity
+sized to a budget at the close lands one increment over it unless the increment
+is reserved.
 
 Risk configuration
 ------------------
@@ -380,6 +398,150 @@ def _sample_equity() -> object:
         lot_size=Quantity.from_int(1),
         ts_event=0,
         ts_init=0,
+    )
+
+
+def _check_order_is_closed_after_a_terminal_event() -> tuple[bool, str]:
+    from nautilus_trader.common.component import TestClock
+    from nautilus_trader.common.factories import OrderFactory
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.enums import OrderSide
+    from nautilus_trader.model.events import OrderDenied
+    from nautilus_trader.model.identifiers import StrategyId, TraderId
+    from nautilus_trader.model.objects import Quantity
+
+    factory = OrderFactory(
+        trader_id=TraderId("T-1"), strategy_id=StrategyId("S-1"), clock=TestClock()
+    )
+    order = factory.market(_sample_equity().id, OrderSide.BUY, Quantity.from_int(1))  # type: ignore[attr-defined]
+    fresh = bool(order.is_closed)
+    order.apply(
+        OrderDenied(
+            trader_id=order.trader_id,
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            client_order_id=order.client_order_id,
+            reason="probe",
+            event_id=UUID4(),
+            ts_init=0,
+        )
+    )
+    denied = bool(order.is_closed)
+    holds = not fresh and denied
+    return holds, (
+        f"is_closed read {fresh} on a fresh market order and {denied} once denied: an order "
+        "is open from INITIALIZED until a terminal event closes it"
+    )
+
+
+def _probe_fills(quantity: int, *, finer: bool) -> list[tuple[float, float]]:
+    """The fills of one market order from a minute handler, with or without a 1s grain.
+
+    Three minute bars closing 11, 12, 13 and, when `finer`, two one-second bars closing
+    101 and 102 halfway through the first two minutes, each 1,000 shares. The order goes
+    in from the second minute's handler.
+    """
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import Bar, BarSpecification, BarType
+    from nautilus_trader.model.enums import (
+        AccountType,
+        AggregationSource,
+        BarAggregation,
+        OmsType,
+        OrderSide,
+        PriceType,
+    )
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity = _sample_equity()
+    minute = BarType(
+        equity.id,  # type: ignore[attr-defined]
+        BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    second = BarType(
+        equity.id,  # type: ignore[attr-defined]
+        BarSpecification(1, BarAggregation.SECOND, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    minute_ns = 60_000_000_000
+
+    def bar(bar_type: object, ts: int, close: float) -> object:
+        return Bar(
+            bar_type,
+            Price(close, 2),
+            Price(close + 0.5, 2),
+            Price(close - 0.5, 2),
+            Price(close, 2),
+            Quantity.from_int(1_000),
+            ts_event=ts,
+            ts_init=ts,
+        )
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.fills: list[tuple[float, float]] = []
+
+        def on_start(self) -> None:
+            self.subscribe_bars(minute)
+
+        def on_bar(self, bar_: object) -> None:
+            if not self.fills and int(bar_.ts_event) == 2 * minute_ns:  # type: ignore[attr-defined]
+                self.submit_order(
+                    self.order_factory.market(
+                        equity.id,  # type: ignore[attr-defined]
+                        OrderSide.BUY,
+                        Quantity.from_int(quantity),
+                    )
+                )
+
+        def on_order_filled(self, event: object) -> None:
+            self.fills.append((float(event.last_qty), float(event.last_px)))  # type: ignore[attr-defined]
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        points = [bar(minute, i * minute_ns, 10.0 + i) for i in range(1, 4)]
+        if finer:
+            points += [bar(second, i * minute_ns + minute_ns // 2, 100.0 + i) for i in range(1, 3)]
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return probe.fills
+    finally:
+        engine.dispose()
+
+
+def _check_exchange_matches_on_the_finest_grain() -> tuple[bool, str]:
+    alone = _probe_fills(10, finer=False)
+    both = _probe_fills(10, finer=True)
+    holds = alone == [(10.0, 12.0)] and both == [(10.0, 101.0)]
+    return holds, (
+        f"a market order from the second minute's handler filled at {alone} with the minute "
+        f"grain alone and at {both} once one-second bars were loaded too: the exchange matches "
+        "against the finest bar type it has seen for the instrument"
+    )
+
+
+def _check_market_order_walks_one_increment_past_a_quarter_of_volume() -> tuple[bool, str]:
+    fills = _probe_fills(300, finer=True)
+    holds = fills == [(250.0, 101.0), (50.0, 101.01)]
+    return holds, (
+        f"300 shares against a 1,000-share bar filled as {fills}: a quarter of the volume at "
+        "the close, the remainder one price increment worse"
     )
 
 
@@ -1280,6 +1442,18 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "a simulation module is handed every market point before the venue matches against it",
         _check_simulation_module_precedes_matching,
+    ),
+    (
+        "an order is open from INITIALIZED until a terminal event closes it, on both paths",
+        _check_order_is_closed_after_a_terminal_event,
+    ),
+    (
+        "the exchange matches against the finest bar type it has seen for an instrument",
+        _check_exchange_matches_on_the_finest_grain,
+    ),
+    (
+        "a market order past a quarter of the bar's volume walks one increment for the rest",
+        _check_market_order_walks_one_increment_past_a_quarter_of_volume,
     ),
 )
 

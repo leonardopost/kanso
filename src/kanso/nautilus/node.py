@@ -75,6 +75,7 @@ from kanso.criteria.run import CardRun
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits
 from kanso.nautilus.backtest import RunRequest
+from kanso.nautilus.cross_section import arm, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, ordered
 from kanso.nautilus.venue import NETTING, starting_balance, venues_of
@@ -135,6 +136,8 @@ class Placement:
     period: str
     source: bytes
     loaded: Loaded
+    grains: tuple[str, ...] = ()
+    sleeve_budget: float = 0.0
 
     @property
     def tag(self) -> str:
@@ -161,6 +164,8 @@ class Placement:
             venue_model=self.venue_model.model_dump(),
             capital=self.capital,
             period=self.period,
+            grains=self.grains,
+            sleeve_budget=self.sleeve_budget,
         )
 
 
@@ -403,6 +408,8 @@ def run(
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
         sandbox.attach(kernel, node.venues(), points)
         strategies = _components(built, node.placements)
+        for strategy in strategies:
+            arm(strategy, points)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points))
         realised = tuple(
             _realised(placed, request, kernel, groups, books, window.instruments)
@@ -415,13 +422,13 @@ def run(
             for strategy in strategies
             for i in strategy.intents
         )
-        released = client.released
+        released = len(without_markers(points[: client.released]))
         return StageRun(
             stage=node.stage,
             window=node.window,
             points=points,
             released=released,
-            clock_ns=client.last_ts if released else None,
+            clock_ns=client.last_ts if client.released else None,
             realised=realised,
             intents=intents,
             halted=halt.reason,

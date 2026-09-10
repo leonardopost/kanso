@@ -1,9 +1,11 @@
 """`overlay`: exposure modification layered on a host without touching its signal.
 
 Two decisions reach the host: `Decision.scale` through its `size` hook, which resizes what
-the signal already asked for, and `Decision.hedges` through its `hedges` hook, which adds
-legs beside it. An overlay whose host is the portfolio rather than a sleeve is classifiable
-and refused: allocating exposure across the book is a seam of its own.
+the signal already asked for, and `Decision.hedges` through its `hedges` hook and its
+`on_data` clock, which add legs beside it. `evaluate` is the host-entry consult; `on_data`
+is the overlay's own grain, so a clipper does not wait for the next host buy. An overlay
+whose host is the portfolio rather than a sleeve is classifiable and refused: allocating
+exposure across the book is a seam of its own.
 """
 
 from __future__ import annotations

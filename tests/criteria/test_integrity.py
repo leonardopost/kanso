@@ -293,3 +293,112 @@ def test_a_strategy_that_is_not_text_is_reported(lane: Path) -> None:
 def test_the_shipped_strategy_stubs_pass(stub: str) -> None:
     source = (PACKAGE_ROOT / "templates" / stub).read_text(encoding="utf-8")
     assert scan(source, stub) == []
+
+
+# --- under a sizing rule ----------------------------------------------------------
+
+
+SIZED_SLEEVE = "\n".join(
+    [
+        "class Strategy:",
+        "    def on_bar(self, bar):",
+        "        self.submit_entry(bar.bar_type.instrument_id, 'BUY', notional=self.notional)",
+        "        self.submit_entry(bar.bar_type.instrument_id, 'BUY', qty=10)",
+        "        self.submit_exit(bar.bar_type.instrument_id, price=9.5)",
+        "        self.submit_entry(bar.bar_type.instrument_id, 'BUY', **self.kw)",
+        "        net = self.portfolio.net_position(bar.bar_type.instrument_id)",
+        "        self.submit_order("
+        "self.order_factory.market(bar.bar_type.instrument_id, 'BUY', 1))",
+        "        self.modify_order(net, quantity=2)",
+        "        self.close_all_positions(bar.bar_type.instrument_id)",
+    ]
+)
+
+
+def test_the_size_knobs_are_refused_under_a_sized_hypothesis() -> None:
+    problems = scan(SIZED_SLEEVE, sized=True)
+
+    assert "line 3: keyword 'notional=' is denied under sizing" in "\n".join(problems)
+    assert any("line 4: keyword 'qty='" in p for p in problems)
+    assert any(
+        "line 5: keyword 'price='" in p and "submit_exit(instrument_id)" in p for p in problems
+    )
+    assert any("line 6: '**' on submit_entry is denied" in p for p in problems)
+    assert any(
+        "line 7: attribute '.portfolio' is denied" in p and "self.held(" in p for p in problems
+    )
+    assert any("'.submit_order' is denied" in p for p in problems)
+    assert any("'.order_factory' is denied" in p for p in problems)
+    assert any("'.modify_order' is denied" in p for p in problems)
+    assert any("'.close_all_positions' is denied" in p for p in problems)
+    assert all("because the harness sizes every order" in p or "self.held(" in p for p in problems)
+
+
+def test_the_size_knobs_are_allowed_under_free_sizing() -> None:
+    assert scan(SIZED_SLEEVE) == []
+    assert scan(SIZED_SLEEVE, sized=False, construct="sleeve") == []
+
+
+def test_an_override_of_a_harness_method_is_refused_under_sizing() -> None:
+    source = "class Strategy:\n    def _quantise(self, instrument, raw):\n        return raw * 2\n"
+    (problem,) = scan(source, sized=True)
+
+    assert problem.startswith("line 2: def '_quantise' overrides a harness method")
+    assert scan(source) == []
+    assert scan("class Strategy:\n    def on_bar(self, bar):\n        pass\n", sized=True) == []
+    assert scan("class Strategy:\n    def _signal(self):\n        pass\n", sized=True) == []
+
+
+def test_hedge_is_refused_for_a_sized_overlay_and_clip_for_a_free_one() -> None:
+    hedging = (
+        "from kanso.nautilus.strategy import Decision, Hedge\n"
+        "class Modifier:\n"
+        "    def on_data(self, ctx):\n"
+        "        return Decision(scale=1.0, hedges=(Hedge('X', 1.0),))\n"
+    )
+    clipping = (
+        "from kanso.nautilus.strategy import Clip, Decision\n"
+        "class Modifier:\n"
+        "    def on_data(self, ctx):\n"
+        "        return Decision(clips=(Clip('X', 'BUY'),))\n"
+    )
+
+    sized_problems = scan(hedging, sized=True, construct="overlay")
+    assert any("name 'Hedge' is denied for this overlay" in p for p in sized_problems)
+    assert any("keyword 'hedges='" in p for p in sized_problems)
+    assert any("keyword 'scale='" in p for p in sized_problems)
+    assert all("Decision(clips=(Clip(instrument, side),))" in p for p in sized_problems)
+    assert scan(clipping, sized=True, construct="overlay") == []
+
+    free_problems = scan(clipping, sized=False, construct="overlay")
+    assert any("name 'Clip' is denied for this overlay" in p for p in free_problems)
+    assert any("keyword 'clips='" in p for p in free_problems)
+    assert scan(hedging, sized=False, construct="overlay") == []
+
+
+def test_a_sized_overlay_may_write_its_two_hooks_and_nothing_of_the_harness() -> None:
+    hooks = (
+        "class Modifier:\n    def evaluate(self, ctx):\n        pass\n"
+        "    def on_data(self, ctx):\n        pass\n"
+    )
+    assert scan(hooks, sized=True, construct="overlay") == []
+    (problem,) = scan(
+        "class Modifier:\n    def _start(self):\n        pass\n", sized=True, construct="overlay"
+    )
+    assert "overrides a harness method" in problem
+
+
+def test_a_filter_is_held_to_no_sizing_vocabulary() -> None:
+    assert scan("x = Clip\ny = Hedge\n", sized=True, construct="filter") == []
+
+
+def test_the_overlay_vocabulary_is_refused_as_an_attribute_and_a_bare_call_is_seen() -> None:
+    (problem,) = scan(
+        "import kanso.nautilus.strategy as s\nx = s.Hedge", sized=True, construct="overlay"
+    )
+    assert "name 'Hedge' is denied for this overlay" in problem
+    (bare,) = scan("submit_entry(x, 'BUY', qty=1)", sized=True)
+    assert (
+        "keyword 'qty=' is denied under sizing" in bare
+        and "submit_entry(instrument_id, side)" in bare
+    )

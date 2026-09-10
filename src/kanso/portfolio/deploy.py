@@ -53,6 +53,7 @@ from kanso.env.envelope import engine_version
 from kanso.errors import ApprovalError, PreconditionError
 from kanso.inbox import escalate
 from kanso.nautilus import node
+from kanso.nautilus.cross_section import without_markers
 from kanso.nautilus.node import Placement, StageNode, StageRun
 from kanso.portfolio import files, records
 from kanso.portfolio.capital import assign
@@ -66,6 +67,7 @@ from kanso.replay.target import resolve as resolve_target
 from kanso.schemas import Limits, Stage, StrategyFile, StrategyVersion, check_execution_client
 from kanso.schemas.strategy import PAPER_STATES
 from kanso.strategy import files as strategy_files
+from kanso.strategy import impl as strategy_impl
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.portfolio.records import StageResult
@@ -371,6 +373,20 @@ def _fund(
                 f"stages.{stage} has no capital left to fund {candidate.subject}",
             )
             continue
+        budgets = _budgets(ws, strategy_id, version)
+        if share < budgets:
+            blocked.append(candidate.subject)
+            escalate(
+                ws,
+                store,
+                BLOCKED,
+                candidate.subject,
+                f"stages.{stage} funds {candidate.subject} with {share:g} and its budgets sum "
+                f"to {budgets:g}; a sized version deployed below its budgets would size every "
+                "order over the money it has — raise limits.per_strategy_max_pct or the "
+                "stage's capital",
+            )
+            continue
         joined_at = held.joined_at if held is not None and held.version == version else joined
         working = files.place(working, strategy_id, version, share, joined_at)
         admitted.append(
@@ -490,8 +506,19 @@ def _opens(placements: tuple[Placement, ...], clock: int | None) -> date:
     return min(placed.hyp.windows.forward.start for placed in placements)
 
 
+def _budgets(ws: Workspace, strategy_id: str, version: int) -> float:
+    """What a sized version needs funded: the sleeve's budget and its sized overlays' together."""
+    manifest = strategy_impl.read_manifest(ws, strategy_id, version)
+    return sum(
+        float(component.config.get("sizing_budget", 0.0) or 0.0)
+        for component in manifest.components
+    )
+
+
 def _placement(ws: Workspace, target: Target, admitted: Admitted) -> Placement:
     """One deployed version as the node runs it, funded with what deployment gave it."""
+    loaded = strategies.load(ws, admitted.strategy_id, admitted.version)
+    config = loaded.manifest.sleeve.config
     return Placement(
         strategy_id=admitted.strategy_id,
         version=admitted.version,
@@ -501,7 +528,9 @@ def _placement(ws: Workspace, target: Target, admitted: Admitted) -> Placement:
         snapshot_id=target.snapshot_id,
         period=target.period,
         source=target.strategy_source,
-        loaded=strategies.load(ws, admitted.strategy_id, admitted.version),
+        loaded=loaded,
+        grains=(str(config["resolution"]), *(str(g) for g in config.get("extra_resolutions", ()))),
+        sleeve_budget=float(config.get("sizing_budget", 0.0) or 0.0),
     )
 
 
@@ -536,7 +565,7 @@ def _session(
     written = record.write(
         ws,
         made,
-        (Point.of(point) for point in ran.points[: ran.released]),
+        (Point.of(point) for point in without_markers(ran.points)[: ran.released]),
         (Intent.of(row) for row in ran.intents),
     )
     record.insert(store, written)

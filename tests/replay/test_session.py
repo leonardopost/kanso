@@ -167,13 +167,18 @@ def test_a_bar_reaches_the_simulated_venue() -> None:
 
 def test_ordered_is_the_stable_sort_the_engine_uses() -> None:
     """Points sharing an instant keep the order their groups were added in."""
+    from kanso.nautilus.cross_section import is_marker
+
     first, second = bars(FORWARD), bars(FORWARD, OTHER)
 
     stream = ordered([tuple(first), tuple(second)])
 
-    assert len(stream) == len(first) + len(second)
     assert stream[0] is first[0]
     assert stream[1] is second[0]
+    assert is_marker(stream[2]) and is_marker(stream[3])
+    assert len(stream) == 2 * len(first) + 2 * len(second)
+    assert stream[4] is first[1]
+    assert stream[5] is second[1]
 
 
 # --- failure ------------------------------------------------------------------

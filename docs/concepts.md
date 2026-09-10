@@ -229,8 +229,9 @@ already over. There are four.
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
+| `sizing` | an order the harness refused at the boundary under a `sizing` rule: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
-The last of those is the only one that carries a floor. `risk_limits` are three ceilings — a
+The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
 position may not exceed `max_position_pct`, the book may not exceed `max_leverage` — so a
 strategy holding a tenth of what its operator asked for satisfies all of them, and nothing in
 the package could say otherwise. `position_size` is measured on `run.held`: what each
@@ -244,6 +245,30 @@ either would refuse the compliant strategy and pass the drifting one.
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
 subtracted first and the remainder re-marked, so what is judged is what the modifier added.
+
+**Under a `sizing` rule the floor is not a gate at all.** `sizing: {mode: full_book, budget: N}`
+in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry
+is the whole budget in one instrument at market — `budget / ((1 + 2 × cost) × (price + one
+increment))`, floored to whole lots — at most one instrument is held at a time, every exit is
+the whole position, and `submit_entry(id, side)` and `submit_exit(id)` take no size. A
+proposal that names one is discarded by `strategy_integrity` before any backtest, with the
+line and the reason; a shape the scan cannot see — an entry into a second instrument while
+one is held with no exit in flight, the other side of a held name, a hand-built order — is
+refused inside the handler that asked for it, the run stops there, and the card is a
+`discard` carrying a `sizing` gate with the rule, the instrument, the instant and what was
+held, which the proposer sees with its next cards. Nothing is spent grinding on a size that
+could never validate. `position_size` stays as the backstop, and under the rule it judges
+**entry fills** as a share of the budget — gathered per order, because the venue fills a
+market order past a quarter of the bar's volume as two events — rather than period-end
+marks, which a leveraged leg drifts through between two closes. A flip is `submit_exit(old)`
+then `submit_entry(new, side)` in the same handler: the exit in flight nets the old leg to
+nothing before the new one sizes, so one leg at a time needs no leverage. A sized overlay
+(`docs/constructs.md`) names `Clip(instrument, side)` and the harness sizes it to the
+overlay's own budget; the host's own share and the overlay's clips are told apart by a
+ledger over the clip orders, so `self.held(id)` and `ctx.book` are the host's and
+`ctx.clips` the overlay's, even in one name. A refused card places no order and is not a
+trial. The rule is scope: a `best` earned under one sizing is not compared with a card run
+under another, so adding or changing it clears the best.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.
@@ -335,6 +360,37 @@ position's opening basis** — the account, `avg_px_open`, `peak_qty`, `realized
 the share count the position opened in, so after a split it is a price per share that no
 longer exists. kanso's own extraction reads none of them, and `program.md` lists them for
 the author.
+
+## Delivery
+
+The engine delivers by `ts_init` — availability — and, at a tie, keeps the order the
+series were loaded in. A sleeve that trades several instruments therefore used to handle
+the first name against a book the later names had not yet moved, and a market submitted
+into the second filled at its previous close.
+
+kanso batches a coincident grain — every bar at one `ts_init`, then every quote, then
+every trade — into the venue before any author handler of that grain runs, and then runs
+those handlers one at a time so each fill is visible to the next. `on_bar` of the first
+instrument sees every instrument's last close for that instant; a fill against another
+instrument of the instant is at that close. A limit placed in that handler sees only the
+close, not the rest of the bar's range. An instant a name does not print is incomplete:
+the silent leg still trades at the last price that was public, which is not lookahead.
+
+A live data client that polls several series independently must emit the same
+per-`(ts_init, kind)` markers. A single marker at the end of a poll that covered more
+than one instant would flush the first instant after later books had already moved.
+
+**Two grains in one run.** An overlay researched at a finer grain than its host loads both —
+for the combined run and the host-alone run alike, so the difference between them is the
+overlay. Every grain loaded reaches the venue whether or not the sleeve subscribes it, and
+the exchange matches against the finest bar type it has seen for an instrument. So inside
+such a run the host's market orders fill at the last print of the finer grain, not at the
+close its own bar just delivered — on the soxpair catalog, a daily bar stamped 04:00 UTC
+fills at the previous session's last after-hours print, four hours earlier at the median —
+and a coarser bar on a day the finer grain is silent does not move the book at all. The
+host's own certificate and its combined baseline are therefore different numbers by
+construction, and a composed version that carries such an overlay is measured and deployed
+under both grains, so a stage sees what composition measured.
 
 ## Corporate actions
 

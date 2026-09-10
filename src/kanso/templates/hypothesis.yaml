@@ -16,6 +16,11 @@ data_requirements: [bar]           # bar|quote|trade|<any registered custom type
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
+# sizing:                          # yours: classification never touches it. Scope: changing it clears `best`
+#   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / price) whole lots with the
+#   budget: 100000                 # round trip reserved; one instrument held at a time; every exit the whole position; submit_entry
+#                                  # and submit_exit take no size. `kanso hyp validate` refuses (exit 3) unless
+#                                  # capital x max_position_pct / 100 >= budget and capital x max_leverage >= budget
 risk_limits:                       # *_pct are percentages of capital
   max_position_pct: 20
   max_drawdown_pct: 15

@@ -11,7 +11,7 @@ from nautilus_trader.model.objects import Quantity
 from kanso.errors import ValidationError
 from kanso.nautilus.strategy import ENTRY, EXIT_ORDER, KansoConfig, KansoStrategy
 
-from .conftest import DEMO, HEDGE, bar, every_grain, quote, saw_tooth
+from .conftest import DEMO, HEDGE, bar, every_grain, quote, saw_tooth, trade
 
 FREE = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes"}}
 """A cost model that charges nothing, so a sizing assertion is exact arithmetic."""
@@ -112,6 +112,36 @@ def test_a_historical_bar_does_not_move_the_stream_clock(backtest) -> None:
                 self.after = self.data_time
 
     run = backtest(Catchup(config()))
+
+    assert run.strategy.after == saw_tooth(DEMO)[0].ts_event
+
+
+def test_a_historical_quote_does_not_move_the_stream_clock(backtest) -> None:
+    class Catchup(KansoStrategy):
+        def on_start(self) -> None:
+            self.after: int | None = None
+
+        def on_bar(self, bar_: object) -> None:
+            if self.after is None:
+                self.handle_quote_tick(quote(DEMO, 900), historical=True)
+                self.after = self.data_time
+
+    run = backtest(Catchup(config(data_requirements=("bar", "quote"))))
+
+    assert run.strategy.after == saw_tooth(DEMO)[0].ts_event
+
+
+def test_a_historical_trade_does_not_move_the_stream_clock(backtest) -> None:
+    class Catchup(KansoStrategy):
+        def on_start(self) -> None:
+            self.after: int | None = None
+
+        def on_bar(self, bar_: object) -> None:
+            if self.after is None:
+                self.handle_trade_tick(trade(DEMO, 900), historical=True)
+                self.after = self.data_time
+
+    run = backtest(Catchup(config(data_requirements=("bar", "trade"))))
 
     assert run.strategy.after == saw_tooth(DEMO)[0].ts_event
 

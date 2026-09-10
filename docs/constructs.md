@@ -73,7 +73,10 @@ what you make a config field is what you are claiming a plateau for.
 
 Composition makes a certified sleeve **version 1 of a new strategy** in the portfolio. It is
 the only construct that creates a strategy; every other runnable one adds a version to a
-strategy a sleeve already made.
+strategy a sleeve already made. A universe of more than one instrument is one book at each
+instant (`docs/concepts.md`, Delivery): `on_bar` of the first name sees every name's last
+close for that instant, and a fill against another instrument of the instant is at that
+close.
 
 ### `filter`, `overlay` and `exit`
 
@@ -89,13 +92,49 @@ one hook:
 | construct | sets | the host hook that consults it | what it may do |
 |---|---|---|---|
 | `filter` | `allow: bool` | `before_entry` | withhold an entry the host's signal asked for. It never changes the signal |
-| `overlay` | `scale: float ∈ [0, 1]`, `hedges: [Hedge]` | `size`, `hedges` | resize what the signal already asked for, and add legs beside it |
+| `overlay` | `scale: float ∈ [0, 1]`, `hedges: [Hedge]` — or, under `sizing`, `clips: [Clip]` | `size`, `hedges` (on a host entry); `on_data` (on the overlay's grain) | resize what the signal already asked for, and add or take off legs beside it — including while the host is already holding |
 | `exit` | `exit: bool` | `before_exit` | close an open position, with the last word over the host's own exit logic |
 
 `Decision.neutral(construct)` is the identity for that part — the answer that leaves the
 host exactly as it was. It is what the shipped stub returns, which is why the baseline card
 of an attached construct scores zero: the modifier changed nothing, and a relative objective
 differences the combined run against the host's own.
+
+**An overlay has two clocks.** `evaluate` runs once inside every host **entry**, before
+the host's order and any exit it placed in the same handler have filled, and answers
+`scale` plus any legs placed beside that order. `on_data` runs once per cohort of the
+overlay's own grain — the host's grain when they match, or a finer grain the overlay
+hypothesis declares — after every handler of that cohort and never while a market order
+of the sleeve is unfilled, and answers legs only (`scale` is ignored). A clipper that fires
+while the host is sitting in a name therefore does not wait for the next host buy, and a
+leg it asked for at one instant is filled before it is asked again. The shipped `on_data`
+is silence, so an overlay that only scales at entry is unchanged. On the data clock
+`ctx.qty` is 0, `ctx.side` is empty and `ctx.instrument_id` is the last name of the
+cohort; `ctx.prices` is the last print of every name at the finest grain loaded, which is
+what an order fills against. `ctx.book` is the host sleeve's own signed position per name
+— under a `sizing` rule with its unfilled market orders applied and its overlays' clips
+left out — and `ctx.clips` is what the overlays hold the same way.
+
+**A sized overlay names clips.** When its hypothesis declares `sizing`, the overlay answers
+`Decision(clips=(Clip(instrument, side),))` and the harness sizes the clip to the overlay's
+own budget — the whole of it, in whole lots, at the last print — holds one clip at a time,
+and takes it off whole on `Clip(instrument, "FLAT")`. `Hedge`, `hedges=` and `scale=` are
+refused on a sized overlay and `Clip` on one without a budget, statically by
+`strategy_integrity` and again at the boundary; the neutral answer is the identity on both.
+A budgeted overlay attaches to a budgeted host (`kanso hyp validate` pairs them, and holds
+the overlay's book to the ceilings its own file declares), its `capital` is the whole book
+its cards run on, and the host's own share and the overlay's clips are told apart even in
+one name, so the host's exit never takes a clip with it. At a host flip the overlay is
+asked through `evaluate` with the leg the host is entering and its clips in view, and legs
+it answers there settle with the flip at one price; a flatten left to `on_data` lands one
+cohort later, which on a daily host under a one-second overlay is the next morning's first
+print.
+
+When the overlay's resolution is finer than the host's, the runner loads both grains and
+the host's `on_bar` still runs only on the host grain; the host's orders then fill on the
+finer book (`docs/concepts.md`, Delivery). A composed version records the overlay's grain
+and its budget in its manifest, so a stage node and a `--strategy` replay load what a card
+did.
 
 Several modifiers may be attached to one sleeve, and they compose without conferring: an
 entry needs **every** filter to allow it, scales multiply, hedge legs are the union, and

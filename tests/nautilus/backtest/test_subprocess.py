@@ -186,3 +186,55 @@ def test_a_child_that_says_nothing_leaves_no_tail(store: Path, lane: Path, reque
     result = run_subprocess(request_for(), store, lane)
 
     assert result.traceback_tail is None
+
+
+REVERSING_SLEEVE = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        self.seen += 1
+        if self.seen == 3:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY")
+        elif self.seen == 5:
+            self.submit_entry(bar.bar_type.instrument_id, "SELL")
+"""
+
+
+def test_a_sizing_refusal_crosses_the_process_boundary_as_a_refusal_not_a_crash(
+    store: Path, lane: Path, request_for
+) -> None:
+    request = request_for(source=REVERSING_SLEEVE, sleeve_budget=10_000.0)
+
+    result = run_subprocess(request, store, lane)
+
+    assert result.crashed is False
+    assert result.refused is not None
+    assert result.refused.rule == "one_position"
+    assert result.refused.instrument_id == "DEMO.XNAS"
+    assert result.refused.asked == "SELL"
+    assert "on the other side" in result.refused.why
+    assert result.run.fills == () and result.intents == ()
+    assert result.run.capital == request.capital
+
+
+def test_a_refusal_stops_the_run_at_the_first_refused_order(
+    store: Path, lane: Path, request_for
+) -> None:
+    from kanso.nautilus.sizing import SizingError
+
+    with pytest.raises(SizingError) as failure:
+        run(request_for(source=REVERSING_SLEEVE, sleeve_budget=10_000.0), store)
+
+    assert failure.value.refusal.rule == "one_position"
+    assert list(failure.value.refusal.held) == ["DEMO.XNAS"]

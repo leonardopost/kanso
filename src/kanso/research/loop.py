@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, criteria_version, gates, objectives
+from kanso.criteria.context import verdict
 from kanso.criteria.gates import strategy_integrity
 from kanso.criteria.integrity import check as check_integrity
 from kanso.data.instruments import resolve_universe
@@ -55,6 +56,8 @@ from kanso.hyp import (
     PROGRAM_FILE,
     STRATEGY_FILE,
     Registration,
+    host_resolution,
+    host_sizing,
     hypothesis_dir,
     hypothesis_file,
     read_source,
@@ -62,7 +65,7 @@ from kanso.hyp import (
     show,
     venue_models,
 )
-from kanso.nautilus import backtest
+from kanso.nautilus import backtest, sizing
 from kanso.research import lanes, records
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
@@ -144,6 +147,8 @@ class Setup:
     catalog: Path
     host_source: bytes | None = None
     host_modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = field(default=())
+    grains: tuple[str, ...] = ()
+    sleeve_budget: float = 0.0
 
     @property
     def window(self) -> tuple[date, date]:
@@ -268,7 +273,18 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
         catalog=catalog_path(ws),
         host_source=host_source,
         host_modifiers=modifiers,
+        grains=backtest.grains_of(hyp, host_resolution(ws, store, harness.host)),
+        sleeve_budget=_sleeve_budget(ws, store, hyp, harness.host),
     )
+
+
+def _sleeve_budget(
+    ws: Workspace, store: StateStore, hyp: Hypothesis, host: HostRef | None
+) -> float:
+    """What the sleeve of this run sizes to: its own rule, or its host's when attached."""
+    if host is not None:
+        return host_sizing(ws, store, host)
+    return 0.0 if hyp.sizing is None else hyp.sizing.budget
 
 
 # --- running one backtest ----------------------------------------------------
@@ -290,6 +306,8 @@ def _request(
     else:
         strategy = setup.host_source
         params = dict((setup.hyp.construct.params if setup.hyp.construct else None) or {})
+        if setup.hyp.sizing is not None:
+            params["sizing_budget"] = setup.hyp.sizing.budget
         attached = (
             setup.host_modifiers
             if host_only
@@ -306,6 +324,8 @@ def _request(
         budget_s=budget_s,
         mem_cap_gb=mem_cap_gb,
         period=setup.period,
+        grains=setup.grains,
+        sleeve_budget=setup.sleeve_budget,
     )
 
 
@@ -336,6 +356,14 @@ def _host_run(
             host_only=True,
         )
         result = backtest.run_subprocess(request, setup.catalog, directory)
+        if result.refused is not None:
+            raise PreconditionError(
+                f"host: {ref.strategy_id} version {ref.version} did not run over the research "
+                f"window (sizing refused {result.refused.rule} at {result.refused.instrument_id}: "
+                f"{result.refused.why}), so there is nothing to measure against",
+                remedy="re-certify the host under its sizing rule, or attach this construct "
+                "to another one",
+            )
         if result.crashed:
             raise PreconditionError(
                 f"host: {ref.strategy_id} version {ref.version} did not run over the research "
@@ -550,6 +578,26 @@ def _judge(
 ) -> Card:
     """Steps 3 to 5: the constraints, the keep rule and the record."""
     n_trials = records.n_trials(store, run.hyp_id) + 1
+    if result.refused is not None:
+        return _record(
+            ws,
+            store,
+            setup,
+            run,
+            strategy_sha=strategy_sha,
+            source=source,
+            desc=desc,
+            status="discard",
+            metric=0.0,
+            se=0.0,
+            n_trades=0,
+            wall_s=result.wall_s,
+            peak_mem_gb=result.peak_mem_gb,
+            n_trials=n_trials,
+            gate_results=[integrity, verdict(sizing.GATE, False, result.refused.payload())],
+            crash_tail=None,
+            directory=directory,
+        )
     if result.crashed:
         return _record(
             ws,
@@ -768,7 +816,9 @@ def _baseline(
     run has no budget to give its cards. `from_best` says whether the file that did not
     run was the best card's, which decides what beginning again would take.
     """
-    problems = check_integrity(directory, dict(pins))
+    problems = check_integrity(
+        directory, dict(pins), sized=setup.hyp.sizing is not None, construct=setup.construct
+    )
     if problems:
         _refuse_baseline(setup.hyp.id, "; ".join(problems[:5]), from_best=from_best)
     result = backtest.run_subprocess(
@@ -782,6 +832,13 @@ def _baseline(
         setup.catalog,
         directory,
     )
+    if result.refused is not None:
+        _refuse_baseline(
+            setup.hyp.id,
+            f"sizing refused {result.refused.rule} at {result.refused.instrument_id}: "
+            f"{result.refused.why}",
+            from_best=from_best,
+        )
     if result.crashed:
         _refuse_baseline(
             setup.hyp.id,

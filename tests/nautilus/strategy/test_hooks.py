@@ -12,6 +12,7 @@ from kanso.nautilus.hooks import (
     FILTER,
     MODIFIER_CONSTRUCTS,
     OVERLAY,
+    Clip,
     Decision,
     Hedge,
     HookContext,
@@ -94,6 +95,12 @@ def test_a_scale_outside_the_unit_interval_is_refused() -> None:
 def test_hedges_are_normalised_to_a_tuple() -> None:
     decision = Decision(scale=1.0, hedges=[Hedge("H.XNAS", -5.0)])  # type: ignore[arg-type]
     assert decision.hedges == (Hedge("H.XNAS", -5.0),)
+
+
+def test_clips_are_normalised_to_a_tuple() -> None:
+    decision = Decision(clips=[Clip("H.XNAS", "BUY")])  # type: ignore[arg-type]
+    assert decision.clips == (Clip("H.XNAS", "BUY"),)
+    assert Decision.neutral(OVERLAY).check(OVERLAY).clips is None
 
 
 def test_a_stub_satisfies_the_modifier_protocol() -> None:
