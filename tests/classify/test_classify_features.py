@@ -317,7 +317,13 @@ def test_the_construct_catalogue_states_what_each_one_is_and_needs(ws: Workspace
 
 def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace) -> None:
     gates = {gate["id"]: gate for gate in card_gates(hypothesis(), ws.config.research.folds)}
-    assert set(gates) == {"strategy_integrity", "min_trades", "max_drawdown", "position_size"}
+    assert set(gates) == {
+        "strategy_integrity",
+        "min_trades",
+        "max_hold",
+        "max_drawdown",
+        "position_size",
+    }
     assert gates["strategy_integrity"]["required"] is True
     assert gates["min_trades"]["required"] is False
     assert gates["min_trades"]["params"] == {"min": "int"}

@@ -17,6 +17,7 @@ from kanso.criteria.gates import (
     deflated_sharpe,
     embargoed_window,
     max_drawdown,
+    max_hold,
     min_trades,
     position_size,
     publication_lag,
@@ -51,6 +52,68 @@ def trading_run(*pnl: float, cost: float = 0.0) -> Any:
             for day, value in zip(DAYS, pnl, strict=True)
         ),
     )
+
+
+# --- max_hold ---------------------------------------------------------------------
+
+
+def holding(*day_indexes: int, instrument: str = "DEMO", days: int = 6, **overrides: Any) -> Any:
+    """A `days`-long flat run holding `instrument` at the period ends of these days."""
+    run = build_run(
+        (0.0,) * days,
+        holdings=tuple(held(START + timedelta(days=i), 10_000.0, instrument) for i in day_indexes),
+    )
+    return context(run, **overrides)
+
+
+def test_max_hold_times_a_position_from_its_first_period_end_to_its_last_plus_one() -> None:
+    result = max_hold.evaluate(holding(0, 1, 2, params={"days": 3}))
+    assert result.passed
+    assert result.evidence == {"days": 3, "longest_days": 3.0, "n_positions": 1, "n_over": 0}
+
+
+def test_max_hold_refuses_a_position_held_one_day_too_long() -> None:
+    result = max_hold.evaluate(holding(0, 1, 2, params={"days": 2}))
+    assert not result.passed
+    assert result.evidence["longest_days"] == 3.0
+    assert result.evidence["n_over"] == 1
+
+
+def test_max_hold_times_a_position_still_open_when_the_window_closes() -> None:
+    """No trade ever closed, so a trade-based count would see nothing to refuse."""
+    result = max_hold.evaluate(holding(3, 4, 5, params={"days": 2}))
+    assert not result.passed
+    assert result.evidence["longest_days"] == 3.0
+
+
+def test_max_hold_ends_a_position_at_a_flat_period_and_at_a_flip() -> None:
+    run = build_run(
+        (0.0,) * 6,
+        holdings=(
+            held(START, 10_000.0, "SOXL"),
+            held(START + timedelta(days=1), 10_000.0, "SOXL"),
+            held(START + timedelta(days=2), 10_000.0, "SOXS"),
+            held(START + timedelta(days=3), 10_000.0, "SOXS"),
+            held(START + timedelta(days=5), 10_000.0, "SOXS"),
+        ),
+    )
+    result = max_hold.evaluate(context(run, params={"days": 2}))
+    assert result.passed
+    assert result.evidence["n_positions"] == 3
+    assert result.evidence["longest_days"] == 2.0
+    assert not max_hold.evaluate(context(run, params={"days": 1})).passed
+
+
+def test_max_hold_without_a_limit_or_a_position_judges_nothing() -> None:
+    assert max_hold.evaluate(holding(0, 1)).skipped is not None
+    assert max_hold.evaluate(holding(params={"days": 5})).skipped is not None
+
+
+def test_max_hold_times_only_what_an_attached_construct_added() -> None:
+    """The host held every day; the candidate changed nothing, so nothing of its own is timed."""
+    host = build_run((0.0,) * 4, holdings=tuple(held(DAYS[i], 10_000.0) for i in range(4)))
+    result = max_hold.evaluate(context(host, host_run=host, params={"days": 1}))
+    assert result.passed and result.skipped is not None
 
 
 # --- min_trades -------------------------------------------------------------------

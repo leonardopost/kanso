@@ -221,7 +221,7 @@ it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are four.
+already over. There are five.
 
 | gate | what it refuses |
 |---|---|
@@ -229,6 +229,7 @@ already over. There are four.
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
+| `max_hold` | a position held longer than the hypothesis allows — every stretch of consecutive period ends an instrument was held over, a position still open when the window closes included |
 | `sizing` | an order the harness refused at the boundary under a `sizing` rule: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a

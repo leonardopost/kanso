@@ -59,11 +59,13 @@ from kanso.criteria.quantities import (
     variance,
     years,
 )
-from kanso.criteria.run import BPS, CardRun, Fill, Held, day_of
-from kanso.schemas import GateResult
+from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, day_of
+from kanso.schemas import GateResult, parse_duration
 
 PERCENT: Final = 100.0
 """A share of capital is reported the way a risk limit states one."""
+
+NS_PER_DAY: Final = 86_400 * NS_PER_SECOND
 
 EULER_MASCHERONI: Final = 0.5772156649015329
 """The constant in the expected maximum of a sample of Sharpe ratios."""
@@ -118,6 +120,74 @@ class _MinTrades:
             total >= minimum and all(n >= 1 for n in per_fold),
             {"n_trades": total, "min": minimum, "trades_per_fold": per_fold},
         )
+
+
+class _MaxHold:
+    """No position held longer than the hypothesis allows.
+
+    A thesis that says "switches are less than a month apart" is a sentence a model reads;
+    this is the same sentence as a refusal. Timed on `run.held`, per instrument: every
+    stretch of consecutive period ends at which the instrument was held is one position,
+    and its length is the span from the first of those ends to the last plus one period,
+    so a position still open when the window closes is timed to the window's end rather
+    than missed for never closing — which is exactly the position a strategy that stops
+    switching leaves behind, and the one `Trade.closed_ns` cannot see. A flip from one
+    leg to another ends one position and starts another; a flat period ends one too. An
+    attached construct is timed on what it added to its host.
+    """
+
+    id: ClassVar[str] = "max_hold"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        limit = count(ctx, "days")
+        if limit is None:
+            return skipped(self.id, "no limit was chosen, so no position was timed")
+        marked = ctx.run.held if ctx.host_run is None else _own(ctx)
+        if not marked:
+            return skipped(
+                self.id, "no instrument was held at any period end, so nothing was timed"
+            )
+        lengths = _hold_days(ctx.run, marked)
+        over = [length for length in lengths if length > limit]
+        return verdict(
+            self.id,
+            not over,
+            {
+                "days": limit,
+                "longest_days": max(lengths),
+                "n_positions": len(lengths),
+                "n_over": len(over),
+            },
+        )
+
+
+def _hold_days(run: CardRun, marked: Sequence[Held]) -> list[float]:
+    """The length in days of every position: consecutive period ends held, plus one period.
+
+    A mark is placed in the period whose end is at or after it, so a mark struck inside a
+    period counts for that period.
+    """
+    ends = run.period_ends_ns
+    period_ns = parse_duration(run.period, "period").total_seconds() * NS_PER_SECOND
+    by_instrument: dict[str, set[int]] = {}
+    for item in marked:
+        position = min(bisect_left(ends, item.ts_ns), len(ends) - 1)
+        by_instrument.setdefault(item.instrument_id, set()).add(position)
+    lengths: list[float] = []
+    for positions in by_instrument.values():
+        ordered = sorted(positions)
+        first = previous = ordered[0]
+        for index in ordered[1:]:
+            if index != previous + 1:
+                lengths.append(_span_days(ends, first, previous, period_ns))
+                first = index
+            previous = index
+        lengths.append(_span_days(ends, first, previous, period_ns))
+    return lengths
+
+
+def _span_days(ends: Sequence[int], first: int, last: int, period_ns: float) -> float:
+    return (ends[last] - ends[first] + period_ns) / NS_PER_DAY
 
 
 class _PositionSize:
@@ -665,6 +735,7 @@ def _peak_daily_notional(ctx: GateContext) -> dict[str, float]:
 
 strategy_integrity: Final[Gate] = _StrategyIntegrity()
 min_trades: Final[Gate] = _MinTrades()
+max_hold: Final[Gate] = _MaxHold()
 position_size: Final[Gate] = _PositionSize()
 max_drawdown: Final[Gate] = _MaxDrawdown()
 embargoed_window: Final[Gate] = _EmbargoedWindow()

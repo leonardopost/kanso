@@ -1,0 +1,8 @@
+id: max_hold
+kind: gate
+stage: card
+required: false
+meaningful_when: "Informative when the thesis bounds how long a position may be held: every stretch of consecutive period ends an instrument was held over is timed, a position still open at the window's close included."
+params: {days: int}
+ranges: {days: [1, 366]}
+impl: kanso.criteria.gates.max_hold
