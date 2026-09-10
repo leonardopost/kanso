@@ -164,6 +164,12 @@ def compose(ws: Workspace, store: StateStore, hyp_id: str) -> StrategyVersion:
             "value": measured.value,
         },
     )
+    if construct.needs_host == NO_HOST:
+        # A sleeve's new version is one its attached constructs were not measured against.
+        # Research schedules that; the import is deferred so the cycle exists only here.
+        from kanso.research import scheduler
+
+        scheduler.on_host_composed(ws, store, hyp_id, version.version)
     return version
 
 
