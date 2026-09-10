@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.4.2 — 2026-09-10
 
 - **The supervisor puts back only what a lane claimed.** 0.4.1's recovery re-queued every `researching` hypothesis with neither a run nor a place — which is also what `research end` leaves behind, so an overlay whose run the operator had ended came back at every start and failed its host on a lane every three minutes. A claim is now recorded (`claimed`, with the lane and the priority), and recovery reads the queue's own record, returning each hypothesis at the priority it held. A stall holds its hypothesis in the lane's name until the scheduler has decided, so a certification that cannot run — or a stop that lands during one — leaves the hypothesis owed to the queue, not lost. A hypothesis a 0.4.1 lane claimed and dropped before this release has no such record, and `queue add` puts it back; one already cycling on a refused baseline keeps its place and keeps cycling until `queue remove`.
 - **`kanso research queue remove ID`.** The inverse of `queue add`: takes a hypothesis out of the queue, or out of a lane's hands if one claimed it and its run has not begun — that lane refuses to begin it, its failure does not bring it back, and neither does a restart. A hypothesis retired while a lane held it stays out too, its claim closed so `hyp resume` does not revive it; before, the lane died putting it back.
