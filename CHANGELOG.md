@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.4.1 — 2026-09-10
 
 - **A stop kills the card in flight.** A card child leads its own session and outlived the lane that supervised it — one ran 70 minutes past a 30-minute budget with weeks to go. `research stop` now interrupts the card, records nothing, and the run resumes at the next start.
 - **Two lanes cannot claim one hypothesis.** Lanes poll in step and both read the same head of the queue; the second to remove the row went on to start a run the first lane's run then refused (`already has an active run`, nine times in one workspace) and put the hypothesis back at priority −1 behind a run already in progress. The removal is now the claim: a lane whose delete removed nothing takes the next row.
