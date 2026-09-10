@@ -12,14 +12,20 @@ Four rules make the loop finite in effort while remaining infinite in time.
 given the file's exact bytes and returns a unified diff over them. Applying it happens
 here, in-package, on lines: a diff that does not apply, that names another file, or that
 leaves the file unchanged is invalid output and takes the router's retry ladder, exactly
-as a malformed JSON object would. It never becomes a card, so a wasted answer costs a call
-rather than a trial.
+as a malformed JSON object would. So is one that produces bytes the hypothesis has already
+carded under the run's pins — the same file, the same hypothesis, the same snapshot, the
+same criteria — because a card is a deterministic function of those and a second one
+would only repeat the first while counting as a second trial. The refusal names the card
+it repeats. None of these becomes a card, so a wasted answer costs a call rather than a
+trial.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
-provider cache hits; the moving half is the current file, the last `context_cards` cards,
-the previous diff, and the tail of a crash if the last card crashed. Nothing else, however
-much of it exists.
+provider cache hits; the moving half is the current file, the last `context_cards` cards
+of the hypothesis under the run's pins — across runs, so a run that begins after a stall
+is not shown a blank slate and made to re-walk the last run's discards — the previous
+diff, and the tail of a crash if the last card crashed. Nothing else, however much of it
+exists.
 
 **Drift is checked on a clock, not on suspicion.** Every `align_every` cards the run is
 asked whether it still tests the idea, and a drift rewinds it and carries on.
@@ -31,6 +37,7 @@ certifying and puts the hypothesis back in the queue either way.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping
@@ -67,6 +74,10 @@ STALLED: Final = "stalled"
 
 _UNCHANGED: Final = (
     "diff: applies but leaves strategy.py exactly as it was, so it is not an experiment"
+)
+_ALREADY_CARDED: Final = (
+    "diff: applies, but produces bytes this hypothesis already carded under the run's pins"
+    " ({sha7}: {status} at {metric:.4g}), so its result is known and it is not an experiment"
 )
 _ONE_LINE: Final = "desc: one line describing the change, with no tab and no newline"
 
@@ -206,6 +217,16 @@ def _propose(
         if candidate == source:
             complaints.append(_UNCHANGED)
             return complaints
+        seen = _carded(store, active, candidate)
+        if seen is not None:
+            complaints.append(
+                _ALREADY_CARDED.format(
+                    sha7=str(seen["strategy_sha"])[:7],
+                    status=str(seen["status"]),
+                    metric=float(seen["metric"]),
+                )
+            )
+            return complaints
         applied["source"] = candidate
         return complaints
 
@@ -325,19 +346,45 @@ def _failing_gates(store: StateStore, hyp_id: str) -> list[str]:
     return [str(gate["id"]) for gate in failed[:GATE_LINES]]
 
 
-def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Row]:
-    """The last `limit` cards of this run, oldest first.
+_PINNED: Final = (
+    " JOIN runs ON runs.run_id = cards.run_id"
+    " WHERE cards.hyp_id = ? AND runs.hypothesis_sha = ? AND runs.snapshot_id = ?"
+    " AND runs.criteria_version = ?"
+)
+"""The cards of a hypothesis that answer the same question this run asks: made under the
+same hypothesis file, the same snapshot and the same criteria, in whichever run."""
 
-    Read as rows rather than as `Card`s, and bounded in SQL rather than in Python, because
-    a run is unbounded and a proposer is shown a fixed window of it either way.
+
+def _pins(active: RunRecord) -> tuple[str, str, str, str]:
+    return (active.hyp_id, active.hypothesis_sha, active.snapshot_id, active.criteria_version)
+
+
+def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Row]:
+    """The last `limit` cards of the hypothesis under this run's pins, oldest first.
+
+    Across runs: a run that begins after a stall starts from the same bytes the last one
+    stalled on, and a proposer shown only its own run's cards re-walks the last run's
+    discards. Read as rows rather than as `Card`s, and bounded in SQL rather than in
+    Python, because a hypothesis is unbounded and a proposer is shown a fixed window of it
+    either way.
     """
     rows = store.connection.execute(
-        "SELECT strategy_sha, status, metric, metric_se, description, crash_tail, gate_results"
-        " FROM cards"
-        " WHERE run_id = ? ORDER BY seq DESC LIMIT ?",
-        (active.run_id, limit),
+        "SELECT cards.strategy_sha, cards.status, cards.metric, cards.metric_se,"
+        " cards.description, cards.crash_tail, cards.gate_results FROM cards"
+        f"{_PINNED} ORDER BY cards.card_id DESC LIMIT ?",
+        (*_pins(active), limit),
     ).fetchall()
     return list(reversed(rows))
+
+
+def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.Row | None:
+    """The card these bytes already have under this run's pins, or `None`."""
+    row: sqlite3.Row | None = store.connection.execute(
+        f"SELECT cards.strategy_sha, cards.status, cards.metric FROM cards{_PINNED}"
+        " AND cards.strategy_sha = ? ORDER BY cards.card_id DESC LIMIT 1",
+        (*_pins(active), hashlib.sha256(candidate).hexdigest()),
+    ).fetchone()
+    return row
 
 
 def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:

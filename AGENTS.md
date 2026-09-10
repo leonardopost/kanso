@@ -60,8 +60,9 @@ research could reach the certification window, and never replace the refusal wit
 instruction to a model.
 
 **Only `strategy.py` is mutable by the research loop.** Everything fixed lives in the
-package. A proposal that names another file, does not apply, or changes nothing is a wrong
-answer that takes the retry ladder; it never becomes a card.
+package. A proposal that names another file, does not apply, changes nothing, or produces bytes
+already carded under the same pins is a wrong answer that takes the retry ladder; it never
+becomes a card.
 
 **Real capital moves only on a named, recorded approval.** `promote --live --as NAME` is the
 only path, `--as` has no default and no environment fallback, and the approval is recorded

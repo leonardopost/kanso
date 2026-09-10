@@ -72,7 +72,7 @@ never edits the file.
 | `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify` | **yes**, between runs |
 | `hypotheses/<id>/program.md` | `hyp new` | **yes**, between runs |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
-| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; the script wraps, so a second hypothesis classified against it gets the first one's answer |
+| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
 | `AGENTS.md`, `CLAUDE.md` | `init`, if absent | **yes** |
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |

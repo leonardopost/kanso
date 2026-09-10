@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **Bytes already carded are not an experiment.** A proposal that reproduces a file the hypothesis has carded under the run's pins (hypothesis file, snapshot, criteria) is refused on the retry ladder with the card it repeats, instead of being backtested again and counted as another trial; one sleeve had the same sha carded five times in a day. The proposer now sees the last `context_cards` cards of the hypothesis across runs, so a run that begins after a stall is not shown a blank slate. The mock protocol puts the ordinal of the call wherever a script writes `{{call}}`, so a wrapped script can still propose new bytes; the demo run a second time exits 2 naming the cards its answers repeat.
+
 ## v0.4.1 — 2026-09-10
 
 - **A stop kills the card in flight.** A card child leads its own session and outlived the lane that supervised it — one ran 70 minutes past a 30-minute budget with weeks to go. `research stop` now interrupts the card, records nothing, and the run resumes at the next start.

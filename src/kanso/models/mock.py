@@ -10,6 +10,12 @@ retry could never express "this attempt fails and the next one succeeds", which 
 behaviour a scripted fixture most needs to express. Running off the end wraps to the start,
 so a script of three answers drives a run of thirty cards without the fixture growing.
 
+A wrapped answer is the same text again, and the loop refuses a proposal whose bytes it has
+already carded, so a script that must keep proposing writes `{{call}}` where it wants the
+ordinal of the call — 1, 2, 3 … per task class — and the mock puts it there in every string
+of the answer, however deep. A diff that adds a line ending in `# call {{call}}` then
+produces new bytes on every turn of the script.
+
 A task class the script does not list answers `{}`. An empty object satisfies no task
 class's schema, so an unlisted class exercises the whole ladder — retry, escalate, refuse
 — without the script having to spell a malformed answer out.
@@ -33,7 +39,10 @@ from kanso.models.ledger import cost_of
 from kanso.models.register import script_path
 from kanso.schemas.models import ModelSpec
 
-__all__ = ["MockClient", "reset"]
+__all__ = ["CALL", "MockClient", "reset"]
+
+CALL: Final = "{{call}}"
+"""The text a script writes where it wants the ordinal of the call put."""
 
 CHARS_PER_TOKEN: Final = 4
 """The mock has no tokeniser; a fixed ratio keeps its ledger rows deterministic."""
@@ -62,7 +71,9 @@ class MockClient:
         key = (str(path), call.task_class)
         turn = _CURSORS.get(key, 0)
         _CURSORS[key] = turn + 1
-        data: Mapping[str, object] = answers[turn % len(answers)] if answers else {}
+        data: Mapping[str, object] = (
+            _numbered(answers[turn % len(answers)], turn + 1) if answers else {}
+        )
         tokens_in = (len(call.system) + len(call.user)) // CHARS_PER_TOKEN
         tokens_out = len(json.dumps(data, default=str)) // CHARS_PER_TOKEN
         return Answer(
@@ -74,6 +85,21 @@ class MockClient:
             cost=cost_of(tokens_in, tokens_out, spec.cost_in, spec.cost_out),
             cache_hit=None,
         )
+
+
+def _numbered(answer: Mapping[str, object], ordinal: int) -> Mapping[str, object]:
+    """The answer with `{{call}}` replaced by `ordinal` in every string, however nested."""
+
+    def put(value: object) -> object:
+        if isinstance(value, str):
+            return value.replace(CALL, str(ordinal))
+        if isinstance(value, Mapping):
+            return {str(key): put(inner) for key, inner in value.items()}
+        if isinstance(value, list):
+            return [put(inner) for inner in value]
+        return value
+
+    return {str(key): put(value) for key, value in answer.items()}
 
 
 def _script(path: Path) -> dict[str, list[Mapping[str, object]]]:
