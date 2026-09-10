@@ -57,7 +57,7 @@ def test_every_claim_but_the_design_constraints_holds(verified: list[Fact]) -> N
 
 def test_design_constraints_are_claims() -> None:
     assert set(CLAIMS) >= DESIGN_CONSTRAINTS
-    assert len(DESIGN_CONSTRAINTS) == 3
+    assert len(DESIGN_CONSTRAINTS) == 4
 
 
 def test_verify_is_repeatable() -> None:

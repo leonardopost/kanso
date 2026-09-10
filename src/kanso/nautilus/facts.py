@@ -175,6 +175,17 @@ and a live engine has not, so the remainder is never filled, never cancelled and
 never reported — which is why kanso's own venue sends its events to the
 synchronous implementation.
 
+**Closing a position costs more the more positions were closed before it.** On a
+NETTING venue the execution engine snapshots every closed position, and
+`Portfolio.update_position` re-reads the snapshots of *this* instrument on every close
+while pruning its count of every other instrument's, so two instruments closing in
+turn re-unpickle each other's whole snapshot list each time: `pickle.loads` grows as
+the square of the trades a run has made (a quarter of it, measured), and a
+two-instrument sleeve that flips every bar never finishes. That is a design
+constraint kanso cannot repair from outside the engine; what it does is measure it
+here, record it, and tell a researcher that turnover — not per-bar work — is what a
+card's budget buys.
+
 Three more facts about matching bind the sleeve's sizing and its in-flight
 guard. `Order.is_closed` is false for a fresh order and true once a terminal
 event — filled, cancelled, rejected, denied, expired — has been applied, on
@@ -272,6 +283,7 @@ DESIGN_CONSTRAINTS: frozenset[str] = frozenset(
         "the engine pairs a component with its config through a config_cls class attribute",
         "ParquetDataCatalog accepts pyarrow tables or record batches on its write path",
         "customdataclass reads a module that postpones annotation evaluation",
+        "closing a position costs the same whatever was closed before it",
     }
 )
 """The claims that do **not** hold against `ENGINE_VERSION`, by design.
@@ -543,6 +555,141 @@ def _check_market_order_walks_one_increment_past_a_quarter_of_volume() -> tuple[
         f"300 shares against a 1,000-share bar filled as {fills}: a quarter of the volume at "
         "the close, the remainder one price increment worse"
     )
+
+
+def _check_close_cost_is_flat() -> tuple[bool, str]:
+    """Count the pickle loads a run makes closing positions in two instruments in turn.
+
+    Two instruments, one share bought and sold on alternating bars, so every bar closes a
+    position; the count of `pickle.loads` across the run is compared at two lengths. A
+    flat cost grows with the trades; the engine's grows with their square.
+    """
+    import pickle
+
+    counts: list[int] = []
+    original = pickle.loads
+    calls = 0
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    for bars in (24, 48):
+        calls = 0
+        pickle.loads = counting
+        try:
+            trades = _alternating_closes(bars)
+        finally:
+            pickle.loads = original
+        counts.append(calls)
+        if trades < bars - 2:  # pragma: no cover - the engine did not close what it was told to
+            return False, f"only {trades} of {bars - 1} closes happened"
+    shorter, longer = counts
+    flat = longer <= 2 * shorter + 8
+    return flat, (
+        f"{shorter} pickle loads over 24 alternating closes and {longer} over 48: the cost "
+        + ("is linear in the trades" if flat else "grows with the square of the trades")
+    )
+
+
+def _alternating_closes(bars: int) -> int:
+    """A run closing one position per bar across two instruments; the trades it made."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import Bar, BarSpecification, BarType
+    from nautilus_trader.model.enums import (
+        AccountType,
+        AggregationSource,
+        BarAggregation,
+        OmsType,
+        OrderSide,
+        PriceType,
+    )
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
+    from nautilus_trader.model.instruments import Equity
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    venue = Venue("XNAS")
+    names = [InstrumentId(Symbol(symbol), venue) for symbol in ("AAA", "BBB")]
+    minute_ns = 60_000_000_000
+
+    def equity(instrument_id: InstrumentId) -> Equity:
+        return Equity(
+            instrument_id=instrument_id,
+            raw_symbol=instrument_id.symbol,
+            currency=USD,
+            price_precision=2,
+            price_increment=Price.from_str("0.01"),
+            lot_size=Quantity.from_int(1),
+            ts_event=0,
+            ts_init=0,
+        )
+
+    def bar_type(instrument_id: InstrumentId) -> BarType:
+        return BarType(
+            instrument_id,
+            BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+            AggregationSource.EXTERNAL,
+        )
+
+    class Flipper(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.trades = 0
+            self.held: InstrumentId | None = None
+
+        def on_start(self) -> None:
+            for name in names:
+                self.subscribe_bars(bar_type(name))
+
+        def on_bar(self, bar_: object) -> None:
+            target = bar_.bar_type.instrument_id  # type: ignore[attr-defined]
+            if self.held is not None:
+                self.submit_order(
+                    self.order_factory.market(self.held, OrderSide.SELL, Quantity.from_int(1))
+                )
+                self.trades += 1
+            self.submit_order(
+                self.order_factory.market(target, OrderSide.BUY, Quantity.from_int(1))
+            )
+            self.held = target
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=venue,
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        points = []
+        for index in range(bars):
+            name = names[index % 2]
+            engine.add_instrument(equity(name)) if index < 2 else None
+            ts = (index + 1) * minute_ns
+            points.append(
+                Bar(
+                    bar_type(name),
+                    Price(10.0, 2),
+                    Price(10.5, 2),
+                    Price(9.5, 2),
+                    Price(10.0, 2),
+                    Quantity.from_int(1_000),
+                    ts_event=ts,
+                    ts_init=ts,
+                )
+            )
+        engine.add_data(points)
+        strategy = Flipper()
+        engine.add_strategy(strategy)
+        engine.run()
+        return strategy.trades
+    finally:
+        engine.dispose()
 
 
 def _sample_bar(ts_event: int = 1_000, ts_init: int = 2_000, close: float | None = None) -> object:
@@ -1454,6 +1601,10 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "a market order past a quarter of the bar's volume walks one increment for the rest",
         _check_market_order_walks_one_increment_past_a_quarter_of_volume,
+    ),
+    (
+        "closing a position costs the same whatever was closed before it",
+        _check_close_cost_is_flat,
     ),
 )
 

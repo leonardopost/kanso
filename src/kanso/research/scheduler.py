@@ -149,9 +149,10 @@ def requeue(store: StateStore, hyp_id: str, priority: int) -> QueueItem:
     return QueueItem(hyp_id, priority, now)
 
 
-def drop(store: StateStore, hyp_id: str) -> None:
-    """Take a hypothesis out of the queue. Idempotent."""
-    store.connection.execute("DELETE FROM queue WHERE hyp_id = ?", (hyp_id,))
+def drop(store: StateStore, hyp_id: str) -> bool:
+    """Take a hypothesis out of the queue. Idempotent; true only if this call removed it."""
+    cursor = store.connection.execute("DELETE FROM queue WHERE hyp_id = ?", (hyp_id,))
+    return cursor.rowcount == 1
 
 
 def queued(store: StateStore) -> list[QueueItem]:
@@ -162,11 +163,35 @@ def queued(store: StateStore) -> list[QueueItem]:
     return [QueueItem(str(r["hyp_id"]), int(r["priority"]), str(r["enqueued_at"])) for r in rows]
 
 
+def recover(store: StateStore) -> list[str]:
+    """Re-queue every `researching` hypothesis with neither an active run nor a place.
+
+    That is the state a lane leaves behind when it dies between claiming a hypothesis and
+    recording its run. Returns the ids put back, oldest first.
+    """
+    rows = store.connection.execute(
+        "SELECT hyp_id FROM hypotheses WHERE status = 'researching' ORDER BY hyp_id"
+    ).fetchall()
+    found: list[str] = []
+    for row in rows:
+        hyp_id = str(row["hyp_id"])
+        if active_run(store, hyp_id) is not None or _row(store, hyp_id) is not None:
+            continue
+        enqueue(store, hyp_id)
+        found.append(hyp_id)
+    return found
+
+
 def dequeue(store: StateStore) -> str | None:
     """The next hypothesis to research, removed from the queue, or `None`.
 
     A dead hypothesis is dropped on sight and one already being researched is passed
     over and left where it is, so the lane that finishes it finds its place unchanged.
+
+    The removal is the claim. Lanes poll in step, so two of them read the same head at
+    once; the one whose delete removed the row has it, and the other, whose delete
+    removed nothing, moves on to the next row rather than starting a run that the first
+    lane's run would then refuse.
     """
     for item in queued(store):
         status = _status(store, item.hyp_id)
@@ -175,8 +200,8 @@ def dequeue(store: StateStore) -> str | None:
             continue
         if active_run(store, item.hyp_id) is not None:
             continue
-        drop(store, item.hyp_id)
-        return item.hyp_id
+        if drop(store, item.hyp_id):
+            return item.hyp_id
     return None
 
 

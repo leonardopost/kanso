@@ -48,6 +48,7 @@ from typing import IO, Final
 from kanso.env import read as read_envelope
 from kanso.errors import KansoError, PreconditionError
 from kanso.hyp import STRATEGY_FILE
+from kanso.nautilus import backtest
 from kanso.research import driver as research_driver
 from kanso.research import lanes, records, scheduler
 from kanso.schemas import RunRecord, parse_duration
@@ -138,15 +139,22 @@ _STOPPING = False
 
 
 def request_stop(*_: object) -> None:
-    """Ask this process's loops to finish what they are doing and return."""
+    """Ask this process's loops to finish what they are doing and return.
+
+    A card in flight is killed with them: the child leads its own session and would
+    otherwise outlive the lane, unbudgeted. The card is not recorded and the run stays
+    open, so the next start resumes it from its last card.
+    """
     global _STOPPING
     _STOPPING = True
+    backtest.interrupt()
 
 
 def clear_stop() -> None:
     """Forget a stop request. For a test that runs a loop more than once."""
     global _STOPPING
     _STOPPING = False
+    backtest.resume()
 
 
 def stopping() -> bool:
@@ -314,9 +322,11 @@ def _lane_sha(ws: Workspace, run: RunRecord) -> str | None:
 
 
 def serve(ws: Workspace) -> int:
-    """The supervisor: hold the lock, start the children, wait, pass the signal on."""
+    """The supervisor: hold the lock, recover what a dead lane dropped, start the children,
+    wait, pass the signal on."""
     lock = _acquire(ws)
     _listen()
+    recover(ws)
     children = [_spawn(ws, LANE, name) for name in lane_names(ws)]
     children.append(_spawn(ws, MONITOR))
     try:
@@ -328,6 +338,19 @@ def serve(ws: Workspace) -> int:
         pid_path(ws).unlink(missing_ok=True)
         lock.close()
     return 0
+
+
+def recover(ws: Workspace) -> list[str]:
+    """Put back in the queue every hypothesis a dead lane dropped between claim and run.
+
+    A lane takes a hypothesis out of the queue when it claims it and records the run only
+    once the baseline has finished, which can be minutes later; a lane killed in between
+    leaves the hypothesis `researching` with neither a run nor a place in the queue, where
+    nothing reports it. The supervisor closes that gap every time it starts.
+    """
+    with StateStore(ws.path("state.db")) as store:
+        usable(store, ws.path("state.db"))
+        return scheduler.recover(store)
 
 
 def worker(ws: Workspace, lane: str) -> int:
@@ -356,6 +379,8 @@ def worker(ws: Workspace, lane: str) -> int:
             try:
                 research_driver.run(ws, store, subject, cards=CARDS_PER_TURN, lane=lane)
             except KansoError as exc:
+                if stopping():
+                    break  # the card was interrupted, not failed; the run resumes next start
                 store.event(LANE_FAILED, subject, {"lane": lane, "error": exc.message})
                 if records.active(store, subject) is None:
                     scheduler.on_baseline_failed(store, subject)
@@ -456,7 +481,8 @@ def _terminate(child: subprocess.Popen[bytes]) -> None:
 
     A lane inside a card cannot answer until the card ends, and a card may be allowed
     minutes; a shutdown that waited for one would not be a shutdown. So the grace is
-    short and the card is what a stop costs.
+    short and the card is what a stop costs — the lane kills it on the way out, since the
+    child leads its own session and would otherwise outlive the lane, unbudgeted.
     """
     if child.poll() is not None:
         return
