@@ -32,7 +32,6 @@ in a lane's hands has its claim closed, so resuming it later does not revive the
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
@@ -41,6 +40,15 @@ from kanso.errors import PreconditionError
 from kanso.hyp import active_run, set_status
 from kanso.research import records
 from kanso.research.lanes import DEFAULT_LANE
+from kanso.research.passages import (
+    BEGUN,
+    CLAIMED,
+    QUEUED,
+    REMOVED,
+    Passage,
+    last_passage,
+    taken,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -90,22 +98,10 @@ returns to the queue. The status survives on hypotheses ended under an older ver
 means only that: their last certificate failed, and `kanso research queue add` takes them
 back."""
 
-QUEUED: Final = "queued"
-CLAIMED: Final = "claimed"
-REMOVED: Final = "removed"
 STALLED: Final = "stalled"
 CERTIFIABLE: Final = "certifiable"
-"""The events this module appends, under the hypothesis id as subject."""
-
-BEGUN: Final = "run_begun"
-"""The event `research/loop.py` appends once a run's row exists: the passage that consumes
-a claim."""
-
-_PASSAGES: Final = (QUEUED, CLAIMED, REMOVED, BEGUN)
-"""The events that move a hypothesis between the queue and a run, in either direction."""
-
-_Passage = tuple[str, dict[str, object]]
-"""One passage as read back: its kind and its detail."""
+"""The events this module appends beside the passages `research/passages.py` defines —
+`QUEUED`, `CLAIMED`, `REMOVED` and the run's `BEGUN` — under the hypothesis id as subject."""
 
 
 @dataclass(frozen=True)
@@ -213,9 +209,10 @@ def recover(store: StateStore) -> list[str]:
     found: list[str] = []
     for row in rows:
         hyp_id = str(row["subject"])
-        if not claimed(store, hyp_id) or _row(store, hyp_id) is not None:
+        passage = last_passage(store, hyp_id)
+        if passage is None or not claimed(store, hyp_id) or _row(store, hyp_id) is not None:
             continue
-        enqueue(store, hyp_id, _priority_of(_last_passage(store, hyp_id)))
+        enqueue(store, hyp_id, _priority_of(passage))
         found.append(hyp_id)
     return found
 
@@ -229,7 +226,7 @@ def claimed(store: StateStore, hyp_id: str) -> bool:
     """
     if _status(store, hyp_id) in DEAD or active_run(store, hyp_id) is not None:
         return False
-    return _kind(_last_passage(store, hyp_id)) == CLAIMED
+    return _kind(last_passage(store, hyp_id)) == CLAIMED
 
 
 def hold(store: StateStore, hyp_id: str, lane: str, priority: int = STALL_PRIORITY) -> None:
@@ -243,16 +240,6 @@ def hold(store: StateStore, hyp_id: str, lane: str, priority: int = STALL_PRIORI
     store.event(CLAIMED, hyp_id, {"lane": lane, "priority": priority})
 
 
-def taken(store: StateStore, hyp_id: str, lane: str) -> bool:
-    """Whether the operator took `hyp_id` out of `lane`'s hands.
-
-    True when the last passage is a removal naming that lane: the lane may not begin the
-    run it was about to, and its failure does not bring the hypothesis back.
-    """
-    passage = _last_passage(store, hyp_id)
-    return _kind(passage) == REMOVED and passage is not None and passage[1].get("lane") == lane
-
-
 def remove(store: StateStore, hyp_id: str) -> str:
     """Take a hypothesis out of the queue, or out of a lane's hands before its run begins.
 
@@ -262,7 +249,7 @@ def remove(store: StateStore, hyp_id: str) -> str:
     begun is ended with `research end`. Refuses a hypothesis that is neither queued nor
     held.
     """
-    passage = _last_passage(store, hyp_id)
+    passage = last_passage(store, hyp_id)
     if drop(store, hyp_id):
         detail: dict[str, object] = {"from": "queue"}
     elif claimed(store, hyp_id) and passage is not None:
@@ -368,7 +355,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         drop(store, hyp_id)
         _release(store, hyp_id, "retired")
         return Stall(hyp_id, best, certifiable, None, verdict)
-    if _kind(_last_passage(store, hyp_id)) == REMOVED:
+    if _kind(last_passage(store, hyp_id)) == REMOVED:
         return Stall(hyp_id, best, certifiable, None, verdict)
     requeue(store, hyp_id, STALL_PRIORITY)
     return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict)
@@ -388,34 +375,19 @@ def _row(store: StateStore, hyp_id: str) -> QueueItem | None:
     return QueueItem(str(found["hyp_id"]), int(found["priority"]), str(found["enqueued_at"]))
 
 
-def _last_passage(store: StateStore, hyp_id: str) -> _Passage | None:
-    marks = ", ".join("?" for _ in _PASSAGES)
-    row = store.connection.execute(
-        f"SELECT kind, detail FROM events WHERE subject = ? AND kind IN ({marks}) "
-        "ORDER BY event_id DESC LIMIT 1",
-        (hyp_id, *_PASSAGES),
-    ).fetchone()
-    if row is None:
-        return None
-    detail = json.loads(str(row["detail"]))
-    return str(row["kind"]), dict(detail) if isinstance(detail, dict) else {}
-
-
-def _kind(passage: _Passage | None) -> str | None:
+def _kind(passage: Passage | None) -> str | None:
     return None if passage is None else passage[0]
 
 
-def _priority_of(passage: _Passage | None) -> int:
+def _priority_of(passage: Passage) -> int:
     """The priority a claim recorded, or the queue's entry priority when it recorded none."""
-    if passage is None:
-        return 0
     value = passage[1].get("priority", 0)
-    return int(value) if isinstance(value, int) else 0
+    return value if isinstance(value, int) else 0
 
 
 def _release(store: StateStore, hyp_id: str, because: str) -> None:
     """Close an open claim on a hypothesis that is not coming back to the queue."""
-    passage = _last_passage(store, hyp_id)
+    passage = last_passage(store, hyp_id)
     if _kind(passage) == CLAIMED and passage is not None:
         lane = passage[1].get("lane")
         store.event(REMOVED, hyp_id, {"from": "lane", "lane": lane, "because": because})

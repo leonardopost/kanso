@@ -66,9 +66,10 @@ from kanso.hyp import (
     venue_models,
 )
 from kanso.nautilus import backtest, sizing
-from kanso.research import lanes, records, scheduler
+from kanso.research import lanes, records
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
+from kanso.research.passages import BEGUN, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
@@ -114,7 +115,6 @@ ended one, and the queue now takes it back (`research/scheduler.py`). Leaving it
 let such a hypothesis be queued and then refused at `begin`, which is a lane spinning
 rather than a refusal anyone reads."""
 
-BEGUN = scheduler.BEGUN
 CARDED: Final = "card"
 ENDED: Final = "run_ended"
 BASELINE_FAILED: Final = "baseline_failed"
@@ -961,7 +961,7 @@ def _lane_source(store: StateStore, run: RunRecord, directory: Path) -> bytes:
 
 def _admitted(store: StateStore, hyp_id: str, lane: str) -> None:
     """Refuse to begin a run for a hypothesis the operator took out of this lane's hands."""
-    if scheduler.taken(store, hyp_id, lane):
+    if taken(store, hyp_id, lane):
         raise PreconditionError(
             f"{hyp_id} was taken out of the queue while lane {lane} held it, so this lane "
             "does not begin its run",
