@@ -540,8 +540,9 @@ subject travels with the files even where `state.db` does not.
 
 ## The strategy version
 
-What a passing certificate composes: a **sleeve** becomes a new strategy at version 1; an
-attached construct becomes its host's version n+1 with itself appended. A version is not a
+What a passing certificate composes: a **sleeve** becomes version 1 of a new strategy, or
+version n+1 of its own when it is certified again with different bytes or under another
+engine; an attached construct becomes its host's version n+1 with itself appended. A version is not a
 pointer to source that might change — it is a closed record of four things.
 
 - **What it is made of**: the sleeve's `strategy_sha` and each attached construct's, by sha.
@@ -571,7 +572,12 @@ longer hashes to what the manifest records is refused by name and nothing runs, 
 is the bytes it was certified with or it is nothing.
 
 A version's life is `composed → paper → promotable → live → retired`. At most one version of
-a strategy per stage; a replaced version is retired.
+a strategy per stage; a replaced version is retired. A sleeve certified again composes its
+next version and the paper stage replaces the one it holds, so an overlay composed onto the
+old version leaves the stage with it until it certifies against the new one. The same bytes
+certified again under the same engine return the version they already have, whatever its
+position or state; under a new engine they compose a new one, since a version is deployed
+only on the engine it was measured on.
 
 ## Stages
 

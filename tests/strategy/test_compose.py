@@ -4,17 +4,30 @@ from __future__ import annotations
 
 import pytest
 
-from kanso.errors import PreconditionError
+from kanso.env.envelope import engine_version
+from kanso.errors import PreconditionError, ValidationError
+from kanso.research import loop
 from kanso.schemas import Certificate, StrategyFile, load_yaml
 from kanso.state import StateStore
-from kanso.strategy import composition, files
+from kanso.strategy import composition, files, impl
 from kanso.strategy.composition import compose
 from kanso.workspace import Workspace
-from tests.research.conftest import DOCUMENT, HYP_ID
+from tests.research.conftest import (
+    BOOK,
+    DOCUMENT,
+    HYP_ID,
+    NEUTRAL_OVERLAY,
+    SIZED_HOST,
+    classify,
+    document,
+    register,
+    write_hypothesis,
+)
 
 from .conftest import (
     ALLOWING,
     BLOCKING,
+    FILTER_CONSTRUCT,
     FILTER_DOCUMENT,
     FILTER_ID,
     VARYING,
@@ -117,6 +130,14 @@ def test_composing_the_same_sleeve_twice_returns_the_version_already_made(
     assert again == first
     assert len(files.require(ws, HYP_ID).versions) == 1
 
+    certified_filter(ws, store)
+    compose(ws, store, FILTER_ID)
+
+    assert compose(ws, store, HYP_ID) == first, (
+        "a version carrying a filter shares the sha; it is not the sleeve's"
+    )
+    assert [v.version for v in files.require(ws, HYP_ID).versions] == [1, 2]
+
 
 def test_composing_the_same_attached_construct_twice_returns_the_version_already_made(
     ws: Workspace, store: StateStore, sleeve: Certificate
@@ -131,11 +152,12 @@ def test_composing_the_same_attached_construct_twice_returns_the_version_already
     assert [v.version for v in files.require(ws, HYP_ID).versions] == [1, 2]
 
 
-def test_a_second_sleeve_certificate_of_a_composed_strategy_is_refused(
+def test_a_sleeve_certified_again_composes_version_two_of_its_strategy(
     ws: Workspace, store: StateStore, sleeve: Certificate
 ) -> None:
-    compose(ws, store, HYP_ID)
-    a_certificate(
+    first = compose(ws, store, HYP_ID)
+    manifest_one = impl.manifest_file(ws, HYP_ID, 1).read_bytes()
+    new = a_certificate(
         ws,
         store,
         HYP_ID,
@@ -144,8 +166,225 @@ def test_a_second_sleeve_certificate_of_a_composed_strategy_is_refused(
         objective_id="wf_sharpe_net",
     )
 
-    with pytest.raises(PreconditionError, match="version 1"):
+    second = compose(ws, store, HYP_ID)
+
+    assert (second.version, second.attached, second.config, second.state) == (2, [], {}, "composed")
+    assert second.sleeve.strategy_sha == new.strategy_sha
+    assert second.pins.snapshot_id == new.snapshot_id
+    assert second.pins.criteria_version == new.criteria_version
+    assert second.expectation.window.start.isoformat() == "2024-02-06"
+    held = files.require(ws, HYP_ID)
+    assert held.versions[0] == first
+    assert [v.version for v in held.versions] == [1, 2]
+    rows = store.connection.execute(
+        "SELECT strategy_id, version, state, stage, capital FROM strategy_versions ORDER BY version"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (HYP_ID, 1, "composed", None, None),
+        (HYP_ID, 2, "composed", None, None),
+    ]
+    assert len(store.events(kind=composition.COMPOSED, subject=HYP_ID)) == 2
+    assert impl.manifest_file(ws, HYP_ID, 2).is_file()
+    assert impl.manifest_file(ws, HYP_ID, 1).read_bytes() == manifest_one
+
+
+def test_the_same_bytes_certified_again_return_their_version_whatever_its_position(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    first = compose(ws, store, HYP_ID)
+    a_certificate(
+        ws,
+        store,
+        HYP_ID,
+        b"# other\n" + VARYING,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+    )
+    assert compose(ws, store, HYP_ID).version == 2
+    a_certificate(
+        ws,
+        store,
+        HYP_ID,
+        store.get_blob(first.sleeve.strategy_sha),
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+        plan_version=2,
+    )
+
+    again = compose(ws, store, HYP_ID)
+
+    assert (again.version, again.sleeve, again.pins) == (1, first.sleeve, first.pins)
+    assert [v.version for v in files.require(ws, HYP_ID).versions] == [1, 2]
+    assert len(store.events(kind=composition.COMPOSED, subject=HYP_ID)) == 2
+
+
+def test_the_same_bytes_certified_under_another_engine_compose_a_new_version(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    first = compose(ws, store, HYP_ID)
+    a_certificate(
+        ws,
+        store,
+        HYP_ID,
+        store.get_blob(first.sleeve.strategy_sha),
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+        nautilus_version="9.9.9",
+    )
+
+    made = compose(ws, store, HYP_ID)
+
+    assert (made.version, made.sleeve.strategy_sha) == (2, first.sleeve.strategy_sha)
+    assert (made.pins.nautilus_version, first.pins.nautilus_version) == ("9.9.9", engine_version())
+
+    certified_filter(ws, store)
+    assert compose(ws, store, FILTER_ID).version == 3
+    certified_filter(ws, store, nautilus_version="9.9.9")
+    # The latest version already carries the filter: docs/backlog.md row 68.
+    with pytest.raises(ValidationError, match="names a hypothesis twice"):
+        compose(ws, store, FILTER_ID)
+
+
+def test_a_sized_sleeve_composes_with_its_budget_in_the_manifest(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The case 0.4.0 shipped without: composition refused every sized subject's budget."""
+    a_certificate(
+        ws,
+        store,
+        "demo_sized",
+        SIZED_HOST,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+        doc=document(id="demo_sized", sizing={"mode": "full_book", "budget": 10_000}, **BOOK),
+    )
+
+    version = compose(ws, store, "demo_sized")
+
+    assert (version.version, version.attached) == (1, [])
+    manifest = impl.read_manifest(ws, "demo_sized", 1)
+    assert manifest.sleeve.config["sizing_budget"] == 10_000.0
+    assert manifest.sleeve.config["capital"] == 100_000.0
+
+
+def test_a_sized_overlay_composes_with_its_budget_in_its_attached_ref(
+    ws: Workspace, store: StateStore
+) -> None:
+    a_certificate(
+        ws,
+        store,
+        "demo_sized",
+        SIZED_HOST,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+        doc=document(id="demo_sized", sizing={"mode": "full_book", "budget": 10_000}, **BOOK),
+    )
+    compose(ws, store, "demo_sized")
+    overlay = {"id": "overlay", "host": "demo_sized"}
+    a_certificate(
+        ws,
+        store,
+        "demo_ins",
+        NEUTRAL_OVERLAY,
+        construct=overlay,
+        objective_id="marginal_wf_sharpe",
+        doc=document(
+            id="demo_ins",
+            construct=overlay,
+            objective={"id": "marginal_wf_sharpe", "params": {"min_delta": 0.0, "k_se": 0.5}},
+            sizing={"mode": "full_book", "budget": 5_000},
+            **BOOK,
+        ),
+    )
+
+    version = compose(ws, store, "demo_ins")
+
+    assert version.version == 2
+    assert version.attached[-1].params == {"sizing_budget": 5_000.0}
+    manifest = impl.read_manifest(ws, "demo_sized", 2)
+    assert manifest.attached[0].config["sizing_budget"] == 5_000.0
+    assert impl.sources(ws, manifest)[1][0][2] == {"sizing_budget": 5_000.0}
+
+
+def test_a_construct_certified_against_an_earlier_sleeve_does_not_compose_onto_a_later_one(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    compose(ws, store, HYP_ID)
+    classify(ws, store, FILTER_DOCUMENT, ALLOWING)
+    run = loop.begin(ws, store, FILTER_ID)
+    assert run.host_version == 1
+    a_certificate(
+        ws,
+        store,
+        FILTER_ID,
+        ALLOWING,
+        construct=FILTER_CONSTRUCT,
+        objective_id="marginal_wf_sharpe",
+    )
+    assert compose(ws, store, FILTER_ID).version == 2, "the host it measured is still the latest"
+
+    a_certificate(
+        ws,
+        store,
+        HYP_ID,
+        b"# a second sleeve\n" + VARYING,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+    )
+    assert compose(ws, store, HYP_ID).version == 3
+    a_certificate(
+        ws,
+        store,
+        FILTER_ID,
+        ALLOWING,
+        construct=FILTER_CONSTRUCT,
+        objective_id="marginal_wf_sharpe",
+        plan_version=2,
+    )
+
+    with pytest.raises(
+        PreconditionError, match=f"{FILTER_ID} was certified against {HYP_ID}@1"
+    ) as failure:
+        compose(ws, store, FILTER_ID)
+
+    assert "@3" in str(failure.value.remedy) and "--from-workspace" in str(failure.value.remedy)
+    assert [v.version for v in files.require(ws, HYP_ID).versions] == [1, 2, 3]
+
+
+def test_a_certificate_earned_under_another_scope_is_refused(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    same = store.get_blob(sleeve.strategy_sha)
+    register(ws, store, write_hypothesis(ws, document(title="A better title"), same))
+    assert compose(ws, store, HYP_ID).version == 1, "a title is not scope"
+
+    register(
+        ws,
+        store,
+        write_hypothesis(
+            ws,
+            document(
+                sizing={"mode": "full_book", "budget": 5_000},
+                capital=100_000,
+                risk_limits=BOOK["risk_limits"],
+            ),
+            same,
+        ),
+    )
+    a_certificate(
+        ws,
+        store,
+        HYP_ID,
+        same,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+        nautilus_version="9.9.9",
+    )
+
+    with pytest.raises(PreconditionError, match="sizing changed from None") as failure:
         compose(ws, store, HYP_ID)
+
+    assert f"hypotheses/{HYP_ID}/hypothesis.yaml" in str(failure.value.remedy)
 
 
 def test_a_hypothesis_whose_certificates_all_failed_cannot_compose(

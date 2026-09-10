@@ -14,8 +14,9 @@ cannot trade yet, and none of them is a reason to lose the evidence: the refusal
 `deploy_blocked` escalation naming the version and the way out, and the verdict stands.
 
 **Composing twice is composing once.** Certification is automatic and so is this, so a
-hypothesis certified again under a new plan or a new engine returns the version it already
-has rather than a second copy of it.
+hypothesis whose same bytes are certified again under a new plan returns the version it
+already has; under a new engine, or with different bytes, it composes the next version and
+the paper stage replaces the one it holds.
 """
 
 from __future__ import annotations

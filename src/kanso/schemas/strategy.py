@@ -1,10 +1,11 @@
 """`strategy.yaml`: a deployable strategy and its versions.
 
 A strategy is composed from certified hypotheses, never written by hand: a sleeve becomes
-version 1, and every attached construct — a filter, an overlay, an exit rule — becomes the
-host's next version. Each version records what it was certified under (`pins`) and what
-composition measured of it over the sleeve's certification window (`expectation`), which
-is the band the paper and live gates later judge the realised objective against.
+version 1, and its next version each time it is certified again; every attached construct
+— a filter, an overlay, an exit rule — becomes the host's next version. Each version records
+what it was certified under (`pins`) and what composition measured of it over the sleeve's
+certification window (`expectation`), which is the band the paper and live gates later
+judge the realised objective against.
 
 A stage holds at most one version of a strategy, so at most one version is `live` and at
 most one is on paper — `paper` and `promotable` being the same stage seen before and after

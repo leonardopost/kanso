@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
+from kanso.env.envelope import engine_version
 from kanso.schemas import Portfolio, StrategyFile, load_yaml, resolve_venue_model, write_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace, init
@@ -147,7 +148,7 @@ def write_strategy(ws: Workspace, strategy_id: str, declared_id: str | None = No
                     "sleeve": {"hyp_id": named, "strategy_sha": HOST_SHA},
                     "pins": {
                         "kanso_version": "0.1.0",
-                        "nautilus_version": "1.231.0",
+                        "nautilus_version": engine_version(),
                         "criteria_version": "0.1.0",
                         "plan_version": 1,
                         "snapshot_id": "snap1",

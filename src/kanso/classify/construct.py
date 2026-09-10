@@ -20,10 +20,11 @@ Three things a construct owes the rest of the system:
 * `harness` — everything the runner needs to execute one card: the class it loads from
   `strategy.py`, the base that class must subclass, the host it attaches to, and the
   mapping from each `Decision` field the construct sets to the host hook that consults it;
-* `compose` — the strategy version certification produces: a sleeve is a new strategy at
-  version 1, an attached construct is its host's version n+1 with itself appended. What the
-  version was certified under and what composition measured are supplied by the caller,
-  which is the only part of a version this module does not decide;
+* `compose` — the strategy version certification produces: a sleeve is version 1 of a new
+  strategy, or version n+1 of its own — bare, `attached: []` — when it is certified again;
+  an attached construct is its host's version n+1 with itself appended. What the version was
+  certified under and what composition measured are supplied by the caller, which is the
+  only part of a version this module does not decide;
 * `host_run` — the host-alone run a relative objective is differenced against, computed
   once per run and cached by data snapshot and host version, since the same host over the
   same data yields the same run for every card of that run.
@@ -57,6 +58,11 @@ from kanso.workspace import Workspace
 
 PORTFOLIO: Final = "portfolio"
 """The host a construct names when it attaches to the book rather than to one sleeve."""
+
+SIZING_BUDGET: Final = "sizing_budget"
+"""The one parameter composition sets on an attached construct and no construct declares:
+its own budget under a `sizing` rule, which its config takes (`KansoModifierConfig`) and
+which research and certification already hand it the same way."""
 
 SLEEVE_ENTRY: Final = "Strategy"
 MODIFIER_ENTRY: Final = "Modifier"
@@ -303,13 +309,15 @@ class Sleeve(Base):
         created_at: datetime | None = None,
     ) -> StrategyVersion:
         self.check_params(params)
-        if strategy is not None:
+        if strategy is not None and strategy.id != hyp_id:
             raise PreconditionError(
-                f"strategy: a {self.id} composes a new strategy at version 1, but {strategy.id} "
-                f"already has {len(strategy.versions)}"
+                f"strategy: a {self.id} composes a version of its own strategy, and "
+                f"{strategy.id} is not {hyp_id}'s"
             )
+        # A bare version: an earlier sleeve's operator fields must not configure a
+        # different implementation, so `config` stays at its default.
         return StrategyVersion(
-            version=1,
+            version=1 if strategy is None else strategy.latest().version + 1,
             sleeve=SleeveRef(hyp_id=hyp_id, strategy_sha=strategy_sha),
             attached=[],
             pins=pins,
@@ -386,7 +394,7 @@ class Attached(Base):
         expectation: Expectation,
         created_at: datetime | None = None,
     ) -> StrategyVersion:
-        self.check_params(params)
+        self.check_params({k: v for k, v in (params or {}).items() if k != SIZING_BUDGET})
         if strategy is None:
             raise PreconditionError(
                 f"strategy: a {self.id} composes onto its host's latest version, and no host "

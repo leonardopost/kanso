@@ -95,8 +95,14 @@ def repin(ws: Workspace, strategy_id: str, **pins: Any) -> StrategyFile:
     return written
 
 
-def second_version(ws: Workspace, store: StateStore, strategy_id: str) -> int:
-    """A second composed version of a strategy, as a later certification produces one."""
+def second_version(
+    ws: Workspace, store: StateStore, strategy_id: str, *, sleeve: bytes | None = None
+) -> int:
+    """A second composed version of a strategy, as a later certification produces one.
+
+    With `sleeve`, the version carries those bytes as its sleeve — what a sleeve certified
+    again composes — rather than the first version's.
+    """
     from datetime import UTC, datetime
 
     from kanso.strategy.impl import generate as generate_impl
@@ -104,13 +110,14 @@ def second_version(ws: Workspace, store: StateStore, strategy_id: str) -> int:
 
     held = strategy_files.require(ws, strategy_id)
     latest = held.latest()
-    made = latest.model_copy(
-        update={
-            "version": latest.version + 1,
-            "state": "composed",
-            "created_at": datetime.now(tz=UTC),
-        }
-    )
+    update: dict[str, Any] = {
+        "version": latest.version + 1,
+        "state": "composed",
+        "created_at": datetime.now(tz=UTC),
+    }
+    if sleeve is not None:
+        update["sleeve"] = latest.sleeve.model_copy(update={"strategy_sha": store.put_blob(sleeve)})
+    made = latest.model_copy(update=update)
     strategy_files.write(ws, strategy_files.appended(held, strategy_id, made))
     strategy_files.record(store, strategy_id, made)
     generate_impl(ws, store, strategy_id, made, hypothesis(id=strategy_id), CAPITAL)

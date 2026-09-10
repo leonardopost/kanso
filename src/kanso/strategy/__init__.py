@@ -1,10 +1,11 @@
 """Strategies: what a certificate composes into, and the one implementation it runs.
 
 A hypothesis that survives its embargo becomes a version of a strategy. The construct
-decides the shape — a sleeve is a new strategy at version 1, an attached construct is its
-host's next version — and composition writes it: `strategies/<id>/strategy.yaml` lists the
-versions, `strategies/<id>/impl/<version>/` holds a verbatim copy of every certified
-source beside a manifest naming the classes and the configuration each is built with.
+decides the shape — a sleeve is version 1 of a new strategy or version n+1 of its own, an
+attached construct is its host's next version — and composition writes it:
+`strategies/<id>/strategy.yaml` lists the versions, `strategies/<id>/impl/<version>/`
+holds a verbatim copy of every certified source beside a manifest naming the classes and
+the configuration each is built with.
 
 That directory is the whole of what a stage loads. A backtest, a replay and a live node
 resolve the same `module:Class` pairs out of the same files, so the thing that was
