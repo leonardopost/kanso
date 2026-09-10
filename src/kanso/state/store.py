@@ -257,9 +257,23 @@ class StateStore:
         return self._conn
 
     @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction around several writes, so they land together or not at all.
+
+        A write made inside it — `event`, `put_blob`, any of the store's own — joins it
+        rather than opening a transaction of its own, and the outer exit commits or rolls
+        back the lot.
+        """
+        with self._write() as conn:
+            yield conn
+
+    @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        """One short write transaction, rolled back on any exception."""
+        """One short write transaction, rolled back on any exception; inside another, joins it."""
         conn = self.connection
+        if conn.in_transaction:
+            yield conn
+            return
         conn.execute("BEGIN IMMEDIATE")
         try:
             yield conn

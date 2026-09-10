@@ -448,6 +448,106 @@ def test_remove_reaches_a_hypothesis_a_lane_holds_and_its_failure_leaves_it_out(
     assert ids(store) == []
 
 
+def test_recover_returns_each_at_the_priority_it_held_in_claim_order(
+    ws: Workspace, store: StateStore
+) -> None:
+    demoted = classify(ws, store, DOCUMENT)
+    fresh = register(ws, store, "demo_two")
+    scheduler.enqueue(store, demoted, priority=scheduler.BASELINE_PRIORITY)
+    scheduler.enqueue(store, fresh)
+    assert scheduler.dequeue(store, "l1") == fresh
+    assert scheduler.dequeue(store, "l2") == demoted
+
+    assert scheduler.recover(store) == [fresh, demoted]
+
+    assert [(item.hyp_id, item.priority) for item in scheduler.queued(store)] == [
+        (fresh, 0),
+        (demoted, scheduler.BASELINE_PRIORITY),
+    ]
+
+
+def test_a_stall_holds_the_hypothesis_in_the_lane_s_name_until_the_scheduler_decides(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The run has ended and the queue has not taken it: a lane that fails or dies now owes it."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    store.event(BEGUN, hyp_id, {"lane": "l1"})
+    assert scheduler.put_back(store, hyp_id) is None, "an ended run is the operator's doing"
+
+    scheduler.hold(store, hyp_id, "l1")
+
+    assert scheduler.claimed(store, hyp_id)
+    put = scheduler.put_back(store, hyp_id)
+    assert put is not None and put.priority == scheduler.BASELINE_PRIORITY
+    other = register(ws, store, "demo_two")
+    scheduler.enqueue(store, other)
+    assert scheduler.dequeue(store, "l2") == other
+    store.event(BEGUN, other, {"lane": "l2"})
+    scheduler.hold(store, other, "l2")
+    assert scheduler.recover(store) == [other], "the lane died before the scheduler decided"
+    assert [(item.hyp_id, item.priority) for item in scheduler.queued(store)] == [
+        (other, scheduler.STALL_PRIORITY),
+        (hyp_id, scheduler.BASELINE_PRIORITY),
+    ]
+
+
+def test_a_retire_while_a_lane_holds_it_closes_the_claim_so_resume_does_not_revive_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    set_status(store, hyp_id, "retired")
+
+    assert scheduler.put_back(store, hyp_id) is None
+    set_status(store, hyp_id, "researching")
+
+    assert not scheduler.claimed(store, hyp_id)
+    assert scheduler.recover(store) == []
+    closing = store.events(kind=scheduler.REMOVED, subject=hyp_id)[-1]
+    assert closing.detail == {"from": "lane", "lane": "l1", "because": "retired"}
+
+
+def test_remove_from_a_lane_names_the_lane_that_may_not_begin(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l2") == hyp_id
+
+    assert scheduler.remove(store, hyp_id) == "lane"
+
+    assert scheduler.taken(store, hyp_id, "l2")
+    assert not scheduler.taken(store, hyp_id, "op"), "another lane may still begin it by hand"
+    scheduler.enqueue(store, hyp_id)
+    assert not scheduler.taken(store, hyp_id, "l2"), "queued again, the removal is spent"
+
+
+def test_a_removal_that_lands_during_the_certification_is_honoured(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    a_card(ws, store, FLAT)
+    write_plan(ws)
+    scheduler.hold(store, hyp_id, "l1")
+    real = certify_run.certify
+
+    def removing(*args: Any, **kwargs: Any) -> Any:
+        assert scheduler.remove(store, hyp_id) == "lane"
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(certify_run, "certify", removing)
+
+    stall = scheduler.on_stall(ws, store, hyp_id, "l1")
+
+    assert stall.verdict == "fail"
+    assert stall.priority is None
+    assert ids(store) == []
+    assert scheduler.recover(store) == []
+
+
 def test_put_back_returns_a_failed_lane_s_hypothesis_by_where_it_got_to(
     ws: Workspace, store: StateStore
 ) -> None:

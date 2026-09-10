@@ -53,3 +53,18 @@ def test_events_survive_the_store_being_reopened(store: StateStore) -> None:
     store.close()
     with StateStore(path) as reopened:
         assert [e.kind for e in reopened.events()] == ["initialised"]
+
+
+def test_writes_inside_one_transaction_land_together_or_not_at_all(store: StateStore) -> None:
+    with store.transaction():
+        store.event("claimed", "demo", {"lane": "l1"})
+        store.put_blob(b"held")
+    assert [event.kind for event in store.events(subject="demo")] == ["claimed"]
+    assert store.get_blob(store.put_blob(b"held")) == b"held"
+
+    with pytest.raises(RuntimeError, match="mid-claim"), store.transaction():
+        store.event("claimed", "demo", {"lane": "l2"})
+        raise RuntimeError("killed mid-claim")
+
+    assert len(store.events(subject="demo")) == 1, "the second claim never landed"
+    assert store.event("queued", "demo", {}) > 0, "and the store writes again afterwards"
