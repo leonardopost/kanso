@@ -97,6 +97,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
         "data_requirements": ["bar"],
         "construct": None,
         "sizing": None,
+        "objective": None,
     }
 
 
@@ -232,7 +233,8 @@ def test_a_change_of_construct_clears_the_best(ws: Workspace, store: StateStore)
     assert found.best_sha is None
     cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
     assert [event.detail["reason"] for event in cleared] == [
-        "construct changed from 'sleeve' to 'filter'"
+        "construct changed from 'sleeve' to 'filter'; "
+        "objective changed from 'net_edge_bps' to 'marginal_net_edge_bps'"
     ]
 
 
@@ -297,6 +299,41 @@ def test_a_row_pinned_before_sizing_joined_the_scope_keeps_the_best(
     register(ws, store, document(title="A better title"))
 
     assert record(ws, store).best_sha == "c" * 64
+
+
+def test_a_change_of_objective_clears_the_best(ws: Workspace, store: StateStore) -> None:
+    """A best is a number in its objective's units; under another objective it means nothing."""
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    daily = {
+        **SLEEVE_CLASSIFICATION,
+        "horizon": "1d",
+        "objective": {"id": "wf_sharpe_net", "params": {"min_delta": 0.1, "k_se": 1.0}},
+    }
+
+    register(ws, store, document(**daily))
+
+    assert record(ws, store).best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["reason"] for event in cleared] == [
+        "objective changed from 'net_edge_bps' to 'wf_sharpe_net'"
+    ]
+
+
+def test_a_row_pinned_before_the_objective_joined_the_scope_answers_from_its_column(
+    ws: Workspace, store: StateStore
+) -> None:
+    """An upgrade must not clear every best in a workspace on the next re-pin."""
+    register(ws, store)
+    set_best(store)
+    pins = json.loads(store.connection.execute("SELECT pins FROM hypotheses").fetchone()["pins"])
+    pins.pop("objective")
+    store.connection.execute("UPDATE hypotheses SET pins = ?", (json.dumps(pins, sort_keys=True),))
+
+    register(ws, store)
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
 
 
 def test_clearing_the_best_says_so_in_the_event_log(ws: Workspace, store: StateStore) -> None:
