@@ -6,10 +6,11 @@
 # `kanso init --demo`, the second and third against the state that first one leaves behind — which is what
 # the lane holds again after each of them, since a discard and a crash both restore the run's best.
 # So `kanso research run demo_mr --cards 3` in a freshly initialised demo is a keep, a discard and a crash,
-# in that order. Past the third the script wraps, and a diff that does not fit the file in hand is invalid
-# output like any other: the router retries, the cursor moves on, and the demo keeps going on whichever
-# scripted answer does fit. That is the point at which the demo has shown what it can and you want a real
-# model in models.yaml.
+# in that order. Past the third the script wraps: the first diff no longer fits the file in hand, and the
+# other two reproduce bytes the run has already carded, which the loop refuses as it refuses any wrong
+# answer — the ladder runs out and the command exits 2 naming the cards they repeat. That is the point at
+# which the demo has shown what it can and you want a real model in models.yaml. (A script that must keep
+# proposing writes `{{call}}` in its diff; the mock puts the ordinal of the call there.)
 classify:
   - {construct: {id: sleeve}, objective_params: {min_delta: 0.0, k_se: 1.0}, constraints: [{id: strategy_integrity, params: []}, {id: min_trades, params: [{name: min, value: 30}]}, {id: max_drawdown, params: []}], rationale: "A complete signal-to-trade thesis with nothing deployed to attach to: a sleeve."}
 certify_plan:

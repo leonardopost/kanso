@@ -15,7 +15,7 @@ import pytest
 
 from kanso.certify import certificate
 from kanso.errors import PreconditionError
-from kanso.models import Answer, Call, spend
+from kanso.models import Answer, Call, reset_mock, spend
 from kanso.models import router as router_module
 from kanso.research import driver, lanes, records, scheduler
 from kanso.schemas import ModelSpec
@@ -136,6 +136,47 @@ def test_a_diff_that_changes_nothing_is_refused_before_it_costs_a_card(
 
     assert outcome.proposed == 1
     assert spend(store, lane="op").calls == 2
+
+
+def test_a_diff_that_reproduces_carded_bytes_is_refused_with_the_card_it_repeats(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A discard restores the best, so the same untagged diff makes the discarded bytes again."""
+    scripted(ws, propose=[proposal("weak", tagged=False)])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    discarded = records.cards_of(store, prepared_hyp)[-1]
+    assert discarded.status == "discard"
+    before = spend(store, lane="op").calls
+    reset_mock()
+    scripted(ws, propose=[proposal("weak", tagged=False), proposal("boom")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.proposed == 1
+    assert spend(store, lane="op").calls == before + 2
+    assert statuses(store, prepared_hyp) == ["keep", "discard", "crash"]
+    retry = recorded.of("propose")[-1]
+    assert (
+        f"already carded under the run's pins ({discarded.strategy_sha[:7]}: discard" in retry.user
+    )
+
+
+def test_recent_cards_reach_across_runs_under_the_same_pins(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A run begun after a stall is shown what the stalled run tried."""
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("boom")])
+    stalled = driver.run(workspace, store, prepared_hyp)
+    assert stalled.ended
+    reset_mock()
+    scripted(workspace, propose=[proposal("weak")])
+
+    driver.run(workspace, store, prepared_hyp, cards=1)
+
+    first = recorded.of("propose")[-1]
+    assert "run in boom mode" in first.user
+    assert first.user.count('"status": "crash"') == 2
 
 
 def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(

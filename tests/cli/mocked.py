@@ -93,20 +93,26 @@ class Strategy(KansoStrategy):
 """`flat` trades nothing, `boom` raises on the first bar, and the three in `MODES` fade."""
 
 
-def mode_diff(mode: str) -> str:
-    """A diff that makes the strategy run in `mode`, and that applies however often."""
+def mode_diff(mode: str, *, tagged: bool = True) -> str:
+    """A diff that makes the strategy run in `mode`, and that applies however often.
+
+    Tagged with the mock's call ordinal, so the same answer produces new bytes on every
+    turn of a wrapped script: the loop refuses a proposal whose bytes it already carded.
+    An untagged diff reproduces the same bytes each time, for a test that wants exactly that.
+    """
+    tag = "  # call {{call}}" if tagged else ""
     return (
         "--- a/strategy.py\n"
         "+++ b/strategy.py\n"
         "@@ -46,1 +46,2 @@\n"
-        f'+Strategy.mode = "{mode}"\n'
+        f'+Strategy.mode = "{mode}"{tag}\n'
         f" {MARKER}\n"
     )
 
 
-def proposal(mode: str, desc: str | None = None) -> dict[str, Any]:
+def proposal(mode: str, desc: str | None = None, *, tagged: bool = True) -> dict[str, Any]:
     """One scripted `propose` answer."""
-    return {"desc": desc or f"run in {mode} mode", "diff": mode_diff(mode)}
+    return {"desc": desc or f"run in {mode} mode", "diff": mode_diff(mode, tagged=tagged)}
 
 
 CYCLE: list[dict[str, Any]] = [proposal("revert"), proposal("weak"), proposal("boom")]

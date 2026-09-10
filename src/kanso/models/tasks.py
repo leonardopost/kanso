@@ -225,8 +225,9 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "path, is discarded and the attempt is wasted.\n\n"
         "One idea per change. The objective and its keep rule are stated below and are the "
         "only measure of success; a change that cannot plausibly move the objective is not "
-        "worth a card. Read the recent cards for what has already been tried: repeating a "
-        "discarded change, or reverting a kept one without a reason, wastes the run. When a "
+        "worth a card. Read the recent cards for what has already been tried: a diff that "
+        "reproduces bytes already carded is refused with the card it repeats, and reverting "
+        "a kept change without a reason wastes the run. When a "
         "crash tail is given, the crash is the change to make. Keep the description under "
         "120 characters and make it say what changed, not that something changed."
     ),

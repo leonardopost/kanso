@@ -185,7 +185,10 @@ inbox      0 unread
 One keep, one discard and one crash is the loop working rather than a fault. A card is
 `keep`, `discard` or `crash`; the last two restore the lane's `strategy.py` from the best,
 and every one of the three stays in state, so the experiment log is complete whatever the
-lane directory looks like afterwards.
+lane directory looks like afterwards. Run it again and the scripted answers wrap: the first
+no longer fits, and the other two reproduce bytes the run has already carded, which the loop
+refuses rather than backtests twice — the command exits 2 naming the cards they repeat. The
+demo has shown what it can; the next step is a real model in `models.yaml`.
 
 A run that stalls certifies itself before it returns, so a daemon left running reaches a
 certificate on every lane with no operator at all. Driven by hand, the same path is:

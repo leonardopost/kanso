@@ -45,6 +45,20 @@ def test_the_cursor_wraps_around(ws: Workspace) -> None:
     assert answers(ws, "align_check", 5) == [{"n": 1}, {"n": 2}, {"n": 1}, {"n": 2}, {"n": 1}]
 
 
+def test_the_ordinal_of_the_call_is_put_wherever_the_script_asks(ws: Workspace) -> None:
+    """A wrapped script can still answer with new bytes every turn."""
+    write_script(
+        ws,
+        "cheap_mock",
+        {"align_check": [{"diff": "+x = 1  # call {{call}}", "deep": [{"n": "{{call}}"}], "k": 7}]},
+    )
+
+    assert answers(ws, "align_check", 2) == [
+        {"diff": "+x = 1  # call 1", "deep": [{"n": "1"}], "k": 7},
+        {"diff": "+x = 1  # call 2", "deep": [{"n": "2"}], "k": 7},
+    ]
+
+
 def test_each_task_class_has_its_own_cursor(ws: Workspace) -> None:
     write_script(
         ws,
