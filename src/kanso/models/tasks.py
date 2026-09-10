@@ -228,7 +228,10 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "worth a card. Read the recent cards for what has already been tried: a diff that "
         "reproduces bytes already carded is refused with the card it repeats, and reverting "
         "a kept change without a reason wastes the run. When a "
-        "crash tail is given, the crash is the change to make. Keep the description under "
+        "crash tail is given, the crash is the change to make. When `rewound_for` is "
+        "given, this run was rewound for those reasons and the file in hand is from before "
+        "them: a change back in any of those directions is rewound again. Keep the "
+        "description under "
         "120 characters and make it say what changed, not that something changed."
     ),
     "align_check": (

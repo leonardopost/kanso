@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A rewound run is told why.** A drift check rewinds the lane to its last aligned keep and the run carries on, but the file it resumes from says nothing about the direction the check refused, so the proposer walks straight back into it: one hypothesis in a live workspace was rewound four times in six hours for the same complaint, and every improvement it found in between was thrown away with the rewind. The reasons this run was rewound now reach the next proposal beside the recent cards, newest first.
+
 ## v0.4.4 — 2026-09-11
 
 - **A repeat anywhere in the ladder is a miss.** 0.4.3 counted a miss only when the *last* judged answer repeated a card, so a proposer that repeated itself and then answered with a diff that would not apply still failed the lane — two such failures in the seven minutes after the release, and no misses. A ladder that reaches for bytes already carded at any point in its three attempts is now a miss, because the model was asked three times and had nothing new.

@@ -32,7 +32,11 @@ diff, and the tail of a crash if the last card crashed. Nothing else, however mu
 exists.
 
 **Drift is checked on a clock, not on suspicion.** Every `align_every` cards the run is
-asked whether it still tests the idea, and a drift rewinds it and carries on.
+asked whether it still tests the idea, and a drift rewinds it and carries on — carrying the
+reasons with it. A rewound run told nothing walks back into the drift it was rewound for:
+measured in a live workspace, one hypothesis was rewound four times in six hours for the
+same complaint, because the file it resumed from said nothing about why the last one went.
+So every drift this run was rewound for reaches the next proposal, newest first.
 
 **A run ends on a stall, and a stall is not an ending.** `stall_k` consecutive non-keeps
 close the run and hand the hypothesis to the scheduler, which certifies what is worth
@@ -65,6 +69,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "CRASH_TAIL_LINES",
+    "DRIFT_LINES",
     "GATE_LINES",
     "REPEATED",
     "TASK",
@@ -81,6 +86,9 @@ CRASH_TAIL_LINES: Final = 50
 
 GATE_LINES: Final = 10
 """How many failing certification gates are fed back into the next proposal."""
+
+DRIFT_LINES: Final = 3
+"""How many of a run's rewinds are fed back into the next proposal, newest first."""
 
 CARDS: Final = "cards"
 STALLED: Final = "stalled"
@@ -318,6 +326,9 @@ def _dynamic(
     failing = _failing_gates(store, active.hyp_id)
     if failing:
         facts["failing_certification_gates"] = failing
+    rewound = _rewound_for(store, active)
+    if rewound:
+        facts["rewound_for"] = rewound
     return facts
 
 
@@ -406,6 +417,24 @@ same hypothesis file, the same snapshot and the same criteria, in whichever run.
 
 def _pins(active: RunRecord) -> tuple[str, str, str, str]:
     return (active.hyp_id, active.hypothesis_sha, active.snapshot_id, active.criteria_version)
+
+
+def _rewound_for(store: StateStore, active: RunRecord) -> list[str]:
+    """Why this run has been rewound, newest first: the reason each drift check gave.
+
+    A reason is a sentence about `strategy.py` and the hypothesis it is meant to test, both
+    of which the proposer is already shown in full, so unlike a failing certification gate's
+    evidence it carries nothing measured on the embargoed window and nothing measured at
+    all. What it carries is the one thing the rewound file cannot say: which direction the
+    check refused, and why.
+    """
+    rows = store.connection.execute(
+        "SELECT detail FROM events WHERE kind = ? AND subject = ?"
+        " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC LIMIT ?",
+        (align.DRIFTED, active.hyp_id, active.run_id, DRIFT_LINES),
+    ).fetchall()
+    said = [str(json.loads(str(row["detail"])).get("reason") or "") for row in rows]
+    return [reason for reason in said if reason]
 
 
 def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Row]:
