@@ -72,6 +72,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from collections.abc import Mapping, Sequence
@@ -137,6 +138,7 @@ that is not a bar, a quote or a trade."""
 
 BUDGET: Final = "budget"
 MEMORY: Final = "memory"
+INTERRUPTED: Final = "interrupted"
 EXCEPTION: Final = "exception"
 DIED: Final = "died"
 
@@ -148,6 +150,25 @@ POLL_S: Final = 0.02
 
 MEMORY_POLL_S: Final = 0.25
 """How often the supervisor asks the operating system for the child's resident size."""
+
+_INTERRUPT = threading.Event()
+"""Set when the process supervising a card has been told to stop.
+
+A card child leads its own session, so nothing outside this process can kill it with the
+lane that started it; the watcher reads this flag between polls and kills the child itself,
+so a stop costs the card in flight and never leaves it running unbudgeted.
+"""
+
+
+def interrupt() -> None:
+    """Have every card this process is watching killed at its next poll."""
+    _INTERRUPT.set()
+
+
+def resume() -> None:
+    """Forget an interrupt, so a later card in this process runs to its end."""
+    _INTERRUPT.clear()
+
 
 GIB: Final = float(1024**3)
 _MAXRSS_BYTES: Final = 1 if sys.platform == "darwin" else 1024
@@ -1090,6 +1111,11 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
         breach, peak_gb = _watch(child, request.budget_s, request.mem_cap_gb)
     wall_s = time.monotonic() - started
     tail = _tail((room / "stderr.txt").read_text(encoding="utf-8", errors="replace"))
+    if breach == INTERRUPTED:
+        raise PreconditionError(
+            "the card was interrupted: the lane running it was told to stop",
+            remedy="start the daemon again; the run resumes from its last card",
+        )
     if breach is not None:
         return _crashed(request, wall_s, peak_gb, breach, tail)
     return _reported(request, result_path, wall_s, peak_gb, tail)
@@ -1098,7 +1124,8 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
 def _watch(
     child: Any, budget_s: float | None, mem_cap_gb: float | None
 ) -> tuple[str | None, float]:
-    """Wait for the child, killing its process group when it overruns either bound."""
+    """Wait for the child, killing its process group when it overruns either bound or when
+    this process has been told to stop."""
     started = time.monotonic()
     checked = started
     breach: str | None = None
@@ -1108,7 +1135,9 @@ def _watch(
             child.returncode = os.waitstatus_to_exitcode(status)
             return breach, usage.ru_maxrss * _MAXRSS_BYTES / GIB
         now = time.monotonic()
-        if budget_s is not None and now - started > budget_s:
+        if _INTERRUPT.is_set():
+            breach = INTERRUPTED
+        elif budget_s is not None and now - started > budget_s:
             breach = BUDGET
         elif mem_cap_gb is not None and now - checked >= MEMORY_POLL_S:
             checked = now

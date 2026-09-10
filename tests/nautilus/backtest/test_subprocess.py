@@ -238,3 +238,25 @@ def test_a_refusal_stops_the_run_at_the_first_refused_order(
 
     assert failure.value.refusal.rule == "one_position"
     assert list(failure.value.refusal.held) == ["DEMO.XNAS"]
+
+
+def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
+    store: Path, lane: Path, request_for
+) -> None:
+    """The child leads its own session; only the watcher can kill it with the lane."""
+    import threading
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    timer = threading.Timer(0.3, runner.interrupt)
+    timer.start()
+    try:
+        with pytest.raises(PreconditionError, match="the card was interrupted") as failure:
+            run_subprocess(request_for(source=SLOW_SLEEVE), store, lane)
+    finally:
+        timer.cancel()
+        runner.resume()
+
+    assert "the run resumes" in str(failure.value.remedy)
+    assert not runner._INTERRUPT.is_set()

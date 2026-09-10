@@ -162,6 +162,25 @@ def queued(store: StateStore) -> list[QueueItem]:
     return [QueueItem(str(r["hyp_id"]), int(r["priority"]), str(r["enqueued_at"])) for r in rows]
 
 
+def recover(store: StateStore) -> list[str]:
+    """Re-queue every `researching` hypothesis with neither an active run nor a place.
+
+    That is the state a lane leaves behind when it dies between claiming a hypothesis and
+    recording its run. Returns the ids put back, oldest first.
+    """
+    rows = store.connection.execute(
+        "SELECT hyp_id FROM hypotheses WHERE status = 'researching' ORDER BY hyp_id"
+    ).fetchall()
+    found: list[str] = []
+    for row in rows:
+        hyp_id = str(row["hyp_id"])
+        if active_run(store, hyp_id) is not None or _row(store, hyp_id) is not None:
+            continue
+        enqueue(store, hyp_id)
+        found.append(hyp_id)
+    return found
+
+
 def dequeue(store: StateStore) -> str | None:
     """The next hypothesis to research, removed from the queue, or `None`.
 

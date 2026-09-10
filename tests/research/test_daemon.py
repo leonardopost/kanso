@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from kanso.errors import KansoError, PreconditionError
+from kanso.hyp import set_status
 from kanso.research import daemon, lanes, records, scheduler
 from kanso.research import driver as research_driver
 from kanso.state import StateStore
@@ -163,10 +164,10 @@ def test_a_hypothesis_whose_baseline_will_not_run_goes_back_behind_the_others(
     scheduler.enqueue(store, hyp_id)
 
     def failing(*_: Any, **__: Any) -> Any:
-        daemon.request_stop()
         raise PreconditionError("the baseline card did not run")
 
     monkeypatch.setattr(research_driver, "run", failing)
+    monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
 
     assert daemon.worker(ws, "l1") == 0
     assert [item.priority for item in scheduler.queued(store)] == [scheduler.BASELINE_PRIORITY]
@@ -181,10 +182,10 @@ def test_a_run_that_failed_mid_flight_stays_beside_the_stalled_ones(
     open_run(store, hyp_id, lane="l1")
 
     def failing(*_: Any, **__: Any) -> Any:
-        daemon.request_stop()
         raise PreconditionError("no model answered in a usable shape")
 
     monkeypatch.setattr(research_driver, "run", failing)
+    monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
 
     assert daemon.worker(ws, "l1") == 0
     assert [item.priority for item in scheduler.queued(store)] == [scheduler.STALL_PRIORITY]
@@ -432,3 +433,42 @@ def test_no_module_of_the_research_package_reaches_for_git(ws: Workspace) -> Non
         daemon._argv(ws.root, "monitor")[0],
     ]
     assert set(built) <= {sys.executable, daemon.CAFFEINATE[0]}
+
+
+def test_a_stop_request_interrupts_the_card_and_is_taken_back_with_it() -> None:
+    from kanso.nautilus import backtest as runner
+
+    daemon.clear_stop()
+    daemon.request_stop()
+    assert daemon.stopping() and runner._INTERRUPT.is_set()
+    daemon.clear_stop()
+    assert not daemon.stopping() and not runner._INTERRUPT.is_set()
+
+
+def test_a_card_interrupted_by_a_stop_is_neither_failed_nor_requeued(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run stays open and untouched, so the next start resumes it from its last card."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    open_run(store, hyp_id, lane="l1")
+
+    def interrupted(*_: Any, **__: Any) -> Any:
+        daemon.request_stop()
+        raise PreconditionError("the card was interrupted: the lane running it was told to stop")
+
+    monkeypatch.setattr(research_driver, "run", interrupted)
+
+    assert daemon.worker(ws, "l1") == 0
+    assert scheduler.queued(store) == []
+    assert records.active(store, hyp_id) is not None
+    assert all(event.kind != "lane_failed" for event in store.events(subject=hyp_id))
+
+
+def test_the_supervisor_puts_back_what_a_dead_lane_dropped(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    set_status(store, hyp_id, "researching")
+
+    assert daemon.recover(ws) == [hyp_id]
+    assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]

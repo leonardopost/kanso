@@ -346,3 +346,23 @@ def test_the_queue_payload_is_json(ws: Workspace, store: StateStore) -> None:
     assert json.loads(json.dumps(payload))["priority"] == 3
     assert json.loads(json.dumps(stall))["certifiable"] is True
     assert json.loads(json.dumps(stall))["verdict"] == "pass"
+
+
+def test_a_hypothesis_dropped_between_claim_and_run_is_put_back(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A dead lane leaves its subject `researching` with neither a run nor a place."""
+    dropped = classify(ws, store, DOCUMENT)
+    set_status(store, dropped, "researching")
+    busy = register(ws, store, "demo_two")
+    set_status(store, busy, "researching")
+    open_run(store, busy, lane="l1")
+    waiting = register(ws, store, "demo_three")
+    set_status(store, waiting, "researching")
+    scheduler.enqueue(store, waiting)
+    register(ws, store, "demo_four")
+
+    assert scheduler.recover(store) == [dropped]
+
+    assert ids(store) == [waiting, dropped]
+    assert scheduler.recover(store) == []
