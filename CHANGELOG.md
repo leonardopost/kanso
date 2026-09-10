@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.4.5 — 2026-09-11
 
 - **A rewound run is told why.** A drift check rewinds the lane to its last aligned keep and the run carries on, but the file it resumes from says nothing about the direction the check refused, so the proposer walks straight back into it: one hypothesis in a live workspace was rewound four times in six hours for the same complaint, and every improvement it found in between was thrown away with the rewind. The reasons this run was rewound now reach the next proposal beside the recent cards, newest first.
 
