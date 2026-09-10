@@ -17,7 +17,7 @@ from kanso.certify import certificate
 from kanso.errors import PreconditionError
 from kanso.models import Answer, Call, reset_mock, spend
 from kanso.models import router as router_module
-from kanso.research import driver, lanes, records, scheduler
+from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
 from kanso.schemas import ModelSpec
 from kanso.state import StateStore
@@ -25,7 +25,9 @@ from kanso.workspace import Workspace
 
 from .conftest import DOCUMENT, classify, document
 from .mocked import (  # noqa: F401
+    ALIGNED,
     CYCLE,
+    DRIFTED,
     MARKER,
     SEED,
     fresh_cursors,
@@ -421,6 +423,53 @@ def test_failing_certification_gates_reach_the_next_proposal(
     assert "failing_certification_gates" in user
     assert "deflated_sharpe" in user
     assert "embargoed_window" not in user
+
+
+def test_the_drifts_this_run_was_rewound_for_reach_the_next_proposal(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The rewound file says nothing about the direction the check refused; this does."""
+    workspace = tuned(ws, align_every=1)
+    scripted(workspace, propose=CYCLE, align_check=[DRIFTED, ALIGNED])
+
+    driver.run(workspace, store, prepared_hyp, cards=3)
+
+    proposals = recorded.of("propose")
+    assert "rewound_for" not in proposals[0].user, "nothing has been rewound yet"
+    assert "rewound_for" in proposals[1].user
+    assert DRIFTED["reason"] in proposals[1].user
+    assert proposals[2].user.count(str(DRIFTED["reason"])) == 1, "the aligned check adds none"
+
+
+def test_only_this_run_s_rewinds_reach_it_and_only_the_newest_few(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    scripted(ws, propose=[proposal("revert")])
+    active = records.active(store, prepared_hyp)
+    driver.run(ws, store, prepared_hyp, cards=1)
+    active = records.active(store, prepared_hyp)
+    assert active is not None
+    for n in range(driver.DRIFT_LINES + 1):
+        store.event(
+            align.DRIFTED,
+            prepared_hyp,
+            {"run_id": active.run_id, "cards": n, "sha": "a" * 64, "reason": f"drift {n}"},
+        )
+    store.event(
+        align.DRIFTED,
+        prepared_hyp,
+        {"run_id": "another", "cards": 0, "sha": "a" * 64, "reason": "another run's drift"},
+    )
+    reset_mock()
+    scripted(ws, propose=[proposal("weak")])
+
+    driver.run(ws, store, prepared_hyp, cards=1)
+
+    user = recorded.of("propose")[-1].user
+    assert "another run's drift" not in user
+    assert "drift 0" not in user, "older than the newest few"
+    for n in range(1, driver.DRIFT_LINES + 1):
+        assert f"drift {n}" in user
 
 
 def test_the_gate_that_refused_a_card_reaches_the_next_proposal(
