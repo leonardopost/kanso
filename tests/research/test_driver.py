@@ -162,6 +162,42 @@ def test_a_diff_that_reproduces_carded_bytes_is_refused_with_the_card_it_repeats
     )
 
 
+def test_a_proposer_with_nothing_new_is_a_miss_that_counts_toward_the_stall(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """One discard, then the same bytes again: the ladder runs out, and that is the stall."""
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("weak", tagged=False)])
+
+    outcome = driver.run(workspace, store, prepared_hyp)
+
+    assert outcome.reason == "stalled"
+    assert (outcome.proposed, outcome.discards, outcome.missed) == (2, 1, 1)
+    assert outcome.payload()["missed"] == 1
+    assert statuses(store, prepared_hyp) == ["keep", "discard"], "a miss is not a card"
+    repeats = store.events(kind=driver.REPEATED, subject=prepared_hyp)
+    assert len(repeats) == 1
+    assert "already carded under the run's pins" in str(repeats[0].detail["because"])
+    assert records.active(store, prepared_hyp) is None, "the run stalled and ended"
+
+
+def test_a_miss_counts_against_the_cards_asked_for_and_survives_a_resume(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    scripted(ws, propose=[proposal("weak", tagged=False)])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    before = spend(store, lane="op").calls
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert (outcome.proposed, outcome.missed) == (1, 1)
+    assert spend(store, lane="op").calls == before + 3, "the whole ladder, then the miss"
+    assert statuses(store, prepared_hyp) == ["keep", "discard"]
+    active = records.active(store, prepared_hyp)
+    assert active is not None
+    assert driver._trailing_non_keeps(store, active) == 2, "the discard and the miss"
+
+
 def test_recent_cards_reach_across_runs_under_the_same_pins(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:

@@ -5,6 +5,7 @@ One line per user-visible change, newest release first. The format is the one
 
 ## Unreleased
 
+- **A proposer with nothing new is a miss, not a failed lane.** 0.4.2 refused a proposal that reproduced bytes already carded; on an exhausted surface every proposal was one, the ladder ran out three calls at a time, and the lane failed, backed off and retried a minute later without the run ever stalling — 180 calls an hour for nothing, on one sleeve. A ladder that runs out with its last judged answer a repeat now counts toward the stall exactly as a discard does (`repeated` event, `missed` in the outcome, counted by `--cards`), so the run stalls and the queue takes it back at the usual cadence.
 - **A sleeve that composes wakes the hypotheses attached to it.** An overlay registered against a host not yet composed under its rule waited for an operator to notice the host's new version and `queue add` it. Now a sleeve's new version puts every idle attached hypothesis — neither running, nor queued, nor held by a lane — back in the queue with a `host_composed` event, so its next run pins the new version; a run in flight keeps the version it pinned.
 
 ## v0.4.2 — 2026-09-10

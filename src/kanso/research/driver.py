@@ -17,7 +17,10 @@ carded under the run's pins — the same file, the same hypothesis, the same sna
 same criteria — because a card is a deterministic function of those and a second one
 would only repeat the first while counting as a second trial. The refusal names the card
 it repeats. None of these becomes a card, so a wasted answer costs a call rather than a
-trial.
+trial. A ladder that runs out having judged a repeat and nothing better is a *miss*: the
+model had no new change to make, which is what a discard says too, so it counts toward the
+stall exactly as a discard does and is recorded as an event rather than a card. A ladder
+that runs out on answers that do not fit at all is still a failure of the step.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
@@ -47,7 +50,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from kanso.criteria import catalogue
-from kanso.errors import ValidationError
+from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE
 from kanso.models import CallInputs, route
 from kanso.research import align, lanes, records, scheduler
@@ -59,7 +62,15 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
-__all__ = ["CRASH_TAIL_LINES", "GATE_LINES", "TASK", "Outcome", "run"]
+__all__ = [
+    "CRASH_TAIL_LINES",
+    "GATE_LINES",
+    "REPEATED",
+    "TASK",
+    "NothingNewError",
+    "Outcome",
+    "run",
+]
 
 TASK: Final = "propose"
 """The task class every card of a run is proposed by."""
@@ -73,6 +84,15 @@ GATE_LINES: Final = 10
 CARDS: Final = "cards"
 STALLED: Final = "stalled"
 """Why a driver stopped: it reached the count it was given, or the run stalled."""
+
+REPEATED: Final = "repeated"
+"""The event a miss appends, under the hypothesis id: the ladder ran out and the last
+answer it judged reproduced bytes already carded."""
+
+
+class NothingNewError(PreconditionError):
+    """The proposer had nothing new: the ladder ran out on bytes already carded."""
+
 
 _UNCHANGED: Final = (
     "diff: applies but leaves strategy.py exactly as it was, so it is not an experiment"
@@ -95,6 +115,7 @@ class Outcome:
     keeps: int
     discards: int
     crashes: int
+    missed: int
     checks: int
     drifts: int
     reason: str
@@ -112,6 +133,7 @@ class Outcome:
             "keeps": self.keeps,
             "discards": self.discards,
             "crashes": self.crashes,
+            "missed": self.missed,
             "checks": self.checks,
             "drifts": self.drifts,
             "reason": self.reason,
@@ -131,9 +153,10 @@ def run(
 ) -> Outcome:
     """Research a hypothesis: begin a run if it has none, then propose cards.
 
-    `cards` counts the cards this call proposes; the baseline and everything a previous
-    call left behind do not count. `None` researches until the run stalls, which is what
-    a daemon lane asks for.
+    `cards` counts the proposals this call asks for — cards and misses alike — so an
+    exhausted proposer cannot keep a bounded call running; the baseline and everything a
+    previous call left behind do not count. `None` researches until the run stalls, which
+    is what a daemon lane asks for.
     """
     lane = lanes.check_lane(lane)
     if records.active(store, hyp_id) is None:
@@ -142,7 +165,7 @@ def run(
     settings = ws.config.research
     directory = ws.root / active.dir
     tally = {"keep": 0, "discard": 0, "crash": 0}
-    proposed = checks = drifts = 0
+    proposed = missed = checks = drifts = 0
     misses = _trailing_non_keeps(store, active)
     waiting = align.since(store, active)
     previous = _last_diff(store, active)
@@ -150,7 +173,21 @@ def run(
 
     while cards is None or proposed < cards:
         source = align.lane_strategy(store, active, directory)
-        desc, patch, candidate = _propose(ws, store, active, source, previous, lane)
+        try:
+            desc, patch, candidate = _propose(ws, store, active, source, previous, lane)
+        except NothingNewError as exc:
+            store.event(
+                REPEATED,
+                hyp_id,
+                {"run_id": active.run_id, "lane": lane, "because": exc.remedy},
+            )
+            proposed += 1
+            missed += 1
+            misses += 1
+            if misses >= settings.stall_k:
+                reason = STALLED
+                break
+            continue
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
         card = research_loop.card(ws, store, hyp_id, desc, lane=lane)
         proposed += 1
@@ -181,6 +218,7 @@ def run(
         keeps=tally["keep"],
         discards=tally["discard"],
         crashes=tally["crash"],
+        missed=missed,
         checks=checks,
         drifts=drifts,
         reason=reason,
@@ -207,9 +245,11 @@ def _propose(
     the router's ladder rather than turned into a card that could not have run.
     """
     applied: dict[str, bytes] = {}
+    repeat: dict[str, str] = {}
 
     def judge(data: Mapping[str, object]) -> list[str]:
         complaints: list[str] = []
+        repeat.pop("complaint", None)
         if any(character in str(data["desc"]) for character in "\t\r\n"):
             complaints.append(_ONE_LINE)
         try:
@@ -222,13 +262,14 @@ def _propose(
             return complaints
         seen = _carded(store, active, candidate)
         if seen is not None:
-            complaints.append(
-                _ALREADY_CARDED.format(
-                    sha7=str(seen["strategy_sha"])[:7],
-                    status=str(seen["status"]),
-                    metric=float(seen["metric"]),
-                )
+            said = _ALREADY_CARDED.format(
+                sha7=str(seen["strategy_sha"])[:7],
+                status=str(seen["status"]),
+                metric=float(seen["metric"]),
             )
+            if not complaints:
+                repeat["complaint"] = said
+            complaints.append(said)
             return complaints
         applied["source"] = candidate
         return complaints
@@ -239,7 +280,13 @@ def _propose(
         dynamic=_dynamic(ws, store, active, source, previous),
         check=judge,
     )
-    answer = route(ws, store, TASK, inputs, lane=lane)
+    try:
+        answer = route(ws, store, TASK, inputs, lane=lane)
+    except PreconditionError as exc:
+        said = repeat.get("complaint")
+        if said is not None:
+            raise NothingNewError(exc.message, remedy=said) from exc
+        raise
     return str(answer.data["desc"]), str(answer.data["diff"]), applied["source"]
 
 
@@ -391,13 +438,20 @@ def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.R
 
 
 def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:
-    """How many cards this run has recorded since its last keep, so a resume continues."""
-    row = store.connection.execute(
+    """How many cards and misses this run has recorded since its last keep, so a resume
+    continues the count rather than starting it over."""
+    cards = store.connection.execute(
         "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
         " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status = 'keep'), 0)",
         (active.run_id, active.run_id),
     ).fetchone()
-    return int(row[0])
+    misses = store.connection.execute(
+        "SELECT COUNT(*) FROM events WHERE kind = ? AND subject = ?"
+        " AND json_extract(detail, '$.run_id') = ? AND ts > COALESCE("
+        " (SELECT MAX(created_at) FROM cards WHERE run_id = ? AND status = 'keep'), '')",
+        (REPEATED, active.hyp_id, active.run_id, active.run_id),
+    ).fetchone()
+    return int(cards[0]) + int(misses[0])
 
 
 def _last_diff(store: StateStore, active: RunRecord) -> str:
