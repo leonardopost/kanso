@@ -26,4 +26,8 @@ class Modifier(KansoModifier):
 
     def evaluate(self, ctx) -> Decision:
         # Baseline stub: neutral decision (allow / scale 1.0 and no hedges / no exit).
+        # Overlay: override on_data(ctx) to place legs on the overlay's data clock,
+        # independent of host entries. Default is silence. scale is ignored there.
+        # Under a `sizing` rule answer Decision(clips=(Clip(instrument, side),)) and kanso
+        # sizes the clip to this overlay's budget; without one, Hedge(instrument, qty).
         return Decision.neutral(self.construct)

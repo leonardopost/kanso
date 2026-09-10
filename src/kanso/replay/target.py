@@ -27,16 +27,15 @@ from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError, ValidationError
-from kanso.hyp import HYPOTHESIS_FILE, hypothesis_file
+from kanso.hyp import HYPOTHESIS_FILE, host_resolution, host_sizing, hypothesis_of
 from kanso.hyp import show as registration_of
-from kanso.nautilus.backtest import RunRequest
+from kanso.nautilus.backtest import RunRequest, grains_of
 from kanso.research import records
-from kanso.schemas import Hypothesis, StrategyFile, VenueModel, load_yaml, parse_yaml
+from kanso.schemas import Hypothesis, StrategyFile, VenueModel, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from datetime import date
 
-    from kanso.hyp import Registration
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
@@ -63,6 +62,8 @@ class Target:
     modifiers: Modifiers = ()
     strategy_id: str | None = None
     version: int | None = None
+    grains: tuple[str, ...] = ()
+    sleeve_budget: float = 0.0
 
     @property
     def universe(self) -> tuple[str, ...]:
@@ -80,6 +81,8 @@ class Target:
             capital=self.capital,
             modifiers=self.modifiers,
             period=self.period,
+            grains=self.grains,
+            sleeve_budget=self.sleeve_budget,
         )
 
 
@@ -135,8 +138,9 @@ def _of_strategy(ws: Workspace, store: StateStore, strategy_id: str, version: in
     file = strategy.require(ws, strategy_id)
     chosen = HostRef.of(file, version).version
     composed = file.versions[chosen - 1]
-    hypothesis = _hypothesis(ws, store, composed.sleeve.hyp_id)
-    sleeve, modifiers = strategy.sources(ws, strategy.read_manifest(ws, strategy_id, chosen))
+    hypothesis = hypothesis_of(ws, store, composed.sleeve.hyp_id)
+    manifest = strategy.read_manifest(ws, strategy_id, chosen)
+    sleeve, modifiers = strategy.sources(ws, manifest)
     return Target(
         label=f"{strategy_id}@{chosen}",
         hyp=hypothesis,
@@ -150,7 +154,19 @@ def _of_strategy(ws: Workspace, store: StateStore, strategy_id: str, version: in
         modifiers=modifiers,
         strategy_id=strategy_id,
         version=chosen,
+        grains=_manifest_grains(manifest.sleeve.config),
+        sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
     )
+
+
+def _own_budget(hyp: Hypothesis) -> dict[str, float]:
+    """An attached construct's own budget, as the parameter its config takes."""
+    return {} if hyp.sizing is None else {"sizing_budget": hyp.sizing.budget}
+
+
+def _manifest_grains(config: Mapping[str, Any]) -> tuple[str, ...]:
+    """The grains a composed version loads: the sleeve's, then any extra its overlays need."""
+    return (str(config["resolution"]), *(str(g) for g in config.get("extra_resolutions", ())))
 
 
 # --- a hypothesis's card ------------------------------------------------------
@@ -186,7 +202,11 @@ def _of_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, sha: str | Non
         sleeve, attached = _layers(store, harness.host)
         modifiers = (
             *attached,
-            (harness.construct, source, dict(hypothesis.construct.params or {})),
+            (
+                harness.construct,
+                source,
+                {**dict(hypothesis.construct.params or {}), **_own_budget(hypothesis)},
+            ),
         )
     return Target(
         label=f"{hyp_id}@{chosen[:7]}",
@@ -199,45 +219,11 @@ def _of_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, sha: str | Non
         period=ws.config.research.return_period,
         catalog=catalog_path(ws),
         modifiers=modifiers,
+        grains=grains_of(hypothesis, host_resolution(ws, store, harness.host)),
+        sleeve_budget=host_sizing(ws, store, harness.host)
+        if harness.host is not None
+        else (0.0 if hypothesis.sizing is None else hypothesis.sizing.budget),
     )
-
-
-def _hypothesis(ws: Workspace, store: StateStore, hyp_id: str) -> Hypothesis:
-    """The hypothesis a composed version was built from: the pinned bytes, or the file.
-
-    The pinned bytes are preferred: a version was composed from what the hypothesis said
-    when it was certified, and an edit since then belongs to the next version rather than to
-    this one. When the registry holds no pin — a clone whose `state.db` never travelled has
-    no registry at all — the committed `hypotheses/<id>/hypothesis.yaml` is read instead, so
-    a version's universe and forward window are recovered from the file that composed it and
-    a committed, certified version replays without re-registering the hypothesis first.
-    """
-    registration = _registration_or_none(ws, store, hyp_id)
-    if registration is not None and registration.hypothesis_sha is not None:
-        return parse_yaml(
-            Hypothesis,
-            store.get_blob(registration.hypothesis_sha).decode("utf-8"),
-            HYPOTHESIS_FILE,
-        )
-    path = hypothesis_file(ws, hyp_id)
-    if not path.is_file():
-        raise PreconditionError(
-            f"{hyp_id} is neither registered nor present at {path}, so the version's "
-            "universe and forward window cannot be recovered to replay it",
-            remedy=f"run `kanso hyp add hypotheses/{hyp_id}/hypothesis.yaml`",
-        )
-    return load_yaml(Hypothesis, path)
-
-
-def _registration_or_none(ws: Workspace, store: StateStore, hyp_id: str) -> Registration | None:
-    """This hypothesis's registration, or `None` when the registry does not hold it.
-
-    Listed rather than fetched by id, because fetching one by id refuses an id the registry
-    does not know, and a clone's empty registry is a state to read past rather than to fail
-    on.
-    """
-    registrations = cast("list[Registration]", registration_of(ws, store))
-    return next((one for one in registrations if one.hyp_id == hyp_id), None)
 
 
 def _host(ws: Workspace, host_id: str | None) -> StrategyFile | None:

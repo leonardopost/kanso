@@ -33,13 +33,14 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from kanso.errors import PreconditionError
-from kanso.hyp.scaffold import hypothesis_file
+from kanso.hyp.scaffold import HYPOTHESIS_FILE, hypothesis_file
 from kanso.hyp.validate import read_source, validate
-from kanso.schemas import Hypothesis
+from kanso.schemas import Hypothesis, load_yaml, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
 
+    from kanso.classify.construct import HostRef
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
@@ -56,11 +57,16 @@ RESEARCHING: Final[Status] = "researching"
 ENDED: Final[frozenset[str]] = frozenset({"retired", "failed"})
 """The statuses `resume` undoes: the operator's own, and the one kanso used to write."""
 
-SCOPE: Final = ("universe", "resolution", "data_requirements", "construct")
+SCOPE: Final = ("universe", "resolution", "data_requirements", "construct", "sizing")
 """What a `best` is comparable under; a change to any of them clears it."""
 
 CONSTRUCT: Final = "construct"
 """The scope field that joined after the first release; a row pinned before it has none."""
+
+SIZING: Final = "sizing"
+"""The scope field that joined in 0.4.0. A row pinned before it holds no key for it, which
+reads as `None` — the same answer a file with no `sizing` gives — so an older pin keeps its
+best until the file actually declares a rule."""
 
 REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"
@@ -222,6 +228,47 @@ def show(
     return _registration(ws, store, held)
 
 
+def hypothesis_of(ws: Workspace, store: StateStore, hyp_id: str) -> Hypothesis:
+    """The hypothesis as registered: the pinned bytes, or the committed file.
+
+    The pinned bytes are preferred: a version was composed from what the hypothesis said
+    when it was certified, and an edit since then belongs to the next version rather than to
+    this one. When the registry holds no pin — a clone whose `state.db` never travelled has
+    no registry at all — the committed `hypotheses/<id>/hypothesis.yaml` is read instead, so
+    a version's universe and forward window are recovered from the file that composed it and
+    a committed, certified version replays without re-registering the hypothesis first.
+    """
+    held = _row(store, hyp_id)
+    sha = None if held is None else _optional(held["hypothesis_sha"])
+    if sha is not None:
+        return parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
+    path = hypothesis_file(ws, hyp_id)
+    if not path.is_file():
+        raise PreconditionError(
+            f"{hyp_id} is neither registered nor present at {path}, so the version's "
+            "universe and forward window cannot be recovered to replay it",
+            remedy=f"run `kanso hyp add hypotheses/{hyp_id}/hypothesis.yaml`",
+        )
+    return load_yaml(Hypothesis, path)
+
+
+def host_resolution(ws: Workspace, store: StateStore, host: HostRef | None) -> str | None:
+    """The host sleeve's bar grain, so a run of an attached construct loads both grains.
+
+    Read from the host hypothesis as registered, never from the attached construct's own
+    file: a finer overlay must not rewrite the clock its host was certified on.
+    """
+    if host is None:
+        return None
+    return hypothesis_of(ws, store, host.sleeve.hyp_id).resolution
+
+
+def host_sizing(ws: Workspace, store: StateStore, host: HostRef) -> float:
+    """The budget the host sleeve sizes to under its rule, or zero when it declares none."""
+    sizing = hypothesis_of(ws, store, host.sleeve.hyp_id).sizing
+    return 0.0 if sizing is None else sizing.budget
+
+
 def retire(ws: Workspace, store: StateStore, hyp_id: str) -> None:
     """Retire a hypothesis. `ws` names the workspace whose registry this is."""
     if _row(store, hyp_id) is None:
@@ -343,12 +390,13 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def _scope(hyp: Hypothesis) -> dict[str, Any]:
-    """The four fields a metric is only comparable within, in a stable order."""
+    """The five fields a metric is only comparable within, in a stable order."""
     return {
         "universe": sorted(hyp.universe),
         "resolution": hyp.resolution,
         "data_requirements": sorted(hyp.data_requirements),
         CONSTRUCT: hyp.construct.id if hyp.construct else None,
+        SIZING: hyp.sizing.model_dump() if hyp.sizing else None,
     }
 
 
@@ -356,7 +404,8 @@ def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
     """The scope the row was pinned under.
 
     The construct was pinned in its own column before it joined the pins, and the two are
-    written together, so a row from before then answers from the column.
+    written together, so a row from before then answers from the column. `sizing` joined
+    later still and has no column: a pin without the key answers `None`.
     """
     pins = _pins(held)
     scope = {name: pins.get(name) for name in SCOPE}

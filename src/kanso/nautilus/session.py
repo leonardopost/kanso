@@ -53,7 +53,6 @@ import contextlib
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from itertools import chain
 from typing import Any, Final
 
 from nautilus_trader.common import Environment
@@ -70,6 +69,7 @@ from nautilus_trader.model.identifiers import TraderId
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, sandbox
 from kanso.nautilus.backtest import RunRequest, RunResult
+from kanso.nautilus.cross_section import arm, ordered, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
 
@@ -114,9 +114,11 @@ class Replayed:
     """What one node session produced, and how far through its window it got.
 
     `released` and `clock_ns` are how far the feed actually reached, which is the window's
-    end for a session that finished and wherever it stopped for one that did not. A stage
-    resumes from `clock_ns`, so it has to be the last point the node handled rather than the
-    last point the window held.
+    end for a session that finished and wherever it stopped for one that did not. `released`
+    counts catalog points only: a flush marker is a feed signal and not a clock tick, and
+    slicing the marked stream by this count would drop later bars. A stage resumes from
+    `clock_ns`, so it has to be the last point the node handled rather than the last point
+    the window held.
     """
 
     result: RunResult
@@ -142,17 +144,6 @@ class Halt:
     def running(self) -> bool:
         """Whether the feed may keep releasing points."""
         return self.reason is None
-
-
-def ordered(groups: Sequence[Sequence[Any]]) -> tuple[Any, ...]:
-    """Every point of every group in the order an engine would deliver them.
-
-    The engine sorts its accumulated stream by `ts_init` with a stable sort, so points
-    sharing an instant keep the order their groups were added in. Sorting the concatenation
-    the same way reproduces that exactly, which is what makes the two code paths see one
-    stream rather than two.
-    """
-    return tuple(sorted(chain.from_iterable(groups), key=lambda point: int(point.ts_init)))
 
 
 def run_node(
@@ -198,6 +189,7 @@ def run_node(
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
         _venues(request, kernel, points)
         strategy = _strategy(request, node)
+        arm(strategy, points)
         loop.run_until_complete(_drive(node, client, strategy, halt))
         card = backtest._extract(request, kernel, stream, groups)
         intents = tuple(
@@ -205,8 +197,8 @@ def run_node(
             for i in strategy.intents
         )
         stopped = halt.reason
-        released = client.released
-        clock_ns = client.last_ts if released else None
+        released = len(without_markers(points[: client.released]))
+        clock_ns = client.last_ts if client.released else None
     finally:
         node.dispose()
     wall_s = time.perf_counter() - started

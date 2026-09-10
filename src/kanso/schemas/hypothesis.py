@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, timedelta
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import Field, model_validator
 
@@ -124,6 +124,26 @@ class RiskLimits(KansoModel):
     max_leverage: float = Field(gt=0)
 
 
+FULL_BOOK: Final = "full_book"
+"""The one sizing rule: every entry is the whole budget in one instrument."""
+
+
+class Sizing(KansoModel):
+    """How every order is sized when the hypothesis says so and the strategy may not.
+
+    `full_book`: every entry is the whole budget in exactly one instrument — the budget over
+    the price, floored to whole lots, with the round-trip cost reserved inside it — at most
+    one instrument held at a time, and every exit the whole position. The harness computes
+    each quantity: `submit_entry` and `submit_exit` take no size, and an attached overlay
+    names a `Clip` and never a `Hedge`. Operator-owned like `required_constraints`, so
+    classification neither reads nor writes it; and scope, so a `best` earned under one
+    rule is not compared with a card run under another.
+    """
+
+    mode: Literal["full_book"]
+    budget: float = Field(gt=0)
+
+
 class ConstructRef(KansoModel):
     """What `classify` decided this hypothesis is, in portfolio-construction terms."""
 
@@ -167,6 +187,7 @@ class Hypothesis(Versioned):
     data_requirements: list[CatalogueId] = Field(min_length=1)
     costs: CostsOverride | None = None
     capital: float | None = Field(default=None, gt=0)
+    sizing: Sizing | None = None
     risk_limits: RiskLimits
     windows: Windows
     required_constraints: list[ConstraintRef] | None = None

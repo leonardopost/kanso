@@ -24,8 +24,10 @@ from kanso.criteria.gates import (
     stressed,
     walk_forward_consistency,
 )
+from kanso.criteria.run import Fill
 from tests.criteria.builders import (
     START,
+    at,
     book,
     build_run,
     context,
@@ -657,3 +659,74 @@ def test_every_implemented_gate_answers_a_bare_context() -> None:
         result = gate.evaluate(ctx)
         assert result.id == name
         assert result.passed or result.skipped is None
+
+
+# --- position_size under a sizing rule: entry fills over the budget ----------------
+
+
+def _fill(day: date, side: str, qty: float, px: float, instrument_id: str = "DEMO") -> Fill:
+    return Fill(ts_ns=at(day), instrument_id=instrument_id, side=side, qty=qty, px=px, cost=0.0)
+
+
+def filled(
+    *fills: Fill, budget: float = 10_000.0, host: tuple[Fill, ...] | None = None, **overrides: Any
+) -> Any:
+    hyp = make_hyp(sizing={"mode": "full_book", "budget": budget})
+    run = build_run((0.0,) * 3, fills=fills)
+    if host is not None:
+        overrides["host_run"] = build_run((0.0,) * 3, fills=host)
+    return context(run, hyp=hyp, **overrides)
+
+
+def test_position_size_judges_entry_fills_against_the_budget_under_sizing() -> None:
+    result = position_size.evaluate(
+        filled(
+            _fill(START, "BUY", 99.0, 100.5),
+            _fill(START + timedelta(days=1), "SELL", 99.0, 101.0),
+            _fill(START + timedelta(days=2), "BUY", 98.0, 101.5),
+            params={"min_pct": 98.0, "max_pct": 100.0},
+        )
+    )
+
+    assert result.passed, result.evidence
+    assert result.evidence["basis"] == "entry_fills"
+    assert result.evidence["n_entries"] == 2
+    assert result.evidence["budget"] == 10_000.0
+
+
+def test_position_size_gathers_a_walked_order_before_judging_it() -> None:
+    """The venue fills a large market order as two events; together they are one entry."""
+    result = position_size.evaluate(
+        filled(
+            _fill(START, "BUY", 75.0, 100.0),
+            _fill(START, "BUY", 24.0, 100.01),
+            params={"min_pct": 98.0, "max_pct": 100.0},
+        )
+    )
+
+    assert result.passed, result.evidence
+    assert result.evidence["n_entries"] == 1
+
+
+def test_position_size_refuses_a_half_sized_entry_under_sizing() -> None:
+    result = position_size.evaluate(
+        filled(_fill(START, "BUY", 50.0, 100.0), params={"min_pct": 98.0, "max_pct": 100.0})
+    )
+
+    assert not result.passed
+    assert result.evidence["smallest_pct"] == 50.0
+
+
+def test_position_size_subtracts_the_host_s_fills_for_an_attached_construct() -> None:
+    host = (_fill(START, "BUY", 99.0, 100.0), _fill(START + timedelta(days=2), "SELL", 99.0, 100.0))
+    own = (_fill(START + timedelta(days=1), "BUY", 49.0, 100.0, "HEDGE"),)
+    result = position_size.evaluate(
+        filled(*host, *own, budget=5_000.0, host=host, params={"min_pct": 98.0, "max_pct": 100.0})
+    )
+
+    assert result.passed, result.evidence
+    assert result.evidence["n_entries"] == 1
+
+
+def test_position_size_with_no_entry_filled_judges_nothing_under_sizing() -> None:
+    assert position_size.evaluate(filled(params={"min_pct": 98.0})).skipped is not None

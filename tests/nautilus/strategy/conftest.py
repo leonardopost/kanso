@@ -39,6 +39,7 @@ VENUE = Venue("XNAS")
 DEMO = InstrumentId(Symbol("DEMO"), VENUE)
 HEDGE = InstrumentId(Symbol("HEDGE"), VENUE)
 MINUTE_NS = 60_000_000_000
+SECOND_NS = 1_000_000_000
 LATENCY_NS = 1_000
 """Every bar is published a microsecond after it closes, so ts_init > ts_event."""
 
@@ -66,6 +67,14 @@ def bar_type(instrument_id: InstrumentId) -> BarType:
     )
 
 
+def second_bar_type(instrument_id: InstrumentId) -> BarType:
+    return BarType(
+        instrument_id,
+        BarSpecification(1, BarAggregation.SECOND, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+
+
 def bar(instrument_id: InstrumentId, index: int, close: float) -> Bar:
     ts_event = (index + 1) * MINUTE_NS
     price = Price(close, 2)
@@ -78,6 +87,29 @@ def bar(instrument_id: InstrumentId, index: int, close: float) -> Bar:
         Quantity.from_int(1_000),
         ts_event=ts_event,
         ts_init=ts_event + LATENCY_NS,
+    )
+
+
+def second_bar(
+    instrument_id: InstrumentId,
+    index: int,
+    close: float,
+    *,
+    origin_ns: int = 0,
+    ts_init: int | None = None,
+) -> Bar:
+    ts_event = origin_ns + (index + 1) * SECOND_NS
+    published = ts_event + LATENCY_NS if ts_init is None else ts_init
+    price = Price(close, 2)
+    return Bar(
+        second_bar_type(instrument_id),
+        price,
+        Price(close + 0.5, 2),
+        Price(close - 0.5, 2),
+        price,
+        Quantity.from_int(1_000),
+        ts_event=ts_event,
+        ts_init=published,
     )
 
 

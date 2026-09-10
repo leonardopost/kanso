@@ -332,3 +332,34 @@ def test_the_manifest_round_trips_through_its_own_file(
     assert reread == written
     assert reread.strategy_id == HYP_ID
     assert reread.version == 1
+
+
+def test_the_manifest_config_carries_the_overlays_extra_grain_and_the_sleeves_budget(
+    ws: Workspace, store: StateStore
+) -> None:
+    from .conftest import draft_hypothesis, draft_version
+
+    sleeve = draft_hypothesis(
+        ws,
+        store,
+        "demo_host",
+        capital=30_000,
+        sizing={"mode": "full_book", "budget": 30_000},
+        risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},
+    )
+    draft_hypothesis(ws, store, "demo_fine", resolution="1s", horizon="1h")
+    draft_hypothesis(ws, store, "demo_same")
+    draft_hypothesis(ws, store, "demo_filter", resolution="1s", horizon="1h")
+    draft = draft_version(
+        store,
+        "demo_host",
+        (("demo_fine", "overlay"), ("demo_same", "overlay"), ("demo_filter", "filter")),
+    )
+
+    assert impl._extra_grains(ws, store, sleeve, draft) == ("1s",)
+    config = impl._sleeve_config(sleeve, 30_000.0, draft, extra_resolutions=("1s",))
+    assert (config["sizing_budget"], config["extra_resolutions"]) == (30_000.0, ["1s"])
+    assert (
+        impl._sleeve_config(draft_hypothesis(ws, store, "demo_free"), 1.0, draft)["sizing_budget"]
+        == 0.0
+    )

@@ -47,6 +47,7 @@ from kanso.schemas import (
     Routing,
     RoutingEntry,
     RunRecord,
+    Sizing,
     SleeveRef,
     Span,
     Stage,
@@ -171,6 +172,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         data_requirements=required,
         costs=None if override is None else CostsOverride(**override.model_dump()),
         capital=draw(st.none() | POSITIVE),
+        sizing=draw(st.none() | st.builds(Sizing, mode=st.just("full_book"), budget=POSITIVE)),
         risk_limits=RiskLimits(
             max_position_pct=draw(POSITIVE),
             max_drawdown_pct=draw(st.floats(min_value=0.1, max_value=100)),

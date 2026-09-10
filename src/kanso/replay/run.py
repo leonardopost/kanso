@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Final
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, session
+from kanso.nautilus.cross_section import without_markers
 from kanso.nautilus.session import Replayed
 from kanso.replay import record
 from kanso.replay.record import Intent, Point, Session
@@ -89,6 +90,7 @@ def run(
     started = record.now()
     replayed = _execute(request, instruments, groups, mode=mode, speed=speed)
     result = replayed.result
+    market = without_markers(points)[: replayed.released]
     made = Session.model_validate(
         {
             "session_id": record.session_id(mode, target.label, window, started),
@@ -99,7 +101,7 @@ def run(
             "to": window[1],
             "speed": speed,
             "exec": SANDBOX.id,
-            "released": replayed.released,
+            "released": len(market),
             "intents": len(result.intents),
             "clock_ns": replayed.clock_ns,
             "started_at": started,
@@ -109,7 +111,7 @@ def run(
     written = record.write(
         ws,
         made,
-        (Point.of(point) for point in points[: replayed.released]),
+        (Point.of(point) for point in market),
         (Intent.of(row) for row in result.intents),
     )
     record.insert(store, written)
@@ -188,4 +190,5 @@ def _execute(
         return session.run_node(request, instruments, groups, speed=speed)
     points = session.ordered(groups)
     result = backtest.execute(request, instruments, groups)
-    return Replayed(result, len(points), int(points[-1].ts_init) if points else None)
+    clock = int(points[-1].ts_init) if points else None  # type: ignore[attr-defined]
+    return Replayed(result, len(without_markers(points)), clock)

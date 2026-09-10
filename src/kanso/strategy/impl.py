@@ -101,6 +101,9 @@ MODULE_PREFIX: Final = "kanso_impl"
 DIGEST_CHARS: Final = 12
 """How much of a source's digest goes into its module name."""
 
+OVERLAY: Final = "overlay"
+"""The attached construct with a clock of its own."""
+
 SLEEVE: Final = "sleeve"
 """The construct a sleeve component records, and the slot its file is named for."""
 
@@ -248,7 +251,9 @@ def generate(
         version.sleeve.hyp_id,
         store.get_blob(version.sleeve.strategy_sha),
         version.sleeve.strategy_sha,
-        _sleeve_config(hyp, capital, version),
+        _sleeve_config(
+            hyp, capital, version, extra_resolutions=_extra_grains(ws, store, hyp, version)
+        ),
     )
     attached = [
         _write_source(
@@ -356,25 +361,51 @@ def _write_source(
     )
 
 
-def _sleeve_config(hyp: Hypothesis, capital: float, version: StrategyVersion) -> dict[str, Any]:
+def _sleeve_config(
+    hyp: Hypothesis,
+    capital: float,
+    version: StrategyVersion,
+    *,
+    extra_resolutions: tuple[str, ...] = (),
+) -> dict[str, Any]:
     """What the hypothesis and the pinned venue model inject into the sleeve.
 
     Exactly the fields the runner injects when it builds a card, so a version deployed to
     a stage is configured as the card that earned it was, with the version's own `config`
-    layered on top for the fields an operator or a later construct set.
+    layered on top for the fields an operator or a later construct set. `sizing_budget` is
+    the sleeve hypothesis's rule, and `extra_resolutions` the grains its attached overlays
+    keep their own clock on, so a stage node runs both as a card did.
     """
     return {
         "hyp_id": hyp.id,
         "universe": list(hyp.universe),
         "resolution": hyp.resolution,
+        "extra_resolutions": list(extra_resolutions),
         "data_requirements": list(hyp.data_requirements),
         "capital": capital,
         "max_position_pct": hyp.risk_limits.max_position_pct,
         "max_drawdown_pct": hyp.risk_limits.max_drawdown_pct,
         "max_leverage": hyp.risk_limits.max_leverage,
+        "sizing_budget": 0.0 if hyp.sizing is None else hyp.sizing.budget,
         "venue_model": version.pins.venue_model.model_dump(mode="json"),
         **dict(version.config),
     }
+
+
+def _extra_grains(
+    ws: Workspace, store: StateStore, hyp: Hypothesis, version: StrategyVersion
+) -> tuple[str, ...]:
+    """The grains the version's overlays keep a clock on, beyond the sleeve's own."""
+    from kanso.hyp import hypothesis_of
+
+    found: list[str] = []
+    for ref in version.attached:
+        if ref.construct != OVERLAY:
+            continue
+        grain = hypothesis_of(ws, store, ref.hyp_id).resolution
+        if grain != hyp.resolution and grain not in found:
+            found.append(grain)
+    return tuple(found)
 
 
 def _modifier_config(

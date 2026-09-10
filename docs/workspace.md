@@ -286,6 +286,34 @@ Before this existed, an instruction like that could only be prose in `program.md
 nothing enforces: `risk_limits` are three ceilings, and a strategy holding a tenth of what you
 asked for satisfies every one of them.
 
+**`sizing` is yours too, and it is not a gate.** A gate judges after a backtest has been
+paid for; this moves the size of every order to the harness, so a proposal that sizes wrong
+cannot be run at all:
+
+```yaml
+capital: 30000
+sizing:                            # scope: adding or changing it clears `best`
+  mode: full_book                  # every entry is the whole budget in one instrument, whole lots, at market;
+  budget: 30000                    # one instrument held at a time; every exit the whole position; no size argument
+```
+
+Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty` or
+`price`; `self.held(id)` is the position reader; a flip is `submit_exit(old)` then
+`submit_entry(new, side)` in one handler. `strategy_integrity` discards a `strategy.py`
+that names a size knob, builds an order by hand, reads `self.portfolio` or overrides a
+harness method, with the line and what to write instead; what the scan cannot see — a second
+instrument while one is held, the other side of a held name — is refused inside the handler,
+the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
+instrument, the instant and the book held. `position_size` under the rule judges entry fills
+over the budget, gathered per order, and is the backstop that should never fire. Classification
+never touches the key. `kanso hyp validate` refuses (exit 3) a budget above what
+`max_position_pct` or `max_leverage` admits, a rule on a `filter` or an `exit`, a budgeted
+overlay on an unbudgeted host or the reverse, an overlay whose host budget and own budget
+together exceed what its own `capital × max_leverage` funds or whose host budget exceeds its
+own position ceiling, and a filter or exit rule whose `resolution` is not its host's. An
+overlay's `capital` is the whole book its cards run on — host budget and its own — and its
+clips are sized to its own budget (`docs/constructs.md`).
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from

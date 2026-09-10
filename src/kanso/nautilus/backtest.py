@@ -48,14 +48,15 @@ reporting a one-for-ten reverse split as a 905% return.
 Engine facts this module relies on (nautilus_trader 1.231.0): `BacktestEngine` accepts
 data objects directly through `add_data`, which assumes one type per call, requires the
 instrument in the cache first, and needs a `client_id` for anything that is not a `Bar`,
-`QuoteTick` or `TradeTick`; `sort_data` orders the accumulated stream by `ts_init` once;
-`run(start, end)` bounds the stream by `ts_init`; an exception raised in a strategy
-handler is logged and re-raised, so a failing card fails the run rather than passing
-quietly; the engine's simulated exchange processes an order on the next data instant, so
-every fill is stamped at a data instant; `Position` carries `ts_opened`, `ts_closed`, the
-`OrderFilled` events that made it and the `PositionAdjusted` events applied to it, which
-together are the whole trade record; with `use_random_ids` left off the exchange generates
-deterministic trade ids.
+`QuoteTick` or `TradeTick`; `sort_data` orders the accumulated stream by `ts_init` once
+with a stable sort, so markers inserted last at an instant stay last when homogeneous
+runs are concatenated; `run(start, end)` bounds the stream by `ts_init`; an exception
+raised in a strategy handler is logged and re-raised, so a failing card fails the run
+rather than passing quietly; the engine's simulated exchange processes an order on the
+next data instant, so every fill is stamped at a data instant; `Position` carries
+`ts_opened`, `ts_closed`, the `OrderFilled` events that made it and the `PositionAdjusted`
+events applied to it, which together are the whole trade record; with `use_random_ids`
+left off the exchange generates deterministic trade ids.
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ from kanso.criteria import CardRun, Fill, Trade
 from kanso.criteria.run import BPS, NS_PER_DAY, NS_PER_SECOND, Held, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
+from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
 
@@ -115,6 +117,9 @@ DEFAULT_PERIOD: Final = "1d"
 
 RESEARCH: Final = "research"
 CERTIFICATION: Final = "certification"
+
+OVERLAY: Final = "overlay"
+"""The one attached construct with a clock of its own."""
 
 SLEEVE_ENTRY: Final = "Strategy"
 MODIFIER_ENTRY: Final = "Modifier"
@@ -168,6 +173,19 @@ class RunRequest:
     chosen by the caller. Nothing in research sets any: a card is judged at the settings
     its own file states. A perturbation gate is what moves them, and it moves only the
     author's own numeric fields, never one the hypothesis injects.
+
+    `sleeve_budget` is what the sleeve sizes every order to under a `sizing` rule — its
+    own hypothesis's for a sleeve card, its host's for an attached construct's — and zero
+    is free sizing. An attached construct's own budget travels in its `params` as
+    `sizing_budget`. `grains` are the bar grains to load, the sleeve's first; empty means
+    the hypothesis's own. An overlay researched at a finer grain than its host names both
+    (`grains_of`),
+    for the combined run and the host-alone run alike. Every grain loaded reaches the
+    venue whether or not the sleeve subscribes it, and the exchange matches against the
+    finest bar type it has seen for an instrument, so inside such a run the host's market
+    orders fill at the last print of the finer grain — not at the close its own grain
+    just delivered — and a coarser bar on a day the finer grain is silent does not move
+    the book. The host's `on_bar` still runs only on the host grain.
     """
 
     hyp: Hypothesis
@@ -181,6 +199,8 @@ class RunRequest:
     mem_cap_gb: float | None = None
     period: str = DEFAULT_PERIOD
     overrides: Mapping[str, float] = field(default_factory=dict)
+    grains: tuple[str, ...] = ()
+    sleeve_budget: float = 0.0
 
     @property
     def bounds(self) -> tuple[int, int]:
@@ -221,6 +241,9 @@ class RunResult:
     reason: str | None = None
     traceback_tail: str | None = None
     remedy: str | None = None
+    refused: Refusal | None = None
+    """The order the sizing rule refused, when one was: the run stopped there, with no
+    numbers, because the card can no longer validate and every bar after it is spend."""
 
 
 def stage_of(hyp: Hypothesis, window: tuple[date, date]) -> str:
@@ -261,14 +284,40 @@ def _seed_globals(snapshot_id: str) -> None:
 # --- loading the window ------------------------------------------------------
 
 
+def grains_of(hyp: Hypothesis, host_resolution: str | None) -> tuple[str, ...]:
+    """The bar grains a run of this hypothesis loads: its own, or its host's and its own.
+
+    Only an overlay has a clock of its own; a filter or an exit rule is consulted on its
+    host's grain, and `hyp validate` holds it to the host's resolution. So two grains are
+    loaded exactly when an overlay's resolution differs from its host's, and both the
+    combined run and the host-alone run load them, so the difference between the two is
+    the overlay and not the book the host filled against. Empty means the hypothesis's
+    own grain.
+    """
+    if (
+        host_resolution
+        and host_resolution != hyp.resolution
+        and hyp.construct is not None
+        and hyp.construct.id == OVERLAY
+    ):
+        return (host_resolution, hyp.resolution)
+    return ()
+
+
+def _bar_grains(request: RunRequest) -> tuple[str, ...]:
+    """The bar sizes this request loads, the sleeve's first."""
+    return request.grains or (request.hyp.resolution,)
+
+
 def window_data(
     request: RunRequest, catalog_path: Path
 ) -> tuple[tuple[object, ...], tuple[tuple[object, ...], ...]]:
     """The resolved instruments and the window's points, grouped one type per group.
 
     Only the requested window is read, and only the types the hypothesis requires, at the
-    resolution it declares. Each group is homogeneous because the engine assumes one type
-    per `add_data` call.
+    resolution it declares — or at every grain the request names, when an overlay's differs
+    from its host's. Each group is homogeneous because the engine assumes one type per
+    `add_data` call.
     """
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
@@ -287,16 +336,35 @@ def window_data(
     opens, closes = request.bounds
     start, end = opens, closes - 1
     groups: list[tuple[object, ...]] = []
+    grains = _bar_grains(request)
+    loaded: dict[str, int] = {grain: 0 for grain in grains}
     for requirement in sorted(hyp.data_requirements):
         if requirement not in BUILTIN_TYPES:
             custom = _custom_points(catalog, resolve_type(requirement), hyp.universe, start, end)
             if custom:
                 groups.append(custom)
             continue
+        if requirement == "bar":
+            for resolution in grains:
+                for name in sorted(hyp.universe):
+                    found = _market_points(catalog, requirement, held[name], resolution, start, end)
+                    if found:
+                        loaded[resolution] += len(found)
+                        groups.append(found)
+            continue
         for name in sorted(hyp.universe):
             found = _market_points(catalog, requirement, held[name], hyp.resolution, start, end)
             if found:
                 groups.append(found)
+    if len(grains) > 1:
+        missing = [grain for grain, count in loaded.items() if count == 0]
+        if missing:
+            raise PreconditionError(
+                f"data: the catalog holds no {' and no '.join(missing)} bars for {hyp.id} "
+                f"over {request.window[0]}..{request.window[1]}",
+                remedy="load both the host grain and the overlay grain for the window, "
+                "then take a snapshot",
+            )
     ordered = tuple(held[name] for name in sorted(hyp.universe))
     return ordered, tuple(groups)
 
@@ -381,12 +449,18 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     module = _module(request.strategy_source, "sleeve")
     cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
     hyp = request.hyp
+    grains = _bar_grains(request)
+    extra: tuple[str, ...] = ()
+    if any(construct == OVERLAY for construct, _, _ in request.modifiers):
+        extra = grains[1:]
     config = cls.config_cls(
         hyp_id=hyp.id,
         universe=tuple(hyp.universe),
-        resolution=hyp.resolution,
+        resolution=grains[0],
+        extra_resolutions=extra,
         data_requirements=tuple(hyp.data_requirements),
         capital=request.capital,
+        sizing_budget=request.sleeve_budget,
         max_position_pct=hyp.risk_limits.max_position_pct,
         max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
         max_leverage=hyp.risk_limits.max_leverage,
@@ -453,8 +527,7 @@ def execute(
         get_starting_balances,
     )
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
-    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
-    from nautilus_trader.model.identifiers import ClientId, Venue
+    from nautilus_trader.model.identifiers import Venue
 
     from kanso.nautilus.actions import modules
 
@@ -485,20 +558,17 @@ def execute(
             )
         for instrument in instruments:
             engine.add_instrument(instrument)
-        for group in groups:
-            plain = type(group[0]) in (Bar, QuoteTick, TradeTick)
-            engine.add_data(
-                list(group),
-                client_id=None if plain else ClientId(CLIENT_ID),
-                sort=False,
-            )
-        engine.sort_data()
+        points = _ordered(groups)
+        _load_stream(engine, points)
         cls, config = _sleeve(request)
         strategy = cls(config=config)
         for construct, source, params in request.modifiers:
             engine.add_actor(
                 _modifier(construct, source, params, request.hyp.id, cls.__name__),
             )
+        from kanso.nautilus.cross_section import arm
+
+        arm(strategy, points)
         engine.add_strategy(strategy)
         opens, closes = request.bounds
         engine.run(start=opens, end=closes - 1)
@@ -556,10 +626,14 @@ def _stream(
     Ties are broken by instrument and then by price, so two points at one instant always
     order the same way and the mark they leave is reproducible.
     """
+    from kanso.nautilus.cross_section import is_marker
+
     opens, closes = request.bounds
     stream: list[tuple[int, str, float | None]] = []
     for group in groups:
         for point in group:
+            if is_marker(point):
+                continue
             ts = int(point.ts_init)  # type: ignore[attr-defined]
             if not opens <= ts < closes:
                 raise PreconditionError(
@@ -589,6 +663,54 @@ def _price_of(point: object) -> float | None:
     if isinstance(point, TradeTick):
         return float(point.price)
     return None
+
+
+def _ordered(groups: Sequence[Sequence[object]]) -> tuple[object, ...]:
+    """The window as the engine delivers it: stable `ts_init` order, then flush markers."""
+    from kanso.nautilus.cross_section import ordered
+
+    return ordered(groups)
+
+
+def _load_stream(engine: Any, points: Sequence[object]) -> None:
+    """Add the ordered stream in homogeneous type runs, then sort once.
+
+    The engine assumes one type per `add_data` call. Markers are `CustomData` and need
+    `CLIENT_ID`; bars, quotes and trades do not. Consecutive same-type runs keep the
+    insertion order `sort_data`'s stable sort then preserves, so a marker that follows
+    its cohort in the ordered stream still follows it after the sort.
+    """
+    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model.identifiers import ClientId
+
+    if not points:
+        return
+    run: list[object] = []
+    for point in points:
+        if run and type(point) is not type(run[0]):
+            _add_run(engine, run, Bar, QuoteTick, TradeTick, ClientId)
+            run = []
+        run.append(point)
+    _add_run(engine, run, Bar, QuoteTick, TradeTick, ClientId)
+    engine.sort_data()
+
+
+def _add_run(
+    engine: Any,
+    run: Sequence[object],
+    bar_cls: type,
+    quote_cls: type,
+    trade_cls: type,
+    client_id_cls: type,
+) -> None:
+    """One homogeneous `add_data` call, unsorted."""
+    first = run[0]
+    plain = type(first) in (bar_cls, quote_cls, trade_cls)
+    engine.add_data(
+        list(run),
+        client_id=None if plain else client_id_cls(CLIENT_ID),
+        sort=False,
+    )
 
 
 # --- the extraction ----------------------------------------------------------
@@ -1045,11 +1167,13 @@ def _reported(
         return _crashed(
             request, wall_s, peak_gb, EXCEPTION, reported["traceback"], reported["remedy"]
         )
+    refused = reported.get("refused")
     return RunResult(
         run=reported["run"],
         wall_s=wall_s,
         peak_mem_gb=peak_gb,
         intents=reported["intents"],
+        refused=None if refused is None else Refusal(**refused),
     )
 
 
@@ -1096,7 +1220,9 @@ def main(argv: Sequence[str]) -> int:
 
     Every failure is reported as a crash with the tail of its traceback rather than as a
     non-zero exit alone, because a card that raised is a card whose reason the loop has
-    to be able to read. A failure kanso itself raised also reports its remedy, as a value
+    to be able to read. An order the sizing rule refused is not a crash: it comes back as
+    a value, the refusal itself, and the card records it as a gate. A failure kanso itself
+    raised also reports its remedy, as a value
     rather than as a line of a traceback: the parent decides what to tell the operator to
     do about a card that did not run, and it can only choose the right thing if the cause
     is what names it.
@@ -1105,6 +1231,18 @@ def main(argv: Sequence[str]) -> int:
     payload = pickle.loads(request_path.read_bytes())
     try:
         result = execute(payload["request"], payload["instruments"], payload["groups"])
+    except SizingError as refused:
+        result_path.write_bytes(
+            pickle.dumps(
+                {
+                    "ok": True,
+                    "run": _empty(payload["request"]),
+                    "intents": (),
+                    "refused": refused.refusal.payload(),
+                }
+            )
+        )
+        return 0
     except Exception as failure:
         result_path.write_bytes(
             pickle.dumps(

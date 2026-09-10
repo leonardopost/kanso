@@ -6,12 +6,13 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from nautilus_trader.model.enums import BarAggregation
 
 from kanso.errors import PreconditionError
-from kanso.nautilus.backtest import execute, run, run_subprocess, stage_of, window_data
+from kanso.nautilus.backtest import execute, grains_of, run, run_subprocess, stage_of, window_data
 from kanso.schemas import Hypothesis
 
-from .conftest import CERTIFICATION, RESEARCH, bars, catalog, instrument
+from .conftest import CERTIFICATION, RESEARCH, bars, catalog, hypothesis, instrument, second_bars
 
 
 def test_the_two_windows_a_run_may_name(hyp: Hypothesis) -> None:
@@ -78,6 +79,28 @@ def test_only_the_window_and_only_the_universe_is_loaded(
     assert sum(len(group) for group in groups) == 31
 
 
+def test_an_overlay_card_loads_the_host_grain_and_its_own(tmp_path: Path, request_for) -> None:
+    points = [*bars(RESEARCH), *second_bars(RESEARCH)]
+    store = catalog(tmp_path / "both", points, [instrument()])
+    overlay = hypothesis().model_copy(update={"resolution": "1s"})
+    request = request_for(RESEARCH, hypothesis_=overlay, grains=("1d", "1s"))
+    _instruments, groups = window_data(request, store)
+    aggregations = {group[0].bar_type.spec.aggregation for group in groups}
+
+    assert sum(len(group) for group in groups) == 31 + 62
+    assert BarAggregation.SECOND in aggregations
+    assert BarAggregation.DAY in aggregations
+
+
+def test_an_overlay_card_refuses_a_missing_host_grain(tmp_path: Path, request_for) -> None:
+    store = catalog(tmp_path / "seconds-only", second_bars(RESEARCH), [instrument()])
+    overlay = hypothesis().model_copy(update={"resolution": "1s"})
+    request = request_for(RESEARCH, hypothesis_=overlay, grains=("1d", "1s"))
+
+    with pytest.raises(PreconditionError, match="holds no 1d bars"):
+        window_data(request, store)
+
+
 def test_data_from_another_window_is_refused_at_the_door(
     tmp_path: Path, store: Path, request_for
 ) -> None:
@@ -109,3 +132,21 @@ def test_an_unresolved_instrument_is_refused_before_anything_runs(
 
     with pytest.raises(PreconditionError, match="no definition for OTHER.XNAS"):
         run(request_for(RESEARCH, hypothesis_=hyp), store)
+
+
+def test_two_grains_are_loaded_only_for_an_overlay_at_a_grain_of_its_own() -> None:
+    sleeve = hypothesis()
+    overlay = sleeve.model_copy(
+        update={
+            "resolution": "1s",
+            "construct_": sleeve.construct.model_copy(update={"id": "overlay"}),
+        }
+    )
+    filtering = overlay.model_copy(
+        update={"construct_": sleeve.construct.model_copy(update={"id": "filter"})}
+    )
+
+    assert grains_of(sleeve, None) == ()
+    assert grains_of(overlay, "1d") == ("1d", "1s")
+    assert grains_of(overlay, "1s") == ()
+    assert grains_of(filtering, "1d") == ()

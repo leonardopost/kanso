@@ -515,3 +515,80 @@ def test_one_card_is_costed_with_one_venue_model() -> None:
     cash = resolve_venue_model("XNAS", override=VenueOverride(account="cash"))
     with pytest.raises(ValidationError, match="one card is costed with one model"):
         loop._one_venue_model({"XNAS": cash, "XETR": right})
+
+
+# --- under a sizing rule -----------------------------------------------------
+
+
+REVERSING = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        self.seen += 1
+        if self.seen == 3:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY")
+        elif self.seen == 5:
+            self.submit_entry(bar.bar_type.instrument_id, "SELL")
+"""
+
+KNOBBED = REVERSING.replace(b'"SELL")', b'"SELL", notional=100.0)')
+
+SIZED = {"capital": 100_000, "sizing": {"mode": "full_book", "budget": 10_000}}
+
+
+def test_a_refused_card_is_a_discard_carrying_the_sizing_gate(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, document(**SIZED), FLAT)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERSING)
+
+    refused = loop.card(ws, store, hyp_id, "reverses without exiting")
+
+    assert refused.status == "discard"
+    assert (refused.metric, refused.n_trades, refused.crash_tail) == (0.0, 0, None)
+    assert [gate.id for gate in refused.gate_results] == ["strategy_integrity", "sizing"]
+    sizing = refused.gate_results[1]
+    assert not sizing.passed
+    assert sizing.evidence["rule"] == "one_position"
+    assert sizing.evidence["instrument_id"] == "DEMO.XNAS"
+    assert "on the other side" in str(sizing.evidence["why"])
+    assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
+
+
+def test_a_size_knob_is_discarded_before_any_backtest_under_sizing(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, document(**SIZED), FLAT)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, KNOBBED)
+
+    refused = loop.card(ws, store, hyp_id, "names a notional")
+
+    assert refused.status == "discard"
+    assert refused.wall_s == 0.0
+    assert [gate.id for gate in refused.gate_results] == ["strategy_integrity"]
+    problems = refused.gate_results[0].evidence["problems"]
+    assert any("keyword 'notional=' is denied under sizing" in str(p) for p in problems)
+
+
+def test_a_refused_baseline_refuses_the_run_naming_the_rule(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, document(**SIZED), REVERSING)
+
+    with pytest.raises(PreconditionError, match="sizing refused one_position at DEMO.XNAS"):
+        loop.begin(ws, store, hyp_id)
+
+    assert show(ws, store, hyp_id).active_run is None

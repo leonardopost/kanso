@@ -19,7 +19,7 @@ from kanso.schemas import StrategyFile, resolve_venue_model, write_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
-from .conftest import RAISING, REVERTING, classify, document
+from .conftest import RAISING, REVERTING, classify, document, register, write_hypothesis
 
 HOST = "host_sleeve"
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
@@ -55,8 +55,77 @@ FILTER = document(
 """A filter attached to the certified host, measured against what the host does alone."""
 
 
-def compose_host(ws: Workspace, store: StateStore, source: bytes = REVERTING) -> str:
-    """Write a one-version host strategy and store the bytes its sleeve names."""
+SIZED_HOST = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"The reverting rule under a sizing rule: the harness sizes, the rule picks the bar.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.closes = []
+        self.long = False
+
+    def on_bar(self, bar) -> None:
+        self.closes.append(float(bar.close))
+        if len(self.closes) < 3:
+            return
+        first, second, third = self.closes[-3:]
+        if first > second > third and not self.long:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY")
+            self.long = True
+        elif third > second > first and self.long:
+            self.submit_exit(bar.bar_type.instrument_id)
+            self.long = False
+"""
+
+NEUTRAL_OVERLAY = b"""
+from kanso.nautilus.strategy import Decision, KansoModifier, KansoModifierConfig
+
+
+class Config(KansoModifierConfig):
+    pass
+
+
+class Modifier(KansoModifier):
+    construct = "overlay"
+    config_cls = Config
+
+    def on_data(self, ctx) -> Decision:
+        return Decision.neutral(self.construct)
+"""
+
+BOOK = {
+    "capital": 100_000,
+    "risk_limits": {"max_position_pct": 20, "max_drawdown_pct": 40, "max_leverage": 1},
+}
+OVERLAY = document(
+    id="demo_overlay",
+    construct={"id": "overlay", "host": HOST},
+    objective={"id": "marginal_wf_sharpe", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    sizing={"mode": "full_book", "budget": 5_000},
+    **BOOK,
+)
+"""A sized overlay on the sized host, measured against what the host does alone."""
+
+
+def compose_host(
+    ws: Workspace, store: StateStore, source: bytes = REVERTING, *, sized: bool = False
+) -> str:
+    """Register the host's hypothesis, write a one-version host strategy and store its bytes.
+
+    The hypothesis is registered because a composed host always has one: an attached
+    construct's run reads the host's grain and its budget from it, and a host with none
+    is refused.
+    """
+    rule = {"sizing": {"mode": "full_book", "budget": 10_000}, **BOOK} if sized else {}
+    register(ws, store, write_hypothesis(ws, document(id=HOST, **rule), source))
     sha = store.put_blob(source)
     strategy = StrategyFile.model_validate(
         {
@@ -187,3 +256,28 @@ def test_an_unclassified_hypothesis_has_no_construct_to_research_it_as(
     )
     with pytest.raises(PreconditionError, match="is not classified"):
         loop._setup(ws, store, plain)
+
+
+def test_a_sized_overlay_on_a_sized_host_runs_at_both_budgets(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The host sizes to its own rule and the overlay's budget travels in its parameters."""
+    compose_host(ws, store, SIZED_HOST, sized=True)
+    hyp_id = classify(ws, store, OVERLAY, NEUTRAL_OVERLAY)
+
+    run = loop.begin(ws, store, hyp_id)
+    baseline = records.cards_of(store, hyp_id)[0]
+
+    assert run.host_version == 1
+    assert baseline.metric == 0.0, "a neutral overlay is the host"
+    assert baseline.n_trades > 0, "the host traded, sized by the harness"
+
+
+def test_a_sized_host_the_rule_refuses_leaves_nothing_to_measure_against(
+    ws: Workspace, store: StateStore
+) -> None:
+    compose_host(ws, store, REVERTING, sized=True)
+    hyp_id = classify(ws, store, OVERLAY, NEUTRAL_OVERLAY)
+
+    with pytest.raises(PreconditionError, match="sizing refused size_argument"):
+        loop.begin(ws, store, hyp_id)

@@ -260,3 +260,20 @@ def test_a_rationale_is_bounded() -> None:
 def test_every_generated_hypothesis_keeps_its_embargo(hyp: Hypothesis) -> None:
     gap = hyp.windows.certification.start - hyp.windows.research.end
     assert gap >= timedelta(days=embargo_days(hyp.horizon))
+
+
+def test_a_sizing_budget_must_be_positive() -> None:
+    with pytest.raises(ValidationError, match="sizing.budget"):
+        build(sizing={"mode": "full_book", "budget": 0})
+
+
+def test_a_sizing_mode_outside_full_book_is_refused() -> None:
+    with pytest.raises(ValidationError, match="sizing.mode"):
+        build(sizing={"mode": "fixed", "budget": 1000})
+
+
+def test_sizing_is_optional_and_carries_its_budget() -> None:
+    assert build().sizing is None
+    sized = build(sizing={"mode": "full_book", "budget": 30_000})
+    assert sized.sizing is not None
+    assert (sized.sizing.mode, sized.sizing.budget) == ("full_book", 30_000.0)

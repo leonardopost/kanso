@@ -922,3 +922,14 @@ def _failures(store: StateStore, hyp_id: str) -> int:
         "SELECT consecutive_cert_failures FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
     ).fetchone()
     return int(row[0])
+
+
+def test_an_attached_subject_carries_its_own_budget_as_a_parameter() -> None:
+    from types import SimpleNamespace
+
+    from kanso.certify.run import _own_budget
+    from tests.criteria.builders import make_hyp
+
+    assert _own_budget(SimpleNamespace(hyp=make_hyp())) == {}
+    sized = make_hyp(sizing={"mode": "full_book", "budget": 2_500.0})
+    assert _own_budget(SimpleNamespace(hyp=sized)) == {"sizing_budget": 2_500.0}

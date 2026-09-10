@@ -31,7 +31,9 @@ from kanso.schemas import (
     Certificate,
     CertificationPlan,
     Hypothesis,
+    StrategyVersion,
     parse_yaml,
+    resolve_venue_model,
     write_yaml,
 )
 from kanso.state import StateStore
@@ -43,7 +45,9 @@ from tests.research.conftest import (
     classify,
     document,
     prepared,
+    register,
     store,
+    write_hypothesis,
     ws,
 )
 
@@ -302,3 +306,52 @@ def pinned(ws: Workspace, store: StateStore, hyp_id: str = HYP_ID) -> Hypothesis
     sha = registration.hypothesis_sha
     assert sha is not None
     return parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
+
+
+def draft_version(
+    store: StateStore, sleeve_hyp_id: str, attached: tuple[tuple[str, str], ...] = ()
+) -> StrategyVersion:
+    """A one-version draft with these `(hyp_id, construct)` attachments, pinned to nothing real."""
+    return StrategyVersion.model_validate(
+        {
+            "version": 1,
+            "sleeve": {"hyp_id": sleeve_hyp_id, "strategy_sha": store.put_blob(b"# sleeve")},
+            "attached": [
+                {
+                    "hyp_id": hyp_id,
+                    "strategy_sha": store.put_blob(f"# {hyp_id}".encode()),
+                    "construct": construct,
+                    "params": {},
+                }
+                for hyp_id, construct in attached
+            ],
+            "config": {},
+            "pins": {
+                "kanso_version": "0.1.0",
+                "nautilus_version": "1.231.0",
+                "criteria_version": "0.1.0",
+                "plan_version": 1,
+                "snapshot_id": "s",
+                "venue_model": resolve_venue_model("XNAS", max_leverage=1.0),
+            },
+            "expectation": {
+                "objective_id": "wf_sharpe_net",
+                "value": 1.0,
+                "ci90": [0.5, 1.5],
+                "mdd_p95": 0.1,
+                "window": {"start": "2024-01-01", "end": "2024-01-31"},
+            },
+            "state": "composed",
+            "created_at": NOW,
+        }
+    )
+
+
+def draft_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, **changes: Any) -> Hypothesis:
+    """An unclassified hypothesis registered under this id, for readers that need one."""
+    doc = {
+        key: value
+        for key, value in document(id=hyp_id, **changes).items()
+        if key not in ("construct", "objective", "constraints")
+    }
+    return register(ws, store, write_hypothesis(ws, doc, hyp_id=hyp_id))

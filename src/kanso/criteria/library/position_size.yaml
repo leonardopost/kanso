@@ -2,7 +2,7 @@ id: position_size
 kind: gate
 stage: card
 required: false
-meaningful_when: "When the hypothesis says what a position is worth, not only how large it may get: risk limits are ceilings, and this carries a floor. Judges each instrument at each period end it was held."
+meaningful_when: "When the hypothesis says what a position is worth, not only how large it may get: risk limits are ceilings, this carries a floor. On period-end marks; under a sizing rule, on entry fills."
 params: {min_pct: float, max_pct: float}
 ranges: {min_pct: [0.0, 1000.0], max_pct: [0.0, 1000.0]}
 impl: kanso.criteria.gates.position_size

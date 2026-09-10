@@ -5,12 +5,13 @@ overlay or an exit rule — that changes what the sleeve does without editing it
 halves meet here:
 
 * `HookContext` is everything a modifier is told about the moment it is consulted: the
-  order under consideration, the position it would change, the capital behind it, and the
-  last data event of each kind. It carries `ts_event`, never a wall clock;
+  order under consideration, the position it would change, the capital behind it, the
+  sleeve's net book, and the last data event of each kind. It carries `ts_event`, never a
+  wall clock;
 * `Decision` is everything a modifier may say back. Each construct owns exactly one part
-  of it — a filter answers `allow`, an overlay answers `scale` and `hedges`, an exit rule
-  answers `exit` — and `Decision.neutral(construct)` is the identity for that part: the
-  answer that leaves the host exactly as it was;
+  of it — a filter answers `allow`, an overlay answers `scale`, `hedges` and `clips`, an
+  exit rule answers `exit` — and `Decision.neutral(construct)` is the identity for that
+  part: the answer that leaves the host exactly as it was;
 * the registry maps a host strategy to the modifiers attached to it, so the sleeve can
   consult them synchronously, inside the call that is about to place an order, rather than
   through the message bus, which would answer after the fact.
@@ -26,7 +27,7 @@ leaves nothing behind.
 from __future__ import annotations
 
 import weakref
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, Protocol, runtime_checkable
 
@@ -46,10 +47,19 @@ MODIFIER_CONSTRUCTS: Final = (FILTER, OVERLAY, EXIT)
 
 _ANSWERS: Final[dict[str, tuple[str, ...]]] = {
     FILTER: ("allow",),
-    OVERLAY: ("scale", "hedges"),
+    OVERLAY: ("scale", "hedges", "clips"),
     EXIT: ("exit",),
 }
 """The `Decision` fields each construct owns; every other field must be left unset."""
+
+FIELDS: Final = ("allow", "scale", "hedges", "clips", "exit")
+"""Every field a `Decision` carries, so a foreign answer is found whatever construct set it."""
+
+BUY: Final = "BUY"
+SELL: Final = "SELL"
+FLAT: Final = "FLAT"
+CLIP_SIDES: Final = (BUY, SELL, FLAT)
+"""What a clip may ask for: open on a side, or take the clip off whole."""
 
 
 @dataclass(frozen=True)
@@ -65,12 +75,35 @@ class Hedge:
 
 
 @dataclass(frozen=True)
+class Clip:
+    """One leg a sized overlay asks for: an instrument and a side, and never a quantity.
+
+    The harness sizes it to the overlay's own budget — the whole of it, in whole lots, at
+    the last print of the finest grain loaded — and holds one clip at a time. `FLAT` takes
+    the clip in that instrument off whole. A `BUY` or `SELL` on a clip already held on
+    that side is a no-op, and on the other side is refused: `FLAT` first.
+    """
+
+    instrument: str
+    side: str
+
+    def __post_init__(self) -> None:
+        if self.side not in CLIP_SIDES:
+            raise ValidationError(f"clip.side: {self.side!r} is none of {', '.join(CLIP_SIDES)}")
+
+
+@dataclass(frozen=True)
 class HookContext:
     """What a hook and `evaluate` are told about the moment they are consulted.
 
     `ts_event` is the economic reference time of the last data event the host handled —
     the only clock a strategy or a modifier may read, because the engine runs a test clock
     in a backtest and a live clock in a node, so anything else breaks replay parity.
+    `book` is the host sleeve's own signed quantity per instrument — under a sizing rule
+    with its unfilled market orders applied and its overlays' clips left out — `clips` is
+    what the attached overlays hold the same way, and `prices` is the last print of every
+    name at the finest grain loaded, so an overlay consulted on one name can still see what
+    the host holds in the others and what the venue's book marks them at.
     """
 
     instrument_id: str
@@ -86,26 +119,40 @@ class HookContext:
     last_trade: object | None
     host_strategy_id: str | None
     cache: object
+    book: Mapping[str, float] = field(default_factory=dict)
+    """The host's signed net quantity per instrument of its universe."""
+
+    prices: Mapping[str, float] = field(default_factory=dict)
+    """The last print of every name at the finest grain loaded: the price an order fills
+    against, which on a finer overlay grain is not the host's own last close."""
+
+    clips: Mapping[str, float] = field(default_factory=dict)
+    """The attached overlays' signed clip quantity per instrument, unfilled clips applied."""
 
 
 @dataclass(frozen=True)
 class Decision:
     """A modifier's answer. Each construct sets its own fields and leaves the rest unset.
 
-    `allow` belongs to a filter, `scale` and `hedges` to an overlay, `exit` to an exit
-    rule. An unset field is silence, not a "no": the sleeve composes several modifiers by
-    taking every filter's `allow`, the product of every overlay's `scale`, the union of
-    their `hedges`, and whether any exit rule says `exit`.
+    `allow` belongs to a filter, `scale`, `hedges` and `clips` to an overlay, `exit` to an
+    exit rule. An unset field is silence, not a "no": the sleeve composes several modifiers
+    by taking every filter's `allow`, the product of every overlay's `scale`, the union of
+    their `hedges` and `clips`, and whether any exit rule says `exit`. `hedges` carry a
+    quantity and belong to an overlay without a budget; `clips` carry none and belong to
+    one with a budget, which sizes them.
     """
 
     allow: bool | None = None
     scale: float | None = None
     hedges: tuple[Hedge, ...] | None = None
     exit: bool | None = None
+    clips: tuple[Clip, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.hedges is not None and not isinstance(self.hedges, tuple):
             object.__setattr__(self, "hedges", tuple(self.hedges))
+        if self.clips is not None and not isinstance(self.clips, tuple):
+            object.__setattr__(self, "clips", tuple(self.clips))
 
     @classmethod
     def neutral(cls, construct: str) -> Decision:
@@ -135,9 +182,7 @@ class Decision:
                 f"one of {', '.join(MODIFIER_CONSTRUCTS)} was expected"
             )
         foreign = [
-            name
-            for name in ("allow", "scale", "hedges", "exit")
-            if name not in answers and getattr(self, name) is not None
+            name for name in FIELDS if name not in answers and getattr(self, name) is not None
         ]
         if foreign:
             raise ValidationError(

@@ -60,7 +60,7 @@ from kanso.data import registry
 from kanso.data.instruments import resolve_universe
 from kanso.data.types import data_types
 from kanso.errors import ValidationError
-from kanso.hyp.scaffold import HYPOTHESES
+from kanso.hyp.scaffold import HYPOTHESES, hypothesis_file
 from kanso.nautilus import adapters
 from kanso.schemas import (
     ConstraintRef,
@@ -75,6 +75,15 @@ from kanso.schemas import (
     resolve_venue_model,
     single_currency,
 )
+
+PERCENT: Final = 100.0
+
+SIZELESS: Final = frozenset({"filter", "exit"})
+"""Constructs that place no order of their own, so a sizing rule on them sizes nothing."""
+
+OVERLAY: Final = "overlay"
+"""The attached construct that places orders of its own, and so carries a budget."""
+"""Constructs that place no order of their own, so a sizing rule on them sizes nothing."""
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
@@ -121,6 +130,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
     venue_models(ws, hyp, instruments)
     _check_required(ws, hyp)
+    _check_sizing(ws, hyp)
     _check_classification(ws, hyp)
     return hyp
 
@@ -253,6 +263,48 @@ def _check_required(ws: Workspace, hyp: Hypothesis) -> None:
     _check_constraints(ws, hyp, required, where="required_constraints")
 
 
+def _check_sizing(ws: Workspace, hyp: Hypothesis) -> None:
+    """A budget the ceilings can fund, on a construct that places orders.
+
+    `full_book` sizes every entry to the whole budget in one instrument, so the position
+    ceiling and the leverage ceiling must each reach it — a budget above either would size
+    an order the limits then cut, and the rule would be a hope again. A filter places no
+    order and an exit rule places only the host's, so neither has anything to size.
+    """
+    sizing = hyp.sizing
+    if sizing is None:
+        return
+    if hyp.construct is not None and hyp.construct.id in SIZELESS:
+        raise ValidationError(
+            f"sizing: a {hyp.construct.id} places no order of its own, so it has nothing to size",
+            remedy="remove `sizing`, or attach the rule to the host sleeve",
+        )
+    capital, source = _capital(ws, hyp)
+    limits = hyp.risk_limits
+    ceiling = capital * limits.max_position_pct / PERCENT
+    if ceiling < sizing.budget:
+        raise ValidationError(
+            f"sizing.budget: {sizing.budget:g} is more than max_position_pct admits: "
+            f"{limits.max_position_pct:g}% of the {capital:g} capital{source} is {ceiling:g}, "
+            "and a full-book entry is the whole budget",
+            remedy="raise risk_limits.max_position_pct, raise capital, or lower sizing.budget",
+        )
+    funded = capital * limits.max_leverage
+    if funded < sizing.budget:
+        raise ValidationError(
+            f"sizing.budget: {sizing.budget:g} is more than max_leverage funds: "
+            f"{limits.max_leverage:g} x {capital:g} capital{source} is {funded:g}",
+            remedy="raise capital, raise risk_limits.max_leverage, or lower sizing.budget",
+        )
+
+
+def _capital(ws: Workspace, hyp: Hypothesis) -> tuple[float, str]:
+    """The capital a run of this hypothesis starts with, and where the number came from."""
+    if hyp.capital is not None:
+        return hyp.capital, ""
+    return ws.config.research.capital, " (from kanso.toml research.capital)"
+
+
 def _check_classification(ws: Workspace, hyp: Hypothesis) -> None:
     """The three fields classification writes, when they are written."""
     written = (hyp.construct, hyp.objective, hyp.constraints)
@@ -269,12 +321,12 @@ def _check_classification(ws: Workspace, hyp: Hypothesis) -> None:
             ),
             remedy="write the missing field, or clear all three and classify again",
         )
-    mode = _check_construct(ws, construct)
+    mode = _check_construct(ws, hyp, construct)
     _check_objective(ws, hyp, objective, mode)
     _check_constraints(ws, hyp, constraints)
 
 
-def _check_construct(ws: Workspace, ref: ConstructRef) -> str:
+def _check_construct(ws: Workspace, hyp: Hypothesis, ref: ConstructRef) -> str:
     """The construct's objective mode, once it exists, its params fit and its host is right.
 
     The parameters are checked by asking the construct rather than against a copy of its
@@ -304,11 +356,11 @@ def _check_construct(ws: Workspace, ref: ConstructRef) -> str:
                 f"not {ref.host!r}"
             )
     else:
-        _check_host_strategy(ws, ref.id, ref.host)
+        _check_host_strategy(ws, hyp, ref.id, ref.host)
     return str(construct.objective_mode)
 
 
-def _check_host_strategy(ws: Workspace, construct_id: str, host: str) -> None:
+def _check_host_strategy(ws: Workspace, hyp: Hypothesis, construct_id: str, host: str) -> None:
     """The host names a composed strategy, which is what a certified hypothesis becomes."""
     path = ws.path(STRATEGIES, host, STRATEGY_FILE)
     if not path.is_file():
@@ -321,6 +373,71 @@ def _check_host_strategy(ws: Workspace, construct_id: str, host: str) -> None:
     if strategy.id != host:
         raise ValidationError(
             f"construct.host: {path} declares the strategy {strategy.id!r}, not {host!r}"
+        )
+    _check_host_pairing(ws, hyp, construct_id, host, strategy)
+
+
+def _check_host_pairing(
+    ws: Workspace, hyp: Hypothesis, construct_id: str, host: str, strategy: StrategyFile
+) -> None:
+    """What an attached construct must agree with its host on: the grain, and the sizing rule.
+
+    A filter or an exit rule is consulted on the host's grain and has no clock of its own,
+    so its resolution is the host's. A budgeted overlay attaches to a budgeted host and an
+    unbudgeted one to an unbudgeted host, because the overlay's book is the host's budget
+    and its own together; and that book has to fit the ceilings the overlay's own file
+    declares, since an overlay card funds the venue and configures the host with them.
+    Read from the host sleeve's hypothesis file where the workspace holds one.
+    """
+    latest = strategy.latest()
+    path = hypothesis_file(ws, latest.sleeve.hyp_id)
+    if not path.is_file():
+        return
+    host_hyp = load_yaml(Hypothesis, path)
+    label = f"{host}@{latest.version}"
+    if construct_id in SIZELESS and hyp.resolution != host_hyp.resolution:
+        raise ValidationError(
+            f"resolution: {hyp.resolution} is not the host's {host_hyp.resolution}; a "
+            f"{construct_id} is consulted on the host's grain, and only an overlay has a "
+            "clock of its own",
+            remedy=f"set resolution to {host_hyp.resolution}, or attach as an overlay",
+        )
+    if construct_id != OVERLAY:
+        return
+    if hyp.sizing is not None and host_hyp.sizing is None:
+        raise ValidationError(
+            f"sizing: {label} was composed without a sizing rule, so its budget is unknown; "
+            "a budgeted construct attaches to a budgeted host",
+            remedy=f"add sizing to {path}, certify and compose it again, then re-pin this file",
+        )
+    if hyp.sizing is None and host_hyp.sizing is not None:
+        raise ValidationError(
+            f"sizing: {label} sizes to a budget of {host_hyp.sizing.budget:g}, and a construct "
+            "attached to a budgeted host declares its own",
+            remedy="add sizing to this file",
+        )
+    if hyp.sizing is None or host_hyp.sizing is None:
+        return
+    capital, source = _capital(ws, hyp)
+    limits = hyp.risk_limits
+    together = host_hyp.sizing.budget + hyp.sizing.budget
+    funded = capital * limits.max_leverage
+    if funded < together:
+        raise ValidationError(
+            f"sizing.budget: {hyp.sizing.budget:g} on an overlay is funded by its host's book, "
+            f"and {capital:g} capital{source} x {limits.max_leverage:g} leverage is {funded:g}, "
+            f"less than the host's {host_hyp.sizing.budget:g} budget and this one together",
+            remedy=f"set capital to at least {together:g}, raise risk_limits.max_leverage, "
+            "or lower sizing.budget",
+        )
+    ceiling = capital * limits.max_position_pct / PERCENT
+    if ceiling < host_hyp.sizing.budget:
+        raise ValidationError(
+            f"risk_limits.max_position_pct: {limits.max_position_pct:g}% of the {capital:g} "
+            f"book is {ceiling:g}, and the host's {host_hyp.sizing.budget:g} budget is one "
+            "instrument",
+            remedy=f"set max_position_pct to at least "
+            f"{host_hyp.sizing.budget / capital * PERCENT:g}",
         )
 
 

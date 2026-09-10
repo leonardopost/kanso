@@ -225,3 +225,34 @@ def test_every_composed_strategy_is_listed_in_id_order(
     compose(ws, store, HYP_ID)
 
     assert [held.id for held in files.strategies(ws)] == [HYP_ID]
+
+
+def test_an_attached_budget_travels_in_its_params_and_the_book_is_the_largest_sized_capital(
+    ws: Workspace, store: StateStore
+) -> None:
+    from kanso.strategy.composition import _book, _with_budget
+
+    from .conftest import draft_hypothesis, draft_version
+
+    whole = {"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1}
+    sized = draft_hypothesis(
+        ws,
+        store,
+        "demo_sized",
+        capital=50_000,
+        sizing={"mode": "full_book", "budget": 20_000},
+        risk_limits=whole,
+    )
+    plain = draft_hypothesis(ws, store, "demo_plain", capital=80_000)
+    sleeve = draft_hypothesis(ws, store, "demo_host", capital=30_000)
+
+    assert _with_budget({"a": 1}, sized) == {"a": 1, "sizing_budget": 20_000.0}
+    assert _with_budget(None, sized) == {"sizing_budget": 20_000.0}
+    assert _with_budget(None, plain) is None
+    assert _with_budget({"a": 1}, plain) == {"a": 1}
+
+    draft = draft_version(store, "demo_host", (("demo_sized", "overlay"), ("demo_plain", "filter")))
+    assert _book(ws, store, sleeve, draft) == 50_000.0, (
+        "the sized overlay's book, not the plain one's"
+    )
+    assert _book(ws, store, sleeve, draft_version(store, "demo_host")) == 30_000.0

@@ -51,6 +51,18 @@ account read $109,000 from the closing fill onwards. Those are reachable through
 to the cache's denial. kanso's own extraction reads none of them, computing a trade from
 its fills and the split ledger instead; a researched strategy may not read them either.
 
+**Under a sizing rule**, a fourth set. When the hypothesis declares `sizing`, the harness
+sizes every order and a proposal that names a size is refused before any backtest rather
+than capped after one: the `notional`, `qty` and `price` keywords of `submit_entry` and
+`submit_exit` (and a `**` that could carry them), the attributes that build, change or
+cancel an order by hand — `submit_order`, `order_factory`, `close_position`, `modify_order`
+and their kin — and `portfolio`, whose net position counts an attached overlay's clips as
+the host's; `self.held(id)` is the reader. A `def` that overrides a harness or engine
+method is refused too, because an override is a size knob no attribute scan can see. A
+sized overlay may name `Clip` and not `Hedge`, `hedges=` or `scale=`; an overlay without
+a budget may name `Hedge` and not `Clip` or `clips=`. Every denial says why and what to
+write instead, because the proposer is a model and a refusal it cannot act on is a loop.
+
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
 — dot-files and `__pycache__` — are ignored, because the interpreter writes them and the
@@ -192,6 +204,39 @@ DENIED_IDENTIFIERS: Final = DENIED_MODULES | DENIED_DUNDERS | DENIED_BRIDGE | DE
 
 DENIED_ATTRIBUTES: Final = DENIED_IDENTIFIERS | DENIED_CLOCK | DENIED_SCHEDULE | DENIED_STALE_BASIS
 
+SIZE_HELPERS: Final = frozenset({"submit_entry", "submit_exit"})
+"""The two verbs a sized strategy places orders with, which take no size."""
+
+SIZE_KEYWORDS: Final = frozenset({"notional", "qty", "price"})
+"""The keywords of those verbs that name a size or a price, denied under a sizing rule."""
+
+DENIED_UNDER_SIZING: Final = frozenset(
+    {
+        "submit_order",
+        "submit_order_list",
+        "order_factory",
+        "close_position",
+        "close_all_positions",
+        "modify_order",
+        "cancel_order",
+        "cancel_orders",
+        "cancel_all_orders",
+        "portfolio",
+    }
+)
+"""Attributes that build, change or cancel an order by hand, or read a net that is not the
+sleeve's own; denied only when the hypothesis declares `sizing`."""
+
+WHY_UNDER_SIZING: Final = "because the harness sizes every order to the budget"
+
+OVERLAY_CONSTRUCT: Final = "overlay"
+SIZED_OVERLAY_NAMES: Final = frozenset({"Hedge"})
+SIZED_OVERLAY_KEYWORDS: Final = frozenset({"hedges", "scale"})
+FREE_OVERLAY_NAMES: Final = frozenset({"Clip"})
+FREE_OVERLAY_KEYWORDS: Final = frozenset({"clips"})
+OWN_HOOKS: Final = frozenset({"evaluate", "on_data"})
+"""The modifier hooks an author writes; every other harness name is the harness's."""
+
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
 
@@ -254,13 +299,23 @@ def _visit_import_from(node: ast.ImportFrom) -> Iterable[str]:
                     yield named
 
 
-def scan(source: str, origin: str = STRATEGY) -> list[str]:
-    """Every import, identifier and attribute rule this source breaks, in file order."""
+def scan(
+    source: str,
+    origin: str = STRATEGY,
+    *,
+    sized: bool = False,
+    construct: str | None = None,
+) -> list[str]:
+    """Every import, identifier and attribute rule this source breaks, in file order.
+
+    `sized` says the hypothesis declares a sizing rule and `construct` which construct the
+    source is, so the rules of the sizing rule apply to the right vocabulary.
+    """
     try:
         tree = ast.parse(source, filename=origin)
     except SyntaxError as exc:
         return [f"{origin}: does not parse: {exc.msg} at line {exc.lineno}"]
-    problems: list[str] = []
+    problems: list[str] = list(_sizing_problems(tree, sized=sized, construct=construct))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             problems.extend(_visit_import(node))
@@ -277,6 +332,114 @@ def scan(source: str, origin: str = STRATEGY) -> list[str]:
                 + ("" if why is None else f", because {why}")
             )
     return sorted(set(problems), key=problems.index)
+
+
+def _sizing_problems(tree: ast.AST, *, sized: bool, construct: str | None) -> Iterable[str]:
+    """The rules a sizing rule adds, for the construct this source is."""
+    overlay = construct == OVERLAY_CONSTRUCT
+    sleeve = construct in (None, "sleeve")
+    if overlay:
+        names, keywords, why = (
+            (
+                SIZED_OVERLAY_NAMES,
+                SIZED_OVERLAY_KEYWORDS,
+                "a sized overlay names clips, and a "
+                "clip carries no quantity; return Decision(clips=(Clip(instrument, side),))",
+            )
+            if sized
+            else (
+                FREE_OVERLAY_NAMES,
+                FREE_OVERLAY_KEYWORDS,
+                "an overlay without a budget has "
+                "nothing to size a clip to; return Decision(hedges=(Hedge(instrument, qty),)), "
+                "or declare `sizing` on its hypothesis",
+            )
+        )
+        yield from _vocabulary_problems(tree, names, keywords, why)
+    if not sized:
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and sleeve and node.attr in DENIED_UNDER_SIZING:
+            yield f"line {node.lineno}: attribute '.{node.attr}' is denied under sizing, " + (
+                "because the net position counts an attached overlay's clips as the host's; "
+                "read self.held(instrument_id)"
+                if node.attr == "portfolio"
+                else f"{WHY_UNDER_SIZING} and every order is the harness's; call "
+                "submit_entry(instrument_id, side) or submit_exit(instrument_id)"
+            )
+        elif isinstance(node, ast.Call) and sleeve and _names_helper(node.func):
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    yield (
+                        f"line {node.lineno}: '**' on {_names_helper(node.func)} is denied under "
+                        f"sizing, {WHY_UNDER_SIZING}; pass the instrument and the side alone"
+                    )
+                elif keyword.arg in SIZE_KEYWORDS:
+                    yield (
+                        f"line {node.lineno}: keyword '{keyword.arg}=' is denied under sizing, "
+                        f"{WHY_UNDER_SIZING} and places it at market; call "
+                        f"{_names_helper(node.func)}(instrument_id"
+                        + (", side)" if _names_helper(node.func) == "submit_entry" else ")")
+                    )
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and (
+            node.name in _harness_names(overlay)
+        ):
+            yield (
+                f"line {node.lineno}: def '{node.name}' overrides a harness method, which "
+                f"under sizing is a size knob nothing else can see; rename it"
+            )
+
+
+def _vocabulary_problems(
+    tree: ast.AST, names: frozenset[str], keywords: frozenset[str], why: str
+) -> Iterable[str]:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in names:
+            yield f"line {node.lineno}: name '{node.id}' is denied for this overlay, because {why}"
+        elif isinstance(node, ast.Attribute) and node.attr in names:
+            yield (
+                f"line {node.lineno}: name '{node.attr}' is denied for this overlay, because {why}"
+            )
+        elif isinstance(node, ast.ImportFrom | ast.Import):
+            for alias in node.names:
+                if alias.name in names or alias.asname in names:
+                    yield (
+                        f"line {node.lineno}: name '{alias.asname or alias.name}' is denied for "
+                        f"this overlay, because {why}"
+                    )
+        elif isinstance(node, ast.Call):
+            for keyword in node.keywords:
+                if keyword.arg in keywords:
+                    yield (
+                        f"line {node.lineno}: keyword '{keyword.arg}=' is denied for this "
+                        f"overlay, because {why}"
+                    )
+
+
+def _names_helper(func: ast.expr) -> str | None:
+    """`submit_entry` or `submit_exit` when the call is one of them, else `None`."""
+    if isinstance(func, ast.Attribute) and func.attr in SIZE_HELPERS:
+        return func.attr
+    if isinstance(func, ast.Name) and func.id in SIZE_HELPERS:
+        return func.id
+    return None
+
+
+def _harness_names(overlay: bool) -> frozenset[str]:
+    """Every method of the harness base a sized source may not override.
+
+    Read from the classes themselves rather than kept as a list, so a helper added to the
+    harness is protected without anyone remembering to name it. The engine's `on_*` hooks
+    and a modifier's two hooks are what an author writes.
+    """
+    from kanso.nautilus.strategy import KansoModifier, KansoStrategy
+
+    base = KansoModifier if overlay else KansoStrategy
+    return frozenset(
+        name
+        for name in dir(base)
+        if not name.startswith("on_") and not name.startswith("__") and name not in OWN_HOOKS
+    )
 
 
 def scope(lane_dir: Path, pinned: Mapping[str, str]) -> list[str]:
@@ -304,7 +467,13 @@ def scope(lane_dir: Path, pinned: Mapping[str, str]) -> list[str]:
     return problems
 
 
-def check(lane_dir: Path, pinned: Mapping[str, str]) -> list[str]:
+def check(
+    lane_dir: Path,
+    pinned: Mapping[str, str],
+    *,
+    sized: bool = False,
+    construct: str | None = None,
+) -> list[str]:
     """The whole static half: the directory's scope, then the strategy's own source."""
     problems = scope(lane_dir, pinned)
     source = lane_dir / STRATEGY
@@ -314,4 +483,4 @@ def check(lane_dir: Path, pinned: Mapping[str, str]) -> list[str]:
         text = source.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return [*problems, f"{STRATEGY} cannot be read as text: {exc}"]
-    return [*problems, *scan(text)]
+    return [*problems, *scan(text, sized=sized, construct=construct)]
