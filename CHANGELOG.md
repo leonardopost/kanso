@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A sleeve that composes wakes the hypotheses attached to it.** An overlay registered against a host not yet composed under its rule waited for an operator to notice the host's new version and `queue add` it. Now a sleeve's new version puts every idle attached hypothesis — neither running, nor queued, nor held by a lane — back in the queue with a `host_composed` event, so its next run pins the new version; a run in flight keeps the version it pinned.
+
 ## v0.4.2 — 2026-09-10
 
 - **The supervisor puts back only what a lane claimed.** 0.4.1's recovery re-queued every `researching` hypothesis with neither a run nor a place — which is also what `research end` leaves behind, so an overlay whose run the operator had ended came back at every start and failed its host on a lane every three minutes. A claim is now recorded (`claimed`, with the lane and the priority), and recovery reads the queue's own record, returning each hypothesis at the priority it held. A stall holds its hypothesis in the lane's name until the scheduler has decided, so a certification that cannot run — or a stop that lands during one — leaves the hypothesis owed to the queue, not lost. A hypothesis a 0.4.1 lane claimed and dropped before this release has no such record, and `queue add` puts it back; one already cycling on a refused baseline keeps its place and keeps cycling until `queue remove`.

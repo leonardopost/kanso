@@ -193,7 +193,11 @@ version as n+1, and refuses — the certificate stands, the refusal is a `deploy
 escalation naming both versions — when the latest version's sleeve is not the sleeve of the
 version the run was pinned to, because the certificate then measured a host that no longer
 exists; the construct's next run pins the new version, and `kanso research begin ID
---from-workspace` also clears the best that was measured against the old one.
+--from-workspace` also clears the best that was measured against the old one. The next run
+comes on its own: a sleeve that composes a new version puts every hypothesis attached to
+it that is idle — neither running, nor queued, nor held by a lane — back in the queue, with
+a `host_composed` event naming the version, so an overlay registered against a host that
+was not yet composed under its rule begins the moment the host is.
 
 ## The three that classify but do not run
 

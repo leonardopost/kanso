@@ -25,7 +25,8 @@ from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
 from tests.certify.test_run import a_card, with_n_fail, write_plan
 
-from .conftest import DOCUMENT, FLAT, REVERTING, classify, document
+from .conftest import ATTACHED_HOST, DOCUMENT, FLAT, OVERLAY, REVERTING, classify, document
+from .test_attached import compose_host
 
 
 def register(ws: Workspace, store: StateStore, hyp_id: str) -> str:
@@ -163,6 +164,37 @@ def test_two_lanes_reaching_for_the_same_head_at_once_do_not_both_get_it(
 
     assert scheduler.dequeue(store) == free
     assert ids(store) == []
+
+
+def test_a_host_that_composes_wakes_its_idle_attached_hypotheses(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Idle means neither running, nor queued, nor held; everything else keeps its place."""
+    compose_host(ws, store, sized=True)
+    idle = classify(ws, store, OVERLAY)
+    running = classify(ws, store, {**OVERLAY, "id": "demo_running"})
+    open_run(store, running, lane="l1")
+    waiting = classify(ws, store, {**OVERLAY, "id": "demo_waiting"})
+    scheduler.enqueue(store, waiting, priority=scheduler.STALL_PRIORITY)
+    held = classify(ws, store, {**OVERLAY, "id": "demo_held"})
+    scheduler.enqueue(store, held)
+    assert scheduler.dequeue(store, "l2") == held
+    retired = classify(ws, store, {**OVERLAY, "id": "demo_retired"})
+    set_status(store, retired, "retired")
+    classify(ws, store, DOCUMENT)
+
+    assert scheduler.on_host_composed(ws, store, ATTACHED_HOST, 2) == [idle]
+
+    assert [(item.hyp_id, item.priority) for item in scheduler.queued(store)] == [
+        (idle, 0),
+        (waiting, scheduler.STALL_PRIORITY),
+    ]
+    woke = store.events(kind=scheduler.HOST_COMPOSED)
+    assert [(event.subject, event.detail) for event in woke] == [
+        (idle, {"host": ATTACHED_HOST, "version": 2})
+    ]
+    assert scheduler.on_host_composed(ws, store, ATTACHED_HOST, 3) == [], "nothing idle is left"
+    assert scheduler.on_host_composed(ws, store, "another_host", 1) == []
 
 
 def test_only_a_registered_and_living_hypothesis_may_be_queued(

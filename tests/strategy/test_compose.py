@@ -6,7 +6,7 @@ import pytest
 
 from kanso.env.envelope import engine_version
 from kanso.errors import PreconditionError, ValidationError
-from kanso.research import loop
+from kanso.research import loop, scheduler
 from kanso.schemas import Certificate, StrategyFile, load_yaml
 from kanso.state import StateStore
 from kanso.strategy import composition, files, impl
@@ -92,6 +92,37 @@ def test_an_attached_construct_composes_the_hosts_next_version(
     assert second.attached[0].params == {"scope": "time"}
     assert [v.version for v in files.require(ws, HYP_ID).versions] == [1, 2]
     assert files.read(ws, FILTER_ID) is None, "a filter is not a strategy of its own"
+
+
+def test_a_sleeve_certified_again_wakes_the_hypotheses_attached_to_it(
+    ws: Workspace, store: StateStore, sleeve: Certificate
+) -> None:
+    """An overlay registered against version 1 sits idle; the sleeve's version 2 is its cue."""
+    assert compose(ws, store, HYP_ID).version == 1
+    attached = classify(ws, store, FILTER_DOCUMENT, ALLOWING)
+    assert scheduler.queued(store) == [], "registered, not queued: that is the operator's call"
+
+    a_certificate(
+        ws,
+        store,
+        HYP_ID,
+        b"# a second, different sleeve\n" + VARYING,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+    )
+    second = compose(ws, store, HYP_ID)
+
+    assert second.version == 2
+    assert [item.hyp_id for item in scheduler.queued(store)] == [attached]
+    woke = store.events(kind=scheduler.HOST_COMPOSED, subject=attached)
+    assert [event.detail for event in woke] == [{"host": HYP_ID, "version": 2}]
+    # The host's next version, composed from an attached construct, keeps the sleeve the
+    # others were measured against, and wakes none of them.
+    scheduler.drop(store, attached)
+    certified_filter(ws, store)
+    assert compose(ws, store, FILTER_ID).version == 3
+    assert scheduler.queued(store) == []
+    assert len(store.events(kind=scheduler.HOST_COMPOSED)) == 1
 
 
 def test_a_neutral_modifier_leaves_the_hosts_expectation_where_it_was(

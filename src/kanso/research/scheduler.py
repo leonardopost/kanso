@@ -72,6 +72,7 @@ __all__ = [
     "enqueue",
     "hold",
     "on_baseline_failed",
+    "on_host_composed",
     "on_stall",
     "put_back",
     "queued",
@@ -88,6 +89,10 @@ BASELINE_PRIORITY: Final = -2
 """Where a hypothesis whose baseline would not run returns: behind a stalled one, since
 its starting point needs an operator rather than another lane."""
 
+WAKEABLE: Final = frozenset({"classified", "researching", "certified"})
+"""The statuses a hypothesis attached to a host may be in and be woken from when the host
+composes a new version: not yet begun, in research, or certified against the old one."""
+
 DEAD: Final = frozenset({"retired"})
 """The one status that leaves the queue, and only an operator writes it.
 
@@ -100,6 +105,7 @@ back."""
 
 STALLED: Final = "stalled"
 CERTIFIABLE: Final = "certifiable"
+HOST_COMPOSED: Final = "host_composed"
 """The events this module appends beside the passages `research/passages.py` defines —
 `QUEUED`, `CLAIMED`, `REMOVED` and the run's `BEGUN` — under the hypothesis id as subject."""
 
@@ -359,6 +365,40 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         return Stall(hyp_id, best, certifiable, None, verdict)
     requeue(store, hyp_id, STALL_PRIORITY)
     return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict)
+
+
+def on_host_composed(ws: Workspace, store: StateStore, host_id: str, version: int) -> list[str]:
+    """Put back in the queue every idle hypothesis attached to a host that just composed.
+
+    A host that gains a version is a host its attached constructs have not been measured
+    against: their next run pins the new version, so the ones that are idle — neither
+    running, nor queued, nor held by a lane — go back in the queue now rather than when an
+    operator notices. A run in flight keeps the version it pinned (`docs/constructs.md`),
+    and a retired or failed hypothesis is left alone. Returns the ids woken, in id order.
+    """
+    from kanso.hyp import hypothesis_of
+
+    woken: list[str] = []
+    rows = store.connection.execute(
+        "SELECT hyp_id, status FROM hypotheses ORDER BY hyp_id"
+    ).fetchall()
+    for row in rows:
+        hyp_id = str(row["hyp_id"])
+        if hyp_id == host_id or str(row["status"]) not in WAKEABLE:
+            continue
+        hyp = hypothesis_of(ws, store, hyp_id)
+        if hyp.construct is None or hyp.construct.host != host_id:
+            continue
+        if (
+            active_run(store, hyp_id) is not None
+            or _row(store, hyp_id) is not None
+            or claimed(store, hyp_id)
+        ):
+            continue
+        store.event(HOST_COMPOSED, hyp_id, {"host": host_id, "version": version})
+        enqueue(store, hyp_id)
+        woken.append(hyp_id)
+    return woken
 
 
 def on_baseline_failed(store: StateStore, hyp_id: str) -> QueueItem:
