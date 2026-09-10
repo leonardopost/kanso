@@ -20,7 +20,7 @@ from kanso.hyp import set_status, show
 from kanso.inbox import unread
 from kanso.research import records, scheduler
 from kanso.schemas import RunRecord
-from kanso.state import StateStore
+from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
 from tests.certify.test_run import a_card, with_n_fail, write_plan
 
@@ -139,6 +139,29 @@ def test_a_hypothesis_being_researched_is_passed_over_and_left_in_the_queue(
 
     assert scheduler.dequeue(store) == free
     assert ids(store) == [busy]
+
+
+def test_two_lanes_reaching_for_the_same_head_at_once_do_not_both_get_it(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lanes poll in step. Between this lane's look and its take, another lane takes it."""
+    contested = classify(ws, store, DOCUMENT)
+    free = register(ws, store, "demo_two")
+    scheduler.enqueue(store, contested)
+    scheduler.enqueue(store, free)
+    looked = scheduler.active_run
+
+    def other_lane_takes_it_first(s: StateStore, hyp_id: str) -> RunRecord | None:
+        monkeypatch.setattr(scheduler, "active_run", looked)
+        with StateStore(ws.path("state.db")) as other:
+            usable(other, ws.path("state.db"))
+            assert scheduler.dequeue(other) == contested
+        return looked(s, hyp_id)
+
+    monkeypatch.setattr(scheduler, "active_run", other_lane_takes_it_first)
+
+    assert scheduler.dequeue(store) == free
+    assert ids(store) == []
 
 
 def test_only_a_registered_and_living_hypothesis_may_be_queued(
