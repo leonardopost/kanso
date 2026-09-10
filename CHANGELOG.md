@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.4.4 — 2026-09-11
 
 - **A repeat anywhere in the ladder is a miss.** 0.4.3 counted a miss only when the *last* judged answer repeated a card, so a proposer that repeated itself and then answered with a diff that would not apply still failed the lane — two such failures in the seven minutes after the release, and no misses. A ladder that reaches for bytes already carded at any point in its three attempts is now a miss, because the model was asked three times and had nothing new.
 - **A lane failure records why.** `lane_failed` carries the remedy its error had beside the message: for a proposer's ladder the message names the models tried, and only the remedy says what their answers were rejected for.
