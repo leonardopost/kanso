@@ -3,6 +3,13 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A sleeve certified again composes its strategy's next version.** Version n+1 with `attached: []`, pins and expectation from the new certificate; the paper stage replaces the version it holds and retires it, and a construct attached to the old version stays there until it certifies against the new one. Measured in a live workspace: three `deploy_blocked` escalations on four passing certificates of one sleeve, each "a sleeve composes a new strategy at version 1, but sox_main already has 1". The same bytes under the same engine still return the version they have, whatever its position; under a new engine they compose a new one, which is what `deploy`'s own remedy always said.
+- **A sized subject composes.** 0.4.0 handed every sized hypothesis's budget to its construct as a parameter, and every construct refused it as undeclared, so no sleeve or overlay under a `sizing` rule could compose; a sleeve's budget is read from its hypothesis and an overlay's travels in its attached ref.
+- **A construct composes onto the host it was measured against.** When the host's latest sleeve is not the sleeve of the version the construct's run pinned, composition refuses with a `deploy_blocked` escalation naming both, and the construct's next run pins the new version.
+- **A certificate composes under the scope it was earned in.** One whose run pinned a hypothesis of another universe, resolution, data requirement, construct or sizing rule than the one registered now is refused by the field that moved.
+
 ## v0.4.0 — 2026-09-10
 
 - **A multi-instrument instant is one book.** Points that share a `ts_init` and a grain are applied to the venue before any author handler of that grain runs; each handler then runs with that book and the fills of the handler before it. A market submitted into another instrument of the instant fills at that instant's close, not the previous one. A limit placed in that handler sees only the close. An incomplete instant still trades the silent leg at the last public price. Data an author raises inside a handler dispatches at once and never takes a cohort's marker.

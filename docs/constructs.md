@@ -71,9 +71,13 @@ numeric fields — its ints and floats, not its booleans and not the capital and
 the framework injects — are exactly what the `param_plateau` certification gate perturbs, so
 what you make a config field is what you are claiming a plateau for.
 
-Composition makes a certified sleeve **version 1 of a new strategy** in the portfolio. It is
-the only construct that creates a strategy; every other runnable one adds a version to a
-strategy a sleeve already made. A universe of more than one instrument is one book at each
+Composition makes a certified sleeve **a version of its own strategy**: version 1 when the
+strategy does not exist yet, and version n+1 — a bare sleeve, `attached: []` — when the
+sleeve is certified again with different bytes or under another engine. It is the only
+construct that creates a strategy; every other runnable one adds a version to a strategy a
+sleeve already made. The paper stage then replaces the version it holds with the new one and
+retires it, and a construct that was attached to the old version stays there until its own
+certification against the new one. A universe of more than one instrument is one book at each
 instant (`docs/concepts.md`, Delivery): `on_bar` of the first name sees every name's last
 close for that instant, and a fill against another instrument of the instant is at that
 close.
@@ -184,8 +188,12 @@ classified `scope: instrument` running a time filter, with nothing anywhere sayi
 
 **The host is pinned by version, never by "latest".** Every card of a run differences
 against the same host version, so a host that gains a version mid-run does not silently
-change what the run is measuring. Composition then appends this construct to that host's
-version n+1.
+change what the run is measuring. Composition appends this construct to the host's latest
+version as n+1, and refuses — the certificate stands, the refusal is a `deploy_blocked`
+escalation naming both versions — when the latest version's sleeve is not the sleeve of the
+version the run was pinned to, because the certificate then measured a host that no longer
+exists; the construct's next run pins the new version, and `kanso research begin ID
+--from-workspace` also clears the best that was measured against the old one.
 
 ## The three that classify but do not run
 

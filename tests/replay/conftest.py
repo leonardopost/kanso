@@ -38,6 +38,7 @@ from kanso.data import catalog, snapshot
 from kanso.data.instruments import resolve_universe
 from kanso.data.loader import DatasetRef
 from kanso.env import write as write_envelope
+from kanso.env.envelope import engine_version
 from kanso.hyp import add as register
 from kanso.hyp import set_status
 from kanso.hyp import show as registration_of
@@ -612,7 +613,7 @@ def composed(
     frozen = snapshot.snapshots(ws)[-1]
     pins = {
         "kanso_version": __version__,
-        "nautilus_version": "1.231.0",
+        "nautilus_version": engine_version(),
         "criteria_version": criteria_version(),
         "plan_version": 1,
         "snapshot_id": frozen.snapshot_id,

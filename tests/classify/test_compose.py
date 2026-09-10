@@ -31,9 +31,34 @@ def test_a_sleeve_composes_a_new_strategy_at_version_1() -> None:
     assert refile("demo_mr", version).latest().version == 1
 
 
-def test_a_sleeve_composes_a_strategy_that_does_not_exist_yet() -> None:
-    with pytest.raises(PreconditionError, match="a sleeve composes a new strategy at version 1"):
+def test_a_sleeve_certified_again_composes_its_own_strategys_next_version() -> None:
+    host = strategy()
+    version = get("sleeve").compose(host, "demo_sleeve", SHA, **COMPOSED)
+    assert version.version == 2
+    assert (version.sleeve.hyp_id, version.sleeve.strategy_sha) == ("demo_sleeve", SHA)
+    assert version.attached == []
+    assert version.config == {}, "an earlier sleeve's operator fields do not configure new bytes"
+    assert refile("demo_sleeve", host.versions[0], version).latest().version == 2
+
+
+def test_a_sleeve_composes_only_its_own_strategy() -> None:
+    with pytest.raises(PreconditionError, match="demo_sleeve is not demo_mr's"):
         get("sleeve").compose(strategy(), "demo_mr", SHA, **COMPOSED)
+
+
+def test_an_attached_construct_records_the_budget_it_is_composed_with_without_declaring_it() -> (
+    None
+):
+    version = get("overlay").compose(
+        strategy(), "vol_target", SHA, {"sizing_budget": 5_000.0}, **COMPOSED
+    )
+    assert version.attached[-1].params == {"sizing_budget": 5_000.0}
+    with pytest.raises(ValidationError, match="'sector' is not one of"):
+        get("filter").compose(
+            strategy(), "vol_gate", SHA, {"scope": "sector", "sizing_budget": 1.0}, **COMPOSED
+        )
+    with pytest.raises(ValidationError, match="no parameter 'sizing_budget'; it takes none"):
+        get("sleeve").compose(None, "demo_mr", SHA, {"sizing_budget": 1.0}, **COMPOSED)
 
 
 def test_an_attached_construct_composes_its_host_version_plus_one() -> None:

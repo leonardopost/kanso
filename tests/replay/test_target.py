@@ -332,3 +332,19 @@ def test_a_host_that_is_gone_is_refused(ws: Workspace, store: StateStore, carded
 
     with pytest.raises(PreconditionError, match="is not a composed strategy"):
         resolve(ws, store, hyp=hyp_id)
+
+
+def test_an_earlier_version_replays_by_number_and_the_latest_by_default(
+    ws: Workspace, store: StateStore, carded_hyp: str
+) -> None:
+    from tests.portfolio.conftest import second_version
+    from tests.strategy.conftest import VARYING
+
+    composed(ws, store, carded_hyp)
+    second_version(ws, store, carded_hyp, sleeve=VARYING)
+
+    first = resolve(ws, store, strategy=carded_hyp, version=1)
+    latest = resolve(ws, store, strategy=carded_hyp)
+
+    assert (first.version, first.label, first.strategy_source) == (1, f"{carded_hyp}@1", REVERTING)
+    assert (latest.version, latest.label, latest.strategy_source) == (2, f"{carded_hyp}@2", VARYING)

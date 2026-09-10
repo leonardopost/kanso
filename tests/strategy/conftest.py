@@ -233,6 +233,8 @@ def a_certificate(
     gates: list[dict[str, Any]] | None = None,
     doc: dict[str, Any] | None = None,
     verdict: str = "pass",
+    plan_version: int = 1,
+    nautilus_version: str | None = None,
 ) -> Certificate:
     """A certificate written straight in, for a subject that cannot earn one.
 
@@ -248,11 +250,11 @@ def a_certificate(
             "schema": 1,
             "hyp_id": hyp_id,
             "strategy_sha": store.put_blob(source),
-            "nautilus_version": engine_version(),
+            "nautilus_version": nautilus_version or engine_version(),
             "venue_model": venue_model(),
             "snapshot_id": snapshot_id(ws),
             "criteria_version": criteria_version(),
-            "plan_version": 1,
+            "plan_version": plan_version,
             "construct": construct,
             "objective": {"id": objective_id, "value": 0.0, "se": 0.0},
             "gates": gates
@@ -280,6 +282,8 @@ def certified_filter(
     *,
     source: bytes = ALLOWING,
     gates: list[dict[str, Any]] | None = None,
+    plan_version: int = 1,
+    nautilus_version: str | None = None,
 ) -> Certificate:
     """A passing certificate for a filter attached to the demo sleeve."""
     return a_certificate(
@@ -291,6 +295,8 @@ def certified_filter(
         objective_id="marginal_wf_sharpe",
         gates=gates,
         doc=FILTER_DOCUMENT,
+        plan_version=plan_version,
+        nautilus_version=nautilus_version,
     )
 
 

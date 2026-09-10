@@ -662,6 +662,10 @@ strategies/<id>/strategy.yaml          the versions, their pins, their expectati
 strategies/<id>/impl/<version>/        the manifest and a verbatim copy of every certified source
 ```
 
+`strategy.yaml` gains a version each time a construct attaches and each time the sleeve
+itself is certified with different bytes; earlier versions are never rewritten, only their
+`state` moves.
+
 `kanso strat compose` writes both, and a passing certificate composes on its own, so these
 are usually not commands you type. `impl/<version>/` is the **one directory a backtest, a
 replay and a live node all load from**, so the exchange a version was judged against and the

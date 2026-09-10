@@ -127,8 +127,13 @@ next step: paper to live needs `promote --live --as NAME`.
 
 A strategy is composed, never written. A passing certificate composes the version it
 implies and offers it to the paper stage on its own, so these commands are the hand-driven
-form of an automatic act; running `strat compose` on a subject already composed returns the
-version that exists rather than a second copy of it.
+form of an automatic act; running `strat compose` on bytes already composed under the same
+engine returns the version that exists rather than a second copy of it, and a sleeve certified
+with different bytes, or the same bytes under a new engine, composes its strategy's next
+version. The certificate composed is the hypothesis's newest passing one, under the hypothesis
+as the registry pins it now: one earned under another universe, resolution, data requirement,
+construct or sizing rule is refused (exit 2) by the field that moved, and so is a construct
+whose host's latest sleeve is not the one its run was pinned to.
 
 `STRATEGY[@V]` is the notation every command below shares: a strategy id, optionally a
 version. Leaving the version out means the one the command's own rule picks — the latest
@@ -136,7 +141,7 @@ for a read, the version on the stage for a move.
 
 | command | what it does |
 |---|---|
-| `kanso strat compose ID` | turn this hypothesis's newest passing certificate into a version: a new strategy at version 1 for a sleeve, the host's version n+1 for a construct attached to one. Writes `strategies/<id>/strategy.yaml` and generates `strategies/<id>/impl/<version>/` — a verbatim copy of every certified source plus a manifest naming the classes — which is the one directory a backtest, a replay and a live node all load. Runs that implementation over the sleeve's certification window to measure the version's `expectation`: the objective, a ninety-percent interval and the ninety-fifth-percentile drawdown |
+| `kanso strat compose ID` | turn this hypothesis's newest passing certificate into a version: version 1 of a new strategy for a sleeve composed the first time and its own strategy's version n+1 when it is certified again, the host's version n+1 for a construct attached to one. Writes `strategies/<id>/strategy.yaml` and generates `strategies/<id>/impl/<version>/` — a verbatim copy of every certified source plus a manifest naming the classes — which is the one directory a backtest, a replay and a live node all load. Runs that implementation over the sleeve's certification window to measure the version's `expectation`: the objective, a ninety-percent interval and the ninety-fifth-percentile drawdown |
 | `kanso strat show [STRATEGY[@V]]` | with no argument, every composed strategy and the state of each version; with a strategy, its versions and their bands; with a version, what it is made of, what is expected of it and what it was certified under |
 | `kanso strat retire STRATEGY[@V]` | end a version: take it off whatever stages hold it and mark it retired, then restart the stages whose kill switch is off. A stage a kill switch has halted is named and left halted |
 

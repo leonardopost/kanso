@@ -1,7 +1,8 @@
 """`sleeve`: a strategy of its own, measured absolutely, hosted by nothing.
 
 The lane's `strategy.py` is the strategy class itself, and composition makes it version 1
-of a new strategy in the portfolio.
+of a new strategy in the portfolio, and version n+1 of that strategy each time it is
+certified again.
 """
 
 from __future__ import annotations

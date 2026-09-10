@@ -2,7 +2,8 @@
 
 A certificate says a hypothesis survived its embargo. Composition turns that into
 something a stage can hold. The construct decides the shape and this module decides
-nothing about it: a sleeve becomes a new strategy at version 1, an attached construct
+nothing about it: a sleeve becomes version 1 of a new strategy — or version n+1 of its
+own when it is certified again with different bytes or under another engine — an attached construct
 becomes its host's next version with itself appended, and everything else here serves
 those two.
 
@@ -23,9 +24,13 @@ With too few closed trades to resample, the interval is the point estimate and t
 drawdown is the one the run actually took: an honest band of zero width beats an invented
 one.
 
-**Composing the same subject twice is one version.** Certification is automatic and so is
-what follows it, so a repeat returns the version already made instead of a second copy of
-it or a refusal that stops the loop.
+**The same bytes under the same engine are one version**, whatever position or state that
+version is in: certification is automatic and so is this, so a plan re-run on the same
+card returns the version it already has. Under a new engine they are a new version,
+because a version is deployed only on the engine it was measured on. A certificate is
+composed under the scope its bytes were certified in, and an attached construct onto the
+host version its run measured against; either mismatch is a refusal that stands as a
+`deploy_blocked` escalation rather than a version that was never measured.
 """
 
 from __future__ import annotations
@@ -36,19 +41,22 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso import __version__
 from kanso.certify import certificate
+from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, drawdown_pct, gates, objectives
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError
-from kanso.hyp import HYPOTHESIS_FILE, Registration
+from kanso.hyp import HYPOTHESIS_FILE, Registration, moved, scope_of
 from kanso.hyp import show as registration_of
 from kanso.nautilus import backtest
+from kanso.research import records
 from kanso.schemas import (
     Certificate,
     DateWindow,
     Expectation,
     Hypothesis,
     Pins,
+    RunRecord,
     StrategyFile,
     StrategyVersion,
     parse_yaml,
@@ -105,9 +113,20 @@ def compose(ws: Workspace, store: StateStore, hyp_id: str) -> StrategyVersion:
     already = _composed(held, passed, construct)
     if already is not None:
         return already
+    current = _hypothesis(ws, store, hyp_id)
+    run = _run_of(store, passed)
+    if run is not None:
+        _check_scope(store, passed, run, current)
+        _check_host(held, passed, run, hyp_id)
 
     pins = _pins(passed)
-    params = _with_budget(passed.construct.params, _hypothesis(ws, store, hyp_id))
+    # A sleeve records no params: its budget is read from its hypothesis when the
+    # implementation is generated. An attached construct's travels in its ref.
+    params = (
+        passed.construct.params
+        if construct.needs_host == NO_HOST
+        else _with_budget(passed.construct.params, current)
+    )
     created = datetime.now(tz=UTC)
     draft = construct.compose(
         held,
@@ -222,12 +241,29 @@ def _strategy_id(construct: Any, passed: Certificate, hyp_id: str) -> str:
 def _composed(
     held: StrategyFile | None, passed: Certificate, construct: Any
 ) -> StrategyVersion | None:
-    """The version this certificate already composed, when it composed one."""
+    """The version this certificate already composed, when it composed one.
+
+    The same bytes under the same engine are one version, whatever position or state that
+    version is in; under another engine they are a new one, because a version is deployed
+    only on the engine it was measured on. A sleeve's is the bare version of its bytes —
+    an attached version copies the sleeve's sha and would otherwise shadow it — and an
+    attached construct's is the version on the host's current sleeve that carries it.
+    """
     if held is None:
         return None
+    engine = passed.nautilus_version
     if construct.needs_host == NO_HOST:
-        first = held.versions[0]
-        return first if first.sleeve.strategy_sha == passed.strategy_sha else None
+        return next(
+            (
+                version
+                for version in held.versions
+                if not version.attached
+                and version.sleeve.strategy_sha == passed.strategy_sha
+                and version.pins.nautilus_version == engine
+            ),
+            None,
+        )
+    latest = held.latest().sleeve.strategy_sha
     return next(
         (
             version
@@ -235,8 +271,84 @@ def _composed(
             if version.attached
             and version.attached[-1].hyp_id == passed.hyp_id
             and version.attached[-1].strategy_sha == passed.strategy_sha
+            and version.pins.nautilus_version == engine
+            and version.sleeve.strategy_sha == latest
         ),
         None,
+    )
+
+
+def _run_of(store: StateStore, passed: Certificate) -> RunRecord | None:
+    """The run the certified card belongs to: what certification itself pinned.
+
+    The newest card of the certificate's bytes at or before the certificate, because a run
+    begun from `best` records the best's bytes again as its own baseline, and the newer
+    card would name a run pinned to a host the certificate never measured. `None` when this
+    record holds no such card — a clone whose state did not travel — in which case the
+    certificate composes with neither the scope nor the host check; certification cannot
+    run in such a workspace, so the automatic path is always checked.
+    """
+    cards = [
+        card
+        for card in records.cards_of(store, passed.hyp_id)
+        if card.strategy_sha == passed.strategy_sha and card.created_at <= passed.created_at
+    ]
+    if not cards:
+        return None
+    run_id = cards[-1].run_id
+    return next(
+        (run for run in records.runs_of(store, passed.hyp_id) if run.run_id == run_id), None
+    )
+
+
+def _check_scope(
+    store: StateStore, passed: Certificate, run: RunRecord, current: Hypothesis
+) -> None:
+    """A certificate composes under the scope its bytes were certified in.
+
+    Certification reads the run's pinned hypothesis and composition the registry's; the
+    two differ only between runs, when `hyp add` re-pinned the file. The fields compared are
+    exactly the ones a re-pin clears `best` on, so nothing the daemon composes is refused
+    here and a hand-run `strat compose` of an older certificate under a moved file is.
+    """
+    certified = parse_yaml(
+        Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), HYPOTHESIS_FILE
+    )
+    before, after = scope_of(certified), scope_of(current)
+    if before != after:
+        raise PreconditionError(
+            f"{passed.hyp_id}'s certificate of {passed.sha7} was earned under a hypothesis "
+            f"whose {moved(before, after)}; a version is composed under the scope its bytes "
+            "were certified in",
+            remedy=f"research and certify {passed.hyp_id} again under "
+            f"hypotheses/{passed.hyp_id}/hypothesis.yaml as it is now",
+        )
+
+
+def _check_host(
+    held: StrategyFile | None, passed: Certificate, run: RunRecord, hyp_id: str
+) -> None:
+    """A construct composes onto the host it was measured against.
+
+    Every card of a run differences against one host version, and a sleeve certified again
+    gives its strategy a new latest; a certificate earned against the old sleeve would then
+    be appended to bytes it never ran with. The refusal names both, and stands as a
+    `deploy_blocked` escalation on the automatic path.
+    """
+    if held is None or run.host_version is None:
+        return
+    pinned = HostRef.of(held, run.host_version)
+    latest = held.latest()
+    if pinned.sleeve.strategy_sha == latest.sleeve.strategy_sha:
+        return
+    raise PreconditionError(
+        f"{hyp_id} was certified against {held.id}@{pinned.version}, whose sleeve is "
+        f"{pinned.sleeve.strategy_sha[:7]}; {held.id}@{latest.version} is "
+        f"{latest.sleeve.strategy_sha[:7]}, and a construct composes onto the host it was "
+        "measured against",
+        remedy=f"end {hyp_id}'s run if one is active (`kanso research end {hyp_id}`), then "
+        f"`kanso research begin {hyp_id} --from-workspace`: the next run pins "
+        f"{held.id}@{latest.version} and clears the best measured against @{pinned.version}",
     )
 
 

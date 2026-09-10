@@ -123,3 +123,25 @@ def test_a_version_the_stage_did_not_admit_keeps_the_state_it_had(
 
     assert adoption.state == "composed"
     assert adoption.capital is None
+
+
+def test_a_sleeve_certified_again_reaches_paper_as_version_two_and_retires_version_one(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """The refusal three passing certificates met in a live workspace, replayed at its layer."""
+    from kanso import strategy as strategies
+    from tests.strategy.conftest import VARYING
+
+    first = a_certificate(ws, sha=composed_strategy.versions[0].sleeve.strategy_sha)
+    certificate.write(ws, store, first, REVERTING)
+    assert on_certified(ws, store, first).version is not None
+    second = a_certificate(ws, sha=store.put_blob(VARYING))
+    certificate.write(ws, store, second, VARYING)
+
+    adoption = on_certified(ws, store, second)
+
+    assert adoption.version is not None and adoption.version.version == 2
+    assert adoption.deployment is not None
+    assert adoption.deployment.retired == (f"{HYP_ID}@1",)
+    assert [v.state for v in strategies.require(ws, HYP_ID).versions] == ["retired", "paper"]
+    assert all(item.kind != "deploy_blocked" for item in unread(store))

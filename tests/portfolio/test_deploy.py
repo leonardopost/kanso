@@ -134,7 +134,9 @@ def test_a_replaced_version_retires(
     ws: Workspace, store: StateStore, composed_strategy: StrategyFile
 ) -> None:
     deploy(ws, store, "paper")
-    second_version(ws, store, composed_strategy.id)
+    from tests.strategy.conftest import VARYING
+
+    second_version(ws, store, composed_strategy.id, sleeve=VARYING)
 
     deploy(ws, store, "paper")
 

@@ -13,13 +13,25 @@ from typing import Any
 
 import pytest
 
+from kanso.env.envelope import engine_version
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
 from kanso.schemas import StrategyFile, resolve_venue_model, write_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
-from .conftest import RAISING, REVERTING, classify, document, register, write_hypothesis
+from .conftest import (
+    BOOK,
+    NEUTRAL_OVERLAY,
+    OVERLAY,
+    RAISING,
+    REVERTING,
+    SIZED_HOST,
+    classify,
+    document,
+    register,
+    write_hypothesis,
+)
 
 HOST = "host_sleeve"
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
@@ -55,66 +67,6 @@ FILTER = document(
 """A filter attached to the certified host, measured against what the host does alone."""
 
 
-SIZED_HOST = b"""
-from kanso.nautilus.strategy import KansoConfig, KansoStrategy
-
-
-class Config(KansoConfig):
-    pass
-
-
-class Strategy(KansoStrategy):
-    \"\"\"The reverting rule under a sizing rule: the harness sizes, the rule picks the bar.\"\"\"
-
-    config_cls = Config
-
-    def on_start(self) -> None:
-        self.closes = []
-        self.long = False
-
-    def on_bar(self, bar) -> None:
-        self.closes.append(float(bar.close))
-        if len(self.closes) < 3:
-            return
-        first, second, third = self.closes[-3:]
-        if first > second > third and not self.long:
-            self.submit_entry(bar.bar_type.instrument_id, "BUY")
-            self.long = True
-        elif third > second > first and self.long:
-            self.submit_exit(bar.bar_type.instrument_id)
-            self.long = False
-"""
-
-NEUTRAL_OVERLAY = b"""
-from kanso.nautilus.strategy import Decision, KansoModifier, KansoModifierConfig
-
-
-class Config(KansoModifierConfig):
-    pass
-
-
-class Modifier(KansoModifier):
-    construct = "overlay"
-    config_cls = Config
-
-    def on_data(self, ctx) -> Decision:
-        return Decision.neutral(self.construct)
-"""
-
-BOOK = {
-    "capital": 100_000,
-    "risk_limits": {"max_position_pct": 20, "max_drawdown_pct": 40, "max_leverage": 1},
-}
-OVERLAY = document(
-    id="demo_overlay",
-    construct={"id": "overlay", "host": HOST},
-    objective={"id": "marginal_wf_sharpe", "params": {"min_delta": 0.0, "k_se": 0.5}},
-    sizing={"mode": "full_book", "budget": 5_000},
-    **BOOK,
-)
-"""A sized overlay on the sized host, measured against what the host does alone."""
-
-
 def compose_host(
     ws: Workspace, store: StateStore, source: bytes = REVERTING, *, sized: bool = False
 ) -> str:
@@ -137,7 +89,7 @@ def compose_host(
                     "sleeve": {"hyp_id": HOST, "strategy_sha": sha},
                     "pins": {
                         "kanso_version": "0.1.0",
-                        "nautilus_version": "1.231.0",
+                        "nautilus_version": engine_version(),
                         "criteria_version": "0.1.0",
                         "plan_version": 1,
                         "snapshot_id": "s",

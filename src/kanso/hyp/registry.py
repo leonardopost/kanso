@@ -177,7 +177,7 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     refuse_active_run(store, hyp.id, "re-pin")
     held = _row(store, hyp.id)
     sha = store.put_blob(source)
-    scope = _scope(hyp)
+    scope = scope_of(hyp)
     before = {} if held is None else _scope_of(held)
     cleared = held is not None and held["best_sha"] is not None and before != scope
     status: Status
@@ -204,7 +204,7 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     )
     store.connection.execute(_UPSERT, values)
     if cleared:
-        store.event(BEST_CLEARED, hyp.id, {"reason": _moved(before, scope), "scope": scope})
+        store.event(BEST_CLEARED, hyp.id, {"reason": moved(before, scope), "scope": scope})
     store.event(
         REGISTERED if held is None else REPINNED,
         hyp.id,
@@ -389,8 +389,13 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def _scope(hyp: Hypothesis) -> dict[str, Any]:
-    """The five fields a metric is only comparable within, in a stable order."""
+def scope_of(hyp: Hypothesis) -> dict[str, Any]:
+    """The five fields a metric is only comparable within, in a stable order.
+
+    `hyp add` clears a best when they move, and composition refuses a certificate whose
+    run pinned a hypothesis of another scope than the one registered now: one definition
+    of what a number is comparable under, read in both places.
+    """
     return {
         "universe": sorted(hyp.universe),
         "resolution": hyp.resolution,
@@ -414,7 +419,7 @@ def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
     return scope
 
 
-def _moved(before: dict[str, Any], after: dict[str, Any]) -> str:
+def moved(before: dict[str, Any], after: dict[str, Any]) -> str:
     """Which of the scope's fields changed, and from what to what."""
     return "; ".join(
         f"{name} changed from {before.get(name)!r} to {after[name]!r}"

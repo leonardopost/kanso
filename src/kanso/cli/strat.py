@@ -1,10 +1,12 @@
 """`kanso strat`: the versions a certificate composes into, and the end of one's life.
 
 A strategy is not written, it is composed: `compose` turns a hypothesis's passing
-certificate into a version — a new strategy at version 1 for a sleeve, the host's next
-version for anything attached to one — and generates the implementation every stage loads.
+certificate into a version — version 1 of a new strategy for a sleeve composed the first
+time and its own strategy's next version when it is certified again, the host's next version
+for anything attached to one — and generates the implementation every stage loads.
 Certification already does this by itself, so the command is the hand-driven form of an
-automatic act and repeating it returns the version that exists rather than making a second.
+automatic act, and repeating it on the same bytes under the same engine returns the version
+that exists rather than making a second.
 
 `show` reads: with no argument it lists every composed strategy and where its versions
 stand, with `STRATEGY` it prints that strategy, with `STRATEGY@V` that one version.
