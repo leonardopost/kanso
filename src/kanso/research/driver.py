@@ -32,7 +32,9 @@ asked whether it still tests the idea, and a drift rewinds it and carries on.
 
 **A run ends on a stall, and a stall is not an ending.** `stall_k` consecutive non-keeps
 close the run and hand the hypothesis to the scheduler, which certifies what is worth
-certifying and puts the hypothesis back in the queue either way.
+certifying and puts the hypothesis back in the queue either way. Between the two the lane
+holds the hypothesis in its own name, so a certification that cannot run, or a stop that
+lands during one, leaves the hypothesis owed to the queue rather than lost.
 """
 
 from __future__ import annotations
@@ -168,6 +170,7 @@ def run(
 
     if reason == STALLED:
         research_loop.end(ws, store, hyp_id)
+        scheduler.hold(store, hyp_id, lane)
         scheduler.on_stall(ws, store, hyp_id, lane)
     best_sha, best_metric = records.best_of(store, hyp_id)
     return Outcome(

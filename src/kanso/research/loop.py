@@ -69,6 +69,7 @@ from kanso.nautilus import backtest, sizing
 from kanso.research import lanes, records
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
+from kanso.research.passages import BEGUN, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
@@ -114,7 +115,6 @@ ended one, and the queue now takes it back (`research/scheduler.py`). Leaving it
 let such a hypothesis be queued and then refused at `begin`, which is a lane spinning
 rather than a refusal anyone reads."""
 
-BEGUN: Final = "run_begun"
 CARDED: Final = "card"
 ENDED: Final = "run_ended"
 BASELINE_FAILED: Final = "baseline_failed"
@@ -680,6 +680,7 @@ def begin(
             f"{hyp_id} already has an active run ({registration.active_run})",
             remedy=f"end it with `kanso research end {hyp_id}`",
         )
+    _admitted(store, hyp_id, lane)
     path = hypothesis_file(ws, hyp_id)
     source = read_source(path)
     if not registration.pinned:
@@ -727,6 +728,7 @@ def begin(
             cache=host_cache,
         )
         result = _baseline(ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best)
+        _admitted(store, hyp_id, lane)  # the baseline took minutes; the operator may have acted
     except KansoError as exc:
         # Nothing a card could be judged against ran, so the run leaves no trace but the
         # event the scheduler reads to requeue the hypothesis at a lower priority.
@@ -955,6 +957,16 @@ def _lane_source(store: StateStore, run: RunRecord, directory: Path) -> bytes:
         f"{path} is missing, so there was nothing to evaluate; it has been restored",
         remedy="edit the restored strategy.py and run the card again",
     )
+
+
+def _admitted(store: StateStore, hyp_id: str, lane: str) -> None:
+    """Refuse to begin a run for a hypothesis the operator took out of this lane's hands."""
+    if taken(store, hyp_id, lane):
+        raise PreconditionError(
+            f"{hyp_id} was taken out of the queue while lane {lane} held it, so this lane "
+            "does not begin its run",
+            remedy=f"`kanso research queue add {hyp_id}` when you want it researched again",
+        )
 
 
 def end(ws: Workspace, store: StateStore, hyp_id: str) -> RunRecord:

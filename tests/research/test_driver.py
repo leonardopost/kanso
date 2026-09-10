@@ -18,6 +18,7 @@ from kanso.errors import PreconditionError
 from kanso.models import Answer, Call, reset_mock, spend
 from kanso.models import router as router_module
 from kanso.research import driver, lanes, records, scheduler
+from kanso.research import loop as research_loop
 from kanso.schemas import ModelSpec
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -230,6 +231,61 @@ def test_a_stall_ends_the_run_and_requeues_the_hypothesis(
     assert scheduler.queued(store)[0].priority == scheduler.STALL_PRIORITY
     # The baseline kept, so the stall had a subject and certified it on the way out.
     assert certificate.latest(store, prepared_hyp) is not None
+
+
+def test_a_stall_whose_certification_cannot_run_leaves_the_hypothesis_owed_to_the_queue(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """The planner's tier answers nothing usable, so on_stall raises; the lane still holds it."""
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("boom")], certify_plan=[{}])
+
+    with pytest.raises(PreconditionError, match="certify_plan"):
+        driver.run(workspace, store, prepared_hyp, lane="l1")
+
+    assert records.active(store, prepared_hyp) is None
+    assert scheduler.claimed(store, prepared_hyp)
+    put = scheduler.put_back(store, prepared_hyp)
+    assert put is not None and put.priority == scheduler.BASELINE_PRIORITY
+
+
+def test_a_lane_whose_hypothesis_was_taken_out_does_not_begin_its_run(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    scheduler.enqueue(store, prepared_hyp)
+    assert scheduler.dequeue(store, "l1") == prepared_hyp
+    assert scheduler.remove(store, prepared_hyp) == "lane"
+
+    with pytest.raises(PreconditionError, match="taken out of the queue while lane l1 held it"):
+        driver.run(ws, store, prepared_hyp, cards=1, lane="l1")
+
+    assert records.active(store, prepared_hyp) is None
+    assert not lanes.lane_dir(ws, "l1", prepared_hyp).exists()
+    assert scheduler.put_back(store, prepared_hyp) is None
+    # By hand, in the interactive lane, the operator may still begin it.
+    assert driver.run(ws, store, prepared_hyp, cards=1).proposed == 1
+
+
+def test_a_removal_that_lands_during_the_baseline_is_honoured_before_the_run_exists(
+    ws: Workspace, store: StateStore, prepared_hyp: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scheduler.enqueue(store, prepared_hyp)
+    assert scheduler.dequeue(store, "l1") == prepared_hyp
+    real = research_loop._baseline
+
+    def removing(*args: Any, **kwargs: Any) -> Any:
+        result = real(*args, **kwargs)
+        assert scheduler.remove(store, prepared_hyp) == "lane"
+        return result
+
+    monkeypatch.setattr(research_loop, "_baseline", removing)
+
+    with pytest.raises(PreconditionError, match="taken out of the queue"):
+        driver.run(ws, store, prepared_hyp, cards=1, lane="l1")
+
+    assert records.active(store, prepared_hyp) is None
+    assert not lanes.lane_dir(ws, "l1", prepared_hyp).exists()
+    assert records.cards_of(store, prepared_hyp) == []
 
 
 def test_two_lanes_never_touch_each_other_s_files(ws: Workspace, store: StateStore) -> None:

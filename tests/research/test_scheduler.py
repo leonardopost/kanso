@@ -19,6 +19,7 @@ from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
 from kanso.inbox import unread
 from kanso.research import records, scheduler
+from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
@@ -371,21 +372,200 @@ def test_the_queue_payload_is_json(ws: Workspace, store: StateStore) -> None:
     assert json.loads(json.dumps(stall))["verdict"] == "pass"
 
 
+def test_a_claim_is_recorded_under_the_lane_that_made_it(ws: Workspace, store: StateStore) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+
+    assert scheduler.dequeue(store, "l2") == hyp_id
+
+    claims = store.events(kind=scheduler.CLAIMED, subject=hyp_id)
+    assert [event.detail["lane"] for event in claims] == ["l2"]
+    assert scheduler.claimed(store, hyp_id)
+
+
 def test_a_hypothesis_dropped_between_claim_and_run_is_put_back(
     ws: Workspace, store: StateStore
 ) -> None:
-    """A dead lane leaves its subject `researching` with neither a run nor a place."""
+    """A dead lane leaves its subject with neither a run nor a place, and a claim on record.
+
+    Everything else with neither a run nor a place is left alone: a run the operator ended,
+    a hypothesis nobody queued, one the operator took out, one whose claim became a run.
+    """
     dropped = classify(ws, store, DOCUMENT)
-    set_status(store, dropped, "researching")
+    scheduler.enqueue(store, dropped)
+    assert scheduler.dequeue(store, "l1") == dropped
     busy = register(ws, store, "demo_two")
-    set_status(store, busy, "researching")
-    open_run(store, busy, lane="l1")
-    waiting = register(ws, store, "demo_three")
-    set_status(store, waiting, "researching")
+    scheduler.enqueue(store, busy)
+    assert scheduler.dequeue(store, "l2") == busy
+    open_run(store, busy, lane="l2")
+    ended = register(ws, store, "demo_three")
+    scheduler.enqueue(store, ended)
+    assert scheduler.dequeue(store, "l3") == ended
+    store.event(BEGUN, ended, {"lane": "l3"})
+    taken_out = register(ws, store, "demo_four")
+    scheduler.enqueue(store, taken_out)
+    assert scheduler.dequeue(store, "l3") == taken_out
+    assert scheduler.remove(store, taken_out) == "lane"
+    waiting = register(ws, store, "demo_five")
     scheduler.enqueue(store, waiting)
-    register(ws, store, "demo_four")
+    register(ws, store, "demo_six")
 
     assert scheduler.recover(store) == [dropped]
 
     assert ids(store) == [waiting, dropped]
     assert scheduler.recover(store) == []
+
+
+def test_remove_takes_a_hypothesis_out_of_the_queue(ws: Workspace, store: StateStore) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+
+    assert scheduler.remove(store, hyp_id) == "queue"
+
+    assert ids(store) == []
+    assert [event.kind for event in store.events(subject=hyp_id)][-2:] == [
+        scheduler.QUEUED,
+        scheduler.REMOVED,
+    ]
+    with pytest.raises(PreconditionError, match="not in the queue"):
+        scheduler.remove(store, hyp_id)
+
+
+def test_remove_reaches_a_hypothesis_a_lane_holds_and_its_failure_leaves_it_out(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The operator's removal outranks the lane's put-back; the lane's next failure or the
+    next start does not bring the hypothesis back."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+
+    assert scheduler.remove(store, hyp_id) == "lane"
+
+    assert not scheduler.claimed(store, hyp_id)
+    assert scheduler.put_back(store, hyp_id) is None
+    assert scheduler.recover(store) == []
+    assert ids(store) == []
+
+
+def test_recover_returns_each_at_the_priority_it_held_in_claim_order(
+    ws: Workspace, store: StateStore
+) -> None:
+    demoted = classify(ws, store, DOCUMENT)
+    fresh = register(ws, store, "demo_two")
+    scheduler.enqueue(store, demoted, priority=scheduler.BASELINE_PRIORITY)
+    scheduler.enqueue(store, fresh)
+    assert scheduler.dequeue(store, "l1") == fresh
+    assert scheduler.dequeue(store, "l2") == demoted
+
+    assert scheduler.recover(store) == [fresh, demoted]
+
+    assert [(item.hyp_id, item.priority) for item in scheduler.queued(store)] == [
+        (fresh, 0),
+        (demoted, scheduler.BASELINE_PRIORITY),
+    ]
+
+
+def test_a_stall_holds_the_hypothesis_in_the_lane_s_name_until_the_scheduler_decides(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The run has ended and the queue has not taken it: a lane that fails or dies now owes it."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    store.event(BEGUN, hyp_id, {"lane": "l1"})
+    assert scheduler.put_back(store, hyp_id) is None, "an ended run is the operator's doing"
+
+    scheduler.hold(store, hyp_id, "l1")
+
+    assert scheduler.claimed(store, hyp_id)
+    put = scheduler.put_back(store, hyp_id)
+    assert put is not None and put.priority == scheduler.BASELINE_PRIORITY
+    other = register(ws, store, "demo_two")
+    scheduler.enqueue(store, other)
+    assert scheduler.dequeue(store, "l2") == other
+    store.event(BEGUN, other, {"lane": "l2"})
+    scheduler.hold(store, other, "l2")
+    assert scheduler.recover(store) == [other], "the lane died before the scheduler decided"
+    assert [(item.hyp_id, item.priority) for item in scheduler.queued(store)] == [
+        (other, scheduler.STALL_PRIORITY),
+        (hyp_id, scheduler.BASELINE_PRIORITY),
+    ]
+
+
+def test_a_retire_while_a_lane_holds_it_closes_the_claim_so_resume_does_not_revive_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    set_status(store, hyp_id, "retired")
+
+    assert scheduler.put_back(store, hyp_id) is None
+    set_status(store, hyp_id, "researching")
+
+    assert not scheduler.claimed(store, hyp_id)
+    assert scheduler.recover(store) == []
+    closing = store.events(kind=scheduler.REMOVED, subject=hyp_id)[-1]
+    assert closing.detail == {"from": "lane", "lane": "l1", "because": "retired"}
+
+
+def test_remove_from_a_lane_names_the_lane_that_may_not_begin(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l2") == hyp_id
+
+    assert scheduler.remove(store, hyp_id) == "lane"
+
+    assert scheduler.taken(store, hyp_id, "l2")
+    assert not scheduler.taken(store, hyp_id, "op"), "another lane may still begin it by hand"
+    scheduler.enqueue(store, hyp_id)
+    assert not scheduler.taken(store, hyp_id, "l2"), "queued again, the removal is spent"
+
+
+def test_a_removal_that_lands_during_the_certification_is_honoured(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    a_card(ws, store, FLAT)
+    write_plan(ws)
+    scheduler.hold(store, hyp_id, "l1")
+    real = certify_run.certify
+
+    def removing(*args: Any, **kwargs: Any) -> Any:
+        assert scheduler.remove(store, hyp_id) == "lane"
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(certify_run, "certify", removing)
+
+    stall = scheduler.on_stall(ws, store, hyp_id, "l1")
+
+    assert stall.verdict == "fail"
+    assert stall.priority is None
+    assert ids(store) == []
+    assert scheduler.recover(store) == []
+
+
+def test_put_back_returns_a_failed_lane_s_hypothesis_by_where_it_got_to(
+    ws: Workspace, store: StateStore
+) -> None:
+    never_began = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, never_began)
+    assert scheduler.dequeue(store, "l1") == never_began
+    mid_run = register(ws, store, "demo_two")
+    open_run(store, mid_run, lane="l2")
+    retired = register(ws, store, "demo_three")
+    scheduler.enqueue(store, retired)
+    assert scheduler.dequeue(store, "l3") == retired
+    set_status(store, retired, "retired")
+
+    assert scheduler.put_back(store, never_began) is not None
+    assert scheduler.put_back(store, mid_run) is not None
+    assert scheduler.put_back(store, retired) is None
+
+    assert [(item.hyp_id, item.priority) for item in scheduler.queued(store)] == [
+        (mid_run, scheduler.STALL_PRIORITY),
+        (never_began, scheduler.BASELINE_PRIORITY),
+    ]

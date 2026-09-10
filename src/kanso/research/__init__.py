@@ -27,7 +27,16 @@ from kanso.research.lanes import DEFAULT_LANE, lane_dir
 from kanso.research.loop import BASELINE, Setup, begin, card, end
 from kanso.research.records import active, cards_of, n_trials, runs_of, trial_metrics
 from kanso.research.results import results_file, results_tsv, write_results
-from kanso.research.scheduler import QueueItem, Stall, dequeue, enqueue, on_stall, queued, requeue
+from kanso.research.scheduler import (
+    QueueItem,
+    Stall,
+    dequeue,
+    enqueue,
+    on_stall,
+    queued,
+    remove,
+    requeue,
+)
 
 __all__ = [
     "BASELINE",
@@ -56,6 +65,7 @@ __all__ = [
     "trial_metrics",
     "on_stall",
     "queued",
+    "remove",
     "requeue",
     "results_file",
     "results_tsv",
