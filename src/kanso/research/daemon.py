@@ -364,6 +364,10 @@ def worker(ws: Workspace, lane: str) -> int:
     alignment check, what the last diff was — it reads back out of the run, so a turn is
     a resumption and the run is unaware it was interrupted.
 
+    A failure is recorded with the remedy its error carried, because the message says which
+    step gave up and only the remedy says why: a proposer's ladder names the models it
+    tried, and what the last of them answered is the whole of the diagnosis.
+
     A hypothesis it could not research goes back in the queue rather than out of it — a
     baseline that will not run returns behind the stalled ones, and anything that failed
     mid-run returns beside them — and the lane waits before taking anything else, so a
@@ -385,7 +389,11 @@ def worker(ws: Workspace, lane: str) -> int:
             except KansoError as exc:
                 if stopping():
                     break  # the card was interrupted, not failed; the run resumes next start
-                store.event(LANE_FAILED, subject, {"lane": lane, "error": exc.message})
+                store.event(
+                    LANE_FAILED,
+                    subject,
+                    {"lane": lane, "error": exc.message, "because": exc.remedy},
+                )
                 scheduler.put_back(store, subject)
                 _wait(BACKOFF_S)
     return 0

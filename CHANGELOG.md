@@ -3,6 +3,11 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A repeat anywhere in the ladder is a miss.** 0.4.3 counted a miss only when the *last* judged answer repeated a card, so a proposer that repeated itself and then answered with a diff that would not apply still failed the lane — two such failures in the seven minutes after the release, and no misses. A ladder that reaches for bytes already carded at any point in its three attempts is now a miss, because the model was asked three times and had nothing new.
+- **A lane failure records why.** `lane_failed` carries the remedy its error had beside the message: for a proposer's ladder the message names the models tried, and only the remedy says what their answers were rejected for.
+
 ## v0.4.3 — 2026-09-10
 
 - **A proposer with nothing new is a miss, not a failed lane.** 0.4.2 refused a proposal that reproduced bytes already carded; on an exhausted surface every proposal was one, the ladder ran out three calls at a time, and the lane failed, backed off and retried a minute later without the run ever stalling — 180 calls an hour for nothing, on one sleeve. A ladder that runs out with its last judged answer a repeat now counts toward the stall exactly as a discard does (`repeated` event, `missed` in the outcome, counted by `--cards`), so the run stalls and the queue takes it back at the usual cadence.

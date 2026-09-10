@@ -17,10 +17,11 @@ carded under the run's pins — the same file, the same hypothesis, the same sna
 same criteria — because a card is a deterministic function of those and a second one
 would only repeat the first while counting as a second trial. The refusal names the card
 it repeats. None of these becomes a card, so a wasted answer costs a call rather than a
-trial. A ladder that runs out having judged a repeat and nothing better is a *miss*: the
-model had no new change to make, which is what a discard says too, so it counts toward the
-stall exactly as a discard does and is recorded as an event rather than a card. A ladder
-that runs out on answers that do not fit at all is still a failure of the step.
+trial. A ladder that runs out having judged a repeat anywhere in it is a *miss*: the model
+was asked three times and reached for a change already tried at least once, which is what a
+discard says too, so it counts toward the stall exactly as a discard does and is recorded
+as an event rather than a card. A ladder that runs out without ever proposing a repeat —
+answers that do not apply, or do not parse — is still a failure of the step.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
@@ -86,8 +87,8 @@ STALLED: Final = "stalled"
 """Why a driver stopped: it reached the count it was given, or the run stalled."""
 
 REPEATED: Final = "repeated"
-"""The event a miss appends, under the hypothesis id: the ladder ran out and the last
-answer it judged reproduced bytes already carded."""
+"""The event a miss appends, under the hypothesis id: the ladder ran out having judged an
+answer that reproduced bytes already carded."""
 
 
 class NothingNewError(PreconditionError):
@@ -249,7 +250,6 @@ def _propose(
 
     def judge(data: Mapping[str, object]) -> list[str]:
         complaints: list[str] = []
-        repeat.pop("complaint", None)
         if any(character in str(data["desc"]) for character in "\t\r\n"):
             complaints.append(_ONE_LINE)
         try:
@@ -267,8 +267,7 @@ def _propose(
                 status=str(seen["status"]),
                 metric=float(seen["metric"]),
             )
-            if not complaints:
-                repeat["complaint"] = said
+            repeat.setdefault("complaint", said)
             complaints.append(said)
             return complaints
         applied["source"] = candidate
