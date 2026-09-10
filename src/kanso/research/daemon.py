@@ -345,8 +345,10 @@ def recover(ws: Workspace) -> list[str]:
 
     A lane takes a hypothesis out of the queue when it claims it and records the run only
     once the baseline has finished, which can be minutes later; a lane killed in between
-    leaves the hypothesis `researching` with neither a run nor a place in the queue, where
-    nothing reports it. The supervisor closes that gap every time it starts.
+    leaves the hypothesis with neither a run nor a place in the queue, where nothing
+    reports it, and only the queue's record of the claim says a lane was holding it. The
+    supervisor reads that record every time it starts. A hypothesis whose run the operator
+    ended, or that the operator took out of the queue, is left where they put it.
     """
     with StateStore(ws.path("state.db")) as store:
         usable(store, ws.path("state.db"))
@@ -365,7 +367,9 @@ def worker(ws: Workspace, lane: str) -> int:
     A hypothesis it could not research goes back in the queue rather than out of it — a
     baseline that will not run returns behind the stalled ones, and anything that failed
     mid-run returns beside them — and the lane waits before taking anything else, so a
-    provider that is down costs a call a minute rather than a call a second.
+    provider that is down costs a call a minute rather than a call a second. The two
+    exceptions are the operator's: a hypothesis retired, or taken out of the queue, while
+    the lane held it stays out.
     """
     lane = lanes.check_lane(lane)
     _listen()
@@ -382,10 +386,7 @@ def worker(ws: Workspace, lane: str) -> int:
                 if stopping():
                     break  # the card was interrupted, not failed; the run resumes next start
                 store.event(LANE_FAILED, subject, {"lane": lane, "error": exc.message})
-                if records.active(store, subject) is None:
-                    scheduler.on_baseline_failed(store, subject)
-                else:
-                    scheduler.requeue(store, subject, scheduler.STALL_PRIORITY)
+                scheduler.put_back(store, subject)
                 _wait(BACKOFF_S)
     return 0
 
@@ -424,7 +425,7 @@ def claim(store: StateStore, lane: str) -> str | None:
     ).fetchone()
     if row is not None:
         return str(row["hyp_id"])
-    return scheduler.dequeue(store)
+    return scheduler.dequeue(store, lane)
 
 
 def main(argv: Sequence[str]) -> int:

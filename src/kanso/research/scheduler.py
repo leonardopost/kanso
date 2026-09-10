@@ -19,6 +19,12 @@ because one run per hypothesis is the invariant the run table enforces, and a de
 which is dropped on sight. Lane `op` is a lane like any other to this module, which is
 what keeps an operator working by hand from blocking a daemon lane: their hypothesis is
 simply not available to be taken.
+
+Between the queue and a run there is a gap: a lane that took a hypothesis holds it, with no
+row to show for it, until its baseline has run and the run row exists. The queue records
+the passage — `queued`, `claimed`, `removed`, and the run's own `run_begun` — so that gap
+can be read back: what a dead lane was holding is put back at the next start, and what an
+operator took out while a lane held it stays out when that lane fails.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from kanso.errors import PreconditionError
 from kanso.hyp import active_run, set_status
 from kanso.research import records
 from kanso.research.lanes import DEFAULT_LANE
+from kanso.research.loop import BEGUN
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -39,18 +46,24 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "BASELINE_PRIORITY",
     "CERTIFIABLE",
+    "CLAIMED",
     "DEAD",
     "QUEUED",
+    "REMOVED",
     "STALLED",
     "STALL_PRIORITY",
     "QueueItem",
     "Stall",
+    "claimed",
     "dequeue",
     "drop",
     "enqueue",
     "on_baseline_failed",
     "on_stall",
+    "put_back",
     "queued",
+    "recover",
+    "remove",
     "requeue",
 ]
 
@@ -72,9 +85,14 @@ means only that: their last certificate failed, and `kanso research queue add` t
 back."""
 
 QUEUED: Final = "queued"
+CLAIMED: Final = "claimed"
+REMOVED: Final = "removed"
 STALLED: Final = "stalled"
 CERTIFIABLE: Final = "certifiable"
 """The events this module appends, under the hypothesis id as subject."""
+
+_PASSAGES: Final = (QUEUED, CLAIMED, REMOVED, BEGUN)
+"""The events that move a hypothesis between the queue and a run, in either direction."""
 
 
 @dataclass(frozen=True)
@@ -164,34 +182,87 @@ def queued(store: StateStore) -> list[QueueItem]:
 
 
 def recover(store: StateStore) -> list[str]:
-    """Re-queue every `researching` hypothesis with neither an active run nor a place.
+    """Re-queue every hypothesis a lane claimed and never began.
 
-    That is the state a lane leaves behind when it dies between claiming a hypothesis and
-    recording its run. Returns the ids put back, oldest first.
+    That is what a lane leaves behind when it dies between taking a hypothesis and
+    recording its run: no run, no place, and the queue's last word on it a claim. Nothing
+    else with no run and no place is touched — a hypothesis whose run the operator ended
+    looks the same from the tables and is left alone, and so is one the operator took out
+    of the queue. Returns the ids put back, in id order.
     """
     rows = store.connection.execute(
-        "SELECT hyp_id FROM hypotheses WHERE status = 'researching' ORDER BY hyp_id"
+        "SELECT DISTINCT subject FROM events WHERE kind = ? ORDER BY subject", (CLAIMED,)
     ).fetchall()
     found: list[str] = []
     for row in rows:
-        hyp_id = str(row["hyp_id"])
-        if active_run(store, hyp_id) is not None or _row(store, hyp_id) is not None:
+        hyp_id = str(row["subject"])
+        if not claimed(store, hyp_id) or _row(store, hyp_id) is not None:
             continue
         enqueue(store, hyp_id)
         found.append(hyp_id)
     return found
 
 
-def dequeue(store: StateStore) -> str | None:
+def claimed(store: StateStore, hyp_id: str) -> bool:
+    """Whether a lane holds `hyp_id` with no run to show for it yet.
+
+    True when the last passage recorded for the hypothesis is a claim — not a run
+    beginning, not a return to the queue, not the operator taking it out — and no run is
+    active. A retired hypothesis has no claim outstanding whatever the record says.
+    """
+    if _status(store, hyp_id) in DEAD or active_run(store, hyp_id) is not None:
+        return False
+    return _last_passage(store, hyp_id) == CLAIMED
+
+
+def remove(store: StateStore, hyp_id: str) -> str:
+    """Take a hypothesis out of the queue, or out of a lane's hands before its run begins.
+
+    Returns where it came from: `"queue"` when a row was removed, `"lane"` when none was
+    but a lane holds it. A lane that holds it goes on to fail or to begin: the failure does
+    not bring the hypothesis back, and a run that began is ended with `research end`.
+    Refuses a hypothesis that is neither queued nor held.
+    """
+    if drop(store, hyp_id):
+        where = "queue"
+    elif claimed(store, hyp_id):
+        where = "lane"
+    else:
+        raise PreconditionError(
+            f"{hyp_id} is not in the queue, and no lane holds it short of a run",
+            remedy="`kanso research status` lists what waits and what runs; a run ends with "
+            f"`kanso research end {hyp_id}`",
+        )
+    store.event(REMOVED, hyp_id, {"from": where})
+    return where
+
+
+def put_back(store: StateStore, hyp_id: str) -> QueueItem | None:
+    """Return a failed lane's hypothesis to the queue, or say why not with `None`.
+
+    Beside the stalled ones when its run had begun, behind them when it never did. Nothing
+    comes back that was retired, or that the operator took out of the queue while the lane
+    held it: the lane's failure is not a reason to overrule either.
+    """
+    if _status(store, hyp_id) in DEAD:
+        return None
+    if active_run(store, hyp_id) is not None:
+        return requeue(store, hyp_id, STALL_PRIORITY)
+    if claimed(store, hyp_id):
+        return on_baseline_failed(store, hyp_id)
+    return None
+
+
+def dequeue(store: StateStore, lane: str = DEFAULT_LANE) -> str | None:
     """The next hypothesis to research, removed from the queue, or `None`.
 
     A dead hypothesis is dropped on sight and one already being researched is passed
     over and left where it is, so the lane that finishes it finds its place unchanged.
 
-    The removal is the claim. Lanes poll in step, so two of them read the same head at
-    once; the one whose delete removed the row has it, and the other, whose delete
-    removed nothing, moves on to the next row rather than starting a run that the first
-    lane's run would then refuse.
+    The removal is the claim, and it is recorded under the lane that made it. Lanes poll
+    in step, so two of them read the same head at once; the one whose delete removed the
+    row has it, and the other, whose delete removed nothing, moves on to the next row
+    rather than starting a run that the first lane's run would then refuse.
     """
     for item in queued(store):
         status = _status(store, item.hyp_id)
@@ -201,6 +272,7 @@ def dequeue(store: StateStore) -> str | None:
         if active_run(store, item.hyp_id) is not None:
             continue
         if drop(store, item.hyp_id):
+            store.event(CLAIMED, item.hyp_id, {"lane": lane})
             return item.hyp_id
     return None
 
@@ -260,6 +332,16 @@ def _row(store: StateStore, hyp_id: str) -> QueueItem | None:
     if found is None:
         return None
     return QueueItem(str(found["hyp_id"]), int(found["priority"]), str(found["enqueued_at"]))
+
+
+def _last_passage(store: StateStore, hyp_id: str) -> str | None:
+    marks = ", ".join("?" for _ in _PASSAGES)
+    row = store.connection.execute(
+        f"SELECT kind FROM events WHERE subject = ? AND kind IN ({marks}) "
+        "ORDER BY event_id DESC LIMIT 1",
+        (hyp_id, *_PASSAGES),
+    ).fetchone()
+    return None if row is None else str(row["kind"])
 
 
 def _status(store: StateStore, hyp_id: str) -> str:

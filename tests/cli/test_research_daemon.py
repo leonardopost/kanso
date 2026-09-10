@@ -165,3 +165,26 @@ def test_queueing_an_unknown_hypothesis_is_refused(runner: CliRunner, mocked_ws:
 
     assert result.exit_code == Exit.PRECONDITION
     assert "nonesuch" in payload(result)["error"]
+
+
+def test_queue_remove_takes_the_hypothesis_out_and_says_where_from(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    assert at(runner, mocked_ws, "research", "queue", "add", HYP_ID).exit_code == Exit.OK
+
+    result = at(runner, mocked_ws, "research", "queue", "remove", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert payload(result) == {"id": HYP_ID, "removed_from": "queue", "waiting": 0}
+    again = at(runner, mocked_ws, "research", "queue", "remove", HYP_ID, "--json")
+    assert again.exit_code == Exit.PRECONDITION
+    assert "not in the queue" in payload(again)["error"]
+
+
+def test_queue_remove_reads_as_where_it_came_from(runner: CliRunner, mocked_ws: Path) -> None:
+    assert at(runner, mocked_ws, "research", "queue", "add", HYP_ID).exit_code == Exit.OK
+
+    result = at(runner, mocked_ws, "research", "queue", "remove", HYP_ID)
+
+    assert result.exit_code == Exit.OK
+    assert "from the queue" in result.stdout

@@ -174,6 +174,43 @@ def test_a_hypothesis_whose_baseline_will_not_run_goes_back_behind_the_others(
     assert daemon.LANE_FAILED in [event.kind for event in store.events(subject=hyp_id)]
 
 
+def test_a_hypothesis_taken_out_while_a_lane_held_it_does_not_come_back_when_it_fails(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The operator ran `queue remove` in the minutes between the claim and the failure."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+
+    def failing(_ws: Workspace, opened: StateStore, subject: str, **_: Any) -> Any:
+        with StateStore(ws.path("state.db")) as operator:
+            assert scheduler.remove(operator, subject) == "lane"
+        raise PreconditionError("the baseline card did not run")
+
+    monkeypatch.setattr(research_driver, "run", failing)
+    monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
+
+    assert daemon.worker(ws, "l1") == 0
+    assert scheduler.queued(store) == []
+    assert daemon.LANE_FAILED in [event.kind for event in store.events(subject=hyp_id)]
+
+
+def test_a_hypothesis_retired_while_a_lane_held_it_stays_out_and_the_lane_lives(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+
+    def failing(_ws: Workspace, opened: StateStore, subject: str, **_: Any) -> Any:
+        set_status(opened, subject, "retired")
+        raise PreconditionError("the baseline card did not run")
+
+    monkeypatch.setattr(research_driver, "run", failing)
+    monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
+
+    assert daemon.worker(ws, "l1") == 0
+    assert scheduler.queued(store) == []
+
+
 def test_a_run_that_failed_mid_flight_stays_beside_the_stalled_ones(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -468,7 +505,8 @@ def test_the_supervisor_puts_back_what_a_dead_lane_dropped(
     ws: Workspace, store: StateStore
 ) -> None:
     hyp_id = classify(ws, store, DOCUMENT)
-    set_status(store, hyp_id, "researching")
+    scheduler.enqueue(store, hyp_id)
+    assert daemon.claim(store, "l1") == hyp_id
 
     assert daemon.recover(ws) == [hyp_id]
     assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]

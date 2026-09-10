@@ -132,6 +132,14 @@ def queue_add_command(
     emit(as_json or global_json(ctx), lambda: _queue_add(open_workspace(ctx), hyp_id, priority))
 
 
+@queue_app.command("remove")
+def queue_remove_command(
+    ctx: typer.Context, hyp_id: IdArgument, as_json: JsonOption = False
+) -> None:
+    """Take a hypothesis out of the queue, or out of a lane's hands before its run begins."""
+    emit(as_json or global_json(ctx), lambda: _queue_remove(open_workspace(ctx), hyp_id))
+
+
 @app.command("show")
 def show_command(
     ctx: typer.Context,
@@ -321,6 +329,18 @@ def _queue_add(ws: Workspace, hyp_id: str, priority: int) -> Report:
         field("queued", f"{item.hyp_id} · priority {item.priority}"),
         field("place", f"{place} of {len(waiting)}"),
         field("since", item.enqueued_at),
+    )
+    return Report(data=data, lines=lines)
+
+
+def _queue_remove(ws: Workspace, hyp_id: str) -> Report:
+    with store(ws) as opened:
+        where = research.remove(opened, hyp_id)
+        waiting = research.queued(opened)
+    data: dict[str, Any] = {"id": hyp_id, "removed_from": where, "waiting": len(waiting)}
+    lines = (
+        field("removed", f"{hyp_id} · from the {where}"),
+        field("waiting", len(waiting)),
     )
     return Report(data=data, lines=lines)
 
