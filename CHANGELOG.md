@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.4.0 — 2026-09-10
 
 - **A multi-instrument instant is one book.** Points that share a `ts_init` and a grain are applied to the venue before any author handler of that grain runs; each handler then runs with that book and the fills of the handler before it. A market submitted into another instrument of the instant fills at that instant's close, not the previous one. A limit placed in that handler sees only the close. An incomplete instant still trades the silent leg at the last public price. Data an author raises inside a handler dispatches at once and never takes a cohort's marker.
 - **An overlay has its own clock.** `evaluate` runs once inside every host entry (`scale`, and legs beside that order). `on_data` runs once per cohort of the overlay's grain, after every handler of that cohort and never while a market order of the sleeve is unfilled, and places legs without waiting for the next host buy. When the overlay's resolution is finer than the host's, the runner loads both grains for the combined run and the host-alone run alike; the host's `on_bar` still runs only on its grain, and its orders fill on the finer book. `HookContext` gains `book` (the host's own signed position per name), `prices` (the last print of every name at the finest grain loaded) and `clips`.
