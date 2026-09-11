@@ -1504,18 +1504,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             signed = quantity if order.side == OrderSide.BUY else -quantity
             closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
             held[key] = now + signed
-            price = _order_price(order) or self._price_now(key)
-            if price is None:
-                if quantity > closing:
-                    self._refuse(
-                        UNFUNDED_ORDER,
-                        key,
-                        side,
-                        why="an entry built by hand in a name with no price seen yet cannot "
-                        "be shown to fit the book; place it with submit_entry, which places "
-                        "nothing until a price has been seen",
-                    )
-                continue
+            price = _order_price(order) or self._price_now(key) or 0.0
+            if price <= 0.0 and quantity > closing:
+                self._refuse(
+                    UNFUNDED_ORDER,
+                    key,
+                    side,
+                    why="an entry built by hand in a name with no price seen yet cannot be "
+                    "shown to fit the book; place it with submit_entry, which places nothing "
+                    "until a price has been seen",
+                )
             free += closing * price
             opening = (quantity - closing) * price
             if opening > free + 1e-6:

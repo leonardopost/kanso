@@ -17,7 +17,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso.nautilus.sizing import UNFUNDED_ORDER, SizingError
 from kanso.nautilus.strategy import KansoStrategy
 
-from .conftest import DEEP, DEMO, HEDGE, MINUTE_NS, SECOND_NS, bar, equity, flat
+from .conftest import DEEP, DEMO, HEDGE, MINUTE_NS, SECOND_NS, bar, equity, flat, quote
 from .test_sleeve import config
 
 DEMO_SHARES = 10_000.0
@@ -406,3 +406,33 @@ def test_a_bracket_s_exits_do_not_count_against_the_book_its_entry_takes(backtes
     run = backtest(Bracketed(free()), data=two_names(), instruments=(DEMO, HEDGE))
 
     assert intents(run)[0] == ("DEMO.XNAS", "BUY", 10_000.0)
+
+
+def test_a_quote_in_one_name_leaves_another_name_s_resting_entry_on_the_book(backtest) -> None:
+    """A quote books its own name's fills and keeps every other order where it was: the HEDGE
+    limit resting under the market still holds back its 39,995 when DEMO sizes after DEMO's
+    quotes, so DEMO gets 5,976 shares of the room its quoted spread leaves, not 9,960."""
+
+    class Quoted(KansoStrategy):
+        def on_start(self) -> None:
+            self.bars = 0
+
+        def on_bar(self, bar_: object) -> None:
+            if str(bar_.bar_type.instrument_id) != "DEMO.XNAS":  # type: ignore[attr-defined]
+                return
+            self.bars += 1
+            if self.bars == 2:
+                self.submit_entry(HEDGE, "BUY", notional=40_000.0, price=19.0)
+            if self.bars == 6:
+                self.submit_entry(DEMO, "BUY")
+
+    data = [
+        *flat(DEMO, volume=DEEP),
+        *flat(HEDGE, close=20.0, volume=DEEP),
+        *(quote(DEMO, index) for index in range(20)),
+    ]
+    config = free(data_requirements=("bar", "quote"))
+
+    run = backtest(Quoted(config), data=data, instruments=(DEMO, HEDGE))
+
+    assert intents(run) == [("HEDGE.XNAS", "BUY", 2_105.0), ("DEMO.XNAS", "BUY", 5_976.0)]

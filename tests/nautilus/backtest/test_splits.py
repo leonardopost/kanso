@@ -363,3 +363,15 @@ def test_an_order_sent_into_the_split_name_before_it_prints_fills_at_the_restate
     assert [(fill.side, fill.px) for fill in on_the_ex_date][:1] == [
         ("SELL" if exits else "BUY", 200.0)
     ]
+
+
+def test_a_split_dated_before_the_window_changes_nothing_in_it(request_for) -> None:
+    """The venue applies every due split at the first point it matches, an old one included.
+    With nothing held and no book yet to restate, the window runs as if there were none."""
+    long_ago = {"splits": [{"ex_date": "2023-06-01", "ratio": 0.1}]}
+    flat_series = restated(before=10.0, after=10.0)
+
+    old = card(request_for, scheduled=long_ago, points=flat_series)
+    none = card(request_for, scheduled=None, points=flat_series)
+
+    assert old.fills and old.equity == none.equity
