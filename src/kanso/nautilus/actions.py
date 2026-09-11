@@ -54,6 +54,10 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   raised it reaches the matching engine.
 * `SimulatedExchange.instruments` is the venue's own instrument map, populated by
   `add_instrument` before any point moves the market on both paths.
+* `SimulatedExchange.get_matching_engine(instrument_id)` returns the instrument's
+  `OrderMatchingEngine` on both venues. Its `get_book()` is the L1 book both of kanso's
+  venues declare, and `process_quote_tick` sets that book's top level from a quote, skipping
+  one older than its last update. A market order is matched against that top level.
 """
 
 from __future__ import annotations
@@ -65,6 +69,7 @@ from nautilus_trader.backtest.config import SimulationModuleConfig
 from nautilus_trader.backtest.modules import SimulationModule
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import CancelAllOrders
+from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId, StrategyId
 
@@ -142,7 +147,8 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
     def _apply(
         self, instrument_id: InstrumentId, split: Split, ts_event: int, ts_init: int
     ) -> None:
-        """Cancel, then adjust, then resync — in that order, and each part earns its place.
+        """Cancel, then adjust, then resync, then restate the book — in that order, and each
+        part earns its place.
 
         **Cancel**, because a resting order is priced and sized in shares that no longer
         exist and the exchange is about to match it against restated prices. **Adjust**
@@ -150,6 +156,11 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         reaches every holder. **Resync**, because `Portfolio` caches a net position per
         instrument and would otherwise keep the pre-split count, so the next exit would be
         sized against shares nobody holds — measured, 1,005 sold against 100 held.
+        **Restate the book**, because the matching engine quotes the instrument at its last
+        print until it prints again, and the point that applied the split may be another
+        instrument's: an order that name's handler sends into this one would fill at the
+        pre-split price — measured, 50 restated shares sold at 20.00 against 200.00, a
+        9,005.50 loss on a card whose baseline lost the cost alone.
         """
         self._cancel(instrument_id, ts_init)
         instrument = self.exchange.instruments[instrument_id]
@@ -161,6 +172,32 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
             splits.apply_to(position, split, lot, ts_event)
         self.portfolio.initialize_positions()
         self._applied.add((str(instrument_id), split.ex_date))
+        self._restate_book(instrument_id, split, ts_event, ts_init)
+
+    def _restate_book(
+        self, instrument_id: InstrumentId, split: Split, ts_event: int, ts_init: int
+    ) -> None:
+        """Quote the matching engine's book in the restated shares: the last bid and ask
+        divided by the ratio, their sizes multiplied by it. Nothing rests in it — the cancel
+        ran first — so the quote moves prices and matches nothing."""
+        engine = self.exchange.get_matching_engine(instrument_id)
+        book = engine.get_book()
+        bid, ask = book.best_bid_price(), book.best_ask_price()
+        if bid is None or ask is None:
+            return
+        instrument = self.exchange.instruments[instrument_id]
+        step = float(instrument.size_increment)
+        engine.process_quote_tick(
+            QuoteTick(
+                instrument_id,
+                instrument.make_price(float(bid) / split.ratio),
+                instrument.make_price(float(ask) / split.ratio),
+                instrument.make_qty(max(float(book.best_bid_size()) * split.ratio, step)),
+                instrument.make_qty(max(float(book.best_ask_size()) * split.ratio, step)),
+                ts_event,
+                ts_init,
+            )
+        )
 
     def _cancel(self, instrument_id: InstrumentId, ts_init: int) -> None:
         """Cancel every resting order in this instrument, one command per sleeve holding one."""
