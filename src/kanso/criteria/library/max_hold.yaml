@@ -2,7 +2,7 @@ id: max_hold
 kind: gate
 stage: card
 required: false
-meaningful_when: "Informative when the thesis bounds how long a position may be held, in calendar days: a closed position entry fill to exit fill, an open one to the window's close, an attached one at period ends."
-params: {days: int}
-ranges: {days: [1, 366]}
+meaningful_when: "Informative when the thesis bounds how long a position may be held, in calendar days or in trading days (daily period ends): fill to fill, an open one to the window's close."
+params: {days: int, trading_days: int}
+ranges: {days: [1, 366], trading_days: [1, 252]}
 impl: kanso.criteria.gates.max_hold

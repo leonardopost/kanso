@@ -29,10 +29,10 @@ Nothing is declared here and left unimplemented: every gate in the library resol
 
 from __future__ import annotations
 
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from hashlib import sha256
 from math import e, inf, sqrt
 from statistics import NormalDist, median
@@ -123,76 +123,105 @@ class _MinTrades:
 
 
 class _MaxHold:
-    """No position held longer than the hypothesis allows, in calendar days.
+    """No position held longer than the hypothesis allows, in calendar days or trading days.
 
     A thesis that says "switches are less than a month apart" is a sentence a model reads;
-    this is the same sentence as a refusal. A closed position is timed from its entry fill
-    to its exit fill — exact instants, so a weekend, a holiday or a clock change inside
-    the hold counts for what it is and a reversal in one instrument is two positions, as
-    the engine records it. A position still open when the window closes is the one
+    this is the same sentence as a refusal, in whichever unit the operator states it:
+    `days` counts calendar days, `trading_days` counts the sessions a position is held
+    across — the run's period ends it spans, which at a daily return period are one per
+    day that traded, so a weekend or a holiday inside a hold adds nothing. Either limit or
+    both may be set, and a position over either is refused.
+
+    A closed position is timed from its entry fill to its exit fill — exact instants, so a
+    clock change counts for what it is and a reversal in one instrument is two positions,
+    as the engine records it. A position still open when the window closes is the one
     `Trade.closed_ns` cannot see and the one a strategy that stops switching leaves
     behind: it is timed from its first fill to the window's last period end.
 
     An attached construct's fills are not separable from its host's, so it is timed on
     what it added to its host at each period end (`_own`): every stretch of consecutive
-    period ends holding the same sign is one position, its length whole periods rounded
-    from the span, so a clock change inside it moves nothing. That reading sees only
-    period ends, so a hold that ends after a gap between them is charged to the last end
-    it was seen at; it is a floor on the hold, never a ceiling, and the yaml says so.
+    period ends holding the same sign is one position, its calendar length whole periods
+    rounded from the span and its trading length the ends it spans. That reading sees only
+    period ends, so it is a floor on the hold, never a ceiling, and the yaml says so.
     """
 
     id: ClassVar[str] = "max_hold"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
-        limit = count(ctx, "days")
-        if limit is None:
+        days, trading = count(ctx, "days"), count(ctx, "trading_days")
+        if days is None and trading is None:
             return skipped(self.id, "no limit was chosen, so no position was timed")
+        if trading is not None and not _counts_sessions(ctx.run):
+            return skipped(
+                self.id,
+                "trading days are the period ends of a daily return period, and this run's "
+                f"period is {ctx.run.period!r} over {len(ctx.run.period_ends_ns)} period ends",
+            )
         if ctx.host_run is None:
-            measured, lengths = "fills", _hold_days_from_fills(ctx.run)
+            measured, held = "fills", _held_from_fills(ctx.run)
         else:
-            measured, lengths = "period_ends", _hold_days_from_marks(ctx.run, _own(ctx))
-        if not lengths:
+            measured, held = "period_ends", _held_from_marks(ctx.run, _own(ctx))
+        if not held:
             return skipped(self.id, "no position was opened, so nothing was timed")
-        over = [length for length in lengths if length > limit]
+        over = [
+            (calendar, sessions)
+            for calendar, sessions in held
+            if (days is not None and calendar > days)
+            or (trading is not None and sessions > trading)
+        ]
         return verdict(
             self.id,
             not over,
             {
-                "days": limit,
-                "unit": "calendar days",
+                "days": days,
+                "trading_days": trading,
                 "measured_on": measured,
-                "longest_days": round(max(lengths), 4),
-                "n_positions": len(lengths),
+                "longest_days": round(max(calendar for calendar, _ in held), 4),
+                "longest_trading_days": max(sessions for _, sessions in held),
+                "n_positions": len(held),
                 "n_over": len(over),
             },
         )
 
 
-def _hold_days_from_fills(run: CardRun) -> list[float]:
-    """Every closed position entry fill to exit fill, and an open one to the window's end."""
-    lengths = [(trade.closed_ns - trade.opened_ns) / NS_PER_DAY for trade in run.trades]
-    if not run.period_ends_ns:
-        return lengths
-    closes = run.period_ends_ns[-1]
-    last_closed: dict[str, int] = {}
-    for trade in run.trades:
-        last_closed[trade.instrument_id] = max(
-            last_closed.get(trade.instrument_id, 0), trade.closed_ns
-        )
-    still_open = {item.instrument_id for item in run.held if item.ts_ns >= closes}
-    for instrument in sorted(still_open):
-        opened = [
-            fill.ts_ns
-            for fill in run.fills
-            if fill.instrument_id == instrument and fill.ts_ns > last_closed.get(instrument, -1)
-        ]
-        if opened:
-            lengths.append((closes - min(opened)) / NS_PER_DAY)
-    return lengths
+def _counts_sessions(run: CardRun) -> bool:
+    """Whether a period end is a trading day: a daily return period, with ends to count."""
+    return bool(run.period_ends_ns) and parse_duration(run.period, "period") == timedelta(days=1)
 
 
-def _hold_days_from_marks(run: CardRun, marked: Sequence[Held]) -> list[float]:
-    """Every stretch of consecutive period ends held with one sign, in whole periods."""
+def _held_from_fills(run: CardRun) -> list[tuple[float, int]]:
+    """Every position's calendar and trading days, fill to fill, an open one to the close."""
+    spans = [(trade.opened_ns, trade.closed_ns) for trade in run.trades]
+    ends = run.period_ends_ns
+    if ends:
+        closes = ends[-1]
+        last_closed: dict[str, int] = {}
+        for trade in run.trades:
+            last_closed[trade.instrument_id] = max(
+                last_closed.get(trade.instrument_id, 0), trade.closed_ns
+            )
+        still_open = {item.instrument_id for item in run.held if item.ts_ns >= closes}
+        for instrument in sorted(still_open):
+            opened = [
+                fill.ts_ns
+                for fill in run.fills
+                if fill.instrument_id == instrument and fill.ts_ns > last_closed.get(instrument, -1)
+            ]
+            if opened:
+                spans.append((min(opened), closes))
+    return [
+        ((closed - opened) / NS_PER_DAY, _sessions(ends, opened, closed))
+        for opened, closed in spans
+    ]
+
+
+def _sessions(ends: Sequence[int], opened: int, closed: int) -> int:
+    """The period ends a position was held across: after its entry, up to its exit."""
+    return bisect_right(ends, closed) - bisect_right(ends, opened)
+
+
+def _held_from_marks(run: CardRun, marked: Sequence[Held]) -> list[tuple[float, int]]:
+    """Every stretch of consecutive period ends held with one sign, and the ends it spans."""
     ends = run.period_ends_ns
     if not ends or not marked:
         return []
@@ -202,23 +231,23 @@ def _hold_days_from_marks(run: CardRun, marked: Sequence[Held]) -> list[float]:
         position = min(bisect_left(ends, item.ts_ns), len(ends) - 1)
         sign = 1 if item.qty > 0 else -1
         stretches.setdefault((item.instrument_id, sign), set()).add(position)
-    lengths: list[float] = []
+    held: list[tuple[float, int]] = []
     for positions in stretches.values():
         ordered = sorted(positions)
         first = previous = ordered[0]
         for index in ordered[1:]:
             if index != previous + 1:
-                lengths.append(_periods(ends, first, previous, period_ns))
+                held.append(_stretch(ends, first, previous, period_ns))
                 first = index
             previous = index
-        lengths.append(_periods(ends, first, previous, period_ns))
-    return lengths
+        held.append(_stretch(ends, first, previous, period_ns))
+    return held
 
 
-def _periods(ends: Sequence[int], first: int, last: int, period_ns: float) -> float:
-    """The stretch's length in calendar days: whole periods from first end to last, plus one."""
+def _stretch(ends: Sequence[int], first: int, last: int, period_ns: float) -> tuple[float, int]:
+    """A stretch's calendar days in whole periods, and the period ends it spans."""
     whole = round((ends[last] - ends[first]) / period_ns) + 1
-    return whole * period_ns / NS_PER_DAY
+    return whole * period_ns / NS_PER_DAY, last - first + 1
 
 
 class _PositionSize:

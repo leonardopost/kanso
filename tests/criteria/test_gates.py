@@ -89,7 +89,7 @@ def test_max_hold_times_a_closed_position_from_its_entry_fill_to_its_exit_fill()
     assert result.passed
     assert result.evidence["longest_days"] == 3.0
     assert result.evidence["measured_on"] == "fills"
-    assert result.evidence["unit"] == "calendar days"
+    assert result.evidence["trading_days"] is None
     assert not max_hold.evaluate(context(run, params={"days": 2})).passed
 
 
@@ -135,6 +135,89 @@ def test_max_hold_reads_a_reopened_position_from_the_fill_after_the_last_close()
     assert result.evidence["n_positions"] == 2
     assert result.evidence["longest_days"] == pytest.approx(4.5), "day 3 noon to the close of day 7"
     assert result.passed
+
+
+def weekdays(start: date, n: int) -> list[date]:
+    """The first `n` trading days from `start`, weekends skipped."""
+    days: list[date] = []
+    day = start
+    while len(days) < n:
+        if day.weekday() < 5:
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
+MONDAY = date(2024, 3, 4)
+
+
+def sessions(n: int = 8, **fields: Any) -> Any:
+    """A daily run over `n` trading days from a Monday, with no period end on a weekend."""
+    days = weekdays(MONDAY, n)
+    run = build_run((0.0,) * n, start=MONDAY, days=(days[-1] - MONDAY).days + 1, **fields)
+    return replace(run, period_ends_ns=tuple(at(day, 20) for day in days))
+
+
+def test_max_hold_counts_trading_days_so_a_weekend_inside_a_hold_adds_nothing() -> None:
+    """Friday morning to Tuesday morning: four calendar days, held across two session ends."""
+    run = sessions(trades=(closed("DEMO", at(date(2024, 3, 8), 9), at(date(2024, 3, 12), 9)),))
+
+    result = max_hold.evaluate(context(run, params={"trading_days": 2}))
+
+    assert result.passed
+    assert result.evidence["longest_trading_days"] == 2
+    assert result.evidence["longest_days"] == 4.0
+    assert not max_hold.evaluate(context(run, params={"trading_days": 1})).passed
+    assert not max_hold.evaluate(context(run, params={"days": 3})).passed, "calendar days count it"
+
+
+def test_max_hold_refuses_a_position_over_either_limit_when_both_are_set() -> None:
+    run = sessions(trades=(closed("DEMO", at(date(2024, 3, 8), 9), at(date(2024, 3, 12), 9)),))
+
+    result = max_hold.evaluate(context(run, params={"days": 4, "trading_days": 1}))
+
+    assert not result.passed
+    assert result.evidence["n_over"] == 1
+
+
+def test_max_hold_counts_an_open_position_across_the_session_ends_to_the_close() -> None:
+    run = open_at_the_close(sessions(fills=(fill(date(2024, 3, 11)),)))
+
+    result = max_hold.evaluate(context(run, params={"trading_days": 3}))
+
+    assert result.passed
+    assert result.evidence["longest_trading_days"] == 3, "Monday, Tuesday and Wednesday's ends"
+    assert not max_hold.evaluate(context(run, params={"trading_days": 2})).passed
+
+
+def test_max_hold_counts_trading_days_only_on_a_daily_return_period() -> None:
+    hourly = replace(
+        build_run(FLAT * 2, trades=(closed("DEMO", at(START, 9), at(START, 15)),)), period="1h"
+    )
+    empty = build_run((), days=1, trades=(closed("DEMO", at(START, 9), at(START, 15)),))
+
+    result = max_hold.evaluate(context(hourly, params={"trading_days": 5}))
+
+    assert result.passed and "'1h'" in str(result.skipped)
+    assert max_hold.evaluate(context(empty, params={"trading_days": 5})).skipped is not None
+    assert max_hold.evaluate(context(hourly, params={"days": 1})).skipped is None
+
+
+def test_max_hold_counts_an_attached_construct_s_trading_days_by_the_ends_it_spans() -> None:
+    host = build_run(FLAT * 2)
+    marks = tuple(
+        Held(ts_ns=end, instrument_id="DEMO", qty=100.0, notional=10_000.0)
+        for end in host.period_ends_ns[:5]
+    )
+    combined = replace(host, held=marks)
+
+    result = max_hold.evaluate(context(combined, host_run=host, params={"trading_days": 5}))
+
+    assert result.passed
+    assert result.evidence["longest_trading_days"] == 5
+    assert not max_hold.evaluate(
+        context(combined, host_run=host, params={"trading_days": 4})
+    ).passed
 
 
 def test_max_hold_without_a_limit_or_a_position_judges_nothing() -> None:
