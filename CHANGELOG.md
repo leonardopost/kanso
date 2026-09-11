@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **An unsized entry is sized with the sleeve's unfilled orders applied.** Without a sizing rule the room an entry may take was read from the venue's positions alone, so a flip written as `submit_exit(old)` then `submit_entry(new, side)` in one handler found no room at leverage one — the old leg still filled the book — and was refused for a bar, a day late on daily bars. The room and `self.held(id)` now apply the sleeve's own market orders in flight on both paths, as the sizing rule already did, so the flip settles at one price with the exit first.
+
 ## v0.5.0 — 2026-09-11
 
 - **A re-pin under another objective clears the best.** The objective joins the scope a metric is only comparable within: a best of 69 bps per trade left in place under a Sharpe objective would have kept nothing forever. Rows pinned before this answer from their objective column, so an upgrade moves nothing.
