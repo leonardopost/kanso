@@ -177,6 +177,32 @@ def test_max_hold_on_period_ends_is_unmoved_by_a_clock_change_inside_the_stretch
     assert result.evidence["longest_days"] == 8.0
 
 
+def test_max_hold_on_period_ends_starts_a_new_position_after_a_flat_end() -> None:
+    host = build_run(FLAT * 2)
+    ends = host.period_ends_ns
+    marks = tuple(
+        Held(ts_ns=ends[i], instrument_id="DEMO", qty=100.0, notional=10_000.0)
+        for i in (0, 1, 2, 5, 6, 7)
+    )
+
+    result = max_hold.evaluate(
+        context(replace(host, held=marks), host_run=host, params={"days": 3})
+    )
+
+    assert result.passed
+    assert result.evidence["n_positions"] == 2
+    assert result.evidence["longest_days"] == 3.0
+
+
+def test_max_hold_times_closed_trades_even_when_the_window_holds_no_period() -> None:
+    run = build_run((), days=1, trades=(closed("DEMO", at(START, 9), at(START, 15)),))
+
+    result = max_hold.evaluate(context(run, params={"days": 1}))
+
+    assert result.passed
+    assert result.evidence["longest_days"] == 0.25
+
+
 def test_max_hold_for_an_attached_construct_that_added_nothing_judges_nothing() -> None:
     host = build_run(FLAT, holdings=tuple(held(DAYS[i], 10_000.0) for i in range(4)))
 
