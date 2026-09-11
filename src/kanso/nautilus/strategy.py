@@ -407,15 +407,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def held(self, instrument_id: InstrumentId | str) -> float:
         """This sleeve's own signed position in an instrument, unfilled orders applied.
 
-        Under a sizing rule this is the reader a strategy sizes and flips by: the venue's
-        net position less what the attached overlays hold as clips in the same name, plus
-        what the sleeve's own market orders in flight will add. Without one it is the
-        venue's net position.
+        The reader a strategy sizes and flips by, on both paths: the venue's net position
+        less what the attached overlays hold as clips in the same name, plus what the
+        sleeve's own market orders in flight will add. An exit submitted in this handler
+        already reads as gone, which is what lets the entry that follows it size to the
+        room the exit frees.
         """
-        key = str(instrument_id)
-        if self.sized:
-            return self._own_intended(key)
-        return float(self.portfolio.net_position(self._instrument_id(key)))
+        return self._own_intended(str(instrument_id))
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -959,9 +957,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The quantity is the smallest of what was asked for and what the limits leave:
         `max_position_pct` of capital in this instrument, `max_leverage` x capital gross,
-        both reduced by the round-trip cost the runner will charge. Attached overlays then
-        scale it. Returns the submitted order, or `None` when nothing was submitted —
-        no room, no price to size against, or an attached filter refused the entry.
+        both reduced by the round-trip cost the runner will charge, and both read with the
+        sleeve's own unfilled market orders applied — so a flip is `submit_exit(old)` then
+        `submit_entry(new, side)` in one handler at leverage one, the exit in flight
+        freeing the room the entry takes, and the venue settles both at one price with the
+        exit first. Attached overlays then scale it. Returns the submitted order, or `None`
+        when nothing was submitted — no room, no price to size against, or an attached
+        filter refused the entry.
         """
         resolved_id = self._instrument_id(instrument_id)
         resolved_side = self._side(side)
@@ -1163,23 +1165,39 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return order if len(self._intents) > placed else None
 
     def _headroom(self, instrument_id: InstrumentId, reference: float) -> float:
-        held = abs(float(self.portfolio.net_position(instrument_id))) * reference
-        room = min(self.max_notional - held, self.gross_limit - self._gross_exposure())
+        """What the limits leave for an entry in this name, unfilled market orders applied.
+
+        Read on what the sleeve will hold once its orders in flight fill, not on what the
+        venue holds now: an exit submitted in the same handler counts as gone, so a flip
+        fits at leverage one exactly as it does under a sizing rule, where the same rule
+        was written first. Read on the venue alone, the old leg still filled the book and
+        every flip was refused for a bar.
+        """
+        intended = self._holdings()
+        held = abs(intended.get(instrument_id.value, 0.0)) * reference
+        room = min(self.max_notional - held, self.gross_limit - self._gross_intended(intended))
         return room / (1.0 + ROUND_TRIP * self.cost_rate)
 
-    def _gross_exposure(self) -> float:
-        """What this sleeve holds, marked at the last price seen and at cost where none was.
+    def _gross_intended(self, intended: Mapping[str, float]) -> float:
+        """What this sleeve will hold, marked at the last price seen and at cost where none was.
 
         The fallback is the position's own split-aware cost basis rather than
         `Position.avg_px_open`, which a corporate action leaves quoted in shares the
         position no longer holds and which would understate the exposure by the ratio.
         """
+        positions = {
+            position.instrument_id.value: position
+            for position in self.cache.positions_open(strategy_id=self.id)
+        }
         total = 0.0
-        for position in self.cache.positions_open(strategy_id=self.id):
-            price = self._last_price.get(position.instrument_id.value)
+        for name, quantity in intended.items():
+            if quantity == 0.0:
+                continue
+            price = self._last_price.get(name)
             if price is None:
-                price = splits.ledger(splits.moves_of(position)).basis
-            total += abs(float(position.signed_qty)) * price
+                position = positions.get(name)
+                price = 0.0 if position is None else splits.ledger(splits.moves_of(position)).basis
+            total += abs(quantity) * price
         return total
 
     def _order(
@@ -1298,7 +1316,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _consult_exit(self, instrument_id: InstrumentId) -> None:
         if self._exiting or not self.is_running:
             return
-        net = self.held(instrument_id) if not self.sized else self._own_filled(instrument_id.value)
+        net = self._own_filled(instrument_id.value)  # what is open, not what is in flight
         if net == 0.0:
             return
         side = OrderSide.SELL if net > 0 else OrderSide.BUY

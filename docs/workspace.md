@@ -299,7 +299,11 @@ sizing:                            # scope: adding or changing it clears `best`
 
 Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty` or
 `price`; `self.held(id)` is the position reader; a flip is `submit_exit(old)` then
-`submit_entry(new, side)` in one handler. `strategy_integrity` discards a `strategy.py`
+`submit_entry(new, side)` in one handler. Without the key, `submit_entry(id, side,
+notional=…)` sizes to the smaller of what was asked and what the risk limits leave, and on
+both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
+orders applied, so the same flip fits at leverage one either way: the exit in flight frees
+the room the entry takes, and the venue settles both at one price, the exit first. `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand, reads `self.portfolio` or overrides a
 harness method, with the line and what to write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
