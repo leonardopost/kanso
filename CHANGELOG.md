@@ -6,7 +6,7 @@ One line per user-visible change, newest release first. The format is the one
 ## Unreleased
 
 - **A re-pin under another objective clears the best.** The objective joins the scope a metric is only comparable within: a best of 69 bps per trade left in place under a Sharpe objective would have kept nothing forever. Rows pinned before this answer from their objective column, so an upgrade moves nothing.
-- **`max_hold`, a card-stage gate.** "Switches are less than a month apart" was a sentence in a thesis that only the alignment model read. It is now a refusal: `max_hold` with `days` times every stretch of consecutive period ends an instrument was held over — a position still open when the window closes included, which is the one a strategy that stops switching leaves behind — and discards the card that held one longer. An attached construct is timed on what it added to its host.
+- **`max_hold`, a card-stage gate.** "Switches are less than a month apart" was a sentence in a thesis that only the alignment model read. It is now a refusal: `max_hold` with `days` (calendar days) times every closed position from its entry fill to its exit fill, and a position still open when the window closes — the one a strategy that stops switching leaves behind — to that close, and discards the card that held one longer. An attached construct is timed on what it added to its host at period ends, a floor on the hold.
 
 ## v0.4.5 — 2026-09-11
 

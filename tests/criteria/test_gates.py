@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from kanso.criteria import DatasetFacts, gates
+from kanso.criteria import DatasetFacts, Held, Trade, gates
 from kanso.criteria.gates import (
     book_correlation,
     bootstrap,
@@ -25,7 +26,7 @@ from kanso.criteria.gates import (
     stressed,
     walk_forward_consistency,
 )
-from kanso.criteria.run import Fill
+from kanso.criteria.run import NS_PER_SECOND, Fill
 from tests.criteria.builders import (
     START,
     at,
@@ -57,62 +58,130 @@ def trading_run(*pnl: float, cost: float = 0.0) -> Any:
 # --- max_hold ---------------------------------------------------------------------
 
 
-def holding(*day_indexes: int, instrument: str = "DEMO", days: int = 6, **overrides: Any) -> Any:
-    """A `days`-long flat run holding `instrument` at the period ends of these days."""
-    run = build_run(
-        (0.0,) * days,
-        holdings=tuple(held(START + timedelta(days=i), 10_000.0, instrument) for i in day_indexes),
+def closed(instrument: str, opened_ns: int, closed_ns: int) -> Trade:
+    """A position of one hundred shares, opened and closed at these instants."""
+    return Trade(
+        opened_ns=opened_ns,
+        closed_ns=closed_ns,
+        instrument_id=instrument,
+        qty=100.0,
+        avg_open=100.0,
+        avg_close=100.0,
+        pnl_net=0.0,
+        cost=0.0,
+        fills=(),
     )
-    return context(run, **overrides)
 
 
-def test_max_hold_times_a_position_from_its_first_period_end_to_its_last_plus_one() -> None:
-    result = max_hold.evaluate(holding(0, 1, 2, params={"days": 3}))
-    assert result.passed
-    assert result.evidence == {"days": 3, "longest_days": 3.0, "n_positions": 1, "n_over": 0}
+def open_at_the_close(run: Any, instrument: str = "DEMO", qty: float = 100.0) -> Any:
+    """The run with `instrument` still held at its last period end."""
+    mark = Held(ts_ns=run.period_ends_ns[-1], instrument_id=instrument, qty=qty, notional=10_000.0)
+    return replace(run, held=(*run.held, mark))
 
 
-def test_max_hold_refuses_a_position_held_one_day_too_long() -> None:
-    result = max_hold.evaluate(holding(0, 1, 2, params={"days": 2}))
-    assert not result.passed
-    assert result.evidence["longest_days"] == 3.0
-    assert result.evidence["n_over"] == 1
-
-
-def test_max_hold_times_a_position_still_open_when_the_window_closes() -> None:
-    """No trade ever closed, so a trade-based count would see nothing to refuse."""
-    result = max_hold.evaluate(holding(3, 4, 5, params={"days": 2}))
-    assert not result.passed
-    assert result.evidence["longest_days"] == 3.0
-
-
-def test_max_hold_ends_a_position_at_a_flat_period_and_at_a_flip() -> None:
+def test_max_hold_times_a_closed_position_from_its_entry_fill_to_its_exit_fill() -> None:
     run = build_run(
-        (0.0,) * 6,
-        holdings=(
-            held(START, 10_000.0, "SOXL"),
-            held(START + timedelta(days=1), 10_000.0, "SOXL"),
-            held(START + timedelta(days=2), 10_000.0, "SOXS"),
-            held(START + timedelta(days=3), 10_000.0, "SOXS"),
-            held(START + timedelta(days=5), 10_000.0, "SOXS"),
-        ),
+        FLAT * 2, trades=(closed("DEMO", at(START, 9), at(START + timedelta(days=3), 9)),)
     )
-    result = max_hold.evaluate(context(run, params={"days": 2}))
+
+    result = max_hold.evaluate(context(run, params={"days": 3}))
+
     assert result.passed
-    assert result.evidence["n_positions"] == 3
-    assert result.evidence["longest_days"] == 2.0
-    assert not max_hold.evaluate(context(run, params={"days": 1})).passed
+    assert result.evidence["longest_days"] == 3.0
+    assert result.evidence["measured_on"] == "fills"
+    assert result.evidence["unit"] == "calendar days"
+    assert not max_hold.evaluate(context(run, params={"days": 2})).passed
+
+
+def test_max_hold_counts_a_weekend_inside_a_hold_and_refuses_one_hour_over() -> None:
+    """Fills are instants, so the days between them are the days there were."""
+    friday, monday = date(2024, 3, 8), date(2024, 3, 11)
+    exact = build_run(
+        FLAT * 2, start=friday, trades=(closed("DEMO", at(friday, 9), at(monday, 9)),)
+    )
+    late = build_run(
+        FLAT * 2, start=friday, trades=(closed("DEMO", at(friday, 9), at(monday, 10)),)
+    )
+
+    assert max_hold.evaluate(context(exact, params={"days": 3})).evidence["longest_days"] == 3.0
+    assert max_hold.evaluate(context(exact, params={"days": 3})).passed
+    assert not max_hold.evaluate(context(late, params={"days": 3})).passed
+
+
+def test_max_hold_times_a_position_still_open_at_the_window_close_from_its_first_fill() -> None:
+    """No trade ever closed, so a trade count alone would see nothing to refuse."""
+    run = open_at_the_close(build_run(FLAT * 2, fills=(fill(START + timedelta(days=1)),)))
+
+    result = max_hold.evaluate(context(run, params={"days": 7}))
+
+    assert result.passed
+    assert result.evidence["longest_days"] == pytest.approx(6.5)
+    assert result.evidence["n_positions"] == 1
+    assert not max_hold.evaluate(context(run, params={"days": 6})).passed
+
+
+def test_max_hold_reads_a_reopened_position_from_the_fill_after_the_last_close() -> None:
+    day = [START + timedelta(days=i) for i in range(8)]
+    run = open_at_the_close(
+        build_run(
+            FLAT * 2,
+            trades=(closed("DEMO", at(day[0]), at(day[1])),),
+            fills=(fill(day[0]), fill(day[1]), fill(day[3])),
+        )
+    )
+
+    result = max_hold.evaluate(context(run, params={"days": 5}))
+
+    assert result.evidence["n_positions"] == 2
+    assert result.evidence["longest_days"] == pytest.approx(4.5), "day 3 noon to the close of day 7"
+    assert result.passed
 
 
 def test_max_hold_without_a_limit_or_a_position_judges_nothing() -> None:
-    assert max_hold.evaluate(holding(0, 1)).skipped is not None
-    assert max_hold.evaluate(holding(params={"days": 5})).skipped is not None
+    assert max_hold.evaluate(context(build_run(FLAT))).skipped is not None
+    assert max_hold.evaluate(context(build_run(FLAT), params={"days": 5})).skipped is not None
 
 
-def test_max_hold_times_only_what_an_attached_construct_added() -> None:
-    """The host held every day; the candidate changed nothing, so nothing of its own is timed."""
-    host = build_run((0.0,) * 4, holdings=tuple(held(DAYS[i], 10_000.0) for i in range(4)))
+def test_max_hold_times_an_attached_construct_on_period_ends_by_instrument_and_sign() -> None:
+    """The candidate's fills are its host's too, so its positions are read at period ends."""
+    host = build_run(FLAT * 2)
+    marks = tuple(
+        Held(ts_ns=end, instrument_id="DEMO", qty=100.0 if i < 4 else -100.0, notional=10_000.0)
+        for i, end in enumerate(host.period_ends_ns)
+    )
+    combined = replace(host, held=marks)
+
+    result = max_hold.evaluate(context(combined, host_run=host, params={"days": 4}))
+
+    assert result.passed
+    assert result.evidence["measured_on"] == "period_ends"
+    assert result.evidence["n_positions"] == 2, "a reversal in one instrument is two positions"
+    assert result.evidence["longest_days"] == 4.0
+    assert not max_hold.evaluate(context(combined, host_run=host, params={"days": 3})).passed
+
+
+def test_max_hold_on_period_ends_is_unmoved_by_a_clock_change_inside_the_stretch() -> None:
+    host = build_run(FLAT * 2)
+    shifted = list(host.period_ends_ns)
+    shifted[4:] = [end + 3600 * NS_PER_SECOND for end in shifted[4:]]
+    host = replace(host, period_ends_ns=tuple(shifted))
+    marks = tuple(
+        Held(ts_ns=end, instrument_id="DEMO", qty=100.0, notional=10_000.0) for end in shifted
+    )
+
+    result = max_hold.evaluate(
+        context(replace(host, held=marks), host_run=host, params={"days": 8})
+    )
+
+    assert result.passed
+    assert result.evidence["longest_days"] == 8.0
+
+
+def test_max_hold_for_an_attached_construct_that_added_nothing_judges_nothing() -> None:
+    host = build_run(FLAT, holdings=tuple(held(DAYS[i], 10_000.0) for i in range(4)))
+
     result = max_hold.evaluate(context(host, host_run=host, params={"days": 1}))
+
     assert result.passed and result.skipped is not None
 
 

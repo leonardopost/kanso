@@ -229,7 +229,7 @@ already over. There are five.
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
-| `max_hold` | a position held longer than the hypothesis allows — every stretch of consecutive period ends an instrument was held over, a position still open when the window closes included |
+| `max_hold` | a position held longer than the hypothesis allows, in calendar days: a closed position from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct is timed on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `sizing` | an order the harness refused at the boundary under a `sizing` rule: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
