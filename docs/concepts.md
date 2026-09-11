@@ -221,7 +221,7 @@ it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are four.
+already over. There are five.
 
 | gate | what it refuses |
 |---|---|
@@ -229,6 +229,7 @@ already over. There are four.
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
+| `max_hold` | a position held longer than the hypothesis allows, in calendar days: a closed position from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct is timed on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `sizing` | an order the harness refused at the boundary under a `sizing` rule: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
@@ -268,7 +269,8 @@ overlay's own budget; the host's own share and the overlay's clips are told apar
 ledger over the clip orders, so `self.held(id)` and `ctx.book` are the host's and
 `ctx.clips` the overlay's, even in one name. A refused card places no order and is not a
 trial. The rule is scope: a `best` earned under one sizing is not compared with a card run
-under another, so adding or changing it clears the best.
+under another, so adding or changing it clears the best — as does changing the objective,
+whose units the best is a number in.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.

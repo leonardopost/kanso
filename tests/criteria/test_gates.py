@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from kanso.criteria import DatasetFacts, gates
+from kanso.criteria import DatasetFacts, Held, Trade, gates
 from kanso.criteria.gates import (
     book_correlation,
     bootstrap,
@@ -17,6 +18,7 @@ from kanso.criteria.gates import (
     deflated_sharpe,
     embargoed_window,
     max_drawdown,
+    max_hold,
     min_trades,
     position_size,
     publication_lag,
@@ -24,7 +26,7 @@ from kanso.criteria.gates import (
     stressed,
     walk_forward_consistency,
 )
-from kanso.criteria.run import Fill
+from kanso.criteria.run import NS_PER_SECOND, Fill
 from tests.criteria.builders import (
     START,
     at,
@@ -51,6 +53,162 @@ def trading_run(*pnl: float, cost: float = 0.0) -> Any:
             for day, value in zip(DAYS, pnl, strict=True)
         ),
     )
+
+
+# --- max_hold ---------------------------------------------------------------------
+
+
+def closed(instrument: str, opened_ns: int, closed_ns: int) -> Trade:
+    """A position of one hundred shares, opened and closed at these instants."""
+    return Trade(
+        opened_ns=opened_ns,
+        closed_ns=closed_ns,
+        instrument_id=instrument,
+        qty=100.0,
+        avg_open=100.0,
+        avg_close=100.0,
+        pnl_net=0.0,
+        cost=0.0,
+        fills=(),
+    )
+
+
+def open_at_the_close(run: Any, instrument: str = "DEMO", qty: float = 100.0) -> Any:
+    """The run with `instrument` still held at its last period end."""
+    mark = Held(ts_ns=run.period_ends_ns[-1], instrument_id=instrument, qty=qty, notional=10_000.0)
+    return replace(run, held=(*run.held, mark))
+
+
+def test_max_hold_times_a_closed_position_from_its_entry_fill_to_its_exit_fill() -> None:
+    run = build_run(
+        FLAT * 2, trades=(closed("DEMO", at(START, 9), at(START + timedelta(days=3), 9)),)
+    )
+
+    result = max_hold.evaluate(context(run, params={"days": 3}))
+
+    assert result.passed
+    assert result.evidence["longest_days"] == 3.0
+    assert result.evidence["measured_on"] == "fills"
+    assert result.evidence["unit"] == "calendar days"
+    assert not max_hold.evaluate(context(run, params={"days": 2})).passed
+
+
+def test_max_hold_counts_a_weekend_inside_a_hold_and_refuses_one_hour_over() -> None:
+    """Fills are instants, so the days between them are the days there were."""
+    friday, monday = date(2024, 3, 8), date(2024, 3, 11)
+    exact = build_run(
+        FLAT * 2, start=friday, trades=(closed("DEMO", at(friday, 9), at(monday, 9)),)
+    )
+    late = build_run(
+        FLAT * 2, start=friday, trades=(closed("DEMO", at(friday, 9), at(monday, 10)),)
+    )
+
+    assert max_hold.evaluate(context(exact, params={"days": 3})).evidence["longest_days"] == 3.0
+    assert max_hold.evaluate(context(exact, params={"days": 3})).passed
+    assert not max_hold.evaluate(context(late, params={"days": 3})).passed
+
+
+def test_max_hold_times_a_position_still_open_at_the_window_close_from_its_first_fill() -> None:
+    """No trade ever closed, so a trade count alone would see nothing to refuse."""
+    run = open_at_the_close(build_run(FLAT * 2, fills=(fill(START + timedelta(days=1)),)))
+
+    result = max_hold.evaluate(context(run, params={"days": 7}))
+
+    assert result.passed
+    assert result.evidence["longest_days"] == pytest.approx(6.5)
+    assert result.evidence["n_positions"] == 1
+    assert not max_hold.evaluate(context(run, params={"days": 6})).passed
+
+
+def test_max_hold_reads_a_reopened_position_from_the_fill_after_the_last_close() -> None:
+    day = [START + timedelta(days=i) for i in range(8)]
+    run = open_at_the_close(
+        build_run(
+            FLAT * 2,
+            trades=(closed("DEMO", at(day[0]), at(day[1])),),
+            fills=(fill(day[0]), fill(day[1]), fill(day[3])),
+        )
+    )
+
+    result = max_hold.evaluate(context(run, params={"days": 5}))
+
+    assert result.evidence["n_positions"] == 2
+    assert result.evidence["longest_days"] == pytest.approx(4.5), "day 3 noon to the close of day 7"
+    assert result.passed
+
+
+def test_max_hold_without_a_limit_or_a_position_judges_nothing() -> None:
+    assert max_hold.evaluate(context(build_run(FLAT))).skipped is not None
+    assert max_hold.evaluate(context(build_run(FLAT), params={"days": 5})).skipped is not None
+
+
+def test_max_hold_times_an_attached_construct_on_period_ends_by_instrument_and_sign() -> None:
+    """The candidate's fills are its host's too, so its positions are read at period ends."""
+    host = build_run(FLAT * 2)
+    marks = tuple(
+        Held(ts_ns=end, instrument_id="DEMO", qty=100.0 if i < 4 else -100.0, notional=10_000.0)
+        for i, end in enumerate(host.period_ends_ns)
+    )
+    combined = replace(host, held=marks)
+
+    result = max_hold.evaluate(context(combined, host_run=host, params={"days": 4}))
+
+    assert result.passed
+    assert result.evidence["measured_on"] == "period_ends"
+    assert result.evidence["n_positions"] == 2, "a reversal in one instrument is two positions"
+    assert result.evidence["longest_days"] == 4.0
+    assert not max_hold.evaluate(context(combined, host_run=host, params={"days": 3})).passed
+
+
+def test_max_hold_on_period_ends_is_unmoved_by_a_clock_change_inside_the_stretch() -> None:
+    host = build_run(FLAT * 2)
+    shifted = list(host.period_ends_ns)
+    shifted[4:] = [end + 3600 * NS_PER_SECOND for end in shifted[4:]]
+    host = replace(host, period_ends_ns=tuple(shifted))
+    marks = tuple(
+        Held(ts_ns=end, instrument_id="DEMO", qty=100.0, notional=10_000.0) for end in shifted
+    )
+
+    result = max_hold.evaluate(
+        context(replace(host, held=marks), host_run=host, params={"days": 8})
+    )
+
+    assert result.passed
+    assert result.evidence["longest_days"] == 8.0
+
+
+def test_max_hold_on_period_ends_starts_a_new_position_after_a_flat_end() -> None:
+    host = build_run(FLAT * 2)
+    ends = host.period_ends_ns
+    marks = tuple(
+        Held(ts_ns=ends[i], instrument_id="DEMO", qty=100.0, notional=10_000.0)
+        for i in (0, 1, 2, 5, 6, 7)
+    )
+
+    result = max_hold.evaluate(
+        context(replace(host, held=marks), host_run=host, params={"days": 3})
+    )
+
+    assert result.passed
+    assert result.evidence["n_positions"] == 2
+    assert result.evidence["longest_days"] == 3.0
+
+
+def test_max_hold_times_closed_trades_even_when_the_window_holds_no_period() -> None:
+    run = build_run((), days=1, trades=(closed("DEMO", at(START, 9), at(START, 15)),))
+
+    result = max_hold.evaluate(context(run, params={"days": 1}))
+
+    assert result.passed
+    assert result.evidence["longest_days"] == 0.25
+
+
+def test_max_hold_for_an_attached_construct_that_added_nothing_judges_nothing() -> None:
+    host = build_run(FLAT, holdings=tuple(held(DAYS[i], 10_000.0) for i in range(4)))
+
+    result = max_hold.evaluate(context(host, host_run=host, params={"days": 1}))
+
+    assert result.passed and result.skipped is not None
 
 
 # --- min_trades -------------------------------------------------------------------
