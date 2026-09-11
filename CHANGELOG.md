@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.6.0 — 2026-09-11
 
 - **`max_hold` counts trading days too.** `trading_days` limits the sessions a position is held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing — beside `days`, which stays calendar days. "No longer than a month" usually means a month of sessions, which calendar days only approximate; either limit or both may be set, and the evidence carries both longest holds.
 
