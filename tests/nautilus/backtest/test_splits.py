@@ -283,3 +283,95 @@ def test_one_adjustment_held_by_two_positions_is_counted_once() -> None:
 def test_an_adjustment_that_changes_no_quantity_changes_no_holding() -> None:
     """`PositionAdjusted` also carries pure P&L adjustments; those move no shares."""
     assert _adjusted([Held(Adjustment("A", None))]) == ()
+
+
+PAIR = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    ex_ns: int = 0
+    exits: int = 0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys HEDGE on its first bar; on DEMO's ex-date bar, adds to HEDGE or sells it.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.bought = False
+        self.acted = False
+
+    def on_bar(self, bar):
+        key = str(bar.bar_type.instrument_id)
+        if key == "HEDGE.XNAS" and not self.bought:
+            self.bought = True
+            self.submit_entry("HEDGE.XNAS", "BUY", notional=10_000.0)
+        if key == "DEMO.XNAS" and bar.ts_event >= self.kanso_config.ex_ns and not self.acted:
+            self.acted = True
+            if self.kanso_config.exits:
+                self.submit_exit("HEDGE.XNAS")
+            else:
+                self.submit_entry("HEDGE.XNAS", "BUY")
+"""
+"""Trades the split leg from the other leg's handler on the ex-date."""
+
+
+def published(symbol: str, before: float, after: float, lag_s: int) -> list[Bar]:
+    """A flat daily series restated on the ex-date, each bar published `lag_s` after it closes."""
+    made: list[Bar] = []
+    for index in range((RESEARCH[1] - RESEARCH[0]).days + 1):
+        ts_event = midnight_ns(RESEARCH[0]) + index * 86_400 * SECOND_NS + CLOSE_NS
+        close = before if ts_event < midnight_ns(EX) else after
+        price = Price(close, 2)
+        made.append(
+            Bar(
+                bar_type(symbol),
+                price,
+                price,
+                price,
+                price,
+                Quantity.from_int(100_000),
+                ts_event=ts_event,
+                ts_init=ts_event + lag_s * SECOND_NS,
+            )
+        )
+    return made
+
+
+@pytest.mark.parametrize("exits", [0, 1], ids=["adds", "exits"])
+def test_an_order_sent_into_the_split_name_before_it_prints_fills_at_the_restated_price(
+    request_for, exits: int
+) -> None:
+    """DEMO's ex-date bar is published before HEDGE's, so DEMO's point applies HEDGE's split
+    and DEMO's handler trades HEDGE while its book still holds yesterday's 20.00. Matched
+    there, the exit sold 50 restated shares at 20.00 and the card lost 9,005.50."""
+    hyp = hypothesis(universe=("DEMO.XNAS", "HEDGE.XNAS"))
+    request = request_for(
+        RESEARCH, source=PAIR, hypothesis_=hyp, overrides={"ex_ns": midnight_ns(EX), "exits": exits}
+    )
+    points = sorted(
+        [*published("DEMO", 10.0, 10.0, 1), *published("HEDGE", 20.0, 200.0, 2)],
+        key=lambda point: point.ts_init,
+    )
+    held = [instrument("DEMO"), instrument("HEDGE", info=REVERSE)]
+
+    run = execute(request, held, [tuple(points)]).run
+
+    on_the_ex_date = [fill for fill in run.fills if fill.ts_ns >= midnight_ns(EX)]
+    assert [(fill.side, fill.px) for fill in on_the_ex_date][:1] == [
+        ("SELL" if exits else "BUY", 200.0)
+    ]
+
+
+def test_a_split_dated_before_the_window_changes_nothing_in_it(request_for) -> None:
+    """The venue applies every due split at the first point it matches, an old one included.
+    With nothing held and no book yet to restate, the window runs as if there were none."""
+    long_ago = {"splits": [{"ex_date": "2023-06-01", "ratio": 0.1}]}
+    flat_series = restated(before=10.0, after=10.0)
+
+    old = card(request_for, scheduled=long_ago, points=flat_series)
+    none = card(request_for, scheduled=None, points=flat_series)
+
+    assert old.fills and old.equity == none.equity

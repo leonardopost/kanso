@@ -67,11 +67,12 @@ here is kanso's own attribute, honoured by kanso's loader alone.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
-from typing import ClassVar, Final, NoReturn
+from typing import Any, ClassVar, Final, NoReturn
 
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.config import ActorConfig, StrategyConfig
@@ -85,12 +86,14 @@ from nautilus_trader.model.enums import (
     order_side_to_str,
     order_type_to_str,
 )
+from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
 from kanso.errors import ValidationError
 from kanso.nautilus import splits
+from kanso.nautilus.costs import fixed_half_spread, quote_half_spread, side_rate
 from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
 from kanso.nautilus.hooks import (
     BUY,
@@ -117,6 +120,7 @@ from kanso.nautilus.sizing import (
     ONE_POSITION,
     SCALE_UNDER_SIZING,
     SIZE_ARGUMENT,
+    UNFUNDED_ORDER,
     Refusal,
     SizingError,
     full_book_quantity,
@@ -278,6 +282,12 @@ def _budget_of(modifier: object) -> float:
     return float(getattr(config, "sizing_budget", 0.0) or 0.0)
 
 
+def _charges(config: KansoConfig) -> Mapping[str, Any]:
+    """The venue model's cost rates as the config carries them; none when it states none."""
+    costs = config.venue_model.get("costs")
+    return costs if isinstance(costs, Mapping) else {}
+
+
 def _order_price(order: object) -> float | None:
     price = getattr(order, "price", None)
     return None if price is None else float(price)
@@ -314,6 +324,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._entry_answers: tuple[tuple[object, Decision], ...] | None = None
         self._clip_orders: dict[str, list[object]] = {}
         self._sizing_call = False
+        self._built = False
+        self._charges = _charges(resolved)
+        self._cash = resolved.capital
+        self._ledger: list[list[Any]] = []
+        self._booked: set[object] = set()
+        self._print_ns: dict[str, int] = {}
+        self._price_ns: dict[str, int] = {}
+        self._seen_ns = 0
+        self._schedules: dict[str, tuple[splits.Split, ...]] = {}
+        self._quoted: dict[str, tuple[list[int], list[float]]] = {}
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -329,7 +349,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     @property
     def capital(self) -> float:
-        """The starting balance the hypothesis is sized against."""
+        """The starting balance: the most the room is ever read on (see `balance`)."""
         return self._cfg.capital
 
     @property
@@ -365,13 +385,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     @property
     def max_notional(self) -> float:
-        """The most one instrument may hold: `max_position_pct` of capital."""
-        return self.capital * self._cfg.max_position_pct / PERCENT
+        """The most one instrument may hold: `max_position_pct` of the smaller of the capital
+        and `balance`, so a sleeve that has lost money cannot borrow to keep its size."""
+        return min(self.capital, self.balance) * self._cfg.max_position_pct / PERCENT
 
     @property
     def gross_limit(self) -> float:
-        """The most the sleeve may hold across every instrument: `max_leverage` x capital."""
-        return self.capital * self._cfg.max_leverage
+        """The most the sleeve may hold across every instrument: `max_leverage` x the smaller
+        of the capital and `balance`."""
+        return min(self.capital, self.balance) * self._cfg.max_leverage
 
     # --- the only clock ------------------------------------------------------
 
@@ -415,10 +437,39 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         return self._own_intended(str(instrument_id))
 
+    @property
+    def balance(self) -> float:
+        """What this sleeve's account is worth now: the runner's equity, kept as it runs.
+
+        The capital, less what every fill paid for what it bought and the commission,
+        slippage and half-spread the runner charges it, plus every open position at its last
+        print. It is the runner's own arithmetic (`kanso.nautilus.costs`) on the sleeve's
+        own fills, so at every period end it is the equity the card records, and between
+        period ends it moves with every fill and every print. It is kept from the fills and
+        from the share counts the venue restated at a split, never from the engine's
+        account, whose balance a corporate action leaves quoted in shares no position holds.
+        Two differences are deliberate: a price printed before a split the venue has since
+        applied is restated by the split's ratio, where the card marks it as printed until
+        the name prints again; and a position the sleeve has seen no price for is marked at
+        its own split-aware cost, where the card marks it at the last price its stream holds.
+
+        Entries and an overlay's hedge legs are cut to what the smaller of this and the
+        capital can fund, and a strategy may size from it.
+        """
+        if self.cache is None:  # not registered with an engine: nothing booked, nothing held
+            return self._cash
+        self._settle()
+        worth = sum(
+            (self._worth(position) for position in self.cache.positions_open(strategy_id=self.id)),
+            0.0,
+        )
+        return self._cash + worth
+
     # --- lifecycle -----------------------------------------------------------
 
     def _start(self) -> None:
         self.subscribe_universe()
+        self._ledger.extend([order, 0] for order in self.cache.orders(strategy_id=self.id))
         super()._start()
 
     def subscribe_universe(self) -> None:
@@ -458,10 +509,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             super().handle_bar(bar, historical)
             return
         key = bar.bar_type.instrument_id.value
-        self._last_print[key] = float(bar.close)
+        self._printed(key, float(bar.close), int(bar.ts_event))
         if not self._is_extra_bar(bar):
             self._last_bar[key] = bar
-            self._observe_price(key, float(bar.close))
+            self._observe_price(key, float(bar.close), int(bar.ts_event))
         if self._held():
             self._pending.append(bar)
             return
@@ -475,8 +526,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         key = tick.instrument_id.value
         self._last_quote[key] = tick
         mid = (float(tick.bid_price) + float(tick.ask_price)) / 2.0
-        self._last_print[key] = mid
-        self._observe_price(key, mid)
+        self._printed(key, mid, int(tick.ts_event))
+        self._observe_price(key, mid, int(tick.ts_event))
+        if self._charges.get("spread") == "quotes":
+            times, values = self._quoted.setdefault(key, ([], []))
+            times.append(int(tick.ts_init))
+            values.append(quote_half_spread(float(tick.bid_price), float(tick.ask_price)))
+            self._settle(key)
         if self._held():
             self._pending.append(tick)
             return
@@ -489,8 +545,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         key = tick.instrument_id.value
         self._last_trade[key] = tick
-        self._last_print[key] = float(tick.price)
-        self._observe_price(key, float(tick.price))
+        self._printed(key, float(tick.price), int(tick.ts_event))
+        self._observe_price(key, float(tick.price), int(tick.ts_event))
         if self._held():
             self._pending.append(tick)
             return
@@ -588,13 +644,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if not self._cfg.extra_resolutions:
                 self._overlay_due = (instrument_id, None, None)
 
-    def _observe_price(self, key: str | None, price: float | None) -> None:
+    def _printed(self, key: str, price: float, ts_event: int) -> None:
+        """Keep the last price an instrument printed at, and when, for marking what it holds."""
+        self._last_print[key] = price
+        self._print_ns[key] = ts_event
+        self._seen_ns = max(self._seen_ns, ts_event)
+
+    def _observe_price(self, key: str | None, price: float | None, ts_event: int) -> None:
         if key is not None and price is not None:
             self._last_price[key] = price
+            self._price_ns[key] = ts_event
 
     def _observe(self, key: str | None, ts_event: int, price: float | None) -> None:
         self._data_time = ts_event
-        self._observe_price(key, price)
+        self._observe_price(key, price, ts_event)
 
     # --- hooks: what an attached construct changes ---------------------------
 
@@ -705,6 +768,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Record the intent, consult the attached filters, submit, then hedge."""
         self._check_hand_built(order)
         kind = self.classify(order)
+        if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
+            self._check_funded((order,))
         ctx = self._context_for(order)
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
@@ -725,6 +790,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
+        if not (self.sized or self._built or self._sizing_call):
+            self._check_funded(orders)
         ctx = self._context_for(orders[0])
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
@@ -771,9 +838,27 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._hedging = True
         try:
             for leg in legs:
-                self._submit_own(leg)
+                self._submit_leg(leg)
         finally:
             self._hedging = False
+
+    def _submit_leg(self, order: Any) -> None:
+        """Submit one leg an overlay asked for. On an unsized host a hedge leg that opens or
+        grows exposure is cut first to the room the book can fund, with every leg already
+        submitted counted as in flight, so two legs of one answer cannot each take it all."""
+        if not self.sized and not self._is_clip(order):
+            price = self._price_now(order.instrument_id.value)
+            if price:
+                instrument = self.cache.instrument(order.instrument_id)
+                wanted = float(order.quantity)
+                funded = self._quantise(
+                    instrument, self._funded(order.instrument_id, order.side, wanted, price)
+                )
+                if funded is None:
+                    return
+                if float(funded) < wanted:
+                    order = self.order_factory.market(order.instrument_id, order.side, funded)
+        self._submit_own(order)
 
     def _submit_own(self, order: object) -> None:
         """Submit an order the harness built, marked as its own for the sizing rule."""
@@ -956,9 +1041,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Open or grow a position, sized to the risk limits and the cost model.
 
         The quantity is the smallest of what was asked for and what the limits leave:
-        `max_position_pct` of capital in this instrument, `max_leverage` x capital gross,
-        both reduced by the round-trip cost the runner will charge, and both read with the
-        sleeve's own unfilled market orders applied — so a flip is `submit_exit(old)` then
+        `max_position_pct` of the book in this instrument and `max_leverage` x the book
+        gross, the book being the smaller of the capital and `balance`, so a sleeve that
+        has lost money cannot borrow to keep its size. Both are reduced by the round-trip
+        cost the runner will charge and read with the sleeve's own unfilled market orders
+        applied — so a flip is `submit_exit(old)` then
         `submit_entry(new, side)` in one handler at leverage one, the exit in flight
         freeing the room the entry takes, and the venue settles both at one price with the
         exit first. Attached overlays then scale it. Returns the submitted order, or `None`
@@ -975,7 +1062,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         if self.sized:
             return self._sized_entry(instrument, resolved_id, resolved_side, notional, qty, price)
-        reference = price if price is not None else self.last_price(resolved_id)
+        reference = price if price is not None else self._price_now(resolved_id.value)
         if reference is None or reference <= 0:
             return None
         room = self._headroom(resolved_id, reference)
@@ -1161,22 +1248,36 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _submitted(self, order: object) -> object | None:
         placed = len(self._intents)
-        self.submit_order(order)
+        built, self._built = self._built, True
+        try:
+            self.submit_order(order)
+        finally:
+            self._built = built
         return order if len(self._intents) > placed else None
 
     def _headroom(self, instrument_id: InstrumentId, reference: float) -> float:
-        """What the limits leave for an entry in this name, unfilled market orders applied.
+        """What the limits leave for an entry in this name, on what the book can fund.
 
-        Read on what the sleeve will hold once its orders in flight fill, not on what the
-        venue holds now: an exit submitted in the same handler counts as gone, so a flip
-        fits at leverage one exactly as it does under a sizing rule, where the same rule
-        was written first. Read on the venue alone, the old leg still filled the book and
-        every flip was refused for a bar.
+        `max_notional` and `gross_limit` are shares of the smaller of the capital and
+        `balance`: an account that has lost money cannot borrow
+        to keep its size, and one that has made money does not grow past its capital.
+        Measured on a sleeve run from 2022 with the room read on the capital alone, it kept
+        buying full-size positions with its balance below zero, which no account that does
+        not borrow can do.
+
+        Read on what the sleeve will hold once its orders in flight fill, with what its
+        resting entries would add held back, not on what the venue holds now: an exit
+        submitted in the same handler counts as gone, so a flip fits at leverage one exactly
+        as it does under a sizing rule, where the same rule was written first. Read on the
+        venue alone, the old leg still filled the book and every flip was refused for a bar.
         """
         intended = self._holdings()
-        held = abs(intended.get(instrument_id.value, 0.0)) * reference
-        room = min(self.max_notional - held, self.gross_limit - self._gross_intended(intended))
-        return room / (1.0 + ROUND_TRIP * self.cost_rate)
+        resting = self._resting(intended)
+        key = instrument_id.value
+        held = abs(intended.get(key, 0.0)) * reference + resting.get(key, 0.0)
+        gross = self._gross_intended(intended) + sum(resting.values())
+        room = min(self.max_notional - held, self.gross_limit - gross)
+        return room / self._reserve(key)
 
     def _gross_intended(self, intended: Mapping[str, float]) -> float:
         """What this sleeve will hold, marked at the last price seen and at cost where none was.
@@ -1193,12 +1294,240 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         for name, quantity in intended.items():
             if quantity == 0.0:
                 continue
-            price = self._last_price.get(name)
+            price = self._price_now(name)
             if price is None:
                 position = positions.get(name)
                 price = 0.0 if position is None else splits.ledger(splits.moves_of(position)).basis
             total += abs(quantity) * price
         return total
+
+    def _restating(self, key: str, printed_ns: int) -> float:
+        """What a price printed at `printed_ns` is divided by to be quoted in the shares held now.
+
+        The venue restates every holder of a split at the first point past its ex-date,
+        whichever instrument printed it, so on a pair's ex-date the other leg's handler sees
+        the held leg's restated share count beside a price still quoted in the old one —
+        read as it stands, a one-for-ten reverse split is a ninety per cent loss, and room
+        for ten times the exposure. The factor is the product of the ratios of the name's
+        splits effective after the print and no later than the latest event seen, which the
+        venue processed, and so applied every split up to, before this sleeve saw it.
+        """
+        schedule = self._schedules.get(key)
+        if schedule is None:
+            instrument = self.cache.instrument(InstrumentId.from_str(key))
+            schedule = () if instrument is None else splits.schedule_of(instrument)
+            self._schedules[key] = schedule
+        return splits.restating(schedule, printed_ns, self._seen_ns)
+
+    def _price_now(self, key: str) -> float | None:
+        """The last price seen for a name, quoted in the share count the venue holds now."""
+        price = self._last_price.get(key)
+        if price is None:
+            return None
+        return price / self._restating(key, self._price_ns.get(key, 0))
+
+    def _print_now(self, key: str) -> float | None:
+        """The last print of a name, quoted in the share count the venue holds now."""
+        price = self._last_print.get(key)
+        if price is None:
+            return None
+        return price / self._restating(key, self._print_ns.get(key, 0))
+
+    def _reserve(self, key: str) -> float:
+        """What a notional is divided by to leave room for its own round trip: commission,
+        slippage and the whole spread each way — the stated width, or the last quoted one."""
+        rate = self.cost_rate
+        if self._charges.get("spread") == "quotes":
+            _, values = self._quoted.get(key, ([], []))
+            if values:
+                rate += 2.0 * values[-1]
+        return 1.0 + ROUND_TRIP * rate
+
+    def _resting(self, intended: Mapping[str, float]) -> dict[str, float]:
+        """The notional the sleeve's own resting orders would add if they filled, by name.
+
+        A limit or stop entry waits at the venue rather than filling at once, so neither
+        `held` nor the orders in flight count it; the room holds its growth back as if it
+        had filled, at its own price, or it and a later entry could each take the whole
+        book. An order that would shrink a position frees nothing until it fills.
+        """
+        added: dict[str, float] = {}
+        for entry in self._ledger:
+            order = self._current(entry[0])
+            if order.is_closed or order.order_type == OrderType.MARKET or self._is_clip(order):
+                continue
+            key = order.instrument_id.value
+            now = intended.get(key, 0.0)
+            leaves = float(order.leaves_qty)
+            grows = abs(now + (leaves if order.side == OrderSide.BUY else -leaves)) - abs(now)
+            if grows > 0.0:
+                price = _order_price(order) or self._price_now(key) or 0.0
+                added[key] = added.get(key, 0.0) + grows * price
+        return added
+
+    def _current(self, order: Any) -> Any:
+        """The order as the cache holds it now. The engine replaces an emulated order with
+        another object under the same id when it releases it, and that one gets the fill."""
+        return self.cache.order(order.client_order_id) or order
+
+    def _settle(self, key: str | None = None) -> None:
+        """Fold every fill not booked yet into the sleeve's cash, as the runner charges it.
+
+        Each order the sleeve sent is kept with how many of its events have been read, read
+        again only when that count moves, and let go once the venue has closed it; a fill is
+        booked once, by its event id, whichever object carried it. With `key` only that
+        name's orders are read: a quote makes its own name's spread current and no other,
+        so a fill in another name waits for that name's quote or for a read of the balance.
+        A quoted spread's series is then cut back to its last quote: every fill before now
+        is booked, and a fill still to come is charged at a quote no older than that one.
+        """
+        waiting: list[list[Any]] = []
+        for entry in self._ledger:
+            order = entry[0] = self._current(entry[0])
+            if key is not None and order.instrument_id.value != key:
+                waiting.append(entry)
+                continue
+            count = order.event_count
+            if count != entry[1]:
+                for event in order.events:
+                    if isinstance(event, OrderFilled) and event.id not in self._booked:
+                        self._booked.add(event.id)
+                        self._cash -= self._paid(event)
+                entry[1] = count
+            if not order.is_closed:
+                waiting.append(entry)
+        self._ledger = waiting
+        for name, (times, values) in self._quoted.items():
+            if key is None or name == key:
+                del times[:-1]
+                del values[:-1]
+
+    def _paid(self, event: Any) -> float:
+        """What one fill took out of cash: the value it bought, or gave back what it sold
+        for, and the commission, slippage and half-spread the runner charges it."""
+        instrument = self.cache.instrument(event.instrument_id)
+        multiplier = 1.0 if instrument is None else float(instrument.multiplier)
+        qty, px = float(event.last_qty), float(event.last_px)
+        signed = qty if event.order_side == OrderSide.BUY else -qty
+        rate = side_rate(
+            float(self._charges.get("commission_bps") or 0.0),
+            float(self._charges.get("slippage_bps") or 0.0),
+            self._half_spread_at(event.instrument_id.value, int(event.ts_event)),
+        )
+        return signed * px * multiplier + qty * px * multiplier * rate
+
+    def _half_spread_at(self, key: str, ts_ns: int) -> float:
+        """Half the spread one fill pays: the stated width, or the last quote before it."""
+        if self._charges.get("spread") != "quotes":
+            return fixed_half_spread(self._charges.get("fixed_bps"))
+        times, values = self._quoted.get(key, ([], []))
+        index = bisect_right(times, ts_ns)
+        return 0.0 if index == 0 else values[index - 1]
+
+    def _worth(self, position: Any) -> float:
+        """One open position's market value at its last print, quoted in the shares held now.
+
+        A price printed before a split the venue has since applied is restated by the
+        split's ratio (`_restating`), so a pair's other leg does not read the split as a
+        loss in the handlers between the split and the held leg's next print. A position
+        the sleeve has seen no price for is marked at its own split-aware cost.
+        """
+        instrument = self.cache.instrument(position.instrument_id)
+        multiplier = 1.0 if instrument is None else float(instrument.multiplier)
+        price = self._print_now(position.instrument_id.value)
+        if price is None:
+            price = splits.ledger(splits.moves_of(position)).basis
+        return float(position.signed_qty) * price * multiplier
+
+    def _opening(
+        self, instrument_id: InstrumentId, side: OrderSide, quantity: float, price: float
+    ) -> tuple[float, float, float]:
+        """What an order closes, what it opens or grows, and the room for the second part.
+
+        The closed part frees its own room before the opened part takes any, so a leg that
+        crosses zero is funded like an exit followed by an entry. The room is the reserved
+        one `submit_entry` sizes to, in notional.
+        """
+        now = self.held(instrument_id)
+        signed = quantity if side == OrderSide.BUY else -quantity
+        closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
+        room = self._headroom(instrument_id, price)
+        room += closing * price / self._reserve(instrument_id.value)
+        return closing, quantity - closing, room
+
+    def _funded(
+        self, instrument_id: InstrumentId, side: OrderSide, quantity: float, price: float
+    ) -> float:
+        """How much of a hedge leg the book can fund: all of what it closes, and of what it
+        opens or grows, what the room leaves once the closed part has freed its own."""
+        closing, opening, room = self._opening(instrument_id, side, quantity, price)
+        if opening <= 0.0:
+            return quantity
+        return closing + min(opening, max(0.0, room) / price)
+
+    def _check_funded(self, orders: Sequence[Any]) -> None:
+        """Refuse entries built by hand that the book cannot fund.
+
+        kanso cuts the orders it builds — `submit_entry` and an overlay's hedge legs — to
+        its room. An order a strategy built itself is not rebuilt at another size, and the
+        question asked of it is the funding one alone: whether what it opens fits inside
+        `max_leverage` times the smaller of the capital and `balance`, less the gross
+        exposure already held, in flight or resting. `max_position_pct` is kanso's own
+        sizing ceiling and is not asked of it. A list is judged whole and in order: what an
+        order closes frees room for the ones after it and what it opens is taken from it,
+        so two entries in one list cannot each take the book — and a bracket's exits, which
+        close what their parent opens and only one of which can fill, are not asked at all.
+
+        One that does not fit is refused inside the handler that placed it, as a sizing rule
+        refuses a hand-built order, and the card is discarded with the refusal rather than
+        measured on money the account never had. With no price seen for a name there is
+        nothing to show an entry in it fits, and it is refused for that.
+        """
+        intended = self._holdings()
+        resting = self._resting(intended)
+        free = self.gross_limit - self._gross_intended(intended) - sum(resting.values())
+        held = dict(intended)
+        parents = {order.client_order_id: order for order in orders}
+        for order in orders:
+            parent = parents.get(order.parent_order_id)
+            if (
+                parent is not None
+                and parent.instrument_id == order.instrument_id
+                and parent.side != order.side
+                and float(order.quantity) <= float(parent.quantity)
+            ):
+                continue
+            key = order.instrument_id.value
+            side = order_side_to_str(order.side)
+            quantity = float(order.quantity)
+            now = held.get(key, 0.0)
+            signed = quantity if order.side == OrderSide.BUY else -quantity
+            closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
+            held[key] = now + signed
+            price = _order_price(order) or self._price_now(key) or 0.0
+            if price <= 0.0 and quantity > closing:
+                self._refuse(
+                    UNFUNDED_ORDER,
+                    key,
+                    side,
+                    why="an entry built by hand in a name with no price seen yet cannot be "
+                    "shown to fit the book; place it with submit_entry, which places nothing "
+                    "until a price has been seen",
+                )
+            free += closing * price
+            opening = (quantity - closing) * price
+            if opening > free + 1e-6:
+                self._refuse(
+                    UNFUNDED_ORDER,
+                    key,
+                    side,
+                    why=f"an entry built by hand opens {opening:,.2f} of exposure and the book "
+                    f"can fund {max(0.0, free):,.2f} more: max_leverage times the smaller of the "
+                    "capital and the balance, less what is held. kanso does not rebuild an "
+                    "order it did not build; place entries with submit_entry, which cuts them "
+                    "to the room, or size them from self.balance",
+                )
+            free -= opening
 
     def _order(
         self, instrument: object, side: OrderSide, quantity: Quantity, price: float | None
@@ -1278,10 +1607,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             book=self._book(),
             prices=dict(self._last_print),
             clips=self._clips(),
+            balance=self.balance,
         )
 
     def _track(self, order: object) -> None:
-        """Keep a market order this sleeve sent until the venue closes it."""
+        """Keep every order this sleeve sent for the balance to book its fills from, and a
+        market order until the venue closes it."""
+        self._ledger.append([order, 0])
         if order.order_type == OrderType.MARKET:  # type: ignore[attr-defined]
             self._sent.append(order)
 
@@ -1362,7 +1694,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             for modifier, clock in clocks:
                 decision = clock(ctx).check(OVERLAY)
                 for order in self._legs_of(modifier, decision):
-                    self._submit_own(order)
+                    self._submit_leg(order)
         finally:
             self._hedging = False
 
@@ -1393,6 +1725,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             book=self._book(),
             prices=dict(self._last_print),
             clips=self._clips(),
+            balance=self.balance,
         )
 
     def _book(self) -> dict[str, float]:

@@ -86,9 +86,10 @@ from types import ModuleType
 from typing import Any, Final
 
 from kanso.criteria import CardRun, Fill, Trade
-from kanso.criteria.run import BPS, NS_PER_DAY, NS_PER_SECOND, Held, midnight_ns
+from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
+from kanso.nautilus.costs import fixed_half_spread, quote_half_spread, side_rate
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
@@ -796,8 +797,7 @@ def _spreads(
             if not isinstance(point, QuoteTick):
                 continue
             bid, ask = float(point.bid_price), float(point.ask_price)
-            mid = (bid + ask) / 2.0
-            fraction = 0.0 if mid <= 0 else (ask - bid) / mid / 2.0
+            fraction = quote_half_spread(bid, ask)
             seen.setdefault(str(point.instrument_id), []).append((int(point.ts_init), fraction))
     return {
         key: (tuple(ts for ts, _ in ordered), tuple(v for _, v in ordered))
@@ -820,7 +820,7 @@ def _half_spread(
     spread to charge and the fill bears none.
     """
     if model.costs.spread != "quotes":
-        return (model.costs.fixed_bps or 0.0) / 2.0 / BPS
+        return fixed_half_spread(model.costs.fixed_bps)
     times, values = spreads.get(instrument_id, ((), ()))
     index = bisect.bisect_right(times, ts_ns)
     return 0.0 if index == 0 else values[index - 1]
@@ -880,7 +880,6 @@ def _fill(
     qty = float(event.last_qty)
     px = float(event.last_px)
     notional = qty * px * multipliers.get(instrument_id, 1.0)
-    rate = (model.costs.commission_bps + model.costs.slippage_bps) / BPS
     half = _half_spread(instrument_id, int(event.ts_event), spreads, model)
     return Fill(
         ts_ns=int(event.ts_event),
@@ -888,7 +887,7 @@ def _fill(
         side=order_side_to_str(event.order_side),
         qty=qty,
         px=px,
-        cost=notional * (rate + half),
+        cost=notional * side_rate(model.costs.commission_bps, model.costs.slippage_bps, half),
     )
 
 

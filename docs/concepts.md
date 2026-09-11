@@ -230,7 +230,7 @@ already over. There are five.
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
-| `sizing` | an order the harness refused at the boundary under a `sizing` rule: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
+| `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
 position may not exceed `max_position_pct`, the book may not exceed `max_leverage` — so a
@@ -246,6 +246,24 @@ either would refuse the compliant strategy and pass the drifting one.
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
 subtracted first and the remainder re-marked, so what is judged is what the modifier added.
+
+**The ceilings are read on what the book can fund.** `max_position_pct` and `max_leverage`
+are shares of the smaller of the hypothesis's `capital` and the balance the sleeve has left:
+the capital, less what its fills paid and were charged, plus its positions marked at the last
+print — the equity curve's own number, computed as the run goes. A strategy that has lost money
+therefore cannot keep entering at its original size on borrowed money, and one that has made
+money does not grow past its capital. The room counts orders in flight as filled and holds back
+what a resting limit or stop entry would add. `submit_entry` is cut to it, and so is each hedge
+leg an overlay asks for, with the legs before it counted. An entry a strategy builds by hand is
+not rebuilt at another size, and only the funding question is asked of it: one that would take
+gross exposure past `max_leverage` of the book is refused inside the handler that placed it as
+`unfunded_order`, and the card is a `discard` carrying a `sizing` gate. An order list is judged
+whole, what each order closes freeing room for the next, and a bracket's exits are not asked. On a pair's
+ex-date the venue restates the held leg at the day's first point, which may be the other leg's;
+until the held leg prints again its last price is restated by the split's ratio, for the balance
+and for the room. `position_size` still judges a position against the capital
+(`docs/backlog.md`), and under a `sizing` rule the budget is funded by definition (row 76).
+`self.balance` reads the number.
 
 **Under a `sizing` rule the floor is not a gate at all.** `sizing: {mode: full_book, budget: N}`
 in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry

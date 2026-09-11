@@ -75,7 +75,13 @@ def second_bar_type(instrument_id: InstrumentId) -> BarType:
     )
 
 
-def bar(instrument_id: InstrumentId, index: int, close: float) -> Bar:
+DEEP = 1_000_000
+"""Shares behind a bar deep enough that every order a test places fills whole at the close.
+At the default 1,000 the simulated book holds a quarter of that at each of the bar's four
+prices, and a larger market order walks a tick further for the rest."""
+
+
+def bar(instrument_id: InstrumentId, index: int, close: float, volume: int = 1_000) -> Bar:
     ts_event = (index + 1) * MINUTE_NS
     price = Price(close, 2)
     return Bar(
@@ -84,7 +90,7 @@ def bar(instrument_id: InstrumentId, index: int, close: float) -> Bar:
         Price(close + 0.5, 2),
         Price(close - 0.5, 2),
         price,
-        Quantity.from_int(1_000),
+        Quantity.from_int(volume),
         ts_event=ts_event,
         ts_init=ts_event + LATENCY_NS,
     )
@@ -118,9 +124,11 @@ def saw_tooth(instrument_id: InstrumentId, n: int = 20) -> list[Bar]:
     return [bar(instrument_id, i, 10.0 + 0.5 * min(i % 8, 8 - i % 8)) for i in range(n)]
 
 
-def flat(instrument_id: InstrumentId, n: int = 20, close: float = 10.0) -> list[Bar]:
+def flat(
+    instrument_id: InstrumentId, n: int = 20, close: float = 10.0, volume: int = 1_000
+) -> list[Bar]:
     """A series that never moves, so a sizing assertion is not a price forecast."""
-    return [bar(instrument_id, i, close) for i in range(n)]
+    return [bar(instrument_id, i, close, volume) for i in range(n)]
 
 
 def quote(instrument_id: InstrumentId, index: int, mid: float = 10.0) -> QuoteTick:

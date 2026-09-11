@@ -7,6 +7,8 @@ construct: the host's `strategy.py` does not know it exists.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from nautilus_trader.model.data import Bar, BarSpecification, BarType
 from nautilus_trader.model.enums import AggregationSource, BarAggregation, OrderSide, PriceType
@@ -25,7 +27,7 @@ from kanso.nautilus.strategy import (
     _resolution_of_bar,
 )
 
-from .conftest import DEMO, HEDGE, flat, saw_tooth, second_bar
+from .conftest import DEEP, DEMO, HEDGE, flat, saw_tooth, second_bar
 
 
 class Host(KansoStrategy):
@@ -597,3 +599,123 @@ def test_an_exit_rule_does_not_pile_on_an_exit_already_in_flight(backtest) -> No
     assert [i.side for i in run.strategy.intents] == ["BUY", "SELL"]
     (position,) = run.engine.cache.positions()
     assert position.is_closed
+
+
+# --- a hedge leg is funded like an entry --------------------------------------
+
+
+class Grows(Host):
+    """Takes 100 shares of DEMO on its third bar and the rest of the room on its sixth."""
+
+    def on_bar(self, bar_: object) -> None:
+        if str(bar_.bar_type.instrument_id) != "DEMO.XNAS":  # type: ignore[attr-defined]
+            return
+        self.bars += 1
+        if self.bars == 3:
+            self.submit_entry(DEMO, "BUY", qty=100)
+        if self.bars == 6:
+            self.submit_entry(DEMO, "BUY")
+
+
+class Commits(Grows):
+    """Takes the whole room on its third bar."""
+
+    def on_bar(self, bar_: object) -> None:
+        if str(bar_.bar_type.instrument_id) != "DEMO.XNAS":  # type: ignore[attr-defined]
+            return
+        self.bars += 1
+        if self.bars == 3:
+            self.submit_entry(DEMO, "BUY")
+
+
+class Legs(KansoModifier):
+    """Hedges `first` shares of HEDGE on the host's first entry and `then` on any later one."""
+
+    construct = OVERLAY
+    config_cls = Attached
+    first: ClassVar[float] = 10_000.0
+    then: ClassVar[float] = 10_000.0
+
+    def on_start(self) -> None:
+        self.balances: list[float] = []
+
+    def evaluate(self, ctx: HookContext) -> Decision:
+        self.balances.append(ctx.balance)
+        qty = self.first if ctx.position_qty == 0 else self.then
+        return Decision(hedges=(Hedge("HEDGE.XNAS", qty),))
+
+
+def pair(host_cls: type[Host], legs: type[Legs], backtest) -> object:
+    config = host(universe=("DEMO.XNAS", "HEDGE.XNAS"), max_position_pct=100.0).kanso_config
+    return backtest(
+        host_cls(config),
+        [attached_for(legs, host_cls.__name__)],
+        data=flat(DEMO, volume=DEEP) + flat(HEDGE, close=20.0, volume=DEEP),
+        instruments=(DEMO, HEDGE),
+    )
+
+
+def legs_of(run: object) -> list[tuple[str, str, float]]:
+    return [(i.instrument_id, i.side, i.qty) for i in run.strategy.intents]  # type: ignore[attr-defined]
+
+
+def test_a_hedge_leg_that_opens_exposure_is_cut_to_the_room_the_book_leaves(backtest) -> None:
+    """100 shares at 10.00 in flight leave 99,000 of a 100,000 book: 4,950 at 20.00, not 10,000.
+    The second entry then finds the book committed and places nothing."""
+    run = pair(Grows, Legs, backtest)
+
+    assert legs_of(run) == [("DEMO.XNAS", "BUY", 100.0), ("HEDGE.XNAS", "BUY", 4_950.0)]
+    assert set(run.modifiers[0].balances) == {100_000.0}  # type: ignore[attr-defined]
+
+
+def test_a_hedge_leg_that_only_closes_is_never_cut(backtest) -> None:
+    """Long 1,000 HEDGE with the book full, a leg selling 500 frees room rather than taking it."""
+
+    class Trims(Legs):
+        first = 1_000.0
+        then = -500.0
+
+    run = pair(Grows, Trims, backtest)
+
+    assert legs_of(run)[-1] == ("HEDGE.XNAS", "SELL", 500.0)
+
+
+def test_what_a_hedge_leg_opens_past_zero_is_cut_to_what_its_close_frees(backtest) -> None:
+    """Long 1,000 HEDGE with the book full, a leg selling 3,000 closes the 1,000, and the
+    20,000 that frees funds 1,000 of the other side: 2,000 sold, not 3,000."""
+
+    class Turns(Legs):
+        first = 1_000.0
+        then = -3_000.0
+
+    run = pair(Grows, Turns, backtest)
+
+    assert legs_of(run) == [
+        ("DEMO.XNAS", "BUY", 100.0),
+        ("HEDGE.XNAS", "BUY", 1_000.0),
+        ("DEMO.XNAS", "BUY", 7_900.0),
+        ("HEDGE.XNAS", "SELL", 2_000.0),
+    ]
+
+
+def test_a_hedge_leg_the_book_cannot_fund_at_all_is_dropped(backtest) -> None:
+    run = pair(Commits, Legs, backtest)
+
+    assert legs_of(run) == [("DEMO.XNAS", "BUY", 10_000.0)]
+
+
+def test_two_hedge_legs_in_one_answer_share_the_room_rather_than_each_taking_it(backtest) -> None:
+    """99,000 of room at 20.00: the first leg's 3,000 shares take 60,000, and the second is cut
+    to the 39,000 left, 1,950, rather than sized against the same empty book."""
+
+    class Twice(Legs):
+        def evaluate(self, ctx: HookContext) -> Decision:
+            return Decision(hedges=(Hedge("HEDGE.XNAS", 3_000.0), Hedge("HEDGE.XNAS", 3_000.0)))
+
+    run = pair(Grows, Twice, backtest)
+
+    assert legs_of(run) == [
+        ("DEMO.XNAS", "BUY", 100.0),
+        ("HEDGE.XNAS", "BUY", 3_000.0),
+        ("HEDGE.XNAS", "BUY", 1_950.0),
+    ]

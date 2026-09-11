@@ -16,7 +16,7 @@ would double-count, and the two counts would disagree the moment either changed.
 
 Every venue account is funded with the whole run capital, because the engine keeps one
 account per venue and has no cross-venue book. What bounds exposure across venues is the
-sleeve, which sizes against `max_position_pct` of capital per instrument and
+sleeve, which sizes against `max_position_pct` of what its book can fund per instrument and
 `max_leverage` x capital gross over every position it holds; the venue balance only has
 to be large enough not to reject an order the sleeve already allowed.
 
