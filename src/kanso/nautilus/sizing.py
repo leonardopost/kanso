@@ -10,6 +10,10 @@ the run stops there because the card can no longer validate and every bar after 
 spend. The refusal crosses the card's process boundary as a value, reaches the card as a
 failed `sizing` gate, and so reaches the proposer with its next twenty cards.
 
+One refusal holds without a sizing rule: `unfunded_order`, an entry a strategy built by hand
+that is larger than the room the book can fund. kanso cuts the orders it builds to that room;
+it does not rebuild one it did not build, so that one is refused the same way.
+
 The quantity is `budget / ((1 + 2 x cost_rate) x (price + increment))`, floored onto the
 lot: the round trip the runner will charge and one price increment are reserved inside the
 budget, because the simulated venue fills a market order past a quarter of the bar's volume
@@ -51,6 +55,9 @@ HAND_BUILT_ORDER: Final = "hand_built_order"
 BUDGET_BELOW_LOT: Final = "budget_below_lot"
 """The budget at this price floors to no whole lot."""
 
+UNFUNDED_ORDER: Final = "unfunded_order"
+"""An entry a strategy with no sizing rule built by hand, larger than the book can fund."""
+
 RULES: Final = (
     SIZE_ARGUMENT,
     ONE_POSITION,
@@ -61,6 +68,7 @@ RULES: Final = (
     SCALE_UNDER_SIZING,
     HAND_BUILT_ORDER,
     BUDGET_BELOW_LOT,
+    UNFUNDED_ORDER,
 )
 
 GATE: Final = "sizing"
@@ -87,13 +95,14 @@ class Refusal:
 
 
 class SizingError(ValidationError):
-    """An order the sizing rule refused, raised inside the handler that asked for it."""
+    """An order the harness refused, raised inside the handler that asked for it: one a
+    sizing rule forbids, or an entry built by hand that the book cannot fund."""
 
     def __init__(self, refusal: Refusal) -> None:
         super().__init__(
             f"sizing: {refusal.rule} at {refusal.instrument_id}: {refusal.why}",
-            remedy="the strategy asked for what the hypothesis's sizing rule forbids; "
-            "the card is discarded with this refusal as its `sizing` gate",
+            remedy="the strategy placed an order the harness refuses; the card is "
+            "discarded with this refusal as its `sizing` gate",
         )
         self.refusal = refusal
 

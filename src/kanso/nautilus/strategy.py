@@ -120,6 +120,7 @@ from kanso.nautilus.sizing import (
     ONE_POSITION,
     SCALE_UNDER_SIZING,
     SIZE_ARGUMENT,
+    UNFUNDED_ORDER,
     Refusal,
     SizingError,
     full_book_quantity,
@@ -323,6 +324,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._entry_answers: tuple[tuple[object, Decision], ...] | None = None
         self._clip_orders: dict[str, list[object]] = {}
         self._sizing_call = False
+        self._built = False
         self._charges = _charges(resolved)
         self._cash = resolved.capital
         self._ledger: list[list[Any]] = []
@@ -758,6 +760,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Record the intent, consult the attached filters, submit, then hedge."""
         self._check_hand_built(order)
         kind = self.classify(order)
+        if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
+            self._check_funded(order)
         ctx = self._context_for(order)
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
@@ -778,6 +782,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
+        if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
+            self._check_funded(orders[0])
         ctx = self._context_for(orders[0])
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
@@ -1224,7 +1230,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _submitted(self, order: object) -> object | None:
         placed = len(self._intents)
-        self.submit_order(order)
+        built, self._built = self._built, True
+        try:
+            self.submit_order(order)
+        finally:
+            self._built = built
         return order if len(self._intents) > placed else None
 
     def _headroom(self, instrument_id: InstrumentId, reference: float) -> float:
@@ -1342,20 +1352,71 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
         return (float(position.signed_qty) - unpriced) * price * multiplier
 
+    def _opening(
+        self, instrument_id: InstrumentId, side: OrderSide, quantity: float, price: float
+    ) -> tuple[float, float, float]:
+        """What an order closes, what it opens or grows, and the room for the second part.
+
+        The closed part frees its own room before the opened part takes any, so a leg that
+        crosses zero is funded like an exit followed by an entry. The room is the reserved
+        one `submit_entry` sizes to, in notional.
+        """
+        now = self.held(instrument_id)
+        signed = quantity if side == OrderSide.BUY else -quantity
+        closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
+        room = self._headroom(instrument_id, price)
+        room += closing * price / (1.0 + ROUND_TRIP * self.cost_rate)
+        return closing, quantity - closing, room
+
     def _funded(
         self, instrument_id: InstrumentId, side: OrderSide, quantity: float, price: float
     ) -> float:
         """How much of a hedge leg the book can fund: all of what it closes, and of what it
         opens or grows, what the room leaves once the closed part has freed its own."""
-        now = self.held(instrument_id)
-        signed = quantity if side == OrderSide.BUY else -quantity
-        closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
-        opening = quantity - closing
+        closing, opening, room = self._opening(instrument_id, side, quantity, price)
         if opening <= 0.0:
             return quantity
-        room = self._headroom(instrument_id, price)
-        room += closing * price / (1.0 + ROUND_TRIP * self.cost_rate)
         return closing + min(opening, max(0.0, room) / price)
+
+    def _check_funded(self, order: Any) -> None:
+        """Refuse an entry built by hand that the book cannot fund.
+
+        kanso cuts the orders it builds — `submit_entry` and an overlay's hedge legs — to the
+        room the smaller of the capital and `balance` leaves. An order a strategy built
+        itself is not rebuilt at another size, so one whose opening part exceeds that room
+        (its cost reserve aside) is refused inside the handler that placed it, as a sizing
+        rule refuses a hand-built order, and the card is discarded with the refusal rather
+        than measured on money the account never had. With no price seen for the name
+        there is nothing to show it fits, and it is refused for that.
+        """
+        key = order.instrument_id.value
+        side = order_side_to_str(order.side)
+        price = _order_price(order) or self._last_print.get(key)
+        if price is None:
+            self._refuse(
+                UNFUNDED_ORDER,
+                key,
+                side,
+                why="an entry built by hand in a name with no price seen yet cannot be shown "
+                "to fit the book; place it with submit_entry, which places nothing until a "
+                "price has been seen",
+            )
+        _, opening, room = self._opening(
+            order.instrument_id, order.side, float(order.quantity), price
+        )
+        limit = max(0.0, room) * (1.0 + ROUND_TRIP * self.cost_rate)
+        if opening * price <= limit + 1e-6:
+            return
+        self._refuse(
+            UNFUNDED_ORDER,
+            key,
+            side,
+            why=f"an entry built by hand opens {opening * price:,.2f} of exposure and the book "
+            f"can fund {limit:,.2f}: max_position_pct and max_leverage of the smaller of the "
+            "capital and the balance. kanso does not rebuild an order it did not build; place "
+            "entries with submit_entry, which cuts them to the room, or size them from "
+            "self.balance",
+        )
 
     def _order(
         self, instrument: object, side: OrderSide, quantity: Quantity, price: float | None

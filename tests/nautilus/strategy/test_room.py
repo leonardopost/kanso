@@ -6,8 +6,14 @@ which is cash less what its fills paid and were charged plus its positions at th
 
 from __future__ import annotations
 
-import pytest
+from typing import ClassVar
 
+import pytest
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.objects import Quantity
+
+from kanso.nautilus.sizing import UNFUNDED_ORDER, SizingError
 from kanso.nautilus.strategy import KansoStrategy
 
 from .conftest import DEEP, DEMO, HEDGE, bar, equity, flat
@@ -211,3 +217,61 @@ def test_a_split_on_the_other_leg_s_first_bar_is_not_read_as_a_loss(backtest) ->
         ("DEMO.XNAS", 100.0, 100_000.0),
         ("HEDGE.XNAS", 100.0, 100_000.0),
     ]
+
+
+# --- an entry built by hand is refused, not cut ------------------------------
+
+
+class Builds(KansoStrategy):
+    """Buys `shares` of `name` by hand, with the engine's own order factory, on its third bar."""
+
+    name: ClassVar[InstrumentId] = DEMO
+    shares: ClassVar[int] = 0
+
+    def on_start(self) -> None:
+        self.bars = 0
+
+    def on_bar(self, bar_: object) -> None:
+        if str(bar_.bar_type.instrument_id) != "DEMO.XNAS":  # type: ignore[attr-defined]
+            return
+        self.bars += 1
+        if self.bars == 3:
+            order = self.order_factory.market(
+                self.name, OrderSide.BUY, Quantity.from_int(self.shares)
+            )
+            self.submit_order(order)
+
+
+def test_a_hand_built_entry_the_book_can_fund_reaches_the_venue_as_built(backtest) -> None:
+    class Whole(Builds):
+        shares = 10_000
+
+    run = backtest(Whole(free()), data=two_names(), instruments=(DEMO, HEDGE))
+
+    assert intents(run) == [("DEMO.XNAS", "BUY", 10_000.0)]
+
+
+def test_a_hand_built_entry_the_book_cannot_fund_is_refused_rather_than_cut(backtest) -> None:
+    """One share past the 100,000 book: kanso does not rebuild an order it did not build."""
+
+    class OneMore(Builds):
+        shares = 10_001
+
+    with pytest.raises(SizingError) as failure:
+        backtest(OneMore(free()), data=two_names(), instruments=(DEMO, HEDGE))
+
+    assert failure.value.refusal.rule == UNFUNDED_ORDER
+    assert failure.value.refusal.asked == "BUY"
+    assert "100,010.00" in failure.value.refusal.why
+
+
+def test_a_hand_built_entry_with_no_price_to_value_it_at_is_refused(backtest) -> None:
+    class Blind(Builds):
+        name = HEDGE
+        shares = 1
+
+    with pytest.raises(SizingError) as failure:
+        backtest(Blind(free()), data=flat(DEMO, volume=DEEP), instruments=(DEMO, HEDGE))
+
+    assert failure.value.refusal.rule == UNFUNDED_ORDER
+    assert "no price seen" in failure.value.refusal.why
