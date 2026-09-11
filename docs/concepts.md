@@ -257,7 +257,8 @@ what a resting limit or stop entry would add. `submit_entry` is cut to it, and s
 leg an overlay asks for, with the legs before it counted. An entry a strategy builds by hand is
 not rebuilt at another size, and only the funding question is asked of it: one that would take
 gross exposure past `max_leverage` of the book is refused inside the handler that placed it as
-`unfunded_order`, and the card is a `discard` carrying a `sizing` gate. On a pair's
+`unfunded_order`, and the card is a `discard` carrying a `sizing` gate. An order list is judged
+whole, what each order closes freeing room for the next, and a bracket's exits are not asked. On a pair's
 ex-date the venue restates the held leg at the day's first point, which may be the other leg's;
 until the held leg prints again its last price is restated by the split's ratio, for the balance
 and for the room. `position_size` still judges a position against the capital

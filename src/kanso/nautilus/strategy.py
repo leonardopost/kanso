@@ -69,7 +69,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
 from typing import Any, ClassVar, Final, NoReturn
@@ -769,7 +769,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._check_hand_built(order)
         kind = self.classify(order)
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
-            self._check_funded(order)
+            self._check_funded((order,))
         ctx = self._context_for(order)
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
@@ -790,8 +790,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
-        if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
-            self._check_funded(orders[0])
+        if not (self.sized or self._built or self._sizing_call):
+            self._check_funded(orders)
         ctx = self._context_for(orders[0])
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
@@ -1465,53 +1465,71 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return quantity
         return closing + min(opening, max(0.0, room) / price)
 
-    def _check_funded(self, order: Any) -> None:
-        """Refuse an entry built by hand that the book cannot fund.
+    def _check_funded(self, orders: Sequence[Any]) -> None:
+        """Refuse entries built by hand that the book cannot fund.
 
         kanso cuts the orders it builds — `submit_entry` and an overlay's hedge legs — to
         its room. An order a strategy built itself is not rebuilt at another size, and the
         question asked of it is the funding one alone: whether what it opens fits inside
         `max_leverage` times the smaller of the capital and `balance`, less the gross
-        exposure already held, in flight or resting. `max_position_pct` is kanso's own sizing
-        ceiling and is not asked of it. One that does not fit is refused inside the handler
-        that placed it, as a sizing rule refuses a hand-built order, and the card is
-        discarded with the refusal rather than measured on money the account never had. With
-        no price seen for the name there is nothing to show it fits, and it is refused for
-        that.
+        exposure already held, in flight or resting. `max_position_pct` is kanso's own
+        sizing ceiling and is not asked of it. A list is judged whole and in order: what an
+        order closes frees room for the ones after it and what it opens is taken from it,
+        so two entries in one list cannot each take the book — and a bracket's exits, which
+        close what their parent opens and only one of which can fill, are not asked at all.
+
+        One that does not fit is refused inside the handler that placed it, as a sizing rule
+        refuses a hand-built order, and the card is discarded with the refusal rather than
+        measured on money the account never had. With no price seen for a name there is
+        nothing to show an entry in it fits, and it is refused for that.
         """
-        key = order.instrument_id.value
-        side = order_side_to_str(order.side)
-        price = _order_price(order) or self._price_now(key)
-        if price is None:
-            self._refuse(
-                UNFUNDED_ORDER,
-                key,
-                side,
-                why="an entry built by hand in a name with no price seen yet cannot be shown "
-                "to fit the book; place it with submit_entry, which places nothing until a "
-                "price has been seen",
-            )
         intended = self._holdings()
         resting = self._resting(intended)
-        now = intended.get(key, 0.0)
-        quantity = float(order.quantity)
-        signed = quantity if order.side == OrderSide.BUY else -quantity
-        closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
-        opening = (quantity - closing) * price
-        gross = self._gross_intended(intended) + sum(resting.values())
-        free = self.gross_limit - gross + closing * price
-        if opening <= free + 1e-6:
-            return
-        self._refuse(
-            UNFUNDED_ORDER,
-            key,
-            side,
-            why=f"an entry built by hand opens {opening:,.2f} of exposure and the book can "
-            f"fund {max(0.0, free):,.2f} more: max_leverage times the smaller of the capital "
-            "and the balance, less what is held. kanso does not rebuild an order it did not "
-            "build; place entries with submit_entry, which cuts them to the room, or size "
-            "them from self.balance",
-        )
+        free = self.gross_limit - self._gross_intended(intended) - sum(resting.values())
+        held = dict(intended)
+        parents = {order.client_order_id: order for order in orders}
+        for order in orders:
+            parent = parents.get(order.parent_order_id)
+            if (
+                parent is not None
+                and parent.instrument_id == order.instrument_id
+                and parent.side != order.side
+                and float(order.quantity) <= float(parent.quantity)
+            ):
+                continue
+            key = order.instrument_id.value
+            side = order_side_to_str(order.side)
+            quantity = float(order.quantity)
+            now = held.get(key, 0.0)
+            signed = quantity if order.side == OrderSide.BUY else -quantity
+            closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
+            held[key] = now + signed
+            price = _order_price(order) or self._price_now(key)
+            if price is None:
+                if quantity > closing:
+                    self._refuse(
+                        UNFUNDED_ORDER,
+                        key,
+                        side,
+                        why="an entry built by hand in a name with no price seen yet cannot "
+                        "be shown to fit the book; place it with submit_entry, which places "
+                        "nothing until a price has been seen",
+                    )
+                continue
+            free += closing * price
+            opening = (quantity - closing) * price
+            if opening > free + 1e-6:
+                self._refuse(
+                    UNFUNDED_ORDER,
+                    key,
+                    side,
+                    why=f"an entry built by hand opens {opening:,.2f} of exposure and the book "
+                    f"can fund {max(0.0, free):,.2f} more: max_leverage times the smaller of the "
+                    "capital and the balance, less what is held. kanso does not rebuild an "
+                    "order it did not build; place entries with submit_entry, which cuts them "
+                    "to the room, or size them from self.balance",
+                )
+            free -= opening
 
     def _order(
         self, instrument: object, side: OrderSide, quantity: Quantity, price: float | None

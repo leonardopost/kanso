@@ -12,7 +12,7 @@ import pytest
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.objects import Quantity
+from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.nautilus.sizing import UNFUNDED_ORDER, SizingError
 from kanso.nautilus.strategy import KansoStrategy
@@ -354,3 +354,55 @@ def test_a_hand_built_entry_with_no_price_to_value_it_at_is_refused(backtest) ->
 
     assert failure.value.refusal.rule == UNFUNDED_ORDER
     assert "no price seen" in failure.value.refusal.why
+
+
+class Lists(KansoStrategy):
+    """Submits `listed(self)` as one order list, built by hand, on its third DEMO bar."""
+
+    def on_start(self) -> None:
+        self.bars = 0
+
+    def on_bar(self, bar_: object) -> None:
+        if str(bar_.bar_type.instrument_id) != "DEMO.XNAS":  # type: ignore[attr-defined]
+            return
+        self.bars += 1
+        if self.bars == 3:
+            self.submit_order_list(self.listed())
+
+    def listed(self) -> object:
+        raise NotImplementedError
+
+
+def test_two_hand_built_entries_in_one_list_are_funded_together(backtest) -> None:
+    """Each 60,000 fits the 100,000 book alone; judged by the first alone, both went in."""
+
+    class Two(Lists):
+        def listed(self) -> object:
+            one = self.order_factory.market(DEMO, OrderSide.BUY, Quantity.from_int(6_000))
+            two = self.order_factory.market(DEMO, OrderSide.BUY, Quantity.from_int(6_000))
+            return self.order_factory.create_list([one, two])
+
+    with pytest.raises(SizingError) as failure:
+        backtest(Two(free()), data=two_names(), instruments=(DEMO, HEDGE))
+
+    assert failure.value.refusal.rule == UNFUNDED_ORDER
+    assert "60,000.00" in failure.value.refusal.why
+
+
+def test_a_bracket_s_exits_do_not_count_against_the_book_its_entry_takes(backtest) -> None:
+    """The whole book at market, with a stop and a take-profit that close it: the exits close
+    what the entry opens, and only one of them can fill."""
+
+    class Bracketed(Lists):
+        def listed(self) -> object:
+            return self.order_factory.bracket(
+                DEMO,
+                OrderSide.BUY,
+                Quantity.from_int(10_000),
+                sl_trigger_price=Price.from_str("9.00"),
+                tp_price=Price.from_str("11.00"),
+            )
+
+    run = backtest(Bracketed(free()), data=two_names(), instruments=(DEMO, HEDGE))
+
+    assert intents(run)[0] == ("DEMO.XNAS", "BUY", 10_000.0)
