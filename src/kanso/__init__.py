@@ -6,6 +6,6 @@ business. Versioning of the files the research loop mutates is kanso's own, cont
 addressed in the state store.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = ["__version__"]
