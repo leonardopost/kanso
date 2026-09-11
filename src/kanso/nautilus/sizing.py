@@ -11,8 +11,8 @@ spend. The refusal crosses the card's process boundary as a value, reaches the c
 failed `sizing` gate, and so reaches the proposer with its next twenty cards.
 
 One refusal holds without a sizing rule: `unfunded_order`, an entry a strategy built by hand
-that is larger than the room the book can fund. kanso cuts the orders it builds to that room;
-it does not rebuild one it did not build, so that one is refused the same way.
+that would take gross exposure past what the book can fund. kanso cuts the orders it builds to
+its room; it does not rebuild one it did not build, so that one is refused the same way.
 
 The quantity is `budget / ((1 + 2 x cost_rate) x (price + increment))`, floored onto the
 lot: the round trip the runner will charge and one price increment are reserved inside the

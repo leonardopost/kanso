@@ -194,7 +194,7 @@ WHY: Final = {
         DENIED_STALE_BASIS,
         "the engine computes it against a position's opening basis, which a corporate "
         "action leaves in a share count that no longer exists; size from `last_price`, "
-        "`held` and `balance` instead, which kanso keeps from the sleeve's own fills",
+        "`held` and `balance` instead; kanso keeps the last two from the sleeve's own fills",
     ),
 }
 """Why each corporate-action denial exists, said in the refusal so a proposer can act on it."""

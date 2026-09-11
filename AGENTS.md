@@ -47,12 +47,13 @@ declared publication rule is refused at write (`data/publication.py`).
 the spread each side are deducted per fill in `nautilus/backtest.py` and nowhere else. One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
-recorded fills without re-running anything. The arithmetic lives in `nautilus/costs.py`, and
-the harness calls it to keep the balance it cuts entries to equal to the equity the runner
-strikes; it charges nothing itself. The simulated venue charges nothing to keep it that way
-— and it charges nothing because kanso's resolved instruments leave their maker and taker
-rates at zero, not because the venue is configured fee-free, so an instrument that arrives
-with a non-zero rate double-counts silently.
+recorded fills without re-running anything. The per-fill arithmetic lives in
+`nautilus/costs.py`, and the harness calls it to keep its balance equal to the equity the
+runner strikes; the reserve it sizes with is a separate and deliberately larger estimate, and
+it charges nothing itself. The simulated venue charges nothing to keep it that way — and it
+charges nothing because kanso's resolved instruments leave their maker and taker rates at
+zero, not because the venue is configured fee-free, so an instrument that arrives with a
+non-zero rate double-counts silently.
 
 **The embargo is code.** A backtest request may name only a window the hypothesis declares,
 and the card path accepts only the research window. A card runs in a child process with no

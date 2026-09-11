@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 import pytest
+from nautilus_trader.model.data import Bar
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Quantity
@@ -16,7 +17,7 @@ from nautilus_trader.model.objects import Quantity
 from kanso.nautilus.sizing import UNFUNDED_ORDER, SizingError
 from kanso.nautilus.strategy import KansoStrategy
 
-from .conftest import DEEP, DEMO, HEDGE, bar, equity, flat
+from .conftest import DEEP, DEMO, HEDGE, MINUTE_NS, SECOND_NS, bar, equity, flat
 from .test_sleeve import config
 
 DEMO_SHARES = 10_000.0
@@ -188,35 +189,113 @@ def test_the_balance_is_cash_less_costs_plus_the_position_at_its_last_print(back
     ]
 
 
-def test_a_split_on_the_other_leg_s_first_bar_is_not_read_as_a_loss(backtest) -> None:
-    """On a pair's ex-date the venue restates the held leg at the day's first point, which
-    can be the other leg's; until the held leg prints again its price is the old one."""
-    ex_date = {"splits": [{"ex_date": "1970-01-02", "ratio": 0.1}]}
-    next_day = 1_440
+EX_DATE = {"splits": [{"ex_date": "1970-01-02", "ratio": 0.1}]}
+"""HEDGE reverse-splits one for ten at the midnight opening the second day of the series."""
+NEXT_DAY = 1_440
+"""The minute index of the first bar on that day."""
 
-    class Holds(KansoStrategy):
-        def on_start(self) -> None:
-            self.seen: list[tuple[str, float, float]] = []
 
-        def on_bar(self, bar_: object) -> None:
-            name = str(bar_.bar_type.instrument_id)  # type: ignore[attr-defined]
-            if name == "HEDGE.XNAS" and not self.seen:
-                self.submit_entry(HEDGE, "BUY", qty=1_000)
-            self.seen.append((name, self.held(HEDGE), self.balance))
+def stamped(instrument_id: object, close: float, ts_event: int, ts_init: int) -> Bar:
+    """A deep bar closing at `ts_event` and published at `ts_init`."""
+    made = bar(instrument_id, 0, close, DEEP)  # type: ignore[arg-type]
+    return Bar(
+        made.bar_type, made.open, made.high, made.low, made.close, made.volume, ts_event, ts_init
+    )
 
-    data = [
+
+def across_the_split(*last: Bar) -> list[object]:
+    """HEDGE at 20.00 and DEMO at 10.00 on the first day, DEMO first on the ex-date, then `last`."""
+    return [
         bar(HEDGE, 0, 20.0, DEEP),
         bar(DEMO, 1, 10.0, DEEP),
         bar(HEDGE, 2, 20.0, DEEP),
-        bar(DEMO, next_day, 10.0, DEEP),
-        bar(HEDGE, next_day + 1, 200.0, DEEP),
+        bar(DEMO, NEXT_DAY, 10.0, DEEP),
+        *(last or (bar(HEDGE, NEXT_DAY + 1, 200.0, DEEP),)),
     ]
-    run = backtest(Holds(free()), data=data, instruments=(DEMO, equity(HEDGE, info=ex_date)))
+
+
+class Splits(KansoStrategy):
+    """Buys 1,000 HEDGE at 20.00 on its first print and records, on every bar, the name,
+    what it holds of HEDGE and its balance; with `enter`, takes DEMO's room on the ex-date."""
+
+    enter: ClassVar[bool] = False
+
+    def on_start(self) -> None:
+        self.seen: list[tuple[str, float, float]] = []
+
+    def on_bar(self, bar_: object) -> None:
+        name = str(bar_.bar_type.instrument_id)  # type: ignore[attr-defined]
+        if name == "HEDGE.XNAS" and not self.seen:
+            self.submit_entry(HEDGE, "BUY", qty=1_000)
+        if self.enter and name == "DEMO.XNAS" and self.data_time > NEXT_DAY * MINUTE_NS:
+            self.submit_entry(DEMO, "BUY")
+        self.seen.append((name, self.held(HEDGE), self.balance))
+
+
+def split_run(strategy: KansoStrategy, backtest, data: list[object] | None = None):
+    return backtest(
+        strategy, data=data or across_the_split(), instruments=(DEMO, equity(HEDGE, info=EX_DATE))
+    )
+
+
+def test_a_split_on_the_other_leg_s_first_bar_is_not_read_as_a_loss(backtest) -> None:
+    """On a pair's ex-date the venue restates the held leg at the day's first point, which
+    can be the other leg's; until the held leg prints again its price is the old one, and
+    read as it stands the 100 shares left would be worth 2,000 rather than 20,000."""
+    run = split_run(Splits(free()), backtest)
 
     assert run.strategy.seen[-2:] == [
         ("DEMO.XNAS", 100.0, 100_000.0),
         ("HEDGE.XNAS", 100.0, 100_000.0),
     ]
+
+
+def test_the_room_on_an_ex_date_reads_the_held_leg_at_its_restated_price(backtest) -> None:
+    """Read at 20.00 the 100 HEDGE shares hold 2,000 of the book and DEMO gets 9,800 shares,
+    borrowing 18,000; restated to 200.00 they hold 20,000 and DEMO gets 8,000."""
+
+    class EntersOnTheExDate(Splits):
+        enter = True
+
+    run = split_run(EntersOnTheExDate(free()), backtest)
+
+    assert intents(run)[-1] == ("DEMO.XNAS", "BUY", 8_000.0)
+
+
+def test_an_ex_date_print_published_after_the_split_was_applied_is_not_restated(backtest) -> None:
+    """HEDGE's ex-date bar closes before DEMO's but is published after it, so the venue has
+    applied the split on DEMO's point before HEDGE prints: that print is already quoted in the
+    new shares. Timed against the adjustment rather than the split, it read 280,000."""
+    late = stamped(
+        HEDGE,
+        200.0,
+        ts_event=(NEXT_DAY + 1) * MINUTE_NS - 30 * SECOND_NS,
+        ts_init=(NEXT_DAY + 2) * MINUTE_NS,
+    )
+    run = split_run(Splits(free()), backtest, across_the_split(late))
+
+    assert run.strategy.seen[-1] == ("HEDGE.XNAS", 100.0, 100_000.0)
+
+
+def test_a_resting_limit_entry_holds_back_the_room_it_would_take(backtest) -> None:
+    """A limit to buy 60,000 of DEMO at 9.00 rests under a market at 10.00; the HEDGE entry
+    after it gets the 40,006 left, 2,000 shares, rather than the whole book."""
+
+    class Rests(KansoStrategy):
+        def on_start(self) -> None:
+            self.bars = 0
+
+        def on_bar(self, bar_: object) -> None:
+            if str(bar_.bar_type.instrument_id) != "DEMO.XNAS":  # type: ignore[attr-defined]
+                return
+            self.bars += 1
+            if self.bars == 3:
+                self.submit_entry(DEMO, "BUY", notional=60_000.0, price=9.0)
+                self.submit_entry(HEDGE, "BUY")
+
+    run = backtest(Rests(free()), data=two_names(), instruments=(DEMO, HEDGE))
+
+    assert intents(run) == [("DEMO.XNAS", "BUY", 6_666.0), ("HEDGE.XNAS", "BUY", 2_000.0)]
 
 
 # --- an entry built by hand is refused, not cut ------------------------------

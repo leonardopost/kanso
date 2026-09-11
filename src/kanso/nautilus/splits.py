@@ -282,6 +282,18 @@ def apply_to(position: Any, split: Split, lot: float, ts_ns: int) -> Any:
     return event
 
 
+def restating(schedule: Sequence[Split], printed_ns: int, through_ns: int) -> float:
+    """What a price printed at `printed_ns` is divided by to be quoted in the shares held at
+    `through_ns`: the product of the ratios of every split effective after the one and at or
+    before the other. A one-for-ten reverse split between them makes it 0.1, so a price of
+    twenty reads as the two hundred the restated share count trades at."""
+    factor = 1.0
+    for split in schedule:
+        if printed_ns < split.effective_ns <= through_ns:
+            factor *= split.ratio
+    return factor
+
+
 # --- what a position was, in the units it opened in ---------------------------
 
 

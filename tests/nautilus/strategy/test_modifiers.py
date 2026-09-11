@@ -702,3 +702,20 @@ def test_a_hedge_leg_the_book_cannot_fund_at_all_is_dropped(backtest) -> None:
     run = pair(Commits, Legs, backtest)
 
     assert legs_of(run) == [("DEMO.XNAS", "BUY", 10_000.0)]
+
+
+def test_two_hedge_legs_in_one_answer_share_the_room_rather_than_each_taking_it(backtest) -> None:
+    """99,000 of room at 20.00: the first leg's 3,000 shares take 60,000, and the second is cut
+    to the 39,000 left, 1,950, rather than sized against the same empty book."""
+
+    class Twice(Legs):
+        def evaluate(self, ctx: HookContext) -> Decision:
+            return Decision(hedges=(Hedge("HEDGE.XNAS", 3_000.0), Hedge("HEDGE.XNAS", 3_000.0)))
+
+    run = pair(Grows, Twice, backtest)
+
+    assert legs_of(run) == [
+        ("DEMO.XNAS", "BUY", 100.0),
+        ("HEDGE.XNAS", "BUY", 3_000.0),
+        ("HEDGE.XNAS", "BUY", 1_950.0),
+    ]
