@@ -117,7 +117,10 @@ is silence, so an overlay that only scales at entry is unchanged. On the data cl
 cohort; `ctx.prices` is the last print of every name at the finest grain loaded, which is
 what an order fills against. `ctx.book` is the host sleeve's own signed position per name
 — under a `sizing` rule with its unfilled market orders applied and its overlays' clips
-left out — and `ctx.clips` is what the overlays hold the same way.
+left out — and `ctx.clips` is what the overlays hold the same way. `ctx.balance` is the host
+sleeve's account at that moment, as `self.balance` reads it. On an unsized host, a hedge leg that
+opens or grows exposure is cut to the room the book can fund, like an entry; what it closes is
+never cut.
 
 **A sized overlay names clips.** When its hypothesis declares `sizing`, the overlay answers
 `Decision(clips=(Clip(instrument, side),))` and the harness sizes the clip to the overlay's

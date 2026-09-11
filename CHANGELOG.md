@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A backtest no longer borrows to keep a strategy's size.** Without a sizing rule an entry's room was a share of the starting capital however much the account had lost, and nothing refused the order: measured on a sleeve run from 2022, it kept buying full-size positions with its balance below zero, which no account that does not borrow can do. `max_position_pct` and `max_leverage` are now read on the smaller of the capital and the balance the sleeve has left, `submit_entry` and an overlay's hedge legs are cut to that room, and `self.balance` — `ctx.balance` to a modifier — reads the balance: the capital, less what the sleeve's fills paid and were charged, plus its positions marked at the last print, which is the equity curve's own number at every period end. The cost arithmetic moves to `nautilus/costs.py`, which the runner and the harness both call. Metrics of a strategy that drew down below its capital change; one that never did is unchanged.
+
 ## v0.6.0 — 2026-09-11
 
 - **`max_hold` counts trading days too.** `trading_days` limits the sessions a position is held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing — beside `days`, which stays calendar days. "No longer than a month" usually means a month of sessions, which calendar days only approximate; either limit or both may be set, and the evidence carries both longest holds.

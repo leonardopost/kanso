@@ -232,6 +232,15 @@ already over. There are five.
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `sizing` | an order the harness refused at the boundary under a `sizing` rule: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
+**The ceilings are read on what the book can fund.** `max_position_pct` and `max_leverage`
+are shares of the smaller of the hypothesis's `capital` and the balance the sleeve has left:
+the capital, less what its fills paid and were charged, plus its positions marked at the last
+print — the equity curve's own number, computed as the run goes. A strategy that has lost money
+therefore cannot keep entering at its original size on borrowed money, and one that has made
+money does not grow past its capital. `submit_entry` and an overlay's hedge legs are cut to that
+room; an order an author builds by hand is not, and under a `sizing` rule the budget is funded
+by definition (`docs/backlog.md`, rows 76 and 77). `self.balance` reads the number.
+
 The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
 position may not exceed `max_position_pct`, the book may not exceed `max_leverage` — so a
 strategy holding a tenth of what its operator asked for satisfies all of them, and nothing in

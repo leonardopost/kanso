@@ -21,7 +21,8 @@ data_requirements: [bar]           # bar|quote|trade|<any registered custom type
 #   budget: 100000                 # round trip reserved; one instrument held at a time; every exit the whole position; submit_entry
 #                                  # and submit_exit take no size. `kanso hyp validate` refuses (exit 3) unless
 #                                  # capital x max_position_pct / 100 >= budget and capital x max_leverage >= budget
-risk_limits:                       # *_pct are percentages of capital
+risk_limits:                       # *_pct are percentages of capital; an unsized entry's room is read on
+                                   # the smaller of capital and what the account is worth, so no borrowing
   max_position_pct: 20
   max_drawdown_pct: 15
   max_leverage: 1

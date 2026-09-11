@@ -129,6 +129,11 @@ class HookContext:
     clips: Mapping[str, float] = field(default_factory=dict)
     """The attached overlays' signed clip quantity per instrument, unfilled clips applied."""
 
+    balance: float = 0.0
+    """What the host sleeve's account is worth at this moment, as `KansoStrategy.balance`
+    reads it: the capital, less what its fills paid and were charged, plus its positions
+    marked at the last print. What an overlay sizes a hedge against."""
+
 
 @dataclass(frozen=True)
 class Decision:
