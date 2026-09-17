@@ -354,6 +354,32 @@ are unchanged: the upper bound of every window is what it was, and only the data
 before it widens. An attached construct declares the same `warmup` as its host, or
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
+**`benchmark` is yours, and it is scope.** A strategy trading one instrument can show a
+healthy Sharpe by holding that instrument through a rising market. Declaring a benchmark
+makes the objective the strategy's Sharpe *over* a hold of the universe's first leg:
+
+```yaml
+benchmark:                         # scope: adding or changing it clears `best`
+  hold: first_leg                  # buy universe[0] on the window's first print, never exit
+```
+
+The hold is not arithmetic on prices. It is a sleeve kanso ships
+(`src/kanso/templates/strategy_hold.py`) run by the same runner as the strategy — the same
+window, snapshot, venue model, costs, splits, capital, sizing budget and warmup, with every
+order in the warmup dropped like the strategy's — and never gated by `max_hold`, because it
+is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
+of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
+fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
+path that measures the objective — each card of a run (once per run, then reused), both
+certification windows (a `param_plateau` perturbation moves the strategy and never the
+hold), the expectation composition measures, and every window a stage node closes, where it
+is stored beside the version's realised run for the paper and live gates. `kanso hyp
+validate` refuses (exit 3) a benchmark on a hypothesis whose objective measures none — a
+sub-daily horizon, which is measured per trade, or an attached construct, which is measured
+against its host — naming `benchmark`. The leg held is scope with the key: reordering the
+universe of a hypothesis that declares one clears `best`, and adopting the key re-pins the
+hypothesis, clears `best` and refuses to compose a certificate earned without it.
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
@@ -402,7 +428,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id` or `warmup` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup` or `benchmark` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.

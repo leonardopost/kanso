@@ -96,13 +96,16 @@ seam that would make it runnable — late on purpose. `docs/constructs.md` is th
 A run optimises **exactly one scalar**. Which one is not a free choice: it follows from the
 construct's objective mode and the hypothesis's horizon, by the one deterministic domain
 rule in the system. A sub-daily sleeve is scored on net edge per trade; a daily-or-longer
-sleeve on a walk-forward net Sharpe; an attached construct on the marginal version of
-whichever of those applies.
+sleeve on a walk-forward net Sharpe — or, when the operator declares a `benchmark`, on
+that Sharpe less the Sharpe of holding the universe's first leg over the same folds; an
+attached construct on the marginal version of whichever of the first two applies.
 
 `absolute` objectives score the construct alone. `relative` objectives score its **marginal
 effect on its host**: the host is run by itself once per run, and every card's number is the
 difference. A neutral modifier therefore scores exactly zero, which is what the baseline of
-an attached construct should be. Here is one, on a filter attached to the demo sleeve:
+an attached construct should be. A benchmark objective is the same difference against a
+hold run by the same runner rather than against a host, so a strategy that only rode its
+market scores zero too. Here is a relative one, on a filter attached to the demo sleeve:
 
 ```
 $ kanso research begin demo_filter
@@ -342,7 +345,8 @@ trial. The rule is scope: a `best` earned under one sizing is not compared with 
 under another, so adding or changing it clears the best — as does changing the objective,
 whose units the best is a number in, and the `warmup`, since a run whose indicators were
 fed before the open and one that spent the window's first sessions filling them measured
-different things over the same days.
+different things over the same days, and the `benchmark`, since a Sharpe over a hold of the
+first leg is not a Sharpe.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.

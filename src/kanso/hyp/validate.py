@@ -56,6 +56,7 @@ from kanso.classify.construct import PORTFOLIO
 from kanso.classify.construct import catalogue as construct_catalogue
 from kanso.criteria import applicable_objectives, check_params
 from kanso.criteria import catalogue as criteria_catalogue
+from kanso.criteria.objectives import measures_benchmark
 from kanso.data import registry
 from kanso.data.instruments import resolve_universe
 from kanso.data.types import data_types
@@ -473,6 +474,13 @@ def _check_objective(ws: Workspace, hyp: Hypothesis, ref: ObjectiveRef, mode: st
     problems = check_params(item, ref.params.model_dump(), hyp, ws.config.research.folds)
     if problems:
         raise ValidationError("; ".join(f"objective.params.{problem}" for problem in problems))
+    if hyp.benchmark is not None and not measures_benchmark(hyp):
+        raise ValidationError(
+            f"benchmark: declared, and {ref.id} measures nothing against it; only a sleeve "
+            "or an alpha held a day or longer is measured against a hold of its first leg",
+            remedy="remove benchmark from this file, or lengthen the horizon to a day and "
+            "classify it as a sleeve",
+        )
 
 
 def _check_constraints(

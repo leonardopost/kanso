@@ -1,0 +1,11 @@
+id: wf_sharpe_vs_hold
+kind: objective
+applies:
+  objective_mode: absolute
+  benchmark: true
+  horizon: {min: 1d}
+priority: 15
+meaningful_when: "The hypothesis declares a benchmark: fold-wise Sharpe minus that of holding the first leg, run by the same runner (never exited, no max_hold)."
+params: {min_delta: float, k_se: float}
+ranges: {min_delta: [0.0, .inf], k_se: [0.5, 3.0]}
+impl: kanso.criteria.objectives.wf_sharpe_vs_hold

@@ -476,6 +476,52 @@ def test_a_relative_objective_on_a_sleeve_is_refused(ws: Workspace) -> None:
     assert "does not apply" in failure.message
 
 
+DAILY_SLEEVE: dict[str, Any] = {
+    "horizon": "1d",
+    "resolution": "1d",
+    "construct": {"id": "sleeve", "rationale": "a strategy of its own"},
+    "constraints": [{"id": "strategy_integrity"}],
+}
+
+
+def test_a_daily_sleeve_measured_against_a_hold_is_admissible(ws: Workspace) -> None:
+    parsed = accepted(
+        ws,
+        document(
+            benchmark={"hold": "first_leg"},
+            objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 1.0}},
+            **DAILY_SLEEVE,
+        ),
+    )
+
+    assert parsed.benchmark is not None and parsed.benchmark.hold == "first_leg"
+
+
+def test_a_benchmark_takes_the_absolute_sharpe_s_place(ws: Workspace) -> None:
+    """A declared benchmark and an objective that ignores it are two answers to one question."""
+    failure = refused(
+        ws,
+        document(
+            benchmark={"hold": "first_leg"},
+            objective={"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}},
+            **DAILY_SLEEVE,
+        ),
+    )
+
+    assert failure.message.startswith("objective.id: 'wf_sharpe_net' does not apply")
+    assert "wf_sharpe_vs_hold" in failure.message
+
+
+def test_a_benchmark_nothing_is_measured_against_is_refused(ws: Workspace) -> None:
+    """A sub-daily sleeve is measured per trade, and a hold has no trades to pair with."""
+    failure = refused(ws, document(benchmark={"hold": "first_leg"}, **SLEEVE_CLASSIFICATION))
+
+    assert failure.message.startswith(
+        "benchmark: declared, and net_edge_bps measures nothing against it"
+    )
+    assert (failure.remedy or "").startswith("remove benchmark from this file")
+
+
 def test_an_objective_parameter_outside_its_range_is_refused(ws: Workspace) -> None:
     classification = {
         **SLEEVE_CLASSIFICATION,
