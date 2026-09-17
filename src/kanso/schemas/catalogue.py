@@ -179,6 +179,12 @@ class CriteriaItem(KansoModel):
         unknown = sorted(set(self.ranges) - set(self.params))
         if unknown:
             raise ValueError(f"ranges: {', '.join(unknown)} is not a declared param")
+        unordered = sorted(
+            name for name in self.ranges if self.params[name] not in NUMERIC_PARAM_TYPES
+        )
+        if unordered:
+            kinds = ", ".join(f"{name} is {self.params[name]}" for name in unordered)
+            raise ValueError(f"ranges: {kinds}; only a numeric param has a range")
         missing = sorted(
             name
             for name, kind in self.params.items()
