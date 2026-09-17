@@ -9,7 +9,8 @@
 # read back by them. So `kanso research run demo_mr --cards 3` in a freshly initialised demo is a keep, a discard and a crash,
 # in that order. Past the third the script wraps: the first diff no longer fits the file in hand, and the
 # other two reproduce bytes the run has already carded, which the loop refuses as it refuses any wrong
-# answer — the ladder runs out and the command exits 2 naming the cards they repeat. That is the point at
+# answer — every ladder runs out on a repeat, so each proposal is a `repeated` miss with no card and no
+# trial, and the command exits 0 reporting three of them. That is the point at
 # which the demo has shown what it can and you want a real model in models.yaml. (A script that must keep
 # proposing writes `{{call}}` in its diff; the mock puts the ordinal of the call there.)
 classify:

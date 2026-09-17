@@ -165,7 +165,7 @@ The last two:
 ```
 $ kanso research run demo_mr --cards 3
 run        d99f1b6cd8734b278a7c8f1160b32f16 · lane op · cards
-cards      3 proposed · 1 keep · 1 discard · 1 crash · trial 4
+cards      3 proposed · 1 keep · 1 discard · 1 crash · 0 repeated · 0 redundant · trial 4
 aligned    0 check(s) · 0 drift(s)
 best       f729a53 at 9.986730
 next       kanso research run demo_mr --cards 3
@@ -187,8 +187,10 @@ One keep, one discard and one crash is the loop working rather than a fault. A c
 and every one of the three stays in state, so the experiment log is complete whatever the
 lane directory looks like afterwards. Run it again and the scripted answers wrap: the first
 no longer fits, and the other two reproduce bytes the run has already carded, which the loop
-refuses rather than backtests twice — the command exits 2 naming the cards they repeat. The
-demo has shown what it can; the next step is a real model in `models.yaml`.
+refuses rather than backtests twice. Every retry ladder runs out on answers with nothing new
+in them, so each of the three proposals is a `repeated` miss — no card and no trial — and
+the command exits 0 with `3 proposed · 0 keep · 0 discard · 0 crash · 3 repeated`. The demo
+has shown what it can; the next step is a real model in `models.yaml`.
 
 A run that stalls certifies itself before it returns, so a daemon left running reaches a
 certificate on every lane with no operator at all. Driven by hand, the same path is:
