@@ -417,12 +417,43 @@ def test_a_spell_of_stalls_on_one_best_reseeds_the_next_run_from_the_best_other_
         "from": best,
         "to": other,
         "stalls": 2,
-        "because": "the best other keep under the pins",
+        "because": "the best other aligned keep under the pins",
     }
     assert second.payload()["reseed_from"] == other
     # A third stall on the same best is a new spell: one stall since the reseed.
     assert scheduler.on_stall(ws, store, hyp_id).reseed_from is None
     assert passages.reseed_of(store, hyp_id) is None, "the newest passage carries none"
+
+
+def test_a_keep_a_drift_check_marked_is_never_where_a_reseed_starts(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A misaligned keep is one its own run was rewound away from, so it is passed over
+    however well it scored, and with no aligned keep left the stalled run's base is next."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    best = a_card(ws, store, REVERTING, seq=1, metric=3.0)
+    drifted = a_card(ws, store, WEAK, seq=2, metric=2.0, best=False)
+    aligned = a_card(ws, store, FLAT, seq=3, metric=1.0, best=False)
+    store.connection.execute(
+        "UPDATE cards SET aligned = 0 WHERE hyp_id = ? AND strategy_sha = ?", (hyp_id, drifted)
+    )
+    certificate(store, hyp_id, best)
+
+    _, second = stall_twice(ws, store, hyp_id)
+
+    assert second.reseed_from == aligned
+    assert passages.reseed_of(store, hyp_id) == aligned
+
+    store.connection.execute(
+        "UPDATE cards SET aligned = 0 WHERE hyp_id = ? AND strategy_sha = ?", (hyp_id, aligned)
+    )
+    _, fourth = stall_twice(ws, store, hyp_id)
+
+    stalled = records.runs_of(store, hyp_id)[-1]
+    assert fourth.reseed_from == stalled.base_sha != drifted
+    assert store.events(kind=scheduler.RESEED, subject=hyp_id)[-1].detail["because"] == (
+        "the stalled run's own base"
+    )
 
 
 def test_with_no_other_keep_the_reseed_is_the_stalled_run_s_base_or_nothing(

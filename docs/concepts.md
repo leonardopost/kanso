@@ -247,7 +247,8 @@ rules: they bound the search and choose nothing within it.
 A stall is where the memory is read one more time. `[research] reseed_after_stalls`
 consecutive stalls on the same best — counted since the last reseed — say the best is a
 ridge the climb cannot leave, so the scheduler **re-seeds**: the next run starts from the
-highest-scoring other keep under the stalled run's pins, else from that run's own base,
+highest-scoring other keep under the stalled run's pins that is still aligned — a keep a
+drift check marked is not ground to start from — else from that run's own base,
 and from the best as before when there is neither. The decision is a `reseed` event and
 rides on the `queued` passage, which `put_back` and `recover` keep; a decision written only
 at the stall did not survive a live workspace. The best is not cleared. A run's best and

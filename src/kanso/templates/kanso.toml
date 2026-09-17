@@ -23,7 +23,7 @@ context_cards = 20        # last cards shown to the proposer
 redundant_pct = 97        # a card holding the same book as a stored one on this share of sessions is a redundant miss, not a card
 local_cards = 10          # misses since the last keep during which the proposer is asked for local changes (parameters, thresholds)
 structural_cards = 10     # the misses after those during which a change that moves no structure is refused; then local again
-reseed_after_stalls = 2   # consecutive stalls on the same best after which the next run starts from the best other keep under the pins
+reseed_after_stalls = 2   # consecutive stalls on the same best after which the next run starts from the best other aligned keep under the pins
 folds = 4                 # contiguous folds for metric / metric_se
 max_lines_per_keep = 40   # complexity rule: a keep growing strategy.py by more lines must clear max(min_delta, 2 × k_se × metric_se)
 baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s = max(60, 3 × baseline_wall_s)

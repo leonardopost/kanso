@@ -22,9 +22,10 @@ simply not available to be taken.
 
 A stall is also where the search's memory is read. `reseed_after_stalls` consecutive
 stalls on the same best say the best is a ridge the climb cannot leave, so the next run
-starts from the highest-scoring other keep under the same pins — or from the stalled run's
-own base — and the decision rides on the `queued` passage, where `put_back` and `recover`
-keep it, rather than on the stall's own event, where they would not. The best is not
+starts from the highest-scoring other keep still aligned under the same pins — or from
+the stalled run's own base — and the decision rides on the `queued` passage, where
+`put_back` and `recover` keep it, rather than on the stall's own event, where they would
+not. The best is not
 touched: a re-seeded run climbs its own ancestry and replaces the hypothesis's best only by
 beating it (`records.set_best`).
 
@@ -369,7 +370,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
 
     `[research] reseed_after_stalls` consecutive stalls on the same best — counted since
     the last reseed — decide that the next run starts elsewhere: from the highest-scoring
-    other keep under the stalled run's pins, else from that run's base when it differs
+    other keep still aligned under the stalled run's pins, else from that run's base when it differs
     from the best. The decision is a `reseed` event and rides on the `queued` passage.
     """
     # Certification reads research; research schedules certification. The import is
@@ -405,9 +406,10 @@ def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str
     Counted newest first over the hypothesis's `stalled` events, stopping at the first
     one on another best and at the last `reseed`, so a reseed is decided once per spell
     of stalls rather than at every stall after the first. The alternative is the
-    highest-scoring keep under the stalled run's pins whose bytes are not the best's,
-    else the stalled run's own base when it is not the best; with neither there is
-    nowhere else to start, and the run starts from the best as before.
+    highest-scoring keep under the stalled run's pins whose bytes are not the best's and
+    that no drift check marked misaligned — a keep its own run was rewound away from is not
+    ground to start from — else the stalled run's own base when it is not the best; with
+    neither there is nowhere else to start, and the run starts from the best as before.
     """
     if best is None:
         return None
@@ -428,12 +430,16 @@ def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str
     keep = store.connection.execute(
         "SELECT cards.strategy_sha FROM cards JOIN runs ON runs.run_id = cards.run_id"
         " WHERE cards.hyp_id = ? AND runs.hypothesis_sha = ? AND runs.snapshot_id = ?"
-        " AND runs.criteria_version = ? AND cards.status = 'keep' AND cards.strategy_sha != ?"
+        " AND runs.criteria_version = ? AND cards.status = 'keep' AND cards.aligned = 1"
+        " AND cards.strategy_sha != ?"
         " ORDER BY cards.metric DESC, cards.card_id DESC LIMIT 1",
         (hyp_id, stalled.hypothesis_sha, stalled.snapshot_id, stalled.criteria_version, best),
     ).fetchone()
     if keep is not None:
-        alternative, because = str(keep["strategy_sha"]), "the best other keep under the pins"
+        alternative, because = (
+            str(keep["strategy_sha"]),
+            "the best other aligned keep under the pins",
+        )
     elif stalled.base_sha != best:
         alternative, because = stalled.base_sha, "the stalled run's own base"
     else:
