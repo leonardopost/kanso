@@ -708,6 +708,21 @@ def test_stressed_recomputes_the_series_from_the_recorded_fills() -> None:
     assert [f.cost for f in doubled.fills] == pytest.approx([40.0, 60.0])
 
 
+def test_stressed_leaves_a_book_policy_s_carry_as_recorded() -> None:
+    """The carry is already in the returns and is not a fill cost: a stress moves the returns
+    by the fills' extra cost alone and carries the carry series over unchanged."""
+    run = build_run(
+        (100.0, 100.0),
+        fills=(fill(DAYS[0], cost=20.0), fill(DAYS[1], cost=30.0)),
+        carry=(1.0, 2.0),
+    )
+
+    tripled = stressed(run, 3.0)
+
+    assert tripled.carry == run.carry
+    assert tripled.returns == pytest.approx((60.0, 40.0)), "only the fills' 40 and 60 more"
+
+
 def test_a_fill_after_the_last_period_end_changes_no_return() -> None:
     run = build_run((10.0,), fills=(fill(date(2024, 1, 9), cost=100.0),))
     assert stressed(run, 5.0).returns == (10.0,)
