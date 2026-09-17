@@ -500,6 +500,35 @@ def test_a_constraint_that_is_not_a_gate_is_refused(ws: Workspace) -> None:
     assert "not a gate" in failure.message
 
 
+def test_a_leg_edge_leg_the_universe_does_not_hold_is_refused(ws: Workspace) -> None:
+    edge = {"id": "leg_edge", "params": {"leg": "EURO", "min_sharpe": 0.0}}
+
+    failure = refused(ws, document(**SLEEVE_CLASSIFICATION, required_constraints=[edge]))
+
+    assert failure.message == (
+        "required_constraints.leg_edge.leg: 'EURO' is not in the universe (DEMO)"
+    )
+
+
+def test_a_leg_edge_leg_the_universe_does_not_hold_is_refused_from_constraints_too(
+    ws: Workspace,
+) -> None:
+    edge = {"id": "leg_edge", "params": {"leg": "EURO", "min_sharpe": 0.0}}
+    classification = {**SLEEVE_CLASSIFICATION, "constraints": [{"id": "strategy_integrity"}, edge]}
+
+    failure = refused(ws, document(**classification))
+
+    assert failure.message == "constraints.leg_edge.leg: 'EURO' is not in the universe (DEMO)"
+
+
+def test_a_leg_edge_leg_the_universe_holds_is_admissible(ws: Workspace) -> None:
+    edge = {"id": "leg_edge", "params": {"leg": "DEMO", "min_sharpe": 0.0}}
+
+    parsed = accepted(ws, document(**SLEEVE_CLASSIFICATION, required_constraints=[edge]))
+
+    assert [ref.id for ref in parsed.required_constraints or []] == ["leg_edge"]
+
+
 def test_a_required_constraint_is_held_to_the_same_rules_and_says_which_list(
     ws: Workspace,
 ) -> None:

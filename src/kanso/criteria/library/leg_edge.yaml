@@ -1,0 +1,8 @@
+id: leg_edge
+kind: gate
+stage: card
+required: false
+meaningful_when: "When the thesis says one leg earns its place, not rides along: per fold, the Sharpe of that leg's own closed spells net of fill costs, annualised by spells per year; open at the close counts nowhere."
+params: {leg: instrument, min_sharpe: float}
+ranges: {min_sharpe: [-10.0, 10.0]}
+impl: kanso.criteria.gates.leg_edge
