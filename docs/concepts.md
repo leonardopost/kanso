@@ -221,7 +221,7 @@ it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are five.
+already over. There are seven.
 
 | gate | what it refuses |
 |---|---|
@@ -230,6 +230,7 @@ already over. There are five.
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
+| `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold with one spell cannot vary and scores zero; a leg that never closed one is skipped, not failed |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
@@ -289,6 +290,16 @@ ledger over the clip orders, so `self.held(id)` and `ctx.book` are the host's an
 trial. The rule is scope: a `best` earned under one sizing is not compared with a card run
 under another, so adding or changing it clears the best — as does changing the objective,
 whose units the best is a number in.
+
+**One leg on its own.** A pair's number is struck on the book, so a hedge that pays its
+spread at every switch and returns nothing of its own is invisible in it. `leg_edge` reads
+one named leg's closed spells — the runner's `Trade`s in that instrument — and holds the
+Sharpe of their returns to `min_sharpe` in every research fold that closed one, annualised
+by the spells the fold held per year, the way `bootstrap` annualises the trades it
+resamples. The leg is an `instrument` parameter: a value naming anything outside the
+hypothesis's universe is refused at `hyp validate` (exit 3), from `constraints` and from
+`required_constraints` alike. For an attached construct the spells the host's own run also
+closed are subtracted first, so what is judged is what the candidate's rule did to the leg.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.

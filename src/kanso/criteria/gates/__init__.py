@@ -46,6 +46,7 @@ from kanso.criteria.context import (
     count,
     number,
     skipped,
+    text,
     verdict,
 )
 from kanso.criteria.integrity import check as check_integrity
@@ -56,10 +57,11 @@ from kanso.criteria.quantities import (
     mean,
     moments,
     periods_per_year,
+    stdev,
     variance,
     years,
 )
-from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, day_of
+from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, Trade, day_of
 from kanso.schemas import GateResult, parse_duration
 
 PERCENT: Final = 100.0
@@ -406,6 +408,97 @@ def _own(ctx: GateContext) -> tuple[Held, ...]:
         price = abs(item.notional / item.qty)
         mine.append(replace(item, qty=qty, notional=abs(qty) * price))
     return tuple(mine)
+
+
+class _LegEdge:
+    """One leg's own closed spells earn their place, in every fold that closed one.
+
+    A pair's edge can live in one leg while the other rides along — a hedge that pays its
+    spread at every switch and returns nothing of its own — and a card's metric, struck on
+    the book, cannot tell the two apart. A thesis that says each leg carries edge is a
+    sentence a model reads; this is that sentence as a refusal on one named leg: within
+    every research fold, the Sharpe of that leg's closed spells is at or above
+    `min_sharpe`.
+
+    A spell is one of the leg's closed positions, as the runner records a `Trade`, and its
+    return is `pnl_net / notional` — net of the leg's own fill costs, in units of what the
+    position opened at. It belongs to the fold its close falls in, as every trade does
+    (`CardRun.between`): a spell open across a fold edge is counted by the fold that
+    closed it, and one still open when the window closes is counted by no fold, because a
+    run carries no mark for a single leg (`docs/backlog.md`). The Sharpe is annualised by
+    the spells the fold actually held per year, as `bootstrap` annualises the trades it
+    resamples; a fold whose spells cannot vary — one spell, or spells that all returned
+    the same — scores zero, as every Sharpe in the toolbox does, so a leg that switched
+    once in a fold clears only a floor at or below zero. A fold that closed no spell is
+    not judged, and a run in which the leg never closed one is skipped rather than failed:
+    the leg not trading is a different fault, and `min_trades` is where it is refused.
+
+    An attached construct's trades are its host's too, so the closed positions the host's
+    own run also closed — by instrument, instants, quantity and prices — are subtracted
+    first, and the remainder are what the candidate's rule did to the leg.
+    """
+
+    id: ClassVar[str] = "leg_edge"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        leg, floor = text(ctx, "leg"), number(ctx, "min_sharpe")
+        if leg is None or floor is None:
+            return skipped(self.id, "no leg or no floor was chosen, so no spell was judged")
+        spells = [
+            trade for trade in _own_trades(ctx) if trade.instrument_id == leg and trade.notional > 0
+        ]
+        if not spells:
+            return skipped(self.id, f"{leg} closed no spell of its own, so nothing was judged")
+        judged: list[float | None] = []
+        counted: list[int] = []
+        for fold in ctx.run.folds(ctx.research_folds):
+            opens, closes = fold.bounds
+            inside = [t for t in spells if opens <= t.closed_ns < closes]
+            counted.append(len(inside))
+            judged.append(_spell_sharpe(inside, fold.window) if inside else None)
+        measured = [value for value in judged if value is not None]
+        below = [value for value in measured if value < floor]
+        return verdict(
+            self.id,
+            not below,
+            {
+                "leg": leg,
+                "min_sharpe": floor,
+                "folds": judged,
+                "spells_per_fold": counted,
+                "n_spells": len(spells),
+                "n_below": len(below),
+                "worst": min(measured),
+            },
+        )
+
+
+def _own_trades(ctx: GateContext) -> tuple[Trade, ...]:
+    """The run's closed positions less the ones its host's own run closed, by identity."""
+    if ctx.host_run is None:
+        return ctx.run.trades
+    theirs = {_trade_key(trade) for trade in ctx.host_run.trades}
+    return tuple(trade for trade in ctx.run.trades if _trade_key(trade) not in theirs)
+
+
+def _trade_key(trade: Trade) -> tuple[str, int, int, float, float, float]:
+    return (
+        trade.instrument_id,
+        trade.opened_ns,
+        trade.closed_ns,
+        round(trade.qty, 9),
+        round(trade.avg_open, 9),
+        round(trade.avg_close, 9),
+    )
+
+
+def _spell_sharpe(spells: Sequence[Trade], window: tuple[date, date]) -> float:
+    """Annualised Sharpe of per-spell returns; spells that cannot vary score zero."""
+    returns = [trade.pnl_net / trade.notional for trade in spells]
+    dispersion = stdev(returns)
+    if dispersion == 0.0:
+        return 0.0
+    return mean(returns) / dispersion * sqrt(len(returns) / years(window))
 
 
 class _MaxDrawdown:
@@ -797,6 +890,7 @@ strategy_integrity: Final[Gate] = _StrategyIntegrity()
 min_trades: Final[Gate] = _MinTrades()
 max_hold: Final[Gate] = _MaxHold()
 position_size: Final[Gate] = _PositionSize()
+leg_edge: Final[Gate] = _LegEdge()
 max_drawdown: Final[Gate] = _MaxDrawdown()
 embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()
