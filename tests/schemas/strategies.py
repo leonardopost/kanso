@@ -56,6 +56,7 @@ from kanso.schemas import (
     StrategyVersion,
     VenueModel,
     VenueOverride,
+    Warmup,
     Windows,
     embargo_days,
     parse_duration,
@@ -179,6 +180,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
             max_leverage=draw(POSITIVE),
         ),
         windows=draw(windows(horizon)),
+        warmup=draw(st.none() | st.builds(Warmup, sessions=st.integers(1, 250))),
         construct=draw(construct_refs()) if classified else None,
         objective=ObjectiveRef(
             id=draw(CATALOGUE_IDS),

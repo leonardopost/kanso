@@ -156,7 +156,8 @@ nothing in it was the record.
 An immutable, content-addressed set of catalog datasets, plus the checksum of the resolved
 instrument definitions. `research begin` pins the newest snapshot that covers the
 hypothesis's universe and data requirements over its research **and** certification windows
-and whose instrument checksum is the store's own. It refuses to start when none covers, and
+— and, when the hypothesis declares a `warmup`, the sessions before each — and whose
+instrument checksum is the store's own. It refuses to start when none covers, and
 refuses by name — the snapshot, what it pins, what the store holds — when the definitions
 have moved since the newest covering snapshot was taken.
 
@@ -202,7 +203,8 @@ f729a53	9.986730	1.064759	2	1003	4.240	0.321	keep	fade a 2-sigma deviation from 
 ```
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
-research window out of the catalog and hands the points to the child, which starts in a new
+research window — and the warmup sessions before it, when the hypothesis declares them —
+out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.
@@ -290,7 +292,9 @@ ledger over the clip orders, so `self.held(id)` and `ctx.book` are the host's an
 `ctx.clips` the overlay's, even in one name. A refused card places no order and is not a
 trial. The rule is scope: a `best` earned under one sizing is not compared with a card run
 under another, so adding or changing it clears the best — as does changing the objective,
-whose units the best is a number in.
+whose units the best is a number in, and the `warmup`, since a run whose indicators were
+fed before the open and one that spent the window's first sessions filling them measured
+different things over the same days.
 
 **One leg on its own.** A pair's number is struck on the book, so a hedge that pays its
 spread at every switch and returns nothing of its own is invisible in it. `leg_edge` reads
@@ -363,6 +367,14 @@ declares, and the card path accepts only the research window; a certification-wi
 is a refusal in code. The child process re-checks the points it was handed against the
 window it was asked for, so the refusal survives the trip across the process boundary.
 
+A `warmup` widens only the lower bound of that check. The runner resolves the sessions
+before the window in the parent, puts them on the request as a span, and the child admits
+points from the first of them — never a point at or after the window's close, prefix or
+not — while every order the strategy places before the window's first point is dropped
+before it is checked or recorded. The prefix is data the strategy may see and may not act
+on; the certification window stays data it may not see, and a warmed card refuses it
+exactly as a cold one does.
+
 **Code that could reach around it never executes.** The `strategy_integrity` gate is a
 syntax-tree check run *before* the backtest, not after. Imports are matched by full dotted
 path against an allow-list of exact leaves; every path that reaches the data catalog is
@@ -382,6 +394,11 @@ best       f72bc11
 own proposer reward-hacking its way to a better number, layered with the data isolation of
 the card subprocess. It is not a sandbox against a hostile actor and does not claim to be
 one.
+
+The engine's history requests — `request_bars` and its quote, trade and custom siblings —
+are denied with the rest: history reaches a strategy only as the `warmup` prefix its
+hypothesis declares, which the runner resolves and feeds before the window, and a request
+would be a second route to the catalog that no window bounds.
 
 Two further denials are about corporate actions rather than about capability, both are
 listed in the same gate's output, and both name their reason there so a proposer can act on
@@ -640,6 +657,17 @@ lists every refusal `deploy` makes and its code.
 the certificate with no decision left in them, and a loop that runs indefinitely cannot stop
 at every certificate to ask for a command with only one possible form. In the transcript
 above nothing was deployed by hand: `cert run` passed, and paper had the version.
+
+A stage node restarts flat, and a version whose hypothesis declares a `warmup` re-warms on
+every restart: the sessions before the window on the first, and on a restart the sessions
+at or before the stage's clock — the data it already replayed, fed again with every order
+dropped. What the session records released, and the clock the next restart resumes from,
+are the points after that instant, so a restart with nothing but its prefix to replay is
+idle and the clock stands. Two versions on one stage that subscribe one series are fed it
+once, cut at the deeper warmup of the two, and each is handed only the span its own
+request delivers: a version without a `warmup` beside a warmed one sees nothing of the
+prefix, a shallower warmup sees nothing of a deeper one's, and every version's handlers,
+indicators and orders are what a run of it alone would produce.
 
 ## Promotion and demotion
 

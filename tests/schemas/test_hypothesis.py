@@ -277,3 +277,26 @@ def test_sizing_is_optional_and_carries_its_budget() -> None:
     sized = build(sizing={"mode": "full_book", "budget": 30_000})
     assert sized.sizing is not None
     assert (sized.sizing.mode, sized.sizing.budget) == ("full_book", 30_000.0)
+
+
+def test_a_warmup_must_ask_for_at_least_one_session() -> None:
+    with pytest.raises(ValidationError, match="warmup.sessions"):
+        build(warmup={"sessions": 0})
+
+
+def test_a_warmup_takes_only_its_session_count() -> None:
+    with pytest.raises(ValidationError, match="warmup.days"):
+        build(warmup={"sessions": 3, "days": 5})
+
+
+def test_warmup_is_optional_and_carries_its_sessions() -> None:
+    assert build().warmup is None
+    warmed = build(warmup={"sessions": 20})
+    assert warmed.warmup is not None
+    assert warmed.warmup.sessions == 20
+
+
+@given(hypotheses())
+def test_a_warmup_survives_the_round_trip(hyp: Hypothesis) -> None:
+    again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
+    assert again.warmup == hyp.warmup

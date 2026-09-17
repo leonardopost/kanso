@@ -425,6 +425,8 @@ def _measure(
 ) -> CardRun:
     """One run of the implementation over the sleeve's certification window."""
     sleeve, attached = impl.sources(ws, manifest)
+    catalog = catalog_path(ws)
+    grains = _grains(manifest.sleeve.config)
     request = backtest.RunRequest(
         hyp=hyp,
         strategy_source=sleeve,
@@ -434,10 +436,11 @@ def _measure(
         capital=capital,
         modifiers=attached,
         period=ws.config.research.return_period,
-        grains=_grains(manifest.sleeve.config),
+        grains=grains,
         sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
+        prefix=backtest.warmup_prefix(hyp, _window(hyp), catalog, grains),
     )
-    return backtest.run(request, catalog_path(ws)).run
+    return backtest.run(request, catalog).run
 
 
 def _grains(config: Mapping[str, Any]) -> tuple[str, ...]:

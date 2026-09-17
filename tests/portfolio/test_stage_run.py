@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from kanso.nautilus.cross_section import is_marker
 from kanso.portfolio import clients, deploy, files, records, set_state, show
 from kanso.schemas import StrategyFile
 from kanso.state import StateStore
@@ -13,10 +14,12 @@ from kanso.workspace import Workspace
 from tests.portfolio.conftest import deployable, reconfigure
 from tests.replay.conftest import (
     BLOCKING_FILTER,
+    FLAT,
     RAISING,
     REVERTING,
     composed,
     document,
+    hypothesis,
 )
 from tests.replay.conftest import carded as a_card
 
@@ -197,3 +200,157 @@ def test_the_deployment_reports_the_capital_it_committed(
     assert made.capital == pytest.approx(80_000.0)
     assert made.admitted[0].label == f"{composed_strategy.id}@1"
     assert records.subject_of(composed_strategy.id, 1) == made.admitted[0].label
+
+
+# --- warming --------------------------------------------------------------------
+
+WARMED = document(id="warm", warmup={"sessions": 3})
+"""The reverting sleeve warmed on three sessions; cold it needs three closes before it acts."""
+
+MARCH_15_CLOSE_NS = int(datetime(2024, 3, 15, 16, 0, 1, tzinfo=UTC).timestamp()) * 1_000_000_000
+"""The availability instant of the March 15 bar: a clock a stage stopped at mid-window."""
+
+
+def first_intent_of(ws: Workspace, session_id: str) -> int:
+    from kanso.replay import record
+
+    return min(intent.ts_event for intent in record.intents_of(ws, session_id))
+
+
+def bar_close_ns(day: int) -> int:
+    return int(datetime(2024, 3, day, 16, 0, tzinfo=UTC).timestamp()) * 1_000_000_000
+
+
+def test_a_warmed_stage_trades_from_its_first_session_and_claims_only_the_window(
+    ws: Workspace, store: StateStore
+) -> None:
+    from kanso.replay import record
+
+    deployable(ws, store, "warm", sleeve=REVERTING, doc=WARMED)
+
+    made = deploy(ws, store, "paper")
+
+    assert made.session is not None
+    stream = record.stream_of(ws, made.session.session_id)
+    assert made.session.released == len(stream) == 31, "March, and not a day of February"
+    assert stream[0].ts_event == bar_close_ns(1) < stream[0].ts_init
+    assert made.session.clock_ns == stream[-1].ts_init
+    assert made.results[0].run.window[0].isoformat() == "2024-03-01"
+    assert first_intent_of(ws, made.session.session_id) == bar_close_ns(1), (
+        "warmed on February's last three sessions it buys March's first bar, a trough; "
+        "cold it would wait for its third close and the trough four sessions on"
+    )
+
+
+def test_a_restart_with_nothing_but_its_prefix_to_replay_is_idle(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The prefix is fed on every restart; a restart that would feed only the prefix feeds
+    nothing, or the clock would walk backwards and the span replay forever."""
+    deployable(ws, store, "warm", sleeve=REVERTING, doc=WARMED)
+    first = deploy(ws, store, "paper")
+    assert first.session is not None
+
+    second = deploy(ws, store, "paper")
+
+    assert second.session is not None
+    assert second.session.released == 0
+    assert second.session.clock_ns is None
+    from kanso.portfolio import clock_of
+
+    assert clock_of(store, "paper") == first.session.clock_ns
+
+
+def test_a_restart_warms_on_the_sessions_at_or_before_its_clock(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Restarted flat mid-window, the node re-warms on what it replayed and trades on."""
+    from kanso.replay import record
+
+    deployable(ws, store, "warm", sleeve=REVERTING, doc=WARMED)
+    deploy(ws, store, "paper")
+    store.connection.execute("UPDATE sessions SET clock_ts = ?", (str(MARCH_15_CLOSE_NS),))
+
+    made = deploy(ws, store, "paper")
+
+    assert made.session is not None
+    stream = record.stream_of(ws, made.session.session_id)
+    assert made.session.released == len(stream) == 16, "March 16 through 31"
+    assert stream[0].ts_init > MARCH_15_CLOSE_NS
+    assert made.session.clock_ns == stream[-1].ts_init
+    assert first_intent_of(ws, made.session.session_id) == bar_close_ns(17), (
+        "warmed on the 13th to the 15th it sees the fall through the 17th and buys; cold "
+        "it would have its third close on the 18th and the next trough on the 21st"
+    )
+
+
+def test_the_feed_carries_the_prefix_and_each_version_s_view_does_not(
+    ws: Workspace, store: StateStore
+) -> None:
+    from datetime import date
+
+    from kanso.data.manifest import catalog_path
+    from kanso.nautilus import node
+    from tests.portfolio.test_node import a_placement
+
+    deployable(ws, store, "warm", sleeve=REVERTING, doc=WARMED)
+    deployable(ws, store, "cold", sleeve=REVERTING, doc=document(id="cold"))
+    window = (date(2024, 3, 15), date(2024, 3, 31))
+    warm = a_placement(ws, "warm", hyp=hypothesis(**WARMED))
+    cold = a_placement(ws, "cold", hyp=hypothesis(id="cold"))
+    requests = (
+        cold.request(window),
+        warm.request(window, (date(2024, 3, 13), date(2024, 3, 15))),
+    )
+
+    loaded = node._window_data(requests, catalog_path(ws), MARCH_15_CLOSE_NS)
+
+    fed = [int(point.ts_init) for point in loaded.points if not is_marker(point)]
+    assert len(fed) == 3 + 16, "the warmed version's three sessions, then the sixteen new"
+    assert fed[0] == bar_close_ns(13) + 1_000_000_000
+    assert [len(group) for groups in loaded.per_version for group in groups] == [16, 16]
+    assert all(
+        int(point.ts_init) > MARCH_15_CLOSE_NS
+        for groups in loaded.per_version
+        for group in groups
+        for point in group
+    )
+    assert all(
+        fed[-len(group) :] == [int(point.ts_init) for point in group]
+        for groups in loaded.per_version
+        for group in groups
+    ), "every version's own view is a suffix of the shared feed of its series"
+
+
+def fills_of(made: object, strategy_id: str) -> list[tuple[int, str, float]]:
+    realised = next(one for one in made.results if one.strategy_id == strategy_id)  # type: ignore[attr-defined]
+    return sorted(
+        (fill.ts_ns, fill.side, fill.qty) for trade in realised.run.trades for fill in trade.fills
+    )
+
+
+@pytest.mark.parametrize(
+    ("own", "mates"),
+    [(None, 3), (2, 5)],
+    ids=["a cold version beside a warmed one", "a shallower warmup beside a deeper one"],
+)
+def test_a_version_measures_on_a_stage_as_it_does_alone_whatever_its_stage_mate_warms_on(
+    ws: Workspace, store: StateStore, own: int | None, mates: int
+) -> None:
+    """The feed is shared and cut at the deepest warmup on the stage; each version is handed
+    only the span its own request delivers, so a stage-mate's prefix warms nobody else.
+    The mate trades nothing, so what it adds to the stage is its prefix and nothing more."""
+    subject = document(id="subject", **({} if own is None else {"warmup": {"sessions": own}}))
+    deployable(ws, store, "subject", sleeve=REVERTING, doc=subject)
+    alone = fills_of(deploy(ws, store, "paper"), "subject")
+    store.connection.execute("DELETE FROM sessions")
+    deployable(ws, store, "mate", sleeve=FLAT, doc=document(id="mate", warmup={"sessions": mates}))
+
+    beside = fills_of(deploy(ws, store, "paper"), "subject")
+
+    assert beside == alone and len(alone) >= 14
+    if own is None:
+        assert alone[0][0] == bar_close_ns(5) + 1_000_000_000, (
+            "cold, the reverting sleeve needs three closes and buys the trough on the 5th; "
+            "fed its mate's prefix it would have bought March's first bar"
+        )

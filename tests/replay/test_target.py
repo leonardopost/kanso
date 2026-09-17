@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -17,6 +17,7 @@ from tests.replay.conftest import (
     BLOCKING_FILTER,
     CERTIFICATION,
     FLAT,
+    FORWARD,
     FORWARD_START,
     INSTRUMENT,
     REVERTING,
@@ -348,3 +349,24 @@ def test_an_earlier_version_replays_by_number_and_the_latest_by_default(
 
     assert (first.version, first.label, first.strategy_source) == (1, f"{carded_hyp}@1", REVERTING)
     assert (latest.version, latest.label, latest.strategy_source) == (2, f"{carded_hyp}@2", VARYING)
+
+
+# --- warming ------------------------------------------------------------------
+
+
+def test_a_warmed_target_resolves_the_sessions_before_the_range_it_is_asked_for(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Resolved from the catalog the target replays, for whatever range is named."""
+    warmed = carded(ws, store, doc=document(warmup={"sessions": 3}))
+    target = resolve(ws, store, hyp=warmed)
+
+    assert target.request(FORWARD).prefix == (date(2024, 2, 27), date(2024, 2, 29))
+    assert target.request((date(2024, 3, 5), date(2024, 3, 10))).prefix == (
+        date(2024, 3, 2),
+        date(2024, 3, 4),
+    )
+    assert (
+        resolve(ws, store, hyp=carded(ws, store, doc=document(id="cold"))).request(FORWARD).prefix
+        is None
+    )
