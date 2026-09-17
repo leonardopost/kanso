@@ -647,7 +647,11 @@ every restart: the sessions before the window on the first, and on a restart the
 at or before the stage's clock — the data it already replayed, fed again with every order
 dropped. What the session records released, and the clock the next restart resumes from,
 are the points after that instant, so a restart with nothing but its prefix to replay is
-idle and the clock stands.
+idle and the clock stands. Two versions on one stage that subscribe one series are fed it
+once, cut at the deeper warmup of the two, and each is handed only the span its own
+request delivers: a version without a `warmup` beside a warmed one sees nothing of the
+prefix, a shallower warmup sees nothing of a deeper one's, and every version's handlers,
+indicators and orders are what a run of it alone would produce.
 
 ## Promotion and demotion
 

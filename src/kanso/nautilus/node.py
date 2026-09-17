@@ -75,7 +75,7 @@ from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits
 from kanso.nautilus.backtest import RunRequest
-from kanso.nautilus.cross_section import arm, warm
+from kanso.nautilus.cross_section import arm, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered
 from kanso.nautilus.venue import NETTING, starting_balance, venues_of
@@ -391,6 +391,11 @@ def run(
     before. Trading begins at the instant after the clock, or at the window's open. What
     the node counts, measures and resumes from are the points after that instant: a
     restart with nothing but its prefix to replay is idle, and its clock stands.
+
+    The feed is one per series and reaches as far back as the deepest warmup on the
+    stage asks, so every strategy is told where its own delivery begins (`deliver_from`)
+    and handles nothing before it: a stage-mate's prefix warms nobody else, and a version
+    measures here as it does alone.
     """
     if not node.placements:
         raise PreconditionError(
@@ -434,6 +439,7 @@ def run(
         strategies = _components(built, node.placements)
         for strategy, request in zip(strategies, requests, strict=True):
             arm(strategy, points)
+            deliver_from(strategy, opens_ns if request.prefix is None else request.delivered[0])
             if request.prefix is not None:
                 warm(strategy, opens_ns)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points))
@@ -521,7 +527,9 @@ def _window_data(
     the feed too, so nothing is replayed twice — except for a version that warms: its
     request names the sessions at or before the clock, and those are fed again with every
     order dropped, which is what warming is. Two versions asking for one series at
-    different depths share the deeper one, since both are cut from the same catalog.
+    different depths share the deeper one, since both are cut from the same catalog —
+    and every version's own view is a suffix of that feed, which is why `run` can tell
+    each strategy the instant its delivery begins and have it ignore what precedes it.
     """
     instruments: dict[str, Any] = {}
     seen: dict[tuple[str, str], tuple[Any, ...]] = {}

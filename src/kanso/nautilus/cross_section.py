@@ -97,6 +97,20 @@ def warm(strategy: object, opens_ns: int) -> None:
     strategy._trading_from_ns = opens_ns  # type: ignore[attr-defined]
 
 
+def deliver_from(strategy: object, from_ns: int) -> None:
+    """Hand the strategy nothing of a shared feed that precedes `from_ns`.
+
+    A stage feeds one series once to every version subscribed to it, cut at the deepest
+    warmup among them, so the feed can reach further back than what one version's own
+    request delivers. The harness drops every point before this instant before it records
+    or dispatches anything, so a version on a shared feed handles exactly the points a run
+    of it alone would: a cold version beside a warmed one sees nothing of the prefix, and
+    a shallower warmup sees nothing of a deeper one's. Set by the node for every version
+    as `arm` and `warm` are, and never by a run whose feed is the request's own span.
+    """
+    strategy._fed_from_ns = from_ns  # type: ignore[attr-defined]
+
+
 def ordered(groups: Sequence[Sequence[object]]) -> tuple[object, ...]:
     """Every point of every group in the order an engine would deliver them, marked.
 

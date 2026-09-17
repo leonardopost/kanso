@@ -6,11 +6,11 @@ order dropped by the gate never becomes a fill, and one placed after the open do
 
 from __future__ import annotations
 
-from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
-from kanso.nautilus.cross_section import warm
+from kanso.nautilus.cross_section import deliver_from, warm
 from kanso.nautilus.hooks import OVERLAY, Clip
 from kanso.nautilus.strategy import (
     Decision,
@@ -21,7 +21,18 @@ from kanso.nautilus.strategy import (
     KansoStrategy,
 )
 
-from .conftest import DEEP, DEMO, HEDGE, LATENCY_NS, MINUTE_NS, bar, flat, saw_tooth
+from .conftest import (
+    DEEP,
+    DEMO,
+    HEDGE,
+    LATENCY_NS,
+    MINUTE_NS,
+    bar,
+    flat,
+    quote,
+    saw_tooth,
+    trade,
+)
 from .test_clips import HEDGE_CLIP, clipper
 from .test_modifiers import Attached, attached, host
 from .test_sizing import Enters, sized
@@ -215,3 +226,61 @@ def test_a_sized_overlay_s_prefix_clip_is_dropped_before_it_reaches_the_ledger(
     assert clips[0].ts_event == saw_tooth(DEMO)[OPEN_INDEX].ts_event
     assert clips[0].qty == HEDGE_CLIP, "sized at the last print, which the prefix supplied"
     assert all(clip.ts_event >= saw_tooth(DEMO)[OPEN_INDEX].ts_event for clip in clips)
+
+
+# --- a shared feed: what precedes the strategy's own delivery is not handled --------
+
+
+class Listening(KansoStrategy):
+    """Records the availability instant of every point each of its handlers is given."""
+
+    def on_start(self) -> None:
+        self.seen: list[tuple[str, int]] = []
+
+    def on_bar(self, bar_: Bar) -> None:
+        self.seen.append(("bar", int(bar_.ts_init)))
+        if len(self.seen) == 1:
+            self.handle_data(quote(DEMO, 0))
+            self.handle_data(quote(DEMO, 30))
+
+    def on_quote_tick(self, tick: QuoteTick) -> None:
+        self.seen.append(("quote", int(tick.ts_init)))
+
+    def on_trade_tick(self, tick: TradeTick) -> None:
+        self.seen.append(("trade", int(tick.ts_init)))
+
+    def on_data(self, data: object) -> None:
+        self.seen.append(("data", int(data.ts_init)))  # type: ignore[attr-defined]
+
+
+def test_a_strategy_on_a_shared_feed_handles_nothing_before_its_own_delivery(backtest) -> None:
+    """A stage feeds one series once, cut at the deepest warmup on it; a version handles
+    only the span its own request delivers, so its state is what a run alone would build."""
+    points = [
+        *saw_tooth(DEMO),
+        *(quote(DEMO, i) for i in range(20)),
+        *(trade(DEMO, i) for i in range(20)),
+    ]
+    strategy = Listening(config(data_requirements=("bar", "quote", "trade")))
+    deliver_from(strategy, opens_ns())
+
+    run = backtest(strategy, data=points)
+
+    seen = run.strategy.seen
+    assert min(ts for _, ts in seen) == opens_ns()
+    assert [kind for kind, _ in seen].count("bar") == len(saw_tooth(DEMO)) - OPEN_INDEX
+    assert [kind for kind, _ in seen].count("quote") == 20 - OPEN_INDEX
+    assert [kind for kind, _ in seen].count("trade") == 20 - OPEN_INDEX
+    assert [ts for kind, ts in seen if kind == "data"] == [int(quote(DEMO, 30).ts_init)], (
+        "a point raised by the author's own handler is gated the same way"
+    )
+    assert int(run.strategy.last_bar(DEMO).ts_init) == int(saw_tooth(DEMO)[-1].ts_init)
+
+
+def test_a_strategy_fed_its_own_span_handles_all_of_it(backtest) -> None:
+    """Nothing set: today's behaviour, byte for byte, on the runs whose feed is their own."""
+    run = backtest(Listening(config()))
+
+    assert [ts for kind, ts in run.strategy.seen if kind == "bar"] == [
+        int(point.ts_init) for point in saw_tooth(DEMO)
+    ]

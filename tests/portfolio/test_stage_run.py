@@ -14,6 +14,7 @@ from kanso.workspace import Workspace
 from tests.portfolio.conftest import deployable, reconfigure
 from tests.replay.conftest import (
     BLOCKING_FILTER,
+    FLAT,
     RAISING,
     REVERTING,
     composed,
@@ -314,3 +315,42 @@ def test_the_feed_carries_the_prefix_and_each_version_s_view_does_not(
         for group in groups
         for point in group
     )
+    assert all(
+        fed[-len(group) :] == [int(point.ts_init) for point in group]
+        for groups in loaded.per_version
+        for group in groups
+    ), "every version's own view is a suffix of the shared feed of its series"
+
+
+def fills_of(made: object, strategy_id: str) -> list[tuple[int, str, float]]:
+    realised = next(one for one in made.results if one.strategy_id == strategy_id)  # type: ignore[attr-defined]
+    return sorted(
+        (fill.ts_ns, fill.side, fill.qty) for trade in realised.run.trades for fill in trade.fills
+    )
+
+
+@pytest.mark.parametrize(
+    ("own", "mates"),
+    [(None, 3), (2, 5)],
+    ids=["a cold version beside a warmed one", "a shallower warmup beside a deeper one"],
+)
+def test_a_version_measures_on_a_stage_as_it_does_alone_whatever_its_stage_mate_warms_on(
+    ws: Workspace, store: StateStore, own: int | None, mates: int
+) -> None:
+    """The feed is shared and cut at the deepest warmup on the stage; each version is handed
+    only the span its own request delivers, so a stage-mate's prefix warms nobody else.
+    The mate trades nothing, so what it adds to the stage is its prefix and nothing more."""
+    subject = document(id="subject", **({} if own is None else {"warmup": {"sessions": own}}))
+    deployable(ws, store, "subject", sleeve=REVERTING, doc=subject)
+    alone = fills_of(deploy(ws, store, "paper"), "subject")
+    store.connection.execute("DELETE FROM sessions")
+    deployable(ws, store, "mate", sleeve=FLAT, doc=document(id="mate", warmup={"sessions": mates}))
+
+    beside = fills_of(deploy(ws, store, "paper"), "subject")
+
+    assert beside == alone and len(alone) >= 14
+    if own is None:
+        assert alone[0][0] == bar_close_ns(5) + 1_000_000_000, (
+            "cold, the reverting sleeve needs three closes and buys the trough on the 5th; "
+            "fed its mate's prefix it would have bought March's first bar"
+        )

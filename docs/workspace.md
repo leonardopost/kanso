@@ -342,7 +342,9 @@ overlay's `on_data` is asked, so their state warms too, but `submit_entry` and
 `submit_exit` return `None` — the same answer a refused filter gives — and nothing fills:
 the measured run begins at the window's first point with no position and no cold start. A
 card, a certificate, a replay and a stage node all warm on the same rule; a stage restart
-warms on the sessions at or before its clock. `research begin` refuses (exit 2) when the
+warms on the sessions at or before its clock, and a stage-mate's prefix warms nobody else:
+a version on a stage is handed only the sessions its own file asks for, whatever the
+versions beside it declare. `research begin` refuses (exit 2) when the
 catalog holds fewer sessions before the window than the file asks for, naming what it
 found, and the snapshot it pins must cover the prefix as well as the two windows. Adding
 the key re-pins the hypothesis under a new sha and clears `best`, exactly as `sizing`

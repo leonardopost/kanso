@@ -320,6 +320,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._hold_until_cross_section = False
         self._trading_from_ns = 0
         self._delivered_ns = 0
+        self._fed_from_ns = 0
         self._flushing = False
         self._pending: deque[object] = deque()
         self._overlay_due: tuple[InstrumentId, Bar | None, float | None] | None = None
@@ -423,6 +424,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         return self._delivered_ns < self._trading_from_ns
 
+    def _undelivered(self, ts_init: int) -> bool:
+        """Whether a point of a shared feed precedes the span this strategy is delivered.
+
+        The node's `deliver_from` sets that instant; every handler returns on such a point
+        before recording or dispatching anything, so the strategy's state is what its own
+        span alone would have built. A run over the request's own span sets nothing here.
+        """
+        return int(ts_init) < self._fed_from_ns
+
     def last_bar(self, instrument_id: InstrumentId | str) -> Bar | None:
         """The last bar seen for an instrument."""
         return self._last_bar.get(str(instrument_id))
@@ -521,6 +531,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_bar(bar, historical)
             return
+        if self._undelivered(bar.ts_init):
+            return
         self._delivered_ns = int(bar.ts_init)
         key = bar.bar_type.instrument_id.value
         self._printed(key, float(bar.close), int(bar.ts_event))
@@ -536,6 +548,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def handle_quote_tick(self, tick: QuoteTick, historical: bool = False) -> None:
         if historical:
             super().handle_quote_tick(tick, historical)
+            return
+        if self._undelivered(tick.ts_init):
             return
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
@@ -558,6 +572,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_trade_tick(tick, historical)
             return
+        if self._undelivered(tick.ts_init):
+            return
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
         self._last_trade[key] = tick
@@ -576,7 +592,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if not self._pending:
                 self._consult_due()
             return
-        self._delivered_ns = int(getattr(data, "ts_init", self._delivered_ns))
+        ts_init = getattr(data, "ts_init", None)
+        if isinstance(ts_init, int):
+            if self._undelivered(ts_init):
+                return
+            self._delivered_ns = ts_init
         if self._held():
             self._pending.append(data)
             return
