@@ -69,8 +69,8 @@ never edits the file.
 | `kanso.toml` | `init` | **yes** — the whole file |
 | `.env` | `init` (empty, mode 600) | **yes** — kanso reads it at each use and writes it never |
 | `models.yaml` | `init` | **yes** |
-| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify` | **yes**, between runs |
-| `hypotheses/<id>/program.md` | `hyp new` | **yes**, between runs |
+| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
+| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
 | `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
@@ -78,7 +78,7 @@ never edits the file.
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | research, after every keep | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |

@@ -50,7 +50,7 @@ from kanso.errors import KansoError, PreconditionError
 from kanso.hyp import STRATEGY_FILE
 from kanso.nautilus import backtest
 from kanso.research import driver as research_driver
-from kanso.research import lanes, records, scheduler
+from kanso.research import explore, lanes, records, scheduler
 from kanso.schemas import RunRecord, parse_duration
 from kanso.state import StateStore, usable
 from kanso.workspace import LANE_ROOT, Workspace, find
@@ -374,6 +374,12 @@ def worker(ws: Workspace, lane: str) -> int:
     provider that is down costs a call a minute rather than a call a second. The two
     exceptions are the operator's: a hypothesis retired, or taken out of the queue, while
     the lane held it stays out.
+
+    A turn that ended in a stall is where `[research] explore_after_stalls` is read: after
+    the driver returns, so the stall's certification and its requeue are already done and
+    the parent is not held while a model writes a new hypothesis. What that exploration
+    does, failure included, is its own events (`research/explore.py`) and never a
+    `lane_failed`.
     """
     lane = lanes.check_lane(lane)
     _listen()
@@ -385,7 +391,7 @@ def worker(ws: Workspace, lane: str) -> int:
                 _wait(POLL_S)
                 continue
             try:
-                research_driver.run(ws, store, subject, cards=CARDS_PER_TURN, lane=lane)
+                outcome = research_driver.run(ws, store, subject, cards=CARDS_PER_TURN, lane=lane)
             except KansoError as exc:
                 if stopping():
                     break  # the card was interrupted, not failed; the run resumes next start
@@ -396,6 +402,9 @@ def worker(ws: Workspace, lane: str) -> int:
                 )
                 scheduler.put_back(store, subject)
                 _wait(BACKOFF_S)
+            else:
+                if outcome.ended:
+                    explore.after_stall(ws, store, subject, lane)
     return 0
 
 

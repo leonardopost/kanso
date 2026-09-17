@@ -568,7 +568,7 @@ def test_every_card_under_the_pins_reaches_the_proposer_as_coverage_by_tag(
     ]
     first, _, third = recorded.of("propose")
     assert '"coverage": {}' in first.user, "the baseline carries no tags"
-    coverage = driver._coverage(store, records.require_active(store, prepared_hyp))
+    coverage = driver.coverage(store, records.require_active(store, prepared_hyp))
     assert coverage == {
         "exit_signal": {
             "count": 1,

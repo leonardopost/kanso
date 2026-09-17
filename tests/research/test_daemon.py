@@ -17,13 +17,14 @@ import threading
 from collections.abc import Iterator
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from kanso.errors import KansoError, PreconditionError
 from kanso.hyp import set_status
-from kanso.research import daemon, lanes, records, scheduler
+from kanso.research import daemon, explore, lanes, records, scheduler
 from kanso.research import driver as research_driver
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -141,11 +142,37 @@ def test_a_worker_researches_what_it_claims_and_stops_when_asked(
     def fake_run(_ws: Workspace, _store: StateStore, subject: str, **kwargs: Any) -> Any:
         seen.append((subject, str(kwargs["lane"])))
         daemon.request_stop()
+        return SimpleNamespace(ended=False)
 
     monkeypatch.setattr(research_driver, "run", fake_run)
+    monkeypatch.setattr(explore, "after_stall", lambda *_: pytest.fail("no stall, no explore"))
 
     assert daemon.worker(ws, "l1") == 0
     assert seen == [(hyp_id, "l1")]
+
+
+def test_a_turn_that_stalled_asks_whether_to_explore_after_the_driver_returned(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside the driver, so the parent is requeued before any model writes anything."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    asked: list[tuple[str, str, bool]] = []
+
+    def stalled(_ws: Workspace, opened: StateStore, subject: str, **_: Any) -> Any:
+        scheduler.requeue(opened, subject, scheduler.STALL_PRIORITY)
+        return SimpleNamespace(ended=True)
+
+    def after_stall(_ws: Workspace, opened: StateStore, subject: str, lane: str) -> None:
+        asked.append((subject, lane, bool(scheduler.queued(opened))))
+        daemon.request_stop()
+
+    monkeypatch.setattr(research_driver, "run", stalled)
+    monkeypatch.setattr(explore, "after_stall", after_stall)
+
+    assert daemon.worker(ws, "l1") == 0
+    assert asked == [(hyp_id, "l1", True)]
+    assert daemon.LANE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
 
 
 def test_a_worker_with_nothing_to_do_waits_rather_than_spinning(
