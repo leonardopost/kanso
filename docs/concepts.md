@@ -221,7 +221,7 @@ it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are five.
+already over. There are six.
 
 | gate | what it refuses |
 |---|---|
