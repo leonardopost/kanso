@@ -609,6 +609,13 @@ $ kanso cert run demo_mr --json
 }
 ```
 
+A subject whose hypothesis declares a `benchmark` is certified against a hold of its first
+leg over each window — two more runs of the one runner, from the subject's own request for
+that window with the strategy replaced — and every gate that measures the objective reads the
+certification hold beside the certification run and the research hold beside the research
+run. `param_plateau` moves the subject's parameters and re-runs the subject alone: the hold
+it is differenced against stays the one it was measured against.
+
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
@@ -646,7 +653,9 @@ pointer to source that might change — it is a closed record of four things.
 - **`expectation`**: what composition measured by running that implementation over the
   sleeve's certification window — the objective, a ninety-percent interval and the
   ninety-fifth-percentile drawdown. The paper and live gates judge the deployment against
-  this band, so it is measured rather than declared.
+  this band, so it is measured rather than declared. A sleeve measured against a
+  `benchmark` has the hold run over the same window, and its value and its band are
+  differences from it.
 
 The identity really is the bytes. In a workspace that has just certified and composed:
 
@@ -708,6 +717,15 @@ once, cut at the deeper warmup of the two, and each is handed only the span its 
 request delivers: a version without a `warmup` beside a warmed one sees nothing of the
 prefix, a shallower warmup sees nothing of a deeper one's, and every version's handlers,
 indicators and orders are what a run of it alone would produce.
+
+A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
+stage rather than inside it: once the node stops, the backtest runner runs the hold over the
+points of that version's own window the feed released, from the version's request with the
+strategy replaced, and the hold is recorded on the same `stage_run` event as the window the
+version realised. The paper and live gates difference the realised objective against the
+holds of the same windows, joined as the windows are; a book recorded without its hold is
+skipped with the reason rather than judged against nothing. A separate engine, because two
+strategies in one account would share the book and the volume a fill walks.
 
 ## Promotion and demotion
 

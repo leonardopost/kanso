@@ -354,3 +354,62 @@ def test_a_version_measures_on_a_stage_as_it_does_alone_whatever_its_stage_mate_
             "cold, the reverting sleeve needs three closes and buys the trough on the 5th; "
             "fed its mate's prefix it would have bought March's first bar"
         )
+
+
+# --- a benchmark ------------------------------------------------------------------
+
+
+HELD = document(
+    id="held",
+    warmup={"sessions": 3},
+    benchmark={"hold": "first_leg"},
+    objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+)
+"""The warmed reverting sleeve, measured against a hold of its one instrument."""
+
+
+def test_a_stage_stores_the_hold_beside_the_window_the_version_realised(
+    ws: Workspace, store: StateStore
+) -> None:
+    deployable(ws, store, "held", sleeve=REVERTING, doc=HELD)
+    deployable(ws, store, "plain", sleeve=REVERTING, doc=document(id="plain"))
+
+    made = deploy(ws, store, "paper")
+
+    held, plain = sorted(made.results, key=lambda result: result.strategy_id)
+    assert plain.benchmark is None
+    hold = held.benchmark
+    assert hold is not None
+    assert hold.window == held.run.window
+    assert hold.period_ends_ns == held.run.period_ends_ns, "one span, so the folds pair"
+    (entry,) = hold.fills
+    assert entry.ts_ns > bar_close_ns(1), "the prefix dropped the hold's order as well"
+    assert hold.trades == ()
+    recorded = {one.strategy_id: one for one in records.stage_results(store, stage="paper")}
+    assert recorded["held"].benchmark == hold
+    assert recorded["plain"].benchmark is None
+
+
+def test_a_restarted_stage_holds_from_the_first_point_after_its_clock(
+    ws: Workspace, store: StateStore
+) -> None:
+    deployable(ws, store, "held", sleeve=REVERTING, doc=HELD)
+    deploy(ws, store, "paper")
+    store.connection.execute("UPDATE sessions SET clock_ts = ?", (str(MARCH_15_CLOSE_NS),))
+
+    made = deploy(ws, store, "paper")
+
+    hold = made.results[0].benchmark
+    assert hold is not None
+    (entry,) = hold.fills
+    assert entry.ts_ns > MARCH_15_CLOSE_NS
+
+
+def test_an_idle_restart_stores_an_empty_hold(ws: Workspace, store: StateStore) -> None:
+    deployable(ws, store, "held", sleeve=REVERTING, doc=HELD)
+    deploy(ws, store, "paper")
+
+    idle = deploy(ws, store, "paper").results[0]
+
+    assert idle.benchmark is not None
+    assert (idle.benchmark.returns, idle.benchmark.fills) == ((), ())

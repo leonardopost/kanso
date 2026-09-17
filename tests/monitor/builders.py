@@ -293,6 +293,7 @@ def write_book(
     positions: tuple[Book, ...] = (),
     session_id: str = "session-1",
     capital: float = CAPITAL,
+    benchmark: CardRun | None = None,
 ) -> None:
     """One closed window, recorded the way a stage node records what it realised."""
     records.record_stage_run(
@@ -306,6 +307,7 @@ def write_book(
                 capital=capital,
                 run=run,
                 positions=positions,
+                benchmark=benchmark,
             )
         ],
     )

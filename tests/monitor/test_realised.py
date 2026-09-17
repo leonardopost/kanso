@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 from kanso.criteria.run import NS_PER_DAY, midnight_ns
 from kanso.monitor import combined, tenure
+from kanso.monitor.realised import combined_benchmark
 from kanso.portfolio.records import StageResult
 
 from .builders import CAPITAL, START, fill_at, run_over
@@ -123,3 +125,29 @@ def test_a_days_profit_is_the_periods_that_ended_on_it() -> None:
     assert held.day_pnl(START) == 10.0
     assert held.day_pnl(SECOND_DAY) == 20.0
     assert held.day_pnl(date(2024, 4, 1)) == 0.0
+
+
+def test_the_holds_of_the_windows_join_as_the_windows_do() -> None:
+    first = result((100.0, 200.0))
+    second = result((300.0,), start=date(2024, 3, 3))
+    held = [
+        replace(first, benchmark=run_over((10.0, 20.0))),
+        replace(second, benchmark=run_over((30.0,), start=date(2024, 3, 3))),
+    ]
+
+    joined = combined_benchmark(held)
+    whole = tenure("paper", held, None)
+
+    assert joined is not None
+    assert joined.returns == (10.0, 20.0, 30.0)
+    assert joined.period_ends_ns == combined(held).period_ends_ns  # type: ignore[union-attr]
+    assert whole is not None and whole.benchmark == joined
+
+
+def test_a_window_that_recorded_no_hold_leaves_the_version_without_a_benchmark() -> None:
+    first = replace(result((100.0,)), benchmark=run_over((10.0,)))
+    second = result((300.0,), start=SECOND_DAY)
+
+    assert combined_benchmark([first, second]) is None
+    assert combined_benchmark([]) is None
+    assert tenure("paper", [second], None).benchmark is None  # type: ignore[union-attr]
