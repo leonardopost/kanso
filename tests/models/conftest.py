@@ -96,7 +96,11 @@ CLASSIFIED: dict[str, Any] = {
     "constraints": [{"id": "strategy_integrity", "params": pairs()}],
     "rationale": "a complete signal-to-trade thesis with nothing to attach to",
 }
-PROPOSED: dict[str, Any] = {"desc": "fade two-sigma deviations", "diff": "--- a\n+++ b\n"}
+PROPOSED: dict[str, Any] = {
+    "desc": "fade two-sigma deviations",
+    "diff": "--- a\n+++ b\n",
+    "tags": ["signal_mean_reversion"],
+}
 PLANNED: dict[str, Any] = {
     "gates": [
         {"id": "embargoed_window", "stage": "cert", "params": pairs(), "rationale": "required"},
@@ -104,6 +108,14 @@ PLANNED: dict[str, Any] = {
         {"id": "live_drift", "stage": "live", "params": pairs(), "rationale": "required"},
     ],
     "excluded": [],
+}
+EXPLORED: dict[str, Any] = {
+    "id": "demo_breakout",
+    "hypothesis_yaml": "id: demo_breakout\n",
+    "program_md": "# demo_breakout\n",
+    "strategy_py": "# a breakout\n",
+    "rationale": "the parent only ever faded deviations; this buys the break",
+    "tags": ["signal_breakout"],
 }
 """One valid answer per task class, for scripts that are meant to succeed."""
 

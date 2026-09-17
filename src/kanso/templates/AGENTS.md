@@ -4,7 +4,7 @@ This directory is a kanso workspace. kanso is the CLI; you are the operator agen
 
 ## Session start
 1. `kanso doctor` — stop and report if not green.
-2. `kanso inbox` — escalations needing the operator: `misaligned`, `cert_failed`, `promotable`, `demoted`, `deploy_blocked`.
+2. `kanso inbox` — escalations needing the operator: `misaligned`, `cert_failed`, `promotable`, `demoted`, `deploy_blocked`, `explored`.
 3. `kanso status` — lanes, cards/hour, best metric per hypothesis, spend today.
 
 ## Flow

@@ -1,8 +1,8 @@
 """`models.yaml`: the LLM register and the routing table.
 
 The register lists the models a workspace may use; the routing table says which tier,
-which thinking effort and which output cap each of the four task classes gets. The classes
-are fixed — a fifth would be a call site the package does not have — so an unknown key is
+which thinking effort and which output cap each of the five task classes gets. The classes
+are fixed — a sixth would be a call site the package does not have — so an unknown key is
 refused rather than ignored.
 
 Every entry is a name, never a value: `api_key_env` overrides the standard credential
@@ -22,10 +22,16 @@ from kanso.schemas.base import KansoModel, NonEmpty, Versioned
 Tier = Literal["cheap", "mid", "frontier"]
 Protocol = Literal["anthropic", "openai_compat", "mock"]
 Effort = Literal["none", "low", "medium", "high"]
-TaskClass = Literal["classify", "propose", "align_check", "certify_plan"]
+TaskClass = Literal["classify", "propose", "align_check", "certify_plan", "explore"]
 
 TIERS: tuple[Tier, ...] = ("cheap", "mid", "frontier")
-TASK_CLASSES: tuple[TaskClass, ...] = ("classify", "propose", "align_check", "certify_plan")
+TASK_CLASSES: tuple[TaskClass, ...] = (
+    "classify",
+    "propose",
+    "align_check",
+    "certify_plan",
+    "explore",
+)
 
 EnvVarName = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]*$")]
 
@@ -43,6 +49,7 @@ ROUTING_DEFAULTS: Final[dict[TaskClass, Route]] = {
     "certify_plan": Route(tier="frontier", effort="high", max_output=4096),
     "propose": Route(tier="mid", effort="medium", max_output=4096),
     "align_check": Route(tier="cheap", effort="none", max_output=256),
+    "explore": Route(tier="frontier", effort="high", max_output=16384),
 }
 """Spend where a wrong answer is dearest; think nothing where a rule already decided."""
 
@@ -86,12 +93,13 @@ class RoutingEntry(KansoModel):
 
 
 class Routing(KansoModel):
-    """The four task classes, and nothing else."""
+    """The five task classes, and nothing else."""
 
     classify: RoutingEntry | None = None
     propose: RoutingEntry | None = None
     align_check: RoutingEntry | None = None
     certify_plan: RoutingEntry | None = None
+    explore: RoutingEntry | None = None
 
     def route(self, task: TaskClass) -> Route:
         """The resolved route for one task class, filling absent fields with its default."""

@@ -96,6 +96,19 @@ def test_no_command_runs_git_in_a_monorepo_subdirectory(
     assert not [parts for parts in spy if os.path.basename(parts[0]) == "git"]
 
 
+def test_exploring_writes_a_hypothesis_directory_without_git(
+    runner: CliRunner, mocked_ws: Path, spy: list[list[str]]
+) -> None:
+    """`hyp explore` is the one model step that creates a directory the operator commits."""
+    from .test_hyp_explore import CANDIDATE_ID, researched
+
+    researched(runner, mocked_ws)
+
+    assert at(runner, mocked_ws, "hyp", "explore", "demo_mr").exit_code == Exit.OK
+    assert (mocked_ws / "hypotheses" / CANDIDATE_ID).is_dir()
+    assert not [parts for parts in spy if os.path.basename(parts[0]) == "git"]
+
+
 def test_the_spy_would_catch_git(spy: list[list[str]]) -> None:
     """The spy is not vacuous."""
     with pytest.raises(GitInvokedError):

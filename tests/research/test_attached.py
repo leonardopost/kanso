@@ -158,7 +158,8 @@ def test_the_host_run_is_computed_once_per_run_and_dropped_when_it_ends(
     run = loop.begin(ws, store, hyp_id)
 
     assert list(loop._HOST_RUNS[run.run_id]) == [f"{run.snapshot_id}:{HOST}@1"]
-    loop.card(ws, store, hyp_id, "the same neutral filter")
+    with pytest.raises(loop.RedundantError):  # the same bytes: judged, then refused
+        loop.card(ws, store, hyp_id, "the same neutral filter")
     assert len(loop._HOST_RUNS[run.run_id]) == 1
 
     loop.end(ws, store, hyp_id)

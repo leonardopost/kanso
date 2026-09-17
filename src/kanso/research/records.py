@@ -17,15 +17,35 @@ dropped from a count that is part of a filename. `trial_metrics` is the narrower
 deflated Sharpe consumes: the cards that ran to a result and traded. A crash and a card
 that placed no order are edits that failed, not candidates the selection could have
 chosen, so counting them widens the search on paper without widening it in fact.
+
+A run's best and the hypothesis's best are two records with two rules. `set_best` always
+moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
+the keep beats it, or when the hypothesis's best is already this run's own — a run that
+owns it may rewind it, another run may only better it. So a run re-seeded from a lesser
+keep climbs its own ancestry, and a drift rewind in one run leaves what another run earned
+standing (`docs/backlog.md` row 61).
+
+A **signature** is what a judged run held: for each period end, keyed by its UTC day, the
+sorted (instrument, sign) pairs open at that end. Two strategies with the same signature
+on nearly every shared day made the same bets and earned the same result, however
+differently they were written, so the second is not an experiment. Signatures are stored
+per strategy under the run's pins — the hypothesis file, the snapshot and the criteria —
+never per run, because two runs under the same pins ask the same question of the same
+data; and they are stored for every judged run, a redundant miss included, so the third
+spelling of one idea is refused against the second as well as the first. The comparison
+is by day rather than by position because it is a fact about sessions, and a day is what
+two runs over the same window share.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
+from kanso.criteria.run import CardRun, day_of
 from kanso.errors import PreconditionError
 from kanso.schemas import Card, GateResult, RunRecord, VenueModel
 
@@ -33,6 +53,8 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
 
 __all__ = [
+    "Redundancy",
+    "Signature",
     "active",
     "best_of",
     "cards_of",
@@ -42,12 +64,20 @@ __all__ = [
     "next_tag",
     "now",
     "record_card",
+    "record_signature",
+    "redundant_with",
     "require_active",
     "runs_of",
     "set_best",
+    "signature",
     "trial_metrics",
     "unset_best",
 ]
+
+Signature = dict[str, list[list[object]]]
+"""What a run held at each period end: the end's UTC day, ISO-formatted, to the sorted
+`[instrument_id, sign]` pairs open at that instant. A day with nothing open maps to `[]`,
+because being flat is a position too."""
 
 _RUN_COLUMNS = (
     "run_id",
@@ -88,6 +118,7 @@ _CARD_COLUMNS = (
     "wall_s",
     "peak_mem_gb",
     "aligned",
+    "tags",
     "gate_results",
     "crash_tail",
     "venue_model",
@@ -189,21 +220,35 @@ def next_tag(store: StateStore, hyp_id: str, today: date) -> str:
 
 
 def set_best(store: StateStore, run: RunRecord, sha: str, metric: float) -> RunRecord:
-    """Point the run's and the hypothesis's `best` at this card and return the run."""
+    """Point the run's `best` at this card, and the hypothesis's when this card beats it
+    or the hypothesis's best is this run's own; return the run."""
     store.connection.execute(
         "UPDATE runs SET best_sha = ?, best_metric = ? WHERE run_id = ?",
         (sha, metric, run.run_id),
     )
-    store.connection.execute(
-        "UPDATE hypotheses SET best_sha = ?, best_metric = ?, best_run_id = ?, updated_at = ?"
-        " WHERE hyp_id = ?",
-        (sha, metric, run.run_id, now().isoformat(), run.hyp_id),
-    )
+    held = store.connection.execute(
+        "SELECT best_metric, best_run_id FROM hypotheses WHERE hyp_id = ?", (run.hyp_id,)
+    ).fetchone()
+    standing = None if held is None or held["best_metric"] is None else float(held["best_metric"])
+    owned = held is not None and held["best_run_id"] == run.run_id
+    if standing is None or metric > standing or owned:
+        store.connection.execute(
+            "UPDATE hypotheses SET best_sha = ?, best_metric = ?, best_run_id = ?, updated_at = ?"
+            " WHERE hyp_id = ?",
+            (sha, metric, run.run_id, now().isoformat(), run.hyp_id),
+        )
     return run.model_copy(update={"best_sha": sha, "best_metric": metric})
 
 
-def unset_best(store: StateStore, hyp_id: str) -> None:
-    """Clear the hypothesis's `best`, as `--from-workspace` does."""
+def unset_best(store: StateStore, hyp_id: str, *, run_id: str | None = None) -> None:
+    """Clear the hypothesis's `best`, as `--from-workspace` does — or, given `run_id`,
+    only when that run is the one that earned it, as a drift rewind does."""
+    if run_id is not None:
+        held = store.connection.execute(
+            "SELECT best_run_id FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
+        ).fetchone()
+        if held is None or held["best_run_id"] != run_id:
+            return
     store.connection.execute(
         "UPDATE hypotheses SET best_sha = NULL, best_metric = NULL, best_run_id = NULL,"
         " updated_at = ? WHERE hyp_id = ?",
@@ -266,6 +311,7 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
         card.wall_s,
         card.peak_mem_gb,
         int(card.aligned),
+        json.dumps(list(card.tags)),
         json.dumps([gate.model_dump(by_alias=True) for gate in card.gate_results], sort_keys=True),
         card.crash_tail,
         json.dumps(card.venue_model.model_dump(mode="json"), sort_keys=True),
@@ -274,6 +320,79 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
     )
     store.connection.execute(_INSERT_CARD, values)
     return card
+
+
+def signature(run: CardRun) -> Signature:
+    """What `run` held at each of its period ends, keyed by the end's UTC day.
+
+    Read from `CardRun.held`, which the runner extracts once per held instrument per
+    period end; the sign is the only part of the quantity that enters, because a size
+    is a parameter and a parameter is exactly what a signature exists to see through.
+    """
+    ends: dict[int, list[list[object]]] = {ts: [] for ts in run.period_ends_ns}
+    for held in run.held:
+        ends.setdefault(held.ts_ns, []).append([held.instrument_id, 1 if held.qty > 0 else -1])
+    return {day_of(ts).isoformat(): sorted(pairs) for ts, pairs in sorted(ends.items())}
+
+
+@dataclass(frozen=True)
+class Redundancy:
+    """Which stored signature a candidate matched, and on how much of their shared days."""
+
+    like: str
+    matched: int
+    shared: int
+
+    @property
+    def pct(self) -> float:
+        return 100.0 * self.matched / self.shared
+
+
+def record_signature(store: StateStore, run: RunRecord, sha: str, held: Signature) -> None:
+    """Store what these bytes held under this run's pins; the same bytes are written once."""
+    store.connection.execute(
+        "INSERT OR REPLACE INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
+        " criteria_version, signature, sessions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            sha,
+            run.hyp_id,
+            run.hypothesis_sha,
+            run.snapshot_id,
+            run.criteria_version,
+            json.dumps(held, sort_keys=True),
+            len(held),
+            now().isoformat(),
+        ),
+    )
+
+
+def redundant_with(
+    store: StateStore, run: RunRecord, held: Signature, pct: int
+) -> Redundancy | None:
+    """The stored signature under this run's pins that `held` matches on at least `pct`
+    percent of their shared days — the closest one, the earlier on a tie — or `None`.
+
+    Every signature stored under the pins is a candidate, the best card's included: the
+    caller applies the keep rule first, so what reaches here has already failed to beat
+    the best, and matching it is the strongest reason of all to refuse the candidate.
+    Two signatures with no day in common match nothing.
+    """
+    rows = store.connection.execute(
+        "SELECT strategy_sha, signature FROM signatures WHERE hyp_id = ? AND hypothesis_sha = ?"
+        " AND snapshot_id = ? AND criteria_version = ? ORDER BY created_at, rowid",
+        (run.hyp_id, run.hypothesis_sha, run.snapshot_id, run.criteria_version),
+    ).fetchall()
+    closest: Redundancy | None = None
+    for row in rows:
+        stored: Any = json.loads(str(row["signature"]))
+        shared = held.keys() & stored.keys()
+        matched = sum(1 for day in shared if held[day] == stored[day])
+        found = Redundancy(str(row["strategy_sha"]), matched, len(shared))
+        if not shared or found.pct < pct:
+            continue
+        if closest is None or found.pct > closest.pct:
+            closest = found
+    return closest
 
 
 def cards_of(store: StateStore, hyp_id: str) -> list[Card]:
@@ -291,6 +410,7 @@ def _run(row: sqlite3.Row) -> RunRecord:
 def _card(row: sqlite3.Row) -> Card:
     gates: Any = json.loads(str(row["gate_results"]))
     model: Any = json.loads(str(row["venue_model"]))
+    tags: Any = json.loads(str(row["tags"]))
     return Card(
         run_id=str(row["run_id"]),
         lane=str(row["lane"]),
@@ -304,6 +424,7 @@ def _card(row: sqlite3.Row) -> Card:
         status=str(row["status"]),  # type: ignore[arg-type]
         desc=str(row["description"]),
         aligned=bool(row["aligned"]),
+        tags=list(tags),
         gate_results=[GateResult.model_validate(gate) for gate in gates],
         crash_tail=None if row["crash_tail"] is None else str(row["crash_tail"]),
         venue_model=VenueModel.model_validate(model),

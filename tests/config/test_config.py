@@ -42,6 +42,11 @@ def test_rendered_template_parses_with_the_documented_defaults(tmp_path: Path) -
     assert config.research.align_every == 10
     assert config.research.stall_k == 30
     assert config.research.context_cards == 20
+    assert config.research.redundant_pct == 97
+    assert config.research.local_cards == 10
+    assert config.research.structural_cards == 10
+    assert config.research.reseed_after_stalls == 2
+    assert config.research.explore_after_stalls == 0
     assert config.research.folds == 4
     assert config.research.max_lines_per_keep == 40
     assert config.research.baseline_budget_s == 1800
@@ -127,6 +132,7 @@ def test_the_flat_field_names_are_accepted_directly() -> None:
     [
         '[research]\ncapital = "lots"\n',
         "[research]\nfolds = 1\n",
+        "[research]\nexplore_after_stalls = -1\n",
         "[research]\ncapital = 0\n",
         '[research]\naccount = "spot"\n',
         '[research]\nreturn_period = "1 day"\n',

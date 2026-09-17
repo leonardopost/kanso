@@ -90,10 +90,12 @@ from kanso.schemas.portfolio import Deployment, Limits, Portfolio, Stage, Stages
 from kanso.schemas.run import (
     RESULTS_COLUMNS,
     RESULTS_HEADER,
+    TAGS,
     Card,
     CardStatus,
     GateResult,
     RunRecord,
+    Tag,
 )
 from kanso.schemas.strategy import (
     AttachedRef,
@@ -125,6 +127,7 @@ __all__ = [
     "RESOLUTION_PATTERN",
     "RESULTS_COLUMNS",
     "RESULTS_HEADER",
+    "TAGS",
     "ROUTING_DEFAULTS",
     "SANDBOX",
     "SCHEMA_VERSION",
@@ -199,6 +202,7 @@ __all__ = [
     "Stage",
     "Stages",
     "StrategyFile",
+    "Tag",
     "StrategyVersion",
     "TaskClass",
     "Tier",

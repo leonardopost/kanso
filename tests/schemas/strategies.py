@@ -8,6 +8,7 @@ from hypothesis import strategies as st
 
 from kanso.replay.record import Session
 from kanso.schemas import (
+    TAGS,
     Applies,
     AttachedRef,
     Book,
@@ -277,6 +278,7 @@ def cards(draw: st.DrawFn) -> Card:
             st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126), max_size=120)
         ),
         aligned=draw(st.booleans()),
+        tags=draw(st.lists(st.sampled_from(TAGS), max_size=3, unique=True)),
         gate_results=draw(st.lists(gate_results(), max_size=3)),
         crash_tail=draw(SAFE_TEXT) if status == "crash" else None,
         venue_model=draw(venue_models()),
@@ -529,6 +531,7 @@ def model_files(draw: st.DrawFn) -> ModelsFile:
             propose=draw(st.none() | st.just(route())),
             align_check=draw(st.none() | st.just(route())),
             certify_plan=draw(st.none() | st.just(route())),
+            explore=draw(st.none() | st.just(route())),
         ),
     )
 

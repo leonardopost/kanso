@@ -21,15 +21,29 @@ trial. A ladder that runs out having judged a repeat anywhere in it is a *miss*:
 was asked three times and reached for a change already tried at least once, which is what a
 discard says too, so it counts toward the stall exactly as a discard does and is recorded
 as an event rather than a card. A ladder that runs out without ever proposing a repeat —
-answers that do not apply, or do not parse — is still a failure of the step.
+answers that do not apply, or do not parse — is still a failure of the step. A candidate
+that ran and held the same book as a strategy already judged under the pins is a miss of
+the same kind, refused by the loop after the backtest rather than before it: recorded as a
+`redundant` event, counted toward the stall, and shown to the next proposal by name.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
 provider cache hits; the moving half is the current file, the last `context_cards` cards
 of the hypothesis under the run's pins — across runs, so a run that begins after a stall
 is not shown a blank slate and made to re-walk the last run's discards — the previous
-diff, and the tail of a crash if the last card crashed. Nothing else, however much of it
-exists.
+diff, the tail of a crash if the last card crashed, and the coverage table: every card
+under the pins, read back by the tags its proposer gave it, as a count, the best score
+and its status, and the newest card per tag. The recent cards say what was tried last;
+the coverage says what has been tried at all, in a size that does not grow with the
+hypothesis. Nothing else, however much of it exists.
+
+**The search has a phase, and the phase is a rule, not a mood.** Misses since the last
+keep drive it: for the first `[research] local_cards` the proposer is asked for local
+changes — a parameter, a threshold, a window — and for the next `structural_cards` a
+change that moves no structure is refused on the ladder like a repeat, where structure is
+the syntax tree of `strategy.py` with every constant blanked. Then local again, round
+until a keep or a stall. The rule is stated in the instruction and the phase is a fact of
+every call, because a refusal the proposer was never told about is a wasted ladder.
 
 **Drift is checked on a clock, not on suspicion.** Every `align_every` cards the run is
 asked whether it still tests the idea, and a drift rewinds it and carries on — carrying the
@@ -47,13 +61,15 @@ lands during one, leaves the hypothesis owed to the queue rather than lost.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
+from kanso.config import ResearchConfig
 from kanso.criteria import catalogue
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE
@@ -61,7 +77,7 @@ from kanso.models import CallInputs, route
 from kanso.research import align, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
-from kanso.schemas import Hypothesis, RunRecord, parse_yaml
+from kanso.schemas import Hypothesis, RunRecord, Tag, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -71,10 +87,15 @@ __all__ = [
     "CRASH_TAIL_LINES",
     "DRIFT_LINES",
     "GATE_LINES",
+    "LOCAL",
+    "REDUNDANT_LINES",
     "REPEATED",
+    "STRUCTURAL",
     "TASK",
     "NothingNewError",
     "Outcome",
+    "coverage",
+    "phase",
     "run",
 ]
 
@@ -90,13 +111,23 @@ GATE_LINES: Final = 10
 DRIFT_LINES: Final = 3
 """How many of a run's rewinds are fed back into the next proposal, newest first."""
 
+REDUNDANT_LINES: Final = 3
+"""How many of a run's redundant misses are fed back into the next proposal, newest
+first: a miss that leaves no card is otherwise invisible to the proposer that made it."""
+
 CARDS: Final = "cards"
 STALLED: Final = "stalled"
 """Why a driver stopped: it reached the count it was given, or the run stalled."""
 
 REPEATED: Final = "repeated"
 """The event a miss appends, under the hypothesis id: the ladder ran out having judged an
-answer that reproduced bytes already carded."""
+answer that reproduced bytes already carded, or — in the structural phase — one that
+moved no structure."""
+
+LOCAL: Final = "local"
+STRUCTURAL: Final = "structural"
+"""The two phases of a search, by misses since the last keep: `local_cards` of the first,
+then `structural_cards` of the second, then round again."""
 
 
 class NothingNewError(PreconditionError):
@@ -111,6 +142,12 @@ _ALREADY_CARDED: Final = (
     " ({sha7}: {status} at {metric:.4g}), so its result is known and it is not an experiment"
 )
 _ONE_LINE: Final = "desc: one line describing the change, with no tab and no newline"
+_NO_STRUCTURE: Final = (
+    "diff: applies, but moves no structure — the syntax tree of strategy.py is unchanged once "
+    "every constant is blanked — and the search is in its structural phase after {misses} "
+    "misses since the last keep, so a parameter, a threshold or a respelling is not the "
+    "experiment being asked for; change what the strategy reads, holds, filters on or exits on"
+)
 
 
 @dataclass(frozen=True)
@@ -125,6 +162,7 @@ class Outcome:
     discards: int
     crashes: int
     missed: int
+    redundant: int
     checks: int
     drifts: int
     reason: str
@@ -143,6 +181,7 @@ class Outcome:
             "discards": self.discards,
             "crashes": self.crashes,
             "missed": self.missed,
+            "redundant": self.redundant,
             "checks": self.checks,
             "drifts": self.drifts,
             "reason": self.reason,
@@ -174,7 +213,7 @@ def run(
     settings = ws.config.research
     directory = ws.root / active.dir
     tally = {"keep": 0, "discard": 0, "crash": 0}
-    proposed = missed = checks = drifts = 0
+    proposed = missed = redundant = checks = drifts = 0
     misses = _trailing_non_keeps(store, active)
     waiting = align.since(store, active)
     previous = _last_diff(store, active)
@@ -183,7 +222,9 @@ def run(
     while cards is None or proposed < cards:
         source = align.lane_strategy(store, active, directory)
         try:
-            desc, patch, candidate = _propose(ws, store, active, source, previous, lane)
+            desc, patch, candidate, tags = _propose(
+                ws, store, active, source, previous, lane, misses
+            )
         except NothingNewError as exc:
             store.event(
                 REPEATED,
@@ -198,7 +239,16 @@ def run(
                 break
             continue
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
-        card = research_loop.card(ws, store, hyp_id, desc, lane=lane)
+        try:
+            card = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
+        except research_loop.RedundantError:
+            proposed += 1
+            redundant += 1
+            misses += 1
+            if misses >= settings.stall_k:
+                reason = STALLED
+                break
+            continue
         proposed += 1
         waiting += 1
         previous = patch
@@ -228,6 +278,7 @@ def run(
         discards=tally["discard"],
         crashes=tally["crash"],
         missed=missed,
+        redundant=redundant,
         checks=checks,
         drifts=drifts,
         reason=reason,
@@ -247,14 +298,21 @@ def _propose(
     source: bytes,
     previous: str,
     lane: str,
-) -> tuple[str, str, bytes]:
-    """Ask for the next change and return its description, its diff and the new bytes.
+    misses: int,
+) -> tuple[str, str, bytes, list[Tag]]:
+    """Ask for the next change: its description, its diff, the new bytes and its tags.
 
     Applying the diff is the caller's check, so a diff that will not fit is corrected on
-    the router's ladder rather than turned into a card that could not have run.
+    the router's ladder rather than turned into a card that could not have run. `misses`
+    is how many non-keeps in a row the run has recorded, which sets the phase: in the
+    structural one a candidate whose syntax tree equals the file's once constants are
+    blanked is refused on the ladder, and a ladder that runs out on such answers is a
+    miss like a repeat.
     """
     applied: dict[str, bytes] = {}
     repeat: dict[str, str] = {}
+    current = phase(ws.config.research, misses)
+    skeleton = _skeleton(source) if current == STRUCTURAL else None
 
     def judge(data: Mapping[str, object]) -> list[str]:
         complaints: list[str] = []
@@ -267,6 +325,11 @@ def _propose(
             return complaints
         if candidate == source:
             complaints.append(_UNCHANGED)
+            return complaints
+        if skeleton is not None and _skeleton(candidate) == skeleton:
+            said = _NO_STRUCTURE.format(misses=misses)
+            repeat.setdefault("complaint", said)
+            complaints.append(said)
             return complaints
         seen = _carded(store, active, candidate)
         if seen is not None:
@@ -284,7 +347,7 @@ def _propose(
     inputs = CallInputs(
         subject=active.hyp_id,
         stable=_stable(store, active),
-        dynamic=_dynamic(ws, store, active, source, previous),
+        dynamic=_dynamic(ws, store, active, source, previous, misses),
         check=judge,
     )
     try:
@@ -294,7 +357,8 @@ def _propose(
         if said is not None:
             raise NothingNewError(exc.message, remedy=said) from exc
         raise
-    return str(answer.data["desc"]), str(answer.data["diff"]), applied["source"]
+    tags = cast(list[Tag], [str(tag) for tag in cast(list[object], answer.data["tags"])])
+    return str(answer.data["desc"]), str(answer.data["diff"]), applied["source"], tags
 
 
 def _stable(store: StateStore, active: RunRecord) -> dict[str, object]:
@@ -313,12 +377,21 @@ def _dynamic(
     active: RunRecord,
     source: bytes,
     previous: str,
+    misses: int,
 ) -> dict[str, object]:
-    """What has changed since the last call: the file, the recent cards and the last diff."""
+    """What has changed since the last call: the file, the recent cards, the coverage of
+    every card under the pins by tag, the phase, and the last diff."""
     recent = _recent(store, active, ws.config.research.context_cards)
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),
         "recent_cards": [_summary(row) for row in recent],
+        "coverage": coverage(store, active),
+        "phase": {
+            "name": phase(ws.config.research, misses),
+            "misses_since_keep": misses,
+            "local_cards": ws.config.research.local_cards,
+            "structural_cards": ws.config.research.structural_cards,
+        },
         "last_diff": previous,
     }
     if recent and recent[-1]["crash_tail"]:
@@ -329,7 +402,35 @@ def _dynamic(
     rewound = _rewound_for(store, active)
     if rewound:
         facts["rewound_for"] = rewound
+    redundant = _redundant_in(store, active)
+    if redundant:
+        facts["redundant"] = redundant
     return facts
+
+
+def phase(settings: ResearchConfig, misses: int) -> str:
+    """Which phase `misses` non-keeps in a row put the search in.
+
+    Local for the first `local_cards`, structural for the next `structural_cards`, and
+    round again: a run that has missed twenty times under the template is local once
+    more, because the structural phase is a spell of refusing the cheap change, not a
+    permanent narrowing of what may be proposed.
+    """
+    span = settings.local_cards + settings.structural_cards
+    return LOCAL if misses % span < settings.local_cards else STRUCTURAL
+
+
+def _skeleton(source: bytes) -> str | None:
+    """The syntax tree of `source` with every constant blanked, or `None` if it does not
+    parse — and a file that does not parse is judged by the card it crashes, not here."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant):
+            node.value = None
+    return ast.dump(tree)
 
 
 def _summary(row: sqlite3.Row) -> dict[str, object]:
@@ -437,6 +538,24 @@ def _rewound_for(store: StateStore, active: RunRecord) -> list[str]:
     return [reason for reason in said if reason]
 
 
+def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object]]:
+    """This run's newest redundant misses: what was tried, and which card it repeated.
+
+    A redundant candidate leaves no card, so without this it reaches the proposer as
+    nothing at all, and a proposer told nothing writes the same bet a third way.
+    """
+    rows = store.connection.execute(
+        "SELECT detail FROM events WHERE kind = ? AND subject = ?"
+        " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC LIMIT ?",
+        (research_loop.REDUNDANT, active.hyp_id, active.run_id, REDUNDANT_LINES),
+    ).fetchall()
+    found: list[dict[str, object]] = []
+    for row in rows:
+        detail = json.loads(str(row["detail"]))
+        found.append({key: detail.get(key) for key in ("desc", "like", "pct")})
+    return found
+
+
 def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Row]:
     """The last `limit` cards of the hypothesis under this run's pins, oldest first.
 
@@ -453,6 +572,46 @@ def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Ro
         (*_pins(active), limit),
     ).fetchall()
     return list(reversed(rows))
+
+
+def coverage(store: StateStore, active: RunRecord) -> dict[str, dict[str, object]]:
+    """Every card under this run's pins, read back by tag: how many, the best and the newest.
+
+    One row per tag in `kanso.schemas.TAGS` that at least one card carries: the count, the
+    highest metric and the status of the card that scored it, and the sha7 of the newest.
+    Built from `cards` alone — research-window metrics — so nothing measured on the
+    certification window reaches the proposer through it. Bounded by the vocabulary rather
+    than by the hypothesis, which is what lets it stand in for the cards `context_cards`
+    leaves out.
+    """
+    rows = store.connection.execute(
+        "SELECT cards.strategy_sha, cards.status, cards.metric, cards.tags FROM cards"
+        f"{_PINNED} ORDER BY cards.card_id",
+        _pins(active),
+    ).fetchall()
+    counts: dict[str, int] = {}
+    best: dict[str, tuple[float, str]] = {}
+    newest: dict[str, str] = {}
+    for row in rows:
+        metric, status, sha7 = (
+            float(row["metric"]),
+            str(row["status"]),
+            str(row["strategy_sha"])[:7],
+        )
+        for tag in json.loads(str(row["tags"])):
+            counts[tag] = counts.get(tag, 0) + 1
+            if tag not in best or metric > best[tag][0]:
+                best[tag] = (metric, status)
+            newest[tag] = sha7
+    return {
+        tag: {
+            "count": counts[tag],
+            "best_metric": best[tag][0],
+            "best_status": best[tag][1],
+            "newest": newest[tag],
+        }
+        for tag in sorted(counts)
+    }
 
 
 def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.Row | None:
@@ -474,10 +633,10 @@ def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:
         (active.run_id, active.run_id),
     ).fetchone()
     misses = store.connection.execute(
-        "SELECT COUNT(*) FROM events WHERE kind = ? AND subject = ?"
+        "SELECT COUNT(*) FROM events WHERE kind IN (?, ?) AND subject = ?"
         " AND json_extract(detail, '$.run_id') = ? AND ts > COALESCE("
         " (SELECT MAX(created_at) FROM cards WHERE run_id = ? AND status = 'keep'), '')",
-        (REPEATED, active.hyp_id, active.run_id, active.run_id),
+        (REPEATED, research_loop.REDUNDANT, active.hyp_id, active.run_id, active.run_id),
     ).fetchone()
     return int(cards[0]) + int(misses[0])
 

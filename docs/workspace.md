@@ -69,16 +69,16 @@ never edits the file.
 | `kanso.toml` | `init` | **yes** — the whole file |
 | `.env` | `init` (empty, mode 600) | **yes** — kanso reads it at each use and writes it never |
 | `models.yaml` | `init` | **yes** |
-| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify` | **yes**, between runs |
-| `hypotheses/<id>/program.md` | `hyp new` | **yes**, between runs |
+| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
+| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
-| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
+| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
 | `AGENTS.md`, `CLAUDE.md` | `init`, if absent | **yes** |
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | research, after every keep | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
@@ -462,8 +462,10 @@ bytes, so the next `research begin` starts from them.
 `research begin`.
 
 `strategy.py` is **kanso's once a keep exists.** It is the best-so-far, written atomically
-from the best blob after every keep and every re-point of `best`, so the file on disk is
-always the current champion. Its bytes hash to the `strategy_sha` kanso shows:
+from the best blob after every keep that moves the hypothesis's `best` and every re-point
+of it, so the file on disk is always the current champion. A keep that moves only its run's
+best — a re-seeded run's baseline, a lesser keep under new pins — leaves the file alone.
+Its bytes hash to the `strategy_sha` kanso shows:
 
 ```
 $ shasum -a 256 hypotheses/demo_mr/strategy.py
@@ -488,9 +490,9 @@ tiers, context sizes, prices and the variable name each key is read from — nev
 default that name is `KANSO_<PROVIDER>_API_KEY`; `api_key_env` overrides it with another
 name, and an override replaces the standard name rather than adding to it.
 
-`routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check` — to a
-tier, a thinking effort and an output cap. `kanso models check` prints the register as the
-router reads it and then makes one minimal call to every configured model.
+`routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check`,
+`explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
+register as the router reads it and then makes one minimal call to every configured model.
 
 A workspace with no register is refused where a model is actually needed:
 
@@ -901,7 +903,7 @@ the certificate that cites it still stands, it just no longer has the stream to 
 ## `escalations/inbox.md`
 
 Append-only, and kanso means it. One line per escalation — `misaligned`, `cert_failed`,
-`promotable`, `demoted`, `deploy_blocked` — carrying an id, a timestamp, the kind, its
+`promotable`, `demoted`, `deploy_blocked`, `explored` — carrying an id, a timestamp, the kind, its
 subject, a summary and the commands that kind offers.
 
 `kanso inbox ack <id>` marks one read, and **the line in the file does not change**: it stays
@@ -990,7 +992,7 @@ kind:
 |---|---|---|
 | `models.yaml` | a commented skeleton with `<provider>` placeholders | the shipped `mock` protocol listed for every tier, so classification, proposal, alignment and planning cost nothing and reach nothing |
 | `instruments.yaml` | `{}` plus the field reference in comments | one `manual: true` entry, `DEMO.SIM`, so no reference adapter is needed |
-| `mock/responses.yaml` | — | the scripted answers that register reads, one per task class, with every `params` written as the list of `{name, value}` pairs a real model answers with |
+| `mock/responses.yaml` | — | the scripted answers that register reads, one per task class, with every `params` written as the list of `{name, value}` pairs a real model answers with and every `propose` answer carrying `tags` |
 | `demo.yaml` | — | a synthetic loader spec: a seeded mean-reverting series spanning the research, certification and forward windows |
 | `hypotheses/demo_mr/` | — | a hypothesis that ships already classified, with its `program.md` and the sleeve stub |
 
