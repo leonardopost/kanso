@@ -15,7 +15,7 @@ metadata:
 4. If the operator disagrees: edit `construct`, `objective`, or `constraints` in `hypothesis.yaml`, then `kanso hyp validate <path>` (exit 3 lists unknown ids, non-applicable objectives, out-of-range params) and `kanso hyp add <path>` to re-pin. A re-pin or a re-classification that changes `construct.id` clears the hypothesis's `best` (event `best_cleared`), because the cards were earned as the other construct; the cards and blobs stay in state. Do not re-run `kanso classify` after a manual override unless asked.
 
 ## Rules
-- Classification precedes research: the harness and the objective (absolute for a sleeve, relative to the pinned host for attached constructs) follow from the construct.
+- Classification precedes research: the harness and the objective (absolute for a sleeve, relative to the pinned host for attached constructs) follow from the construct; a `benchmark: {hold: first_leg}` the operator declared turns a daily sleeve's absolute Sharpe into `wf_sharpe_vs_hold`, and a benchmark on a sub-daily or attached hypothesis exits 3 at `hyp validate` — never drop the key to make classification pass, tell the operator.
 - The catalogue is a library: `kanso ext show` lists constructs added by extensions. Certification, paper and live gates are not chosen here (skill `kanso-certify`).
 - Exit 2 without a configured model: there is no non-LLM fallback by design (`kanso models check`).
 - Exit 3 with "no applicable objective" is a framework bug (the objective set must be total) — report it, do not hand-pick.
