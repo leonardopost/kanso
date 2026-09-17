@@ -143,3 +143,9 @@ def count(ctx: GateContext, name: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value
+
+
+def text(ctx: GateContext, name: str) -> str | None:
+    """A string parameter, or `None` when the planner did not choose one."""
+    value = ctx.params.get(name)
+    return value if isinstance(value, str) else None

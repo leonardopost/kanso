@@ -185,6 +185,11 @@ def _typed(kind: str, value: ParamValue) -> bool:
             return isinstance(value, str)
 
 
+def _in_universe(kind: str, value: ParamValue, hyp: Hypothesis) -> bool:
+    """An `instrument` names one of the hypothesis's own universe ids; any other kind may."""
+    return kind != "instrument" or value in hyp.universe
+
+
 def _measured(kind: str, value: ParamValue) -> float:
     if kind == "duration":
         return parse_duration(str(value), "value").total_seconds()
@@ -194,7 +199,14 @@ def _measured(kind: str, value: ParamValue) -> float:
 def check_params(
     item: CriteriaItem, params: Mapping[str, ParamValue], hyp: Hypothesis, folds: int
 ) -> list[str]:
-    """Every way these chosen values depart from what the item declares."""
+    """Every way these chosen values depart from what the item declares.
+
+    A value is checked for its declared type, then, for an `instrument`, for naming one of
+    the hypothesis's own universe ids, then for its range. The universe check lives here
+    rather than in one caller because the classifier's answer, the operator's own
+    `required_constraints` and a certification plan all pass through this function, and a
+    leg the hypothesis does not trade is wrong from whichever of them it came.
+    """
     problems: list[str] = []
     for name, value in params.items():
         kind = item.params.get(name)
@@ -203,6 +215,9 @@ def check_params(
             continue
         if not _typed(kind, value):
             problems.append(f"{name}: {value!r} is not a {kind}")
+            continue
+        if not _in_universe(kind, value, hyp):
+            problems.append(f"{name}: {value!r} is not in the universe ({', '.join(hyp.universe)})")
             continue
         bounds = item.ranges.get(name)
         if bounds is None:
