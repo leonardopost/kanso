@@ -114,6 +114,11 @@ def test_a_boolean_param_needs_none() -> None:
     assert item.params == {"strict": "bool"}
 
 
+def test_an_instrument_param_needs_none() -> None:
+    item = CriteriaItem.model_validate({**GATE, "params": {"leg": "instrument"}, "ranges": {}})
+    assert item.params == {"leg": "instrument"}
+
+
 def test_a_gate_may_have_no_params_at_all() -> None:
     item = CriteriaItem.model_validate({**GATE, "params": {}, "ranges": {}})
     assert item.ranges == {}

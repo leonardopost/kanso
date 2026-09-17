@@ -204,6 +204,26 @@ def test_a_parameter_that_does_not_fit_is_named(params: Any, message: str) -> No
     assert message in problem
 
 
+def test_an_instrument_parameter_names_one_of_the_universe_s_own_ids() -> None:
+    item = CriteriaItem.model_validate(
+        {
+            "id": "example",
+            "kind": "gate",
+            "stage": "card",
+            "meaningful_when": "an example with a parameter that names a leg",
+            "params": {"leg": "instrument"},
+            "ranges": {},
+            "impl": "kanso.criteria.gates.example",
+        }
+    )
+    hyp = make_hyp(universe=["DEMO", "OTHER"])
+    assert check_params(item, {"leg": "OTHER"}, hyp, FOLDS) == []
+    (problem,) = check_params(item, {"leg": "ELSEWHERE"}, hyp, FOLDS)
+    assert problem == "leg: 'ELSEWHERE' is not in the universe (DEMO, OTHER)"
+    (problem,) = check_params(item, {"leg": 7}, hyp, FOLDS)
+    assert problem == "leg: 7 is not a instrument"
+
+
 def test_a_parameter_without_a_range_is_only_type_checked() -> None:
     item = CriteriaItem.model_validate(
         {
