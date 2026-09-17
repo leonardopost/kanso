@@ -10,6 +10,7 @@ from kanso.replay.record import Session
 from kanso.schemas import (
     Applies,
     AttachedRef,
+    Book,
     Card,
     Certificate,
     CertificationPlan,
@@ -136,6 +137,18 @@ def windows(draw: st.DrawFn, horizon: str) -> Windows:
 
 
 @st.composite
+def books(draw: st.DrawFn, max_leverage: float) -> Book:
+    """A book policy whose maintenance floor the leverage ceiling can stand on."""
+    at_entry = min(100.0, 100.0 / max_leverage)
+    floor = st.none() if at_entry < 0.1 else st.floats(min_value=0.1, max_value=at_entry)
+    return Book(
+        reset=draw(st.sampled_from(["monthly", "none"])),
+        financing_rate_bps=draw(st.floats(min_value=0, max_value=5_000)),
+        maintenance_pct=draw(st.none() | floor),
+    )
+
+
+@st.composite
 def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
     resolution = draw(st.one_of(durations(), st.sampled_from(["tick", "quote", "trade"])))
     required = {
@@ -149,6 +162,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
     horizon = draw(durations())
     if classified is None:
         classified = draw(st.booleans())
+    max_leverage = draw(POSITIVE)
     return Hypothesis(
         id=draw(HYP_IDS),
         title=draw(SAFE_TEXT),
@@ -177,10 +191,11 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         risk_limits=RiskLimits(
             max_position_pct=draw(POSITIVE),
             max_drawdown_pct=draw(st.floats(min_value=0.1, max_value=100)),
-            max_leverage=draw(POSITIVE),
+            max_leverage=max_leverage,
         ),
         windows=draw(windows(horizon)),
         warmup=draw(st.none() | st.builds(Warmup, sessions=st.integers(1, 250))),
+        book=draw(st.none() | books(max_leverage)),
         construct=draw(construct_refs()) if classified else None,
         objective=ObjectiveRef(
             id=draw(CATALOGUE_IDS),

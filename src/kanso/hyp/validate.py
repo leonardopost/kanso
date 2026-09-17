@@ -63,6 +63,7 @@ from kanso.errors import ValidationError
 from kanso.hyp.scaffold import HYPOTHESES, hypothesis_file
 from kanso.nautilus import adapters
 from kanso.schemas import (
+    Book,
     ConstraintRef,
     ConstructRef,
     Hypothesis,
@@ -128,9 +129,10 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_location(ws, path, hyp)
     _check_data_requirements(ws, hyp)
     instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
-    venue_models(ws, hyp, instruments)
+    models = venue_models(ws, hyp, instruments)
     _check_required(ws, hyp)
     _check_sizing(ws, hyp)
+    _check_book(hyp, models)
     _check_classification(ws, hyp)
     return hyp
 
@@ -298,6 +300,31 @@ def _check_sizing(ws: Workspace, hyp: Hypothesis) -> None:
         )
 
 
+def _check_book(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> None:
+    """A policy that moves money needs an account that can hold what it moves.
+
+    A monthly reset restores a deficit from the cushion at the period end, and the
+    strategy then sizes against the restored book while the venue's balance stands where
+    the losses left it; a carry is a charge on notional held above the equity, which a
+    cash account cannot hold at all. Both are margin-account bookkeeping, so on a cash
+    venue they are refused rather than applied to a balance the venue would not fund.
+    """
+    if hyp.book is None or not hyp.book.funded:
+        return
+    cash = sorted(venue for venue, model in models.items() if model.account == "cash")
+    if not cash:
+        return
+    moved = "a monthly reset" if hyp.book.reset != "none" else "a financing carry"
+    if hyp.book.reset != "none" and hyp.book.financing_rate_bps > 0:
+        moved = "a monthly reset and a financing carry"
+    raise ValidationError(
+        f"book: {moved} needs a margin account, and {', '.join(cash)} resolves to a cash "
+        "account, which cannot fund a restore or hold a borrowed notional",
+        remedy=f"set venues.{cash[0]}.account to margin in portfolio.yaml, or set "
+        "book.reset to none and book.financing_rate_bps to 0",
+    )
+
+
 def _capital(ws: Workspace, hyp: Hypothesis) -> tuple[float, str]:
     """The capital a run of this hypothesis starts with, and where the number came from."""
     if hyp.capital is not None:
@@ -380,13 +407,15 @@ def _check_host_strategy(ws: Workspace, hyp: Hypothesis, construct_id: str, host
 def _check_host_pairing(
     ws: Workspace, hyp: Hypothesis, construct_id: str, host: str, strategy: StrategyFile
 ) -> None:
-    """What an attached construct must agree with its host on: the grain, the warmup and
-    the sizing rule.
+    """What an attached construct must agree with its host on: the grain, the warmup, the
+    book policy and the sizing rule.
 
     A filter or an exit rule is consulted on the host's grain and has no clock of its own,
     so its resolution is the host's. A card of an attached construct runs the host sleeve
     underneath it, warmed as this file says, so the warmup has to be the host's own or the
-    host is measured cold — or warm — under a construct that never asked for that. A
+    host is measured cold — or warm — under a construct that never asked for that; the
+    book policy likewise, since a construct's cards run under this file's policy and its
+    version is deployed under the sleeve's. A
     budgeted overlay attaches to a budgeted host and an unbudgeted one to an unbudgeted
     host, because the overlay's book is the host's budget and its own together; and that
     book has to fit the ceilings the overlay's own file declares, since an overlay card
@@ -409,6 +438,18 @@ def _check_host_pairing(
                 f"drop warmup to match {path}"
                 if host_hyp.warmup is None
                 else f"set warmup to {{sessions: {theirs}}} to match {path}"
+            ),
+        )
+    if hyp.book != host_hyp.book:
+        host_book = "none" if host_hyp.book is None else _book_text(host_hyp.book)
+        raise ValidationError(
+            f"book: {label} runs under a book policy of {host_book} and this file declares "
+            f"{'none' if hyp.book is None else _book_text(hyp.book)}; a construct's cards run "
+            "its host under this file's policy, and its version is deployed under the host's",
+            remedy=(
+                f"drop book to match {path}"
+                if host_hyp.book is None
+                else f"set book to {host_book} to match {path}"
             ),
         )
     if construct_id in SIZELESS and hyp.resolution != host_hyp.resolution:
@@ -455,6 +496,12 @@ def _check_host_pairing(
             remedy=f"set max_position_pct to at least "
             f"{host_hyp.sizing.budget / capital * PERCENT:g}",
         )
+
+
+def _book_text(book: Book) -> str:
+    """A book policy as the file would spell it, for a refusal naming the host's."""
+    fields = book.model_dump(exclude_none=True)
+    return "{" + ", ".join(f"{name}: {value}" for name, value in fields.items()) + "}"
 
 
 def _check_objective(ws: Workspace, hyp: Hypothesis, ref: ObjectiveRef, mode: str) -> None:

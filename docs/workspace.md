@@ -121,6 +121,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
+| declare `book.maintenance_pct` above `100 / max_leverage`, a `book.reset` or a `book.financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
@@ -354,6 +355,37 @@ are unchanged: the upper bound of every window is what it was, and only the data
 before it widens. An attached construct declares the same `warmup` as its host, or
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
+**`book` is yours, and it is scope as a whole.** Without it the book is what the fills
+leave: a strategy that made money compounds on its gains, one that lost keeps trading on
+what is left, borrowing costs nothing and nothing floors the margin. With it the runner
+applies a policy at every period end, once, in the extraction, and the harness mirrors it
+so `self.balance` reads the same book:
+
+```yaml
+book:                              # scope: adding or changing any key clears `best`
+  reset: monthly                   # the book returns to `capital` at the first period end of each month
+  financing_rate_bps: 250          # per year, on what the book holds above its equity, shorts included
+  maintenance_pct: 25              # floor for the `maintenance_margin` gate, in percent of gross
+```
+
+`reset: monthly` moves a surplus over `capital` into a cushion outside the book and restores
+a deficit from that cushion while it lasts — never by borrowing — so a strategy is measured
+on the same book every month and a drawdown is bounded by the month it fell in. The
+transfer is not a return: returns are struck before it, and the run carries the cushion
+beside the equity curve. `financing_rate_bps` is charged per year on the notional held
+above the book's equity — gross exposure with shorts counted, less what the account is
+worth — once per return period, by the runner, in the extraction, as its own `carry`
+series; `cost_stress` multiplies fill costs and leaves it alone. `maintenance_pct` is the
+floor the `maintenance_margin` gate holds: each period's end-of-period holdings valued at
+the period's adverse extreme — longs at the lowest low, shorts at the highest high since the
+previous end — over their gross, and a card, a certificate, a composed version and a paper
+window are all refused below it. `kanso hyp validate` refuses (exit 3) a floor above
+`100 / max_leverage`, which a book levered to the ceiling breaches at entry; a reset or a
+carry on a venue whose account is `cash`, which can neither fund a restore nor hold a
+borrowed notional; and an attached construct whose `book` is not its host's, because its
+cards run the host under its own file's policy and its version is deployed under the
+host's. Classification never touches the key.
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
@@ -402,7 +434,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id` or `warmup` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup` or `book` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.
