@@ -378,8 +378,11 @@ worth — once per return period, by the runner, in the extraction, as its own `
 series; `cost_stress` multiplies fill costs and leaves it alone. `maintenance_pct` is the
 floor the `maintenance_margin` gate holds: each period's end-of-period holdings valued at
 the period's adverse extreme — longs at the lowest low, shorts at the highest high since the
-previous end — over their gross, and a card, a certificate, a composed version and a paper
-window are all refused below it. `kanso hyp validate` refuses (exit 3) a floor above
+previous end — over their gross. A card is refused below it when its constraints include
+`maintenance_margin` (list it in `required_constraints` to hold every card to it), a paper
+window when the sleeve's do, and a composed version whenever the floor is declared: `strat
+compose` refuses (exit 2) a version whose own run over the certification window falls
+through it. `kanso hyp validate` refuses (exit 3) a floor above
 `100 / max_leverage`, which a book levered to the ceiling breaches at entry; a reset or a
 carry on a venue whose account is `cash`, which can neither fund a restore nor hold a
 borrowed notional; and an attached construct whose `book` is not its host's, because its
