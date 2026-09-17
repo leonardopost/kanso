@@ -6,6 +6,7 @@ One line per user-visible change, newest release first. The format is the one
 ## Unreleased
 
 - **Four more engine facts `kanso doctor` re-checks.** The risk engine performs no balance or margin check for a margin account — measured on `nautilus_trader 1.231.0`: a limit order for 100,000 shares at 10.00 on an account funded with 1,000 USD is accepted and filled in full, where a cash account denies it with `NOTIONAL_EXCEEDS_FREE_BALANCE`; `LeveragedMarginModel`, the model the engine substitutes when none is configured, asks 0.00 USD of margin at leverage 1 and 4 for the instruments kanso resolves, whose margin rates are zero; `handle_bar(historical=True)` reaches `on_historical_data` and never `on_bar`, whatever the actor's state; and a `Bar` carries `low` and `high` while every market point carries `ts_init`. Nothing changes for an operator today. These are the bindings a warm-up, a financing charge and a maintenance rule will rest on, recorded where an engine upgrade that breaks one is caught first.
+- Docs: `concepts.md` counts six card-stage gates, which is what its table has listed since `sizing` joined it, and a page test now holds the stated count to the table; `AGENTS.md` says the schema version follows from the newest migration file and nothing is bumped by hand.
 
 ## v0.7.0 — 2026-09-11
 

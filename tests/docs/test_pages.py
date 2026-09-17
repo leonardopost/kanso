@@ -204,6 +204,15 @@ def test_the_maintainer_page_says_the_supervisor_does_not_redetect() -> None:
     assert "does not re-detect at startup" in prose(page("maintainers.md"))
 
 
+def test_the_card_gate_count_the_concepts_page_states_is_the_count_its_table_holds() -> None:
+    """The page once said five above a six-row table; a count it states must hold."""
+    body = section(page("concepts.md"), "What a card must satisfy")
+    stated = re.search(r"There are (\w+)\.", body)
+    assert stated is not None
+    rows = [line for line in body.splitlines() if line.startswith("| `")]
+    assert spelled(stated.group(1)) == len(rows)
+
+
 # -- README.md ------------------------------------------------------------------------
 
 _UNITS = [
