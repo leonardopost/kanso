@@ -1,5 +1,6 @@
 # models.yaml — rendered by `kanso init --demo`. The shipped `mock` protocol only, listed for every tier,
 # so the demo classifies, proposes, aligns and plans with no provider key, no network and no cost.
+# `explore` is routed too, but the demo script answers nothing for it: `kanso hyp explore` exits 2 here.
 # Replace this register with the one in docs/workspace.md when you move past the demo.
 schema: 1
 models:

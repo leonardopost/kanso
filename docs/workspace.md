@@ -408,8 +408,8 @@ default that name is `KANSO_<PROVIDER>_API_KEY`; `api_key_env` overrides it with
 name, and an override replaces the standard name rather than adding to it.
 
 `routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check`,
-`explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the register as the
-router reads it and then makes one minimal call to every configured model.
+`explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
+register as the router reads it and then makes one minimal call to every configured model.
 
 A workspace with no register is refused where a model is actually needed:
 

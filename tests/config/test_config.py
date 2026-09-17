@@ -132,6 +132,7 @@ def test_the_flat_field_names_are_accepted_directly() -> None:
     [
         '[research]\ncapital = "lots"\n',
         "[research]\nfolds = 1\n",
+        "[research]\nexplore_after_stalls = -1\n",
         "[research]\ncapital = 0\n",
         '[research]\naccount = "spot"\n',
         '[research]\nreturn_period = "1 day"\n',

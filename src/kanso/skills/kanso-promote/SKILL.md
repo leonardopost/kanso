@@ -9,7 +9,7 @@ metadata:
 # kanso-promote
 
 ## Session start
-`kanso inbox` then `kanso status`. Summarise unread entries in one line each. Acknowledge only entries the operator has dealt with: `kanso inbox ack <id>`. Acknowledging is never an approval.
+`kanso inbox` then `kanso status`. Summarise unread entries in one line each. Acknowledge only entries the operator has dealt with: `kanso inbox ack <id>`. Acknowledging is never an approval. An `explored` entry is a draft hypothesis kanso wrote, not a promotion matter: handle it with skill `kanso-hypothesis`.
 
 ## Promotion path
 - `certified` hypothesis → kanso auto-runs `kanso strat compose` and `kanso portfolio deploy --stage paper`. Nothing to approve. `deploy_blocked` means no capital was assignable within `portfolio.yaml` limits: raise stage `capital` or retire something, then `kanso portfolio deploy --stage paper`.
