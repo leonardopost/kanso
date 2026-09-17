@@ -56,6 +56,7 @@ from kanso.schemas.duration import (
 )
 from kanso.schemas.envelope import Detected, Envelope, Plan
 from kanso.schemas.hypothesis import (
+    Book,
     ConstraintRef,
     ConstructRef,
     DateWindow,
@@ -188,6 +189,7 @@ __all__ = [
     "Resolution",
     "Resolved",
     "RiskLimits",
+    "Book",
     "Sizing",
     "Warmup",
     "Route",

@@ -12,7 +12,7 @@ metadata:
 `kanso inbox` then `kanso status`. Summarise unread entries in one line each. Acknowledge only entries the operator has dealt with: `kanso inbox ack <id>`. Acknowledging is never an approval. An `explored` entry is a draft hypothesis kanso wrote, not a promotion matter: handle it with skill `kanso-hypothesis`.
 
 ## Promotion path
-- `certified` hypothesis → kanso auto-runs `kanso strat compose` and `kanso portfolio deploy --stage paper`. Nothing to approve. `deploy_blocked` means no capital was assignable within `portfolio.yaml` limits: raise stage `capital` or retire something, then `kanso portfolio deploy --stage paper`.
+- `certified` hypothesis → kanso auto-runs `kanso strat compose` and `kanso portfolio deploy --stage paper`. Nothing to approve. `deploy_blocked` means no capital was assignable within `portfolio.yaml` limits: raise stage `capital` or retire something, then `kanso portfolio deploy --stage paper`. One that names `book.maintenance_pct` means the composed version's book fell below the hypothesis's maintenance floor over its certification window: nothing to fund — report the worst ratio and the floor to the operator, whose floor it is.
 - `paper → promotable` happens when the plan's paper-stage gates pass (monitor). Inbox kind `promotable`.
 - `promotable → live` **requires the operator**: only after they explicitly say to go live in this conversation, run `kanso promote <strategy> --live --as "<operator's name>"`. Exit 4 = `--as` missing. Never pass `--as` on your own initiative; there is no environment fallback by design.
 - Demotion is automatic on live-gate failure (inbox kind `demoted`); manual: `kanso demote <strategy>`. Retire: `kanso strat retire <strategy>` or `kanso hyp retire <id>`.

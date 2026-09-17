@@ -163,3 +163,31 @@ def test_a_flat_run_scores_zero_on_every_fold() -> None:
     from kanso.criteria.objectives import wf_sharpe_net
 
     assert wf_sharpe_net.compute(flat_run(), 4)[0] == 0.0
+
+
+def test_a_book_below_its_maintenance_floor_on_paper_fails() -> None:
+    """The floor is judged on the stage's own worst ratios when the sleeve holds cards to it."""
+    floored = hypothesis(
+        book={"maintenance_pct": 30.0},
+        constraints=[{"id": "strategy_integrity"}, {"id": "maintenance_margin"}],
+    )
+    called = run_over((0.0,) * 8, worst_ratio=(None, 0.5, 0.25, 0.5, None, 0.5, 0.5, 0.5))
+
+    result = gate.evaluate(
+        gate_context(params=PARAMS, record=stage_record(), run=called, hyp=floored)
+    )
+
+    assert not result.passed
+    assert result.evidence["constraints"]["maintenance_margin"] is False
+
+
+def test_a_maintenance_floor_the_stage_never_held_a_position_against_passes() -> None:
+    floored = hypothesis(
+        book={"maintenance_pct": 30.0},
+        constraints=[{"id": "strategy_integrity"}, {"id": "maintenance_margin"}],
+    )
+
+    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), hyp=floored))
+
+    assert result.passed
+    assert "no margin was ever called on" in result.evidence["constraints"]["maintenance_margin"]

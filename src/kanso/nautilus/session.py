@@ -198,6 +198,7 @@ def run_node(
         arm(strategy, points)
         if request.prefix is not None:
             warm(strategy, opens)
+        backtest.booked(strategy, request)
         loop.run_until_complete(_drive(node, client, strategy, halt))
         card = backtest._extract(request, kernel, stream, groups)
         intents = tuple(

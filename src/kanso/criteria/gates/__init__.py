@@ -536,6 +536,53 @@ class _MaxDrawdown:
         )
 
 
+NO_FLOOR: Final = "the hypothesis declares no book.maintenance_pct, so there is no floor to hold"
+NEVER_HELD: Final = (
+    "no period end held a position valued at its period's adverse extreme, so no margin "
+    "was ever called on"
+)
+
+
+def worst_margin(run: CardRun) -> tuple[float, int] | None:
+    """The lowest maintenance ratio a run recorded, in percent, and the period end it fell at.
+
+    `None` when no end held anything — a flat run, or one recorded without the series.
+    """
+    held = [
+        (ratio * PERCENT, end)
+        for ratio, end in zip(run.worst_ratio, run.period_ends_ns, strict=False)
+        if ratio is not None
+    ]
+    return min(held, key=lambda item: item[0]) if held else None
+
+
+class _MaintenanceMargin:
+    """The book's equity over its gross stays above the floor the hypothesis declares.
+
+    Each period's end-of-period holdings are valued at the period's adverse extreme — a
+    long at its lowest low, a short at its highest high — so the ratio is a floor on what
+    a margin desk would have read, like `max_hold`'s, not an intra-period measurement of
+    what was held when. The floor is the operator's `book.maintenance_pct`, and the gate
+    carries no parameter of its own, as `max_drawdown` carries none.
+    """
+
+    id: ClassVar[str] = "maintenance_margin"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        floor = None if ctx.hyp.book is None else ctx.hyp.book.maintenance_pct
+        if floor is None:
+            return skipped(self.id, NO_FLOOR)
+        worst = worst_margin(ctx.run)
+        if worst is None:
+            return skipped(self.id, NEVER_HELD)
+        observed, at_ns = worst
+        return verdict(
+            self.id,
+            observed >= floor,
+            {"worst_ratio_pct": observed, "floor_pct": floor, "at_ns": at_ns},
+        )
+
+
 class _EmbargoedWindow:
     """The objective survives the embargo: positive out of sample, and not a collapse."""
 
@@ -673,7 +720,11 @@ def stressed(run: CardRun, multiplier: float) -> CardRun:
     Costs are applied once, by the runner, in the extraction that produced this run, so
     multiplying them is arithmetic on the recorded fills rather than another backtest. A
     fill is charged to the return period it falls in; a fill after the last period end
-    changed no return and so changes none here.
+    changed no return and so changes none here. A book policy's `carry` is a rate on
+    borrowed notional and not a fill cost, so it is left as recorded. Under a monthly reset
+    the transfers stand as struck and the cushion as recorded, so the extra cost stays in the
+    book across months where a real reset would have absorbed it at the next turn: a stressed
+    run's returns are exact, and its equity and drawdown are the more conservative for it.
     """
     extra = multiplier - 1.0
     ends = run.period_ends_ns
@@ -912,6 +963,7 @@ max_hold: Final[Gate] = _MaxHold()
 position_size: Final[Gate] = _PositionSize()
 leg_edge: Final[Gate] = _LegEdge()
 max_drawdown: Final[Gate] = _MaxDrawdown()
+maintenance_margin: Final[Gate] = _MaintenanceMargin()
 embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()
 deflated_sharpe: Final[Gate] = _DeflatedSharpe()

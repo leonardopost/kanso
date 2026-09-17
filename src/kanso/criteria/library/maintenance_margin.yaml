@@ -1,0 +1,8 @@
+id: maintenance_margin
+kind: gate
+stage: card
+required: false
+meaningful_when: "When the hypothesis declares book.maintenance_pct: each period-end book at its period's worst prices, over its gross, never below that floor. Carries no parameter."
+params: {}
+ranges: {}
+impl: kanso.criteria.gates.maintenance_margin

@@ -11,6 +11,8 @@ import pytest
 
 from kanso.criteria import DatasetFacts, Held, Trade, gates
 from kanso.criteria.gates import (
+    NEVER_HELD,
+    NO_FLOOR,
     book_correlation,
     bootstrap,
     capacity_vs_adv,
@@ -18,6 +20,7 @@ from kanso.criteria.gates import (
     deflated_sharpe,
     embargoed_window,
     leg_edge,
+    maintenance_margin,
     max_drawdown,
     max_hold,
     min_trades,
@@ -495,6 +498,54 @@ def test_max_drawdown_passes_inside_the_limit() -> None:
     assert max_drawdown.evaluate(context(run)).passed
 
 
+# --- maintenance_margin -----------------------------------------------------------
+
+FLOORED = {"book": {"maintenance_pct": 30.0}}
+
+
+def test_maintenance_margin_holds_the_floor_the_hypothesis_declares() -> None:
+    run = build_run((0.0, 0.0, 0.0), worst_ratio=(None, 0.45, 0.29))
+
+    result = maintenance_margin.evaluate(context(run, hyp=make_hyp(**FLOORED)))
+
+    assert not result.passed
+    assert result.evidence == {
+        "worst_ratio_pct": pytest.approx(29.0),
+        "floor_pct": 30.0,
+        "at_ns": run.period_ends_ns[2],
+    }
+
+
+def test_maintenance_margin_passes_a_book_that_touches_the_floor_and_no_lower() -> None:
+    run = build_run((0.0, 0.0), worst_ratio=(0.3, 1.2))
+
+    result = maintenance_margin.evaluate(context(run, hyp=make_hyp(**FLOORED)))
+
+    assert result.passed and result.skipped is None
+    assert result.evidence["worst_ratio_pct"] == pytest.approx(30.0)
+
+
+def test_maintenance_margin_without_a_floor_judges_nothing() -> None:
+    run = build_run((0.0,), worst_ratio=(0.01,))
+
+    result = maintenance_margin.evaluate(context(run))
+
+    assert result.passed
+    assert result.skipped == NO_FLOOR
+
+
+@pytest.mark.parametrize("series", [(), (None, None)], ids=["unrecorded", "never held"])
+def test_maintenance_margin_on_a_book_that_held_nothing_judges_nothing(
+    series: tuple[None, ...],
+) -> None:
+    run = build_run((0.0, 0.0), worst_ratio=series)
+
+    result = maintenance_margin.evaluate(context(run, hyp=make_hyp(**FLOORED)))
+
+    assert result.passed
+    assert result.skipped == NEVER_HELD
+
+
 # --- strategy_integrity -----------------------------------------------------------
 
 
@@ -816,6 +867,21 @@ def test_stressed_recomputes_the_series_from_the_recorded_fills() -> None:
     assert doubled.equity == pytest.approx((100_080.0, 100_150.0))
     assert doubled.trades[0].pnl_net == pytest.approx(80.0)
     assert [f.cost for f in doubled.fills] == pytest.approx([40.0, 60.0])
+
+
+def test_stressed_leaves_a_book_policy_s_carry_as_recorded() -> None:
+    """The carry is already in the returns and is not a fill cost: a stress moves the returns
+    by the fills' extra cost alone and carries the carry series over unchanged."""
+    run = build_run(
+        (100.0, 100.0),
+        fills=(fill(DAYS[0], cost=20.0), fill(DAYS[1], cost=30.0)),
+        carry=(1.0, 2.0),
+    )
+
+    tripled = stressed(run, 3.0)
+
+    assert tripled.carry == run.carry
+    assert tripled.returns == pytest.approx((60.0, 40.0)), "only the fills' 40 and 60 more"
 
 
 def test_a_fill_after_the_last_period_end_changes_no_return() -> None:

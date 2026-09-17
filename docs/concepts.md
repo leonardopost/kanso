@@ -298,29 +298,31 @@ it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are seven.
+already over. There are eight.
 
 | gate | what it refuses |
 |---|---|
 | `strategy_integrity` | a file that reads what the embargo hides, or imports outside the allow-list |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
+| `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold with one spell cannot vary and scores zero; a leg that never closed one is skipped, not failed |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
-The fourth of those is the only one that carries a floor on size. `risk_limits` are three
-ceilings — a position may not exceed `max_position_pct`, the book may not exceed
-`max_leverage` — so a strategy holding a tenth of what its operator asked for satisfies all
-of them, and nothing in the package could say otherwise. `position_size` is measured on
-`run.held`: what each instrument was worth at each period end, marked at that period's
-price. Neither notional a run already carried says that. A fill's is traded value struck at
-one price, so a strategy that tops up in three orders looks like three small positions; a
-trade's is `peak_qty x avg_open`, an opening cost basis, which is biased upward by the
-strategy that rebalances toward a target as the price falls and blind to the drift of one
-entered once and left alone. A gate built on either would refuse the compliant strategy and
-pass the drifting one.
+`position_size` is the only one that carries a floor on size: `min_trades` floors the trade
+count, `maintenance_margin` the book's margin and `leg_edge` a leg's Sharpe, none of them a
+position's size. `risk_limits` are three ceilings — a position may not exceed
+`max_position_pct`, the book may not exceed `max_leverage` — so a strategy holding a tenth of
+what its operator asked for satisfies all of them, and nothing in the package could say
+otherwise. `position_size` is measured on `run.held`: what each instrument was worth at each
+period end, marked at that period's price. Neither notional a run already carried says that.
+A fill's is traded value struck at one price, so a strategy that tops up in three orders looks
+like three small positions; a trade's is `peak_qty x avg_open`, an opening cost basis, which
+is biased upward by the strategy that rebalances toward a target as the price falls and blind
+to the drift of one entered once and left alone. A gate built on either would refuse the
+compliant strategy and pass the drifting one.
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
@@ -343,6 +345,39 @@ until the held leg prints again its last price is restated by the split's ratio,
 and for the room. `position_size` still judges a position against the capital
 (`docs/backlog.md`), and under a `sizing` rule the budget is funded by definition (row 76).
 `self.balance` reads the number.
+
+**A `book` policy changes the equity a card is measured on** (`docs/workspace.md` has the
+keys). The runner applies it once, at each period end of the extraction, in one order: the
+carry — the yearly `financing_rate_bps` on gross exposure, shorts counted, above the book's
+equity, over the period's span — out of cash and so in the return; the maintenance ratio;
+then, at the first period end of a calendar month under `reset: monthly`, a surplus over the
+capital moved to a cushion or a deficit restored from it while it lasts. Returns are struck
+before the transfer, so the sum of a run's returns is what book and cushion made together,
+and the run carries `cushion`, `carry` and `worst_ratio` beside its equity curve. The harness
+settles each period from the same functions when the next period's first point arrives, so
+`self.balance` reads the book the policy left. Two consequences are deliberate. The equity
+curve is the book after each transfer, and on a reset book a drawdown is bounded by the month
+it fell in: `max_drawdown` judges each end on the equity struck before its transfer against the
+peak so far, then starts the peak again at each month's first end from the higher of the
+capital and the book after it — so a surplus swept into the cushion is no loss, a loss the
+cushion restored ends with its month, and one it could not restore carries into the next as a
+drawdown from the capital. And `cost_stress` multiplies fill costs and leaves the carry alone,
+because a rate on borrowed notional is not an execution cost; the transfers stand as struck,
+so a stressed reset book carries its extra cost across months rather than having a turn
+absorb it, and its drawdown is the more conservative for that. The engine enforces no margin
+and charges no financing here — kanso's instruments carry no margin rates — so none of this
+is delegated to the venue. A sized sleeve gets no special case: a full-book entry that
+borrows pays the carry and can breach the floor (row 76).
+
+The policy has edges, each recorded in `docs/backlog.md` row 86. `maintenance_margin` reads
+end-of-period holdings, so a position opened and closed inside one period is never judged.
+The harness settles a period on a point delivered to the sleeve itself, so a grouped series
+the sleeve never subscribes to that holds a period's only point moves the runner's period end
+and not the harness's, and `balance` lags one period until the sleeve is handed a point.
+`bootstrap` resamples closed trades' net P&L, which holds neither the carry nor a transfer, so
+its `mdd_p95` understates the drawdown a levered book recorded. And the attribute reads of
+the harness's period close are denied, but an unsized `strategy.py` defining a method of the
+same name is not refused: it moves `balance`, never the arithmetic the card is struck with.
 
 **Under a `sizing` rule the floor is not a gate at all.** `sizing: {mode: full_book, budget: N}`
 in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry
@@ -367,9 +402,10 @@ ledger over the clip orders, so `self.held(id)` and `ctx.book` are the host's an
 `ctx.clips` the overlay's, even in one name. A refused card places no order and is not a
 trial. The rule is scope: a `best` earned under one sizing is not compared with a card run
 under another, so adding or changing it clears the best — as does changing the objective,
-whose units the best is a number in, and the `warmup`, since a run whose indicators were
+whose units the best is a number in, the `warmup`, since a run whose indicators were
 fed before the open and one that spent the window's first sessions filling them measured
-different things over the same days.
+different things over the same days, and the `book` policy as a whole, since a reset, a
+carry and a maintenance floor each change the equity path a metric is read from.
 
 **One leg on its own.** A pair's number is struck on the book, so a hedge that pays its
 spread at every switch and returns nothing of its own is invisible in it. `leg_edge` reads
@@ -473,7 +509,11 @@ one.
 The engine's history requests — `request_bars` and its quote, trade and custom siblings —
 are denied with the rest: history reaches a strategy only as the `warmup` prefix its
 hypothesis declares, which the runner resolves and feeds before the window, and a request
-would be a second route to the catalog that no window bounds.
+would be a second route to the catalog that no window bounds. The state the harness keeps
+for a `book` policy — the instant it cuts return periods from, the period it is in, the
+cushion and the last end it settled — is denied the same way: it is a clock of where the
+window opens and a record of what the book made before this month, and a strategy reads
+the book the policy left from `balance` alone.
 
 Two further denials are about corporate actions rather than about capability, both are
 listed in the same gate's output, and both name their reason there so a proposer can act on
@@ -742,7 +782,9 @@ idle and the clock stands. Two versions on one stage that subscribe one series a
 once, cut at the deeper warmup of the two, and each is handed only the span its own
 request delivers: a version without a `warmup` beside a warmed one sees nothing of the
 prefix, a shallower warmup sees nothing of a deeper one's, and every version's handlers,
-indicators and orders are what a run of it alone would produce.
+indicators and orders are what a run of it alone would produce. A version under a `book`
+policy is seeded on a restart with the cushion and the last settled end of its newest
+measured window on that stage, and its first carry runs from the instant it resumes.
 
 ## Promotion and demotion
 
@@ -755,7 +797,9 @@ both ways: the version must have been on the stage for the longer of the plan's 
 duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
 objective it realised must fall **inside** the ninety-percent interval composition
 measured, above the band as much a fail as below it, because a stage that out-performs its
-certification is not reproducing what was certified. `docs/cli.md` has the pass.
+certification is not reproducing what was certified. Of the sleeve's card-stage constraints it
+judges `max_drawdown` and `maintenance_margin` on the stage's own run, and a breach of either
+is a fail. `docs/cli.md` has the pass.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

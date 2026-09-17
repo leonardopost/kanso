@@ -255,6 +255,47 @@ def test_a_universe_spanning_two_account_currencies_is_refused(ws: Workspace) ->
     assert "more than one account currency" in failure.message
 
 
+@pytest.mark.parametrize(
+    ("book", "moved"),
+    [
+        ({"reset": "monthly"}, "a monthly reset"),
+        ({"financing_rate_bps": 25}, "a financing carry"),
+        ({"reset": "monthly", "financing_rate_bps": 25}, "a monthly reset and a financing carry"),
+    ],
+)
+def test_a_policy_that_moves_money_is_refused_on_a_cash_account(
+    ws: Workspace, book: dict[str, Any], moved: str
+) -> None:
+    """A cash venue cannot fund a restore from the cushion or hold a borrowed notional."""
+    write_portfolio(ws, {"SIM": {"account": "cash"}})
+
+    failure = refused(ws, document(book=book))
+
+    assert failure.message == (
+        f"book: {moved} needs a margin account, and SIM resolves to a cash account, which "
+        "cannot fund a restore or hold a borrowed notional"
+    )
+    assert failure.remedy == (
+        "set venues.SIM.account to margin in portfolio.yaml, or set book.reset to none and "
+        "book.financing_rate_bps to 0"
+    )
+
+
+def test_a_maintenance_floor_alone_is_admissible_on_a_cash_account(ws: Workspace) -> None:
+    """A floor moves no money: it is a gate on what the book held."""
+    write_portfolio(ws, {"SIM": {"account": "cash"}})
+
+    parsed = accepted(ws, document(book={"maintenance_pct": 40}))
+
+    assert parsed.book is not None and parsed.book.maintenance_pct == 40.0
+
+
+def test_a_policy_that_moves_money_is_admissible_on_a_margin_account(ws: Workspace) -> None:
+    parsed = accepted(ws, document(book={"reset": "monthly", "financing_rate_bps": 25}))
+
+    assert parsed.book is not None and parsed.book.funded
+
+
 def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> None:
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
 
@@ -846,6 +887,40 @@ def test_a_construct_warmed_as_its_host_is_admissible(ws: Workspace) -> None:
     parsed = accepted(ws, document(warmup={"sessions": 20}, **FILTER_CLASSIFICATION))
 
     assert parsed.warmup is not None and parsed.warmup.sessions == 20
+
+
+def test_an_attached_construct_declares_its_host_s_book_policy(ws: Workspace) -> None:
+    """The construct's cards run under its own file's policy; its version under the host's."""
+    host_with(ws, book={"reset": "monthly", "financing_rate_bps": 50})
+
+    failure = refused(ws, document(**FILTER_CLASSIFICATION))
+
+    assert (
+        "book: host_sleeve@1 runs under a book policy of {reset: monthly, "
+        "financing_rate_bps: 50.0} and this file declares none" in failure.message
+    )
+    assert failure.remedy is not None
+    assert failure.remedy.startswith("set book to {reset: monthly, financing_rate_bps: 50.0} to")
+
+
+def test_a_construct_booked_under_an_unbooked_host_is_told_to_drop_it(ws: Workspace) -> None:
+    host_with(ws)
+
+    failure = refused(ws, document(book={"maintenance_pct": 30}, **FILTER_CLASSIFICATION))
+
+    assert "runs under a book policy of none" in failure.message
+    assert "this file declares {reset: none, financing_rate_bps: 0.0, maintenance_pct: 30.0}" in (
+        failure.message
+    )
+    assert (failure.remedy or "").startswith("drop book to match ")
+
+
+def test_a_construct_booked_as_its_host_is_admissible(ws: Workspace) -> None:
+    host_with(ws, book={"reset": "monthly"})
+
+    parsed = accepted(ws, document(book={"reset": "monthly"}, **FILTER_CLASSIFICATION))
+
+    assert parsed.book is not None and parsed.book.reset == "monthly"
 
 
 def test_an_overlay_may_keep_a_grain_of_its_own(ws: Workspace) -> None:

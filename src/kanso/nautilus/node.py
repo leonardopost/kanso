@@ -138,6 +138,11 @@ class Placement:
     loaded: Loaded
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    cushion: float = 0.0
+    settled_ns: int | None = None
+    """Where this version's book policy stood when its last window on the stage closed: the
+    cushion a monthly reset had set aside and the last period end it settled. The node
+    restarts flat at `capital` every window, and these are what carry the policy across."""
 
     @property
     def tag(self) -> str:
@@ -155,12 +160,16 @@ class Placement:
         return f"{self.loaded.sleeve.cls.__name__}-{self.tag}"
 
     def request(
-        self, window: tuple[date, date], prefix: tuple[date, date] | None = None
+        self,
+        window: tuple[date, date],
+        prefix: tuple[date, date] | None = None,
+        resumes_ns: int | None = None,
     ) -> RunRequest:
         """The run this version asks for over the stage's window.
 
         `prefix` is the sessions the version warms on, resolved by the node from its
-        catalog and its clock: a placement carries neither.
+        catalog and its clock, and `resumes_ns` the instant after that clock on a restart:
+        a placement carries neither.
         """
         return RunRequest(
             hyp=self.hyp,
@@ -173,6 +182,9 @@ class Placement:
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
             prefix=prefix,
+            cushion=self.cushion,
+            settled_ns=self.settled_ns,
+            resumes_ns=resumes_ns,
         )
 
 
@@ -404,7 +416,8 @@ def run(
         )
     opens_ns = midnight_ns(node.window[0]) if node.after is None else node.after + 1
     requests = tuple(
-        placed.request(node.window, _prefix(placed, node)) for placed in node.placements
+        placed.request(node.window, _prefix(placed, node), None if node.after is None else opens_ns)
+        for placed in node.placements
     )
     window = _window_data(requests, node.catalog, node.after)
     points = window.points
@@ -442,6 +455,7 @@ def run(
             deliver_from(strategy, opens_ns if request.prefix is None else request.delivered[0])
             if request.prefix is not None:
                 warm(strategy, opens_ns)
+            backtest.booked(strategy, request)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points))
         realised = tuple(
             _realised(placed, request, kernel, groups, books, window.instruments)

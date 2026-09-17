@@ -300,3 +300,53 @@ def test_warmup_is_optional_and_carries_its_sessions() -> None:
 def test_a_warmup_survives_the_round_trip(hyp: Hypothesis) -> None:
     again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
     assert again.warmup == hyp.warmup
+
+
+def test_a_book_policy_defaults_to_no_reset_no_carry_and_no_floor() -> None:
+    assert build().book is None
+    booked = build(book={})
+    assert booked.book is not None
+    assert (booked.book.reset, booked.book.financing_rate_bps, booked.book.maintenance_pct) == (
+        "none",
+        0.0,
+        None,
+    )
+    assert not booked.book.funded
+
+
+def test_a_book_policy_carries_its_three_rules() -> None:
+    booked = build(book={"reset": "monthly", "financing_rate_bps": 250, "maintenance_pct": 30})
+    assert booked.book is not None
+    assert booked.book.reset == "monthly"
+    assert booked.book.financing_rate_bps == 250.0
+    assert booked.book.maintenance_pct == 30.0
+    assert booked.book.funded
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reset", "weekly"),
+        ("financing_rate_bps", -1),
+        ("maintenance_pct", 0),
+        ("maintenance_pct", 101),
+    ],
+)
+def test_a_book_policy_refuses_a_value_outside_its_range(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match=f"book.{field}"):
+        build(book={field: value})
+
+
+def test_a_maintenance_floor_above_what_the_leverage_holds_at_entry_is_refused() -> None:
+    """A book levered twice holds 50% equity over gross before any price moves."""
+    limits = {"max_position_pct": 100, "max_drawdown_pct": 15, "max_leverage": 2}
+    with pytest.raises(ValidationError, match="book.maintenance_pct: 60% is above the 50%"):
+        build(book={"maintenance_pct": 60}, risk_limits=limits)
+    held = build(book={"maintenance_pct": 50}, risk_limits=limits)
+    assert held.book is not None and held.book.maintenance_pct == 50.0
+
+
+@given(hypotheses())
+def test_a_book_policy_survives_the_round_trip(hyp: Hypothesis) -> None:
+    again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
+    assert again.book == hyp.book

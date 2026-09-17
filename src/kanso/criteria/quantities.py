@@ -15,7 +15,8 @@ workspace's research settings:
 * a **drawdown** is peak-to-trough equity over the window as a percentage of starting
   capital — the same base the hypothesis's maximum-drawdown limit is expressed in — with
   the peak seeded at the capital the window opened with, so a run that only ever loses
-  still reports the loss it made;
+  still reports the loss it made; on a monthly-reset book the peak starts again at each
+  month's first end, so a drawdown is bounded by the month it fell in;
 * **sample statistics use one degree of freedom**. A series too short for that reports a
   zero dispersion rather than raising, so a fold with nothing in it cannot crash a card;
 * a **trade** is a closed position, so a per-trade quantity averages over closed positions
@@ -31,7 +32,7 @@ from collections.abc import Sequence
 from datetime import date
 from math import fsum, sqrt
 
-from kanso.criteria.run import BPS, CardRun
+from kanso.criteria.run import BPS, CardRun, day_of
 
 DAYS_PER_YEAR = 365.25
 AUTO = "auto"
@@ -92,12 +93,36 @@ def edge_bps(run: CardRun) -> float:
 
 
 def drawdown_pct(run: CardRun) -> float:
-    """Peak-to-trough equity over the window, as a percentage of starting capital."""
+    """Peak-to-trough equity over the window, as a percentage of starting capital.
+
+    On a book a monthly reset returns to its capital — a run that carries `cushion` — a
+    drawdown is bounded by the month it fell in. Each end is judged twice: on the equity
+    struck before that end's transfer, against the peak so far, and on the book after it.
+    At the first end of a month, and at a run's first end, which a restart may have reset,
+    the peak is then taken back to the higher of the capital and the book after the
+    transfer. A surplus swept into the cushion is therefore never read as a loss, a loss
+    the cushion restored ends with its month, and a loss it could not restore carries into
+    the next month as a drawdown from the capital.
+    """
     peak = run.capital
     worst = 0.0
-    for value in run.equity:
+    if not run.cushion:
+        for value in run.equity:
+            peak = max(peak, value)
+            worst = max(worst, peak - value)
+        return worst / run.capital * 100.0
+    previous_equity = run.capital
+    previous_month: tuple[int, int] | None = None
+    for end, made, value in zip(run.period_ends_ns, run.returns, run.equity, strict=True):
+        struck = previous_equity + made
+        peak = max(peak, struck)
+        worst = max(worst, peak - struck)
+        day = day_of(end)
+        if previous_month != (day.year, day.month):
+            peak = max(run.capital, value)
         peak = max(peak, value)
         worst = max(worst, peak - value)
+        previous_equity, previous_month = value, (day.year, day.month)
     return worst / run.capital * 100.0
 
 

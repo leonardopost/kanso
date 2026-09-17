@@ -72,6 +72,7 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
+from math import fsum
 from typing import Any, ClassVar, Final, NoReturn
 
 from nautilus_trader.common.actor import Actor
@@ -93,7 +94,15 @@ from nautilus_trader.trading.strategy import Strategy
 
 from kanso.errors import ValidationError
 from kanso.nautilus import splits
-from kanso.nautilus.costs import fixed_half_spread, quote_half_spread, side_rate
+from kanso.nautilus.costs import (
+    BookPolicy,
+    carry,
+    fixed_half_spread,
+    month_turned,
+    quote_half_spread,
+    reset,
+    side_rate,
+)
 from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
 from kanso.nautilus.hooks import (
     BUY,
@@ -337,6 +346,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._seen_ns = 0
         self._schedules: dict[str, tuple[splits.Split, ...]] = {}
         self._quoted: dict[str, tuple[list[int], list[float]]] = {}
+        self._policy: BookPolicy | None = None
+        self._anchor_ns = 0
+        self._period_ns = 1
+        self._cushion = 0.0
+        self._settled_ns: int | None = None
+        self._carried_from_ns = 0
+        self._period_index: int | None = None
+        self._period_last_ns = 0
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -478,6 +495,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Entries and an overlay's hedge legs are cut to what the smaller of this and the
         capital can fund, and a strategy may size from it.
+
+        Under a `book` policy it is the book the policy leaves. The runner settles each
+        period at its last point — the carry on what the book held above its equity, then
+        the reset's transfer at the turn of a month — and the harness settles the same
+        period from the same functions when the first point of the next arrives, before
+        anything else is done with it (`_turn`). So a balance read at a period's last point
+        is the equity struck there before that end's carry and transfer, and one read at
+        any later point has them.
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
@@ -487,6 +512,68 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             0.0,
         )
         return self._cash + worth
+
+    # --- the book policy: the runner's period ends, mirrored -------------------
+
+    def _turn(self, ts_ns: int) -> None:
+        """Settle the period that ended, when a point of a later one is delivered.
+
+        Called by every handler with the availability instant of the point it was handed,
+        before that point moves a price, is buffered or reaches an author: at that moment
+        the harness's marks are still the last period's, and the only fills in the cache
+        after its end are the ones the venue just matched against this point. Periods are
+        cut as the runner cuts them — from `_anchor_ns`, `_period_ns` long, ending at the
+        last point inside — and nothing turns over a warmup prefix, which the runner
+        measures in no period.
+        """
+        if self._policy is None or ts_ns < self._anchor_ns or ts_ns < self._trading_from_ns:
+            return
+        index = (ts_ns - self._anchor_ns) // self._period_ns
+        if self._period_index is not None and index != self._period_index:
+            self._close_period(self._policy, self._period_last_ns)
+        self._period_index = index
+        self._period_last_ns = ts_ns
+
+    def _close_period(self, policy: BookPolicy, end: int) -> None:
+        """Charge the carry and move the reset's transfer, as the runner does at `end`."""
+        value, gross = self._book_at(end)
+        previous = self._settled_ns
+        since = self._carried_from_ns
+        charged = carry(
+            gross,
+            value,
+            policy.financing_rate_bps,
+            end - (since if previous is None else max(previous, since)),
+        )
+        self._cash -= charged
+        if policy.resets and month_turned(previous, end):
+            moved, self._cushion = reset(value - charged, self.capital, self._cushion)
+            self._cash += moved
+        self._settled_ns = end
+
+    def _book_at(self, end: int) -> tuple[float, float]:
+        """The book's equity and gross at `end`, as the runner strikes them.
+
+        Every fill up to `end` is booked; a fill after it — matched against the point that
+        is turning the period — is left for its own quote and taken back out of the
+        holdings, so a position it opened is not counted and one it closed still is.
+        """
+        later = self._settle(until_ns=end)
+        worth: dict[str, float] = {}
+        for position in self.cache.positions_open(strategy_id=self.id):
+            key = position.instrument_id.value
+            worth[key] = worth.get(key, 0.0) + self._worth(position)
+        for event in later:
+            key = event.instrument_id.value
+            instrument = self.cache.instrument(event.instrument_id)
+            multiplier = 1.0 if instrument is None else float(instrument.multiplier)
+            qty = float(event.last_qty)
+            signed = qty if event.order_side == OrderSide.BUY else -qty
+            price = self._print_now(key)
+            mark = float(event.last_px) if price is None else price
+            worth[key] = worth.get(key, 0.0) - signed * mark * multiplier
+        worths = [worth[key] for key in sorted(worth)]
+        return self._cash + fsum(worths), fsum(abs(value) for value in worths)
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -533,6 +620,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         if self._undelivered(bar.ts_init):
             return
+        self._turn(int(bar.ts_init))
         self._delivered_ns = int(bar.ts_init)
         key = bar.bar_type.instrument_id.value
         self._printed(key, float(bar.close), int(bar.ts_event))
@@ -551,6 +639,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         if self._undelivered(tick.ts_init):
             return
+        self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
         self._last_quote[key] = tick
@@ -574,6 +663,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         if self._undelivered(tick.ts_init):
             return
+        self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
         self._last_trade[key] = tick
@@ -596,6 +686,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if isinstance(ts_init, int):
             if self._undelivered(ts_init):
                 return
+            self._turn(ts_init)
             self._delivered_ns = ts_init
         if self._held():
             self._pending.append(data)
@@ -1416,7 +1507,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         another object under the same id when it releases it, and that one gets the fill."""
         return self.cache.order(order.client_order_id) or order
 
-    def _settle(self, key: str | None = None) -> None:
+    def _settle(self, key: str | None = None, until_ns: int | None = None) -> list[Any]:
         """Fold every fill not booked yet into the sleeve's cash, as the runner charges it.
 
         Each order the sleeve sent is kept with how many of its events have been read, read
@@ -1426,27 +1517,41 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         so a fill in another name waits for that name's quote or for a read of the balance.
         A quoted spread's series is then cut back to its last quote: every fill before now
         is booked, and a fill still to come is charged at a quote no older than that one.
+
+        With `until_ns` a fill after that instant is left unbooked and its order is read
+        again next time: it is returned instead, for the period close that has to strike the
+        book as it stood at the instant (`_book_at`), and it is booked by the next read, at
+        a quote no older than the last one seen.
         """
         waiting: list[list[Any]] = []
+        later: list[Any] = []
         for entry in self._ledger:
             order = entry[0] = self._current(entry[0])
             if key is not None and order.instrument_id.value != key:
                 waiting.append(entry)
                 continue
             count = order.event_count
+            held_back = False
             if count != entry[1]:
                 for event in order.events:
-                    if isinstance(event, OrderFilled) and event.id not in self._booked:
-                        self._booked.add(event.id)
-                        self._cash -= self._paid(event)
-                entry[1] = count
-            if not order.is_closed:
+                    if not isinstance(event, OrderFilled) or event.id in self._booked:
+                        continue
+                    if until_ns is not None and int(event.ts_event) > until_ns:
+                        later.append(event)
+                        held_back = True
+                        continue
+                    self._booked.add(event.id)
+                    self._cash -= self._paid(event)
+                if not held_back:
+                    entry[1] = count
+            if held_back or not order.is_closed:
                 waiting.append(entry)
         self._ledger = waiting
         for name, (times, values) in self._quoted.items():
             if key is None or name == key:
                 del times[:-1]
                 del values[:-1]
+        return later
 
     def _paid(self, event: Any) -> float:
         """What one fill took out of cash: the value it bought, or gave back what it sold
