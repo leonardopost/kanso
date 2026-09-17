@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from kanso.certify import certificate
+from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
 from kanso.models import Answer, Call, reset_mock, spend
 from kanso.models import router as router_module
@@ -41,6 +42,21 @@ NOWHERE = "--- a/strategy.py\n+++ b/strategy.py\n@@ -1,1 +1,1 @@\n-nowhere\n+her
 
 NOOP = "--- a/strategy.py\n+++ b/strategy.py\n@@ -40,1 +40,1 @@\n # end\n"
 """A diff that applies and changes nothing, which is not an experiment."""
+
+CONSTANT_ONLY = (
+    "--- a/strategy.py\n"
+    "+++ b/strategy.py\n"
+    "@@ -5,1 +5,1 @@\n"
+    "-    notional: float = 5_000.0\n"
+    "+    notional: float = 6_000.0\n"
+)
+"""A diff that moves a number and nothing else: local in one phase, refused in the other."""
+
+PARAMETER: dict[str, Any] = {
+    "desc": "trade a little larger",
+    "diff": CONSTANT_ONLY,
+    "tags": ["parameter_only"],
+}
 
 DENIED = (
     "--- a/strategy.py\n"
@@ -288,6 +304,73 @@ def test_redundant_misses_count_toward_the_stall(
     assert outcome.reason == "stalled"
     assert (outcome.keeps, outcome.redundant) == (1, 2)
     assert records.active(store, prepared_hyp) is None
+
+
+def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
+    settings = ResearchConfig(local_cards=10, structural_cards=10)
+    assert [driver.phase(settings, n) for n in (0, 9, 10, 19, 20, 29, 30)] == [
+        "local",
+        "local",
+        "structural",
+        "structural",
+        "local",
+        "local",
+        "structural",
+    ]
+
+
+def test_a_constant_only_change_is_a_card_in_the_local_phase_and_refused_in_the_structural(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The same answer, judged by the phase the run is in: one miss puts a run tuned to
+    `local_cards = 1` into its structural phase, where a number moved is not the
+    experiment being asked for and the ladder walks on to an answer that is."""
+    workspace = tuned(ws, local_cards=1, structural_cards=5)
+    scripted(workspace, propose=[PARAMETER, PARAMETER, proposal("weak")])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    # The first is local: it ran, held nothing like the flat baseline, and was redundant.
+    # The second is structural: refused on the ladder, so the third answer is the card.
+    assert (outcome.proposed, outcome.redundant, outcome.discards, outcome.missed) == (2, 1, 1, 0)
+    calls = recorded.of("propose")
+    assert len(calls) == 3
+    assert '"name": "local"' in calls[0].user
+    assert '"misses_since_keep": 0' in calls[0].user
+    assert '"name": "structural"' in calls[1].user
+    assert '"misses_since_keep": 1' in calls[1].user
+    assert "moves no structure" in calls[2].user, "the ladder carries the complaint"
+
+
+def test_a_ladder_that_only_moves_numbers_in_the_structural_phase_is_a_miss(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    workspace = tuned(ws, local_cards=1, structural_cards=5)
+    scripted(workspace, propose=[PARAMETER])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    assert (outcome.redundant, outcome.missed) == (1, 1)
+    (event,) = store.events(kind=driver.REPEATED, subject=prepared_hyp)
+    assert "moves no structure" in str(event.detail["because"])
+    assert "after 1 misses" in str(event.detail["because"])
+
+
+def test_a_candidate_that_does_not_parse_is_not_judged_by_its_structure(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """A syntax error is the card's to discard — the static integrity check refuses it
+    before any backtest — not the skeleton's to refuse on the ladder."""
+    workspace = tuned(ws, local_cards=1, structural_cards=5)
+    broken = {
+        **PARAMETER,
+        "diff": CONSTANT_ONLY.replace("+    notional: float = 6_000.0", "+    notional float"),
+    }
+    scripted(workspace, propose=[PARAMETER, broken])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    assert (outcome.redundant, outcome.discards, outcome.missed) == (1, 1, 0)
 
 
 def test_recent_cards_reach_across_runs_under_the_same_pins(

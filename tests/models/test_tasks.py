@@ -112,6 +112,7 @@ def test_a_proposal_owes_at_least_one_tag_from_the_vocabulary() -> None:
     assert validate({**answer, "tags": ["exit_stop", "horizon_shorter"]}, schema) == []
     assert schema["properties"]["tags"]["items"]["enum"] == list(TAGS)  # type: ignore[index]
     assert "`coverage`" in INSTRUCTIONS["propose"]
+    assert "`structural` phase" in INSTRUCTIONS["propose"], "a refusal is never hidden"
 
 
 def test_an_empty_dynamic_half_still_asks_for_an_answer() -> None:

@@ -37,6 +37,14 @@ and its status, and the newest card per tag. The recent cards say what was tried
 the coverage says what has been tried at all, in a size that does not grow with the
 hypothesis. Nothing else, however much of it exists.
 
+**The search has a phase, and the phase is a rule, not a mood.** Misses since the last
+keep drive it: for the first `[research] local_cards` the proposer is asked for local
+changes — a parameter, a threshold, a window — and for the next `structural_cards` a
+change that moves no structure is refused on the ladder like a repeat, where structure is
+the syntax tree of `strategy.py` with every constant blanked. Then local again, round
+until a keep or a stall. The rule is stated in the instruction and the phase is a fact of
+every call, because a refusal the proposer was never told about is a wasted ladder.
+
 **Drift is checked on a clock, not on suspicion.** Every `align_every` cards the run is
 asked whether it still tests the idea, and a drift rewinds it and carries on — carrying the
 reasons with it. A rewound run told nothing walks back into the drift it was rewound for:
@@ -53,6 +61,7 @@ lands during one, leaves the hypothesis owed to the queue rather than lost.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sqlite3
@@ -60,6 +69,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from kanso.config import ResearchConfig
 from kanso.criteria import catalogue
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE
@@ -77,11 +87,14 @@ __all__ = [
     "CRASH_TAIL_LINES",
     "DRIFT_LINES",
     "GATE_LINES",
+    "LOCAL",
     "REDUNDANT_LINES",
     "REPEATED",
+    "STRUCTURAL",
     "TASK",
     "NothingNewError",
     "Outcome",
+    "phase",
     "run",
 ]
 
@@ -107,7 +120,13 @@ STALLED: Final = "stalled"
 
 REPEATED: Final = "repeated"
 """The event a miss appends, under the hypothesis id: the ladder ran out having judged an
-answer that reproduced bytes already carded."""
+answer that reproduced bytes already carded, or — in the structural phase — one that
+moved no structure."""
+
+LOCAL: Final = "local"
+STRUCTURAL: Final = "structural"
+"""The two phases of a search, by misses since the last keep: `local_cards` of the first,
+then `structural_cards` of the second, then round again."""
 
 
 class NothingNewError(PreconditionError):
@@ -122,6 +141,12 @@ _ALREADY_CARDED: Final = (
     " ({sha7}: {status} at {metric:.4g}), so its result is known and it is not an experiment"
 )
 _ONE_LINE: Final = "desc: one line describing the change, with no tab and no newline"
+_NO_STRUCTURE: Final = (
+    "diff: applies, but moves no structure — the syntax tree of strategy.py is unchanged once "
+    "every constant is blanked — and the search is in its structural phase after {misses} "
+    "misses since the last keep, so a parameter, a threshold or a respelling is not the "
+    "experiment being asked for; change what the strategy reads, holds, filters on or exits on"
+)
 
 
 @dataclass(frozen=True)
@@ -196,7 +221,9 @@ def run(
     while cards is None or proposed < cards:
         source = align.lane_strategy(store, active, directory)
         try:
-            desc, patch, candidate, tags = _propose(ws, store, active, source, previous, lane)
+            desc, patch, candidate, tags = _propose(
+                ws, store, active, source, previous, lane, misses
+            )
         except NothingNewError as exc:
             store.event(
                 REPEATED,
@@ -270,14 +297,21 @@ def _propose(
     source: bytes,
     previous: str,
     lane: str,
+    misses: int,
 ) -> tuple[str, str, bytes, list[Tag]]:
     """Ask for the next change: its description, its diff, the new bytes and its tags.
 
     Applying the diff is the caller's check, so a diff that will not fit is corrected on
-    the router's ladder rather than turned into a card that could not have run.
+    the router's ladder rather than turned into a card that could not have run. `misses`
+    is how many non-keeps in a row the run has recorded, which sets the phase: in the
+    structural one a candidate whose syntax tree equals the file's once constants are
+    blanked is refused on the ladder, and a ladder that runs out on such answers is a
+    miss like a repeat.
     """
     applied: dict[str, bytes] = {}
     repeat: dict[str, str] = {}
+    current = phase(ws.config.research, misses)
+    skeleton = _skeleton(source) if current == STRUCTURAL else None
 
     def judge(data: Mapping[str, object]) -> list[str]:
         complaints: list[str] = []
@@ -290,6 +324,11 @@ def _propose(
             return complaints
         if candidate == source:
             complaints.append(_UNCHANGED)
+            return complaints
+        if skeleton is not None and _skeleton(candidate) == skeleton:
+            said = _NO_STRUCTURE.format(misses=misses)
+            repeat.setdefault("complaint", said)
+            complaints.append(said)
             return complaints
         seen = _carded(store, active, candidate)
         if seen is not None:
@@ -307,7 +346,7 @@ def _propose(
     inputs = CallInputs(
         subject=active.hyp_id,
         stable=_stable(store, active),
-        dynamic=_dynamic(ws, store, active, source, previous),
+        dynamic=_dynamic(ws, store, active, source, previous, misses),
         check=judge,
     )
     try:
@@ -337,14 +376,21 @@ def _dynamic(
     active: RunRecord,
     source: bytes,
     previous: str,
+    misses: int,
 ) -> dict[str, object]:
     """What has changed since the last call: the file, the recent cards, the coverage of
-    every card under the pins by tag, and the last diff."""
+    every card under the pins by tag, the phase, and the last diff."""
     recent = _recent(store, active, ws.config.research.context_cards)
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),
         "recent_cards": [_summary(row) for row in recent],
         "coverage": _coverage(store, active),
+        "phase": {
+            "name": phase(ws.config.research, misses),
+            "misses_since_keep": misses,
+            "local_cards": ws.config.research.local_cards,
+            "structural_cards": ws.config.research.structural_cards,
+        },
         "last_diff": previous,
     }
     if recent and recent[-1]["crash_tail"]:
@@ -359,6 +405,31 @@ def _dynamic(
     if redundant:
         facts["redundant"] = redundant
     return facts
+
+
+def phase(settings: ResearchConfig, misses: int) -> str:
+    """Which phase `misses` non-keeps in a row put the search in.
+
+    Local for the first `local_cards`, structural for the next `structural_cards`, and
+    round again: a run that has missed twenty times under the template is local once
+    more, because the structural phase is a spell of refusing the cheap change, not a
+    permanent narrowing of what may be proposed.
+    """
+    span = settings.local_cards + settings.structural_cards
+    return LOCAL if misses % span < settings.local_cards else STRUCTURAL
+
+
+def _skeleton(source: bytes) -> str | None:
+    """The syntax tree of `source` with every constant blanked, or `None` if it does not
+    parse — and a file that does not parse is judged by the card it crashes, not here."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant):
+            node.value = None
+    return ast.dump(tree)
 
 
 def _summary(row: sqlite3.Row) -> dict[str, object]:

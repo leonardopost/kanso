@@ -234,6 +234,16 @@ misses included, so the third spelling of an idea is refused against the second 
 the first. Signatures live under the pins — the hypothesis file, the snapshot, the
 criteria — and a run under new pins starts with none.
 
+The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
+Misses since the last keep set it: for the first `[research] local_cards` the proposer is
+asked for local changes — a parameter, a threshold, a window — and for the next
+`structural_cards` a change that moves no structure is refused on the ladder like a
+repeat, where structure is the syntax tree of `strategy.py` with every constant blanked.
+Then local again, round until a keep or a stall. The rule is in the proposer's instruction
+and the phase is a fact of every call, because a refusal the proposer was never told about
+is a wasted ladder. Both lengths, like `stall_k` and `redundant_pct`, are framework search
+rules: they bound the search and choose nothing within it.
+
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.

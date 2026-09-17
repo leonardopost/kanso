@@ -247,7 +247,16 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "cards of this hypothesis under the run's pins read back by tag — how many, the "
         "best score and its status, the newest card — so a corner with many cards and no "
         "keep is a corner already searched, and a corner with none is one the search has "
-        "not reached."
+        "not reached.\n\n"
+        "The search has a phase, given as the `phase` fact with the misses since the last "
+        "keep. In the `local` phase — the first `local_cards` misses — propose local "
+        "changes: a parameter, a threshold, a window, a respelling of the same rule. In the "
+        "`structural` phase — the next `structural_cards` misses — a change that moves no "
+        "structure is refused: if the syntax tree of `strategy.py` is the same once every "
+        "constant is blanked, the answer is rejected and a ladder that runs out on such "
+        "answers is a miss. Change what the strategy reads, holds, filters on, exits on or "
+        "how it sizes. After the structural phase the search is local again, and a keep "
+        "starts the count over."
     ),
     "align_check": (
         "You check that a strategy still tests the hypothesis it was written for.\n\n"
