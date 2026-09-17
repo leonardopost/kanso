@@ -31,9 +31,10 @@ stage carried is a fact about the window and not about the way it ended.
 against a hold of its first leg has that hold produced after the node stops, by the backtest
 runner, over the very points that version's realised window is extracted from — the
 version's request with the strategy replaced — and stored beside what the version realised,
-so the paper and live gates difference against a hold of the same periods. It is a separate engine
-rather than a second strategy in the node, because two strategies in one account share the
-book and the volume a fill walks, and the hold would move the version's fills.
+so the paper and live gates difference against a hold of the same periods. It is a separate
+engine rather than a second strategy in the node, because two strategies in one account
+share the book and the volume a fill walks (nautilus_trader 1.231; `facts.py` asserts the
+walk), and the hold would move the version's fills.
 
 Engine facts this module relies on (nautilus_trader 1.231.0):
 

@@ -930,6 +930,10 @@ def test_every_card_of_a_run_is_differenced_against_one_hold(
     loop.card(ws, store, hyp_id, "buy any fall")
 
     assert derived == [RESEARCH]
+    trough = records.cards_of(store, hyp_id)[1]
+    assert (trough.metric, trough.metric_se) == pytest.approx((14.527, 2.255), abs=1e-3), (
+        "measured on the saw-tooth: the trough-buyer's 15.689 by wf_sharpe_net, less the hold's"
+    )
     assert [key for key in loop._HOST_RUNS[run.run_id] if key.startswith("benchmark")] == [
         f"benchmark@{run.snapshot_id}@None"
     ]
