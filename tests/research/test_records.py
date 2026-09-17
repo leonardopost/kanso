@@ -13,6 +13,7 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace
 
 from .conftest import DOCUMENT, FLAT, RAISING, REVERTING, classify
+from .test_scheduler import open_run
 
 
 def test_a_hypothesis_that_never_ran_has_no_run_and_no_best(store: StateStore) -> None:
@@ -42,6 +43,34 @@ def test_runs_come_back_in_the_order_they_were_started(
     assert [run.run_id for run in held] == [first.run_id, second.run_id]
     assert held[0].ended_at is not None
     assert held[1].ended_at is None
+
+
+def test_the_run_s_best_always_moves_and_the_hypothesis_s_only_when_beaten_or_owned(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Two ancestries: a run re-seeded from a lesser keep climbs its own, and replaces
+    the hypothesis's best only by beating it; the run that owns it may rewind it."""
+    first = loop.begin(ws, store, registered)
+    strong, weak, stronger = (store.put_blob(b) for b in (b"strong", b"weak", b"stronger"))
+    records.set_best(store, first, strong, 2.0)
+    loop.end(ws, store, registered)
+    second = open_run(store, registered)  # a row, not a baseline: the blobs are not sleeves
+
+    second = records.set_best(store, second, weak, 1.0)
+    assert (second.best_sha, second.best_metric) == (weak, 1.0)
+    assert records.best_of(store, registered) == (strong, 2.0), "not beaten"
+
+    records.set_best(store, second, stronger, 3.0)
+    assert records.best_of(store, registered) == (stronger, 3.0), "beaten"
+
+    records.set_best(store, second, weak, 1.0)
+    assert records.best_of(store, registered) == (weak, 1.0), "the owner rewinds its own"
+
+    records.unset_best(store, registered, run_id=first.run_id)
+    assert records.best_of(store, registered) == (weak, 1.0), "not this run's to clear"
+    records.unset_best(store, registered, run_id=second.run_id)
+    assert records.best_of(store, registered) == (None, None)
+    records.unset_best(store, "nobody_here", run_id="x")
 
 
 def test_a_card_comes_back_as_it_was_written(

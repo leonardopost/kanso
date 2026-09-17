@@ -11,7 +11,7 @@ import pytest
 from kanso.criteria import SCOPED_FILES
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
-from kanso.research import loop, records
+from kanso.research import loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
 from kanso.schemas import RunRecord
 from kanso.state import StateStore
@@ -552,6 +552,58 @@ def test_a_later_run_resumes_from_the_best_and_from_workspace_starts_over(
     assert restarted.base_sha == sha256(FLAT).hexdigest()
     assert restarted.best_sha == restarted.base_sha, "its own baseline is the new best"
     assert [event.kind for event in store.events(subject=registered)].count("best_cleared") == 1
+
+
+def test_a_run_begins_from_the_reseed_the_queue_passage_carries_and_keeps_the_best(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Two ancestries, two records: the re-seeded run climbs from its own base, and the
+    hypothesis's best moves only when a keep beats it."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    loop.end(ws, store, registered)
+    weak = store.put_blob(WEAK)
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from=weak)
+
+    reseeded = loop.begin(ws, store, registered)
+
+    assert reseeded.base_sha == weak
+    assert (lane_of(ws, reseeded) / "strategy.py").read_bytes() == WEAK
+    assert reseeded.best_sha == weak, "its baseline is its own first keep"
+    assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    begun = store.events(kind=passages.BEGUN, subject=registered)[-1]
+    assert begun.detail[passages.RESEED_FROM] == weak
+    assert passages.reseed_of(store, registered) is None, "beginning consumed it"
+    assert store.events(kind="best_cleared", subject=registered) == []
+    # Climbing back to the best's bytes beats this run's own best, so the keep rule —
+    # which runs first — keeps it rather than reading it as redundant; and an equal
+    # metric does not beat the hypothesis's best, which stays where it was.
+    edit(ws, reseeded, REVERTING)
+    climbed = loop.card(ws, store, registered, "the trough rule again")
+    assert climbed.status == "keep"
+    assert records.require_active(store, registered).best_sha == kept.strategy_sha
+    assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+
+
+def test_from_workspace_outranks_a_reseed_and_a_missing_blob_is_ignored(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    loop.end(ws, store, registered)
+
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from="c" * 64)
+    resumed = loop.begin(ws, store, registered)
+    assert resumed.base_sha == kept.strategy_sha, "a blob the store lacks re-seeds nothing"
+    loop.end(ws, store, registered)
+
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from=store.put_blob(WEAK))
+    ws.path("hypotheses", registered, "strategy.py").write_bytes(FLAT)  # a keep rewrote it
+    restarted = loop.begin(ws, store, registered, from_workspace=True)
+    assert restarted.base_sha == sha256(FLAT).hexdigest()
+    assert records.best_of(store, registered)[0] == restarted.base_sha
 
 
 # --- the pieces the loop is assembled from -----------------------------------

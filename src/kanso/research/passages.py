@@ -23,7 +23,17 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
 
-__all__ = ["BEGUN", "CLAIMED", "QUEUED", "REMOVED", "Passage", "last_passage", "taken"]
+__all__ = [
+    "BEGUN",
+    "CLAIMED",
+    "QUEUED",
+    "REMOVED",
+    "RESEED_FROM",
+    "Passage",
+    "last_passage",
+    "reseed_of",
+    "taken",
+]
 
 QUEUED: Final = "queued"
 CLAIMED: Final = "claimed"
@@ -32,6 +42,12 @@ BEGUN: Final = "run_begun"
 """The four events that move a hypothesis between the queue and a run."""
 
 PASSAGES: Final = (QUEUED, CLAIMED, REMOVED, BEGUN)
+
+RESEED_FROM: Final = "reseed_from"
+"""The key a `queued` passage carries when the scheduler decided the next run starts from
+another keep than the best: the sha of the blob to start from. It rides on the passage
+rather than on the stall's own event because the passage is what survives `put_back`
+and `recover` — a decision written only where the stall was decided does not."""
 
 Passage = tuple[str, dict[str, object]]
 """One passage as read back: its kind and its detail."""
@@ -49,6 +65,25 @@ def last_passage(store: StateStore, hyp_id: str) -> Passage | None:
         return None
     detail = json.loads(str(row["detail"]))
     return str(row["kind"]), dict(detail) if isinstance(detail, dict) else {}
+
+
+def reseed_of(store: StateStore, hyp_id: str) -> str | None:
+    """The sha the next run of `hyp_id` was told to start from, or `None`.
+
+    Read from the newest `queued` passage, and only while no run has begun since: a run
+    beginning consumes the decision, so a reseed decided before the last run cannot leak
+    into the one after it.
+    """
+    row = store.connection.execute(
+        "SELECT kind, detail FROM events WHERE subject = ? AND kind IN (?, ?)"
+        " ORDER BY event_id DESC LIMIT 1",
+        (hyp_id, QUEUED, BEGUN),
+    ).fetchone()
+    if row is None or str(row["kind"]) != QUEUED:
+        return None
+    detail = json.loads(str(row["detail"]))
+    found = detail.get(RESEED_FROM) if isinstance(detail, dict) else None
+    return found if isinstance(found, str) and found else None
 
 
 def taken(store: StateStore, hyp_id: str, lane: str) -> bool:

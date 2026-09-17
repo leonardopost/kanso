@@ -244,6 +244,18 @@ and the phase is a fact of every call, because a refusal the proposer was never 
 is a wasted ladder. Both lengths, like `stall_k` and `redundant_pct`, are framework search
 rules: they bound the search and choose nothing within it.
 
+A stall is where the memory is read one more time. `[research] reseed_after_stalls`
+consecutive stalls on the same best — counted since the last reseed — say the best is a
+ridge the climb cannot leave, so the scheduler **re-seeds**: the next run starts from the
+highest-scoring other keep under the stalled run's pins, else from that run's own base,
+and from the best as before when there is neither. The decision is a `reseed` event and
+rides on the `queued` passage, which `put_back` and `recover` keep; a decision written only
+at the stall did not survive a live workspace. The best is not cleared. A run's best and
+the hypothesis's are two records: a keep always moves the run's, and moves the
+hypothesis's only when it beats it or when the hypothesis's best is that run's own — so a
+re-seeded run climbs its own ancestry and replaces the best only by bettering it, and a
+drift rewind in one run leaves what another run earned standing.
+
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.

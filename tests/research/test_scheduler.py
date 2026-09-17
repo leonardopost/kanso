@@ -18,14 +18,23 @@ from kanso.certify import run as certify_run
 from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
 from kanso.inbox import unread
-from kanso.research import records, scheduler
+from kanso.research import passages, records, scheduler
 from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
 from tests.certify.test_run import a_card, with_n_fail, write_plan
 
-from .conftest import ATTACHED_HOST, DOCUMENT, FLAT, OVERLAY, REVERTING, classify, document
+from .conftest import (
+    ATTACHED_HOST,
+    DOCUMENT,
+    FLAT,
+    OVERLAY,
+    REVERTING,
+    WEAK,
+    classify,
+    document,
+)
 from .test_attached import compose_host
 
 
@@ -322,7 +331,11 @@ def test_a_hypothesis_that_keeps_failing_keeps_getting_lanes(
     policy = with_n_fail(ws, 3)
 
     for attempt in range(1, 6):
-        a_card(ws, store, FLAT + f"# attempt {attempt}\n".encode(), seq=attempt)
+        # Each attempt's keep beats the last, as a keep beats its run's base: an equal
+        # metric would leave the hypothesis's best — and the certificate — where it was.
+        a_card(
+            ws, store, FLAT + f"# attempt {attempt}\n".encode(), seq=attempt, metric=float(attempt)
+        )
         scheduler.enqueue(store, hyp_id)
         stall = scheduler.on_stall(policy, store, hyp_id)
         assert stall.verdict == "fail"
@@ -374,6 +387,103 @@ def test_a_stall_on_bytes_already_certified_is_not_worth_certifying_again(
     assert stall.certifiable is False
     assert stall.best_sha == sha
     assert ids(store) == [hyp_id]
+
+
+def stall_twice(ws: Workspace, store: StateStore, hyp_id: str) -> list[scheduler.Stall]:
+    """Two stalls on a best already certified, so nothing is certified in between."""
+    return [scheduler.on_stall(ws, store, hyp_id) for _ in range(2)]
+
+
+def test_a_spell_of_stalls_on_one_best_reseeds_the_next_run_from_the_best_other_keep(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The decision is a `reseed` event and rides on the queue passage, where `put_back`
+    keeps it; the best itself is not moved."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    best = a_card(ws, store, REVERTING, seq=1, metric=2.0)
+    other = a_card(ws, store, WEAK, seq=2, metric=1.0, best=False)
+    lesser = a_card(ws, store, FLAT, seq=3, metric=0.5, best=False)
+    assert lesser != other
+    certificate(store, hyp_id, best)
+
+    first, second = stall_twice(ws, store, hyp_id)
+
+    assert first.reseed_from is None, "one stall is a stall"
+    assert second.reseed_from == other, "the highest-scoring keep that is not the best"
+    assert passages.reseed_of(store, hyp_id) == other
+    assert records.best_of(store, hyp_id) == (best, 2.0)
+    (event,) = store.events(kind=scheduler.RESEED, subject=hyp_id)
+    assert event.detail == {
+        "from": best,
+        "to": other,
+        "stalls": 2,
+        "because": "the best other keep under the pins",
+    }
+    assert second.payload()["reseed_from"] == other
+    # A third stall on the same best is a new spell: one stall since the reseed.
+    assert scheduler.on_stall(ws, store, hyp_id).reseed_from is None
+    assert passages.reseed_of(store, hyp_id) is None, "the newest passage carries none"
+
+
+def test_with_no_other_keep_the_reseed_is_the_stalled_run_s_base_or_nothing(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    best = a_card(ws, store, REVERTING, seq=1, metric=2.0)
+    certificate(store, hyp_id, best)
+
+    _, second = stall_twice(ws, store, hyp_id)
+
+    assert second.reseed_from is None, "the run began from the best: nowhere else to start"
+    assert store.events(kind=scheduler.RESEED, subject=hyp_id) == []
+
+    # A later run that began from other bytes and kept nothing: its base is the way out,
+    # and the spell is already two stalls long when the third lands on the same best.
+    run = open_run(store, hyp_id)
+    records.close(store, run)
+    third, fourth = stall_twice(ws, store, hyp_id)
+    assert third.reseed_from == run.base_sha
+    (event,) = store.events(kind=scheduler.RESEED, subject=hyp_id)
+    assert event.detail["because"] == "the stalled run's own base"
+    assert fourth.reseed_from is None, "one stall since the reseed"
+
+
+def test_stalls_on_different_bests_are_not_one_spell(ws: Workspace, store: StateStore) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    first = a_card(ws, store, REVERTING, seq=1, metric=1.0)
+    certificate(store, hyp_id, first)
+    scheduler.on_stall(ws, store, hyp_id)
+    second = a_card(ws, store, WEAK, seq=2, metric=2.0)
+    certificate(store, hyp_id, second)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.best_sha == second
+    assert stall.reseed_from is None
+    assert store.events(kind=scheduler.RESEED, subject=hyp_id) == []
+
+
+def test_the_reseed_passage_survives_a_put_back_and_a_recover(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Backlog row 62 measured that a decision written only at the stall does not survive
+    this workspace; one on the passage is re-written by every return to the queue that
+    precedes a run, and only a run beginning consumes it."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.requeue(store, hyp_id, scheduler.STALL_PRIORITY, reseed_from="b" * 64)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    assert passages.reseed_of(store, hyp_id) == "b" * 64, "a claim does not consume it"
+
+    assert scheduler.put_back(store, hyp_id) is not None, "the lane failed before a run"
+    assert passages.reseed_of(store, hyp_id) == "b" * 64, "put back with the decision"
+    assert scheduler.dequeue(store, "l2") == hyp_id
+    assert scheduler.recover(store) == [hyp_id]
+    assert passages.reseed_of(store, hyp_id) == "b" * 64, "recovered with the decision"
+
+    store.event(BEGUN, hyp_id, {"run_id": "r", "tag": "t", "lane": "l3"})
+    assert passages.reseed_of(store, hyp_id) is None, "a run beginning consumed it"
+    scheduler.requeue(store, hyp_id, scheduler.STALL_PRIORITY)
+    assert passages.reseed_of(store, hyp_id) is None, "a plain requeue carries none"
 
 
 def test_a_baseline_that_will_not_run_returns_behind_the_stalled_ones(

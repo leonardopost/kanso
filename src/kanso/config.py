@@ -49,6 +49,7 @@ class ResearchConfig(BaseModel):
     redundant_pct: int = Field(default=97, gt=0, le=100)
     local_cards: int = Field(default=10, gt=0)
     structural_cards: int = Field(default=10, gt=0)
+    reseed_after_stalls: int = Field(default=2, gt=0)
     folds: int = Field(default=4, ge=2)
     max_lines_per_keep: int = Field(default=40, gt=0)
     baseline_budget_s: int = Field(default=1800, gt=0)

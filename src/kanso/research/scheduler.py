@@ -20,6 +20,14 @@ which is dropped on sight. Lane `op` is a lane like any other to this module, wh
 what keeps an operator working by hand from blocking a daemon lane: their hypothesis is
 simply not available to be taken.
 
+A stall is also where the search's memory is read. `reseed_after_stalls` consecutive
+stalls on the same best say the best is a ridge the climb cannot leave, so the next run
+starts from the highest-scoring other keep under the same pins — or from the stalled run's
+own base — and the decision rides on the `queued` passage, where `put_back` and `recover`
+keep it, rather than on the stall's own event, where they would not. The best is not
+touched: a re-seeded run climbs its own ancestry and replaces the hypothesis's best only by
+beating it (`records.set_best`).
+
 Between the queue and a run there is a gap: a lane that took a hypothesis holds it, with no
 row to show for it, until its baseline has run and the run row exists — and again between
 a stall, which ends the run, and this module's decision on where the hypothesis goes. The
@@ -32,6 +40,7 @@ in a lane's hands has its claim closed, so resuming it later does not revive the
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
@@ -45,8 +54,10 @@ from kanso.research.passages import (
     CLAIMED,
     QUEUED,
     REMOVED,
+    RESEED_FROM,
     Passage,
     last_passage,
+    reseed_of,
     taken,
 )
 
@@ -62,6 +73,7 @@ __all__ = [
     "DEAD",
     "QUEUED",
     "REMOVED",
+    "RESEED",
     "STALLED",
     "STALL_PRIORITY",
     "QueueItem",
@@ -106,6 +118,7 @@ back."""
 STALLED: Final = "stalled"
 CERTIFIABLE: Final = "certifiable"
 HOST_COMPOSED: Final = "host_composed"
+RESEED: Final = "reseed"
 """The events this module appends beside the passages `research/passages.py` defines —
 `QUEUED`, `CLAIMED`, `REMOVED` and the run's `BEGUN` — under the hypothesis id as subject."""
 
@@ -134,6 +147,8 @@ class Stall:
     """`None` where nothing was certified; otherwise the verdict of the certificate the
     stall produced. A `priority` of `None` means the hypothesis did not come back: the
     only way out of the queue is death, and the failure run is the one way to it."""
+    reseed_from: str | None = None
+    """The sha the next run was told to start from, when this stall decided one."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -142,6 +157,7 @@ class Stall:
             "certifiable": self.certifiable,
             "priority": self.priority,
             "verdict": self.verdict,
+            "reseed_from": self.reseed_from,
         }
 
 
@@ -169,8 +185,14 @@ def enqueue(store: StateStore, hyp_id: str, priority: int = 0) -> QueueItem:
     return QueueItem(hyp_id, priority, now)
 
 
-def requeue(store: StateStore, hyp_id: str, priority: int) -> QueueItem:
-    """Return a hypothesis to the queue at `priority`, behind everything in that band."""
+def requeue(
+    store: StateStore, hyp_id: str, priority: int, *, reseed_from: str | None = None
+) -> QueueItem:
+    """Return a hypothesis to the queue at `priority`, behind everything in that band.
+
+    `reseed_from` rides on the passage: the sha the next run starts from instead of the
+    best, read back by `research/passages.py` when that run begins.
+    """
     drop(store, hyp_id)
     _alive(store, hyp_id)
     now = datetime.now(tz=UTC).isoformat()
@@ -178,7 +200,10 @@ def requeue(store: StateStore, hyp_id: str, priority: int) -> QueueItem:
         "INSERT INTO queue (hyp_id, priority, enqueued_at) VALUES (?, ?, ?)",
         (hyp_id, priority, now),
     )
-    store.event(QUEUED, hyp_id, {"priority": priority})
+    detail: dict[str, object] = {"priority": priority}
+    if reseed_from is not None:
+        detail[RESEED_FROM] = reseed_from
+    store.event(QUEUED, hyp_id, detail)
     return QueueItem(hyp_id, priority, now)
 
 
@@ -205,7 +230,8 @@ def recover(store: StateStore) -> list[str]:
     recorded — where it stood in the queue, or where the stall would have put it — in the
     order the claims were made. Nothing else with no run and no place is touched: a
     hypothesis whose run the operator ended looks the same from the tables and is left
-    alone, and so is one the operator took out of the queue.
+    alone, and so is one the operator took out of the queue. A reseed the dead lane was
+    handed and never consumed — no run began — rides on to the new passage.
     """
     rows = store.connection.execute(
         "SELECT subject, MAX(event_id) AS last FROM events WHERE kind = ?"
@@ -218,7 +244,7 @@ def recover(store: StateStore) -> list[str]:
         passage = last_passage(store, hyp_id)
         if passage is None or not claimed(store, hyp_id) or _row(store, hyp_id) is not None:
             continue
-        enqueue(store, hyp_id, _priority_of(passage))
+        requeue(store, hyp_id, _priority_of(passage), reseed_from=reseed_of(store, hyp_id))
         found.append(hyp_id)
     return found
 
@@ -340,6 +366,11 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
 
     A `queue remove` that lands during the certification is honoured like the retire: the
     hypothesis returns nowhere. Either way an open claim on it is closed.
+
+    `[research] reseed_after_stalls` consecutive stalls on the same best — counted since
+    the last reseed — decide that the next run starts elsewhere: from the highest-scoring
+    other keep under the stalled run's pins, else from that run's base when it differs
+    from the best. The decision is a `reseed` event and rides on the `queued` passage.
     """
     # Certification reads research; research schedules certification. The import is
     # deferred so the cycle exists only while this function runs.
@@ -363,8 +394,56 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         return Stall(hyp_id, best, certifiable, None, verdict)
     if _kind(last_passage(store, hyp_id)) == REMOVED:
         return Stall(hyp_id, best, certifiable, None, verdict)
-    requeue(store, hyp_id, STALL_PRIORITY)
-    return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict)
+    reseed = _reseed(store, hyp_id, best, ws.config.research.reseed_after_stalls)
+    requeue(store, hyp_id, STALL_PRIORITY, reseed_from=reseed)
+    return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict, reseed)
+
+
+def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str | None:
+    """Where the next run starts when the last `after` stalls all ended on `best`.
+
+    Counted newest first over the hypothesis's `stalled` events, stopping at the first
+    one on another best and at the last `reseed`, so a reseed is decided once per spell
+    of stalls rather than at every stall after the first. The alternative is the
+    highest-scoring keep under the stalled run's pins whose bytes are not the best's,
+    else the stalled run's own base when it is not the best; with neither there is
+    nowhere else to start, and the run starts from the best as before.
+    """
+    if best is None:
+        return None
+    rows = store.connection.execute(
+        "SELECT kind, detail FROM events WHERE subject = ? AND kind IN (?, ?)"
+        " ORDER BY event_id DESC LIMIT ?",
+        (hyp_id, STALLED, RESEED, after),
+    ).fetchall()
+    spell = 0
+    for row in rows:
+        detail = json.loads(str(row["detail"]))
+        if str(row["kind"]) != STALLED or detail.get("best_sha") != best:
+            break
+        spell += 1
+    if spell < after:
+        return None
+    stalled = records.runs_of(store, hyp_id)[-1]  # a best is set by a run, so one exists
+    keep = store.connection.execute(
+        "SELECT cards.strategy_sha FROM cards JOIN runs ON runs.run_id = cards.run_id"
+        " WHERE cards.hyp_id = ? AND runs.hypothesis_sha = ? AND runs.snapshot_id = ?"
+        " AND runs.criteria_version = ? AND cards.status = 'keep' AND cards.strategy_sha != ?"
+        " ORDER BY cards.metric DESC, cards.card_id DESC LIMIT 1",
+        (hyp_id, stalled.hypothesis_sha, stalled.snapshot_id, stalled.criteria_version, best),
+    ).fetchone()
+    if keep is not None:
+        alternative, because = str(keep["strategy_sha"]), "the best other keep under the pins"
+    elif stalled.base_sha != best:
+        alternative, because = stalled.base_sha, "the stalled run's own base"
+    else:
+        return None
+    store.event(
+        RESEED,
+        hyp_id,
+        {"from": best, "to": alternative, "stalls": spell, "because": because},
+    )
+    return alternative
 
 
 def on_host_composed(ws: Workspace, store: StateStore, host_id: str, version: int) -> list[str]:
@@ -402,8 +481,12 @@ def on_host_composed(ws: Workspace, store: StateStore, host_id: str, version: in
 
 
 def on_baseline_failed(store: StateStore, hyp_id: str) -> QueueItem:
-    """Requeue a hypothesis whose run could not begin, behind the stalled ones."""
-    return requeue(store, hyp_id, BASELINE_PRIORITY)
+    """Requeue a hypothesis whose run could not begin, behind the stalled ones.
+
+    The run never began, so a reseed the queue passage carried was never consumed, and it
+    rides on: the decision belongs to the next run that does begin.
+    """
+    return requeue(store, hyp_id, BASELINE_PRIORITY, reseed_from=reseed_of(store, hyp_id))
 
 
 def _row(store: StateStore, hyp_id: str) -> QueueItem | None:

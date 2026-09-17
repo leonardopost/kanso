@@ -8,9 +8,12 @@ and is merely sequenced here.
 `program.md` into the lane directory and stores both as blobs; every later card is
 evaluated against the pinned bytes rather than the workspace's, so editing the hypothesis
 mid-run changes nothing except the card that notices. `strategy.py` starts from the
-hypothesis's best blob when there is one — research resumes where it left off — and from
+hypothesis's best blob when there is one — research resumes where it left off — from the
+blob the scheduler re-seeded it to when the last stalls all ended on that best, and from
 the workspace only when the operator asks for it, which also clears the best, because
-starting from a worse file and keeping the old best would compare two ancestries.
+starting from a worse file and keeping the old best would compare two ancestries. A
+re-seeded run does not clear it: it climbs its own ancestry, and `records.set_best`
+moves the hypothesis's best only when a keep beats it.
 
 **The baseline calibrates the run.** It runs the unmodified `strategy.py` under
 `[research] baseline_budget_s` with memory uncapped, and what it costs becomes what a
@@ -80,7 +83,7 @@ from kanso.nautilus import backtest, sizing
 from kanso.research import lanes, records
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
-from kanso.research.passages import BEGUN, taken
+from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
@@ -793,7 +796,9 @@ def begin(
             f"{program} is missing, and a run pins the program it follows",
             remedy=f"run `kanso hyp new {hyp_id}` in another directory and copy program.md over",
         )
-    base, from_best = _base_source(ws, store, hyp_id, from_workspace=from_workspace)
+    base, from_best, reseeded = _base_source(
+        ws, store, hyp_id, from_workspace=from_workspace, reseed=reseed_of(store, hyp_id)
+    )
     pins = {
         HYPOTHESIS_FILE: store.put_blob(source),
         PROGRAM_FILE: store.put_blob(program.read_bytes()),
@@ -839,7 +844,10 @@ def begin(
         ),
     )
     _HOST_RUNS[run.run_id] = host_cache
-    store.event(BEGUN, hyp_id, {"run_id": run.run_id, "tag": run.tag, "lane": lane})
+    begun: dict[str, object] = {"run_id": run.run_id, "tag": run.tag, "lane": lane}
+    if reseeded is not None:
+        begun[RESEED_FROM] = reseeded
+    store.event(BEGUN, hyp_id, begun)
     if registration.status != RESEARCHING:
         set_status(store, hyp_id, RESEARCHING)
     _judge(
@@ -860,17 +868,26 @@ def begin(
 
 
 def _base_source(
-    ws: Workspace, store: StateStore, hyp_id: str, *, from_workspace: bool
-) -> tuple[bytes, bool]:
-    """The `strategy.py` a run starts from, and whether it is the hypothesis's best.
+    ws: Workspace,
+    store: StateStore,
+    hyp_id: str,
+    *,
+    from_workspace: bool,
+    reseed: str | None = None,
+) -> tuple[bytes, bool, str | None]:
+    """The `strategy.py` a run starts from, whether it is the hypothesis's best, and the
+    sha it was re-seeded from when it was.
 
-    The best blob when one exists and the workspace copy otherwise; `--from-workspace`
-    takes the workspace copy regardless and clears the best, so the history says the
-    run started over.
+    The best blob when one exists and the workspace copy otherwise; `reseed` — the sha
+    the scheduler put on the queue passage after a spell of stalls — takes that blob
+    instead of the best and leaves the best alone; `--from-workspace` takes the workspace
+    copy regardless and clears the best, so the history says the run started over.
     """
     best, _ = records.best_of(store, hyp_id)
+    if reseed is not None and not from_workspace and store.has_blob(reseed):
+        return store.get_blob(reseed), False, reseed
     if best is not None and not from_workspace:
-        return store.get_blob(best), True
+        return store.get_blob(best), True, None
     path = hypothesis_dir(ws, hyp_id) / STRATEGY_FILE
     if not path.is_file():
         raise PreconditionError(
@@ -882,7 +899,7 @@ def _base_source(
         store.event(
             "best_cleared", hyp_id, {"reason": "the run starts from the workspace strategy"}
         )
-    return path.read_bytes(), False
+    return path.read_bytes(), False, None
 
 
 def _baseline(

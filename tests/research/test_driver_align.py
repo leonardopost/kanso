@@ -131,6 +131,28 @@ def test_drift_rewinds_to_the_last_keep_a_check_had_already_passed(
     assert aligned_flags(store, hyp_id) == [1, 1, 0]
 
 
+def test_a_rewind_with_no_keep_of_its_own_leaves_another_run_s_best_standing(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Backlog row 61: the run's best is the run's to clear; the hypothesis's belongs to
+    the run that earned it."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    write_lane(ws, hyp_id, REVERTING)
+    kept = research.card(ws, store, hyp_id, "trade the trough")
+    assert kept.status == "keep"
+    research.end(ws, store, hyp_id)
+    resumed = research.begin(ws, store, hyp_id)
+    # The resumed run's only keep is its baseline; mark it as a check would never, to
+    # reach the branch a run whose baseline discarded reaches.
+    store.connection.execute("UPDATE cards SET aligned = 0 WHERE run_id = ?", (resumed.run_id,))
+
+    align._revert(ws, store, resumed, ws.root / resumed.dir)
+
+    assert records.require_active(store, hyp_id).best_sha is None
+    assert records.best_of(store, hyp_id) == (kept.strategy_sha, kept.metric)
+
+
 def test_a_drift_escalates_and_writes_one_inbox_line(ws: Workspace, store: StateStore) -> None:
     scripted(ws, align_check=[DRIFTED])
     hyp_id = started(ws, store)
