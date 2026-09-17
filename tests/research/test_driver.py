@@ -106,14 +106,18 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
     outcome = driver.run(ws, store, prepared_hyp, cards=30)
 
     assert outcome.proposed == 30
-    assert (outcome.keeps, outcome.crashes, outcome.discards) == (1, 10, 19)
+    # The second turn of the cycle holds what the first held: `revert` and `weak` are
+    # redundant from then on, and only the crash, which held nothing judged, is a card.
+    assert (outcome.keeps, outcome.crashes, outcome.discards) == (1, 10, 1)
+    assert (outcome.missed, outcome.redundant) == (0, 18)
     assert outcome.reason == "cards"
     assert outcome.ended is False
-    # Every card of the run, the baseline included, is a trial.
-    assert records.n_trials(store, prepared_hyp) == 31
+    # Every card of the run, the baseline included, is a trial; a redundant miss is not.
+    assert records.n_trials(store, prepared_hyp) == 13
     assert statuses(store, prepared_hyp)[:4] == ["keep", "keep", "crash", "discard"]
-    # align_every is 10 and the baseline is the run's first card, so checks land on 9, 19, 29.
-    assert (outcome.checks, outcome.drifts) == (3, 0)
+    # align_every is 10 and the baseline is the run's first card, so the check lands on
+    # the ninth card proposed; misses are not cards and do not advance it.
+    assert (outcome.checks, outcome.drifts) == (1, 0)
     assert records.active(store, prepared_hyp) is not None
     assert outcome.best_sha == records.cards_of(store, prepared_hyp)[1].strategy_sha
 
@@ -241,6 +245,49 @@ def test_a_miss_counts_against_the_cards_asked_for_and_survives_a_resume(
     active = records.active(store, prepared_hyp)
     assert active is not None
     assert driver._trailing_non_keeps(store, active) == 2, "the discard and the miss"
+
+
+def test_a_redundant_card_is_a_miss_that_the_next_proposal_is_told_about(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A candidate that held what a judged strategy held costs the backtest and no
+    trial; it counts toward the stall, survives a resume, and reaches the proposer by
+    the name of the card it repeated, since no card of its own will."""
+    scripted(ws, propose=[proposal("revert"), proposal("revert", desc="the same bet again")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert (outcome.proposed, outcome.keeps, outcome.redundant, outcome.missed) == (2, 1, 1, 0)
+    assert statuses(store, prepared_hyp) == ["keep", "keep"]
+    (event,) = store.events(kind=research_loop.REDUNDANT, subject=prepared_hyp)
+    kept = records.cards_of(store, prepared_hyp)[1]
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["desc"] == "the same bet again"
+    active = records.require_active(store, prepared_hyp)
+    assert driver._trailing_non_keeps(store, active) == 1, "the miss, after the keep"
+    assert align.lane_strategy(store, active, ws.root / active.dir) == store.get_blob(
+        kept.strategy_sha
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=1)
+
+    third = recorded.of("propose")[-1]
+    assert '"redundant"' in third.user
+    assert f'"like": "{kept.sha7}"' in third.user
+    assert "the same bet again" in third.user
+
+
+def test_redundant_misses_count_toward_the_stall(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("revert")])
+
+    outcome = driver.run(workspace, store, prepared_hyp)
+
+    assert outcome.reason == "stalled"
+    assert (outcome.keeps, outcome.redundant) == (1, 2)
+    assert records.active(store, prepared_hyp) is None
 
 
 def test_recent_cards_reach_across_runs_under_the_same_pins(

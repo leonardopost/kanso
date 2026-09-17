@@ -118,8 +118,8 @@ def test_drift_rewinds_to_the_last_keep_a_check_had_already_passed(
     assert kept.status == "keep"
     assert align.check(ws, store, hyp_id) == (True, None)
 
-    write_lane(ws, hyp_id, SEED)
-    dropped = research.card(ws, store, hyp_id, "back to trading nothing")
+    write_lane(ws, hyp_id, SEED.replace(b'mode = "flat"', b'mode = "weak"'))
+    dropped = research.card(ws, store, hyp_id, "react to every step")
     assert dropped.status == "discard"
 
     ok, _ = align.check(ws, store, hyp_id)

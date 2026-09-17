@@ -29,6 +29,17 @@ path to a catalog.
 bytes are a blob; a keep rewrites `hypotheses/<id>/strategy.py`, and anything else
 restores the lane copy from the best blob, or from the run's base before the first keep.
 `results.tsv` is rendered from the records afterwards, so no restore can lose history.
+
+**A result already known is not a trial.** After the keep rule has had its say, a card
+that did not keep is compared by what it held — its signature, `research/records.py` —
+against every strategy judged under the run's pins, and one that held the same book on
+`[research] redundant_pct` percent of their shared sessions is refused as *redundant*:
+no card, no trial, the lane restored, a `redundant` event, and `RedundantError` for the
+caller. The keep rule runs first so that a candidate which beats the best is a keep
+whatever it resembles, and the baseline is never redundant, since it is the best blob
+of the last run and its own signature is already stored. The trial count is the size
+of the search that found the result, and a spelling that repeats a bet already measured
+did not widen the search.
 """
 
 from __future__ import annotations
@@ -92,7 +103,9 @@ __all__ = [
     "BASELINE",
     "HEADROOM",
     "MIN_CARD_BUDGET_S",
+    "REDUNDANT",
     "RESEARCHABLE",
+    "RedundantError",
     "Setup",
     "begin",
     "card",
@@ -118,6 +131,15 @@ rather than a refusal anyone reads."""
 
 CARDED: Final = "card"
 ENDED: Final = "run_ended"
+REDUNDANT: Final = "redundant"
+"""The event a redundant miss appends under the hypothesis id: the candidate held the
+same book as a strategy already judged under the pins, and was refused without a card."""
+
+
+class RedundantError(PreconditionError):
+    """The candidate's result is already known: it held what a judged strategy held."""
+
+
 BASELINE_FAILED: Final = "baseline_failed"
 """The event kinds this module appends, all under the hypothesis id as subject."""
 
@@ -579,8 +601,12 @@ def _judge(
     host_run: CardRun | None,
     directory: Path,
     tags: Sequence[Tag] = (),
+    baseline: bool = False,
 ) -> Card:
-    """Steps 3 to 5: the constraints, the keep rule and the record."""
+    """Steps 3 to 5: the constraints, the keep rule, the redundancy check and the record.
+
+    `baseline` exempts the run's first card from the redundancy check and nothing else.
+    """
     n_trials = records.n_trials(store, run.hyp_id) + 1
     if result.refused is not None:
         return _record(
@@ -635,6 +661,13 @@ def _judge(
     metric, se = _measure(setup, result.run, host_run)
     passed = integrity.passed and all(gate.passed for gate in constraints)
     kept = passed and _keeps(setup, store, run, source, metric, se)
+    held = records.signature(result.run)
+    if not kept and not baseline:
+        like = records.redundant_with(store, run, held, ws.config.research.redundant_pct)
+        if like is not None:
+            records.record_signature(store, run, strategy_sha, held)
+            _refuse_redundant(store, run, strategy_sha, desc, metric, like, directory=directory)
+    records.record_signature(store, run, strategy_sha, held)
     return _record(
         ws,
         store,
@@ -654,6 +687,49 @@ def _judge(
         crash_tail=None,
         directory=directory,
         tags=tags,
+    )
+
+
+def _refuse_redundant(
+    store: StateStore,
+    run: RunRecord,
+    strategy_sha: str,
+    desc: str,
+    metric: float,
+    like: records.Redundancy,
+    *,
+    directory: Path,
+) -> NoReturn:
+    """Restore the lane copy, record the miss as an event, and refuse the card.
+
+    The metric the redundant run measured travels on the event and nowhere else: it is
+    the number a card would have carried, and the reason there is no card is that the
+    same number was already on one.
+    """
+    lanes.restore(store, directory, {STRATEGY_FILE: run.best_sha or run.base_sha})
+    store.event(
+        REDUNDANT,
+        run.hyp_id,
+        {
+            "run_id": run.run_id,
+            "lane": run.lane,
+            "sha": strategy_sha[:7],
+            "like": like.like[:7],
+            "matched": like.matched,
+            "sessions": like.shared,
+            "pct": round(like.pct, 2),
+            "metric": metric,
+            "desc": desc,
+        },
+    )
+    raise RedundantError(
+        f"{strategy_sha[:7]} held the same book as {like.like[:7]} on {like.matched} of "
+        f"{like.shared} sessions ({like.pct:.0f}%), so its result is already known and it "
+        "is not an experiment; the lane copy has been restored",
+        remedy=(
+            "change what the strategy holds and when, not how it is written; "
+            f"`kanso research show {run.hyp_id} --sha {like.like[:7]}` prints the card it repeats"
+        ),
     )
 
 
@@ -778,6 +854,7 @@ def begin(
         result=result,
         host_run=host_run,
         directory=directory,
+        baseline=True,
     )
     return records.require_active(store, hyp_id)
 
@@ -893,9 +970,10 @@ def card(
 
     Stores the bytes, checks the static half of `strategy_integrity` before anything
     runs, backtests the research window in a subprocess under the run's budgets,
-    evaluates the constraints and the keep rule, and records the card. `tags` are the
-    proposer's account of the change, from `kanso.schemas.TAGS`; a card made by hand
-    carries none.
+    evaluates the constraints and the keep rule, and records the card — or raises
+    `RedundantError` with no card when what it held is what a judged strategy already
+    held. `tags` are the proposer's account of the change, from `kanso.schemas.TAGS`; a
+    card made by hand carries none.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)

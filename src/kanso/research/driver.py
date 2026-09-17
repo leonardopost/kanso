@@ -21,7 +21,10 @@ trial. A ladder that runs out having judged a repeat anywhere in it is a *miss*:
 was asked three times and reached for a change already tried at least once, which is what a
 discard says too, so it counts toward the stall exactly as a discard does and is recorded
 as an event rather than a card. A ladder that runs out without ever proposing a repeat —
-answers that do not apply, or do not parse — is still a failure of the step.
+answers that do not apply, or do not parse — is still a failure of the step. A candidate
+that ran and held the same book as a strategy already judged under the pins is a miss of
+the same kind, refused by the loop after the backtest rather than before it: recorded as a
+`redundant` event, counted toward the stall, and shown to the next proposal by name.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
@@ -74,6 +77,7 @@ __all__ = [
     "CRASH_TAIL_LINES",
     "DRIFT_LINES",
     "GATE_LINES",
+    "REDUNDANT_LINES",
     "REPEATED",
     "TASK",
     "NothingNewError",
@@ -92,6 +96,10 @@ GATE_LINES: Final = 10
 
 DRIFT_LINES: Final = 3
 """How many of a run's rewinds are fed back into the next proposal, newest first."""
+
+REDUNDANT_LINES: Final = 3
+"""How many of a run's redundant misses are fed back into the next proposal, newest
+first: a miss that leaves no card is otherwise invisible to the proposer that made it."""
 
 CARDS: Final = "cards"
 STALLED: Final = "stalled"
@@ -128,6 +136,7 @@ class Outcome:
     discards: int
     crashes: int
     missed: int
+    redundant: int
     checks: int
     drifts: int
     reason: str
@@ -146,6 +155,7 @@ class Outcome:
             "discards": self.discards,
             "crashes": self.crashes,
             "missed": self.missed,
+            "redundant": self.redundant,
             "checks": self.checks,
             "drifts": self.drifts,
             "reason": self.reason,
@@ -177,7 +187,7 @@ def run(
     settings = ws.config.research
     directory = ws.root / active.dir
     tally = {"keep": 0, "discard": 0, "crash": 0}
-    proposed = missed = checks = drifts = 0
+    proposed = missed = redundant = checks = drifts = 0
     misses = _trailing_non_keeps(store, active)
     waiting = align.since(store, active)
     previous = _last_diff(store, active)
@@ -201,7 +211,16 @@ def run(
                 break
             continue
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
-        card = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
+        try:
+            card = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
+        except research_loop.RedundantError:
+            proposed += 1
+            redundant += 1
+            misses += 1
+            if misses >= settings.stall_k:
+                reason = STALLED
+                break
+            continue
         proposed += 1
         waiting += 1
         previous = patch
@@ -231,6 +250,7 @@ def run(
         discards=tally["discard"],
         crashes=tally["crash"],
         missed=missed,
+        redundant=redundant,
         checks=checks,
         drifts=drifts,
         reason=reason,
@@ -335,6 +355,9 @@ def _dynamic(
     rewound = _rewound_for(store, active)
     if rewound:
         facts["rewound_for"] = rewound
+    redundant = _redundant_in(store, active)
+    if redundant:
+        facts["redundant"] = redundant
     return facts
 
 
@@ -443,6 +466,24 @@ def _rewound_for(store: StateStore, active: RunRecord) -> list[str]:
     return [reason for reason in said if reason]
 
 
+def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object]]:
+    """This run's newest redundant misses: what was tried, and which card it repeated.
+
+    A redundant candidate leaves no card, so without this it reaches the proposer as
+    nothing at all, and a proposer told nothing writes the same bet a third way.
+    """
+    rows = store.connection.execute(
+        "SELECT detail FROM events WHERE kind = ? AND subject = ?"
+        " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC LIMIT ?",
+        (research_loop.REDUNDANT, active.hyp_id, active.run_id, REDUNDANT_LINES),
+    ).fetchall()
+    found: list[dict[str, object]] = []
+    for row in rows:
+        detail = json.loads(str(row["detail"]))
+        found.append({key: detail.get(key) for key in ("desc", "like", "pct")})
+    return found
+
+
 def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Row]:
     """The last `limit` cards of the hypothesis under this run's pins, oldest first.
 
@@ -520,10 +561,10 @@ def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:
         (active.run_id, active.run_id),
     ).fetchone()
     misses = store.connection.execute(
-        "SELECT COUNT(*) FROM events WHERE kind = ? AND subject = ?"
+        "SELECT COUNT(*) FROM events WHERE kind IN (?, ?) AND subject = ?"
         " AND json_extract(detail, '$.run_id') = ? AND ts > COALESCE("
         " (SELECT MAX(created_at) FROM cards WHERE run_id = ? AND status = 'keep'), '')",
-        (REPEATED, active.hyp_id, active.run_id, active.run_id),
+        (REPEATED, research_loop.REDUNDANT, active.hyp_id, active.run_id, active.run_id),
     ).fetchone()
     return int(cards[0]) + int(misses[0])
 

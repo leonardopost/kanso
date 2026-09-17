@@ -218,6 +218,22 @@ cards say what was tried last; the coverage says what has been tried at all, in 
 bounded by the vocabulary rather than by the hypothesis. A card made by hand carries no
 tags, and reaches the table under none.
 
+A card that ran and did not keep is then compared by what it **held**: its signature,
+which is for each session of the research window the instruments and sides open at its
+end, keyed by the session's day. Two strategies with the same signature on nearly every
+shared session made the same bets and earned the same number, however differently they
+were written — a threshold moved, a helper renamed, a condition spelt the other way — so
+the second is not an experiment. One that matches a strategy already judged under the
+run's pins on at least `[research] redundant_pct` percent of their shared sessions is
+**redundant**: no card, no trial, the lane restored, a `redundant` event carrying the
+metric it measured and the card it repeats, and the proposer shown that card by name on
+its next turn. The keep rule is asked first, so a candidate that beats the best is a keep
+whatever it resembles; the baseline is exempt, since it is the last run's best and its
+signature is already stored; and signatures are stored for every judged run, redundant
+misses included, so the third spelling of an idea is refused against the second as well as
+the first. Signatures live under the pins — the hypothesis file, the snapshot, the
+criteria — and a run under new pins starts with none.
+
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.

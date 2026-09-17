@@ -260,10 +260,75 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == REVERTING
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
 
-    again = loop.card(ws, store, registered, "the very same file")
-    assert again.status == "discard"
-    assert again.metric == kept.metric, "the same snapshot and code give the same number"
+    with pytest.raises(loop.RedundantError, match="result is already known") as refused:
+        loop.card(ws, store, registered, "the very same file")
+    assert kept.sha7 in refused.value.message
+    assert f"--sha {kept.sha7}" in str(refused.value.remedy)
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert records.n_trials(store, registered) == 2, "a known result is not a trial"
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["pct"] == 100.0
+    assert event.detail["metric"] == kept.metric, "the same snapshot and code give the same number"
+
+
+def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restored(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The signature reads what a run held, not how the file that held it was written."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    respelt = REVERTING.replace(b"self.long = False", b"self.long = bool(0)")
+    assert respelt != REVERTING
+    edit(ws, run, respelt)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(ws, store, registered, "the same rule, spelt otherwise")
+
+    assert (lane_of(ws, run) / "strategy.py").read_bytes() == REVERTING
+    assert statuses(store) == ["keep", "keep"]
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["sessions"] == 31, "one session per day of the research window"
+    assert event.detail["matched"] == 31
+
+
+def test_the_keep_rule_is_asked_before_the_signature(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate that beats the best is a keep whatever it resembles: refusing it
+    unmeasured would hide exactly the improvement a signature cannot see."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    loop.card(ws, store, registered, "the trough rule")
+    monkeypatch.setattr(loop, "_keeps", lambda *_: True)
+    edit(ws, run, REVERTING.replace(b"self.long = False", b"self.long = bool(0)"))
+
+    again = loop.card(ws, store, registered, "the same book, judged better")
+
+    assert again.status == "keep"
+    assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+
+
+def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Holding nothing is a book too, and the baseline is exempt: it is the best blob of
+    the last run, whose signature is already stored."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, FLAT + b"# spelt otherwise\n")
+    with pytest.raises(loop.RedundantError, match="already known"):
+        loop.card(ws, store, registered, "still trades nothing")
+    edit(ws, run, REVERTING)
+    loop.card(ws, store, registered, "the trough rule")
+    loop.end(ws, store, registered)
+
+    resumed = loop.begin(ws, store, registered)
+
+    assert resumed.base_sha == sha256(REVERTING).hexdigest()
+    assert statuses(store) == ["keep", "keep", "keep"], "the baseline of the second run"
+    assert len(store.events(kind=loop.REDUNDANT, subject=registered)) == 1
 
 
 def test_a_card_that_is_worse_is_discarded_and_the_lane_is_restored(

@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
 from kanso.errors import Exit
+from kanso.state import StateStore
 from kanso.workspace import find
 
 from .conftest import (
@@ -153,21 +154,26 @@ def test_a_keep_rewrites_the_workspace_strategy(runner: CliRunner, registered: P
     assert workspace_copy == REVERTING
 
 
-def test_the_same_bytes_over_the_same_snapshot_give_the_same_metric(
+def test_the_same_bytes_over_the_same_snapshot_are_a_known_result_and_not_a_card(
     runner: CliRunner, registered: Path
 ) -> None:
-    """Determinism is the property every other card comparison rests on."""
+    """Determinism is the property every other card comparison rests on, and it is why
+    the second run of the same book is refused: its number is already on a card."""
     begin(runner, registered)
     edit(registered, REVERTING)
     first = card(runner, registered, "fade the rolling mean")
 
-    second = card(runner, registered, "the same code again")
+    result = at(runner, registered, "research", "card", HYP_ID, "--desc", "again", "--json")
 
-    assert second["strategy_sha"] == first["strategy_sha"]
-    assert second["metric"] == first["metric"]
-    assert second["metric_se"] == first["metric_se"]
-    assert second["n_trades"] == first["n_trades"]
-    assert second["status"] == "discard"
+    assert result.exit_code == Exit.PRECONDITION, result.stdout
+    refused = payload(result)
+    assert "already known" in refused["error"]
+    assert f"--sha {first['strategy_sha'][:7]}" in refused["remedy"]
+    with StateStore(registered / "state.db") as store:
+        (event,) = store.events(kind="redundant", subject=HYP_ID)
+        assert event.detail["metric"] == first["metric"]
+        assert event.detail["like"] == first["strategy_sha"][:7]
+    assert (lane(registered) / "strategy.py").read_text() == REVERTING
 
 
 def test_a_card_that_earns_less_than_the_best_discards_and_the_lane_is_restored(
@@ -288,8 +294,9 @@ def test_a_constraint_that_judged_nothing_says_why(runner: CliRunner, loaded: Pa
     assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
     classify(loaded)
     begin(runner, loaded)
+    edit(loaded, REVERTING)  # the baseline's own bytes would be a known result, not a card
 
-    result = at(runner, loaded, "research", "card", HYP_ID, "--desc", "the flat baseline again")
+    result = at(runner, loaded, "research", "card", HYP_ID, "--desc", "the trough rule")
 
     assert result.exit_code == Exit.OK
     assert "min_trades: pass — skipped:" in result.stdout
@@ -482,7 +489,8 @@ def test_a_run_writes_nothing_to_the_instrument_store(runner: CliRunner, registe
     cache = (registered / "instruments.yaml").read_bytes()
 
     begin(runner, registered)
-    card(runner, registered, "unchanged")
+    edit(registered, REVERTING)
+    card(runner, registered, "the trough rule")
 
     assert resolved_instruments_checksum(ws) == pinned
     assert (registered / "instruments.yaml").read_bytes() == cache
@@ -526,6 +534,7 @@ def test_a_scheduled_split_the_window_also_carries_runs(runner: CliRunner, loade
     schedule_split(runner, loaded)
 
     begun = at(runner, loaded, "research", "begin", HYP_ID, "--tag", "20240101-1")
+    edit(loaded, WEAK)  # a book of its own: the baseline's bytes would be a known result
     result = at(runner, loaded, "research", "card", HYP_ID, "--desc", "fade a declared split")
 
     assert begun.exit_code == Exit.OK, begun.output

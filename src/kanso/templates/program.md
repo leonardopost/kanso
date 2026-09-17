@@ -20,7 +20,7 @@ You are an autonomous researcher. Your job is to improve `strategy.py` against t
 1. The lane directory's `strategy.py` is the last keep (or the baseline): kanso restored it after any discard or crash. Start from it.
 2. Change `strategy.py` with **one** idea.
 3. `kanso research card {{hyp_id}} --desc "<≤120 chars, what and why>"` — kanso stores the lane directory's `strategy.py` under its sha256 (`strategy_sha`) in `state.db`, runs the backtest under the run's wall-clock budget, evaluates the objective and card gates, records the card, and either makes that sha `best` and writes the file back to `hypotheses/{{hyp_id}}/strategy.py` (keep) or restores the lane directory's `strategy.py` from the `best` snapshot, else the run's base (discard/crash). Read its single output line: `keep|discard|crash · metric · Δ · reason`.
-4. `crash`: the command prints the traceback tail. Fix an obvious error (typo, import) in your next change; if the idea is fundamentally broken, move on.
+4. `crash`: the command prints the traceback tail. Fix an obvious error (typo, import) in your next change; if the idea is fundamentally broken, move on. `redundant` (exit 2, no card): what you held at each session's end was what a card already judged held, so the result is known — the command names that card; change what the strategy holds, not how it is spelt.
 5. Prefer simpler code. A keep that adds more than `max_lines_per_keep` lines must clear twice the noise margin.
 6. Do not write notes, summaries, or learnings anywhere. The cards are the log.
 7. Go to 1.

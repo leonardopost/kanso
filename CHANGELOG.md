@@ -6,8 +6,9 @@ One line per user-visible change, newest release first. The format is the one
 ## Unreleased
 
 - **Every proposal says what it is, and the proposer is shown what has been tried.** A `propose` answer now owes `tags`, one or more of the twenty-one strings `kanso.schemas.TAGS` fixes — what the change reads, holds, filters, exits and sizes, or `parameter_only`/`refactor` — recorded on the card (`cards.tags`, migration `0003_memory.sql`; a card recorded before it reads back with none). Each call is shown `coverage`: every card under the run's pins read back by tag, as a count, the best metric and its status, and the newest card, beside the last `context_cards` cards. A mock or demo script that proposes must now send `tags`; the shipped demo does. Adopting 0.8.0 moves `criteria_version`, so the proposer's memory — recent cards, coverage and repeats — restarts at the first run under it.
-- Templates: `demo/responses.yaml` tags its three proposals.
-- Docs: `cli.md` (`research run`), `concepts.md` (card).
+- **A result already known is not a trial.** After the keep rule, a card that did not keep is compared by what it held — for each session, the instruments and sides open at its end — against every strategy judged under the run's pins, and one matching on at least `[research] redundant_pct` percent of their shared sessions (template 97) is a *redundant* miss: no card, no trial, the lane restored, a `redundant` event carrying the metric it measured and the card it repeats, and the next proposals shown that card by name. The same bytes twice are the plainest case, and `kanso research card` now refuses them (exit 2) where it recorded a discard. A card that beats the best is a keep whatever it resembles; the baseline is never redundant. Measured on the mock cycle that drives the driver tests, thirty proposals that were 1 keep, 10 crashes and 19 discards are now 1 keep, 10 crashes, 1 discard and 18 redundant misses, and the trial count falls from 31 to 13. `redundant_pct` is a framework search rule beside `stall_k`, not an agent decision. Signatures are the `signatures` table of migration `0003_memory.sql`.
+- Templates: `demo/responses.yaml` tags its three proposals; `kanso.toml` gains `redundant_pct`.
+- Docs: `cli.md` (`research card`, `research run`, the `[research]` keys), `concepts.md` (card), `backlog.md` row 59.
 
 ## v0.7.0 — 2026-09-11
 
