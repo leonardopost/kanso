@@ -417,19 +417,25 @@ class Strategy(KansoStrategy):
 
 
 @pytest.mark.parametrize(
-    ("quoted", "restarted"),
-    [(False, False), (True, False), (False, True)],
-    ids=["fixed spread", "quoted spread", "a restart settled ninety days before"],
+    ("quoted", "gone_days", "seed"),
+    [(False, None, 0.0), (True, None, 0.0), (False, 90, 0.0), (False, 1, 1_000.0)],
+    ids=[
+        "fixed spread",
+        "quoted spread",
+        "a restart settled ninety days before",
+        "a restart seeded across the turn of a month",
+    ],
 )
 def test_the_balance_read_before_acting_is_the_book_the_policy_left(
-    tmp_path: Path, quoted: bool, restarted: bool
+    tmp_path: Path, quoted: bool, gone_days: int | None, seed: float
 ) -> None:
     """Every balance read at a period end the sleeve did not trade in is the equity the
     card struck there before that end's own carry and transfer — so every earlier carry,
     every earlier reset and the fills of every earlier end, including the resting bid the
     venue matched against the point that turned a period, are in it to the last cent. A
-    restart's seed is the harness's too: the cushion it draws on at the first end, which a
-    month turned since the settled end resets, and a first carry from the resumption."""
+    restart's seed is the harness's too: a first carry from the resumption, which ninety
+    days of carry would put in every later balance, and the cushion it draws on at the
+    first end, which a month turned since the settled end resets."""
     fields = booked(
         {"reset": "monthly", "financing_rate_bps": 500.0}, max_position_pct=200.0, max_leverage=2.0
     ).model_dump(by_alias=True, mode="json")
@@ -439,10 +445,14 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
     hyp = Hypothesis.model_validate(fields)
     record = tmp_path / "balance.txt"
     opens = midnight_ns(QUARTER[0])
-    seed = 1_000.0 if restarted else 0.0
+    restarted = gone_days is not None
     restart = (
-        {"cushion": seed, "settled_ns": opens - 90 * NS_PER_DAY, "resumes_ns": opens + 3_600}
-        if restarted
+        {
+            "cushion": seed,
+            "settled_ns": opens - gone_days * NS_PER_DAY,
+            "resumes_ns": opens + 3_600,
+        }
+        if gone_days is not None
         else {}
     )
     request = RunRequest(
@@ -474,7 +484,7 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
         for index, cushion in enumerate(card.cushion)
         if cushion != (card.cushion[index - 1] if index else seed)
     ]
-    assert moved == ([0] if restarted else []) + [31, 60], (
+    assert moved == ([0] if seed else []) + [31, 60], (
         "a transfer at the first end of February and of March, and a restart's at its first"
     )
     if restarted:
