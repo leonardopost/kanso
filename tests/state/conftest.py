@@ -10,7 +10,10 @@ from kanso.state import StateStore
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PREVIOUS_RELEASE = FIXTURES / "state_0_7_0.sql"
-"""A workspace `state.db` the 0.7.0 demo wrote, as `sqlite3 .dump` recorded it."""
+"""A workspace `state.db` the 0.7.0 demo wrote, as `sqlite3.Connection.iterdump()` emitted it.
+
+The file's header records the command that printed it and why it is not a `.dump`.
+"""
 PREVIOUS_RELEASE_VERSION = 2
 """The schema version 0.7.0 stamped on it: the newest migration that release shipped."""
 
