@@ -2,8 +2,9 @@
 
 The explorer itself is proved in its own slice; what is asserted here is the command around
 it — that the object printed under `--json` names what was written, that the draft it
-writes is one `hyp validate` admits and `hyp add` registers as a draft, and that with no
-model to call the step exits 2 rather than writing anything of its own.
+writes is one `hyp validate` admits and `hyp add` registers as a draft, that with no
+model to call the step exits 2 rather than writing anything of its own, and that an attempt
+by hand that fails starts a lane's count of stalls over just as a lane's own does.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import yaml
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.research import explore
+from kanso.state import StateStore
 
 from . import mocked
 from .conftest import DRAFT, FLAT, HYP_ID, at, payload
@@ -107,3 +110,25 @@ def test_explore_of_a_hypothesis_never_researched_exits_2(
 
     assert result.exit_code == Exit.PRECONDITION
     assert payload(result)["remedy"] == f"run `kanso research run {HYP_ID}`"
+
+
+def test_a_failed_attempt_by_hand_starts_the_count_of_stalls_over(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """The count a lane reads is the parent's events, and the operator's attempt is one."""
+    assert at(runner, mocked_ws, "research", "run", HYP_ID, "--cards", 1).exit_code == Exit.OK
+    mocked.write_script(mocked_ws, "frontier", {"explore": [{}]})
+    with StateStore(mocked_ws / "state.db") as store:
+        for _ in range(2):
+            store.event("stalled", HYP_ID, {"best_sha": "a" * 64, "verdict": None})
+        assert explore.due(store, HYP_ID, 2) is True
+
+    result = at(runner, mocked_ws, "hyp", "explore", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert "explore: no model answered" in payload(result)["error"]
+    with StateStore(mocked_ws / "state.db") as store:
+        [failed] = [e for e in store.events(subject=HYP_ID) if e.kind == explore.EXPLORED_FAILED]
+        assert failed.detail["lane"] == "op"
+        assert failed.detail["error"] == payload(result)["error"]
+        assert explore.due(store, HYP_ID, 2) is False

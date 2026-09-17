@@ -274,8 +274,12 @@ measured on the parent's research, so that is the last day it saw, and one certi
 would be certified on data within the embargo of the data that chose it. It is written as a
 draft to `hypotheses/<id>/`, a directory that did not exist, and registered by nothing: an
 `explored` escalation offers `hyp validate` and `hyp add`, and whether it gets a lane is
-yours. A lane's exploration that fails is an `explored_failed` event, never a failure of
-the lane, and any attempt starts the count over.
+yours. Every attempt, by hand or by a lane, leaves an event under the parent — `explored`
+when it wrote a candidate, `explored_failed` with the error and its remedy when it did not —
+and the stalls a lane counts are the ones since the newest of them, so a provider that is
+down costs one call per spell. A hypothesis not registered or never researched is refused
+before any attempt and leaves neither. A lane's exploration that fails is never a failure
+of the lane.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search

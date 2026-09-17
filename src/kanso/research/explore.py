@@ -45,11 +45,13 @@ offering `hyp validate` and `hyp add`.
 **The trigger is the operator's, or a count the operator set.** `kanso hyp explore ID`
 runs it by hand. `[research] explore_after_stalls` — zero, never, in the template — runs
 it in a daemon lane after a run that stalled, once the parent's newest stalls, counted
-since its last exploration, all ended on the same best and number at least that many. An
-attempt, failed or not, starts the count over, so a provider that is down costs one call
-per spell rather than one per stall. A lane's exploration that fails is an
-`explored_failed` event and never the lane's failure: the parent was already requeued by
-its stall, and nothing about a bad answer for a new idea is a reason to hold the old one.
+since its last exploration, all ended on the same best and number at least that many.
+Either trigger's attempt, failed or not, starts the count over — a candidate written is an
+`explored` event under the parent, a failure an `explored_failed` one — so a provider that
+is down costs one call per spell rather than one per stall. A hypothesis not registered or
+never researched is refused before any attempt and leaves nothing. A lane's exploration
+that fails is never the lane's failure: the parent was already requeued by its stall, and
+nothing about a bad answer for a new idea is a reason to hold the old one.
 """
 
 from __future__ import annotations
@@ -155,7 +157,10 @@ def explore(
 
     Refuses a hypothesis that is not registered, or that has never been researched: with
     no run there are no pins to read the research under and nothing learned to explore
-    from. `lane` is the lane the call's spend is attributed to.
+    from. Past those two refusals it is an attempt, and an attempt that fails — no model
+    to ask, a ladder that ran out, a directory that appeared — leaves an `explored_failed`
+    event under the parent, carrying `lane`, before the error is raised, whether the
+    operator ran it or a lane did. `lane` is the lane the call's spend is attributed to.
     """
     show(ws, store, hyp_id)
     runs = records.runs_of(store, hyp_id)
@@ -165,7 +170,21 @@ def explore(
             "to explore from",
             remedy=f"run `kanso research run {hyp_id}`",
         )
+    try:
+        return _attempt(ws, store, runs, lane)
+    except KansoError as exc:
+        store.event(
+            EXPLORED_FAILED,
+            hyp_id,
+            {"lane": lane, "error": exc.message, "because": exc.remedy},
+        )
+        raise
+
+
+def _attempt(ws: Workspace, store: StateStore, runs: list[RunRecord], lane: str) -> Explored:
+    """Ask for a candidate from the parent's research, judge it on the ladder, write it."""
     newest = runs[-1]
+    hyp_id = newest.hyp_id
     parent = _pinned(store, newest.hypothesis_sha)
     seen = max(_pinned(store, sha).windows.research.end for sha in {r.hypothesis_sha for r in runs})
     accepted: list[dict[str, Any]] = []
@@ -217,20 +236,16 @@ def due(store: StateStore, hyp_id: str, after: int) -> bool:
 def after_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str) -> Explored | None:
     """Explore from a parent whose run just stalled, when its stalls say so.
 
-    What a daemon lane calls once a run it drove has stalled. A failure is recorded as an
-    `explored_failed` event carrying the message and the remedy, and returns `None` like a
-    spell that did not call for one: the lane carries on with its next claim.
+    What a daemon lane calls once a run it drove has stalled. A failure returns `None` like
+    a spell that did not call for one, and the lane carries on with its next claim; the
+    `explored_failed` event is already written. A parent that stalled is registered and
+    has run, so neither refusal that precedes an attempt can reach here.
     """
     if not due(store, hyp_id, ws.config.research.explore_after_stalls):
         return None
     try:
         return explore(ws, store, hyp_id, lane=lane)
-    except KansoError as exc:
-        store.event(
-            EXPLORED_FAILED,
-            hyp_id,
-            {"lane": lane, "error": exc.message, "because": exc.remedy},
-        )
+    except KansoError:
         return None
 
 
