@@ -240,6 +240,24 @@ def test_a_book_levered_past_its_equity_is_charged_the_carry_every_period(
         previous_equity = value
 
 
+def test_a_short_s_notional_is_borrowed_like_a_long_s(quarter: Path) -> None:
+    """Short 15,000 from 10.00 on 100,000: on January 3 the stock closes at 11.00, so the book
+    holds 165,000 of gross against 85,000 less the entry's costs and two earlier days' carry,
+    and pays 500 bps a year on the difference for the day."""
+    hyp = booked({"financing_rate_bps": 500.0}, max_position_pct=200.0, max_leverage=2.0)
+    card = run(request_over(hyp, notional=150_000.0, side="SELL"), quarter).run
+
+    qty, paid, cost = entered(card)
+    assert qty == -15_000.0
+    gross = 15_000.0 * 11.0
+    assert [item.notional for item in card.held if item.ts_ns == card.period_ends_ns[2]] == [gross]
+    equity = CAPITAL - paid - cost - gross - card.carry[0] - card.carry[1]
+    assert card.equity[2] + card.carry[2] == pytest.approx(equity)
+    assert card.carry[2] == pytest.approx((gross - equity) * 0.05 * NS_PER_DAY / NS_PER_YEAR)
+    assert paid == -149_875.0, "the venue walks the entry one tick"
+    assert card.carry[2] == pytest.approx(10.98, abs=1e-2), "80,213.44 borrowed for a day"
+
+
 def test_a_book_inside_its_equity_is_charged_nothing(quarter: Path) -> None:
     card = run(request_over(booked({"financing_rate_bps": 500.0})), quarter).run
 
@@ -386,6 +404,7 @@ from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 class Config(KansoConfig):
     record: str = ""
     notional: float = 150_000.0
+    side: str = "BUY"
 
 
 class Strategy(KansoStrategy):
@@ -404,7 +423,7 @@ class Strategy(KansoStrategy):
             out.write(f"{bar.ts_init} {self.balance!r}\\n")
         name = bar.bar_type.instrument_id
         if self.seen in (1, 62):
-            self.submit_entry(name, "BUY", notional=self.kanso_config.notional)
+            self.submit_entry(name, self.kanso_config.side, notional=self.kanso_config.notional)
         if self.seen == 1:
             self.submit_order(
                 self.order_factory.limit(
@@ -417,17 +436,24 @@ class Strategy(KansoStrategy):
 
 
 @pytest.mark.parametrize(
-    ("quoted", "gone_days", "seed"),
-    [(False, None, 0.0), (True, None, 0.0), (False, 90, 0.0), (False, 1, 1_000.0)],
+    ("quoted", "gone_days", "seed", "side"),
+    [
+        (False, None, 0.0, "BUY"),
+        (True, None, 0.0, "BUY"),
+        (False, 90, 0.0, "BUY"),
+        (False, 1, 1_000.0, "BUY"),
+        (False, None, 0.0, "SELL"),
+    ],
     ids=[
         "fixed spread",
         "quoted spread",
         "a restart settled ninety days before",
         "a restart seeded across the turn of a month",
+        "short",
     ],
 )
 def test_the_balance_read_before_acting_is_the_book_the_policy_left(
-    tmp_path: Path, quoted: bool, gone_days: int | None, seed: float
+    tmp_path: Path, quoted: bool, gone_days: int | None, seed: float, side: str
 ) -> None:
     """Every balance read at a period end the sleeve did not trade in is the equity the
     card struck there before that end's own carry and transfer — so every earlier carry,
@@ -462,7 +488,7 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
         snapshot_id=SNAPSHOT,
         venue_model=venue_model(hyp, quotes_available=quoted),
         capital=CAPITAL,
-        overrides={"record": str(record)},
+        overrides={"record": str(record), "side": side},
         **restart,  # type: ignore[arg-type]
     )
     groups: list[tuple[object, ...]] = [tuple(bars(QUARTER))]
@@ -484,8 +510,9 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
         for index, cushion in enumerate(card.cushion)
         if cushion != (card.cushion[index - 1] if index else seed)
     ]
-    assert moved == ([0] if seed else []) + [31, 60], (
-        "a transfer at the first end of February and of March, and a restart's at its first"
+    assert moved == ([0] if seed else []) + ([31, 60] if side == "BUY" else []), (
+        "a transfer at the first end of February and of March, and a restart's at its first; "
+        "a short into the saw-tooth has nothing to set aside"
     )
     if restarted:
         a_day = (card.held[0].notional - card.equity[0] - card.carry[0]) * 0.05 / 365.25
