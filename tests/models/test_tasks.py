@@ -99,6 +99,21 @@ def test_the_system_turn_holds_the_instruction_the_schema_and_the_subject() -> N
     assert "reverts within four sessions" in call.system
 
 
+def test_a_proposal_owes_at_least_one_tag_from_the_vocabulary() -> None:
+    """The tags are the key of the coverage table, so every card must carry one on the
+    wire — as an enum array, the one shape a provider accepts and a free string is not."""
+    from kanso.schemas import TAGS
+
+    schema = ANSWER_SCHEMAS["propose"]
+    answer: dict[str, Any] = {"desc": "widen the band", "diff": "--- a\n+++ b\n"}
+    assert any("tags" in complaint for complaint in validate(answer, schema))
+    assert any("tags" in c for c in validate({**answer, "tags": []}, schema))
+    assert any("tags" in c for c in validate({**answer, "tags": ["clever"]}, schema))
+    assert validate({**answer, "tags": ["exit_stop", "horizon_shorter"]}, schema) == []
+    assert schema["properties"]["tags"]["items"]["enum"] == list(TAGS)  # type: ignore[index]
+    assert "`coverage`" in INSTRUCTIONS["propose"]
+
+
 def test_an_empty_dynamic_half_still_asks_for_an_answer() -> None:
     call = build("classify", ROUTE, inputs(dynamic={}))
     assert call.user == "Answer for the facts already given."

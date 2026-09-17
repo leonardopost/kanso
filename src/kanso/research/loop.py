@@ -78,6 +78,7 @@ from kanso.schemas import (
     Hypothesis,
     RunRecord,
     StrategyFile,
+    Tag,
     VenueModel,
     load_yaml,
     parse_yaml,
@@ -523,6 +524,7 @@ def _record(
     gate_results: Sequence[GateResult],
     crash_tail: str | None,
     directory: Path,
+    tags: Sequence[Tag] = (),
     restore_all: bool = False,
 ) -> Card:
     """Write the card, then move `best` or restore the lane copy, then render the log."""
@@ -538,6 +540,7 @@ def _record(
         peak_mem_gb=peak_mem_gb,
         status=status,
         desc=desc,
+        tags=list(tags),
         gate_results=list(gate_results),
         crash_tail=crash_tail,
         venue_model=setup.venue_model,
@@ -575,6 +578,7 @@ def _judge(
     result: backtest.RunResult,
     host_run: CardRun | None,
     directory: Path,
+    tags: Sequence[Tag] = (),
 ) -> Card:
     """Steps 3 to 5: the constraints, the keep rule and the record."""
     n_trials = records.n_trials(store, run.hyp_id) + 1
@@ -597,6 +601,7 @@ def _judge(
             gate_results=[integrity, verdict(sizing.GATE, False, result.refused.payload())],
             crash_tail=None,
             directory=directory,
+            tags=tags,
         )
     if result.crashed:
         return _record(
@@ -617,6 +622,7 @@ def _judge(
             gate_results=[integrity],
             crash_tail=result.traceback_tail or result.reason,
             directory=directory,
+            tags=tags,
         )
     constraints = _constraints(
         setup,
@@ -647,6 +653,7 @@ def _judge(
         gate_results=[integrity, *constraints],
         crash_tail=None,
         directory=directory,
+        tags=tags,
     )
 
 
@@ -880,12 +887,15 @@ def card(
     hyp_id: str,
     desc: str,
     lane: str = lanes.DEFAULT_LANE,
+    tags: Sequence[Tag] = (),
 ) -> Card:
     """Evaluate the lane directory's `strategy.py` as one card of the active run.
 
     Stores the bytes, checks the static half of `strategy_integrity` before anything
     runs, backtests the research window in a subprocess under the run's budgets,
-    evaluates the constraints and the keep rule, and records the card.
+    evaluates the constraints and the keep rule, and records the card. `tags` are the
+    proposer's account of the change, from `kanso.schemas.TAGS`; a card made by hand
+    carries none.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
@@ -912,6 +922,7 @@ def card(
             gate_results=[integrity],
             crash_tail=None,
             directory=directory,
+            tags=tags,
             restore_all=True,
         )
     host_run = _host_run(
@@ -944,6 +955,7 @@ def card(
         result=result,
         host_run=host_run,
         directory=directory,
+        tags=tags,
     )
 
 

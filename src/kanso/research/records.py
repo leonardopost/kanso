@@ -88,6 +88,7 @@ _CARD_COLUMNS = (
     "wall_s",
     "peak_mem_gb",
     "aligned",
+    "tags",
     "gate_results",
     "crash_tail",
     "venue_model",
@@ -266,6 +267,7 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
         card.wall_s,
         card.peak_mem_gb,
         int(card.aligned),
+        json.dumps(list(card.tags)),
         json.dumps([gate.model_dump(by_alias=True) for gate in card.gate_results], sort_keys=True),
         card.crash_tail,
         json.dumps(card.venue_model.model_dump(mode="json"), sort_keys=True),
@@ -291,6 +293,7 @@ def _run(row: sqlite3.Row) -> RunRecord:
 def _card(row: sqlite3.Row) -> Card:
     gates: Any = json.loads(str(row["gate_results"]))
     model: Any = json.loads(str(row["venue_model"]))
+    tags: Any = json.loads(str(row["tags"]))
     return Card(
         run_id=str(row["run_id"]),
         lane=str(row["lane"]),
@@ -304,6 +307,7 @@ def _card(row: sqlite3.Row) -> Card:
         status=str(row["status"]),  # type: ignore[arg-type]
         desc=str(row["description"]),
         aligned=bool(row["aligned"]),
+        tags=list(tags),
         gate_results=[GateResult.model_validate(gate) for gate in gates],
         crash_tail=None if row["crash_tail"] is None else str(row["crash_tail"]),
         venue_model=VenueModel.model_validate(model),

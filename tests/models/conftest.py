@@ -96,7 +96,11 @@ CLASSIFIED: dict[str, Any] = {
     "constraints": [{"id": "strategy_integrity", "params": pairs()}],
     "rationale": "a complete signal-to-trade thesis with nothing to attach to",
 }
-PROPOSED: dict[str, Any] = {"desc": "fade two-sigma deviations", "diff": "--- a\n+++ b\n"}
+PROPOSED: dict[str, Any] = {
+    "desc": "fade two-sigma deviations",
+    "diff": "--- a\n+++ b\n",
+    "tags": ["signal_mean_reversion"],
+}
 PLANNED: dict[str, Any] = {
     "gates": [
         {"id": "embargoed_window", "stage": "cert", "params": pairs(), "rationale": "required"},

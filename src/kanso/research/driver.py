@@ -28,8 +28,11 @@ hypothesis, the objective's definition — is byte-identical on every call of a 
 provider cache hits; the moving half is the current file, the last `context_cards` cards
 of the hypothesis under the run's pins — across runs, so a run that begins after a stall
 is not shown a blank slate and made to re-walk the last run's discards — the previous
-diff, and the tail of a crash if the last card crashed. Nothing else, however much of it
-exists.
+diff, the tail of a crash if the last card crashed, and the coverage table: every card
+under the pins, read back by the tags its proposer gave it, as a count, the best score
+and its status, and the newest card per tag. The recent cards say what was tried last;
+the coverage says what has been tried at all, in a size that does not grow with the
+hypothesis. Nothing else, however much of it exists.
 
 **Drift is checked on a clock, not on suspicion.** Every `align_every` cards the run is
 asked whether it still tests the idea, and a drift rewinds it and carries on — carrying the
@@ -52,7 +55,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso.criteria import catalogue
 from kanso.errors import PreconditionError, ValidationError
@@ -61,7 +64,7 @@ from kanso.models import CallInputs, route
 from kanso.research import align, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
-from kanso.schemas import Hypothesis, RunRecord, parse_yaml
+from kanso.schemas import Hypothesis, RunRecord, Tag, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -183,7 +186,7 @@ def run(
     while cards is None or proposed < cards:
         source = align.lane_strategy(store, active, directory)
         try:
-            desc, patch, candidate = _propose(ws, store, active, source, previous, lane)
+            desc, patch, candidate, tags = _propose(ws, store, active, source, previous, lane)
         except NothingNewError as exc:
             store.event(
                 REPEATED,
@@ -198,7 +201,7 @@ def run(
                 break
             continue
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
-        card = research_loop.card(ws, store, hyp_id, desc, lane=lane)
+        card = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
         proposed += 1
         waiting += 1
         previous = patch
@@ -247,8 +250,8 @@ def _propose(
     source: bytes,
     previous: str,
     lane: str,
-) -> tuple[str, str, bytes]:
-    """Ask for the next change and return its description, its diff and the new bytes.
+) -> tuple[str, str, bytes, list[Tag]]:
+    """Ask for the next change: its description, its diff, the new bytes and its tags.
 
     Applying the diff is the caller's check, so a diff that will not fit is corrected on
     the router's ladder rather than turned into a card that could not have run.
@@ -294,7 +297,8 @@ def _propose(
         if said is not None:
             raise NothingNewError(exc.message, remedy=said) from exc
         raise
-    return str(answer.data["desc"]), str(answer.data["diff"]), applied["source"]
+    tags = cast(list[Tag], [str(tag) for tag in cast(list[object], answer.data["tags"])])
+    return str(answer.data["desc"]), str(answer.data["diff"]), applied["source"], tags
 
 
 def _stable(store: StateStore, active: RunRecord) -> dict[str, object]:
@@ -314,11 +318,13 @@ def _dynamic(
     source: bytes,
     previous: str,
 ) -> dict[str, object]:
-    """What has changed since the last call: the file, the recent cards and the last diff."""
+    """What has changed since the last call: the file, the recent cards, the coverage of
+    every card under the pins by tag, and the last diff."""
     recent = _recent(store, active, ws.config.research.context_cards)
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),
         "recent_cards": [_summary(row) for row in recent],
+        "coverage": _coverage(store, active),
         "last_diff": previous,
     }
     if recent and recent[-1]["crash_tail"]:
@@ -453,6 +459,46 @@ def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Ro
         (*_pins(active), limit),
     ).fetchall()
     return list(reversed(rows))
+
+
+def _coverage(store: StateStore, active: RunRecord) -> dict[str, dict[str, object]]:
+    """Every card under this run's pins, read back by tag: how many, the best and the newest.
+
+    One row per tag in `kanso.schemas.TAGS` that at least one card carries: the count, the
+    highest metric and the status of the card that scored it, and the sha7 of the newest.
+    Built from `cards` alone — research-window metrics — so nothing measured on the
+    certification window reaches the proposer through it. Bounded by the vocabulary rather
+    than by the hypothesis, which is what lets it stand in for the cards `context_cards`
+    leaves out.
+    """
+    rows = store.connection.execute(
+        "SELECT cards.strategy_sha, cards.status, cards.metric, cards.tags FROM cards"
+        f"{_PINNED} ORDER BY cards.card_id",
+        _pins(active),
+    ).fetchall()
+    counts: dict[str, int] = {}
+    best: dict[str, tuple[float, str]] = {}
+    newest: dict[str, str] = {}
+    for row in rows:
+        metric, status, sha7 = (
+            float(row["metric"]),
+            str(row["status"]),
+            str(row["strategy_sha"])[:7],
+        )
+        for tag in json.loads(str(row["tags"])):
+            counts[tag] = counts.get(tag, 0) + 1
+            if tag not in best or metric > best[tag][0]:
+                best[tag] = (metric, status)
+            newest[tag] = sha7
+    return {
+        tag: {
+            "count": counts[tag],
+            "best_metric": best[tag][0],
+            "best_status": best[tag][1],
+            "newest": newest[tag],
+        }
+        for tag in sorted(counts)
+    }
 
 
 def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.Row | None:

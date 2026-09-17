@@ -121,7 +121,13 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
 def test_a_diff_that_does_not_apply_is_invalid_output_and_takes_the_retry(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "move the anchor", "diff": NOWHERE}, proposal("revert")])
+    scripted(
+        ws,
+        propose=[
+            {"desc": "move the anchor", "diff": NOWHERE, "tags": ["refactor"]},
+            proposal("revert"),
+        ],
+    )
 
     outcome = driver.run(ws, store, prepared_hyp, cards=1)
 
@@ -133,7 +139,10 @@ def test_a_diff_that_does_not_apply_is_invalid_output_and_takes_the_retry(
 def test_a_diff_that_changes_nothing_is_refused_before_it_costs_a_card(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "think again", "diff": NOOP}, proposal("revert")])
+    scripted(
+        ws,
+        propose=[{"desc": "think again", "diff": NOOP, "tags": ["refactor"]}, proposal("revert")],
+    )
 
     outcome = driver.run(ws, store, prepared_hyp, cards=1)
 
@@ -193,7 +202,10 @@ def test_a_repeat_earlier_in_the_ladder_is_still_a_miss(
     reset_mock()
     scripted(
         workspace,
-        propose=[proposal("weak", tagged=False), {"desc": "move the anchor", "diff": NOWHERE}],
+        propose=[
+            proposal("weak", tagged=False),
+            {"desc": "move the anchor", "diff": NOWHERE, "tags": ["refactor"]},
+        ],
     )
 
     outcome = driver.run(workspace, store, prepared_hyp)
@@ -206,7 +218,7 @@ def test_a_repeat_earlier_in_the_ladder_is_still_a_miss(
 def test_a_ladder_that_never_repeats_still_fails_the_step(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE}])
+    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE, "tags": ["refactor"]}])
 
     with pytest.raises(PreconditionError, match="in 3 attempts"):
         driver.run(ws, store, prepared_hyp, cards=1)
@@ -252,7 +264,7 @@ def test_recent_cards_reach_across_runs_under_the_same_pins(
 def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    bad = {"desc": "two\nlines", "diff": proposal("revert")["diff"]}
+    bad = {**proposal("revert"), "desc": "two\nlines"}
     scripted(ws, propose=[bad, proposal("revert", desc="trade the trough")])
 
     driver.run(ws, store, prepared_hyp, cards=1)
@@ -263,7 +275,7 @@ def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(
 def test_a_proposer_that_never_fits_fails_the_step_after_the_whole_ladder(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE}])
+    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE, "tags": ["refactor"]}])
 
     with pytest.raises(PreconditionError, match="in 3 attempts"):
         driver.run(ws, store, prepared_hyp, cards=1)
@@ -401,6 +413,56 @@ def test_the_prompt_keeps_a_stable_prefix_and_carries_the_moving_half(
     assert "last_diff" in proposals[1].user
 
 
+def test_every_card_under_the_pins_reaches_the_proposer_as_coverage_by_tag(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The recent cards are a window; the coverage is the whole search, keyed by what
+    each proposal said it was, so a corner already searched reads as searched."""
+    scripted(
+        ws,
+        propose=[
+            proposal("revert", tags=["signal_mean_reversion", "exit_signal"]),
+            proposal("weak", tags=["signal_mean_reversion"]),
+            proposal("boom", tags=["sizing_volatility"]),
+        ],
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=3)
+
+    cards = records.cards_of(store, prepared_hyp)
+    assert [card.tags for card in cards] == [
+        [],
+        ["signal_mean_reversion", "exit_signal"],
+        ["signal_mean_reversion"],
+        ["sizing_volatility"],
+    ]
+    first, _, third = recorded.of("propose")
+    assert '"coverage": {}' in first.user, "the baseline carries no tags"
+    coverage = driver._coverage(store, records.require_active(store, prepared_hyp))
+    assert coverage == {
+        "exit_signal": {
+            "count": 1,
+            "best_metric": cards[1].metric,
+            "best_status": "keep",
+            "newest": cards[1].sha7,
+        },
+        "signal_mean_reversion": {
+            "count": 2,
+            "best_metric": cards[1].metric,
+            "best_status": "keep",
+            "newest": cards[2].sha7,
+        },
+        "sizing_volatility": {
+            "count": 1,
+            "best_metric": 0.0,
+            "best_status": "crash",
+            "newest": cards[3].sha7,
+        },
+    }
+    assert '"signal_mean_reversion": {' in third.user
+    assert '"count": 2' in third.user
+
+
 def test_failing_certification_gates_reach_the_next_proposal(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
@@ -481,7 +543,9 @@ def test_the_gate_that_refused_a_card_reaches_the_next_proposal(
     traceback; without the gate's own evidence the proposer sees a discard with no reason
     and writes the same line again.
     """
-    scripted(ws, propose=[{"desc": "reach for the cache", "diff": DENIED}, *CYCLE])
+    scripted(
+        ws, propose=[{"desc": "reach for the cache", "diff": DENIED, "tags": ["refactor"]}, *CYCLE]
+    )
 
     driver.run(ws, store, prepared_hyp, cards=2)
 

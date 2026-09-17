@@ -76,6 +76,20 @@ def test_only_a_card_that_ran_and_traded_is_a_trial(
     assert records.trial_metrics(store, registered) == [cards[-3].metric]
 
 
+def test_a_card_keeps_the_tags_its_proposer_gave_it(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The tags are the key of the coverage table, so they must come back as written."""
+    run = loop.begin(ws, store, registered)
+    (ws.root / run.dir / "strategy.py").write_bytes(REVERTING)
+    written = loop.card(ws, store, registered, "the trough rule", tags=["signal_mean_reversion"])
+
+    baseline, read = records.cards_of(store, registered)
+    assert written.tags == ["signal_mean_reversion"]
+    assert read.tags == ["signal_mean_reversion"]
+    assert baseline.tags == [], "no proposer described the baseline"
+
+
 def test_a_crashed_card_keeps_its_tail(ws: Workspace, store: StateStore, registered: str) -> None:
     run = loop.begin(ws, store, registered)
     (ws.root / run.dir / "strategy.py").write_bytes(RAISING)

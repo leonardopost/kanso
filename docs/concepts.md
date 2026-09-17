@@ -207,6 +207,17 @@ session under an environment allow-list. A card therefore has no route to data o
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.
 
+A card proposed by a model carries the proposer's own account of what it was: `tags`, one
+or more of the twenty-one strings `kanso.schemas.TAGS` fixes — `signal_*` for what the
+change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*`, and
+`parameter_only` or `refactor` for a change that moves no structure. The vocabulary is the
+package's rather than the model's because the tags are read back as a **coverage** table,
+keyed by them, that every proposal is shown: for each tag, how many cards under the run's
+pins carry it, the best metric among them and its status, and the newest. The recent
+cards say what was tried last; the coverage says what has been tried at all, in a size
+bounded by the vocabulary rather than by the hypothesis. A card made by hand carries no
+tags, and reaches the table under none.
+
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.

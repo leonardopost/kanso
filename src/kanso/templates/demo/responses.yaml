@@ -5,7 +5,8 @@
 # the pairs back into a map before anything sees them. Write a real model's answers the same way. `diff` values are unified diffs against strategy.py: the first against the stub rendered by
 # `kanso init --demo`, the second and third against the state that first one leaves behind — which is what
 # the lane holds again after each of them, since a discard and a crash both restore the run's best.
-# So `kanso research run demo_mr --cards 3` in a freshly initialised demo is a keep, a discard and a crash,
+# Every proposal carries `tags` from the vocabulary `kanso.schemas.TAGS` fixes; the proposer is shown the cards
+# read back by them. So `kanso research run demo_mr --cards 3` in a freshly initialised demo is a keep, a discard and a crash,
 # in that order. Past the third the script wraps: the first diff no longer fits the file in hand, and the
 # other two reproduce bytes the run has already carded, which the loop refuses as it refuses any wrong
 # answer — the ladder runs out and the command exits 2 naming the cards they repeat. That is the point at
@@ -29,6 +30,7 @@ align_check:
   - {aligned: true, reason: "Same universe, resolution and mean-reversion mechanism."}
 propose:
   - desc: "fade a 2-sigma deviation from a 60-bar rolling mean"
+    tags: [signal_mean_reversion, exit_signal, sizing_fixed]
     diff: |2
       --- a/strategy.py
       +++ b/strategy.py
@@ -78,6 +80,7 @@ propose:
       +            self.submit_exit(bar.bar_type.instrument_id)
       +            self.long = False
   - desc: "narrow the entry threshold to 1 sigma"
+    tags: [parameter_only]
     diff: |2
       --- a/strategy.py
       +++ b/strategy.py
@@ -91,6 +94,7 @@ propose:
            notional: float = 10_000.0
        
   - desc: "scale by a rolling sigma helper that does not exist (intentional crash)"
+    tags: [sizing_volatility]
     diff: |2
       --- a/strategy.py
       +++ b/strategy.py

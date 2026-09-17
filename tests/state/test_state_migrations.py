@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -228,6 +229,49 @@ def test_a_migration_another_process_applied_first_is_not_reported_as_ours(
     with StateStore(db_path) as store:
         assert store.migrate() == []
         assert store.connection.in_transaction is False
+
+
+def test_a_card_recorded_before_the_memory_migration_reads_back_with_no_tags(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0003 adds `cards.tags` over rows that exist: each reads as a card nobody tagged."""
+    from kanso.research import records
+    from kanso.schemas import resolve_venue_model
+
+    venue = resolve_venue_model("XNAS", max_leverage=1.0).model_dump(mode="json")
+    older = migrations()[:2]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        assert "signatures" not in store.tables()
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("a" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO runs (run_id, hyp_id, tag, lane, dir, base_sha, hypothesis_sha,"
+            " program_sha, snapshot_id, criteria_version, card_budget_s, baseline_wall_s,"
+            " baseline_peak_mem_gb, started_at) VALUES ('r', 'old', '20260101-1', 'op', 'd',"
+            " ?, ?, ?, 's', '0.7.0', 60, 1, 1, '2026-01-01T00:00:00+00:00')",
+            ("a" * 64, "a" * 64, "a" * 64),
+        )
+        conn.execute(
+            "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+            " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 1, 'op',"
+            " ?, 'keep', 1.0, 1, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+            ("a" * 64, json.dumps(venue)),
+        )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[2:]]
+        assert "signatures" in store.tables()
+        (card,) = records.cards_of(store, "old")
+        assert card.tags == []
 
 
 # --- a database this package cannot correctly write, in either direction ------

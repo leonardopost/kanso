@@ -3,6 +3,12 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **Every proposal says what it is, and the proposer is shown what has been tried.** A `propose` answer now owes `tags`, one or more of the twenty-one strings `kanso.schemas.TAGS` fixes — what the change reads, holds, filters, exits and sizes, or `parameter_only`/`refactor` — recorded on the card (`cards.tags`, migration `0003_memory.sql`; a card recorded before it reads back with none). Each call is shown `coverage`: every card under the run's pins read back by tag, as a count, the best metric and its status, and the newest card, beside the last `context_cards` cards. A mock or demo script that proposes must now send `tags`; the shipped demo does. Adopting 0.8.0 moves `criteria_version`, so the proposer's memory — recent cards, coverage and repeats — restarts at the first run under it.
+- Templates: `demo/responses.yaml` tags its three proposals.
+- Docs: `cli.md` (`research run`), `concepts.md` (card).
+
 ## v0.7.0 — 2026-09-11
 
 - **A backtest no longer borrows to keep a strategy's size.** Without a sizing rule an entry's room was a share of the starting capital however much the account had lost, and nothing refused the order: measured on a sleeve run from 2022, it kept buying full-size positions with its balance below zero. `max_position_pct` and `max_leverage` are now read on the smaller of the capital and the balance, with orders in flight counted as filled and resting limit and stop entries held back. Metrics change for an unsized sleeve that drew down below its capital, or that rested an entry beside another; the rest are unchanged.
