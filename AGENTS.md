@@ -135,7 +135,8 @@ the fixtures.
   `kanso.errors.{PreconditionError, ValidationError, ApprovalError}` — each carries the
   message and, wherever there is one to give, a remedy that is a command the reader can run.
 - A new state table ships as a new file in `src/kanso/state/migrations/`, never as an edit
-  to an existing one, with the `schema_version` bump beside it.
+  to an existing one. The package's schema version follows from the newest migration file;
+  nothing is bumped by hand.
 - Conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`) on a branch named for
   the change. Semver per `docs/maintainers.md`.
 
@@ -203,5 +204,5 @@ happens to run at.
 | `certify/`, `strategy/` | the planner, certificates, composition and versions |
 | `portfolio/`, `monitor/`, `replay/` | stages, deployment, promotion, surveillance, the two code paths |
 | `models/` | the register, the router, the two wire protocols and the mock |
-| `inbox/` | the five escalation kinds and the append-only file |
+| `inbox/` | the escalation kinds and the append-only file |
 | `skills/`, `templates/` | what ships into an operator's workspace |

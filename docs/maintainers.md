@@ -62,7 +62,14 @@ Anything found in use without a checkout goes to the issue tracker with `kanso d
   versions pin the engine they were certified under; operators re-certify to move.
 - Schema changes ship with a migration `src/kanso/state/migrations/NNNN_name.sql`, numbered
   after the newest; the package's schema version follows from the newest migration file and
-  nothing is bumped by hand. The version a database is at is `PRAGMA user_version` in
+  nothing is bumped by hand. `tests/state` applies every migration after version 2 over
+  `tests/state/fixtures/state_0_7_0.sql`, a `state.db` the 0.7.0 demo wrote with rows in
+  hypotheses, runs, cards and events, because a fresh file proves only that the SQL parses.
+  The file is what `sqlite3.Connection.iterdump()` printed, not a `sqlite3 .dump`: the CLI
+  shipped with SQLite 3.50 writes a value holding a newline as `unistr(...)`, which the
+  3.45 that CI's interpreter links does not have. Its header records the command and the
+  SQLite it was measured to load under; re-record it with that command, never edit a row.
+  The version a database is at is `PRAGMA user_version` in
   `state.db`, which is what `migrate` advances and `doctor` guards — not the `schema_version`
   key `init` writes to `kanso.toml`, which is read by nothing. `kanso migrate` applies them,
   and every other command refuses a database behind the package with exit 2 rather than

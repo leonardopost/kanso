@@ -574,13 +574,16 @@ def construct_items(draw: st.DrawFn) -> ConstructItem:
 def criteria_items(draw: st.DrawFn) -> CriteriaItem:
     kind = draw(st.sampled_from(["gate", "objective"]))
     names = draw(st.lists(IDENTIFIERS, max_size=3, unique=True))
-    params = {name: draw(st.sampled_from(["int", "float", "duration", "bool"])) for name in names}
+    params = {
+        name: draw(st.sampled_from(["int", "float", "duration", "bool", "instrument"]))
+        for name in names
+    }
     ranges = {}
     for name, kind_name in params.items():
         if kind_name == "duration":
             bounds = sorted((draw(durations()), draw(durations())), key=lambda d: parse_duration(d))
             ranges[name] = (bounds[0], bounds[1])
-        elif kind_name != "bool":
+        elif kind_name not in ("bool", "instrument"):
             low = draw(NON_NEGATIVE)
             ranges[name] = (low, low + draw(NON_NEGATIVE))
     impl = draw(st.from_regex(r"\A[a-z_][a-z0-9_]{1,8}(\.[a-z_][a-z0-9_]{1,8}){1,3}\Z"))

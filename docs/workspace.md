@@ -123,6 +123,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
+| name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
@@ -283,6 +284,8 @@ classification.
 required_constraints:
 - id: position_size          # every position worth 95% to 105% of the capital, always
   params: {min_pct: 95.0, max_pct: 105.0}
+- id: leg_edge               # the hedge leg's own spells clear a Sharpe of zero, every fold
+  params: {leg: DEMO.SIM, min_sharpe: 0.0}
 ```
 
 Before this existed, an instruction like that could only be prose in `program.md`, which

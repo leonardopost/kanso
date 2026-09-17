@@ -17,6 +17,7 @@ from kanso.criteria.gates import (
     cost_stress,
     deflated_sharpe,
     embargoed_window,
+    leg_edge,
     max_drawdown,
     max_hold,
     min_trades,
@@ -327,6 +328,166 @@ def test_min_trades_fails_when_a_fold_traded_nothing() -> None:
 def test_min_trades_without_a_minimum_judges_nothing() -> None:
     result = min_trades.evaluate(context(trading_run(1.0, 1.0, 1.0, 1.0)))
     assert result.passed and result.skipped is not None
+
+
+# --- leg_edge ---------------------------------------------------------------------
+
+
+def spell(day: date, pnl: float, leg: str = "LEG", notional: float = 10_000.0) -> Trade:
+    """One of `leg`'s closed positions, opened and closed on `day`, netting `pnl`."""
+    return replace(trade(day, pnl=pnl, notional=notional), instrument_id=leg)
+
+
+def two_day_folds(*spells: Trade) -> Any:
+    """An eight-day run cut into four two-day folds, closing these spells."""
+    return context(build_run(FLAT * 2, trades=spells), params={"leg": "LEG", "min_sharpe": 0.0})
+
+
+def test_leg_edge_is_the_annualised_sharpe_of_the_leg_s_spell_returns_per_fold() -> None:
+    # Fold one closes returns of 1% and 3%: mean 2%, one-dof deviation sqrt(2)%, two
+    # spells over a two-day fold, so the annualisation is sqrt(2 / (2 / 365.25)).
+    days = [START + timedelta(days=i) for i in range(8)]
+    ctx = two_day_folds(spell(days[0], 100.0), spell(days[1], 300.0), spell(days[4], 50.0))
+
+    result = leg_edge.evaluate(ctx)
+
+    assert result.passed
+    expected = (0.02 / (2**0.5 / 100)) * (365.25) ** 0.5
+    assert result.evidence["folds"][0] == pytest.approx(expected)
+    assert result.evidence["folds"][1] is None, "a fold that closed no spell is not judged"
+    assert result.evidence["folds"][2] == 0.0, "one spell cannot vary"
+    assert result.evidence["spells_per_fold"] == [2, 0, 1, 0]
+    assert result.evidence["n_spells"] == 3 == sum(result.evidence["spells_per_fold"])
+    assert result.evidence["worst"] == 0.0
+
+
+def test_leg_edge_refuses_a_fold_whose_spells_lost() -> None:
+    days = [START + timedelta(days=i) for i in range(8)]
+    ctx = two_day_folds(
+        spell(days[0], 100.0), spell(days[1], 300.0), spell(days[6], -100.0), spell(days[7], -300.0)
+    )
+
+    result = leg_edge.evaluate(ctx)
+
+    assert not result.passed
+    assert result.evidence["n_below"] == 1
+    assert result.evidence["worst"] < 0
+    assert result.evidence["folds"][3] == pytest.approx(-result.evidence["folds"][0])
+
+
+def test_leg_edge_holds_every_fold_to_the_floor_and_clears_it_inclusively() -> None:
+    days = [START + timedelta(days=i) for i in range(8)]
+    ctx = two_day_folds(spell(days[0], 100.0), spell(days[1], 300.0), spell(days[4], 50.0))
+
+    assert leg_edge.evaluate(ctx).passed, "zero clears a floor of zero"
+    assert not leg_edge.evaluate(replace(ctx, params={"leg": "LEG", "min_sharpe": 0.5})).passed, (
+        "the single-spell fold scores zero, and zero is below a floor of one half"
+    )
+
+
+def test_leg_edge_reads_only_the_named_leg_and_its_net_returns() -> None:
+    days = [START + timedelta(days=i) for i in range(8)]
+    other = [spell(days[i], -500.0, leg="OTHER") for i in range(8)]
+    ctx = two_day_folds(spell(days[0], 100.0), spell(days[1], 300.0), *other)
+
+    result = leg_edge.evaluate(ctx)
+
+    assert result.passed
+    assert result.evidence["leg"] == "LEG"
+    assert result.evidence["n_spells"] == 2
+    # The return is pnl_net over the opening notional, so a costlier spell scores lower.
+    dearer = replace(ctx.run, trades=(spell(days[0], 100.0), spell(days[1], 100.0)))
+    assert leg_edge.evaluate(replace(ctx, run=dearer)).evidence["folds"][0] == 0.0
+
+
+def test_leg_edge_counts_a_spell_by_the_fold_that_closed_it() -> None:
+    days = [START + timedelta(days=i) for i in range(8)]
+    straddling = replace(spell(days[3], 100.0), opened_ns=at(days[0], 9))
+    ctx = two_day_folds(straddling, spell(days[2], 300.0))
+
+    result = leg_edge.evaluate(ctx)
+
+    assert result.evidence["spells_per_fold"] == [0, 2, 0, 0]
+
+
+def test_leg_edge_counts_each_fold_s_own_spells_when_an_edge_falls_inside_a_day() -> None:
+    """Ten days into four folds cut at 06:00, 12:00 and 18:00, never at midnight.
+
+    `CardRun.between` cuts a fold's trades at the exact edge while its `bounds` are the
+    fold's whole calendar days, so day two belongs to the bounds of folds one and two
+    both: a gate reading `bounds` would count a spell closed on it twice.
+    """
+    days = [START + timedelta(days=i) for i in range(10)]
+    before_dawn = replace(spell(days[2], 100.0), opened_ns=at(days[1], 9), closed_ns=at(days[2], 3))
+    run = build_run((0.0,) * 10, trades=(spell(days[0], 50.0), before_dawn, spell(days[2], 300.0)))
+
+    result = leg_edge.evaluate(context(run, params={"leg": "LEG", "min_sharpe": 0.0}))
+
+    assert (
+        result.evidence["spells_per_fold"] == [len(f.trades) for f in run.folds(4)] == [2, 1, 0, 0]
+    )
+    assert sum(result.evidence["spells_per_fold"]) == result.evidence["n_spells"] == 3
+    assert result.evidence["folds"][1] == 0.0, "the 15:00 spell is the second fold's only one"
+
+
+def test_leg_edge_counts_a_spell_still_open_at_the_window_close_nowhere() -> None:
+    run = build_run(
+        FLAT * 2,
+        fills=(replace(fill(DAYS[0]), instrument_id="LEG"),),
+        holdings=(held(START + timedelta(days=7), 10_000.0, instrument_id="LEG"),),
+    )
+
+    result = leg_edge.evaluate(context(run, params={"leg": "LEG", "min_sharpe": 0.0}))
+
+    assert result.passed and result.skipped is not None
+    assert "LEG closed no spell" in str(result.skipped)
+
+
+def test_leg_edge_subtracts_the_spells_the_host_s_own_run_closed() -> None:
+    days = [START + timedelta(days=i) for i in range(8)]
+    hosts = (spell(days[0], 100.0), spell(days[1], 300.0))
+    host = build_run(FLAT * 2, trades=hosts)
+    combined = replace(host, trades=(*hosts, spell(days[4], -100.0), spell(days[5], -300.0)))
+    params = {"leg": "LEG", "min_sharpe": 0.0}
+
+    result = leg_edge.evaluate(context(combined, host_run=host, params=params))
+
+    assert not result.passed
+    assert result.evidence["spells_per_fold"] == [0, 0, 2, 0]
+    assert leg_edge.evaluate(context(combined, params=params)).evidence["n_spells"] == 4
+    unchanged = leg_edge.evaluate(context(host, host_run=host, params=params))
+    assert unchanged.skipped is not None, "a construct that added nothing is not judged"
+
+
+def test_leg_edge_judges_nothing_when_every_spell_closed_outside_the_window() -> None:
+    """A run whose trades were not cut to its window has no fold to count them by."""
+    late = spell(START + timedelta(days=20), 100.0)
+
+    result = leg_edge.evaluate(two_day_folds(late))
+
+    assert result.passed and result.skipped is not None
+    assert "inside the window's folds" in str(result.skipped)
+
+
+def test_leg_edge_ignores_a_spell_that_opened_nothing() -> None:
+    days = [START + timedelta(days=i) for i in range(8)]
+    empty = replace(spell(days[0], 0.0), avg_open=0.0)
+
+    result = leg_edge.evaluate(two_day_folds(empty))
+
+    assert result.skipped is not None
+
+
+@pytest.mark.parametrize(
+    "params", [{}, {"leg": "LEG"}, {"min_sharpe": 0.0}, {"leg": 7, "min_sharpe": 0.0}]
+)
+def test_leg_edge_without_a_leg_and_a_floor_judges_nothing(params: Any) -> None:
+    run = build_run(FLAT * 2, trades=(spell(START, 100.0),))
+
+    result = leg_edge.evaluate(context(run, params=params))
+
+    assert result.passed and result.skipped is not None
+    assert "no leg or no floor was chosen" in str(result.skipped)
 
 
 # --- max_drawdown -----------------------------------------------------------------

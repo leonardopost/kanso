@@ -114,6 +114,18 @@ def test_a_boolean_param_needs_none() -> None:
     assert item.params == {"strict": "bool"}
 
 
+@pytest.mark.parametrize("kind", ["instrument", "str", "bool"])
+def test_a_range_on_a_param_that_is_not_a_number_is_refused(kind: str) -> None:
+    """Refused here, where `check_params` would otherwise fail to read a value as a number."""
+    with pytest.raises(ValidationError, match=f"leg is {kind}; only a numeric param has a range"):
+        CriteriaItem.model_validate({**GATE, "params": {"leg": kind}, "ranges": {"leg": [0, 1]}})
+
+
+def test_an_instrument_param_needs_none() -> None:
+    item = CriteriaItem.model_validate({**GATE, "params": {"leg": "instrument"}, "ranges": {}})
+    assert item.params == {"leg": "instrument"}
+
+
 def test_a_gate_may_have_no_params_at_all() -> None:
     item = CriteriaItem.model_validate({**GATE, "params": {}, "ranges": {}})
     assert item.ranges == {}
