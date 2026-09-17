@@ -168,12 +168,15 @@ def covering(
     types: Sequence[str],
     resolution: str | None,
     windows: Windows,
+    prefixes: Sequence[tuple[date, date]] = (),
 ) -> Snapshot | None:
     """The newest snapshot covering the universe, pinning the instruments the store holds.
 
     Newest is the latest `created_at`. A snapshot covers when, for every instrument and
     every required type at `resolution`, the union of the spans it pins contains both
-    windows; the forward window is never loaded, so it is never required. A snapshot
+    windows; the forward window is never loaded, so it is never required. `prefixes` are
+    the warmup spans a warmed hypothesis is fed before its windows, and they are required
+    on the same terms, because a card loads them from the pinned data. A snapshot
     whose covering datasets include one with an unknown publication does not qualify:
     research may not be pinned to data whose availability nobody declared. `None` when
     no snapshot covers.
@@ -187,8 +190,9 @@ def covering(
     is refused first, since no snapshot can pin what does not exist.
     """
     held = manifests(ws)
-    required = tuple(
-        (window.start, window.end) for window in (windows.research, windows.certification)
+    required = (
+        *((window.start, window.end) for window in (windows.research, windows.certification)),
+        *prefixes,
     )
     candidates: list[Snapshot] = []
     for snapshot in sorted(snapshots(ws), key=lambda s: s.created_at, reverse=True):
