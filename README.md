@@ -41,6 +41,7 @@ needs you.
 | `deploy_blocked` | operator | no capital assignable within your limits; adjust `portfolio.yaml` |
 | `promotable` | operator | the paper period passed. `kanso promote <strategy> --live --as <you>` |
 | `demoted` | operator | live surveillance pulled a version back to paper; read the reason |
+| `explored` | operator | kanso wrote a new hypothesis for a lane that stopped learning; `kanso hyp validate` it, then `kanso hyp add` it if the idea deserves a lane |
 | any time | operator | `kanso status`, `kanso inbox`, `kanso replay run`, `kanso research stop` / `start` |
 
 Everything not in that table runs without you.

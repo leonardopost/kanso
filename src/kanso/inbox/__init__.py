@@ -1,7 +1,7 @@
 """Escalations: the few things kanso interrupts an operator for, and where they land.
 
 An autonomous loop that asked for guidance would not be autonomous, so kanso asks for
-almost nothing: five kinds of event, each one a decision the operator alone can make or a
+almost nothing: six kinds of event, each one a decision the operator alone can make or a
 fact they alone can act on. Everything else is decided by a rule and recorded.
 
 Each escalation is three writes that say the same thing three ways, in this order. A row
@@ -19,7 +19,7 @@ notes in it, and what makes it safe to tail.
 
 Every kind carries the commands it offers, because the first reader of these lines is an
 agent that has to decide what to do next, and one shape of line is cheaper to read than
-five. A caller with something more specific to offer passes its own actions instead.
+six. A caller with something more specific to offer passes its own actions instead.
 
 Acknowledging an entry marks it read and is never an approval: nothing in this module
 moves capital, and the one act that does is a named CLI approval elsewhere.
@@ -87,19 +87,29 @@ ACTIONS: Final[Mapping[str, tuple[str, ...]]] = {
         "kanso portfolio show",
         "kanso doctor",
     ),
+    "explored": (
+        "kanso hyp validate hypotheses/{subject}/hypothesis.yaml",
+        "kanso hyp add hypotheses/{subject}/hypothesis.yaml",
+    ),
 }
 """What each kind offers, as commands over its subject — a hypothesis id for the two
-research kinds, a strategy version for the three portfolio ones.
+research kinds, a strategy version for the three portfolio ones, and for `explored` the id
+of a hypothesis kanso wrote and did not register.
 
 Replanning is deliberately absent from `cert_failed`: a plan rewritten because its gates
 failed is no longer a blind one, and the ways out of a failed hypothesis are more
 research or retirement. `promote` keeps its `--as`, since a promotion without a name is
 refused and an agent reading this line should see that before it runs one.
+
+`explored` offers validation and registration and nothing past them: the directory is a
+draft nothing reads until `hyp add` pins it, and whether an idea a model wrote deserves a
+lane is the operator's call, so queueing it is not offered.
 """
 
 KINDS: Final = tuple(ACTIONS)
 """The whole of what kanso escalates: drift, repeated certification failure, a version
-ready for real capital, a demotion that already happened, a deployment that cannot start."""
+ready for real capital, a demotion that already happened, a deployment that cannot start,
+and a new hypothesis written for a lane that stopped learning."""
 
 INBOX: Final = ("escalations", "inbox.md")
 """The append-only file, relative to the workspace root."""
@@ -164,7 +174,7 @@ def escalate(
 
     The summary is folded to one line and truncated rather than refused: an escalation is
     a message to a person, and losing it because a caller was verbose would be the worse
-    failure. A kind outside the five, or an entry naming nothing or saying nothing, is a
+    failure. A kind outside the six, or an entry naming nothing or saying nothing, is a
     caller's bug and is refused loudly instead of landing as an unreadable line.
 
     Actions default to what the kind offers over this subject; a caller passing its own

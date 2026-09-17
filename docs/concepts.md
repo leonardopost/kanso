@@ -754,9 +754,11 @@ starting a node would make the switch advisory.
 
 ## Escalation
 
-kanso escalates five things and nothing else: `misaligned`, `cert_failed`, `promotable`,
-`demoted`, `deploy_blocked`. Each entry names its subject and the commands that kind offers
-over it.
+kanso escalates six things and nothing else: `misaligned`, `cert_failed`, `promotable`,
+`demoted`, `deploy_blocked`, `explored`. Each entry names its subject and the commands that
+kind offers over it. An `explored` entry's subject is a hypothesis kanso wrote and did not
+register — `hypotheses/<id>/` as a draft — and it offers `hyp validate` and `hyp add` and
+nothing further: whether a model's idea deserves a lane is yours to say.
 
 ```
 $ kanso inbox

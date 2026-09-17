@@ -817,7 +817,7 @@ the certificate that cites it still stands, it just no longer has the stream to 
 ## `escalations/inbox.md`
 
 Append-only, and kanso means it. One line per escalation — `misaligned`, `cert_failed`,
-`promotable`, `demoted`, `deploy_blocked` — carrying an id, a timestamp, the kind, its
+`promotable`, `demoted`, `deploy_blocked`, `explored` — carrying an id, a timestamp, the kind, its
 subject, a summary and the commands that kind offers.
 
 `kanso inbox ack <id>` marks one read, and **the line in the file does not change**: it stays

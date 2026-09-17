@@ -1,6 +1,6 @@
 ---
 name: kanso-promote
-description: Handle kanso escalations and strategy promotion — read the inbox, deploy paper, record the operator's approval for live capital, demote, and retire. Use when the operator asks what needs attention, wants to go live or paper, sees an inbox entry (`promotable`, `demoted`, `cert_failed`, `misaligned`, `deploy_blocked`), or asks about portfolio state.
+description: Handle kanso escalations and strategy promotion — read the inbox, deploy paper, record the operator's approval for live capital, demote, and retire. Use when the operator asks what needs attention, wants to go live or paper, sees an inbox entry (`promotable`, `demoted`, `cert_failed`, `misaligned`, `deploy_blocked`, `explored`), or asks about portfolio state.
 license: Apache-2.0
 metadata:
   version: "0.1"

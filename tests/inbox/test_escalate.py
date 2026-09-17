@@ -73,8 +73,15 @@ def test_the_template_header_is_still_above_the_first_entry(
     assert inbox_file(ws).read_text(encoding="utf-8").startswith("# Escalations\n")
 
 
-def test_the_kinds_are_the_five_and_every_one_offers_something() -> None:
-    assert KINDS == ("misaligned", "cert_failed", "promotable", "demoted", "deploy_blocked")
+def test_the_kinds_are_the_six_and_every_one_offers_something() -> None:
+    assert KINDS == (
+        "misaligned",
+        "cert_failed",
+        "promotable",
+        "demoted",
+        "deploy_blocked",
+        "explored",
+    )
     assert all(ACTIONS[kind] for kind in KINDS)
     assert all(action.startswith("kanso ") for actions in ACTIONS.values() for action in actions)
 
@@ -117,7 +124,7 @@ def test_a_caller_with_something_more_specific_replaces_them(
     assert "\n" not in entry.line()
 
 
-def test_a_kind_outside_the_five_is_refused(ws: Workspace, store: StateStore) -> None:
+def test_a_kind_outside_the_six_is_refused(ws: Workspace, store: StateStore) -> None:
     with pytest.raises(ValidationError, match="not an escalation kind") as caught:
         escalate(ws, store, "interesting", "demo_mr", "look at this")
 
