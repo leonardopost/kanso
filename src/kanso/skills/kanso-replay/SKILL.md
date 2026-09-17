@@ -17,5 +17,6 @@ metadata:
 ## Rules
 - Replay is evaluation only: it never creates cards, never changes `best`, never certifies. Use it to answer questions, not to search parameters — that is the research loop's job.
 - Any window may be replayed, including certification and forward; say which window you used when reporting numbers.
+- A target whose hypothesis declares a `warmup` is fed the sessions before the range on both paths, with every order dropped until the range opens; `released` and the stream are the range's own points. Report the range, not the prefix.
 - `--speed 1` replays at wall-clock pace (useful to watch a node behave); `--speed 0` is the default for questions.
 - Sessions persist under `sessions/`; large ranges produce large sessions — prefer the narrowest range that answers the question.

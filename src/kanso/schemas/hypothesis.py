@@ -144,6 +144,22 @@ class Sizing(KansoModel):
     budget: float = Field(gt=0)
 
 
+class Warmup(KansoModel):
+    """The sessions a strategy is fed before its window, so it trades from the open.
+
+    A session is a calendar day on which any instrument of the universe printed at the
+    sleeve's grain — the host's, for an attached construct consulted on another one. The
+    runner resolves the last `sessions` of them before the window,
+    delivers them to the strategy exactly as the window's own points are delivered, and
+    drops every order until the first point of the window arrives: the indicators warm,
+    nothing fills, and the measured run begins at the open with no cold start. Every path —
+    a card, a certificate, a replay, a stage node — warms on the same rule. Scope, like
+    `sizing`: a run warmed on one prefix is not compared with a card run cold.
+    """
+
+    sessions: int = Field(gt=0)
+
+
 class ConstructRef(KansoModel):
     """What `classify` decided this hypothesis is, in portfolio-construction terms."""
 
@@ -190,6 +206,7 @@ class Hypothesis(Versioned):
     sizing: Sizing | None = None
     risk_limits: RiskLimits
     windows: Windows
+    warmup: Warmup | None = None
     required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")
     objective: ObjectiveRef | None = None

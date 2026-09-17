@@ -13,6 +13,11 @@ and everything else is decided at runtime from what these files declare.
 A range bound is a number, a duration, or the expression `<number> * <attr>` over the
 run's own scale — its horizon, its resolution, the length of its research window in days,
 or its fold count — so a toolbox item is written once and sized to each hypothesis.
+
+A parameter's type says what a chosen value must be. The numeric ones carry a range; an
+`instrument` is a string that names one id of the hypothesis's own universe, and a value
+naming anything else is refused wherever parameters are checked — a gate on one leg of a
+pair cannot be told about a leg the hypothesis does not trade.
 """
 
 from __future__ import annotations
@@ -31,7 +36,7 @@ NeedsHost = Literal["none", "sleeve", "portfolio"]
 ObjectiveMode = Literal["absolute", "relative"]
 Kind = Literal["objective", "gate"]
 GateStage = Literal["card", "cert", "paper", "live"]
-ParamType = Literal["int", "float", "bool", "str", "duration"]
+ParamType = Literal["int", "float", "bool", "str", "duration", "instrument"]
 
 RANGE_ATTRS: Final = ("horizon", "resolution", "history_days", "folds")
 NUMERIC_PARAM_TYPES: Final = ("int", "float", "duration")
@@ -174,6 +179,12 @@ class CriteriaItem(KansoModel):
         unknown = sorted(set(self.ranges) - set(self.params))
         if unknown:
             raise ValueError(f"ranges: {', '.join(unknown)} is not a declared param")
+        unordered = sorted(
+            name for name in self.ranges if self.params[name] not in NUMERIC_PARAM_TYPES
+        )
+        if unordered:
+            kinds = ", ".join(f"{name} is {self.params[name]}" for name in unordered)
+            raise ValueError(f"ranges: {kinds}; only a numeric param has a range")
         missing = sorted(
             name
             for name, kind in self.params.items()

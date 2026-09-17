@@ -113,7 +113,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 23
+    assert len(items) == 24
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 4
 
@@ -202,6 +202,26 @@ def test_a_duration_parameter_is_measured_in_seconds() -> None:
 def test_a_parameter_that_does_not_fit_is_named(params: Any, message: str) -> None:
     (problem,) = check_params(catalogue()["bootstrap"], params, make_hyp(), FOLDS)
     assert message in problem
+
+
+def test_an_instrument_parameter_names_one_of_the_universe_s_own_ids() -> None:
+    item = CriteriaItem.model_validate(
+        {
+            "id": "example",
+            "kind": "gate",
+            "stage": "card",
+            "meaningful_when": "an example with a parameter that names a leg",
+            "params": {"leg": "instrument"},
+            "ranges": {},
+            "impl": "kanso.criteria.gates.example",
+        }
+    )
+    hyp = make_hyp(universe=["DEMO", "OTHER"])
+    assert check_params(item, {"leg": "OTHER"}, hyp, FOLDS) == []
+    (problem,) = check_params(item, {"leg": "ELSEWHERE"}, hyp, FOLDS)
+    assert problem == "leg: 'ELSEWHERE' is not in the universe (DEMO, OTHER)"
+    (problem,) = check_params(item, {"leg": 7}, hyp, FOLDS)
+    assert problem == "leg: 7 is not a instrument"
 
 
 def test_a_parameter_without_a_range_is_only_type_checked() -> None:

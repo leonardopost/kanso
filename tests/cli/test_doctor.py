@@ -23,7 +23,7 @@ from kanso.ext import KINDS, shipped
 from kanso.nautilus import facts
 from kanso.nautilus.adapters import exec_clients
 from kanso.skills_sync import packaged_skills
-from kanso.state import SCHEMA_VERSION, StateStore
+from kanso.state import SCHEMA_VERSION, StateStore, migrations
 from kanso.workspace import find
 
 from ..data.adapters.massive import Replay, refused
@@ -794,7 +794,7 @@ def test_a_database_from_an_older_kanso_reports_the_migration_it_lacks(
     result = at(runner, workspace, "doctor", "--json")
 
     assert status(result, "schema") == "warn"
-    assert "0001_init.sql" in items(result, "schema")
+    assert items(result, "schema") == [migration.name for migration in migrations()]
     assert result.exit_code == Exit.OK
 
 

@@ -11,6 +11,7 @@ from datetime import date
 import pytest
 
 from kanso import replay
+from kanso.criteria.run import midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.replay import record
 from kanso.replay.run import REPLAYED
@@ -24,6 +25,7 @@ from tests.replay.conftest import (
     RAISING,
     carded,
     composed,
+    document,
 )
 
 
@@ -323,3 +325,37 @@ def test_a_session_can_be_replayed_from_its_own_record(
     assert record.intents_of(ws, again.session_id) == record.intents_of(ws, first.session_id)
     assert record.stream_of(ws, again.session_id) == record.stream_of(ws, first.session_id)
     assert again.clock_ns == first.clock_ns
+
+
+# --- warming ------------------------------------------------------------------
+
+
+def test_a_warmed_target_is_fed_its_prefix_and_records_only_the_range(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Both paths warm on the same sessions, and the record holds the range alone."""
+    warmed = carded(ws, store, doc=document(warmup={"sessions": 3}))
+
+    node = replay.run(ws, store, hyp=warmed)
+    engine = replay.run(ws, store, hyp=warmed, mode=replay.ENGINE)
+
+    for session in (node, engine):
+        stream = record.stream_of(ws, session.session_id)
+        assert session.released == len(stream) == (FORWARD[1] - FORWARD[0]).days + 1
+        assert stream[0].ts_init >= midnight_ns(FORWARD_START)
+        assert session.clock_ns == stream[-1].ts_init
+    assert node.intents == engine.intents > 0
+    first = min(intent.ts_event for intent in record.intents_of(ws, node.session_id))
+    assert first == record.stream_of(ws, node.session_id)[0].ts_event, (
+        "warmed, the rule trades the range's first bar, a trough; cold it would wait for "
+        "its third close and the next trough, four sessions on"
+    )
+
+
+def test_parity_holds_for_a_warmed_target(ws: Workspace, store: StateStore) -> None:
+    warmed = carded(ws, store, doc=document(warmup={"sessions": 3}))
+
+    result = replay.parity(ws, store, hyp=warmed)
+
+    assert result.identical, result.divergence and result.divergence.render()
+    assert result.compared > 0

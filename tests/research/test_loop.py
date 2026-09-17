@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from datetime import date
 from hashlib import sha256
 from pathlib import Path
 
@@ -10,11 +11,12 @@ import pytest
 
 from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
+from kanso.data import snapshot
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
 from kanso.research import loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
-from kanso.schemas import RunRecord
+from kanso.schemas import Hypothesis, RunRecord
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -25,10 +27,12 @@ from .conftest import (
     PROGRAM,
     RAISING,
     READING,
+    RESEARCH,
     REVERTING,
     WEAK,
     classify,
     document,
+    load_december,
     write_hypothesis,
 )
 from .mocked import tuned
@@ -812,3 +816,66 @@ def test_a_refused_baseline_refuses_the_run_naming_the_rule(
         loop.begin(ws, store, hyp_id)
 
     assert show(ws, store, hyp_id).active_run is None
+
+
+# --- warming --------------------------------------------------------------------
+
+
+def warmed(ws: Workspace, store: StateStore, sessions: int = 3) -> str:
+    """The demo hypothesis, warming on this many sessions before each window."""
+    return classify(ws, store, document(warmup={"sessions": sessions}))
+
+
+def test_a_warmed_hypothesis_needs_its_sessions_in_the_catalog(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = warmed(ws, store)
+
+    with pytest.raises(PreconditionError) as refused:
+        loop.begin(ws, store, hyp_id)
+
+    assert (
+        "warmup: demo_mr asks for 3 session(s) before 2024-01-01 and the catalog holds 0"
+        in refused.value.message
+    )
+    assert "`kanso data load`" in (refused.value.remedy or "")
+    assert show(ws, store, hyp_id).active_run is None  # type: ignore[union-attr]
+
+
+def test_a_warmed_run_pins_a_snapshot_that_covers_the_prefix(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = warmed(ws, store)
+    load_december(ws, freeze=False)
+
+    with pytest.raises(PreconditionError, match="and the warmup sessions before each"):
+        loop.begin(ws, store, hyp_id)
+
+    snapshot.freeze(ws)
+    run = loop.begin(ws, store, hyp_id)
+
+    assert run.snapshot_id == snapshot.newest(ws).snapshot_id  # type: ignore[union-attr]
+    assert records.cards_of(store, hyp_id)[0].status == "keep"
+
+
+def test_every_card_of_a_warmed_run_is_handed_the_same_prefix(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Resolved once in the parent; the child re-checks the span rather than computing one."""
+    load_december(ws)
+    hyp = Hypothesis.model_validate(document(warmup={"sessions": 3}))
+
+    setup = loop._setup(ws, store, hyp)
+    request = loop._request(setup, FLAT, "a" * 64, budget_s=None, mem_cap_gb=None)
+
+    assert setup.prefix == (date(2023, 12, 29), date(2023, 12, 31))
+    assert request.prefix == setup.prefix
+    assert request.window == RESEARCH
+    assert loop._warmup_spans(setup) == (setup.prefix, (date(2024, 2, 3), date(2024, 2, 5)))
+
+
+def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore) -> None:
+    setup = loop._setup(ws, store, Hypothesis.model_validate(DOCUMENT))
+
+    assert setup.prefix is None
+    assert loop._warmup_spans(setup) == ()

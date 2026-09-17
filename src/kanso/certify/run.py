@@ -65,7 +65,7 @@ from kanso.certify.plan import plan as plan_for
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
-from kanso.criteria.run import day_of
+from kanso.criteria.run import day_of, midnight_ns
 from kanso.data.manifest import Manifest, catalog_path, manifests
 from kanso.data.publication import NANOS_PER_SECOND, PUBLICATION_RULES
 from kanso.data.snapshot import Snapshot
@@ -170,6 +170,11 @@ class Subject:
     host_modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = ()
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    research_prefix: tuple[date, date] | None = None
+    certification_prefix: tuple[date, date] | None = None
+    """The sessions each window warms on, resolved once when the subject is built so every
+    run of a window — the subject's, the host's, a perturbation's — is fed the same span;
+    `None` for a hypothesis that declares no warmup."""
 
     @property
     def certification(self) -> tuple[date, date]:
@@ -182,6 +187,13 @@ class Subject:
         """The window the subject was selected on, run again for the gates that compare."""
         window = self.hyp.windows.research
         return window.start, window.end
+
+    def prefix_of(self, window: tuple[date, date]) -> tuple[date, date] | None:
+        """The prefix resolved for one of the two windows this subject is run over."""
+        return {
+            self.research: self.research_prefix,
+            self.certification: self.certification_prefix,
+        }[window]
 
 
 @dataclass(frozen=True)
@@ -301,6 +313,9 @@ def _subject(ws: Workspace, store: StateStore, hyp_id: str, sha: str | None) -> 
         hyp, _host(ws, hyp.construct), version=run.host_version
     )
     host_source, modifiers = _host_sources(store, harness.host)
+    catalog = catalog_path(ws)
+    grains = backtest.grains_of(hyp, host_resolution(ws, store, harness.host))
+    windows = hyp.windows
     return Subject(
         hyp=hyp,
         construct=hyp.construct,
@@ -313,13 +328,19 @@ def _subject(ws: Workspace, store: StateStore, hyp_id: str, sha: str | None) -> 
         capital=hyp.capital or ws.config.research.capital,
         folds=ws.config.research.folds,
         period=ws.config.research.return_period,
-        catalog=catalog_path(ws),
+        catalog=catalog,
         host_source=host_source,
         host_modifiers=modifiers,
-        grains=backtest.grains_of(hyp, host_resolution(ws, store, harness.host)),
+        grains=grains,
         sleeve_budget=host_sizing(ws, store, harness.host)
         if harness.host is not None
         else (0.0 if hyp.sizing is None else hyp.sizing.budget),
+        research_prefix=backtest.warmup_prefix(
+            hyp, (windows.research.start, windows.research.end), catalog, grains
+        ),
+        certification_prefix=backtest.warmup_prefix(
+            hyp, (windows.certification.start, windows.certification.end), catalog, grains
+        ),
     )
 
 
@@ -446,6 +467,7 @@ def _request(
         overrides=own,
         grains=subject.grains,
         sleeve_budget=subject.sleeve_budget,
+        prefix=subject.prefix_of(window),
     )
 
 
@@ -554,6 +576,22 @@ def _inadmissible(ws: Workspace, snapshot: Snapshot) -> list[str]:
     if not reasons and not snapshot.reproducible:
         reasons.append(f"{snapshot.snapshot_id[:12]}: the snapshot records itself irreproducible")
     return reasons
+
+
+def _window_only(
+    groups: Sequence[Sequence[object]], opens_ns: int
+) -> tuple[tuple[object, ...], ...]:
+    """The loaded points from the window's open on: what the evidence gates are shown.
+
+    A warmed subject is fed its prefix before the window, and the prefix is in the groups
+    the runs were made from because a perturbation runs them again. The lags and the
+    volume the gates read are the window's own, so the prefix is cut here rather than
+    handed on: a publication delay observed before the window is not evidence about it.
+    """
+    return tuple(
+        tuple(point for point in group if int(cast("Any", point).ts_init) >= opens_ns)
+        for group in groups
+    )
 
 
 def _dataset_facts(
@@ -689,8 +727,9 @@ def _judge(
         measured.certification, subject.folds, measured.host_certification
     )
     metrics = records.trial_metrics(store, subject.hyp.id)
-    facts = _dataset_facts(ws, snapshot, measured.groups)
-    volume = _daily_volume(measured.groups)
+    judged = _window_only(measured.groups, midnight_ns(subject.certification[0]))
+    facts = _dataset_facts(ws, snapshot, judged)
+    volume = _daily_volume(judged)
     parameters = _tunable(subject)
 
     def rerun(overrides: Mapping[str, float]) -> CardRun:

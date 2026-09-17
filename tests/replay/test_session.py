@@ -9,14 +9,17 @@ None of that can be established against a double.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import date
 
 import pytest
 from nautilus_trader.model.identifiers import ClientId
 
+from kanso.criteria.run import midnight_ns
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
-from kanso.nautilus.session import Halt, ordered
+from kanso.nautilus.cross_section import is_marker
+from kanso.nautilus.session import Halt, measured, ordered
 from tests.replay.conftest import (
     BLOCKING_FILTER,
     FLAT,
@@ -301,3 +304,55 @@ def client() -> object:
         )
     finally:
         loop.close()
+
+
+# --- warming ------------------------------------------------------------------
+
+PREFIX = (date(2024, 2, 27), date(2024, 2, 29))
+"""The three sessions before the forward window, over a series that prints every day."""
+
+
+def warmed_request() -> backtest.RunRequest:
+    return replace(request_for(hyp=hypothesis(warmup={"sessions": 3})), prefix=PREFIX)
+
+
+def test_a_warmed_session_warms_on_both_paths_and_claims_only_its_range() -> None:
+    """The prefix is fed on the live path too, and neither path counts it."""
+    fed = tuple(bars((PREFIX[0], FORWARD[1])))
+    opens = midnight_ns(FORWARD[0])
+
+    replayed = session.run_node(warmed_request(), [instrument()], [fed])
+    engine = backtest.execute(warmed_request(), [instrument()], [fed])
+
+    node = replayed.result
+    assert node.intents == engine.intents
+    assert node.intents, "the prefix filled the three closes the rule needs"
+    assert node.intents[0][0] == fed[4].ts_event, "so it buys the first trough of the range"
+    assert all(opens <= fill.ts_ns for fill in node.run.fills)
+    assert node.run.equity == engine.run.equity
+    assert replayed.released == len(bars(FORWARD))
+    assert replayed.clock_ns == int(fed[-1].ts_init)
+
+
+def test_a_session_that_stops_inside_the_prefix_reaches_no_clock() -> None:
+    """A clock inside the prefix would resume a stage before its window; none is reported."""
+    fed = tuple(bars((PREFIX[0], FORWARD[1])))
+
+    replayed = session.run_node(
+        replace(warmed_request(), strategy_source=RAISING), [instrument()], [fed]
+    )
+
+    assert replayed.result.crashed
+    assert replayed.released == 0
+    assert replayed.clock_ns is None
+
+
+def test_measured_is_the_window_s_own_catalog_points() -> None:
+    fed = tuple(bars((PREFIX[0], FORWARD[1])))
+    stream = ordered([fed])
+
+    kept = measured(stream, midnight_ns(FORWARD[0]))
+
+    assert len(kept) == len(bars(FORWARD))
+    assert kept[0] is fed[3]
+    assert not any(is_marker(point) for point in kept)

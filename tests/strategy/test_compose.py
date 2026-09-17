@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from kanso.certify.run import certify
 from kanso.env.envelope import engine_version
 from kanso.errors import PreconditionError, ValidationError
 from kanso.research import loop, scheduler
@@ -20,6 +21,7 @@ from tests.research.conftest import (
     SIZED_HOST,
     classify,
     document,
+    load_december,
     register,
     write_hypothesis,
 )
@@ -417,6 +419,11 @@ def test_a_certificate_earned_under_another_scope_is_refused(
 
     assert f"hypotheses/{HYP_ID}/hypothesis.yaml" in str(failure.value.remedy)
 
+    register(ws, store, write_hypothesis(ws, document(warmup={"sessions": 3}), same))
+
+    with pytest.raises(PreconditionError, match="warmup changed from None"):
+        compose(ws, store, HYP_ID)
+
 
 def test_a_hypothesis_whose_certificates_all_failed_cannot_compose(
     ws: Workspace, store: StateStore
@@ -526,3 +533,44 @@ def test_an_attached_budget_travels_in_its_params_and_the_book_is_the_largest_si
         "the sized overlay's book, not the plain one's"
     )
     assert _book(ws, store, sleeve, draft_version(store, "demo_host")) == 30_000.0
+
+
+# --- warming ------------------------------------------------------------------
+
+
+def test_a_warmed_sleeve_s_expectation_is_measured_warm_over_its_certification_window(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Composition resolves the certification prefix as certification did, from the pin.
+
+    A passing verdict composes on the spot, so the runner is watched from the certificate
+    on: certification runs the research window warmed on December, then composition runs
+    the certification window warmed on the three sessions before it.
+    """
+    from datetime import date
+
+    from kanso.nautilus import backtest
+    from tests.certify.test_run import a_card, write_plan
+    from tests.research.conftest import CERTIFICATION, RESEARCH
+    from tests.strategy.conftest import VARYING
+
+    warmed = document(warmup={"sessions": 3})
+    load_december(ws)
+    classify(ws, store, warmed, VARYING)
+    a_card(ws, store, VARYING, document=warmed)
+    write_plan(ws)
+    asked: list[backtest.RunRequest] = []
+    run = backtest.run
+    monkeypatch.setattr(
+        backtest, "run", lambda request, catalog: asked.append(request) or run(request, catalog)
+    )
+
+    assert certify(ws, store, HYP_ID).verdict == "pass"
+    version = compose(ws, store, HYP_ID)
+
+    assert [(request.window, request.prefix) for request in asked] == [
+        (RESEARCH, (date(2023, 12, 29), date(2023, 12, 31))),
+        (CERTIFICATION, (date(2024, 2, 3), date(2024, 2, 5))),
+    ]
+    assert version.version == 1
+    assert version.expectation.window.start.isoformat() == "2024-02-06"
