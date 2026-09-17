@@ -77,7 +77,7 @@ import time
 import traceback
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from itertools import chain
 from math import fsum
@@ -86,7 +86,7 @@ from types import ModuleType
 from typing import Any, Final
 
 from kanso.criteria import CardRun, Fill, Trade
-from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, midnight_ns
+from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
 from kanso.nautilus.costs import fixed_half_spread, quote_half_spread, side_rate
@@ -111,6 +111,7 @@ __all__ = [
     "run_subprocess",
     "stage_of",
     "tunable",
+    "warmup_prefix",
     "window_data",
 ]
 
@@ -208,6 +209,12 @@ class RunRequest:
     orders fill at the last print of the finer grain — not at the close its own grain
     just delivered — and a coarser bar on a day the finer grain is silent does not move
     the book. The host's `on_bar` still runs only on the host grain.
+
+    `prefix` is the warmup: the first and last of the sessions before the window that the
+    strategy is fed before it may trade, resolved by the parent (`warmup_prefix`) and put
+    here explicitly, so a card child re-checks the span it was handed rather than one it
+    computes. `bounds` stays the measured window; `delivered` is what the engine is fed.
+    The upper bound is the same in both.
     """
 
     hyp: Hypothesis
@@ -223,11 +230,32 @@ class RunRequest:
     overrides: Mapping[str, float] = field(default_factory=dict)
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    prefix: tuple[date, date] | None = None
+
+    def __post_init__(self) -> None:
+        if self.prefix is None:
+            return
+        first, last = self.prefix
+        if first > last or last >= self.window[0]:
+            raise ValidationError(
+                f"prefix: {first}..{last} is not a span of sessions before the window "
+                f"opening {self.window[0]}"
+            )
 
     @property
     def bounds(self) -> tuple[int, int]:
         """The window as a half-open instant span `[opens, closes)` in nanoseconds."""
         return midnight_ns(self.window[0]), midnight_ns(self.window[1]) + NS_PER_DAY
+
+    @property
+    def span(self) -> tuple[date, date]:
+        """The days fed to the engine: the warmup prefix, when there is one, then the window."""
+        return (self.window[0] if self.prefix is None else self.prefix[0]), self.window[1]
+
+    @property
+    def delivered(self) -> tuple[int, int]:
+        """The instants fed to the engine, `[prefix opens, closes)`; `bounds` without a prefix."""
+        return midnight_ns(self.span[0]), self.bounds[1]
 
     def plain(self) -> RunRequest:
         """The same request with every mapping a plain dict, so it can be serialised."""
@@ -331,22 +359,54 @@ def _bar_grains(request: RunRequest) -> tuple[str, ...]:
     return request.grains or (request.hyp.resolution,)
 
 
-def window_data(
-    request: RunRequest, catalog_path: Path
-) -> tuple[tuple[object, ...], tuple[tuple[object, ...], ...]]:
-    """The resolved instruments and the window's points, grouped one type per group.
+LOOKBACK_DOUBLINGS: Final = 5
+"""How many spans `warmup_prefix` asks the catalog for before giving up: twice the sessions
+asked for in calendar days, doubled each time, so thirty-two times them at most."""
 
-    Only the requested window is read, and only the types the hypothesis requires, at the
-    resolution it declares — or at every grain the request names, when an overlay's differs
-    from its host's. Each group is homogeneous because the engine assumes one type per
-    `add_data` call.
+
+def warmup_prefix(
+    hyp: Hypothesis, window: tuple[date, date], catalog_path: Path, grains: Sequence[str] = ()
+) -> tuple[date, date] | None:
+    """The sessions this hypothesis warms on before `window`, resolved from the catalog.
+
+    `None` when the hypothesis declares no warmup. A session is a calendar day on which any
+    name of the universe printed at the sleeve's own grain — the union, which is how the
+    venue sees the market. The catalog is read over a bounded lookback before the window,
+    doubling from twice the sessions asked for in calendar days, and the last N distinct
+    days found are the prefix; fewer than N inside the bound is a refusal naming what was
+    found. Resolved in the parent by every builder and put on the request explicitly: a
+    card child has no catalog, and re-checks the span it was handed rather than one it
+    computes. The window's own bounds are not touched.
     """
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
-    from kanso.data.types import BUILTIN_TYPES, resolve_type
-
-    hyp = request.hyp
+    if hyp.warmup is None:
+        return None
+    wanted = hyp.warmup.sessions
     catalog = ParquetDataCatalog(str(catalog_path))
+    held = _held(catalog, hyp)
+    grain = (tuple(grains) or (hyp.resolution,))[0]
+    opens = midnight_ns(window[0])
+    days: list[date] = []
+    lookback = wanted
+    for _ in range(LOOKBACK_DOUBLINGS):
+        lookback *= 2
+        start = max(0, opens - lookback * NS_PER_DAY)
+        points = _primary_points(catalog, hyp, held, grain, start, opens - 1)
+        days = sorted({day_of(int(point.ts_init)) for point in points})  # type: ignore[attr-defined]
+        if len(days) >= wanted:
+            return days[-wanted], days[-1]
+    raise PreconditionError(
+        f"warmup: {hyp.id} asks for {wanted} session(s) before {window[0]} and the catalog "
+        f"holds {len(days)} in the {lookback} calendar days before it",
+        remedy=f"load {', '.join(hyp.universe)} at {grain} back to at least "
+        f"{window[0] - timedelta(days=lookback)} with `kanso data load`, then "
+        "`kanso data snapshot`; or lower warmup.sessions",
+    )
+
+
+def _held(catalog: Any, hyp: Hypothesis) -> dict[str, Any]:
+    """The catalog's definition of every name in the universe, refused when one is missing."""
     instruments = catalog.instruments(instrument_ids=list(hyp.universe))
     held = {str(instrument.id): instrument for instrument in instruments}
     missing = [name for name in hyp.universe if name not in held]
@@ -355,7 +415,50 @@ def window_data(
             f"instruments: the catalog holds no definition for {', '.join(sorted(missing))}",
             remedy="run `kanso data instruments` to resolve the universe into the catalog",
         )
-    opens, closes = request.bounds
+    return held
+
+
+def _primary_points(
+    catalog: Any, hyp: Hypothesis, held: Mapping[str, Any], grain: str, start: int, end: int
+) -> tuple[object, ...]:
+    """The series a session is counted on: the sleeve's own grain of its first market type.
+
+    Bars at the sleeve's grain when the hypothesis requires bars, else its quotes, else its
+    trades — one of the three is always required, because a resolution is a bar size or
+    one of the unaggregated grains and the schema requires the type it names. The names
+    are taken together, so a day any of them printed is a session.
+    """
+    from kanso.nautilus.strategy import BAR, QUOTE, TRADE
+
+    requirement = next(kind for kind in (BAR, QUOTE, TRADE) if kind in hyp.data_requirements)
+    resolution = grain if requirement == BAR else hyp.resolution
+    return tuple(
+        chain.from_iterable(
+            _market_points(catalog, requirement, held[name], resolution, start, end)
+            for name in sorted(hyp.universe)
+        )
+    )
+
+
+def window_data(
+    request: RunRequest, catalog_path: Path
+) -> tuple[tuple[object, ...], tuple[tuple[object, ...], ...]]:
+    """The resolved instruments and the delivered span's points, grouped one type per group.
+
+    Only the requested span is read — the window, and the warmup prefix before it when the
+    request names one — and only the types the hypothesis requires, at the resolution it
+    declares, or at every grain the request names when an overlay's differs from its
+    host's. Each group is homogeneous because the engine assumes one type per `add_data`
+    call. The upper bound is the window's, prefix or not.
+    """
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    from kanso.data.types import BUILTIN_TYPES, resolve_type
+
+    hyp = request.hyp
+    catalog = ParquetDataCatalog(str(catalog_path))
+    held = _held(catalog, hyp)
+    opens, closes = request.delivered
     start, end = opens, closes - 1
     groups: list[tuple[object, ...]] = []
     grains = _bar_grains(request)
@@ -383,7 +486,7 @@ def window_data(
         if missing:
             raise PreconditionError(
                 f"data: the catalog holds no {' and no '.join(missing)} bars for {hyp.id} "
-                f"over {request.window[0]}..{request.window[1]}",
+                f"over {request.span[0]}..{request.span[1]}",
                 remedy="load both the host grain and the overlay grain for the window, "
                 "then take a snapshot",
             )
@@ -588,11 +691,13 @@ def execute(
             engine.add_actor(
                 _modifier(construct, source, params, request.hyp.id, cls.__name__),
             )
-        from kanso.nautilus.cross_section import arm
+        from kanso.nautilus.cross_section import arm, warm
 
         arm(strategy, points)
+        if request.prefix is not None:
+            warm(strategy, request.bounds[0])
         engine.add_strategy(strategy)
-        opens, closes = request.bounds
+        opens, closes = request.delivered
         engine.run(start=opens, end=closes - 1)
         card = _extract(request, engine, stream, groups)
         intents = tuple(
@@ -632,9 +737,12 @@ def checked(
     `node._realised` — because a refusal one path makes and another does not is a
     divergence waiting to happen. `run_subprocess` makes the split half of it once more in
     the parent, before the child exists, so a card refuses with a message an operator can
-    read instead of crashing with one only the run records.
+    read instead of crashing with one only the run records. The split check runs over the
+    whole delivered span: a split inside the warmup prefix adjusts no position, but the
+    venue restates the book at it, and an undeclared one would leave the harness's prices
+    wrong without a refusal.
     """
-    splits.unscheduled(instruments, chain.from_iterable(groups), request.window)
+    splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
     return _stream(request, groups)
 
 
@@ -647,10 +755,16 @@ def _stream(
     at least one data event — and the source of the marks the equity curve is struck at.
     Ties are broken by instrument and then by price, so two points at one instant always
     order the same way and the mark they leave is reproducible.
+
+    A point is admitted over the delivered span — the warmup prefix the request names and
+    the window — and refused outside it; the upper bound is the window's own, prefix or
+    not. The refusal for an empty run is made on the window alone: a prefix with nothing
+    measured after it is not a run.
     """
     from kanso.nautilus.cross_section import is_marker
 
-    opens, closes = request.bounds
+    opens, closes = request.delivered
+    measured, _ = request.bounds
     stream: list[tuple[int, str, float | None]] = []
     for group in groups:
         for point in group:
@@ -660,12 +774,12 @@ def _stream(
             if not opens <= ts < closes:
                 raise PreconditionError(
                     f"data: a {type(point).__name__} published at {ts} lies outside the "
-                    f"requested window {request.window[0]}..{request.window[1]}",
+                    f"requested window {request.span[0]}..{request.span[1]}",
                     remedy="load the window the run asked for and nothing else",
                 )
             stream.append((ts, _instrument_of(point) or "", _price_of(point)))
     stream.sort(key=lambda item: (item[0], item[1], -1e308 if item[2] is None else item[2]))
-    if not stream:
+    if not any(ts >= measured for ts, _, _ in stream):
         raise PreconditionError(
             f"data: the catalog holds nothing for {request.hyp.id} over "
             f"{request.window[0]}..{request.window[1]}",
@@ -977,6 +1091,13 @@ def _equity(
     exactly the share count the engine went on to trade. Without it the ex-day's price is
     marked against the pre-split count and the curve reports the whole action as return —
     measured on a one-for-ten reverse split, 190,450 against a true 99,950.
+
+    A stream may begin before the window with the warmup prefix. No period ends inside it
+    — the first period is the window's first — but its points are consumed for the marks,
+    so a name that last printed in the prefix is marked at that print in the first period
+    rather than at nothing. No fill may precede the open: the harness drops every order
+    over the prefix, and one that reached the venue anyway is refused here rather than
+    measured.
     """
     opens, _ = request.bounds
     period_ns = int(parse_duration(request.period, "period").total_seconds() * NS_PER_SECOND)
@@ -985,8 +1106,16 @@ def _equity(
             f"period: {request.period!r} is no time at all, so the window holds no return "
             "periods to measure"
         )
+    early = [fill for fill in fills if fill.ts_ns < opens]
+    if early:
+        raise ValidationError(
+            f"fills: a fill at {early[0].ts_ns} precedes the window opening {opens}; the "
+            "harness drops every order over the warmup prefix, so nothing may fill before it"
+        )
     last_in: dict[int, int] = {}
     for ts, _key, _price in stream:
+        if ts < opens:
+            continue
         last_in[(ts - opens) // period_ns] = ts
     ends = tuple(last_in[index] for index in sorted(last_in))
     marks: dict[str, float] = {}
@@ -1059,7 +1188,7 @@ def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> Ru
     instruments, groups = window_data(request, catalog_path)
     # In the parent, where a refusal is a refusal: the child is a card, and an exception
     # inside one is a crash the run records rather than a message the operator reads.
-    splits.unscheduled(instruments, chain.from_iterable(groups), request.window)
+    splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
     payload = pickle.dumps(
         {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)},
         protocol=pickle.HIGHEST_PROTOCOL,
