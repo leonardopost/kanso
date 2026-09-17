@@ -11,7 +11,9 @@ number that moved because a file moved is not evidence.
 the research window is run beside it because the gates that matter most compare the two,
 and an out-of-sample number means nothing beside an in-sample one measured under different
 conditions. A relative construct adds its host's run over each window, since its objective
-is a difference.
+is a difference, and a hypothesis measured against a benchmark adds the benchmark's run over
+each — produced by the runner from the subject's own request for that window, and held
+fixed while a perturbation gate moves the subject.
 
 **An inadmissible snapshot fails the plan rather than raising.** A snapshot holding a
 dataset whose publication nobody declared, or one whose prices a vendor adjusted as of the
@@ -65,6 +67,7 @@ from kanso.certify.plan import plan as plan_for
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
+from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
 from kanso.data.manifest import Manifest, catalog_path, manifests
 from kanso.data.publication import NANOS_PER_SECOND, PUBLICATION_RULES
@@ -198,7 +201,8 @@ class Subject:
 
 @dataclass(frozen=True)
 class Measured:
-    """What one certification ran: both windows, the host beside them, and the points.
+    """What one certification ran: both windows, the host or the benchmark beside them,
+    and the points.
 
     The resolved instruments and the window's points are kept because a gate that
     perturbs a parameter runs the certification window again, and re-reading the catalog
@@ -211,6 +215,8 @@ class Measured:
     host_certification: CardRun | None = None
     host_research: CardRun | None = None
     instruments: tuple[object, ...] = ()
+    benchmark_certification: CardRun | None = None
+    benchmark_research: CardRun | None = None
 
 
 # --- the entry points ---------------------------------------------------------
@@ -515,6 +521,19 @@ def _measure(subject: Subject) -> Measured:
     research = _ran(
         subject, lambda: backtest.run(_request(subject, subject.research), subject.catalog)
     )
+    benchmark_certification: CardRun | None = None
+    benchmark_research: CardRun | None = None
+    if measures_benchmark(subject.hyp):
+        benchmark_certification = _ran(
+            subject,
+            lambda: backtest.execute(backtest.benchmark(request), instruments, groups),
+        )
+        benchmark_research = _ran(
+            subject,
+            lambda: backtest.run(
+                backtest.benchmark(_request(subject, subject.research)), subject.catalog
+            ),
+        )
     host_certification: CardRun | None = None
     host_research: CardRun | None = None
     if subject.harness.relative:
@@ -537,6 +556,8 @@ def _measure(subject: Subject) -> Measured:
         host_certification=host_certification,
         host_research=host_research,
         instruments=instruments,
+        benchmark_certification=benchmark_certification,
+        benchmark_research=benchmark_research,
     )
 
 
@@ -724,7 +745,10 @@ def _judge(
     measured = _measure(subject)
     compared = _parity(ws, store, plan, subject)
     value, se = objective.compute(
-        measured.certification, subject.folds, measured.host_certification
+        measured.certification,
+        subject.folds,
+        measured.host_certification,
+        measured.benchmark_certification,
     )
     metrics = records.trial_metrics(store, subject.hyp.id)
     judged = _window_only(measured.groups, midnight_ns(subject.certification[0]))
@@ -759,6 +783,8 @@ def _judge(
             strategy_sha=subject.strategy_sha,
             research_run=measured.research,
             host_research_run=measured.host_research,
+            benchmark_run=measured.benchmark_certification,
+            benchmark_research_run=measured.benchmark_research,
             trial_metrics=metrics,
             datasets=facts,
             daily_volume=volume,

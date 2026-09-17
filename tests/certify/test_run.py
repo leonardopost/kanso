@@ -29,12 +29,14 @@ from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
 from kanso.criteria import library
 from kanso.criteria.gates.parity_replay import NO_PARITY
+from kanso.criteria.objectives import wf_sharpe_vs_hold
 from kanso.criteria.run import day_of, midnight_ns
 from kanso.data import snapshot as snapshots
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import set_status
 from kanso.inbox import inbox_file, unread
+from kanso.nautilus import backtest
 from kanso.replay.record import list_sessions as sessions
 from kanso.research import driver, records
 from kanso.schemas import (
@@ -1008,3 +1010,68 @@ def test_the_evidence_gates_are_shown_the_window_and_never_the_prefix(
     assert capacity.evidence["instruments"][INSTRUMENT]["adv"] == pytest.approx(
         sum(window) / len(window)
     )
+
+
+# --- a benchmark ---------------------------------------------------------------
+
+
+HELD = document(
+    benchmark={"hold": "first_leg"},
+    objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+)
+"""The demo sleeve, measured against a hold of its one instrument."""
+
+PLATEAU = {
+    "id": "param_plateau",
+    "stage": "cert",
+    "params": {"perturb_pct": 10.0, "keep_fraction": 0.0},
+    "rationale": "the perturbed subject is measured against the same hold",
+}
+
+
+def test_both_windows_are_measured_against_their_own_hold_and_a_perturbation_moves_neither(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    classify(ws, store, HELD, REVERTING)
+    a_card(ws, store, REVERTING, document=HELD)
+    write_plan(ws, gates=[*CERT_GATES, PLATEAU])
+    derived: list[tuple[date, date]] = []
+    original = backtest.benchmark
+
+    def counted(request: backtest.RunRequest) -> backtest.RunRequest:
+        derived.append(request.window)
+        return original(request)
+
+    monkeypatch.setattr(run.backtest, "benchmark", counted)
+    made = certify(ws, store, HYP_ID)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+    measured = run._measure(subject)
+    assert derived[:2] == [CERTIFICATION, (date(2024, 1, 1), date(2024, 1, 31))]
+    assert len(derived) == 4, "two for the certificate, two for the re-measure here"
+    for hold in (measured.benchmark_certification, measured.benchmark_research):
+        assert hold is not None and len(hold.fills) == 1 and hold.trades == ()
+    assert made.objective.id == "wf_sharpe_vs_hold"
+    assert (made.objective.value, made.objective.se) == pytest.approx(
+        wf_sharpe_vs_hold.compute(
+            measured.certification, subject.folds, benchmark=measured.benchmark_certification
+        )
+    )
+    (window,) = [gate for gate in made.gates if gate.id == "embargoed_window"]
+    assert window.evidence["research"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(
+            measured.research, subject.folds, benchmark=measured.benchmark_research
+        )[0]
+    )
+    (plateau,) = [gate for gate in made.gates if gate.id == "param_plateau"]
+    assert plateau.evidence["n_backtests"] == 2
+    assert plateau.evidence["unperturbed"] == pytest.approx(made.objective.value)
+
+
+def test_a_sleeve_without_a_benchmark_runs_no_hold(ws: Workspace, store: StateStore) -> None:
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+
+    measured = run._measure(run._subject(ws, store, HYP_ID, None))
+
+    assert (measured.benchmark_certification, measured.benchmark_research) == (None, None)
