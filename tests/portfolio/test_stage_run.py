@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,6 +16,7 @@ from kanso.workspace import Workspace
 from tests.portfolio.conftest import deployable, reconfigure
 from tests.replay.conftest import (
     BLOCKING_FILTER,
+    CAPITAL,
     FLAT,
     RAISING,
     REVERTING,
@@ -365,18 +368,20 @@ FEBRUARY_29_CLOSE_NS = int(datetime(2024, 2, 29, 16, 0, 1, tzinfo=UTC).timestamp
 
 
 def test_a_restart_seeds_the_book_from_where_the_last_window_left_it(
-    ws: Workspace, store: StateStore
+    ws: Workspace, store: StateStore, tmp_path: Path
 ) -> None:
     """The node restarts flat at the version's capital, but the cushion and the last end it
     settled carry across: a window that closed in February with 500 set aside, restarted
-    in March, restores the entry's costs from that 500 at its first period end."""
+    in March, restores the entry's costs from that 500 at its first period end — in the
+    extraction, and in the balance the node's harness reads at the next bar."""
     from dataclasses import replace
-    from datetime import date
 
     from kanso.nautilus.node import Realised
 
-    deployable(ws, store, "booked", sleeve=BUYER, doc=BOOKED)
+    record = tmp_path / "balance.txt"
+    deployable(ws, store, "booked", sleeve=recording_buyer(record), doc=BOOKED)
     first = deploy(ws, store, "paper").results[0]
+    record.unlink()
     assert set(first.run.cushion) == {0.0}, "March turns no month inside itself"
     february = replace(
         first.run,
@@ -404,3 +409,139 @@ def test_a_restart_seeds_the_book_from_where_the_last_window_left_it(
     assert second.returns[0] < 0, "the entry's costs on March 16"
     assert second.equity[0] == pytest.approx(first.capital), "restored at the month's first end"
     assert second.cushion[0] == pytest.approx(500.0 + second.returns[0])
+    (_, entered), (at, restored), *_ = balances(record)
+    assert entered == first.capital
+    assert at == second.period_ends_ns[1]
+    assert restored == pytest.approx(second.equity[1], rel=1e-12), "the seed, restored"
+
+
+def recording_buyer(record: Path, notional: str = "5_000.0") -> bytes:
+    """A sleeve that buys once on its first bar and writes down every balance it reads."""
+    return f'''
+from pathlib import Path
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Buys once, sized as it is told, and records the balance before every bar it acts on."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.bought = False
+
+    def on_bar(self, bar) -> None:
+        with Path({str(record)!r}).open("a") as out:
+            out.write(f"{{bar.ts_init}} {{self.balance!r}}\\n")
+        if not self.bought:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional={notional})
+            self.bought = True
+'''.encode()
+
+
+def balances(record: Path) -> list[tuple[int, float]]:
+    return [
+        (int(ts), float(value))
+        for ts, value in (line.split() for line in record.read_text().splitlines())
+    ]
+
+
+def levered(ws: Workspace, store: StateStore, hyp_id: str, sleeve: bytes, **doc: Any) -> None:
+    """A deployable version whose implementation carries the hypothesis's own risk limits.
+
+    `composed` generates every implementation from the demo hypothesis; a sleeve that has to
+    borrow needs the manifest to say it may."""
+    from kanso.strategy.impl import generate
+
+    written = document(id=hyp_id, **doc)
+    file = deployable(ws, store, hyp_id, sleeve=sleeve, doc=written)
+    generate(
+        ws,
+        store,
+        hyp_id,
+        file.latest(),
+        hypothesis(id=hyp_id, **doc),
+        CAPITAL,
+        created_at=datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+
+def test_a_node_sleeve_reads_the_book_its_carry_left(
+    ws: Workspace, store: StateStore, tmp_path: Path
+) -> None:
+    """Levered to one and a half times its balance on the first bar and held, the version's
+    node harness settles the carry at every period end: each balance it reads afterwards is
+    the equity the node's extraction struck at that end before the end's own carry, where a
+    harness never handed the policy would read the fills alone."""
+    record = tmp_path / "balance.txt"
+    levered(
+        ws,
+        store,
+        "carried",
+        recording_buyer(record, "self.balance * 1.5"),
+        risk_limits={"max_position_pct": 200, "max_drawdown_pct": 40, "max_leverage": 2},
+        book={"financing_rate_bps": 500.0},
+    )
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert run.fills and all(charged > 0 for charged in run.carry[:-1])
+    ends = list(run.period_ends_ns)
+    filled = {fill.ts_ns for fill in run.fills}
+    assert filled == {ends[0], ends[-1]}, "the entry, and the flatten at the window's close"
+    read = [(ends.index(ts), balance) for ts, balance in balances(record) if ts not in filled]
+    assert len(read) == len(ends) - 2
+    for index, balance in read:
+        assert balance == pytest.approx(run.equity[index] + run.carry[index], rel=1e-12), index
+
+
+def test_a_node_restart_charges_its_first_carry_from_the_instant_it_resumed(
+    ws: Workspace, store: StateStore, tmp_path: Path
+) -> None:
+    """The newest window on the stage settled on February 29 and the clock stands at March
+    15's close: the first carry of the restart covers the day since the clock, not the
+    sixteen since the settled end, when nothing was held."""
+    from dataclasses import replace
+
+    from kanso.nautilus.costs import NS_PER_YEAR
+    from kanso.nautilus.node import Realised
+
+    levered(
+        ws,
+        store,
+        "carried",
+        recording_buyer(tmp_path / "balance.txt", "self.balance * 1.5"),
+        risk_limits={"max_position_pct": 200, "max_drawdown_pct": 40, "max_leverage": 2},
+        book={"financing_rate_bps": 500.0},
+    )
+    first = deploy(ws, store, "paper").results[0]
+    february = replace(
+        first.run,
+        window=(date(2024, 2, 29), date(2024, 2, 29)),
+        period_ends_ns=(FEBRUARY_29_CLOSE_NS,),
+        returns=(0.0,),
+        equity=(first.capital,),
+        trades=(),
+        fills=(),
+        held=(),
+        carry=(0.0,),
+        worst_ratio=(None,),
+    )
+    records.record_stage_run(
+        store, "paper", "an-earlier-window", [Realised("carried", 1, first.capital, february, ())]
+    )
+    store.connection.execute("UPDATE sessions SET clock_ts = ?", (str(MARCH_15_CLOSE_NS),))
+
+    second = deploy(ws, store, "paper").results[0].run
+
+    end = second.period_ends_ns[0]
+    borrowed = second.held[0].notional - (second.equity[0] + second.carry[0])
+    assert borrowed > 0
+    assert second.carry[0] == pytest.approx(
+        borrowed * 0.05 * (end - MARCH_15_CLOSE_NS - 1) / NS_PER_YEAR
+    )
