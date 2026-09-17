@@ -31,6 +31,7 @@ from .conftest import (
     document,
     write_hypothesis,
 )
+from .mocked import tuned
 
 
 def lane_of(ws: Workspace, run: RunRecord) -> Path:
@@ -308,6 +309,20 @@ def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restor
     assert event.detail["like"] == kept.sha7
     assert event.detail["sessions"] == 31, "one session per day of the research window"
     assert event.detail["matched"] == 31
+    # A redundant miss is judged, so what it held is stored too: the third spelling of an
+    # idea is refused against the second as well as the first.
+    stored = store.connection.execute(
+        "SELECT sessions FROM signatures WHERE strategy_sha = ? AND hyp_id = ?"
+        " AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?",
+        (
+            sha256(respelt).hexdigest(),
+            registered,
+            run.hypothesis_sha,
+            run.snapshot_id,
+            run.criteria_version,
+        ),
+    ).fetchall()
+    assert [row["sessions"] for row in stored] == [31]
 
 
 def test_the_keep_rule_is_asked_before_the_signature(
@@ -325,6 +340,23 @@ def test_the_keep_rule_is_asked_before_the_signature(
 
     assert again.status == "keep"
     assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+
+
+def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_toml(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Measured: WEAK is flat at 17 of the window's 31 session ends, as the flat baseline is
+    at all of them — a discard at the template's 97 percent, a redundant miss at 50."""
+    workspace = tuned(ws, redundant_pct=50)
+    run = loop.begin(workspace, store, registered)
+    edit(workspace, run, WEAK)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(workspace, store, registered, "buy any fall")
+
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    assert (event.detail["matched"], event.detail["sessions"]) == (17, 31)
+    assert event.detail["like"] == run.base_sha[:7]
 
 
 def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(
@@ -345,6 +377,30 @@ def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_noth
     assert resumed.base_sha == sha256(REVERTING).hexdigest()
     assert statuses(store) == ["keep", "keep", "keep"], "the baseline of the second run"
     assert len(store.events(kind=loop.REDUNDANT, subject=registered)) == 1
+
+
+def test_a_baseline_that_discards_on_a_book_already_judged_is_a_card_not_a_redundant_miss(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The exemption the keep rule cannot stand in for: a baseline that fails a gate does not
+    keep, and the flat book it holds was stored by the run before it. A run exists to
+    climb from its base, so the base is always measured."""
+    hyp_id = classify(
+        ws,
+        store,
+        document(
+            constraints=[{"id": "strategy_integrity"}, {"id": "min_trades", "params": {"min": 4}}]
+        ),
+    )
+    loop.begin(ws, store, hyp_id)
+    loop.end(ws, store, hyp_id)
+
+    again = loop.begin(ws, store, hyp_id, from_workspace=True)
+
+    assert again.base_sha == sha256(FLAT).hexdigest()
+    assert statuses(store, hyp_id) == ["discard", "discard"]
+    assert records.cards_of(store, hyp_id)[-1].run_id == again.run_id
+    assert store.events(kind=loop.REDUNDANT, subject=hyp_id) == []
 
 
 def test_a_card_that_is_worse_is_discarded_and_the_lane_is_restored(

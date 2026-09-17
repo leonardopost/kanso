@@ -35,6 +35,7 @@ from .conftest import (
     classify,
     document,
 )
+from .mocked import tuned
 from .test_attached import compose_host
 
 
@@ -423,6 +424,22 @@ def test_a_spell_of_stalls_on_one_best_reseeds_the_next_run_from_the_best_other_
     # A third stall on the same best is a new spell: one stall since the reseed.
     assert scheduler.on_stall(ws, store, hyp_id).reseed_from is None
     assert passages.reseed_of(store, hyp_id) is None, "the newest passage carries none"
+
+
+def test_the_spell_of_stalls_before_a_reseed_is_read_from_kanso_toml(
+    ws: Workspace, store: StateStore
+) -> None:
+    workspace = tuned(ws, reseed_after_stalls=1)
+    hyp_id = classify(workspace, store, DOCUMENT, REVERTING)
+    best = a_card(workspace, store, REVERTING, seq=1, metric=2.0)
+    other = a_card(workspace, store, WEAK, seq=2, metric=1.0, best=False)
+    certificate(store, hyp_id, best)
+
+    stall = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert stall.reseed_from == other, "one stall is a spell of one"
+    (event,) = store.events(kind=scheduler.RESEED, subject=hyp_id)
+    assert event.detail["stalls"] == 1
 
 
 def test_a_keep_a_drift_check_marked_is_never_where_a_reseed_starts(
