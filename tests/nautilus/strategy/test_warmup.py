@@ -11,17 +11,20 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
 from kanso.nautilus.cross_section import warm
-from kanso.nautilus.hooks import OVERLAY
+from kanso.nautilus.hooks import OVERLAY, Clip
 from kanso.nautilus.strategy import (
     Decision,
     Hedge,
     HookContext,
     KansoModifier,
+    KansoModifierConfig,
     KansoStrategy,
 )
 
 from .conftest import DEEP, DEMO, HEDGE, LATENCY_NS, MINUTE_NS, bar, flat, saw_tooth
+from .test_clips import HEDGE_CLIP, clipper
 from .test_modifiers import Attached, attached, host
+from .test_sizing import Enters, sized
 from .test_sleeve import config
 
 OPEN_INDEX = 5
@@ -171,3 +174,44 @@ def test_an_overlay_s_clock_is_consulted_over_the_prefix_and_its_answer_dropped(
     assert len(Counting.asked) >= len(saw_tooth(DEMO)), "asked on every bar, prefix included"
     assert hedges, "and its clip is placed once the window opens"
     assert hedges[0].ts_event >= saw_tooth(DEMO)[OPEN_INDEX].ts_event
+
+
+class Clipping(KansoModifier):
+    """A sized overlay that asks for the same clip on every consult, prefix included."""
+
+    construct = OVERLAY
+    config_cls = KansoModifierConfig
+
+    def on_data(self, ctx: HookContext) -> Decision:
+        return Decision(clips=(Clip("HEDGE.XNAS", "SELL"),))
+
+
+class Ledgered(Enters):
+    """A sized host that records, on each of its own bars, how many clips are on the ledger."""
+
+    def on_start(self) -> None:
+        super().on_start()
+        self.ledger: dict[int, int] = {}
+
+    def after(self, bars: int) -> None:
+        self.ledger[bars] = sum(len(held) for held in self._clip_orders.values())
+
+
+def test_a_sized_overlay_s_prefix_clip_is_dropped_before_it_reaches_the_ledger(
+    backtest,
+) -> None:
+    """A clip built and then refused would sit on the ledger and count as the one clip
+    for the rest of the run, so the answer is dropped before any leg is built."""
+    points = [*saw_tooth(DEMO), *flat(HEDGE, close=20.0, volume=DEEP)]
+    strategy = Ledgered(sized())
+    warm(strategy, opens_ns())
+    overlay = clipper(Clipping, host="Ledgered")
+
+    run = backtest(strategy, [overlay], data=points, instruments=(DEMO, HEDGE))
+    clips = [i for i in run.strategy.intents if i.instrument_id == "HEDGE.XNAS"]
+
+    assert strategy.ledger[OPEN_INDEX + 1] == 0, "nothing on the ledger at the first window bar"
+    assert clips, "the first in-window clip is placed: the prefix's did not count as the one clip"
+    assert clips[0].ts_event == saw_tooth(DEMO)[OPEN_INDEX].ts_event
+    assert clips[0].qty == HEDGE_CLIP, "sized at the last print, which the prefix supplied"
+    assert all(clip.ts_event >= saw_tooth(DEMO)[OPEN_INDEX].ts_event for clip in clips)
