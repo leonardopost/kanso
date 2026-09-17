@@ -1230,9 +1230,10 @@ def _equity(
     instant, so it is a floor like `max_hold`'s; a name that did not print is valued at
     its mark. Then the reset, at the first end of a new calendar month: the return is
     struck on the equity before the transfer, the transfer moves cash between the book
-    and the cushion, and the equity recorded is the book after it. The harness applies
-    the same two transfers from the same functions on the same instant, so a sleeve's
-    `balance` at a period end is the equity struck here.
+    and the cushion, and the equity recorded is the book after it. The harness settles
+    the same period from the same functions when the first point of the next period is
+    delivered, so a sleeve's `balance` read at a period's last point is the equity struck
+    here before that end's carry and transfer, and any later read includes them.
     """
     opens, _ = request.bounds
     policy = policy_of(request.hyp.book)

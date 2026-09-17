@@ -8,12 +8,19 @@ here and both call it: the balance a strategy sizes against is the equity the ru
 The book policy a hypothesis declares is the same shape of promise at the period end. A
 monthly reset moves a surplus into a cushion and restores a deficit from it; a financing
 carry charges a yearly rate on what the book holds above its equity; both are applied
-once, by the runner, at each period end of the extraction, and mirrored by the harness on
-the same instant from the same functions, so `self.balance` at a period end is the equity
-the card records there. The maintenance ratio is read from the run alone — a gate's
-arithmetic, with no harness half — and lives here beside the rest so the three rules are
-one module. Nothing here is delegated to the venue: the engine enforces no margin on a
-margin account and charges no financing (`kanso.nautilus.facts`).
+once, by the runner, at each period end of the extraction. The harness settles the same
+period from the same functions when the first point of the next period is delivered, so a
+balance read at a period's last point is the equity struck there before that end's carry
+and transfer, and any later read includes them. The maintenance ratio is read from the run
+alone — a gate's arithmetic, with no harness half — and lives here beside the rest so the
+three rules are one module.
+
+Nothing here is delegated to the venue, because the venue does none of it. Under
+nautilus_trader 1.231.0 `RiskEngine._check_orders_risk_for_account` returns before any
+balance or margin check when the account is a margin account (`risk/engine.pyx`,
+"Determine risk controls for margin"), kanso's resolved instruments carry zero margin
+rates (`kanso.nautilus.splits`), and the engine's `FUNDING` position adjustment is
+published to nothing and applied by no venue (`kanso.nautilus.facts`).
 """
 
 from __future__ import annotations

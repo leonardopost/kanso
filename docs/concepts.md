@@ -223,7 +223,7 @@ it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are five.
+already over. There are seven.
 
 | gate | what it refuses |
 |---|---|
@@ -235,7 +235,8 @@ already over. There are five.
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
-The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
+`position_size` is the only one that carries a floor on size — `maintenance_margin` floors the
+book's margin, not a position's size. `risk_limits` are three ceilings — a
 position may not exceed `max_position_pct`, the book may not exceed `max_leverage` — so a
 strategy holding a tenth of what its operator asked for satisfies all of them, and nothing in
 the package could say otherwise. `position_size` is measured on `run.held`: what each
@@ -286,9 +287,20 @@ cushion restored ends with its month, and one it could not restore carries into 
 drawdown from the capital. And `cost_stress` multiplies fill costs and leaves the carry alone,
 because a rate on borrowed notional is not an execution cost; the transfers stand as struck,
 so a stressed reset book carries its extra cost across months rather than having a turn
-absorb it, and its drawdown is the more conservative for that. The engine enforces no margin and charges no financing here — kanso's instruments carry
-no margin rates — so none of this is delegated to the venue. A sized sleeve gets no special
-case: a full-book entry that borrows pays the carry and can breach the floor (row 76).
+absorb it, and its drawdown is the more conservative for that. The engine enforces no margin
+and charges no financing here — kanso's instruments carry no margin rates — so none of this
+is delegated to the venue. A sized sleeve gets no special case: a full-book entry that
+borrows pays the carry and can breach the floor (row 76).
+
+The policy has edges, each recorded in `docs/backlog.md` row 84. `maintenance_margin` reads
+end-of-period holdings, so a position opened and closed inside one period is never judged.
+The harness settles a period on a point delivered to the sleeve itself, so a grouped series
+the sleeve never subscribes to that holds a period's only point moves the runner's period end
+and not the harness's, and `balance` lags one period until the sleeve is handed a point.
+`bootstrap` resamples closed trades' net P&L, which holds neither the carry nor a transfer, so
+its `mdd_p95` understates the drawdown a levered book recorded. And the attribute reads of
+the harness's period close are denied, but an unsized `strategy.py` defining a method of the
+same name is not refused: it moves `balance`, never the arithmetic the card is struck with.
 
 **Under a `sizing` rule the floor is not a gate at all.** `sizing: {mode: full_book, budget: N}`
 in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry

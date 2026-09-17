@@ -263,8 +263,10 @@ skipped. It then requires the objective the stage realised to fall **inside** th
 ninety-percent interval composition measured — a result above the band fails exactly as one
 below it does, because a stage that out-performs its certification is not reproducing the
 model that was certified, and promoting on it would promote an unexplained difference. Of
-the sleeve's card-stage constraints only the drawdown limit is judged; `min_trades` is
-recorded as skipped, since a research-window count cannot be met in a paper window.
+the sleeve's card-stage constraints the drawdown limit and, when the sleeve holds cards to
+it, `maintenance_margin` are judged on the stage's own run, and a breach of either fails;
+`min_trades` is recorded as skipped, since a research-window count cannot be met in a paper
+window.
 
 ## Models
 
