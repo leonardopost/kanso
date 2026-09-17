@@ -8,9 +8,12 @@ and is merely sequenced here.
 `program.md` into the lane directory and stores both as blobs; every later card is
 evaluated against the pinned bytes rather than the workspace's, so editing the hypothesis
 mid-run changes nothing except the card that notices. `strategy.py` starts from the
-hypothesis's best blob when there is one — research resumes where it left off — and from
+hypothesis's best blob when there is one — research resumes where it left off — from the
+blob the scheduler re-seeded it to when the last stalls all ended on that best, and from
 the workspace only when the operator asks for it, which also clears the best, because
-starting from a worse file and keeping the old best would compare two ancestries.
+starting from a worse file and keeping the old best would compare two ancestries. A
+re-seeded run does not clear it: it climbs its own ancestry, and `records.set_best`
+moves the hypothesis's best only when a keep beats it.
 
 **The baseline calibrates the run.** It runs the unmodified `strategy.py` under
 `[research] baseline_budget_s` with memory uncapped, and what it costs becomes what a
@@ -26,9 +29,21 @@ Only then does the engine run, on research-window data alone, in a subprocess wi
 path to a catalog.
 
 **A discard costs nothing but the trial.** Keep or not, the card is recorded and its
-bytes are a blob; a keep rewrites `hypotheses/<id>/strategy.py`, and anything else
+bytes are a blob; a keep that moves the hypothesis's best rewrites
+`hypotheses/<id>/strategy.py`, so the file is always the champion, and anything else
 restores the lane copy from the best blob, or from the run's base before the first keep.
 `results.tsv` is rendered from the records afterwards, so no restore can lose history.
+
+**A result already known is not a trial.** After the keep rule has had its say, a card
+that did not keep is compared by what it held — its signature, `research/records.py` —
+against every strategy judged under the run's pins, and one that held the same book on
+`[research] redundant_pct` percent of their shared sessions is refused as *redundant*:
+no card, no trial, the lane restored, a `redundant` event, and `RedundantError` for the
+caller. The keep rule runs first so that a candidate which beats the best is a keep
+whatever it resembles, and the baseline is never redundant, since it is the best blob
+of the last run and its own signature is already stored. The trial count is the size
+of the search that found the result, and a spelling that repeats a bet already measured
+did not widen the search.
 """
 
 from __future__ import annotations
@@ -69,7 +84,7 @@ from kanso.nautilus import backtest, sizing
 from kanso.research import lanes, records
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
-from kanso.research.passages import BEGUN, taken
+from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
@@ -78,6 +93,7 @@ from kanso.schemas import (
     Hypothesis,
     RunRecord,
     StrategyFile,
+    Tag,
     VenueModel,
     load_yaml,
     parse_yaml,
@@ -91,7 +107,9 @@ __all__ = [
     "BASELINE",
     "HEADROOM",
     "MIN_CARD_BUDGET_S",
+    "REDUNDANT",
     "RESEARCHABLE",
+    "RedundantError",
     "Setup",
     "begin",
     "card",
@@ -117,6 +135,15 @@ rather than a refusal anyone reads."""
 
 CARDED: Final = "card"
 ENDED: Final = "run_ended"
+REDUNDANT: Final = "redundant"
+"""The event a redundant miss appends under the hypothesis id: the candidate held the
+same book as a strategy already judged under the pins, and was refused without a card."""
+
+
+class RedundantError(PreconditionError):
+    """The candidate's result is already known: it held what a judged strategy held."""
+
+
 BASELINE_FAILED: Final = "baseline_failed"
 """The event kinds this module appends, all under the hypothesis id as subject."""
 
@@ -553,9 +580,15 @@ def _record(
     gate_results: Sequence[GateResult],
     crash_tail: str | None,
     directory: Path,
+    tags: Sequence[Tag] = (),
     restore_all: bool = False,
 ) -> Card:
-    """Write the card, then move `best` or restore the lane copy, then render the log."""
+    """Write the card, then move `best` or restore the lane copy, then render the log.
+
+    The workspace `strategy.py` is the hypothesis's champion, so a keep writes it only
+    when the hypothesis's best is now these bytes: a keep that moved no more than its
+    run's best — a re-seeded run's baseline, a lesser keep under new pins — leaves it.
+    """
     made = Card(
         run_id=run.run_id,
         lane=run.lane,
@@ -568,6 +601,7 @@ def _record(
         peak_mem_gb=peak_mem_gb,
         status=status,
         desc=desc,
+        tags=list(tags),
         gate_results=list(gate_results),
         crash_tail=crash_tail,
         venue_model=setup.venue_model,
@@ -576,7 +610,8 @@ def _record(
     records.record_card(store, run, made)
     if status == "keep":
         records.set_best(store, run, strategy_sha, metric)
-        lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
+        if records.best_of(store, run.hyp_id)[0] == strategy_sha:
+            lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
     else:
         restored = {STRATEGY_FILE: run.best_sha or run.base_sha}
         if restore_all:
@@ -605,8 +640,13 @@ def _judge(
     result: backtest.RunResult,
     host_run: CardRun | None,
     directory: Path,
+    tags: Sequence[Tag] = (),
+    baseline: bool = False,
 ) -> Card:
-    """Steps 3 to 5: the constraints, the keep rule and the record."""
+    """Steps 3 to 5: the constraints, the keep rule, the redundancy check and the record.
+
+    `baseline` exempts the run's first card from the redundancy check and nothing else.
+    """
     n_trials = records.n_trials(store, run.hyp_id) + 1
     if result.refused is not None:
         return _record(
@@ -627,6 +667,7 @@ def _judge(
             gate_results=[integrity, verdict(sizing.GATE, False, result.refused.payload())],
             crash_tail=None,
             directory=directory,
+            tags=tags,
         )
     if result.crashed:
         return _record(
@@ -647,6 +688,7 @@ def _judge(
             gate_results=[integrity],
             crash_tail=result.traceback_tail or result.reason,
             directory=directory,
+            tags=tags,
         )
     constraints = _constraints(
         setup,
@@ -659,6 +701,13 @@ def _judge(
     metric, se = _measure(setup, result.run, host_run)
     passed = integrity.passed and all(gate.passed for gate in constraints)
     kept = passed and _keeps(setup, store, run, source, metric, se)
+    held = records.signature(result.run)
+    if not kept and not baseline:
+        like = records.redundant_with(store, run, held, ws.config.research.redundant_pct)
+        if like is not None:
+            records.record_signature(store, run, strategy_sha, held)
+            _refuse_redundant(store, run, strategy_sha, desc, metric, like, directory=directory)
+    records.record_signature(store, run, strategy_sha, held)
     return _record(
         ws,
         store,
@@ -677,6 +726,50 @@ def _judge(
         gate_results=[integrity, *constraints],
         crash_tail=None,
         directory=directory,
+        tags=tags,
+    )
+
+
+def _refuse_redundant(
+    store: StateStore,
+    run: RunRecord,
+    strategy_sha: str,
+    desc: str,
+    metric: float,
+    like: records.Redundancy,
+    *,
+    directory: Path,
+) -> NoReturn:
+    """Restore the lane copy, record the miss as an event, and refuse the card.
+
+    The metric the redundant run measured travels on the event and nowhere else: it is
+    the number a card would have carried, and the reason there is no card is that the
+    same number was already on one.
+    """
+    lanes.restore(store, directory, {STRATEGY_FILE: run.best_sha or run.base_sha})
+    store.event(
+        REDUNDANT,
+        run.hyp_id,
+        {
+            "run_id": run.run_id,
+            "lane": run.lane,
+            "sha": strategy_sha[:7],
+            "like": like.like[:7],
+            "matched": like.matched,
+            "sessions": like.shared,
+            "pct": round(like.pct, 2),
+            "metric": metric,
+            "desc": desc,
+        },
+    )
+    raise RedundantError(
+        f"{strategy_sha[:7]} held the same book as {like.like[:7]} on {like.matched} of "
+        f"{like.shared} sessions ({like.pct:.0f}%), so its result is already known and it "
+        "is not an experiment; the lane copy has been restored",
+        remedy=(
+            "change what the strategy holds and when, not how it is written; "
+            f"`kanso research show {run.hyp_id} --sha {like.like[:7]}` prints the card it repeats"
+        ),
     )
 
 
@@ -744,7 +837,9 @@ def begin(
             f"{program} is missing, and a run pins the program it follows",
             remedy=f"run `kanso hyp new {hyp_id}` in another directory and copy program.md over",
         )
-    base, from_best = _base_source(ws, store, hyp_id, from_workspace=from_workspace)
+    base, from_best, reseeded = _base_source(
+        ws, store, hyp_id, from_workspace=from_workspace, reseed=reseed_of(store, hyp_id)
+    )
     pins = {
         HYPOTHESIS_FILE: store.put_blob(source),
         PROGRAM_FILE: store.put_blob(program.read_bytes()),
@@ -790,7 +885,10 @@ def begin(
         ),
     )
     _HOST_RUNS[run.run_id] = host_cache
-    store.event(BEGUN, hyp_id, {"run_id": run.run_id, "tag": run.tag, "lane": lane})
+    begun: dict[str, object] = {"run_id": run.run_id, "tag": run.tag, "lane": lane}
+    if reseeded is not None:
+        begun[RESEED_FROM] = reseeded
+    store.event(BEGUN, hyp_id, begun)
     if registration.status != RESEARCHING:
         set_status(store, hyp_id, RESEARCHING)
     _judge(
@@ -805,22 +903,32 @@ def begin(
         result=result,
         host_run=host_run,
         directory=directory,
+        baseline=True,
     )
     return records.require_active(store, hyp_id)
 
 
 def _base_source(
-    ws: Workspace, store: StateStore, hyp_id: str, *, from_workspace: bool
-) -> tuple[bytes, bool]:
-    """The `strategy.py` a run starts from, and whether it is the hypothesis's best.
+    ws: Workspace,
+    store: StateStore,
+    hyp_id: str,
+    *,
+    from_workspace: bool,
+    reseed: str | None = None,
+) -> tuple[bytes, bool, str | None]:
+    """The `strategy.py` a run starts from, whether it is the hypothesis's best, and the
+    sha it was re-seeded from when it was.
 
-    The best blob when one exists and the workspace copy otherwise; `--from-workspace`
-    takes the workspace copy regardless and clears the best, so the history says the
-    run started over.
+    The best blob when one exists and the workspace copy otherwise; `reseed` — the sha
+    the scheduler put on the queue passage after a spell of stalls — takes that blob
+    instead of the best and leaves the best alone; `--from-workspace` takes the workspace
+    copy regardless and clears the best, so the history says the run started over.
     """
     best, _ = records.best_of(store, hyp_id)
+    if reseed is not None and not from_workspace and store.has_blob(reseed):
+        return store.get_blob(reseed), False, reseed
     if best is not None and not from_workspace:
-        return store.get_blob(best), True
+        return store.get_blob(best), True, None
     path = hypothesis_dir(ws, hyp_id) / STRATEGY_FILE
     if not path.is_file():
         raise PreconditionError(
@@ -832,7 +940,7 @@ def _base_source(
         store.event(
             "best_cleared", hyp_id, {"reason": "the run starts from the workspace strategy"}
         )
-    return path.read_bytes(), False
+    return path.read_bytes(), False, None
 
 
 def _baseline(
@@ -914,12 +1022,16 @@ def card(
     hyp_id: str,
     desc: str,
     lane: str = lanes.DEFAULT_LANE,
+    tags: Sequence[Tag] = (),
 ) -> Card:
     """Evaluate the lane directory's `strategy.py` as one card of the active run.
 
     Stores the bytes, checks the static half of `strategy_integrity` before anything
     runs, backtests the research window in a subprocess under the run's budgets,
-    evaluates the constraints and the keep rule, and records the card.
+    evaluates the constraints and the keep rule, and records the card — or raises
+    `RedundantError` with no card when what it held is what a judged strategy already
+    held. `tags` are the proposer's account of the change, from `kanso.schemas.TAGS`; a
+    card made by hand carries none.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
@@ -946,6 +1058,7 @@ def card(
             gate_results=[integrity],
             crash_tail=None,
             directory=directory,
+            tags=tags,
             restore_all=True,
         )
     host_run = _host_run(
@@ -978,6 +1091,7 @@ def card(
         result=result,
         host_run=host_run,
         directory=directory,
+        tags=tags,
     )
 
 

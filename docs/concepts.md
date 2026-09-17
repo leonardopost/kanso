@@ -187,7 +187,7 @@ evaluate, record. Three outcomes, and each does something different to the lane.
 
 | status | what it means | what happens to the lane |
 |---|---|---|
-| `keep` | every constraint passed and the keep rule cleared | this becomes `best`; the blob is written to `hypotheses/<id>/strategy.py` |
+| `keep` | every constraint passed and the keep rule cleared | this becomes the run's `best`, and the hypothesis's when it beats that or the run already holds it; only then is the blob written to `hypotheses/<id>/strategy.py` |
 | `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base |
 | `crash` | the backtest raised, or exceeded its time or memory budget | the same restore, with the traceback tail recorded |
 
@@ -208,6 +208,56 @@ out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.
+
+A card proposed by a model carries the proposer's own account of what it was: `tags`, one
+or more of the twenty-one strings `kanso.schemas.TAGS` fixes — `signal_*` for what the
+change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*`, and
+`parameter_only` or `refactor` for a change that moves no structure. The vocabulary is the
+package's rather than the model's because the tags are read back as a **coverage** table,
+keyed by them, that every proposal is shown: for each tag, how many cards under the run's
+pins carry it, the best metric among them and its status, and the newest. The recent
+cards say what was tried last; the coverage says what has been tried at all, in a size
+bounded by the vocabulary rather than by the hypothesis. A card made by hand carries no
+tags, and reaches the table under none.
+
+A card that ran and did not keep is then compared by what it **held**: its signature,
+which is for each session of the research window the instruments and sides open at its
+end, keyed by the session's day. Two strategies with the same signature on nearly every
+shared session made the same bets and earned the same number, however differently they
+were written — a threshold moved, a helper renamed, a condition spelt the other way — so
+the second is not an experiment. One that matches a strategy already judged under the
+run's pins on at least `[research] redundant_pct` percent of their shared sessions is
+**redundant**: no card, no trial, the lane restored, a `redundant` event carrying the
+metric it measured and the card it repeats, and the proposer shown that card by name on
+its next turn. The keep rule is asked first, so a candidate that beats the best is a keep
+whatever it resembles; the baseline is exempt, since it is the last run's best and its
+signature is already stored; and signatures are stored for every judged run, redundant
+misses included, so the third spelling of an idea is refused against the second as well as
+the first. Signatures live under the pins — the hypothesis file, the snapshot, the
+criteria — and a run under new pins starts with none.
+
+The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
+Misses since the last keep set it: for the first `[research] local_cards` the proposer is
+asked for local changes — a parameter, a threshold, a window — and for the next
+`structural_cards` a change that moves no structure is refused on the ladder like a
+repeat, where structure is the syntax tree of `strategy.py` with every constant blanked.
+Then local again, round until a keep or a stall. The rule is in the proposer's instruction
+and the phase is a fact of every call, because a refusal the proposer was never told about
+is a wasted ladder. Both lengths, like `stall_k` and `redundant_pct`, are framework search
+rules: they bound the search and choose nothing within it.
+
+A stall is where the memory is read one more time. `[research] reseed_after_stalls`
+consecutive stalls on the same best — counted since the last reseed — say the best is a
+ridge the climb cannot leave, so the scheduler **re-seeds**: the next run starts from the
+highest-scoring other keep under the stalled run's pins that is still aligned — a keep a
+drift check marked is not ground to start from — else from that run's own base,
+and from the best as before when there is neither. The decision is a `reseed` event and
+rides on the `queued` passage, which `put_back` and `recover` keep; a decision written only
+at the stall did not survive a live workspace. The best is not cleared. A run's best and
+the hypothesis's are two records: a keep always moves the run's, and moves the
+hypothesis's only when it beats it or when the hypothesis's best is that run's own — so a
+re-seeded run climbs its own ancestry and replaces the best only by bettering it, and a
+drift rewind in one run leaves what another run earned standing.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search

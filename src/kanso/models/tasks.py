@@ -47,6 +47,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from kanso.models.call import Call, CallInputs
+from kanso.schemas import TAGS
 from kanso.schemas.models import Route, TaskClass
 
 __all__ = ["ANSWER_SCHEMAS", "INSTRUCTIONS", "PARAM_PAIRS", "build", "canonical", "collapse"]
@@ -137,8 +138,13 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
         "properties": {
             "desc": {"type": "string", "minLength": 1, "maxLength": 120},
             "diff": {"type": "string", "minLength": 1},
+            "tags": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "enum": list(TAGS)},
+            },
         },
-        "required": ["desc", "diff"],
+        "required": ["desc", "diff", "tags"],
         "additionalProperties": False,
     },
     "align_check": {
@@ -233,7 +239,25 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "given, this run was rewound for those reasons and the file in hand is from before "
         "them: a change back in any of those directions is rewound again. Keep the "
         "description under "
-        "120 characters and make it say what changed, not that something changed."
+        "120 characters and make it say what changed, not that something changed.\n\n"
+        "Tag every change with what it is, from the vocabulary the schema fixes: what the "
+        "change reads (`signal_*`), how long it holds (`horizon_*`), what it withholds on "
+        "(`filter_*`), what closes it (`exit_*`), how it sizes (`sizing_*`), and "
+        "`parameter_only` or `refactor` for a change that moves no structure. One tag at "
+        "least, several where the change does several things. The `coverage` fact is the "
+        "cards of this hypothesis under the run's pins read back by tag — how many, the "
+        "best score and its status, the newest card — so a corner with many cards and no "
+        "keep is a corner already searched, and a corner with none is one the search has "
+        "not reached.\n\n"
+        "The search has a phase, given as the `phase` fact with the misses since the last "
+        "keep. In the `local` phase — the first `local_cards` misses — propose local "
+        "changes: a parameter, a threshold, a window, a respelling of the same rule. In the "
+        "`structural` phase — the next `structural_cards` misses — a change that moves no "
+        "structure is refused: if the syntax tree of `strategy.py` is the same once every "
+        "constant is blanked, the answer is rejected and a ladder that runs out on such "
+        "answers is a miss. Change what the strategy reads, holds, filters on, exits on or "
+        "how it sizes. After the structural phase the search is local again, and a keep "
+        "starts the count over."
     ),
     "align_check": (
         "You check that a strategy still tests the hypothesis it was written for.\n\n"

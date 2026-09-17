@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from kanso.errors import ValidationError
-from kanso.schemas import RESULTS_HEADER, Card, GateResult, RunRecord, resolve_venue_model
+from kanso.schemas import RESULTS_HEADER, TAGS, Card, GateResult, RunRecord, resolve_venue_model
 
 SHA = "a" * 64
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -114,6 +114,16 @@ def test_a_description_stays_on_one_row() -> None:
         Card.model_validate({**CARD, "desc": "two\tcolumns"})
     with pytest.raises(ValidationError, match="desc"):
         Card.model_validate({**CARD, "desc": "x" * 121})
+
+
+def test_a_card_made_by_hand_carries_no_tags_and_a_tag_is_from_the_vocabulary() -> None:
+    """The vocabulary is the package's: a coverage table keyed by free text has no cells."""
+    assert Card.model_validate(CARD).tags == []
+    tagged = Card.model_validate({**CARD, "tags": ["signal_trend", "exit_stop"]})
+    assert tagged.tags == ["signal_trend", "exit_stop"]
+    assert len(TAGS) == 21 and len(set(TAGS)) == len(TAGS)
+    with pytest.raises(ValidationError, match="tags"):
+        Card.model_validate({**CARD, "tags": ["clever"]})
 
 
 def test_a_skipped_gate_passes() -> None:

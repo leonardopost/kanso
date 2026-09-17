@@ -6,12 +6,17 @@ from cards, and its row is defined here so that every renderer produces the same
 
 A crashed card carries a zero metric by definition: nothing was measured, and letting a
 crash report anything else would let a timeout beat a working strategy.
+
+A card's `tags` are the proposer's own account of what the change was, drawn from the
+vocabulary `TAGS` fixes. The vocabulary is the package's rather than the model's because
+the tags are read back as a coverage table keyed by them, and a table keyed by whatever
+each answer happened to say would never have two rows in the same cell.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, get_args
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -26,6 +31,35 @@ from kanso.schemas.base import (
 from kanso.schemas.venue import VenueModel
 
 CardStatus = Literal["keep", "discard", "crash"]
+
+Tag = Literal[
+    "signal_trend",
+    "signal_mean_reversion",
+    "signal_breakout",
+    "signal_volatility",
+    "signal_volume",
+    "signal_relative",
+    "horizon_shorter",
+    "horizon_longer",
+    "filter_regime",
+    "filter_time",
+    "filter_volatility",
+    "filter_liquidity",
+    "exit_stop",
+    "exit_target",
+    "exit_time",
+    "exit_signal",
+    "sizing_fixed",
+    "sizing_volatility",
+    "sizing_conviction",
+    "parameter_only",
+    "refactor",
+]
+TAGS: Final[tuple[str, ...]] = get_args(Tag)
+"""The vocabulary a proposal describes itself in: what the change reads (`signal_*`), how
+long it holds (`horizon_*`), what it withholds on (`filter_*`), what closes it (`exit_*`),
+how it sizes (`sizing_*`), and the two that say a change moved no structure. A card may
+carry several; every card carries at least one."""
 
 RunTag = Annotated[str, StringConstraints(pattern=r"^[0-9]{8}-[0-9]+$")]
 """`<yyyymmdd>-<n>`: the nth run started on that date."""
@@ -107,6 +141,7 @@ class Card(KansoModel):
     status: CardStatus
     desc: str = Field(max_length=120)
     aligned: bool = True
+    tags: list[Tag] = Field(default_factory=list)
     gate_results: list[GateResult] = Field(default_factory=list)
     crash_tail: str | None = None
     venue_model: VenueModel
