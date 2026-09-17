@@ -115,6 +115,43 @@ def test_a_proposal_owes_at_least_one_tag_from_the_vocabulary() -> None:
     assert "`structural` phase" in INSTRUCTIONS["propose"], "a refusal is never hidden"
 
 
+EXPLORATION: dict[str, Any] = {
+    "id": "demo_breakout",
+    "hypothesis_yaml": "id: demo_breakout\n",
+    "program_md": "# program\n",
+    "strategy_py": "class Strategy: ...\n",
+    "rationale": "the parent only faded falls; this buys the break",
+    "tags": ["signal_breakout"],
+}
+
+
+@pytest.mark.parametrize("missing", sorted(EXPLORATION))
+def test_an_exploration_owes_every_field(missing: str) -> None:
+    schema = ANSWER_SCHEMAS["explore"]
+    answer = {key: value for key, value in EXPLORATION.items() if key != missing}
+
+    assert validate(answer, schema) == [f"the answer: {missing!r} is required and missing"]
+
+
+def test_an_exploration_owes_a_bounded_rationale_and_tags_from_the_vocabulary() -> None:
+    """The decisions pin the answer: one candidate whole, a rationale an inbox line can
+    carry, tags from the vocabulary the coverage table is keyed by, and nothing else."""
+    from kanso.schemas import TAGS
+
+    schema = ANSWER_SCHEMAS["explore"]
+    assert validate(EXPLORATION, schema) == []
+    assert validate({**EXPLORATION, "rationale": "r" * 240}, schema) == []
+    assert validate({**EXPLORATION, "rationale": "r" * 241}, schema) == [
+        "the answer.rationale: 241 characters, and at most 240 are allowed"
+    ]
+    assert any("tags" in c for c in validate({**EXPLORATION, "tags": []}, schema))
+    assert any("tags" in c for c in validate({**EXPLORATION, "tags": ["clever"]}, schema))
+    assert validate({**EXPLORATION, "also": "a second candidate"}, schema) == [
+        "the answer: 'also' is not a field of this object"
+    ]
+    assert schema["properties"]["tags"]["items"]["enum"] == list(TAGS)  # type: ignore[index]
+
+
 def test_an_empty_dynamic_half_still_asks_for_an_answer() -> None:
     call = build("classify", ROUTE, inputs(dynamic={}))
     assert call.user == "Answer for the facts already given."
