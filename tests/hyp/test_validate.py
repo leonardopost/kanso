@@ -797,7 +797,18 @@ def test_an_attached_construct_declares_its_host_s_warmup(ws: Workspace) -> None
 
     assert "warmup: host_sleeve@1 warms on 20 session(s) before its window" in failure.message
     assert "this file declares 0" in failure.message
-    assert "set warmup to {sessions: 20}, or drop it" in (failure.remedy or "")
+    assert "set warmup to {sessions: 20} to match" in (failure.remedy or "")
+
+
+def test_a_construct_warmed_under_a_cold_host_is_told_to_drop_it(ws: Workspace) -> None:
+    """`sessions` is greater than zero, so the remedy for a host without a warmup is to drop
+    the key, never to set it to zero."""
+    host_with(ws)
+
+    failure = refused(ws, document(warmup={"sessions": 5}, **FILTER_CLASSIFICATION))
+
+    assert "warms on 0 session(s)" in failure.message and "this file declares 5" in failure.message
+    assert (failure.remedy or "").startswith("drop warmup to match ")
 
 
 def test_a_construct_warmed_as_its_host_is_admissible(ws: Workspace) -> None:

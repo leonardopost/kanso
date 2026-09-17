@@ -419,6 +419,11 @@ def test_a_certificate_earned_under_another_scope_is_refused(
 
     assert f"hypotheses/{HYP_ID}/hypothesis.yaml" in str(failure.value.remedy)
 
+    register(ws, store, write_hypothesis(ws, document(warmup={"sessions": 3}), same))
+
+    with pytest.raises(PreconditionError, match="warmup changed from None"):
+        compose(ws, store, HYP_ID)
+
 
 def test_a_hypothesis_whose_certificates_all_failed_cannot_compose(
     ws: Workspace, store: StateStore

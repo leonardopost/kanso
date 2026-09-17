@@ -405,7 +405,11 @@ def _check_host_pairing(
             f"warmup: {label} warms on {theirs} session(s) before its window and this file "
             f"declares {hyp.warmup.sessions if hyp.warmup else 0}; a construct runs its host "
             "underneath it, and the host warms as the construct's own file says",
-            remedy=f"set warmup to {{sessions: {theirs}}}, or drop it, to match {path}",
+            remedy=(
+                f"drop warmup to match {path}"
+                if host_hyp.warmup is None
+                else f"set warmup to {{sessions: {theirs}}} to match {path}"
+            ),
         )
     if construct_id in SIZELESS and hyp.resolution != host_hyp.resolution:
         raise ValidationError(
