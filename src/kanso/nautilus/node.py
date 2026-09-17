@@ -442,6 +442,7 @@ def run(
             deliver_from(strategy, opens_ns if request.prefix is None else request.delivered[0])
             if request.prefix is not None:
                 warm(strategy, opens_ns)
+            backtest.booked(strategy, request)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points))
         realised = tuple(
             _realised(placed, request, kernel, groups, books, window.instruments)

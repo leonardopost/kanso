@@ -385,7 +385,11 @@ one.
 The engine's history requests — `request_bars` and its quote, trade and custom siblings —
 are denied with the rest: history reaches a strategy only as the `warmup` prefix its
 hypothesis declares, which the runner resolves and feeds before the window, and a request
-would be a second route to the catalog that no window bounds.
+would be a second route to the catalog that no window bounds. The state the harness keeps
+for a `book` policy — the instant it cuts return periods from, the period it is in, the
+cushion and the last end it settled — is denied the same way: it is a clock of where the
+window opens and a record of what the book made before this month, and a strategy reads
+the book the policy left from `balance` alone.
 
 Two further denials are about corporate actions rather than about capability, both are
 listed in the same gate's output, and both name their reason there so a proposer can act on

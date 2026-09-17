@@ -7,6 +7,7 @@ compared with the arithmetic in `kanso.nautilus.costs` by hand.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from datetime import date
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.objects import Price
 
 from kanso.criteria.run import NS_PER_DAY, Fill, midnight_ns
-from kanso.nautilus.backtest import RunRequest, _equity, run
+from kanso.nautilus.backtest import RunRequest, _equity, execute, run
 from kanso.nautilus.costs import NS_PER_YEAR, carry
 from kanso.schemas import Hypothesis
 
@@ -27,6 +28,7 @@ from .conftest import (
     catalog,
     hypothesis,
     instrument,
+    quotes,
     venue_model,
 )
 
@@ -349,3 +351,160 @@ def test_a_seeded_cushion_is_drawn_on_when_the_month_s_own_surplus_runs_out(
     assert card.equity[march] == pytest.approx(CAPITAL)
     assert card.cushion[march] == pytest.approx(4_000.0 - cost - 25.0)
     returns_are_the_differences_net_of_transfers(card)
+
+
+# --- the harness ---------------------------------------------------------------------
+
+BOOK_PROBE = b'''
+from pathlib import Path
+
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    record: str = ""
+    notional: float = 150_000.0
+
+
+class Strategy(KansoStrategy):
+    """Levers into the saw-tooth on the first bar, rests a bid the market reaches on the
+    thirteenth, exits in February and re-enters in March, and writes down every balance it
+    reads before it acts."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        self.seen += 1
+        with Path(self.kanso_config.record).open("a") as out:
+            out.write(f"{bar.ts_init} {self.balance!r}\\n")
+        name = bar.bar_type.instrument_id
+        if self.seen in (1, 62):
+            self.submit_entry(name, "BUY", notional=self.kanso_config.notional)
+        if self.seen == 1:
+            self.submit_order(
+                self.order_factory.limit(
+                    name, OrderSide.BUY, Quantity.from_int(1_000), Price.from_str("9.80")
+                )
+            )
+        if self.seen == 40:
+            self.submit_exit(name)
+'''
+
+
+@pytest.mark.parametrize("quoted", [False, True], ids=["fixed spread", "quoted spread"])
+def test_the_balance_read_before_acting_is_the_book_the_policy_left(
+    tmp_path: Path, quoted: bool
+) -> None:
+    """Every balance read at a period end the sleeve did not trade in is the equity the
+    card struck there before that end's own carry and transfer — so every earlier carry,
+    every earlier reset and the fills of every earlier end, including the resting bid the
+    venue matched against the point that turned a period, are in it to the last cent."""
+    fields = booked(
+        {"reset": "monthly", "financing_rate_bps": 500.0}, max_position_pct=200.0, max_leverage=2.0
+    ).model_dump(by_alias=True, mode="json")
+    if quoted:
+        fields["data_requirements"] = ["bar", "quote"]
+        fields["costs"] = {"commission_bps": 1.0, "slippage_bps": 2.0, "spread": "quotes"}
+    hyp = Hypothesis.model_validate(fields)
+    record = tmp_path / "balance.txt"
+    request = RunRequest(
+        hyp=hyp,
+        strategy_source=BOOK_PROBE,
+        window=QUARTER,
+        snapshot_id=SNAPSHOT,
+        venue_model=venue_model(hyp, quotes_available=quoted),
+        capital=CAPITAL,
+        overrides={"record": str(record)},
+    )
+    groups: list[tuple[object, ...]] = [tuple(bars(QUARTER))]
+    if quoted:
+        # Each day's quote ahead of its bar at the same instant: a fill the bar matches is
+        # then charged the quote of its own instant on both sides, which a sleeve handed the
+        # bar first has not seen yet.
+        groups.insert(0, tuple(quotes(QUARTER)))
+
+    card = execute(request, [instrument()], groups).run
+
+    ends = list(card.period_ends_ns)
+    filled = {ends[bisect_left(ends, fill.ts_ns)] for fill in card.fills}
+    assert len(filled) == 4, "the entry, the bid, the exit and the re-entry"
+    assert (card.fills[2].px, card.fills[2].ts_ns) == (9.8, ends[12]), "the bid, on January 13"
+    assert all(charged > 0 for charged in card.carry[:39]), "levered until the exit"
+    moved = [
+        index
+        for index, cushion in enumerate(card.cushion)
+        if cushion != (card.cushion[index - 1] if index else 0.0)
+    ]
+    assert moved == [31, 60], "a transfer at the first end of February and of March"
+    compared = 0
+    for line in record.read_text().splitlines():
+        ts, balance = int(line.split()[0]), float(line.split()[1])
+        if ts in filled:
+            continue
+        index = ends.index(ts)
+        before = card.cushion[index - 1] if index else 0.0
+        struck = card.equity[index] + card.carry[index] + card.cushion[index] - before
+        assert balance == pytest.approx(struck, rel=1e-12), f"period {index}"
+        compared += 1
+    assert compared == len(ends) - 4
+
+
+# --- a restart ---------------------------------------------------------------------
+
+
+def test_a_restart_carries_from_the_end_it_settled_and_resets_across_the_turn(request_for) -> None:
+    """A stage restart names the last end the previous window settled: the first carry runs
+    from it rather than from the window's midnight, and a month that turned between the two
+    resets at the first end after it, drawing on the cushion the restart was seeded with."""
+    opens = midnight_ns(date(2024, 2, 1))
+    settled = opens - NS_PER_DAY // 2
+    end = opens + NS_PER_DAY // 2
+    request = request_for(
+        hypothesis_=booked(
+            {"reset": "monthly", "financing_rate_bps": 500.0},
+            max_position_pct=200.0,
+            max_leverage=2.0,
+        ),
+        window=(date(2024, 2, 1), date(2024, 2, 1)),
+        cushion=1_000.0,
+        settled_ns=settled,
+    )
+    bought = Fill(
+        ts_ns=opens + 1, instrument_id=INSTRUMENT, side="BUY", qty=15_000, px=10.0, cost=0
+    )
+
+    curve = _equity(
+        request,
+        [(opens + 1, INSTRUMENT, 10.0, 9.0, 10.0), (end, INSTRUMENT, 9.9, 9.9, 9.9)],
+        [bought],
+        {},
+    )
+
+    worth = 15_000 * 9.9
+    value = CAPITAL - 150_000.0 + worth
+    charged = carry(worth, value, 500.0, end - settled)
+    assert curve.carry == (pytest.approx(charged),)
+    assert charged == pytest.approx((worth - value) * 0.05 * NS_PER_DAY / NS_PER_YEAR)
+    assert curve.cushion == (0.0,), "the whole seed restores February's first deficit"
+    assert curve.equity == (pytest.approx(value - charged + 1_000.0),)
+    assert curve.returns == (pytest.approx(value - charged - CAPITAL),)
+
+
+def test_a_restart_inside_the_month_it_settled_in_resets_nothing(request_for) -> None:
+    opens = midnight_ns(date(2024, 2, 2))
+    request = request_for(
+        hypothesis_=booked({"reset": "monthly"}),
+        window=(date(2024, 2, 2), date(2024, 2, 2)),
+        cushion=1_000.0,
+        settled_ns=opens - 1,
+    )
+
+    curve = _equity(request, [(opens + 1, INSTRUMENT, 10.0, 9.0, 10.0)], [], {})
+
+    assert (curve.cushion, curve.equity) == ((1_000.0,), (CAPITAL,))

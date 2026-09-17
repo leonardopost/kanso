@@ -203,6 +203,26 @@ its hypothesis declares, delivered like the window's own points; a request would
 second route to the catalog, and the gate's own state — or its answer — a clock that says
 where the window opens, which is the counter `program.md` tells a proposer not to keep."""
 
+DENIED_BOOK: Final = frozenset(
+    {
+        "_policy",
+        "_anchor_ns",
+        "_period_ns",
+        "_cushion",
+        "_settled_ns",
+        "_period_index",
+        "_period_last_ns",
+        "_turn",
+        "_close_period",
+        "_book_at",
+    }
+)
+"""The harness's book policy: the state it settles each return period with, and the three
+methods that settle it. The anchor and the period index are a clock that says where the
+window opens and how far into it a card is, and the cushion is what the book has made
+before this month; a strategy reads the book the policy left through `balance`, which is
+the number the card is struck on, and nothing else of it."""
+
 WHY: Final = {
     **dict.fromkeys(
         DENIED_SCHEDULE,
@@ -221,6 +241,11 @@ WHY: Final = {
         "fed before the window with every order dropped; declare `warmup: {sessions: N}` "
         "in hypothesis.yaml instead of asking the engine for it",
     ),
+    **dict.fromkeys(
+        DENIED_BOOK,
+        "it is the harness's own book-policy state, a clock of where the window opens and "
+        "what the book set aside; read the book the policy left from `balance`",
+    ),
 }
 """Why each denial that carries a reason exists, said in the refusal so a proposer can act on it."""
 
@@ -228,7 +253,12 @@ DENIED_IDENTIFIERS: Final = DENIED_MODULES | DENIED_DUNDERS | DENIED_BRIDGE | DE
 """Refused as a name, an attribute or an import alias alike."""
 
 DENIED_ATTRIBUTES: Final = (
-    DENIED_IDENTIFIERS | DENIED_CLOCK | DENIED_SCHEDULE | DENIED_STALE_BASIS | DENIED_HISTORY
+    DENIED_IDENTIFIERS
+    | DENIED_CLOCK
+    | DENIED_SCHEDULE
+    | DENIED_STALE_BASIS
+    | DENIED_HISTORY
+    | DENIED_BOOK
 )
 
 SIZE_HELPERS: Final = frozenset({"submit_entry", "submit_exit"})

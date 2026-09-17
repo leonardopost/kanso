@@ -33,10 +33,13 @@ from nautilus_trader.core.data import Data
 from nautilus_trader.model.custom import customdataclass
 from nautilus_trader.model.data import Bar, CustomData, DataType, QuoteTick, TradeTick
 
+from kanso.nautilus.costs import BookPolicy
+
 __all__ = [
     "KansoCrossSection",
     "MARKER_TYPE",
     "arm",
+    "book",
     "is_marker",
     "ordered",
     "warm",
@@ -95,6 +98,29 @@ def warm(strategy: object, opens_ns: int) -> None:
     refused filter is, so both code paths record the same intents.
     """
     strategy._trading_from_ns = opens_ns  # type: ignore[attr-defined]
+
+
+def book(
+    strategy: object,
+    policy: BookPolicy,
+    anchor_ns: int,
+    period_ns: int,
+    cushion: float = 0.0,
+    settled_ns: int | None = None,
+) -> None:
+    """Have the harness apply a book policy on the periods the runner's extraction cuts.
+
+    Set by the runner exactly as `arm` and `warm` are — private attributes an author cannot
+    read back and no manifest records. The harness needs three things the extraction has
+    and it does not: the instant the return periods are cut from, their length, and where
+    the book stood before this run — what earlier windows set aside in the cushion and the
+    last period end they settled, both zero and none except on a stage restart.
+    """
+    strategy._policy = policy  # type: ignore[attr-defined]
+    strategy._anchor_ns = anchor_ns  # type: ignore[attr-defined]
+    strategy._period_ns = period_ns  # type: ignore[attr-defined]
+    strategy._cushion = cushion  # type: ignore[attr-defined]
+    strategy._settled_ns = settled_ns  # type: ignore[attr-defined]
 
 
 def deliver_from(strategy: object, from_ns: int) -> None:

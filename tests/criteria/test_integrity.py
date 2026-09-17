@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from kanso.criteria.integrity import (
+    DENIED_BOOK,
     DENIED_BUILTINS,
     DENIED_CLOCK,
     DENIED_DUNDERS,
@@ -160,6 +161,29 @@ def test_the_history_requests_and_the_warmup_gate_are_out_of_reach(name: str) ->
 
     assert f"attribute '.{name}' is denied" in problem
     assert "declare `warmup: {sessions: N}`" in problem
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_BOOK))
+def test_the_book_policy_s_own_state_is_out_of_reach(name: str) -> None:
+    """The policy's anchor is where the window opens and its cushion what the book made
+    before this month; the book it leaves is read from `balance` alone."""
+    (problem,) = scan(f"x = self.{name}")
+
+    assert f"attribute '.{name}' is denied" in problem
+    assert "read the book the policy left from `balance`" in problem
+
+
+def test_everything_the_runner_hands_the_harness_for_a_book_policy_is_denied() -> None:
+    """A new piece of policy state the runner sets is out of reach the moment it is added."""
+    from types import SimpleNamespace
+
+    from kanso.nautilus.costs import BookPolicy
+    from kanso.nautilus.cross_section import book
+
+    sleeve = SimpleNamespace()
+    book(sleeve, BookPolicy(reset="monthly"), 0, 1, cushion=1.0, settled_ns=0)
+
+    assert set(vars(sleeve)) <= DENIED_BOOK
 
 
 def test_a_strategy_reaching_for_the_schedule_is_refused_by_the_route_it_took() -> None:

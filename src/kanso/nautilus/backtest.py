@@ -112,6 +112,7 @@ __all__ = [
     "MEMORY",
     "RunRequest",
     "RunResult",
+    "booked",
     "checked",
     "child_env",
     "execute",
@@ -227,10 +228,13 @@ class RunRequest:
     day it opens: a stage restart's window opens on the day its clock stands in, and the
     sessions at or before the clock end on that day.
 
-    `cushion` is what a monthly reset had moved out of the book before this window opened:
-    zero for a card, a certificate and a first deploy, and on a stage restart what the
-    last window of the same version closed at, so a restore in the new window draws on
-    what earlier windows set aside. The book itself opens at `capital` either way.
+    `cushion` and `settled_ns` are where a book policy stood before this window opened:
+    what a monthly reset had moved out of the book, and the last period end it settled.
+    Zero and `None` for a card, a certificate and a first deploy; on a stage restart what
+    the last window of the same version closed at, so a restore in the new window draws on
+    what earlier windows set aside, the first carry runs from that end rather than from
+    the window's midnight, and a month that turned across the restart resets at the first
+    end after it. The book itself opens at `capital` either way.
     """
 
     hyp: Hypothesis
@@ -248,6 +252,7 @@ class RunRequest:
     sleeve_budget: float = 0.0
     prefix: tuple[date, date] | None = None
     cushion: float = 0.0
+    settled_ns: int | None = None
 
     def __post_init__(self) -> None:
         if self.prefix is None:
@@ -263,6 +268,17 @@ class RunRequest:
     def bounds(self) -> tuple[int, int]:
         """The window as a half-open instant span `[opens, closes)` in nanoseconds."""
         return midnight_ns(self.window[0]), midnight_ns(self.window[1]) + NS_PER_DAY
+
+    @property
+    def period_ns(self) -> int:
+        """The return period in nanoseconds; a period of no time at all is refused."""
+        length = int(parse_duration(self.period, "period").total_seconds() * NS_PER_SECOND)
+        if length <= 0:
+            raise ValidationError(
+                f"period: {self.period!r} is no time at all, so the window holds no return "
+                "periods to measure"
+            )
+        return length
 
     @property
     def span(self) -> tuple[date, date]:
@@ -724,6 +740,7 @@ def execute(
         arm(strategy, points)
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
+        booked(strategy, request)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
         engine.run(start=opens, end=closes - 1)
@@ -739,6 +756,28 @@ def execute(
         wall_s=time.perf_counter() - started,
         peak_mem_gb=_own_peak_gb(),
         intents=intents,
+    )
+
+
+def booked(strategy: object, request: RunRequest) -> None:
+    """Hand a sleeve the book policy its request runs under, when the hypothesis has one.
+
+    Every path that runs a sleeve calls this beside `arm` and `warm`, with the request its
+    run is extracted from, so the harness cuts the periods the extraction cuts and settles
+    them with the same policy from the same place.
+    """
+    from kanso.nautilus.cross_section import book
+
+    policy = policy_of(request.hyp.book)
+    if policy is None:
+        return
+    book(
+        strategy,
+        policy,
+        request.bounds[0],
+        request.period_ns,
+        cushion=request.cushion,
+        settled_ns=request.settled_ns,
     )
 
 
@@ -1183,12 +1222,7 @@ def _equity(
     """
     opens, _ = request.bounds
     policy = policy_of(request.hyp.book)
-    period_ns = int(parse_duration(request.period, "period").total_seconds() * NS_PER_SECOND)
-    if period_ns <= 0:
-        raise ValidationError(
-            f"period: {request.period!r} is no time at all, so the window holds no return "
-            "periods to measure"
-        )
+    period_ns = request.period_ns
     early = [fill for fill in fills if fill.ts_ns < opens]
     if early:
         raise ValidationError(
@@ -1213,7 +1247,7 @@ def _equity(
     carries: list[float] = []
     worsts: list[float | None] = []
     open_at: list[Held] = []
-    previous_end: int | None = None
+    previous_end = request.settled_ns
     previous_equity = request.capital
     point = 0
     fill = 0
