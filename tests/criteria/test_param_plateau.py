@@ -27,6 +27,7 @@ from kanso.criteria.gates.param_plateau import (
     _moved,
     gate,
 )
+from kanso.criteria.objectives import wf_sharpe_vs_hold
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.certify.test_run import CERT_GATES, a_card, write_plan
@@ -162,6 +163,30 @@ def test_the_floor_is_the_chosen_fraction_of_the_unperturbed_metric() -> None:
     assert result.evidence["unperturbed"] == pytest.approx(2.0)
     assert result.evidence["floor"] == pytest.approx(0.5)
     assert result.passed, "0.6 keeps a quarter of 2.0"
+
+
+def test_a_benchmark_stays_fixed_while_the_subject_is_moved() -> None:
+    """Every perturbed run is measured against the one hold the unperturbed run was."""
+    hold = build_run((1.0, 2.0, 1.0, 3.0, 2.0, 1.0, 2.0, 2.0))
+    subject = build_run((3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0))
+    moved = build_run((2.0, -1.0, 4.0, 2.0, 5.0, -2.0, 6.0, 1.0))
+    measured = judged(
+        lambda overrides: moved,  # type: ignore[arg-type]
+        {"fast": 10.0},
+        run=subject,
+        benchmark_run=hold,
+        hyp=make_hyp(
+            benchmark={"hold": "first_leg"},
+            objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 1.0}},
+        ),
+    )
+
+    assert measured.evidence["unperturbed"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(subject, 4, benchmark=hold)[0]
+    )
+    assert [p["metric"] for p in measured.evidence["perturbations"]] == pytest.approx(
+        [wf_sharpe_vs_hold.compute(moved, 4, benchmark=hold)[0]] * 2
+    )
 
 
 # --- what it will not judge ---------------------------------------------------

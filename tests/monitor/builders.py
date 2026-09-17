@@ -396,6 +396,7 @@ def gate_context(
     hyp: Hypothesis | None = None,
     ci90: tuple[float, float] | None = (-0.5, 0.5),
     folds: int = 4,
+    benchmark: CardRun | None = None,
 ) -> GateContext:
     """What the monitor hands one gate, with only the piece under test varied."""
     measured = run or flat_run()
@@ -412,4 +413,5 @@ def gate_context(
         strategy_sha="a" * 64,
         expectation=expectation,
         session=record,
+        benchmark_run=benchmark,
     )

@@ -5,13 +5,22 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
+import pytest
+
 from kanso.criteria.gates.paper_forward import (
     NOT_A_PAPER_TEST,
     TRADES_UNREACHABLE,
     gate,
 )
+from kanso.criteria.objectives import wf_sharpe_vs_hold
+from kanso.errors import PreconditionError
 
 from .builders import flat_run, gate_context, hypothesis, run_over, stage_record
+
+HOLD = {
+    "benchmark": {"hold": "first_leg"},
+    "objective": {"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+}
 
 PARAMS = {"min_duration": "5d", "horizon_mult": 5.0}
 
@@ -54,6 +63,33 @@ def test_a_redeploy_restarts_the_clock() -> None:
 
     assert early.passed
     assert not rejoined.passed
+
+
+def test_a_benchmark_objective_realises_the_difference_from_the_stage_s_hold() -> None:
+    """The stage stored the hold beside the version; the band is one of differences."""
+    varied = run_over(tuple(float(100 + (day % 3) * 50) for day in range(20)))
+    hold = run_over(tuple(float(100 + (day % 4) * 40) for day in range(20)))
+
+    result = gate.evaluate(
+        gate_context(
+            params=PARAMS,
+            record=stage_record(),
+            run=varied,
+            hyp=hypothesis(**HOLD),
+            benchmark=hold,
+            ci90=(-100.0, 100.0),
+        )
+    )
+
+    assert result.evidence["realised"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(varied, 4, benchmark=hold)[0]
+    )
+    assert result.evidence["realised"] != 0.0
+
+
+def test_a_benchmark_objective_on_a_stage_that_stored_no_hold_is_refused() -> None:
+    with pytest.raises(PreconditionError, match="benchmark's run"):
+        gate.evaluate(gate_context(params=PARAMS, record=stage_record(), hyp=hypothesis(**HOLD)))
 
 
 def test_a_result_below_the_band_fails() -> None:

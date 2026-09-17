@@ -60,10 +60,15 @@ class GateContext:
     """Everything one gate evaluation may read.
 
     `run` covers `window`, and `host_run` is the host's run over the same window for a
-    relative construct. The rest is what individual gates need and cannot derive:
+    relative construct. `benchmark_run` is the benchmark's run over that window for a
+    hypothesis whose objective is measured against one — a slot of its own, because a gate
+    that reads `host_run` as the construct's host (what a modifier added to its sleeve)
+    must never read a hold as one. The rest is what individual gates need and cannot
+    derive:
 
-    * `research_run` (and `host_research_run`) is the research window, for the gates that
-      compare a certification result against the estimate selection acted on;
+    * `research_run` (and `host_research_run`, `benchmark_research_run`) is the research
+      window, for the gates that compare a certification result against the estimate
+      selection acted on;
     * `trial_metrics` are the metrics of this hypothesis's trials — the cards that ran to
       a result and traded — whose count and spread are how wide the search that produced
       the candidate was. A crash and a card that placed no order are edits that failed,
@@ -98,6 +103,8 @@ class GateContext:
     session: object | None = None
     research_run: CardRun | None = None
     host_research_run: CardRun | None = None
+    benchmark_run: CardRun | None = None
+    benchmark_research_run: CardRun | None = None
     trial_metrics: Sequence[float] = ()
     lane_dir: Path | None = None
     pinned: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))

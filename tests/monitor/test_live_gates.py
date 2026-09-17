@@ -8,6 +8,7 @@ from datetime import date
 from kanso.criteria.gates.daily_loss_kill import gate as daily_loss_kill
 from kanso.criteria.gates.fill_quality_drift import gate as fill_quality_drift
 from kanso.criteria.gates.live_drift import gate as live_drift
+from kanso.criteria.objectives import wf_sharpe_vs_hold
 from kanso.monitor.stage import SIMULATED
 
 from .builders import gate_context, hypothesis, run_over, stage_record
@@ -64,6 +65,35 @@ def test_the_rolling_window_is_the_paper_window_not_the_whole_book() -> None:
 
     assert result.evidence["n_periods"] == 7
     assert result.evidence["rolling_window"] == ["2024-03-14", "2024-03-20"]
+
+
+def test_the_benchmark_rolls_with_the_book() -> None:
+    """A difference is paired over one span: the hold's last week against the book's."""
+    varied = run_over(tuple(float(100 + (day % 3) * 50) for day in range(20)))
+    hold = run_over(tuple(float(100 + day * day) for day in range(20)))
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+
+    result = live_drift.evaluate(
+        gate_context(
+            stage="live",
+            record=record,
+            run=varied,
+            benchmark=hold,
+            hyp=hypothesis(
+                benchmark={"hold": "first_leg"},
+                objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+            ),
+        )
+    )
+
+    closes = record.clock_ns + 1
+    opens = closes - int(WEEK_S * 1_000_000_000)
+    rolled = wf_sharpe_vs_hold.compute(
+        varied.between(opens, closes), 4, benchmark=hold.between(opens, closes)
+    )[0]
+    unrolled = wf_sharpe_vs_hold.compute(varied.between(opens, closes), 4, benchmark=hold)[0]
+    assert result.evidence["realised"] == rolled
+    assert rolled != unrolled
 
 
 def test_it_says_nothing_until_the_live_window_is_as_long_as_the_paper_one() -> None:

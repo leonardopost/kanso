@@ -66,7 +66,9 @@ class _ParamPlateau:
         moves, dropped = _plan(ctx.tunable, percent)
         if not moves:
             return skipped(self.id, ALL_DROPPED)
-        unperturbed = objective.compute(ctx.run, ctx.research_folds, ctx.host_run)[0]
+        unperturbed = objective.compute(
+            ctx.run, ctx.research_folds, ctx.host_run, ctx.benchmark_run
+        )[0]
         floor = fraction * unperturbed
         scored = _score(ctx, objective, ctx.rerun, moves)
         return verdict(
@@ -130,7 +132,10 @@ def _score(
             name,
             way,
             value,
-            objective.compute(rerun({name: value}), ctx.research_folds, ctx.host_run)[0],
+            # The benchmark stays fixed: a perturbation moves the subject, never the hold.
+            objective.compute(
+                rerun({name: value}), ctx.research_folds, ctx.host_run, ctx.benchmark_run
+            )[0],
         )
         for name, way, value in moves
     )

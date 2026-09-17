@@ -49,7 +49,7 @@ from kanso.criteria.context import (
     verdict,
 )
 from kanso.criteria.integrity import check as check_integrity
-from kanso.criteria.objectives import REGISTRY, SHARPE_FAMILY, Objective
+from kanso.criteria.objectives import REGISTRY, SHARPE_FAMILY, Objective, benchmark_level
 from kanso.criteria.quantities import (
     correlation,
     drawdown_pct,
@@ -82,8 +82,14 @@ def _objective(ctx: GateContext) -> Objective | None:
     return None if ref is None else REGISTRY.get(ref.id)
 
 
-def _metric(objective: Objective, run: CardRun, ctx: GateContext, host: CardRun | None) -> float:
-    return objective.compute(run, ctx.research_folds, host)[0]
+def _metric(
+    objective: Objective,
+    run: CardRun,
+    ctx: GateContext,
+    host: CardRun | None,
+    benchmark: CardRun | None,
+) -> float:
+    return objective.compute(run, ctx.research_folds, host, benchmark)[0]
 
 
 class _StrategyIntegrity:
@@ -437,8 +443,10 @@ class _EmbargoedWindow:
             return skipped(self.id, NO_OBJECTIVE)
         if ctx.research_run is None:
             return skipped(self.id, NO_RESEARCH_RUN)
-        certified = _metric(objective, ctx.run, ctx, ctx.host_run)
-        researched = _metric(objective, ctx.research_run, ctx, ctx.host_research_run)
+        certified = _metric(objective, ctx.run, ctx, ctx.host_run, ctx.benchmark_run)
+        researched = _metric(
+            objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
+        )
         return verdict(
             self.id,
             certified > 0 and certified >= fraction * researched,
@@ -465,8 +473,13 @@ class _WalkForwardConsistency:
             return skipped(self.id, NO_OBJECTIVE)
         if ctx.research_run is None:
             return skipped(self.id, NO_RESEARCH_RUN)
-        folds = objective.fold_values(ctx.research_run, ctx.research_folds, ctx.host_research_run)
-        certified = _metric(objective, ctx.run, ctx, ctx.host_run)
+        folds = objective.fold_values(
+            ctx.research_run,
+            ctx.research_folds,
+            ctx.host_research_run,
+            ctx.benchmark_research_run,
+        )
+        certified = _metric(objective, ctx.run, ctx, ctx.host_run, ctx.benchmark_run)
         positive = sum(1 for value in folds if value > 0)
         return verdict(
             self.id,
@@ -520,7 +533,12 @@ class _DeflatedSharpe:
         if len(returns) < 3 or shape is None:
             return skipped(self.id, "the research return series is too short or does not vary")
         scale = sqrt(periods_per_year(ctx.research_run))
-        estimate = _metric(objective, ctx.research_run, ctx, ctx.host_research_run) / scale
+        estimate = (
+            _metric(
+                objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
+            )
+            / scale
+        )
         expected = self._expected_maximum(
             variance(metrics) / periods_per_year(ctx.research_run), len(metrics)
         )
@@ -598,8 +616,12 @@ class _CostStress:
         objective = _objective(ctx)
         if objective is None:
             return skipped(self.id, NO_OBJECTIVE)
-        at_first = _metric(objective, stressed(ctx.run, first), ctx, ctx.host_run)
-        at_second = _metric(objective, stressed(ctx.run, second), ctx, ctx.host_run)
+        at_first = _metric(
+            objective, stressed(ctx.run, first), ctx, ctx.host_run, ctx.benchmark_run
+        )
+        at_second = _metric(
+            objective, stressed(ctx.run, second), ctx, ctx.host_run, ctx.benchmark_run
+        )
         return verdict(
             self.id,
             at_first > 0 and at_second >= 0,
@@ -621,7 +643,10 @@ class _Bootstrap:
     gives the drawdown distribution, which is what the gate judges; the same draw gives
     the objective's own statistic, which is recorded as evidence and becomes a deployed
     version's expectation. The statistic is the run's objective family measured on the
-    resampled trades — a Sharpe of the trade series, or its mean edge per trade.
+    resampled trades — a Sharpe of the trade series, or its mean edge per trade — less,
+    for an objective measured against a benchmark, what the benchmark scored on the same
+    statistic over the same folds: a hold has no trades of its own to resample, and the
+    band a paper stage judges a realised difference against has to be one of differences.
     """
 
     id: ClassVar[str] = "bootstrap"
@@ -678,7 +703,9 @@ class _Bootstrap:
                 if objective.id in SHARPE_FAMILY
                 else edge[draws].mean(axis=1)
             )
-        spread = np.concatenate(statistics)
+        spread = np.concatenate(statistics) - benchmark_level(
+            objective, ctx.research_folds, ctx.benchmark_run
+        )
         return (
             float(np.percentile(spread, 5)),
             float(np.percentile(spread, 95)),
