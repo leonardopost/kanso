@@ -74,9 +74,10 @@ CONSTRUCT: Final = "construct"
 SIZING: Final = "sizing"
 OBJECTIVE: Final = "objective"
 WARMUP: Final = "warmup"
-"""The scope fields that joined in 0.4.0 and 0.8.0. A row pinned before one holds no key
-for it, which reads as `None` — the same answer a file without the key gives — so an older
-pin keeps its best until the file actually declares a rule."""
+"""`sizing` joined the scope in 0.4.0 and `warmup` in 0.8.0; `objective` in 0.5.0,
+answering from its own column. A row pinned before `sizing` or `warmup` holds no key for
+it, which reads as `None` — the same answer a file without the key gives — so an older pin
+keeps its best until the file actually declares a rule."""
 
 REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"

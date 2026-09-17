@@ -148,7 +148,8 @@ class Warmup(KansoModel):
     """The sessions a strategy is fed before its window, so it trades from the open.
 
     A session is a calendar day on which any instrument of the universe printed at the
-    sleeve's own grain. The runner resolves the last `sessions` of them before the window,
+    sleeve's grain — the host's, for an attached construct consulted on another one. The
+    runner resolves the last `sessions` of them before the window,
     delivers them to the strategy exactly as the window's own points are delivered, and
     drops every order until the first point of the window arrives: the indicators warm,
     nothing fills, and the measured run begins at the open with no cold start. Every path —

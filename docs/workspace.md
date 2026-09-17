@@ -129,7 +129,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
 | `data instruments resolve` that would change a definition the store holds for the same date | 2 · a correction is explicit: `--refresh` |
 | `research begin` after the store's definitions moved from what the newest covering snapshot pins | 2 · by name; `kanso data snapshot` pins what is held now |
-| `research begin` on a hypothesis whose `warmup` asks for more sessions before a window than the catalog holds | 2 · naming what it found and how far back to `kanso data load`; a snapshot has to cover the sessions too |
+| run a warmed hypothesis — `research begin`, `cert run`, `replay run`, `strat compose`, `portfolio deploy` — over a catalog holding fewer sessions before its window than `warmup` asks for | 2 · naming what it found and how far back to `kanso data load`; a snapshot has to cover the sessions too |
 | `cert run` on bytes already certified under the same plan and engine | 2 · a certificate is immutable |
 | `models check` or `cert plan` with no `models.yaml` | 2 · there is no default plan |
 | edit a file under `strategies/<id>/impl/<version>/` | 3 · at `deploy` and at `replay`, before either runs it |
@@ -335,7 +335,8 @@ warmup:                            # scope: adding or changing it clears `best`
 ```
 
 A session is a calendar day on which any instrument of the universe printed at the
-hypothesis's own `resolution`; the runner takes the last `sessions` of them before the
+sleeve's grain — the host's, for an attached construct consulted on a coarser or finer
+one; the runner takes the last `sessions` of them before the
 window from the catalog, so the prefix is trading days rather than calendar days and a
 weekend or a holiday adds nothing. Over the prefix every handler runs and every attached
 overlay's `on_data` is asked, so their state warms too, but `submit_entry` and

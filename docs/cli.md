@@ -49,7 +49,7 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | command | what it does |
 |---|---|
 | `kanso hyp new ID` | scaffold `hypotheses/<id>/` with `hypothesis.yaml`, `program.md` and a `strategy.py` stub |
-| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
+| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints, and the `warmup` an attached construct shares with its host — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
 | `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with. A re-pin that changes the `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`, `objective.id` or `warmup` — stripping the classification included — clears the hypothesis's best and records `best_cleared` naming the field, because a card's metric means nothing across any of them; the cards and their blobs stay in state |
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
 | `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state, and it is the only way research ends: no verdict and no run of failures ends one |

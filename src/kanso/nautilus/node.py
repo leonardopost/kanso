@@ -530,6 +530,9 @@ def _window_data(
     different depths share the deeper one, since both are cut from the same catalog —
     and every version's own view is a suffix of that feed, which is why `run` can tell
     each strategy the instant its delivery begins and have it ignore what precedes it.
+    On a restart that view holds the points after the clock and not the re-fed prefix,
+    so the extraction marks a name that last printed in the prefix at nothing until it
+    prints again; the first deploy's view holds the prefix and marks it at that print.
     """
     instruments: dict[str, Any] = {}
     seen: dict[tuple[str, str], tuple[Any, ...]] = {}

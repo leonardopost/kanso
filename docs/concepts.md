@@ -156,7 +156,8 @@ nothing in it was the record.
 An immutable, content-addressed set of catalog datasets, plus the checksum of the resolved
 instrument definitions. `research begin` pins the newest snapshot that covers the
 hypothesis's universe and data requirements over its research **and** certification windows
-and whose instrument checksum is the store's own. It refuses to start when none covers, and
+— and, when the hypothesis declares a `warmup`, the sessions before each — and whose
+instrument checksum is the store's own. It refuses to start when none covers, and
 refuses by name — the snapshot, what it pins, what the store holds — when the definitions
 have moved since the newest covering snapshot was taken.
 
@@ -202,7 +203,8 @@ f729a53	9.986730	1.064759	2	1003	4.240	0.321	keep	fade a 2-sigma deviation from 
 ```
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
-research window out of the catalog and hands the points to the child, which starts in a new
+research window — and the warmup sessions before it, when the hypothesis declares them —
+out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.

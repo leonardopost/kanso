@@ -1692,6 +1692,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
 
     def _consult_exit(self, instrument_id: InstrumentId) -> None:
+        # The warming guard is unreachable on a flat start — no position exists in the
+        # prefix — and stands for a run that carries or restores a book across the open.
         if self._exiting or not self.is_running or self._warming():
             return
         net = self._own_filled(instrument_id.value)  # what is open, not what is in flight

@@ -150,9 +150,12 @@ class Setup:
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
     prefix: tuple[date, date] | None = None
-    """The sessions a card is fed before the research window, resolved here in the parent
-    so every card of the run — and its child, which has no catalog — is handed the same
-    span; `None` for a hypothesis that declares no warmup."""
+    """The sessions a card is fed before the research window, resolved in the parent from
+    the catalog as it stands when the card is built, so the child — which has no catalog —
+    is handed a span rather than computing one; `None` for a hypothesis that declares no
+    warmup. The run pins its snapshot, not this span: a `kanso data load` that adds a
+    printed day inside the lookback between two cards moves the prefix by that day, and
+    the certificate records the count it was warmed on, not the days."""
 
     @property
     def window(self) -> tuple[date, date]:
