@@ -44,6 +44,7 @@ from kanso.certify import certificate
 from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, drawdown_pct, gates, objectives
+from kanso.criteria.gates import worst_margin
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError
 from kanso.hyp import HYPOTHESIS_FILE, Registration, moved, scope_of
@@ -194,6 +195,7 @@ def expectation(
         )
     start, end = _window(hyp)
     run = _measure(ws, manifest, version, hyp, capital)
+    _check_margin(hyp, run)
     objective = objectives()[hyp.objective.id]
     value, _ = objective.compute(run, ws.config.research.folds)
     low, high, worst = _bands(ws, passed, version, hyp, run, value, objective.id)
@@ -329,6 +331,27 @@ def _check_scope(
             remedy=f"research and certify {passed.hyp_id} again under "
             f"hypotheses/{passed.hyp_id}/hypothesis.yaml as it is now",
         )
+
+
+def _check_margin(hyp: Hypothesis, run: CardRun) -> None:
+    """A version whose own book breaches the declared maintenance floor is not composed.
+
+    Whether or not the plan held a card to `maintenance_margin`, the floor is the operator's
+    and the expectation run is the version a stage would load, over the sleeve's
+    certification window: a book that falls through it there would be margin-called on
+    paper, so it is refused here rather than measured into a band.
+    """
+    floor = None if hyp.book is None else hyp.book.maintenance_pct
+    worst = worst_margin(run)
+    if floor is None or worst is None or worst[0] >= floor:
+        return
+    raise PreconditionError(
+        f"{hyp.id}: the composed version's book falls to {worst[0]:.4g}% of its gross at its "
+        f"worst over {run.window[0]}..{run.window[1]}, below the {floor:g}% floor "
+        "book.maintenance_pct declares",
+        remedy=f"research {hyp.id} again under that floor, or lower book.maintenance_pct in "
+        f"hypotheses/{hyp.id}/hypothesis.yaml and run `kanso hyp add` before certifying again",
+    )
 
 
 def _check_host(

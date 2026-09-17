@@ -230,6 +230,7 @@ already over. There are five.
 | `strategy_integrity` | a file that reads what the embargo hides, or imports outside the allow-list |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
+| `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
@@ -266,6 +267,23 @@ until the held leg prints again its last price is restated by the split's ratio,
 and for the room. `position_size` still judges a position against the capital
 (`docs/backlog.md`), and under a `sizing` rule the budget is funded by definition (row 76).
 `self.balance` reads the number.
+
+**A `book` policy changes the equity a card is measured on** (`docs/workspace.md` has the
+keys). The runner applies it once, at each period end of the extraction, in one order: the
+carry — the yearly `financing_rate_bps` on gross exposure, shorts counted, above the book's
+equity, over the period's span — out of cash and so in the return; the maintenance ratio;
+then, at the first period end of a calendar month under `reset: monthly`, a surplus over the
+capital moved to a cushion or a deficit restored from it while it lasts. Returns are struck
+before the transfer, so the sum of a run's returns is what book and cushion made together,
+and the run carries `cushion`, `carry` and `worst_ratio` beside its equity curve. The harness
+settles each period from the same functions when the next period's first point arrives, so
+`self.balance` reads the book the policy left. Two consequences are deliberate. The equity
+curve is the book after each transfer and `max_drawdown` seeds its peak at the capital, so on
+a reset book a drawdown is bounded by the month it fell in; and `cost_stress` multiplies fill
+costs and leaves the carry alone, because a rate on borrowed notional is not an execution
+cost. The engine enforces no margin and charges no financing here — kanso's instruments carry
+no margin rates — so none of this is delegated to the venue. A sized sleeve gets no special
+case: a full-book entry that borrows pays the carry and can breach the floor (row 76).
 
 **Under a `sizing` rule the floor is not a gate at all.** `sizing: {mode: full_book, budget: N}`
 in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry
@@ -671,7 +689,9 @@ both ways: the version must have been on the stage for the longer of the plan's 
 duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
 objective it realised must fall **inside** the ninety-percent interval composition
 measured, above the band as much a fail as below it, because a stage that out-performs its
-certification is not reproducing what was certified. `docs/cli.md` has the pass.
+certification is not reproducing what was certified. Of the sleeve's card-stage constraints it
+judges `max_drawdown` and `maintenance_margin` on the stage's own run, and a breach of either
+is a fail. `docs/cli.md` has the pass.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

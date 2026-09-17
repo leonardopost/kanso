@@ -574,3 +574,20 @@ def test_a_warmed_sleeve_s_expectation_is_measured_warm_over_its_certification_w
     ]
     assert version.version == 1
     assert version.expectation.window.start.isoformat() == "2024-02-06"
+
+
+def test_a_version_whose_book_breaches_its_maintenance_floor_is_not_composed() -> None:
+    """The floor is the operator's whatever the plan chose, so the expectation run holds it."""
+    from tests.criteria.builders import build_run, make_hyp
+
+    floored = make_hyp(book={"maintenance_pct": 30.0})
+    breached = build_run((0.0, 0.0), worst_ratio=(0.31, 0.2999))
+
+    with pytest.raises(PreconditionError, match="falls to 29.99% of its gross") as failure:
+        composition._check_margin(floored, breached)
+
+    assert "below the 30% floor book.maintenance_pct declares" in failure.value.message
+    assert failure.value.remedy is not None and "kanso hyp add" in failure.value.remedy
+    composition._check_margin(floored, build_run((0.0, 0.0), worst_ratio=(0.31, 0.3)))
+    composition._check_margin(make_hyp(), breached)
+    composition._check_margin(floored, build_run((0.0,)))

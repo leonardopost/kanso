@@ -134,7 +134,10 @@ with different bytes, or the same bytes under a new engine, composes its strateg
 version. The certificate composed is the hypothesis's newest passing one, under the hypothesis
 as the registry pins it now: one earned under another universe, resolution, data requirement,
 construct, sizing rule, warmup or book policy is refused (exit 2) by the field that moved, and so is a construct
-whose host's latest sleeve is not the one its run was pinned to.
+whose host's latest sleeve is not the one its run was pinned to. A version whose own book, run
+over the sleeve's certification window, falls below the `book.maintenance_pct` its hypothesis
+declares is refused (exit 2) with the worst ratio and the floor, whether or not any card was
+held to `maintenance_margin`.
 
 `STRATEGY[@V]` is the notation every command below shares: a strategy id, optionally a
 version. Leaving the version out means the one the command's own rule picks — the latest

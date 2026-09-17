@@ -11,12 +11,15 @@ import pytest
 
 from kanso.criteria import DatasetFacts, Held, Trade, gates
 from kanso.criteria.gates import (
+    NEVER_HELD,
+    NO_FLOOR,
     book_correlation,
     bootstrap,
     capacity_vs_adv,
     cost_stress,
     deflated_sharpe,
     embargoed_window,
+    maintenance_margin,
     max_drawdown,
     max_hold,
     min_trades,
@@ -332,6 +335,54 @@ def test_max_drawdown_reads_the_hypothesis_own_limit() -> None:
 def test_max_drawdown_passes_inside_the_limit() -> None:
     run = build_run((100.0, -50.0, 50.0), capital=1_000.0)
     assert max_drawdown.evaluate(context(run)).passed
+
+
+# --- maintenance_margin -----------------------------------------------------------
+
+FLOORED = {"book": {"maintenance_pct": 30.0}}
+
+
+def test_maintenance_margin_holds_the_floor_the_hypothesis_declares() -> None:
+    run = build_run((0.0, 0.0, 0.0), worst_ratio=(None, 0.45, 0.29))
+
+    result = maintenance_margin.evaluate(context(run, hyp=make_hyp(**FLOORED)))
+
+    assert not result.passed
+    assert result.evidence == {
+        "worst_ratio_pct": pytest.approx(29.0),
+        "floor_pct": 30.0,
+        "at_ns": run.period_ends_ns[2],
+    }
+
+
+def test_maintenance_margin_passes_a_book_that_touches_the_floor_and_no_lower() -> None:
+    run = build_run((0.0, 0.0), worst_ratio=(0.3, 1.2))
+
+    result = maintenance_margin.evaluate(context(run, hyp=make_hyp(**FLOORED)))
+
+    assert result.passed and result.skipped is None
+    assert result.evidence["worst_ratio_pct"] == pytest.approx(30.0)
+
+
+def test_maintenance_margin_without_a_floor_judges_nothing() -> None:
+    run = build_run((0.0,), worst_ratio=(0.01,))
+
+    result = maintenance_margin.evaluate(context(run))
+
+    assert result.passed
+    assert result.skipped == NO_FLOOR
+
+
+@pytest.mark.parametrize("series", [(), (None, None)], ids=["unrecorded", "never held"])
+def test_maintenance_margin_on_a_book_that_held_nothing_judges_nothing(
+    series: tuple[None, ...],
+) -> None:
+    run = build_run((0.0, 0.0), worst_ratio=series)
+
+    result = maintenance_margin.evaluate(context(run, hyp=make_hyp(**FLOORED)))
+
+    assert result.passed
+    assert result.skipped == NEVER_HELD
 
 
 # --- strategy_integrity -----------------------------------------------------------

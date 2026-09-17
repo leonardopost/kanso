@@ -15,12 +15,14 @@ the band is not a better strategy; it is the paper stage failing to reproduce th
 was certified, and promoting on it would promote an unexplained difference.
 
 **Did it stay inside the risk the hypothesis declared?** Of the sleeve's card-stage
-constraints only the drawdown limit is evaluated. `min_trades` is recorded as skipped: it
-counts trades over a research window years long, a paper window cannot hold that many, and
-applying it would make `promotable` unreachable however well the version behaved. Trade
-sufficiency in paper is already the planner's decision, expressed as the minimum duration and
-the horizon multiple this gate measures. Any other card-stage constraint is recorded as not a
-paper test — `strategy_integrity` inspects a lane directory that a deployment does not have.
+constraints only the drawdown limit and the maintenance floor are evaluated — the floor on
+the stage's own worst ratios, which the node's extraction records as a card's does.
+`min_trades` is recorded as skipped: it counts trades over a research window years long, a
+paper window cannot hold that many, and applying it would make `promotable` unreachable
+however well the version behaved. Trade sufficiency in paper is already the planner's
+decision, expressed as the minimum duration and the horizon multiple this gate measures. Any
+other card-stage constraint is recorded as not a paper test — `strategy_integrity` inspects a
+lane directory that a deployment does not have.
 
 A redeploy flattens the stage and restarts the clock, so the window this gate measures is the
 one since the current join and not the whole life of the version.
@@ -31,6 +33,7 @@ from __future__ import annotations
 from typing import ClassVar, Final
 
 from kanso.criteria.context import Gate, GateContext, number, skipped, verdict
+from kanso.criteria.gates import maintenance_margin
 from kanso.criteria.objectives import REGISTRY, Objective
 from kanso.criteria.quantities import drawdown_pct
 from kanso.monitor.stage import StageRecord
@@ -38,6 +41,7 @@ from kanso.schemas import GateResult, ParamValue, parse_duration
 
 MIN_TRADES: Final = "min_trades"
 MAX_DRAWDOWN: Final = "max_drawdown"
+MAINTENANCE_MARGIN: Final = "maintenance_margin"
 
 NO_WINDOW: Final = "no paper window was chosen, so no duration was required"
 NO_STAGE: Final = "no stage record was supplied, so there is no clock to measure against"
@@ -52,7 +56,7 @@ NOT_A_PAPER_TEST: Final = "not a test a deployed stage can run"
 
 
 class _PaperForward:
-    """Long enough on paper, inside the expectation, and inside the drawdown limit."""
+    """Long enough on paper, inside the expectation, and inside the declared risk."""
 
     id: ClassVar[str] = "paper_forward"
 
@@ -102,6 +106,10 @@ def _constraints(ctx: GateContext, observed: float, limit: float) -> tuple[dict[
             held = observed <= limit
             judged[MAX_DRAWDOWN] = held
             within = within and held
+        elif constraint.id == MAINTENANCE_MARGIN:
+            margin = maintenance_margin.evaluate(ctx)
+            judged[MAINTENANCE_MARGIN] = margin.skipped or margin.passed
+            within = within and margin.passed
         elif constraint.id == MIN_TRADES:
             judged[MIN_TRADES] = TRADES_UNREACHABLE
         else:
