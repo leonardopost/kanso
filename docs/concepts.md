@@ -371,6 +371,11 @@ own proposer reward-hacking its way to a better number, layered with the data is
 the card subprocess. It is not a sandbox against a hostile actor and does not claim to be
 one.
 
+The engine's history requests — `request_bars` and its quote, trade and custom siblings —
+are denied with the rest: history reaches a strategy only as the `warmup` prefix its
+hypothesis declares, which the runner resolves and feeds before the window, and a request
+would be a second route to the catalog that no window bounds.
+
 Two further denials are about corporate actions rather than about capability, both are
 listed in the same gate's output, and both name their reason there so a proposer can act on
 it. **`.cache`** is denied because it is the one route by which a `strategy.py` can hold an

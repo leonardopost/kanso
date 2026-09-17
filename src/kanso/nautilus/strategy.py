@@ -318,6 +318,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._hedging = False
         self._exiting = False
         self._hold_until_cross_section = False
+        self._trading_from_ns = 0
+        self._delivered_ns = 0
         self._flushing = False
         self._pending: deque[object] = deque()
         self._overlay_due: tuple[InstrumentId, Bar | None, float | None] | None = None
@@ -409,6 +411,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def intents(self) -> tuple[OrderIntent, ...]:
         """Every order this sleeve submitted, in order."""
         return tuple(self._intents)
+
+    def _warming(self) -> bool:
+        """Whether the point being handled precedes the window this run is measured on.
+
+        The runner's `warm` sets the instant the window opens; the handlers record the
+        availability instant of every point they are handed. While the latter is short of
+        the former the strategy is being fed its prefix: it sees everything, and places
+        nothing. Keyed on `ts_init` and not on `data_time`, because the window is an
+        availability span and a point of it may carry a reference time before midnight.
+        """
+        return self._delivered_ns < self._trading_from_ns
 
     def last_bar(self, instrument_id: InstrumentId | str) -> Bar | None:
         """The last bar seen for an instrument."""
@@ -508,6 +521,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_bar(bar, historical)
             return
+        self._delivered_ns = int(bar.ts_init)
         key = bar.bar_type.instrument_id.value
         self._printed(key, float(bar.close), int(bar.ts_event))
         if not self._is_extra_bar(bar):
@@ -523,6 +537,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_quote_tick(tick, historical)
             return
+        self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
         self._last_quote[key] = tick
         mid = (float(tick.bid_price) + float(tick.ask_price)) / 2.0
@@ -543,6 +558,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_trade_tick(tick, historical)
             return
+        self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
         self._last_trade[key] = tick
         self._printed(key, float(tick.price), int(tick.ts_event))
@@ -560,6 +576,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if not self._pending:
                 self._consult_due()
             return
+        self._delivered_ns = int(getattr(data, "ts_init", self._delivered_ns))
         if self._held():
             self._pending.append(data)
             return
@@ -765,7 +782,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """Record the intent, consult the attached filters, submit, then hedge."""
+        """Record the intent, consult the attached filters, submit, then hedge.
+
+        Nothing at all while the strategy is warming: the order is neither checked nor
+        recorded, so an author sees `None` from the helpers exactly as under a refused
+        filter, and the two code paths hold identical intent lists.
+        """
+        if self._warming():
+            return
         self._check_hand_built(order)
         kind = self.classify(order)
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
@@ -787,6 +811,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         params: dict[str, object] | None = None,
     ) -> None:
         """As `submit_order`, classifying and filtering the list by its first order."""
+        if self._warming():
+            return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
@@ -1646,7 +1672,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
 
     def _consult_exit(self, instrument_id: InstrumentId) -> None:
-        if self._exiting or not self.is_running:
+        if self._exiting or not self.is_running or self._warming():
             return
         net = self._own_filled(instrument_id.value)  # what is open, not what is in flight
         if net == 0.0:
@@ -1677,7 +1703,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         ignored: resizing the host is an entry-time question. A market order already in
         flight is left to fill first, or the same clip would stack on every event until
         the first fill landed. A sleeve with no overlay attached pays nothing here: the
-        registry is asked before any scan or context is built.
+        registry is asked before any scan or context is built. While the sleeve is warming
+        the overlay is still asked, so a clock of its own warms with the host's, and its
+        answer is dropped before any leg is built — a clip built and then refused would
+        sit on the clip ledger for the rest of the run.
         """
         if self._hedging or not self.is_running:
             return
@@ -1693,6 +1722,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         try:
             for modifier, clock in clocks:
                 decision = clock(ctx).check(OVERLAY)
+                if self._warming():
+                    continue
                 for order in self._legs_of(modifier, decision):
                     self._submit_leg(order)
         finally:

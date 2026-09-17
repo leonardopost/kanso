@@ -11,6 +11,7 @@ from kanso.criteria.integrity import (
     DENIED_BUILTINS,
     DENIED_CLOCK,
     DENIED_DUNDERS,
+    DENIED_HISTORY,
     DENIED_MODULES,
     DENIED_NUMPY_FILE,
     DENIED_SCHEDULE,
@@ -149,6 +150,16 @@ def test_the_route_to_the_split_schedule_is_out_of_reach(name: str) -> None:
     """`info.splits` names splits after the window a card is judged on, and the cache
     hands out the instrument that carries it."""
     assert scan(f"x = self.{name}"), f"self.{name} was allowed"
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_HISTORY))
+def test_the_history_requests_and_the_warmup_gate_are_out_of_reach(name: str) -> None:
+    """History arrives only as the declared prefix; a request or the gate's own state would
+    be a second route to it, or a way to trade before the open."""
+    (problem,) = scan(f"x = self.{name}")
+
+    assert f"attribute '.{name}' is denied" in problem
+    assert "declare `warmup: {sessions: N}`" in problem
 
 
 def test_a_strategy_reaching_for_the_schedule_is_refused_by_the_route_it_took() -> None:

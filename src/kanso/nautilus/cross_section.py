@@ -39,6 +39,7 @@ __all__ = [
     "arm",
     "is_marker",
     "ordered",
+    "warm",
     "without_markers",
     "with_cross_section",
 ]
@@ -80,6 +81,20 @@ def arm(strategy: object, points: Sequence[object]) -> None:
     """
     if any(is_marker(point) for point in points):
         strategy._hold_until_cross_section = True  # type: ignore[attr-defined]
+
+
+def warm(strategy: object, opens_ns: int) -> None:
+    """Drop every order the strategy submits before the feed reaches `opens_ns`.
+
+    Set by the runner exactly as `arm` is — a private attribute the harness reads, never
+    a configuration field an author could read back or a manifest would record. The
+    harness keys the gate on the availability instant of the point it is handling, which
+    is the window's own order, so an in-window point published after midnight is never
+    refused for having a reference time before it. Everything else runs: handlers, the
+    last-price readers, an overlay's own clock. What is dropped is dropped silently, as a
+    refused filter is, so both code paths record the same intents.
+    """
+    strategy._trading_from_ns = opens_ns  # type: ignore[attr-defined]
 
 
 def ordered(groups: Sequence[Sequence[object]]) -> tuple[object, ...]:
