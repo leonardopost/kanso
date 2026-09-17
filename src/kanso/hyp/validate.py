@@ -56,7 +56,7 @@ from kanso.classify.construct import PORTFOLIO
 from kanso.classify.construct import catalogue as construct_catalogue
 from kanso.criteria import applicable_objectives, check_params
 from kanso.criteria import catalogue as criteria_catalogue
-from kanso.criteria.objectives import measures_benchmark
+from kanso.criteria.objectives import measures_a_hold_over, measures_benchmark
 from kanso.data import registry
 from kanso.data.instruments import resolve_universe
 from kanso.data.types import data_types
@@ -64,6 +64,7 @@ from kanso.errors import ValidationError
 from kanso.hyp.scaffold import HYPOTHESES, hypothesis_file
 from kanso.nautilus import adapters
 from kanso.schemas import (
+    Benchmark,
     ConstraintRef,
     ConstructRef,
     Hypothesis,
@@ -132,8 +133,24 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     venue_models(ws, hyp, instruments)
     _check_required(ws, hyp)
     _check_sizing(ws, hyp)
+    _check_benchmark(hyp)
     _check_classification(ws, hyp)
     return hyp
+
+
+def _check_benchmark(hyp: Hypothesis) -> None:
+    """A benchmark only on a horizon some objective measures a hold over, classified or not.
+
+    A draft carries no objective, and without this it would pass `hyp validate` and `hyp add`
+    only to be refused by `kanso classify` after the model had been asked.
+    """
+    if hyp.benchmark is None or measures_a_hold_over(list(criteria_catalogue().values()), hyp):
+        return
+    raise ValidationError(
+        f"benchmark: declared on a {hyp.horizon} horizon, and no objective measures a hold "
+        "over one; a hypothesis held under a day is measured per trade, and a hold has none",
+        remedy="remove benchmark from this file, or lengthen the horizon to a day or more",
+    )
 
 
 def venue_models(
@@ -469,18 +486,38 @@ def _check_objective(ws: Workspace, hyp: Hypothesis, ref: ObjectiveRef, mode: st
     if ref.id not in applicable:
         raise ValidationError(
             f"objective.id: {ref.id!r} does not apply to this hypothesis; the applicable "
-            f"{mode} objectives are {', '.join(sorted(applicable))}"
+            f"{mode} objectives are {', '.join(sorted(applicable))}",
+            remedy=_objective_remedy(hyp, ref, mode, applicable),
         )
     problems = check_params(item, ref.params.model_dump(), hyp, ws.config.research.folds)
     if problems:
         raise ValidationError("; ".join(f"objective.params.{problem}" for problem in problems))
     if hyp.benchmark is not None and not measures_benchmark(hyp):
         raise ValidationError(
-            f"benchmark: declared, and {ref.id} measures nothing against it; only a sleeve "
-            "or an alpha held a day or longer is measured against a hold of its first leg",
-            remedy="remove benchmark from this file, or lengthen the horizon to a day and "
-            "classify it as a sleeve",
+            f"benchmark: declared, and {ref.id} measures nothing against it; a {mode} "
+            "objective is measured against the host's run, and only a sleeve or an alpha "
+            "against a hold of its first leg",
+            remedy="remove benchmark from this file; the construct is measured against its host",
         )
+
+
+def _objective_remedy(hyp: Hypothesis, ref: ObjectiveRef, mode: str, applicable: list[str]) -> str:
+    """What to write when an objective does not apply, naming `benchmark` when it moved the grid.
+
+    Adding or removing the key on a classified file changes which absolute Sharpe applies,
+    so the objective id has to move in the same edit; the parameters do not.
+    """
+    toggled = hyp.model_copy(
+        update={"benchmark": None if hyp.benchmark else Benchmark(hold="first_leg")}
+    )
+    if ref.id in (found for _, found in applicable_objectives(toggled, mode)):
+        if hyp.benchmark is not None:
+            return f"set objective.id to {applicable[0]}, or remove benchmark"
+        return f"declare `benchmark: {{hold: first_leg}}`, or set objective.id to {applicable[0]}"
+    return (
+        "name one of the applicable objectives, or clear construct, objective and "
+        "constraints and run `kanso classify`"
+    )
 
 
 def _check_constraints(

@@ -424,6 +424,19 @@ def test_a_certificate_earned_under_another_scope_is_refused(
     with pytest.raises(PreconditionError, match="warmup changed from None"):
         compose(ws, store, HYP_ID)
 
+    held = document(
+        benchmark={"hold": "first_leg"},
+        objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    )
+    register(ws, store, write_hypothesis(ws, held, same))
+
+    with pytest.raises(PreconditionError, match="objective changed from") as adopted:
+        compose(ws, store, HYP_ID)
+
+    assert "benchmark changed from None to {'hold': 'first_leg', 'leg': 'DEMO.XNAS'}" in (
+        adopted.value.message
+    )
+
 
 def test_a_hypothesis_whose_certificates_all_failed_cannot_compose(
     ws: Workspace, store: StateStore

@@ -277,6 +277,23 @@ def applies_to(applies: Applies, hyp: Hypothesis, mode: str) -> bool:
     return applies.history_days is None or _within_int(applies.history_days, history_days(hyp))
 
 
+def measures_a_hold_over(items: Sequence[CriteriaItem], hyp: Hypothesis) -> bool:
+    """Whether some objective that measures a benchmark admits this hypothesis's horizon.
+
+    Read from the toolbox's `benchmark: true` clauses, in either mode, so a hypothesis can be
+    refused a benchmark before it is classified: below every such horizon no classification
+    could choose an objective that measures the hold.
+    """
+    horizon = parse_duration(hyp.horizon, "horizon").total_seconds()
+    return any(
+        item.kind == "objective"
+        and item.applies is not None
+        and item.applies.benchmark is True
+        and (item.applies.horizon is None or _within_duration(item.applies.horizon, horizon))
+        for item in items
+    )
+
+
 def applicable(items: Sequence[CriteriaItem], hyp: Hypothesis, mode: str) -> list[tuple[int, str]]:
     """Every applicable objective as `(priority, id)`, best first; the lowest wins."""
     return sorted(
