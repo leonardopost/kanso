@@ -6,10 +6,12 @@ than one, and a paper gate asking "how has this behaved since it joined?" has to
 them as one run.
 
 **The equity curve is rebuilt, not concatenated.** Inside a window, equity is capital plus the
-running sum of the returns; across two windows the second starts from its own capital again,
-so laying them end to end would step back at every seam. Summing the returns from the first
-window's capital is the same arithmetic within a window and the only one that survives the
-join.
+running sum of the returns less what a monthly reset moved out to the cushion; across two
+windows the second starts from its own capital again, so laying them end to end would step
+back at every seam. Summing the returns from the first window's capital, net of each end's
+transfer, is the same arithmetic within a window and the only one that survives the join.
+The cushion itself is carried across the seam by the stage, which seeds a restart from the
+last window's closing value, so the recorded series is one series over the join.
 
 **Two windows can share a calendar day.** A stage stopped mid-session and restarted the same
 day produces two partial periods ending at the same instant, and a run's periods are strictly
@@ -72,17 +74,32 @@ def combined(results: Sequence[StageResult]) -> CardRun | None:
     if not results:
         return None
     per_end: dict[int, float] = {}
+    cushion_at: dict[int, float] = {}
+    carry_at: dict[int, float] = {}
+    worst_at: dict[int, float | None] = {}
     for result in results:
-        for ts, value in zip(result.run.period_ends_ns, result.run.returns, strict=True):
+        run = result.run
+        for index, (ts, value) in enumerate(zip(run.period_ends_ns, run.returns, strict=True)):
             per_end[ts] = per_end.get(ts, 0.0) + value
+            if run.cushion:
+                cushion_at[ts] = run.cushion[index]
+            if run.carry:
+                carry_at[ts] = carry_at.get(ts, 0.0) + run.carry[index]
+            if run.worst_ratio:
+                worst_at[ts] = _lower(worst_at.get(ts), run.worst_ratio[index])
     ends = tuple(sorted(per_end))
     returns = tuple(per_end[ts] for ts in ends)
     capital = results[0].run.capital
     running = capital
+    held_back = 0.0
     equity: list[float] = []
-    for value in returns:
-        running += value
+    cushions: list[float] = []
+    for ts, value in zip(ends, returns, strict=True):
+        cushion = cushion_at.get(ts, held_back)
+        running += value - (cushion - held_back)
+        held_back = cushion
         equity.append(running)
+        cushions.append(cushion)
     last = results[-1].run
     return CardRun(
         window=(results[0].run.window[0], last.window[1]),
@@ -111,7 +128,19 @@ def combined(results: Sequence[StageResult]) -> CardRun | None:
         capital=capital,
         currency=last.currency,
         venue_model=last.venue_model,
+        cushion=tuple(cushions) if cushion_at else (),
+        carry=tuple(carry_at.get(ts, 0.0) for ts in ends) if carry_at else (),
+        worst_ratio=tuple(worst_at.get(ts) for ts in ends) if worst_at else (),
     )
+
+
+def _lower(held: float | None, found: float | None) -> float | None:
+    """The worse of two ratios at one shared end; an unheld end defers to the other."""
+    if held is None:
+        return found
+    if found is None:
+        return held
+    return min(held, found)
 
 
 def tenure(stage: str, results: Sequence[StageResult], clock_ns: int | None) -> Tenure | None:

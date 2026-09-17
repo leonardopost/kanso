@@ -99,6 +99,9 @@ def build_run(
     capital: float = CAPITAL,
     equity: tuple[float, ...] | None = None,
     holdings: tuple[Held, ...] = (),
+    cushion: tuple[float, ...] = (),
+    carry: tuple[float, ...] = (),
+    worst_ratio: tuple[float | None, ...] = (),
 ) -> CardRun:
     """A daily run: one return period per day, equity compounded from the returns."""
     span = len(returns) if days is None else days
@@ -120,6 +123,9 @@ def build_run(
         capital=capital,
         currency="USD",
         venue_model={},
+        cushion=cushion,
+        carry=carry,
+        worst_ratio=worst_ratio,
         held=holdings,
     )
 

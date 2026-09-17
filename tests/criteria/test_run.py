@@ -127,3 +127,25 @@ def test_one_fold_is_the_whole_run() -> None:
     (whole,) = run.folds(1)
     assert whole.window == run.window
     assert whole.returns == run.returns
+
+
+@pytest.mark.parametrize("name", ["cushion", "carry", "worst_ratio"])
+def test_a_book_series_must_be_parallel_to_the_period_ends_or_absent(name: str) -> None:
+    run = build_run((1.0, 2.0))
+    with pytest.raises(ValidationError, match=f"{name}: a book series is parallel"):
+        CardRun(**{**run.__dict__, name: (0.0,)})
+    assert getattr(CardRun(**{**run.__dict__, name: ()}), name) == ()
+
+
+def test_a_fold_carries_only_the_book_series_inside_it() -> None:
+    run = build_run(
+        (0.0, 0.0, 0.0, 0.0),
+        cushion=(0.0, 10.0, 10.0, 25.0),
+        carry=(1.0, 2.0, 3.0, 4.0),
+        worst_ratio=(None, 0.9, 0.8, None),
+    )
+    first, second = run.folds(2)
+    assert (first.cushion, second.cushion) == ((0.0, 10.0), (10.0, 25.0))
+    assert (first.carry, second.carry) == ((1.0, 2.0), (3.0, 4.0))
+    assert (first.worst_ratio, second.worst_ratio) == ((None, 0.9), (0.8, None))
+    assert build_run((0.0, 0.0)).folds(2)[0].cushion == ()

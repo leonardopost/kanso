@@ -123,3 +123,51 @@ def test_a_days_profit_is_the_periods_that_ended_on_it() -> None:
     assert held.day_pnl(START) == 10.0
     assert held.day_pnl(SECOND_DAY) == 20.0
     assert held.day_pnl(date(2024, 4, 1)) == 0.0
+
+
+def test_the_book_series_ride_across_the_seam_and_the_equity_is_net_of_transfers() -> None:
+    """The second window opens with the cushion the first closed at, as the stage seeds it;
+    the joined curve steps down by each transfer and never by a seam."""
+    first = result(
+        (1_000.0, 2_000.0),
+        cushion=(0.0, 3_000.0),
+        carry=(0.0, 4.0),
+        worst_ratio=(None, 0.8),
+    )
+    second = result(
+        (500.0,),
+        start=date(2024, 3, 3),
+        cushion=(3_000.0,),
+        carry=(5.0,),
+        worst_ratio=(0.6,),
+    )
+
+    joined = combined([first, second])
+
+    assert joined is not None
+    assert joined.returns == (1_000.0, 2_000.0, 500.0)
+    assert joined.equity == (CAPITAL + 1_000.0, CAPITAL, CAPITAL + 500.0)
+    assert joined.cushion == (0.0, 3_000.0, 3_000.0)
+    assert joined.carry == (0.0, 4.0, 5.0)
+    assert joined.worst_ratio == (None, 0.8, 0.6)
+
+
+def test_a_shared_day_sums_the_carry_and_keeps_the_worse_ratio() -> None:
+    first = result((100.0,), carry=(1.0,), worst_ratio=(0.7,))
+    second = result((200.0,), carry=(2.0,), worst_ratio=(None,))
+    third = result((300.0,), carry=(3.0,), worst_ratio=(0.4,))
+
+    joined = combined([first, second, third])
+
+    assert joined is not None
+    assert joined.returns == (600.0,)
+    assert joined.carry == (6.0,)
+    assert joined.worst_ratio == (0.4,)
+
+
+def test_windows_recorded_without_a_book_series_join_as_before() -> None:
+    joined = combined([result((100.0,)), result((200.0,), start=SECOND_DAY)])
+
+    assert joined is not None
+    assert (joined.cushion, joined.carry, joined.worst_ratio) == ((), (), ())
+    assert joined.equity == (CAPITAL + 100.0, CAPITAL + 300.0)

@@ -199,6 +199,23 @@ def test_what_each_instrument_was_worth_survives_the_round_trip() -> None:
     assert records.decode_run(records.encode_run(run)) == run
 
 
+def test_the_book_series_survive_the_round_trip() -> None:
+    """`maintenance_margin` reads the worst ratio and a stage restart seeds the cushion."""
+    run = a_run(cushion=(0.0, 250.0, 250.0), carry=(0.0, 1.5, 0.0), worst_ratio=(None, 0.42, 1.0))
+
+    assert records.decode_run(records.encode_run(run)) == run
+
+
+def test_a_record_written_before_the_book_series_still_decodes() -> None:
+    payload = records.encode_run(a_run())
+    for name in ("cushion", "carry", "worst_ratio"):
+        del payload[name]
+
+    decoded = records.decode_run(payload)
+
+    assert (decoded.cushion, decoded.carry, decoded.worst_ratio) == ((), (), ())
+
+
 def test_a_record_written_before_holdings_were_kept_still_decodes() -> None:
     """Every stage record already in a store predates the key and must still read back."""
     payload = records.encode_run(a_run())

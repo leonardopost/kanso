@@ -309,6 +309,9 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         "trades": [_encode_trade(trade) for trade in run.trades],
         "fills": [_encode_fill(fill) for fill in run.fills],
         "held": [_encode_held(item) for item in run.held],
+        "cushion": list(run.cushion),
+        "carry": list(run.carry),
+        "worst_ratio": list(run.worst_ratio),
         "capital": run.capital,
         "currency": run.currency,
         "venue_model": dict(run.venue_model),
@@ -327,6 +330,11 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
         trades=tuple(_decode_trade(trade) for trade in payload["trades"]),
         fills=tuple(_decode_fill(fill) for fill in payload["fills"]),
         held=tuple(_decode_held(item) for item in payload.get("held", ())),
+        cushion=tuple(float(value) for value in payload.get("cushion", ())),
+        carry=tuple(float(value) for value in payload.get("carry", ())),
+        worst_ratio=tuple(
+            None if value is None else float(value) for value in payload.get("worst_ratio", ())
+        ),
         capital=float(payload["capital"]),
         currency=str(payload["currency"]),
         venue_model=dict(payload["venue_model"]),
