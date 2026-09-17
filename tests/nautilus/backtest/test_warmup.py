@@ -110,6 +110,32 @@ def test_too_few_sessions_inside_the_bound_is_a_refusal_naming_what_was_found(
     assert "lower warmup.sessions" in (refused.value.remedy or "")
 
 
+def test_a_clock_resolves_the_sessions_at_or_before_it(deep: Path) -> None:
+    """A stage restart warms on what it replayed: the day its clock stands in counts once
+    that day has printed, and not before."""
+    from .conftest import CLOSE_NS, SECOND_NS
+
+    tenth = midnight_ns(date(2024, 1, 10))
+    published = tenth + CLOSE_NS + SECOND_NS
+
+    before_the_print = warmup_prefix(warmed(3), RESEARCH, deep, until_ns=published - 1)
+    at_the_print = warmup_prefix(warmed(3), RESEARCH, deep, until_ns=published)
+
+    assert before_the_print == (date(2024, 1, 7), date(2024, 1, 9))
+    assert at_the_print == (date(2024, 1, 8), date(2024, 1, 10))
+
+
+def test_too_few_sessions_before_a_clock_names_the_clock(tmp_path: Path) -> None:
+    store = catalog(tmp_path / "shallow", bars(RESEARCH), [instrument()])
+    clock = midnight_ns(date(2024, 1, 3))
+
+    with pytest.raises(PreconditionError) as refused:
+        warmup_prefix(warmed(), RESEARCH, store, until_ns=clock)
+
+    assert f"session(s) at or before 2024-01-03 ({clock})" in refused.value.message
+    assert "the catalog holds 2" in refused.value.message
+
+
 def test_an_unresolved_name_is_refused_before_any_lookback(deep: Path) -> None:
     with pytest.raises(PreconditionError, match="holds no definition for OTHR.XNAS"):
         warmup_prefix(warmed(universe=[INSTRUMENT, OTHER]), RESEARCH, deep)
@@ -136,11 +162,17 @@ def test_sessions_are_counted_on_quotes_when_the_hypothesis_requires_no_bars(
 # --- the request ---------------------------------------------------------------
 
 
-def test_a_prefix_must_end_before_the_window_opens(request_for) -> None:
+def test_a_prefix_ends_before_the_window_opens_or_on_the_day_it_opens(request_for) -> None:
+    """A stage restart's window opens on its clock's day, and the prefix may end there."""
     with pytest.raises(ValidationError, match="is not a span of sessions before the window"):
-        request_for(RESEARCH, prefix=(date(2023, 12, 27), date(2024, 1, 1)))
+        request_for(RESEARCH, prefix=(date(2023, 12, 27), date(2024, 1, 2)))
     with pytest.raises(ValidationError, match="is not a span of sessions before the window"):
         request_for(RESEARCH, prefix=(date(2023, 12, 31), date(2023, 12, 27)))
+
+    restarted = request_for(RESEARCH, prefix=(date(2023, 12, 30), date(2024, 1, 1)))
+
+    assert restarted.span == (date(2023, 12, 30), RESEARCH[1])
+    assert restarted.bounds == request_for(RESEARCH).bounds
 
 
 def test_the_delivered_span_widens_the_lower_bound_and_only_that(request_for) -> None:

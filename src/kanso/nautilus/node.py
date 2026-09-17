@@ -71,13 +71,13 @@ from nautilus_trader.config import (
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import TraderId
 
-from kanso.criteria.run import CardRun
+from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits
 from kanso.nautilus.backtest import RunRequest
-from kanso.nautilus.cross_section import arm, without_markers
+from kanso.nautilus.cross_section import arm, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
-from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, ordered
+from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered
 from kanso.nautilus.venue import NETTING, starting_balance, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
@@ -154,8 +154,14 @@ class Placement:
         """The `StrategyId` this version's sleeve runs under, without constructing it."""
         return f"{self.loaded.sleeve.cls.__name__}-{self.tag}"
 
-    def request(self, window: tuple[date, date]) -> RunRequest:
-        """The run this version asks for over the stage's window."""
+    def request(
+        self, window: tuple[date, date], prefix: tuple[date, date] | None = None
+    ) -> RunRequest:
+        """The run this version asks for over the stage's window.
+
+        `prefix` is the sessions the version warms on, resolved by the node from its
+        catalog and its clock: a placement carries neither.
+        """
         return RunRequest(
             hyp=self.hyp,
             strategy_source=self.source,
@@ -166,6 +172,7 @@ class Placement:
             period=self.period,
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
+            prefix=prefix,
         )
 
 
@@ -201,7 +208,13 @@ class Realised:
 
 @dataclass(frozen=True)
 class StageRun:
-    """What one run of a stage node produced, for every version on it."""
+    """What one run of a stage node produced, for every version on it.
+
+    `points` are the window's own catalog points in feed order — a warmed version's
+    prefix is fed and never among them — and `released` is the length of the prefix of
+    them the feed reached, so the session written from the two records what the stage
+    replayed and nothing it was warmed on.
+    """
 
     stage: str
     window: tuple[date, date]
@@ -371,16 +384,27 @@ def run(
     Every version is measured over the same window from the same cache, filtered to the
     positions its own strategy opened, so two strategies sharing a stage are costed and
     reported separately while trading one account.
+
+    A warmed version is fed its sessions before it may trade: the ones before the window
+    on a first start, and on a restart the ones at or before the stage's clock — the
+    node restarts flat and warms from scratch, and what it warms on is what it replayed
+    before. Trading begins at the instant after the clock, or at the window's open. What
+    the node counts, measures and resumes from are the points after that instant: a
+    restart with nothing but its prefix to replay is idle, and its clock stands.
     """
     if not node.placements:
         raise PreconditionError(
             f"stages.{node.stage}: no version is deployed, so there is no node to run",
             remedy="compose a certified hypothesis and deploy it",
         )
-    requests = tuple(placed.request(node.window) for placed in node.placements)
+    opens_ns = midnight_ns(node.window[0]) if node.after is None else node.after + 1
+    requests = tuple(
+        placed.request(node.window, _prefix(placed, node)) for placed in node.placements
+    )
     window = _window_data(requests, node.catalog, node.after)
     points = window.points
-    if not points:
+    market = measured(points, opens_ns)
+    if not market:
         return _idle(node, requests)
     backtest._seed_globals(requests[0].snapshot_id)
     loop = asyncio.new_event_loop()
@@ -408,8 +432,10 @@ def run(
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
         sandbox.attach(kernel, node.venues(), points)
         strategies = _components(built, node.placements)
-        for strategy in strategies:
+        for strategy, request in zip(strategies, requests, strict=True):
             arm(strategy, points)
+            if request.prefix is not None:
+                warm(strategy, opens_ns)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points))
         realised = tuple(
             _realised(placed, request, kernel, groups, books, window.instruments)
@@ -422,19 +448,25 @@ def run(
             for strategy in strategies
             for i in strategy.intents
         )
-        released = len(without_markers(points[: client.released]))
         return StageRun(
             stage=node.stage,
             window=node.window,
-            points=points,
-            released=released,
-            clock_ns=client.last_ts if client.released else None,
+            points=market,
+            released=len(measured(points[: client.released], opens_ns)),
+            clock_ns=client.last_ts if client.last_ts >= opens_ns else None,
             realised=realised,
             intents=intents,
             halted=halt.reason,
         )
     finally:
         built.dispose()
+
+
+def _prefix(placed: Placement, node: StageNode) -> tuple[date, date] | None:
+    """The sessions this version warms on, from the node's catalog and its clock."""
+    return backtest.warmup_prefix(
+        placed.hyp, node.window, node.catalog, placed.grains, until_ns=node.after
+    )
 
 
 def _idle(node: StageNode, requests: Sequence[RunRequest]) -> StageRun:
@@ -484,9 +516,12 @@ def _window_data(
     feed is built from the distinct series, while each version keeps its own view of them,
     because the marks and the observed spreads its window is costed with are its own.
 
-    `after` is the stage's clock, and every point at or before it is dropped from both —
-    from the feed, so nothing is replayed twice, and from each version's view, so what is
-    measured is exactly what was released.
+    `after` is the stage's clock, and every point at or before it is dropped from each
+    version's view, so what is measured is exactly what was released. It is dropped from
+    the feed too, so nothing is replayed twice — except for a version that warms: its
+    request names the sessions at or before the clock, and those are fed again with every
+    order dropped, which is what warming is. Two versions asking for one series at
+    different depths share the deeper one, since both are cut from the same catalog.
     """
     instruments: dict[str, Any] = {}
     seen: dict[tuple[str, str], tuple[Any, ...]] = {}
@@ -495,10 +530,12 @@ def _window_data(
         found, groups = backtest.window_data(request, catalog)
         for instrument in found:
             instruments.setdefault(str(getattr(instrument, "id", instrument)), instrument)
-        kept = (_since(group, after) for group in groups)
-        per_version.append(
-            tuple(seen.setdefault(_group_key(group), group) for group in kept if group)
-        )
+        kept = tuple(_since(group, after) for group in groups)
+        fed = groups if request.prefix is not None else kept
+        for group in fed:
+            if group and len(group) > len(seen.get(_group_key(group), ())):
+                seen[_group_key(group)] = group
+        per_version.append(tuple(group for group in kept if group))
     return _Window(
         instruments=tuple(instruments[name] for name in sorted(instruments)),
         points=ordered(tuple(seen[key] for key in sorted(seen))),

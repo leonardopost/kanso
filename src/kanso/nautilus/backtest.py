@@ -77,7 +77,7 @@ import time
 import traceback
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from itertools import chain
 from math import fsum
@@ -214,7 +214,9 @@ class RunRequest:
     strategy is fed before it may trade, resolved by the parent (`warmup_prefix`) and put
     here explicitly, so a card child re-checks the span it was handed rather than one it
     computes. `bounds` stays the measured window; `delivered` is what the engine is fed.
-    The upper bound is the same in both.
+    The upper bound is the same in both. A prefix ends before the window opens, or on the
+    day it opens: a stage restart's window opens on the day its clock stands in, and the
+    sessions at or before the clock end on that day.
     """
 
     hyp: Hypothesis
@@ -236,7 +238,7 @@ class RunRequest:
         if self.prefix is None:
             return
         first, last = self.prefix
-        if first > last or last >= self.window[0]:
+        if first > last or last > self.window[0]:
             raise ValidationError(
                 f"prefix: {first}..{last} is not a span of sessions before the window "
                 f"opening {self.window[0]}"
@@ -365,7 +367,12 @@ asked for in calendar days, doubled each time, so thirty-two times them at most.
 
 
 def warmup_prefix(
-    hyp: Hypothesis, window: tuple[date, date], catalog_path: Path, grains: Sequence[str] = ()
+    hyp: Hypothesis,
+    window: tuple[date, date],
+    catalog_path: Path,
+    grains: Sequence[str] = (),
+    *,
+    until_ns: int | None = None,
 ) -> tuple[date, date] | None:
     """The sessions this hypothesis warms on before `window`, resolved from the catalog.
 
@@ -377,6 +384,11 @@ def warmup_prefix(
     found. Resolved in the parent by every builder and put on the request explicitly: a
     card child has no catalog, and re-checks the span it was handed rather than one it
     computes. The window's own bounds are not touched.
+
+    `until_ns` is a stage restart's clock: the sessions are then the last N at or before
+    that instant rather than before the window's open, because a restarted node resumes
+    at the instant after its clock, inside a window that opens on the clock's day, and
+    what it warms on is what it replayed before.
     """
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
@@ -386,22 +398,23 @@ def warmup_prefix(
     catalog = ParquetDataCatalog(str(catalog_path))
     held = _held(catalog, hyp)
     grain = (tuple(grains) or (hyp.resolution,))[0]
-    opens = midnight_ns(window[0])
+    end = midnight_ns(window[0]) - 1 if until_ns is None else until_ns
+    edge = f"before {window[0]}" if until_ns is None else f"at or before {day_of(end)} ({end})"
     days: list[date] = []
     lookback = wanted
+    start = end
     for _ in range(LOOKBACK_DOUBLINGS):
         lookback *= 2
-        start = max(0, opens - lookback * NS_PER_DAY)
-        points = _primary_points(catalog, hyp, held, grain, start, opens - 1)
+        start = max(0, end + 1 - lookback * NS_PER_DAY)
+        points = _primary_points(catalog, hyp, held, grain, start, end)
         days = sorted({day_of(int(point.ts_init)) for point in points})  # type: ignore[attr-defined]
         if len(days) >= wanted:
             return days[-wanted], days[-1]
     raise PreconditionError(
-        f"warmup: {hyp.id} asks for {wanted} session(s) before {window[0]} and the catalog "
-        f"holds {len(days)} in the {lookback} calendar days before it",
-        remedy=f"load {', '.join(hyp.universe)} at {grain} back to at least "
-        f"{window[0] - timedelta(days=lookback)} with `kanso data load`, then "
-        "`kanso data snapshot`; or lower warmup.sessions",
+        f"warmup: {hyp.id} asks for {wanted} session(s) {edge} and the catalog holds "
+        f"{len(days)} in the {lookback} calendar days before it",
+        remedy=f"load {', '.join(hyp.universe)} at {grain} back to at least {day_of(start)} "
+        "with `kanso data load`, then `kanso data snapshot`; or lower warmup.sessions",
     )
 
 
