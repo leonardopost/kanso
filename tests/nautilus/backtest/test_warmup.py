@@ -334,7 +334,7 @@ def test_a_fill_before_the_open_is_refused_by_the_extraction(request_for) -> Non
     )
 
     with pytest.raises(ValidationError, match="precedes the window opening"):
-        _equity(request, [(midnight_ns(RESEARCH[0]), INSTRUMENT, 10.0)], [early], {})
+        _equity(request, [(midnight_ns(RESEARCH[0]), INSTRUMENT, 10.0, 9.0, 11.0)], [early], {})
 
 
 def test_a_warmed_card_runs_in_its_child_on_the_span_it_was_handed(
