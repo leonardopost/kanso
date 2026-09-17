@@ -1,6 +1,6 @@
 ---
 name: kanso-promote
-description: Handle kanso escalations and strategy promotion — read the inbox, deploy paper, record the operator's approval for live capital, demote, and retire. Use when the operator asks what needs attention, wants to go live or paper, sees an inbox entry (`promotable`, `demoted`, `cert_failed`, `misaligned`, `deploy_blocked`), or asks about portfolio state.
+description: Handle kanso escalations and strategy promotion — read the inbox, deploy paper, record the operator's approval for live capital, demote, and retire. Use when the operator asks what needs attention, wants to go live or paper, sees an inbox entry (`promotable`, `demoted`, `cert_failed`, `misaligned`, `deploy_blocked`, `explored`), or asks about portfolio state.
 license: Apache-2.0
 metadata:
   version: "0.1"
@@ -9,7 +9,7 @@ metadata:
 # kanso-promote
 
 ## Session start
-`kanso inbox` then `kanso status`. Summarise unread entries in one line each. Acknowledge only entries the operator has dealt with: `kanso inbox ack <id>`. Acknowledging is never an approval.
+`kanso inbox` then `kanso status`. Summarise unread entries in one line each. Acknowledge only entries the operator has dealt with: `kanso inbox ack <id>`. Acknowledging is never an approval. An `explored` entry is a draft hypothesis kanso wrote, not a promotion matter: handle it with skill `kanso-hypothesis`.
 
 ## Promotion path
 - `certified` hypothesis → kanso auto-runs `kanso strat compose` and `kanso portfolio deploy --stage paper`. Nothing to approve. `deploy_blocked` means no capital was assignable within `portfolio.yaml` limits: raise stage `capital` or retire something, then `kanso portfolio deploy --stage paper`.

@@ -109,6 +109,14 @@ PLANNED: dict[str, Any] = {
     ],
     "excluded": [],
 }
+EXPLORED: dict[str, Any] = {
+    "id": "demo_breakout",
+    "hypothesis_yaml": "id: demo_breakout\n",
+    "program_md": "# demo_breakout\n",
+    "strategy_py": "# a breakout\n",
+    "rationale": "the parent only ever faded deviations; this buys the break",
+    "tags": ["signal_breakout"],
+}
 """One valid answer per task class, for scripts that are meant to succeed."""
 
 

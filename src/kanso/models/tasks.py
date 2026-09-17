@@ -1,8 +1,8 @@
-"""The four task classes: what each one is asked, and the shape of the answer it owes.
+"""The five task classes: what each one is asked, and the shape of the answer it owes.
 
 A task class is a call site with a fixed job, a fixed answer shape and a fixed place in
-the routing table. There are four, they are named in the register's routing table, and a
-fifth would be a call site the package does not have — so this module is closed, and the
+the routing table. There are five, they are named in the register's routing table, and a
+sixth would be a call site the package does not have — so this module is closed, and the
 schemas here are the whole of what any model in any workspace is ever asked to produce.
 
 Four rules shape every prompt built here.
@@ -38,6 +38,13 @@ planner that has seen the results is choosing the test that its results already 
 Enforcing that is the calling step's business — it assembles the inputs — but the
 instructions below say so, so a model asked for one of them anyway knows the answer is
 not to be conditioned on it.
+
+`explore` is the other way round: it is shown what a hypothesis's research learned — the
+coverage of its cards by tag, its keeps and their research-window scores, its stalls, and
+which certification gates failed, by id — and asked for a new hypothesis the search has
+not reached. What it is never shown is a number measured on a certification window, for
+the reason `research/driver.py` gives for the failing gates: the files it writes are
+researched next.
 """
 
 from __future__ import annotations
@@ -190,6 +197,23 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
         "required": ["gates", "excluded"],
         "additionalProperties": False,
     },
+    "explore": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "minLength": 3, "maxLength": 40},
+            "hypothesis_yaml": {"type": "string", "minLength": 1},
+            "program_md": {"type": "string", "minLength": 1},
+            "strategy_py": {"type": "string", "minLength": 1},
+            "rationale": {"type": "string", "minLength": 1, "maxLength": 240},
+            "tags": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "enum": list(TAGS)},
+            },
+        },
+        "required": ["id", "hypothesis_yaml", "program_md", "strategy_py", "rationale", "tags"],
+        "additionalProperties": False,
+    },
 }
 """The answer each task class owes, as the schema both sent on the wire and checked here."""
 
@@ -286,6 +310,39 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "You are shown no result, no card metric, no certificate and no strategy source, "
         "and you must not ask for any: a plan written against the results it will judge "
         "proves nothing. Keep every rationale and reason under 200 characters."
+    ),
+    "explore": (
+        "You write a new trading hypothesis for an automated research system, because the "
+        "research of an existing one has stopped learning.\n\n"
+        "The parent hypothesis, its program and its best `strategy.py` are given below, with "
+        "what its research found: `coverage` reads every card under the parent's newest pins "
+        "back by tag — how many, the best score and its status, the newest card — `keeps` "
+        "are the changes that improved its objective with their research-window scores, "
+        "`stalls` are the runs that ended without improving, and "
+        "`certificates` gives each newest certificate's verdict and the ids of the gates "
+        "that did not pass. A corner with many cards and no keep is a corner already "
+        "searched; write an idea that tests a mechanism the parent's cards have not reached, "
+        "not a variation of its best.\n\n"
+        "Answer with one candidate: an `id` for the new hypothesis — 3 to 40 characters "
+        "from a-z, 0-9 and _, not one listed in `taken_ids` — and the three files a "
+        "hypothesis directory holds, whole. `hypothesis_yaml` follows the parent's file "
+        "field for field with your `id`, your thesis and mechanism. Keep the parent's "
+        "`windows` and `universe` unless the rationale says why a change is the idea: a "
+        "candidate may not research past the end of the parent's research window, nor "
+        "certify before the start of the parent's certification window, because the "
+        "parent's results were measured there and nothing learned from them may be "
+        "certified on them. Leave `construct`, `objective` and `constraints` out: the "
+        "candidate is written as a draft and classified by the operator's own step. "
+        "`program_md` states what the research of the new idea may change and what it may "
+        "not. `strategy_py` is a complete strategy in the parent's style, trading only the "
+        "candidate's universe at its resolution; it must not be bytes this workspace has "
+        "already stored.\n\n"
+        "Tag the candidate with what it is, from the vocabulary the schema fixes — what it "
+        "reads (`signal_*`), how long it holds (`horizon_*`), what it withholds on "
+        "(`filter_*`), what closes it (`exit_*`), how it sizes (`sizing_*`). Keep the "
+        "rationale under 240 characters and make it say what the parent's research did not "
+        "try that this does. You are shown no number measured on a certification window, "
+        "and you must not ask for one."
     ),
 }
 """The fixed half of each task class's system turn."""

@@ -259,6 +259,31 @@ hypothesis's only when it beats it or when the hypothesis's best is that run's o
 re-seeded run climbs its own ancestry and replaces the best only by bettering it, and a
 drift rewind in one run leaves what another run earned standing.
 
+A re-seed moves the climb to another foot of the same hill; **exploring** asks for another
+hill. `kanso hyp explore ID` — or a daemon lane, once `[research] explore_after_stalls`
+stalls on one best have passed since the last exploration (zero, never, is the template) —
+calls the `explore` task class with what the hypothesis's research learned: its pinned
+`hypothesis.yaml` and `program.md`, its best `strategy.py`, the coverage of its cards by
+tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of
+the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
+judged on the ladder: an id nothing holds, a file that parses with that id and no
+classification, a strategy the static alignment checks accept against it and whose bytes
+the workspace has never stored, and windows that neither research past the end of the
+parent's research window nor certify before the start of its certification window. Nor may
+the candidate certify inside its own embargo counted from the last day the *parent*
+researched — the latest research end of any pin the parent's runs held — rather than from
+the end of the research window the candidate declares: the idea was chosen by scores
+measured on the parent's research, so that is the last day it saw, and one certified sooner
+would be certified on data within the embargo of the data that chose it. It is written as a
+draft to `hypotheses/<id>/`, a directory that did not exist, and registered by nothing: an
+`explored` escalation offers `hyp validate` and `hyp add`, and whether it gets a lane is
+yours. Every attempt, by hand or by a lane, leaves an event under the parent — `explored`
+when it wrote a candidate, `explored_failed` with the error and its remedy when it did not —
+and the stalls a lane counts are the ones since the newest of them, so a provider that is
+down costs one call per spell. A hypothesis not registered or never researched is refused
+before any attempt and leaves neither. A lane's exploration that fails is never a failure
+of the lane.
+
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.
@@ -797,9 +822,11 @@ starting a node would make the switch advisory.
 
 ## Escalation
 
-kanso escalates five things and nothing else: `misaligned`, `cert_failed`, `promotable`,
-`demoted`, `deploy_blocked`. Each entry names its subject and the commands that kind offers
-over it.
+kanso escalates six things and nothing else: `misaligned`, `cert_failed`, `promotable`,
+`demoted`, `deploy_blocked`, `explored`. Each entry names its subject and the commands that
+kind offers over it. An `explored` entry's subject is a hypothesis kanso wrote and did not
+register — `hypotheses/<id>/` as a draft — and it offers `hyp validate` and `hyp add` and
+nothing further: whether a model's idea deserves a lane is yours to say.
 
 ```
 $ kanso inbox

@@ -516,6 +516,7 @@ def model_files(draw: st.DrawFn) -> ModelsFile:
             propose=draw(st.none() | st.just(route())),
             align_check=draw(st.none() | st.just(route())),
             certify_plan=draw(st.none() | st.just(route())),
+            explore=draw(st.none() | st.just(route())),
         ),
     )
 

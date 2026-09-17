@@ -69,8 +69,8 @@ never edits the file.
 | `kanso.toml` | `init` | **yes** — the whole file |
 | `.env` | `init` (empty, mode 600) | **yes** — kanso reads it at each use and writes it never |
 | `models.yaml` | `init` | **yes** |
-| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify` | **yes**, between runs |
-| `hypotheses/<id>/program.md` | `hyp new` | **yes**, between runs |
+| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
+| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
 | `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
@@ -78,7 +78,7 @@ never edits the file.
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
@@ -444,9 +444,9 @@ tiers, context sizes, prices and the variable name each key is read from — nev
 default that name is `KANSO_<PROVIDER>_API_KEY`; `api_key_env` overrides it with another
 name, and an override replaces the standard name rather than adding to it.
 
-`routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check` — to a
-tier, a thinking effort and an output cap. `kanso models check` prints the register as the
-router reads it and then makes one minimal call to every configured model.
+`routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check`,
+`explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
+register as the router reads it and then makes one minimal call to every configured model.
 
 A workspace with no register is refused where a model is actually needed:
 
@@ -857,7 +857,7 @@ the certificate that cites it still stands, it just no longer has the stream to 
 ## `escalations/inbox.md`
 
 Append-only, and kanso means it. One line per escalation — `misaligned`, `cert_failed`,
-`promotable`, `demoted`, `deploy_blocked` — carrying an id, a timestamp, the kind, its
+`promotable`, `demoted`, `deploy_blocked`, `explored` — carrying an id, a timestamp, the kind, its
 subject, a summary and the commands that kind offers.
 
 `kanso inbox ack <id>` marks one read, and **the line in the file does not change**: it stays

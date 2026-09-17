@@ -152,7 +152,7 @@ ON_THE_WIRE: list[tuple[str, dict[str, Any]]] = [
 ]
 """Every schema this package sends to a provider.
 
-The four task classes and the register check. `check` is not a task class, but it is sent
+The five task classes and the register check. `check` is not a task class, but it is sent
 the same way — `route`'s sibling builds a `Call` around `CHECK_SCHEMA` and both clients put
 `call.schema` into their request unchanged — so a guard that skipped it would leave one
 document reaching a provider unexamined.

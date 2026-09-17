@@ -40,6 +40,7 @@ def test_the_shipped_routing_defaults() -> None:
     )
     assert ROUTING_DEFAULTS["propose"] == Route(tier="mid", effort="medium", max_output=4096)
     assert ROUTING_DEFAULTS["align_check"] == Route(tier="cheap", effort="none", max_output=256)
+    assert ROUTING_DEFAULTS["explore"] == Route(tier="frontier", effort="high", max_output=16384)
 
 
 def test_an_absent_routing_table_is_every_default() -> None:
@@ -53,7 +54,7 @@ def test_an_absent_field_takes_its_default() -> None:
     assert routes["classify"] == ROUTING_DEFAULTS["classify"]
 
 
-def test_a_fifth_task_class_is_refused() -> None:
+def test_a_sixth_task_class_is_refused() -> None:
     with pytest.raises(ValidationError, match="Extra inputs"):
         build(routing={"summarise": {"tier": "cheap"}})
 

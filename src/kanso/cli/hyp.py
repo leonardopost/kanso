@@ -5,6 +5,10 @@ run is scoped to; `validate` says whether the file is admissible and changes not
 `add` registers it or re-pins it under the sha256 of its bytes; `show` reports what is
 registered and `retire` ends its life.
 
+`explore` asks the best model on the register for a new hypothesis, written as a draft under
+`hypotheses/<id>/` from what the research of a registered one learned, and registers
+nothing: the report's `next` is `validate`, and `add` is still the operator's.
+
 `validate` and `add` are the operator's override path for a classification: edit the file,
 check it, re-pin it. Both refuse a file that is not admissible with exit 3, and `add` and
 `retire` refuse a hypothesis with an active run with exit 2, because a run is pinned to the
@@ -22,12 +26,15 @@ from kanso import hyp
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.hyp import Registration
+from kanso.research.explore import explore
+from kanso.research.lanes import DEFAULT_LANE
 from kanso.schemas import Hypothesis
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
 app = typer.Typer(
-    help="Hypotheses: scaffold, validate, register, show, retire.", no_args_is_help=True
+    help="Hypotheses: scaffold, validate, register, show, retire, explore.",
+    no_args_is_help=True,
 )
 
 JsonOption = Annotated[bool, typer.Option("--json", help="Print one JSON object.")]
@@ -75,6 +82,12 @@ def retire_command(ctx: typer.Context, hyp_id: IdArgument, as_json: JsonOption =
 def resume_command(ctx: typer.Context, hyp_id: IdArgument, as_json: JsonOption = False) -> None:
     """Put a retired hypothesis back to `researching`, and clear its failure count."""
     emit(as_json or global_json(ctx), lambda: _resume(open_workspace(ctx), hyp_id))
+
+
+@app.command("explore")
+def explore_command(ctx: typer.Context, hyp_id: IdArgument, as_json: JsonOption = False) -> None:
+    """Write a new draft hypothesis from what this one's research learned."""
+    emit(as_json or global_json(ctx), lambda: _explore(open_workspace(ctx), hyp_id))
 
 
 # -- command bodies ---------------------------------------------------------------
@@ -160,6 +173,22 @@ def _resume(ws: Workspace, hyp_id: str) -> Report:
             field("next", f"kanso research queue add {hyp_id}"),
         ),
     )
+
+
+def _explore(ws: Workspace, hyp_id: str) -> Report:
+    with store(ws) as opened:
+        # Exploring by hand is the operator's own act, so its spend is the interactive lane's.
+        written = explore(ws, opened, hyp_id, lane=DEFAULT_LANE)
+    path = written.directory / hyp.HYPOTHESIS_FILE
+    lines = (
+        field("explored", f"{written.hyp_id} · from {written.parent}"),
+        field("dir", written.directory),
+        field("tags", ", ".join(written.tags)),
+        indent(written.rationale),
+        field("inbox", written.escalation_id),
+        field("next", f"kanso hyp validate {path}"),
+    )
+    return Report(data=written.payload(), lines=lines)
 
 
 def _best(registration: Registration) -> str:

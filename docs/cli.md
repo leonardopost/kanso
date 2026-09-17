@@ -54,6 +54,7 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
 | `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state, and it is the only way research ends: no verdict and no run of failures ends one |
 | `kanso hyp resume ID` | undo an ending — a hypothesis you retired, or one an older kanso turned `failed` — back to `researching`, clearing the consecutive-failure count. Refused (exit 2) on a hypothesis research has not ended. Give it a lane with `kanso research queue add ID` |
+| `kanso hyp explore ID` | write one **new** hypothesis from what the research of `ID` learned, in one call to the best model on the register (the `explore` task class): the pinned `hypothesis.yaml` and `program.md`, the best `strategy.py`, the coverage of its cards by tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of its failing gates — never a number measured on a certification window. The candidate is judged on the ladder — an id that is not registered, reserved or already a directory; a file that parses with that id and carries no classification; a strategy the static alignment checks accept and whose bytes the workspace has never stored; windows that research no later than the parent's research window ends, certify no earlier than its certification window starts, and certify no sooner than the candidate's own embargo (`max(5 x horizon, 1d)`) counted from the latest research end of any pin the parent's runs held, the last day the idea saw — and written as a **draft** to `hypotheses/<id>/`, a directory that did not exist. Nothing is registered: an `explored` escalation offers `hyp validate` and `hyp add`. Refused (exit 2) for an id not registered and for a hypothesis never researched; past those two it is an attempt, and it also exits 2 with no model configured, as every model step does, and when no answer survives the ladder — each such failure an `explored_failed` event under `ID` which, like a candidate's `explored` event, starts a lane's count of `explore_after_stalls` over |
 | `kanso classify ID` | decide what the hypothesis **is** — construct, host, the keep rule's two parameters and the card-stage constraints — in one call to the best model on the register, and write the three keys into `hypothesis.yaml`, re-pinning it. The objective is not asked for: it follows from the hypothesis and the construct. A construct this build cannot run is recorded honestly and refused at `research begin`. `strategy.py` is replaced by the construct's stub only while the file is still one kanso wrote. A classification onto another construct clears the hypothesis's best on the same terms as `hyp add` |
 
 Editing `construct`, `objective` and `constraints` by hand and running `kanso hyp add` is
@@ -80,7 +81,10 @@ consecutive non-keeps — discards, crashes, repeated and redundant misses alike
 `redundant_pct` is the share of shared sessions on which two strategies holding the same
 book are one experiment; `local_cards` and `structural_cards` are the lengths of the two
 phases; `reseed_after_stalls` is the spell of stalls on one best after which the next run
-starts elsewhere. All are `[research]` keys of `kanso.toml`, and all are framework
+starts elsewhere; `explore_after_stalls` (0, never, in the template) is the spell of stalls
+on one best, since the last exploration, after which a daemon lane runs `hyp explore` on the
+stalled hypothesis once the driver has returned — a failure there is an `explored_failed`
+event and never the lane's. All are `[research]` keys of `kanso.toml`, and all are framework
 search rules rather than decisions an agent makes: they bound the search, they do not
 choose within it.
 
