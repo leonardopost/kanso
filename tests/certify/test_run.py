@@ -1045,10 +1045,12 @@ def test_both_windows_are_measured_against_their_own_hold_and_a_perturbation_mov
     monkeypatch.setattr(run.backtest, "benchmark", counted)
     made = certify(ws, store, HYP_ID)
 
+    assert derived == [CERTIFICATION, (date(2024, 1, 1), date(2024, 1, 31)), CERTIFICATION], (
+        "one hold per window for the certificate, whatever param_plateau moved, and one for "
+        "the expectation of the version the pass composed"
+    )
     subject = run._subject(ws, store, HYP_ID, None)
     measured = run._measure(subject)
-    assert derived[:2] == [CERTIFICATION, (date(2024, 1, 1), date(2024, 1, 31))]
-    assert len(derived) == 4, "two for the certificate, two for the re-measure here"
     for hold in (measured.benchmark_certification, measured.benchmark_research):
         assert hold is not None and len(hold.fills) == 1 and hold.trades == ()
     assert made.objective.id == "wf_sharpe_vs_hold"
