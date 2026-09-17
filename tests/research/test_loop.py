@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
 from kanso.data import snapshot
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
-from kanso.research import loop, records
+from kanso.research import loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
 from kanso.schemas import Hypothesis, RunRecord
 from kanso.state import StateStore
@@ -34,6 +35,7 @@ from .conftest import (
     load_december,
     write_hypothesis,
 )
+from .mocked import tuned
 
 
 def lane_of(ws: Workspace, run: RunRecord) -> Path:
@@ -50,6 +52,21 @@ def edit(ws: Workspace, run: RunRecord, source: bytes) -> Path:
 
 def statuses(store: StateStore, hyp_id: str = HYP_ID) -> list[str]:
     return [card.status for card in records.cards_of(store, hyp_id)]
+
+
+def champion(ws: Workspace, store: StateStore, hyp_id: str) -> str | None:
+    """The hypothesis's best sha, asserted to be what the workspace file hashes to."""
+    held = sha256(ws.path("hypotheses", hyp_id, "strategy.py").read_bytes()).hexdigest()
+    best, _ = records.best_of(store, hyp_id)
+    assert held == best, f"workspace strategy.py is {held[:7]}, best is {str(best)[:7]}"
+    return best
+
+
+def best_run_id(store: StateStore, hyp_id: str) -> str | None:
+    row = store.connection.execute(
+        "SELECT best_run_id FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
+    ).fetchone()
+    return None if row["best_run_id"] is None else str(row["best_run_id"])
 
 
 # --- begin -------------------------------------------------------------------
@@ -264,10 +281,130 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == REVERTING
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
 
-    again = loop.card(ws, store, registered, "the very same file")
-    assert again.status == "discard"
-    assert again.metric == kept.metric, "the same snapshot and code give the same number"
+    with pytest.raises(loop.RedundantError, match="result is already known") as refused:
+        loop.card(ws, store, registered, "the very same file")
+    assert kept.sha7 in refused.value.message
+    assert f"--sha {kept.sha7}" in str(refused.value.remedy)
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert records.n_trials(store, registered) == 2, "a known result is not a trial"
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["pct"] == 100.0
+    assert event.detail["metric"] == kept.metric, "the same snapshot and code give the same number"
+
+
+def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restored(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The signature reads what a run held, not how the file that held it was written."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    respelt = REVERTING.replace(b"self.long = False", b"self.long = bool(0)")
+    assert respelt != REVERTING
+    edit(ws, run, respelt)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(ws, store, registered, "the same rule, spelt otherwise")
+
+    assert (lane_of(ws, run) / "strategy.py").read_bytes() == REVERTING
+    assert statuses(store) == ["keep", "keep"]
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["sessions"] == 31, "one session per day of the research window"
+    assert event.detail["matched"] == 31
+    # A redundant miss is judged, so what it held is stored too: the third spelling of an
+    # idea is refused against the second as well as the first.
+    stored = store.connection.execute(
+        "SELECT sessions FROM signatures WHERE strategy_sha = ? AND hyp_id = ?"
+        " AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?",
+        (
+            sha256(respelt).hexdigest(),
+            registered,
+            run.hypothesis_sha,
+            run.snapshot_id,
+            run.criteria_version,
+        ),
+    ).fetchall()
+    assert [row["sessions"] for row in stored] == [31]
+
+
+def test_the_keep_rule_is_asked_before_the_signature(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate that beats the best is a keep whatever it resembles: refusing it
+    unmeasured would hide exactly the improvement a signature cannot see."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    loop.card(ws, store, registered, "the trough rule")
+    monkeypatch.setattr(loop, "_keeps", lambda *_: True)
+    edit(ws, run, REVERTING.replace(b"self.long = False", b"self.long = bool(0)"))
+
+    again = loop.card(ws, store, registered, "the same book, judged better")
+
+    assert again.status == "keep"
+    assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+
+
+def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_toml(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Measured: WEAK is flat at 17 of the window's 31 session ends, as the flat baseline is
+    at all of them — a discard at the template's 97 percent, a redundant miss at 50."""
+    workspace = tuned(ws, redundant_pct=50)
+    run = loop.begin(workspace, store, registered)
+    edit(workspace, run, WEAK)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(workspace, store, registered, "buy any fall")
+
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    assert (event.detail["matched"], event.detail["sessions"]) == (17, 31)
+    assert event.detail["like"] == run.base_sha[:7]
+
+
+def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Holding nothing is a book too, and the baseline is exempt: it is the best blob of
+    the last run, whose signature is already stored."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, FLAT + b"# spelt otherwise\n")
+    with pytest.raises(loop.RedundantError, match="already known"):
+        loop.card(ws, store, registered, "still trades nothing")
+    edit(ws, run, REVERTING)
+    loop.card(ws, store, registered, "the trough rule")
+    loop.end(ws, store, registered)
+
+    resumed = loop.begin(ws, store, registered)
+
+    assert resumed.base_sha == sha256(REVERTING).hexdigest()
+    assert statuses(store) == ["keep", "keep", "keep"], "the baseline of the second run"
+    assert len(store.events(kind=loop.REDUNDANT, subject=registered)) == 1
+
+
+def test_a_baseline_that_discards_on_a_book_already_judged_is_a_card_not_a_redundant_miss(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The exemption the keep rule cannot stand in for: a baseline that fails a gate does not
+    keep, and the flat book it holds was stored by the run before it. A run exists to
+    climb from its base, so the base is always measured."""
+    hyp_id = classify(
+        ws,
+        store,
+        document(
+            constraints=[{"id": "strategy_integrity"}, {"id": "min_trades", "params": {"min": 4}}]
+        ),
+    )
+    loop.begin(ws, store, hyp_id)
+    loop.end(ws, store, hyp_id)
+
+    again = loop.begin(ws, store, hyp_id, from_workspace=True)
+
+    assert again.base_sha == sha256(FLAT).hexdigest()
+    assert statuses(store, hyp_id) == ["discard", "discard"]
+    assert records.cards_of(store, hyp_id)[-1].run_id == again.run_id
+    assert store.events(kind=loop.REDUNDANT, subject=hyp_id) == []
 
 
 def test_a_card_that_is_worse_is_discarded_and_the_lane_is_restored(
@@ -491,6 +628,89 @@ def test_a_later_run_resumes_from_the_best_and_from_workspace_starts_over(
     assert restarted.base_sha == sha256(FLAT).hexdigest()
     assert restarted.best_sha == restarted.base_sha, "its own baseline is the new best"
     assert [event.kind for event in store.events(subject=registered)].count("best_cleared") == 1
+
+
+def test_a_run_begins_from_the_reseed_the_queue_passage_carries_and_keeps_the_best(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Two ancestries, two records: the re-seeded run climbs from its own base, and the
+    hypothesis's best moves only when a keep beats it."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    loop.end(ws, store, registered)
+    weak = store.put_blob(WEAK)
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from=weak)
+
+    reseeded = loop.begin(ws, store, registered)
+
+    assert reseeded.base_sha == weak
+    assert (lane_of(ws, reseeded) / "strategy.py").read_bytes() == WEAK
+    assert reseeded.best_sha == weak, "its baseline is its own first keep"
+    assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert champion(ws, store, registered) == kept.strategy_sha, "the file is the champion"
+    assert doctor._best(ws, None).status == "ok"
+    begun = store.events(kind=passages.BEGUN, subject=registered)[-1]
+    assert begun.detail[passages.RESEED_FROM] == weak
+    assert passages.reseed_of(store, registered) is None, "beginning consumed it"
+    assert store.events(kind="best_cleared", subject=registered) == []
+    # Climbing back to the best's bytes beats this run's own best, so the keep rule —
+    # which runs first — keeps it rather than reading it as redundant; and an equal
+    # metric does not beat the hypothesis's best, which stays where it was.
+    edit(ws, reseeded, REVERTING)
+    climbed = loop.card(ws, store, registered, "the trough rule again")
+    assert climbed.status == "keep"
+    assert records.require_active(store, registered).best_sha == kept.strategy_sha
+    assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert best_run_id(store, registered) == run.run_id, "an equal metric beats nothing"
+    assert champion(ws, store, registered) == kept.strategy_sha
+
+
+def test_a_re_seeded_keep_moves_the_champion_file_only_when_it_moves_the_best(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The workspace `strategy.py` follows the hypothesis's best, not the run's: a lesser
+    keep of a re-seeded run leaves it, and the keep that beats the best rewrites it."""
+    first = loop.begin(ws, store, registered)
+    loop.end(ws, store, registered)
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from=store.put_blob(WEAK))
+
+    reseeded = loop.begin(ws, store, registered)
+
+    baseline = records.cards_of(store, registered)[-1]
+    assert (baseline.status, baseline.strategy_sha) == ("keep", sha256(WEAK).hexdigest())
+    assert baseline.metric <= 0.0, "measured: WEAK earns nothing, so it does not beat FLAT"
+    assert best_run_id(store, registered) == first.run_id
+    assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == FLAT
+    assert doctor._best(ws, None).status == "ok"
+
+    edit(ws, reseeded, REVERTING)
+    beaten = loop.card(ws, store, registered, "the trough rule")
+
+    assert beaten.status == "keep"
+    assert best_run_id(store, registered) == reseeded.run_id
+    assert champion(ws, store, registered) == beaten.strategy_sha
+    assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == REVERTING
+
+
+def test_from_workspace_outranks_a_reseed_and_a_missing_blob_is_ignored(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    loop.end(ws, store, registered)
+
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from="c" * 64)
+    resumed = loop.begin(ws, store, registered)
+    assert resumed.base_sha == kept.strategy_sha, "a blob the store lacks re-seeds nothing"
+    loop.end(ws, store, registered)
+
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from=store.put_blob(WEAK))
+    ws.path("hypotheses", registered, "strategy.py").write_bytes(FLAT)  # a keep rewrote it
+    restarted = loop.begin(ws, store, registered, from_workspace=True)
+    assert restarted.base_sha == sha256(FLAT).hexdigest()
+    assert records.best_of(store, registered)[0] == restarted.base_sha
 
 
 # --- the pieces the loop is assembled from -----------------------------------

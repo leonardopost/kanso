@@ -13,7 +13,7 @@ import pytest
 from kanso import inbox, research
 from kanso.errors import ValidationError
 from kanso.models import spend
-from kanso.research import align, lanes, records
+from kanso.research import align, lanes, records, scheduler
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -118,8 +118,8 @@ def test_drift_rewinds_to_the_last_keep_a_check_had_already_passed(
     assert kept.status == "keep"
     assert align.check(ws, store, hyp_id) == (True, None)
 
-    write_lane(ws, hyp_id, SEED)
-    dropped = research.card(ws, store, hyp_id, "back to trading nothing")
+    write_lane(ws, hyp_id, SEED.replace(b'mode = "flat"', b'mode = "weak"'))
+    dropped = research.card(ws, store, hyp_id, "react to every step")
     assert dropped.status == "discard"
 
     ok, _ = align.check(ws, store, hyp_id)
@@ -129,6 +129,57 @@ def test_drift_rewinds_to_the_last_keep_a_check_had_already_passed(
     assert workspace_file(ws, hyp_id) == REVERTING
     assert records.best_of(store, hyp_id) == (kept.strategy_sha, kept.metric)
     assert aligned_flags(store, hyp_id) == [1, 1, 0]
+
+
+def test_a_rewind_with_no_keep_of_its_own_leaves_another_run_s_best_standing(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Backlog row 61: the run's best is the run's to clear; the hypothesis's belongs to
+    the run that earned it."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    write_lane(ws, hyp_id, REVERTING)
+    kept = research.card(ws, store, hyp_id, "trade the trough")
+    assert kept.status == "keep"
+    research.end(ws, store, hyp_id)
+    resumed = research.begin(ws, store, hyp_id)
+    # The resumed run's only keep is its baseline; mark it as a check would never, to
+    # reach the branch a run whose baseline discarded reaches.
+    store.connection.execute("UPDATE cards SET aligned = 0 WHERE run_id = ?", (resumed.run_id,))
+
+    align._revert(ws, store, resumed, ws.root / resumed.dir)
+
+    assert records.require_active(store, hyp_id).best_sha is None
+    assert records.best_of(store, hyp_id) == (kept.strategy_sha, kept.metric)
+
+
+def test_a_rewind_in_a_re_seeded_run_leaves_the_champion_file_another_run_earned(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The lane goes back to what the run stands on; the workspace `strategy.py` stays the
+    hypothesis's best, whichever branch of the rewind is taken."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    write_lane(ws, hyp_id, REVERTING)
+    kept = research.card(ws, store, hyp_id, "trade the trough")
+    assert kept.status == "keep"
+    research.end(ws, store, hyp_id)
+    scheduler.requeue(store, hyp_id, scheduler.STALL_PRIORITY, reseed_from=store.put_blob(SEED))
+    reseeded = research.begin(ws, store, hyp_id)
+    assert workspace_file(ws, hyp_id) == REVERTING
+
+    align._revert(ws, store, reseeded, ws.root / reseeded.dir)  # to its aligned baseline
+
+    assert lane_file(ws, hyp_id) == SEED
+    assert workspace_file(ws, hyp_id) == REVERTING
+    assert records.best_of(store, hyp_id) == (kept.strategy_sha, kept.metric)
+
+    store.connection.execute("UPDATE cards SET aligned = 0 WHERE run_id = ?", (reseeded.run_id,))
+    align._revert(ws, store, reseeded, ws.root / reseeded.dir)  # to the bytes it began with
+
+    assert lane_file(ws, hyp_id) == SEED
+    assert workspace_file(ws, hyp_id) == REVERTING
+    assert records.best_of(store, hyp_id) == (kept.strategy_sha, kept.metric)
 
 
 def test_a_drift_escalates_and_writes_one_inbox_line(ws: Workspace, store: StateStore) -> None:

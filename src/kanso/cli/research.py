@@ -241,7 +241,8 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         field(
             "cards",
             f"{outcome.proposed} proposed · {outcome.keeps} keep · "
-            f"{outcome.discards} discard · {outcome.crashes} crash · trial {trials}",
+            f"{outcome.discards} discard · {outcome.crashes} crash · "
+            f"{outcome.missed} repeated · {outcome.redundant} redundant · trial {trials}",
         ),
         field("aligned", f"{outcome.checks} check(s) · {outcome.drifts} drift(s)"),
         field("best", best),

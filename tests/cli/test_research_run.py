@@ -35,6 +35,7 @@ def test_run_begins_a_run_and_proposes_the_cards_it_was_asked_for(
     outcome = payload(result)
     assert outcome["proposed"] == 3
     assert outcome["keeps"] + outcome["discards"] + outcome["crashes"] == 3
+    assert (outcome["missed"], outcome["redundant"]) == (0, 0)
     assert outcome["reason"] == "cards"
     assert outcome["ended"] is False
     # The run it began is still open, and its lane directory is still the interface.
@@ -75,6 +76,7 @@ def test_run_reads_as_the_tally_and_the_next_command(runner: CliRunner, mocked_w
 
     assert result.exit_code == Exit.OK
     assert "1 proposed" in result.stdout
+    assert "0 repeated · 0 redundant" in result.stdout
     assert f"kanso research run {HYP_ID}" in result.stdout
 
 

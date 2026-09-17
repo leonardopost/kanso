@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from kanso.certify import certificate
+from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
 from kanso.models import Answer, Call, reset_mock, spend
 from kanso.models import router as router_module
@@ -41,6 +42,21 @@ NOWHERE = "--- a/strategy.py\n+++ b/strategy.py\n@@ -1,1 +1,1 @@\n-nowhere\n+her
 
 NOOP = "--- a/strategy.py\n+++ b/strategy.py\n@@ -40,1 +40,1 @@\n # end\n"
 """A diff that applies and changes nothing, which is not an experiment."""
+
+CONSTANT_ONLY = (
+    "--- a/strategy.py\n"
+    "+++ b/strategy.py\n"
+    "@@ -5,1 +5,1 @@\n"
+    "-    notional: float = 5_000.0\n"
+    "+    notional: float = 6_000.0\n"
+)
+"""A diff that moves a number and nothing else: local in one phase, refused in the other."""
+
+PARAMETER: dict[str, Any] = {
+    "desc": "trade a little larger",
+    "diff": CONSTANT_ONLY,
+    "tags": ["parameter_only"],
+}
 
 DENIED = (
     "--- a/strategy.py\n"
@@ -106,14 +122,18 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
     outcome = driver.run(ws, store, prepared_hyp, cards=30)
 
     assert outcome.proposed == 30
-    assert (outcome.keeps, outcome.crashes, outcome.discards) == (1, 10, 19)
+    # The second turn of the cycle holds what the first held: `revert` and `weak` are
+    # redundant from then on, and only the crash, which held nothing judged, is a card.
+    assert (outcome.keeps, outcome.crashes, outcome.discards) == (1, 10, 1)
+    assert (outcome.missed, outcome.redundant) == (0, 18)
     assert outcome.reason == "cards"
     assert outcome.ended is False
-    # Every card of the run, the baseline included, is a trial.
-    assert records.n_trials(store, prepared_hyp) == 31
+    # Every card of the run, the baseline included, is a trial; a redundant miss is not.
+    assert records.n_trials(store, prepared_hyp) == 13
     assert statuses(store, prepared_hyp)[:4] == ["keep", "keep", "crash", "discard"]
-    # align_every is 10 and the baseline is the run's first card, so checks land on 9, 19, 29.
-    assert (outcome.checks, outcome.drifts) == (3, 0)
+    # align_every is 10 and the baseline is the run's first card, so the check lands on
+    # the ninth card proposed; misses are not cards and do not advance it.
+    assert (outcome.checks, outcome.drifts) == (1, 0)
     assert records.active(store, prepared_hyp) is not None
     assert outcome.best_sha == records.cards_of(store, prepared_hyp)[1].strategy_sha
 
@@ -121,7 +141,13 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
 def test_a_diff_that_does_not_apply_is_invalid_output_and_takes_the_retry(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "move the anchor", "diff": NOWHERE}, proposal("revert")])
+    scripted(
+        ws,
+        propose=[
+            {"desc": "move the anchor", "diff": NOWHERE, "tags": ["refactor"]},
+            proposal("revert"),
+        ],
+    )
 
     outcome = driver.run(ws, store, prepared_hyp, cards=1)
 
@@ -133,7 +159,10 @@ def test_a_diff_that_does_not_apply_is_invalid_output_and_takes_the_retry(
 def test_a_diff_that_changes_nothing_is_refused_before_it_costs_a_card(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "think again", "diff": NOOP}, proposal("revert")])
+    scripted(
+        ws,
+        propose=[{"desc": "think again", "diff": NOOP, "tags": ["refactor"]}, proposal("revert")],
+    )
 
     outcome = driver.run(ws, store, prepared_hyp, cards=1)
 
@@ -193,7 +222,10 @@ def test_a_repeat_earlier_in_the_ladder_is_still_a_miss(
     reset_mock()
     scripted(
         workspace,
-        propose=[proposal("weak", tagged=False), {"desc": "move the anchor", "diff": NOWHERE}],
+        propose=[
+            proposal("weak", tagged=False),
+            {"desc": "move the anchor", "diff": NOWHERE, "tags": ["refactor"]},
+        ],
     )
 
     outcome = driver.run(workspace, store, prepared_hyp)
@@ -206,7 +238,7 @@ def test_a_repeat_earlier_in_the_ladder_is_still_a_miss(
 def test_a_ladder_that_never_repeats_still_fails_the_step(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE}])
+    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE, "tags": ["refactor"]}])
 
     with pytest.raises(PreconditionError, match="in 3 attempts"):
         driver.run(ws, store, prepared_hyp, cards=1)
@@ -231,6 +263,116 @@ def test_a_miss_counts_against_the_cards_asked_for_and_survives_a_resume(
     assert driver._trailing_non_keeps(store, active) == 2, "the discard and the miss"
 
 
+def test_a_redundant_card_is_a_miss_that_the_next_proposal_is_told_about(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A candidate that held what a judged strategy held costs the backtest and no
+    trial; it counts toward the stall, survives a resume, and reaches the proposer by
+    the name of the card it repeated, since no card of its own will."""
+    scripted(ws, propose=[proposal("revert"), proposal("revert", desc="the same bet again")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert (outcome.proposed, outcome.keeps, outcome.redundant, outcome.missed) == (2, 1, 1, 0)
+    assert statuses(store, prepared_hyp) == ["keep", "keep"]
+    (event,) = store.events(kind=research_loop.REDUNDANT, subject=prepared_hyp)
+    kept = records.cards_of(store, prepared_hyp)[1]
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["desc"] == "the same bet again"
+    active = records.require_active(store, prepared_hyp)
+    assert driver._trailing_non_keeps(store, active) == 1, "the miss, after the keep"
+    assert align.lane_strategy(store, active, ws.root / active.dir) == store.get_blob(
+        kept.strategy_sha
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=1)
+
+    third = recorded.of("propose")[-1]
+    assert '"redundant"' in third.user
+    assert f'"like": "{kept.sha7}"' in third.user
+    assert "the same bet again" in third.user
+
+
+def test_redundant_misses_count_toward_the_stall(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("revert")])
+
+    outcome = driver.run(workspace, store, prepared_hyp)
+
+    assert outcome.reason == "stalled"
+    assert (outcome.keeps, outcome.redundant) == (1, 2)
+    assert records.active(store, prepared_hyp) is None
+
+
+def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
+    settings = ResearchConfig(local_cards=10, structural_cards=10)
+    assert [driver.phase(settings, n) for n in (0, 9, 10, 19, 20, 29, 30)] == [
+        "local",
+        "local",
+        "structural",
+        "structural",
+        "local",
+        "local",
+        "structural",
+    ]
+
+
+def test_a_constant_only_change_is_a_card_in_the_local_phase_and_refused_in_the_structural(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The same answer, judged by the phase the run is in: one miss puts a run tuned to
+    `local_cards = 1` into its structural phase, where a number moved is not the
+    experiment being asked for and the ladder walks on to an answer that is."""
+    workspace = tuned(ws, local_cards=1, structural_cards=5)
+    scripted(workspace, propose=[PARAMETER, PARAMETER, proposal("weak")])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    # The first is local: it ran, held nothing like the flat baseline, and was redundant.
+    # The second is structural: refused on the ladder, so the third answer is the card.
+    assert (outcome.proposed, outcome.redundant, outcome.discards, outcome.missed) == (2, 1, 1, 0)
+    calls = recorded.of("propose")
+    assert len(calls) == 3
+    assert '"name": "local"' in calls[0].user
+    assert '"misses_since_keep": 0' in calls[0].user
+    assert '"name": "structural"' in calls[1].user
+    assert '"misses_since_keep": 1' in calls[1].user
+    assert "moves no structure" in calls[2].user, "the ladder carries the complaint"
+
+
+def test_a_ladder_that_only_moves_numbers_in_the_structural_phase_is_a_miss(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    workspace = tuned(ws, local_cards=1, structural_cards=5)
+    scripted(workspace, propose=[PARAMETER])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    assert (outcome.redundant, outcome.missed) == (1, 1)
+    (event,) = store.events(kind=driver.REPEATED, subject=prepared_hyp)
+    assert "moves no structure" in str(event.detail["because"])
+    assert "after 1 misses" in str(event.detail["because"])
+
+
+def test_a_candidate_that_does_not_parse_is_not_judged_by_its_structure(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """A syntax error is the card's to discard — the static integrity check refuses it
+    before any backtest — not the skeleton's to refuse on the ladder."""
+    workspace = tuned(ws, local_cards=1, structural_cards=5)
+    broken = {
+        **PARAMETER,
+        "diff": CONSTANT_ONLY.replace("+    notional: float = 6_000.0", "+    notional float"),
+    }
+    scripted(workspace, propose=[PARAMETER, broken])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    assert (outcome.redundant, outcome.discards, outcome.missed) == (1, 1, 0)
+
+
 def test_recent_cards_reach_across_runs_under_the_same_pins(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
@@ -252,7 +394,7 @@ def test_recent_cards_reach_across_runs_under_the_same_pins(
 def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    bad = {"desc": "two\nlines", "diff": proposal("revert")["diff"]}
+    bad = {**proposal("revert"), "desc": "two\nlines"}
     scripted(ws, propose=[bad, proposal("revert", desc="trade the trough")])
 
     driver.run(ws, store, prepared_hyp, cards=1)
@@ -263,7 +405,7 @@ def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(
 def test_a_proposer_that_never_fits_fails_the_step_after_the_whole_ladder(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
-    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE}])
+    scripted(ws, propose=[{"desc": "never fits", "diff": NOWHERE, "tags": ["refactor"]}])
 
     with pytest.raises(PreconditionError, match="in 3 attempts"):
         driver.run(ws, store, prepared_hyp, cards=1)
@@ -401,6 +543,56 @@ def test_the_prompt_keeps_a_stable_prefix_and_carries_the_moving_half(
     assert "last_diff" in proposals[1].user
 
 
+def test_every_card_under_the_pins_reaches_the_proposer_as_coverage_by_tag(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The recent cards are a window; the coverage is the whole search, keyed by what
+    each proposal said it was, so a corner already searched reads as searched."""
+    scripted(
+        ws,
+        propose=[
+            proposal("revert", tags=["signal_mean_reversion", "exit_signal"]),
+            proposal("weak", tags=["signal_mean_reversion"]),
+            proposal("boom", tags=["sizing_volatility"]),
+        ],
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=3)
+
+    cards = records.cards_of(store, prepared_hyp)
+    assert [card.tags for card in cards] == [
+        [],
+        ["signal_mean_reversion", "exit_signal"],
+        ["signal_mean_reversion"],
+        ["sizing_volatility"],
+    ]
+    first, _, third = recorded.of("propose")
+    assert '"coverage": {}' in first.user, "the baseline carries no tags"
+    coverage = driver._coverage(store, records.require_active(store, prepared_hyp))
+    assert coverage == {
+        "exit_signal": {
+            "count": 1,
+            "best_metric": cards[1].metric,
+            "best_status": "keep",
+            "newest": cards[1].sha7,
+        },
+        "signal_mean_reversion": {
+            "count": 2,
+            "best_metric": cards[1].metric,
+            "best_status": "keep",
+            "newest": cards[2].sha7,
+        },
+        "sizing_volatility": {
+            "count": 1,
+            "best_metric": 0.0,
+            "best_status": "crash",
+            "newest": cards[3].sha7,
+        },
+    }
+    assert '"signal_mean_reversion": {' in third.user
+    assert '"count": 2' in third.user
+
+
 def test_failing_certification_gates_reach_the_next_proposal(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
@@ -481,7 +673,9 @@ def test_the_gate_that_refused_a_card_reaches_the_next_proposal(
     traceback; without the gate's own evidence the proposer sees a discard with no reason
     and writes the same line again.
     """
-    scripted(ws, propose=[{"desc": "reach for the cache", "diff": DENIED}, *CYCLE])
+    scripted(
+        ws, propose=[{"desc": "reach for the cache", "diff": DENIED, "tags": ["refactor"]}, *CYCLE]
+    )
 
     driver.run(ws, store, prepared_hyp, cards=2)
 

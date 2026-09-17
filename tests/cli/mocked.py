@@ -110,9 +110,15 @@ def mode_diff(mode: str, *, tagged: bool = True) -> str:
     )
 
 
-def proposal(mode: str, desc: str | None = None, *, tagged: bool = True) -> dict[str, Any]:
-    """One scripted `propose` answer."""
-    return {"desc": desc or f"run in {mode} mode", "diff": mode_diff(mode, tagged=tagged)}
+def proposal(
+    mode: str, desc: str | None = None, *, tagged: bool = True, tags: list[str] | None = None
+) -> dict[str, Any]:
+    """One scripted `propose` answer, tagged `signal_mean_reversion` unless told otherwise."""
+    return {
+        "desc": desc or f"run in {mode} mode",
+        "diff": mode_diff(mode, tagged=tagged),
+        "tags": ["signal_mean_reversion"] if tags is None else tags,
+    }
 
 
 CYCLE: list[dict[str, Any]] = [proposal("revert"), proposal("weak"), proposal("boom")]

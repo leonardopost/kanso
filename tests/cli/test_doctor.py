@@ -23,7 +23,7 @@ from kanso.ext import KINDS, shipped
 from kanso.nautilus import facts
 from kanso.nautilus.adapters import exec_clients
 from kanso.skills_sync import packaged_skills
-from kanso.state import StateStore
+from kanso.state import SCHEMA_VERSION, StateStore
 from kanso.workspace import find
 
 from ..data.adapters.massive import Replay, refused
@@ -1252,13 +1252,12 @@ def test_the_record_checks_are_not_graded_against_a_database_this_package_cannot
     with sqlite3.connect(workspace / "state.db") as conn:
         conn.execute("PRAGMA user_version = 0")
     behind = at(runner, workspace, "doctor", "--json")
+    behind_by_all = f"not checked: state.db is {SCHEMA_VERSION} migration(s) behind"
     for name in ("best", "certificates", "lanes"):
         assert status(behind, name) == "warn"
-        assert checks(behind)[name]["detail"] == "not checked: state.db is 2 migration(s) behind"
+        assert checks(behind)[name]["detail"] == behind_by_all
         assert _remedy(behind, name) == "run `kanso migrate`"
-    assert "universes not checked: state.db is 2 migration(s) behind" in items(
-        behind, "instruments"
-    )
+    assert f"universes {behind_by_all}" in items(behind, "instruments")
 
     (workspace / "state.db").write_bytes(b"not a database at all")
     broken = at(runner, workspace, "doctor", "--json")

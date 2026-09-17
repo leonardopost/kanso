@@ -61,6 +61,7 @@ TABLES: Final = (
     "queue",
     "runs",
     "sessions",
+    "signatures",
     "snapshots",
     "spend",
     "strategies",
