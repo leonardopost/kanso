@@ -7,13 +7,20 @@ from typing import Any
 import pytest
 
 from kanso.criteria import GateContext, gates
+from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest
 from kanso.schemas import Certificate
 from kanso.state import StateStore
 from kanso.strategy import impl
-from kanso.strategy.composition import REPLICATIONS, _replications, compose, expectation
+from kanso.strategy.composition import (
+    REPLICATIONS,
+    _measure,
+    _replications,
+    compose,
+    expectation,
+)
 from kanso.workspace import Workspace
 from tests.research.conftest import DOCUMENT, HYP_ID
 
@@ -218,3 +225,55 @@ def test_a_sleeve_with_no_objective_has_nothing_to_expect_of_it(
 
     with pytest.raises(PreconditionError, match="carries no objective"):
         expectation(ws, manifest, version, unclassified, 100_000.0, certificate)
+
+
+def test_a_sleeve_measured_against_a_hold_expects_a_difference_from_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The expectation's run has the hold beside it, and its band is one of differences."""
+    held = {
+        **DOCUMENT,
+        "benchmark": {"hold": "first_leg"},
+        "objective": {"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    }
+    certificate = a_certificate(
+        ws,
+        store,
+        HYP_ID,
+        VARYING,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_vs_hold",
+        gates=[PASSED],
+        doc=held,
+    )
+
+    version = compose(ws, store, HYP_ID)
+
+    manifest = impl.read_manifest(ws, HYP_ID, 1)
+    hyp = pinned(ws, store)
+    run, hold = _measure(ws, manifest, version, hyp, 100_000.0)
+    assert hold is not None and len(hold.fills) == 1 and hold.trades == ()
+    folds = ws.config.research.folds
+    assert version.expectation.objective_id == "wf_sharpe_vs_hold"
+    assert version.expectation.value == pytest.approx(
+        wf_sharpe_vs_hold.compute(run, folds, benchmark=hold)[0]
+    )
+    alone = gates()["bootstrap"].evaluate(
+        GateContext(
+            hyp=hyp.model_copy(
+                update={"objective": hyp.objective.model_copy(update={"id": "wf_sharpe_net"})}
+            ),
+            construct="sleeve",
+            stage="cert",
+            params={"n": REPLICATIONS},
+            window=(hyp.windows.certification.start, hyp.windows.certification.end),
+            run=run,
+            research_folds=folds,
+            snapshot_id=version.pins.snapshot_id,
+            strategy_sha=certificate.strategy_sha,
+        )
+    )
+    level = wf_sharpe_net.compute(hold, folds)[0]
+    assert list(version.expectation.ci90) == pytest.approx(
+        [bound - level for bound in alone.evidence["objective_ci90"]]
+    )
