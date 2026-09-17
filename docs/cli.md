@@ -69,8 +69,9 @@ the override path, and needs no model at all.
 | `kanso research end ID` | end the run and remove the lane directory, and nothing else: the cards, the blobs and the best stay in state |
 | `kanso research show ID [--sha S] [--diff S2]` | print a card's stored `strategy.py` (default: the best), or the unified diff between two of them. A sha is any unique prefix of one belonging to this hypothesis; a foreign or ambiguous prefix is refused (exit 3) |
 
-A card is `keep`, `discard` or `crash`. On a keep the hypothesis's best moves and the blob
-is written to `hypotheses/<id>/strategy.py`; on a discard or a crash the lane's
+A card is `keep`, `discard` or `crash`. On a keep the run's best moves; the hypothesis's
+best moves when the keep beats it or is already this run's, and only then is the blob
+written to `hypotheses/<id>/strategy.py`, which is always the hypothesis's best; on a discard or a crash the lane's
 `strategy.py` is restored from the best, else from the run's base. `results.tsv` is
 rendered from state, so the history survives every restore.
 

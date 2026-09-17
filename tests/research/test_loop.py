@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
@@ -46,6 +47,21 @@ def edit(ws: Workspace, run: RunRecord, source: bytes) -> Path:
 
 def statuses(store: StateStore, hyp_id: str = HYP_ID) -> list[str]:
     return [card.status for card in records.cards_of(store, hyp_id)]
+
+
+def champion(ws: Workspace, store: StateStore, hyp_id: str) -> str | None:
+    """The hypothesis's best sha, asserted to be what the workspace file hashes to."""
+    held = sha256(ws.path("hypotheses", hyp_id, "strategy.py").read_bytes()).hexdigest()
+    best, _ = records.best_of(store, hyp_id)
+    assert held == best, f"workspace strategy.py is {held[:7]}, best is {str(best)[:7]}"
+    return best
+
+
+def best_run_id(store: StateStore, hyp_id: str) -> str | None:
+    row = store.connection.execute(
+        "SELECT best_run_id FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
+    ).fetchone()
+    return None if row["best_run_id"] is None else str(row["best_run_id"])
 
 
 # --- begin -------------------------------------------------------------------
@@ -572,6 +588,8 @@ def test_a_run_begins_from_the_reseed_the_queue_passage_carries_and_keeps_the_be
     assert (lane_of(ws, reseeded) / "strategy.py").read_bytes() == WEAK
     assert reseeded.best_sha == weak, "its baseline is its own first keep"
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert champion(ws, store, registered) == kept.strategy_sha, "the file is the champion"
+    assert doctor._best(ws, None).status == "ok"
     begun = store.events(kind=passages.BEGUN, subject=registered)[-1]
     assert begun.detail[passages.RESEED_FROM] == weak
     assert passages.reseed_of(store, registered) is None, "beginning consumed it"
@@ -584,6 +602,35 @@ def test_a_run_begins_from_the_reseed_the_queue_passage_carries_and_keeps_the_be
     assert climbed.status == "keep"
     assert records.require_active(store, registered).best_sha == kept.strategy_sha
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert best_run_id(store, registered) == run.run_id, "an equal metric beats nothing"
+    assert champion(ws, store, registered) == kept.strategy_sha
+
+
+def test_a_re_seeded_keep_moves_the_champion_file_only_when_it_moves_the_best(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The workspace `strategy.py` follows the hypothesis's best, not the run's: a lesser
+    keep of a re-seeded run leaves it, and the keep that beats the best rewrites it."""
+    first = loop.begin(ws, store, registered)
+    loop.end(ws, store, registered)
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from=store.put_blob(WEAK))
+
+    reseeded = loop.begin(ws, store, registered)
+
+    baseline = records.cards_of(store, registered)[-1]
+    assert (baseline.status, baseline.strategy_sha) == ("keep", sha256(WEAK).hexdigest())
+    assert baseline.metric <= 0.0, "measured: WEAK earns nothing, so it does not beat FLAT"
+    assert best_run_id(store, registered) == first.run_id
+    assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == FLAT
+    assert doctor._best(ws, None).status == "ok"
+
+    edit(ws, reseeded, REVERTING)
+    beaten = loop.card(ws, store, registered, "the trough rule")
+
+    assert beaten.status == "keep"
+    assert best_run_id(store, registered) == reseeded.run_id
+    assert champion(ws, store, registered) == beaten.strategy_sha
+    assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == REVERTING
 
 
 def test_from_workspace_outranks_a_reseed_and_a_missing_blob_is_ignored(

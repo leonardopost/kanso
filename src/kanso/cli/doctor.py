@@ -723,11 +723,12 @@ def _sha(path: Path) -> str:
 def _best(ws: Workspace, unread: Unread | None) -> Check:
     """`hypotheses/<id>/strategy.py` against the `best` blob kanso last wrote there.
 
-    Once a hypothesis has a `best`, kanso owns that file: every keep and every re-point
-    of `best` rewrites it, so a workspace copy holding other bytes was edited by hand or
-    is missing. That is a warning and never a failure, because editing the file is
-    exactly how an operator prepares `research begin --from-workspace` — the run that
-    starts from the edit and clears `best`. A retired hypothesis is left alone.
+    Once a hypothesis has a `best`, kanso owns that file: every keep that moves `best` and
+    every re-point of it rewrites it, and a keep that moves only its run's best leaves it,
+    so a workspace copy holding other bytes was edited by hand or is missing. That is a
+    warning and never a failure, because editing the file is exactly how an operator
+    prepares `research begin --from-workspace` — the run that starts from the edit and
+    clears `best`. A retired hypothesis is left alone.
     """
     if unread is not None:
         return unread.check("best")

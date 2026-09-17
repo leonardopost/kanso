@@ -78,7 +78,7 @@ never edits the file.
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | research, after every keep | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
@@ -381,8 +381,10 @@ bytes, so the next `research begin` starts from them.
 `research begin`.
 
 `strategy.py` is **kanso's once a keep exists.** It is the best-so-far, written atomically
-from the best blob after every keep and every re-point of `best`, so the file on disk is
-always the current champion. Its bytes hash to the `strategy_sha` kanso shows:
+from the best blob after every keep that moves the hypothesis's `best` and every re-point
+of it, so the file on disk is always the current champion. A keep that moves only its run's
+best — a re-seeded run's baseline, a lesser keep under new pins — leaves the file alone.
+Its bytes hash to the `strategy_sha` kanso shows:
 
 ```
 $ shasum -a 256 hypotheses/demo_mr/strategy.py

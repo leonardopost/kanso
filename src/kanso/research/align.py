@@ -380,7 +380,9 @@ def _revert(ws: Workspace, store: StateStore, run: RunRecord, directory: Path) -
 
     The run's best is the run's to clear; the hypothesis's is cleared only when this run
     earned it, so a rewind in a run whose baseline discarded leaves a best another run
-    earned standing.
+    earned standing. The workspace `strategy.py` follows the hypothesis's best, not the
+    run's: it is rewritten when the best is now the bytes rewound to, or when there is no
+    best left, and a best another run earned keeps its file.
     """
     keep = _last_aligned_keep(store, run)
     if keep is None:
@@ -394,7 +396,8 @@ def _revert(ws: Workspace, store: StateStore, run: RunRecord, directory: Path) -
         records.set_best(store, run, sha, metric)
     source = store.get_blob(sha)
     lanes.write_atomic(directory / STRATEGY_FILE, source)
-    lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
+    if records.best_of(store, run.hyp_id)[0] in (sha, None):
+        lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
     return sha
 
 

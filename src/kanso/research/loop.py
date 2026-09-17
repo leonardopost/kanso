@@ -29,7 +29,8 @@ Only then does the engine run, on research-window data alone, in a subprocess wi
 path to a catalog.
 
 **A discard costs nothing but the trial.** Keep or not, the card is recorded and its
-bytes are a blob; a keep rewrites `hypotheses/<id>/strategy.py`, and anything else
+bytes are a blob; a keep that moves the hypothesis's best rewrites
+`hypotheses/<id>/strategy.py`, so the file is always the champion, and anything else
 restores the lane copy from the best blob, or from the run's base before the first keep.
 `results.tsv` is rendered from the records afterwards, so no restore can lose history.
 
@@ -552,7 +553,12 @@ def _record(
     tags: Sequence[Tag] = (),
     restore_all: bool = False,
 ) -> Card:
-    """Write the card, then move `best` or restore the lane copy, then render the log."""
+    """Write the card, then move `best` or restore the lane copy, then render the log.
+
+    The workspace `strategy.py` is the hypothesis's champion, so a keep writes it only
+    when the hypothesis's best is now these bytes: a keep that moved no more than its
+    run's best — a re-seeded run's baseline, a lesser keep under new pins — leaves it.
+    """
     made = Card(
         run_id=run.run_id,
         lane=run.lane,
@@ -574,7 +580,8 @@ def _record(
     records.record_card(store, run, made)
     if status == "keep":
         records.set_best(store, run, strategy_sha, metric)
-        lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
+        if records.best_of(store, run.hyp_id)[0] == strategy_sha:
+            lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
     else:
         restored = {STRATEGY_FILE: run.best_sha or run.base_sha}
         if restore_all:

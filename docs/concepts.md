@@ -186,7 +186,7 @@ evaluate, record. Three outcomes, and each does something different to the lane.
 
 | status | what it means | what happens to the lane |
 |---|---|---|
-| `keep` | every constraint passed and the keep rule cleared | this becomes `best`; the blob is written to `hypotheses/<id>/strategy.py` |
+| `keep` | every constraint passed and the keep rule cleared | this becomes the run's `best`, and the hypothesis's when it beats that or the run already holds it; only then is the blob written to `hypotheses/<id>/strategy.py` |
 | `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base |
 | `crash` | the backtest raised, or exceeded its time or memory budget | the same restore, with the traceback tail recorded |
 
