@@ -119,9 +119,10 @@ paths rather than claiming that they agreed.
 **A passing verdict composes and deploys by itself.** The construct's version is made and
 the paper stage is offered it, because both acts follow from the certificate with no
 decision left in them and a loop that runs indefinitely cannot stop at every certificate to
-ask for a command with only one possible form. A stage that cannot take the version — it is
-halted, the engine has moved, the catalog has no forward data, the limits leave no capital —
-escalates `deploy_blocked` and the certificate still stands. What is never automatic is the
+ask for a command with only one possible form. A version that cannot be composed — its book
+falls below the `book.maintenance_pct` its hypothesis declares — or a stage that cannot take
+it — it is halted, the engine has moved, the catalog has no forward data, the limits leave
+no capital — escalates `deploy_blocked` and the certificate still stands. What is never automatic is the
 next step: paper to live needs `promote --live --as NAME`.
 
 ## Strategies
@@ -137,7 +138,8 @@ construct, sizing rule, warmup or book policy is refused (exit 2) by the field t
 whose host's latest sleeve is not the one its run was pinned to. A version whose own book, run
 over the sleeve's certification window, falls below the `book.maintenance_pct` its hypothesis
 declares is refused (exit 2) with the worst ratio and the floor, whether or not any card was
-held to `maintenance_margin`.
+held to `maintenance_margin`: no version is written to `strategy.yaml`, and the implementation
+generated to measure it stays in `impl/<version>/` until the next compose replaces it.
 
 `STRATEGY[@V]` is the notation every command below shares: a strategy id, optionally a
 version. Leaving the version out means the one the command's own rule picks — the latest
