@@ -265,6 +265,7 @@ def test_the_explorer_is_shown_the_research_and_only_ids_of_the_certification(
         ),
     )
     store.event("stalled", researched, {"best_sha": "c" * 64, "verdict": "fail"})
+    store.event("stalled", "demo_other", {"best_sha": "d" * 64, "verdict": "pass"})  # not ours
     explorer(ws, [answer()])
 
     explore.explore(ws, store, researched)
@@ -292,6 +293,50 @@ def test_the_explorer_is_shown_the_research_and_only_ids_of_the_certification(
     assert HYP_ID in facts["taken_ids"] and "portfolio" in facts["taken_ids"]
     # Nothing measured on the certification window travels: no evidence, no passing gate.
     assert "0.123456" not in call.user and "embargoed_window" not in call.user
+
+
+@pytest.mark.parametrize("pin", ["hypothesis_sha", "snapshot_id", "criteria_version"])
+def test_the_explorer_is_shown_only_the_keeps_measured_under_the_newest_pins(
+    ws: Workspace, store: StateStore, researched: str, recorded: Recorder, pin: str
+) -> None:
+    """A keep under another pin was scored on another window, snapshot or criteria."""
+    changed = {
+        "hypothesis_sha": store.put_blob(
+            yaml.safe_dump({**DOCUMENT, "title": "an older pin"}).encode("utf-8")
+        ),
+        "snapshot_id": "an-older-snapshot",
+        "criteria_version": "0.0.1",
+    }[pin]
+    [run] = [
+        dict(row)
+        for row in store.connection.execute("SELECT * FROM runs WHERE hyp_id = ?", (researched,))
+    ]
+    older = {**run, "run_id": "older-pin", "tag": "20200101-1", pin: changed}
+    older.update(started_at=EARLIER_PIN, ended_at=EARLIER_PIN)
+    store.connection.execute(
+        f"INSERT INTO runs ({', '.join(older)}) VALUES ({', '.join('?' for _ in older)})",
+        tuple(older.values()),
+    )
+    [card] = [
+        dict(row)
+        for row in store.connection.execute(
+            "SELECT * FROM cards WHERE run_id = ? AND status = 'keep' ORDER BY seq LIMIT 1",
+            (run["run_id"],),
+        )
+    ]
+    del card["card_id"]
+    card.update(run_id="older-pin", metric=1e9, description="kept under an older pin")
+    store.connection.execute(
+        f"INSERT INTO cards ({', '.join(card)}) VALUES ({', '.join('?' for _ in card)})",
+        tuple(card.values()),
+    )
+    explorer(ws, [answer()])
+
+    explore.explore(ws, store, researched)
+
+    [call] = [call for call in recorded.calls if call.task_class == "explore"]
+    keeps = [keep["desc"] for keep in json.loads(call.user)["keeps"]]
+    assert keeps == ["run in revert mode", "baseline"]
 
 
 def test_a_rejected_candidate_is_asked_again_with_its_complaints(
@@ -370,6 +415,14 @@ def test_a_hypothesis_never_researched_has_nothing_to_explore_from(
             "carries construct; a candidate is written as a draft",
         ),
         (
+            {"hypothesis_yaml": candidate_yaml(objective=DOCUMENT["objective"])},
+            "carries objective; a candidate is written as a draft",
+        ),
+        (
+            {"hypothesis_yaml": candidate_yaml(constraints=DOCUMENT["constraints"])},
+            "carries constraints; a candidate is written as a draft",
+        ),
+        (
             {
                 "hypothesis_yaml": candidate_yaml(
                     windows={
@@ -404,6 +457,19 @@ def test_a_hypothesis_never_researched_has_nothing_to_explore_from(
             "windows.certification.start: 2024-02-06 is inside the embargo counted from the "
             "end of the parent's research (2024-01-31) for a 3d horizon; certification may not "
             "open before 2024-02-15",
+        ),
+        (
+            # A 20d horizon embargoes 100 days: its own research end passes its own check,
+            # and certification still opens six days after the parent last researched.
+            {
+                "hypothesis_yaml": candidate_yaml(
+                    horizon="20d",
+                    windows=windows((date(2023, 1, 1), date(2023, 9, 1)), date(2024, 2, 6)),
+                )
+            },
+            "windows.certification.start: 2024-02-06 is inside the embargo counted from the "
+            "end of the parent's research (2024-01-31) for a 20d horizon; certification may "
+            "not open before 2024-05-10",
         ),
         ({"strategy_py": "def broken(:\n"}, "strategy_py: strategy.py does not parse"),
     ],
