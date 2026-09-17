@@ -381,7 +381,11 @@ def test_the_failure_count_escalates_on_a_cadence_rather_than_once(
 
     seen: list[int] = []
     for attempt in range(1, 5):
-        a_card(ws, store, FLAT + f"# attempt {attempt}\n".encode(), seq=attempt)
+        # Each keep beats the last, as a keep beats its run's base; at one metric the best
+        # would not move and the second certificate would be a repeat.
+        a_card(
+            ws, store, FLAT + f"# attempt {attempt}\n".encode(), seq=attempt, metric=float(attempt)
+        )
         certify(policy, store, HYP_ID)
         seen.append(len(unread(store)))
 
