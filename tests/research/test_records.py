@@ -87,9 +87,7 @@ def test_a_card_comes_back_as_it_was_written(
     assert read.crash_tail is None
 
 
-def test_only_a_card_that_ran_and_traded_is_a_trial(
-    ws: Workspace, store: StateStore, registered: str
-) -> None:
+def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateStore) -> None:
     """`n_trials` counts cards; `trial_metrics` counts the candidates selection could keep.
 
     The baseline trades, so the card that trades nothing holds a book of its own and is a
@@ -108,7 +106,7 @@ def test_only_a_card_that_ran_and_traded_is_a_trial(
         ("crash", 0),
     ]
     assert cards[-3].n_trades > 0
-    assert records.n_trials(store, registered) == len(cards)
+    assert records.n_trials(store, hyp_id) == len(cards)
     assert records.trial_metrics(store, hyp_id) == [cards[-3].metric]
 
 

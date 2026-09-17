@@ -184,6 +184,25 @@ DENIED_STALE_BASIS: Final = frozenset(
 """Every quantity the engine computes against a position's opening basis, which a split
 leaves in the share count the position opened in and which nothing can rewrite."""
 
+DENIED_HISTORY: Final = frozenset(
+    {
+        "request_bars",
+        "request_quote_ticks",
+        "request_trade_ticks",
+        "request_data",
+        "_trading_from_ns",
+        "_delivered_ns",
+        "_fed_from_ns",
+        "_warming",
+        "_undelivered",
+    }
+)
+"""The engine's history requests, and the harness's warmup gate: the three attributes it
+reads and the two methods that combine them. History reaches a strategy only as the prefix
+its hypothesis declares, delivered like the window's own points; a request would be a
+second route to the catalog, and the gate's own state — or its answer — a clock that says
+where the window opens, which is the counter `program.md` tells a proposer not to keep."""
+
 WHY: Final = {
     **dict.fromkeys(
         DENIED_SCHEDULE,
@@ -196,13 +215,21 @@ WHY: Final = {
         "action leaves in a share count that no longer exists; size from `last_price`, "
         "`held` and `balance` instead; kanso keeps the last two from the sleeve's own fills",
     ),
+    **dict.fromkeys(
+        DENIED_HISTORY,
+        "history reaches a strategy only as the `warmup` sessions its hypothesis declares, "
+        "fed before the window with every order dropped; declare `warmup: {sessions: N}` "
+        "in hypothesis.yaml instead of asking the engine for it",
+    ),
 }
-"""Why each corporate-action denial exists, said in the refusal so a proposer can act on it."""
+"""Why each denial that carries a reason exists, said in the refusal so a proposer can act on it."""
 
 DENIED_IDENTIFIERS: Final = DENIED_MODULES | DENIED_DUNDERS | DENIED_BRIDGE | DENIED_NUMPY_FILE
 """Refused as a name, an attribute or an import alias alike."""
 
-DENIED_ATTRIBUTES: Final = DENIED_IDENTIFIERS | DENIED_CLOCK | DENIED_SCHEDULE | DENIED_STALE_BASIS
+DENIED_ATTRIBUTES: Final = (
+    DENIED_IDENTIFIERS | DENIED_CLOCK | DENIED_SCHEDULE | DENIED_STALE_BASIS | DENIED_HISTORY
+)
 
 SIZE_HELPERS: Final = frozenset({"submit_entry", "submit_exit"})
 """The two verbs a sized strategy places orders with, which take no size."""

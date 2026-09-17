@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Final
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, session
-from kanso.nautilus.cross_section import without_markers
 from kanso.nautilus.session import Replayed
 from kanso.replay import record
 from kanso.replay.record import Intent, Point, Session
@@ -86,11 +85,11 @@ def run(
     window = _range(ws, target, start, end)
     request = target.request(window)
     instruments, groups = backtest.window_data(request, target.catalog)
-    points = session.ordered(groups)
+    points = session.measured(session.ordered(groups), request.bounds[0])
     started = record.now()
     replayed = _execute(request, instruments, groups, mode=mode, speed=speed)
     result = replayed.result
-    market = without_markers(points)[: replayed.released]
+    market = points[: replayed.released]
     made = Session.model_validate(
         {
             "session_id": record.session_id(mode, target.label, window, started),
@@ -184,11 +183,12 @@ def _execute(
     """The chosen code path over this window's points.
 
     The research path has no feed to stop short, so it always reaches the end of the window
-    and its session clock is the last point of it.
+    and its session clock is the last point of it. Both paths are fed a warmed target's
+    prefix and neither counts it: what was released is the range's own points.
     """
     if mode == NODE:
         return session.run_node(request, instruments, groups, speed=speed)
-    points = session.ordered(groups)
+    points = session.measured(session.ordered(groups), request.bounds[0])
     result = backtest.execute(request, instruments, groups)
-    clock = int(points[-1].ts_init) if points else None  # type: ignore[attr-defined]
-    return Replayed(result, len(without_markers(points)), clock)
+    clock = int(points[-1].ts_init) if points else None
+    return Replayed(result, len(points), clock)

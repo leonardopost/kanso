@@ -72,13 +72,13 @@ never edits the file.
 | `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
 | `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
-| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
+| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
 | `AGENTS.md`, `CLAUDE.md` | `init`, if absent | **yes** |
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
@@ -121,6 +121,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
+| name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
@@ -129,6 +130,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
 | `data instruments resolve` that would change a definition the store holds for the same date | 2 · a correction is explicit: `--refresh` |
 | `research begin` after the store's definitions moved from what the newest covering snapshot pins | 2 · by name; `kanso data snapshot` pins what is held now |
+| run a warmed hypothesis — `research begin`, `cert run`, `replay run`, `strat compose`, `portfolio deploy` — over a catalog holding fewer sessions before its window than `warmup` asks for | 2 · naming what it found and how far back to `kanso data load`; a snapshot has to cover the sessions too |
 | `cert run` on bytes already certified under the same plan and engine | 2 · a certificate is immutable |
 | `models check` or `cert plan` with no `models.yaml` | 2 · there is no default plan |
 | edit a file under `strategies/<id>/impl/<version>/` | 3 · at `deploy` and at `replay`, before either runs it |
@@ -280,6 +282,8 @@ classification.
 required_constraints:
 - id: position_size          # every position worth 95% to 105% of the capital, always
   params: {min_pct: 95.0, max_pct: 105.0}
+- id: leg_edge               # the hedge leg's own spells clear a Sharpe of zero, every fold
+  params: {leg: DEMO.SIM, min_sharpe: 0.0}
 ```
 
 Before this existed, an instruction like that could only be prose in `program.md`, which
@@ -322,6 +326,36 @@ together exceed what its own `capital × max_leverage` funds or whose host budge
 own position ceiling, and a filter or exit rule whose `resolution` is not its host's. An
 overlay's `capital` is the whole book its cards run on — host budget and its own — and its
 clips are sized to its own budget (`docs/constructs.md`).
+
+**`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
+the first sessions of every window are spent filling them and the run is measured cold;
+with it the runner feeds the strategy the sessions before the window and drops every order
+until the window opens:
+
+```yaml
+warmup:                            # scope: adding or changing it clears `best`
+  sessions: 20                     # sessions before the window fed to the strategy before it may trade
+```
+
+A session is a calendar day on which any instrument of the universe printed at the
+sleeve's grain — the host's, for an attached construct consulted on a coarser or finer
+one; the runner takes the last `sessions` of them before the
+window from the catalog, so the prefix is trading days rather than calendar days and a
+weekend or a holiday adds nothing. Over the prefix every handler runs and every attached
+overlay's `on_data` is asked, so their state warms too, but `submit_entry` and
+`submit_exit` return `None` — the same answer a refused filter gives — and nothing fills:
+the measured run begins at the window's first point with no position and no cold start. A
+card, a certificate, a replay and a stage node all warm on the same rule; a stage restart
+warms on the sessions at or before its clock, and a stage-mate's prefix warms nobody else:
+a version on a stage is handed only the sessions its own file asks for, whatever the
+versions beside it declare. `research begin` refuses (exit 2) when the
+catalog holds fewer sessions before the window than the file asks for, naming what it
+found, and the snapshot it pins must cover the prefix as well as the two windows. Adding
+the key re-pins the hypothesis under a new sha and clears `best`, exactly as `sizing`
+does, and a certificate earned cold refuses to compose under it. The window's own bounds
+are unchanged: the upper bound of every window is what it was, and only the data fed
+before it widens. An attached construct declares the same `warmup` as its host, or
+`kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
@@ -370,9 +404,10 @@ comparable to each other; re-pinning underneath it would silently change the que
 cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
-`universe`, the `resolution`, the `data_requirements` or `construct.id` clears it —
-stripping the classification counts, since a draft has no construct and the best was earned
-as one — and the event log records `best_cleared` naming the field that moved. `kanso
+`universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
+`objective.id` or `warmup` clears it — stripping the classification counts, since a draft
+has no construct and the best was earned as one — and the event log records `best_cleared`
+naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.
 The cards and their blobs stay in state, and `strategy.py` still holds the best-so-far
 bytes, so the next `research begin` starts from them.
@@ -381,8 +416,10 @@ bytes, so the next `research begin` starts from them.
 `research begin`.
 
 `strategy.py` is **kanso's once a keep exists.** It is the best-so-far, written atomically
-from the best blob after every keep and every re-point of `best`, so the file on disk is
-always the current champion. Its bytes hash to the `strategy_sha` kanso shows:
+from the best blob after every keep that moves the hypothesis's `best` and every re-point
+of it, so the file on disk is always the current champion. A keep that moves only its run's
+best — a re-seeded run's baseline, a lesser keep under new pins — leaves the file alone.
+Its bytes hash to the `strategy_sha` kanso shows:
 
 ```
 $ shasum -a 256 hypotheses/demo_mr/strategy.py
@@ -808,7 +845,10 @@ be standing when the long-running node arrives.
 One directory per run of a node: `session.yaml`, the points released (`stream.jsonl`) and the
 order intents that came back (`intents.jsonl`). Replay writes one, a parity comparison writes
 two — one per code path — and a deployment that actually runs a node writes one. They are the
-evidence behind a `parity_replay` gate and behind a stage's realised window.
+evidence behind a `parity_replay` gate and behind a stage's realised window. The sessions a
+warmed target was fed before its range are not among the points released, and `clock_ns` is
+never inside them: a session claims what it was asked for, and a stage resumes into its
+window rather than into its prefix.
 
 They accumulate and nothing prunes them; the directory is gitignored. `kanso replay show`
 lists what is on disk, so deleting a session directory removes it from the listing cleanly —
@@ -906,7 +946,7 @@ kind:
 |---|---|---|
 | `models.yaml` | a commented skeleton with `<provider>` placeholders | the shipped `mock` protocol listed for every tier, so classification, proposal, alignment and planning cost nothing and reach nothing |
 | `instruments.yaml` | `{}` plus the field reference in comments | one `manual: true` entry, `DEMO.SIM`, so no reference adapter is needed |
-| `mock/responses.yaml` | — | the scripted answers that register reads, one per task class, with every `params` written as the list of `{name, value}` pairs a real model answers with |
+| `mock/responses.yaml` | — | the scripted answers that register reads, one per task class, with every `params` written as the list of `{name, value}` pairs a real model answers with and every `propose` answer carrying `tags` |
 | `demo.yaml` | — | a synthetic loader spec: a seeded mean-reverting series spanning the research, certification and forward windows |
 | `hypotheses/demo_mr/` | — | a hypothesis that ships already classified, with its `program.md` and the sleeve stub |
 

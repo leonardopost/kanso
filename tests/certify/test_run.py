@@ -29,6 +29,7 @@ from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
 from kanso.criteria import library
 from kanso.criteria.gates.parity_replay import NO_PARITY
+from kanso.criteria.run import day_of, midnight_ns
 from kanso.data import snapshot as snapshots
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
 from kanso.errors import PreconditionError, ValidationError
@@ -50,13 +51,18 @@ from kanso.schemas import (
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.research.conftest import (
+    CERTIFICATION,
     DOCUMENT,
     FLAT,
     HYP_ID,
     INSTRUMENT,
     RAISING,
     REVERTING,
+    SPAN,
+    bars,
     classify,
+    document,
+    load_december,
 )
 from tests.research.test_attached import ALLOWING, FILTER, HOST, compose_host
 
@@ -937,3 +943,68 @@ def test_an_attached_subject_carries_its_own_budget_as_a_parameter() -> None:
     assert _own_budget(SimpleNamespace(hyp=make_hyp())) == {}
     sized = make_hyp(sizing={"mode": "full_book", "budget": 2_500.0})
     assert _own_budget(SimpleNamespace(hyp=sized)) == {"sizing_budget": 2_500.0}
+
+
+# --- warming ------------------------------------------------------------------
+
+WARMED = document(warmup={"sessions": 3})
+
+CAPACITY_OVER_THE_WINDOW: dict[str, Any] = {
+    "id": "capacity_vs_adv",
+    "stage": "cert",
+    "params": {"participation": 0.2, "adv_days": 30},
+    "rationale": "averaged over more days than the window holds, so every day counts",
+}
+
+
+def a_warmed_subject(ws: Workspace, store: StateStore) -> None:
+    """The reverting sleeve carded under a warmed hypothesis, with December in the pin."""
+    load_december(ws)
+    classify(ws, store, WARMED, REVERTING)
+    a_card(ws, store, REVERTING, document=WARMED)
+    write_plan(ws, gates=[*CERT_GATES, CAPACITY_OVER_THE_WINDOW])
+
+
+def test_a_subject_resolves_both_prefixes_once_and_every_run_of_a_window_is_handed_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    a_warmed_subject(ws, store)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+
+    assert subject.research_prefix == (date(2023, 12, 29), date(2023, 12, 31))
+    assert subject.certification_prefix == (date(2024, 2, 3), date(2024, 2, 5))
+    assert run._request(subject, subject.research).prefix == subject.research_prefix
+    assert (
+        run._request(subject, subject.certification, overrides={"notional": 1.0}).prefix
+        == subject.certification_prefix
+    )
+
+
+def test_the_evidence_gates_are_shown_the_window_and_never_the_prefix(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lags and the volume are the certification window's own."""
+    a_warmed_subject(ws, store)
+    shown: list[Any] = []
+    observed = run._observed_lags
+    monkeypatch.setattr(
+        run, "_observed_lags", lambda groups: shown.append(groups) or observed(groups)
+    )
+
+    made = certify(ws, store, HYP_ID)
+
+    assert made.verdict == "pass"
+    (groups,) = shown
+    stamps = [int(point.ts_init) for group in groups for point in group]
+    assert len(stamps) == (CERTIFICATION[1] - CERTIFICATION[0]).days + 1
+    assert min(stamps) >= midnight_ns(CERTIFICATION[0])
+    (capacity,) = [gate for gate in made.gates if gate.id == "capacity_vs_adv"]
+    window = [
+        float(bar.volume) * float(bar.close)
+        for bar in bars(SPAN)
+        if CERTIFICATION[0] <= day_of(int(bar.ts_init)) <= CERTIFICATION[1]
+    ]
+    assert capacity.evidence["instruments"][INSTRUMENT]["adv"] == pytest.approx(
+        sum(window) / len(window)
+    )

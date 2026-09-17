@@ -377,3 +377,15 @@ def test_newest_is_the_snapshot_taken_last(ws: FakeWorkspace) -> None:
 
     assert found is not None
     assert found.snapshot_id == second.snapshot_id != first.snapshot_id
+
+
+def test_covering_requires_the_warmup_sessions_as_well(ws: FakeWorkspace) -> None:
+    """A warmed hypothesis loads its prefix from the pinned data, so the pin must hold it."""
+    load_bars(ws, count=25)
+    snap.freeze(ws)
+    before = (date(2023, 12, 27), date(2023, 12, 31))
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), prefixes=(before,)) is None
+
+    load_bars(ws, start=date(2023, 12, 20), count=12)
+    snap.freeze(ws)
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), prefixes=(before,)) is not None

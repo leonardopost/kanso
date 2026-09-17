@@ -53,7 +53,7 @@ import contextlib
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from nautilus_trader.common import Environment
 from nautilus_trader.config import (
@@ -69,7 +69,7 @@ from nautilus_trader.model.identifiers import TraderId
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, sandbox
 from kanso.nautilus.backtest import RunRequest, RunResult
-from kanso.nautilus.cross_section import arm, ordered, without_markers
+from kanso.nautilus.cross_section import arm, ordered, warm, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
 
@@ -79,6 +79,7 @@ __all__ = [
     "STOPPED",
     "TRADER_ID",
     "Halt",
+    "measured",
     "ordered",
     "run_node",
 ]
@@ -158,10 +159,15 @@ def run_node(
     """Run this request on the live code path and extract it exactly as a backtest is.
 
     The data is checked against the requested window before anything is built, so a session
-    handed points from outside its range refuses them rather than trading on them.
+    handed points from outside its range refuses them rather than trading on them. A
+    request naming a warmup prefix is fed it first with the strategy warmed at the
+    window's open, exactly as `execute` does; what the session reports released, and the
+    clock a stage resumes from, are the window's own points, so a prefix is never claimed
+    and never resumed into.
     """
     stream = backtest.checked(request, instruments, groups)
     points = ordered(groups)
+    opens, _ = request.bounds
     backtest._seed_globals(request.snapshot_id)
     started = time.perf_counter()
     loop = asyncio.new_event_loop()
@@ -190,6 +196,8 @@ def run_node(
         _venues(request, kernel, points)
         strategy = _strategy(request, node)
         arm(strategy, points)
+        if request.prefix is not None:
+            warm(strategy, opens)
         loop.run_until_complete(_drive(node, client, strategy, halt))
         card = backtest._extract(request, kernel, stream, groups)
         intents = tuple(
@@ -197,8 +205,8 @@ def run_node(
             for i in strategy.intents
         )
         stopped = halt.reason
-        released = len(without_markers(points[: client.released]))
-        clock_ns = client.last_ts if client.released else None
+        released = len(measured(points[: client.released], opens))
+        clock_ns = client.last_ts if client.last_ts >= opens else None
     finally:
         node.dispose()
     wall_s = time.perf_counter() - started
@@ -216,6 +224,20 @@ def run_node(
         ),
         released,
         clock_ns,
+    )
+
+
+def measured(points: Sequence[Any], opens_ns: int) -> tuple[Any, ...]:
+    """The catalog points from the window's open on, in feed order: what a session claims.
+
+    A warmed feed begins with the prefix, which is replayed and never counted — `released`
+    is the length of a prefix of this, and a stage's clock is the last of these it reached
+    — so a session never records a point it was not asked for, and a restart resumes into
+    the window rather than into the sessions before it. Flush markers are dropped as they
+    always were: a marker is a feed signal, not a clock tick.
+    """
+    return tuple(
+        point for point in without_markers(points) if int(cast("Any", point).ts_init) >= opens_ns
     )
 
 

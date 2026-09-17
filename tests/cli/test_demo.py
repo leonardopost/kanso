@@ -118,6 +118,15 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
 
     # The run is still open, and its lane directory is still the interface.
     assert (demo / "runs" / "op" / DEMO_ID / "strategy.py").is_file()
+
+    # -- and again, as the README says: the script wraps with nothing new to propose ------
+    again = at(runner, demo, "research", "run", DEMO_ID, "--cards", CARDS, "--json")
+
+    assert again.exit_code == Exit.OK, again.stdout
+    repeated = payload(again)
+    assert (repeated["proposed"], repeated["missed"], repeated["redundant"]) == (CARDS, CARDS, 0)
+    assert (repeated["keeps"], repeated["discards"], repeated["crashes"]) == (0, 0, 0)
+    assert repeated["best_sha"] == outcome["best_sha"]
     assert at(runner, demo, "research", "end", DEMO_ID).exit_code == Exit.OK
 
 

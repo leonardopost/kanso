@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import shutil
+from datetime import date
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
+from kanso.data import snapshot
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
 from kanso.research import loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
-from kanso.schemas import RunRecord
+from kanso.schemas import Hypothesis, RunRecord
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -24,12 +27,15 @@ from .conftest import (
     PROGRAM,
     RAISING,
     READING,
+    RESEARCH,
     REVERTING,
     WEAK,
     classify,
     document,
+    load_december,
     write_hypothesis,
 )
+from .mocked import tuned
 
 
 def lane_of(ws: Workspace, run: RunRecord) -> Path:
@@ -46,6 +52,21 @@ def edit(ws: Workspace, run: RunRecord, source: bytes) -> Path:
 
 def statuses(store: StateStore, hyp_id: str = HYP_ID) -> list[str]:
     return [card.status for card in records.cards_of(store, hyp_id)]
+
+
+def champion(ws: Workspace, store: StateStore, hyp_id: str) -> str | None:
+    """The hypothesis's best sha, asserted to be what the workspace file hashes to."""
+    held = sha256(ws.path("hypotheses", hyp_id, "strategy.py").read_bytes()).hexdigest()
+    best, _ = records.best_of(store, hyp_id)
+    assert held == best, f"workspace strategy.py is {held[:7]}, best is {str(best)[:7]}"
+    return best
+
+
+def best_run_id(store: StateStore, hyp_id: str) -> str | None:
+    row = store.connection.execute(
+        "SELECT best_run_id FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
+    ).fetchone()
+    return None if row["best_run_id"] is None else str(row["best_run_id"])
 
 
 # --- begin -------------------------------------------------------------------
@@ -292,6 +313,20 @@ def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restor
     assert event.detail["like"] == kept.sha7
     assert event.detail["sessions"] == 31, "one session per day of the research window"
     assert event.detail["matched"] == 31
+    # A redundant miss is judged, so what it held is stored too: the third spelling of an
+    # idea is refused against the second as well as the first.
+    stored = store.connection.execute(
+        "SELECT sessions FROM signatures WHERE strategy_sha = ? AND hyp_id = ?"
+        " AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?",
+        (
+            sha256(respelt).hexdigest(),
+            registered,
+            run.hypothesis_sha,
+            run.snapshot_id,
+            run.criteria_version,
+        ),
+    ).fetchall()
+    assert [row["sessions"] for row in stored] == [31]
 
 
 def test_the_keep_rule_is_asked_before_the_signature(
@@ -309,6 +344,23 @@ def test_the_keep_rule_is_asked_before_the_signature(
 
     assert again.status == "keep"
     assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+
+
+def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_toml(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Measured: WEAK is flat at 17 of the window's 31 session ends, as the flat baseline is
+    at all of them — a discard at the template's 97 percent, a redundant miss at 50."""
+    workspace = tuned(ws, redundant_pct=50)
+    run = loop.begin(workspace, store, registered)
+    edit(workspace, run, WEAK)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(workspace, store, registered, "buy any fall")
+
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    assert (event.detail["matched"], event.detail["sessions"]) == (17, 31)
+    assert event.detail["like"] == run.base_sha[:7]
 
 
 def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(
@@ -329,6 +381,30 @@ def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_noth
     assert resumed.base_sha == sha256(REVERTING).hexdigest()
     assert statuses(store) == ["keep", "keep", "keep"], "the baseline of the second run"
     assert len(store.events(kind=loop.REDUNDANT, subject=registered)) == 1
+
+
+def test_a_baseline_that_discards_on_a_book_already_judged_is_a_card_not_a_redundant_miss(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The exemption the keep rule cannot stand in for: a baseline that fails a gate does not
+    keep, and the flat book it holds was stored by the run before it. A run exists to
+    climb from its base, so the base is always measured."""
+    hyp_id = classify(
+        ws,
+        store,
+        document(
+            constraints=[{"id": "strategy_integrity"}, {"id": "min_trades", "params": {"min": 4}}]
+        ),
+    )
+    loop.begin(ws, store, hyp_id)
+    loop.end(ws, store, hyp_id)
+
+    again = loop.begin(ws, store, hyp_id, from_workspace=True)
+
+    assert again.base_sha == sha256(FLAT).hexdigest()
+    assert statuses(store, hyp_id) == ["discard", "discard"]
+    assert records.cards_of(store, hyp_id)[-1].run_id == again.run_id
+    assert store.events(kind=loop.REDUNDANT, subject=hyp_id) == []
 
 
 def test_a_card_that_is_worse_is_discarded_and_the_lane_is_restored(
@@ -572,6 +648,8 @@ def test_a_run_begins_from_the_reseed_the_queue_passage_carries_and_keeps_the_be
     assert (lane_of(ws, reseeded) / "strategy.py").read_bytes() == WEAK
     assert reseeded.best_sha == weak, "its baseline is its own first keep"
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert champion(ws, store, registered) == kept.strategy_sha, "the file is the champion"
+    assert doctor._best(ws, None).status == "ok"
     begun = store.events(kind=passages.BEGUN, subject=registered)[-1]
     assert begun.detail[passages.RESEED_FROM] == weak
     assert passages.reseed_of(store, registered) is None, "beginning consumed it"
@@ -584,6 +662,35 @@ def test_a_run_begins_from_the_reseed_the_queue_passage_carries_and_keeps_the_be
     assert climbed.status == "keep"
     assert records.require_active(store, registered).best_sha == kept.strategy_sha
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
+    assert best_run_id(store, registered) == run.run_id, "an equal metric beats nothing"
+    assert champion(ws, store, registered) == kept.strategy_sha
+
+
+def test_a_re_seeded_keep_moves_the_champion_file_only_when_it_moves_the_best(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The workspace `strategy.py` follows the hypothesis's best, not the run's: a lesser
+    keep of a re-seeded run leaves it, and the keep that beats the best rewrites it."""
+    first = loop.begin(ws, store, registered)
+    loop.end(ws, store, registered)
+    scheduler.requeue(store, registered, scheduler.STALL_PRIORITY, reseed_from=store.put_blob(WEAK))
+
+    reseeded = loop.begin(ws, store, registered)
+
+    baseline = records.cards_of(store, registered)[-1]
+    assert (baseline.status, baseline.strategy_sha) == ("keep", sha256(WEAK).hexdigest())
+    assert baseline.metric <= 0.0, "measured: WEAK earns nothing, so it does not beat FLAT"
+    assert best_run_id(store, registered) == first.run_id
+    assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == FLAT
+    assert doctor._best(ws, None).status == "ok"
+
+    edit(ws, reseeded, REVERTING)
+    beaten = loop.card(ws, store, registered, "the trough rule")
+
+    assert beaten.status == "keep"
+    assert best_run_id(store, registered) == reseeded.run_id
+    assert champion(ws, store, registered) == beaten.strategy_sha
+    assert ws.path("hypotheses", registered, "strategy.py").read_bytes() == REVERTING
 
 
 def test_from_workspace_outranks_a_reseed_and_a_missing_blob_is_ignored(
@@ -709,3 +816,66 @@ def test_a_refused_baseline_refuses_the_run_naming_the_rule(
         loop.begin(ws, store, hyp_id)
 
     assert show(ws, store, hyp_id).active_run is None
+
+
+# --- warming --------------------------------------------------------------------
+
+
+def warmed(ws: Workspace, store: StateStore, sessions: int = 3) -> str:
+    """The demo hypothesis, warming on this many sessions before each window."""
+    return classify(ws, store, document(warmup={"sessions": sessions}))
+
+
+def test_a_warmed_hypothesis_needs_its_sessions_in_the_catalog(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = warmed(ws, store)
+
+    with pytest.raises(PreconditionError) as refused:
+        loop.begin(ws, store, hyp_id)
+
+    assert (
+        "warmup: demo_mr asks for 3 session(s) before 2024-01-01 and the catalog holds 0"
+        in refused.value.message
+    )
+    assert "`kanso data load`" in (refused.value.remedy or "")
+    assert show(ws, store, hyp_id).active_run is None  # type: ignore[union-attr]
+
+
+def test_a_warmed_run_pins_a_snapshot_that_covers_the_prefix(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = warmed(ws, store)
+    load_december(ws, freeze=False)
+
+    with pytest.raises(PreconditionError, match="and the warmup sessions before each"):
+        loop.begin(ws, store, hyp_id)
+
+    snapshot.freeze(ws)
+    run = loop.begin(ws, store, hyp_id)
+
+    assert run.snapshot_id == snapshot.newest(ws).snapshot_id  # type: ignore[union-attr]
+    assert records.cards_of(store, hyp_id)[0].status == "keep"
+
+
+def test_every_card_of_a_warmed_run_is_handed_the_same_prefix(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Resolved once in the parent; the child re-checks the span rather than computing one."""
+    load_december(ws)
+    hyp = Hypothesis.model_validate(document(warmup={"sessions": 3}))
+
+    setup = loop._setup(ws, store, hyp)
+    request = loop._request(setup, FLAT, "a" * 64, budget_s=None, mem_cap_gb=None)
+
+    assert setup.prefix == (date(2023, 12, 29), date(2023, 12, 31))
+    assert request.prefix == setup.prefix
+    assert request.window == RESEARCH
+    assert loop._warmup_spans(setup) == (setup.prefix, (date(2024, 2, 3), date(2024, 2, 5)))
+
+
+def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore) -> None:
+    setup = loop._setup(ws, store, Hypothesis.model_validate(DOCUMENT))
+
+    assert setup.prefix is None
+    assert loop._warmup_spans(setup) == ()

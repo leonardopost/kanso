@@ -98,6 +98,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
         "construct": None,
         "sizing": None,
         "objective": None,
+        "warmup": None,
     }
 
 
@@ -204,6 +205,7 @@ def test_reordering_the_universe_is_not_a_change_of_scope(ws: Workspace, store: 
         ("resolution", "5m"),
         ("data_requirements", ["bar", "quote"]),
         ("sizing", {"mode": "full_book", "budget": 100.0}),
+        ("warmup", {"sessions": 20}),
     ],
 )
 def test_a_change_of_scope_clears_the_best(
@@ -292,6 +294,40 @@ def test_a_row_pinned_before_sizing_joined_the_scope_keeps_the_best(
     ).fetchone()
     pins = json.loads(held["pins"])
     del pins["sizing"]
+    store.connection.execute(
+        "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
+    )
+
+    register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
+
+
+def test_a_change_of_warmup_names_the_sessions_that_moved(ws: Workspace, store: StateStore) -> None:
+    """A run warmed on a prefix and one run cold measured different things over the same days."""
+    register(ws, store, document(warmup={"sessions": 10}))
+    set_best(store)
+
+    register(ws, store, document(warmup={"sessions": 20}))
+
+    assert record(ws, store).best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["reason"] for event in cleared] == [
+        "warmup changed from {'sessions': 10} to {'sessions': 20}"
+    ]
+
+
+def test_a_row_pinned_before_warmup_joined_the_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A row from before 0.8.0 has no `warmup` key in its pins, which reads as no prefix."""
+    register(ws, store)
+    set_best(store)
+    held = store.connection.execute(
+        "SELECT pins FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    pins = json.loads(held["pins"])
+    del pins["warmup"]
     store.connection.execute(
         "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
     )

@@ -29,7 +29,8 @@ Only then does the engine run, on research-window data alone, in a subprocess wi
 path to a catalog.
 
 **A discard costs nothing but the trial.** Keep or not, the card is recorded and its
-bytes are a blob; a keep rewrites `hypotheses/<id>/strategy.py`, and anything else
+bytes are a blob; a keep that moves the hypothesis's best rewrites
+`hypotheses/<id>/strategy.py`, so the file is always the champion, and anything else
 restores the lane copy from the best blob, or from the run's base before the first keep.
 `results.tsv` is rendered from the records afterwards, so no restore can lose history.
 
@@ -175,6 +176,13 @@ class Setup:
     host_modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = field(default=())
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    prefix: tuple[date, date] | None = None
+    """The sessions a card is fed before the research window, resolved in the parent from
+    the catalog as it stands when the card is built, so the child — which has no catalog —
+    is handed a span rather than computing one; `None` for a hypothesis that declares no
+    warmup. The run pins its snapshot, not this span: a `kanso data load` that adds a
+    printed day inside the lookback between two cards moves the prefix by that day, and
+    the certificate records the count it was warmed on, not the days."""
 
     @property
     def window(self) -> tuple[date, date]:
@@ -287,6 +295,9 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = ()
     if harness.host is not None:
         host_source, modifiers = _host_sources(store, harness.host)
+    catalog = catalog_path(ws)
+    grains = backtest.grains_of(hyp, host_resolution(ws, store, harness.host))
+    window = (hyp.windows.research.start, hyp.windows.research.end)
     return Setup(
         hyp=hyp,
         harness=harness,
@@ -296,11 +307,12 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
         folds=research.folds,
         period=research.return_period,
         max_lines=research.max_lines_per_keep,
-        catalog=catalog_path(ws),
+        catalog=catalog,
         host_source=host_source,
         host_modifiers=modifiers,
-        grains=backtest.grains_of(hyp, host_resolution(ws, store, harness.host)),
+        grains=grains,
         sleeve_budget=_sleeve_budget(ws, store, hyp, harness.host),
+        prefix=backtest.warmup_prefix(hyp, window, catalog, grains),
     )
 
 
@@ -352,7 +364,26 @@ def _request(
         period=setup.period,
         grains=setup.grains,
         sleeve_budget=setup.sleeve_budget,
+        prefix=setup.prefix,
     )
+
+
+def _warmup_spans(setup: Setup) -> tuple[tuple[date, date], ...]:
+    """The sessions both windows warm on, resolved now so the snapshot pinned covers them.
+
+    A run's cards are fed the research prefix, and the certification that judges the run's
+    best is fed the certification one; a snapshot that pins neither would refuse the card
+    or the certificate at data load, so both are resolved before the snapshot is chosen.
+    Empty for a hypothesis that declares no warmup.
+    """
+    certification = setup.hyp.windows.certification
+    spans = (
+        setup.prefix,
+        backtest.warmup_prefix(
+            setup.hyp, (certification.start, certification.end), setup.catalog, setup.grains
+        ),
+    )
+    return tuple(span for span in spans if span is not None)
 
 
 def _host_run(
@@ -552,7 +583,12 @@ def _record(
     tags: Sequence[Tag] = (),
     restore_all: bool = False,
 ) -> Card:
-    """Write the card, then move `best` or restore the lane copy, then render the log."""
+    """Write the card, then move `best` or restore the lane copy, then render the log.
+
+    The workspace `strategy.py` is the hypothesis's champion, so a keep writes it only
+    when the hypothesis's best is now these bytes: a keep that moved no more than its
+    run's best — a re-seeded run's baseline, a lesser keep under new pins — leaves it.
+    """
     made = Card(
         run_id=run.run_id,
         lane=run.lane,
@@ -574,7 +610,8 @@ def _record(
     records.record_card(store, run, made)
     if status == "keep":
         records.set_best(store, run, strategy_sha, metric)
-        lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
+        if records.best_of(store, run.hyp_id)[0] == strategy_sha:
+            lanes.write_atomic(hypothesis_dir(ws, run.hyp_id) / STRATEGY_FILE, source)
     else:
         restored = {STRATEGY_FILE: run.best_sha or run.base_sha}
         if restore_all:
@@ -783,11 +820,15 @@ def begin(
             remedy="run `kanso env detect`",
         )
     setup = _setup(ws, store, hyp)
-    snapshot = covering(ws, hyp.universe, hyp.data_requirements, hyp.resolution, hyp.windows)
+    prefixes = _warmup_spans(setup)
+    snapshot = covering(
+        ws, hyp.universe, hyp.data_requirements, hyp.resolution, hyp.windows, prefixes
+    )
     if snapshot is None:
+        warmed = " and the warmup sessions before each" if prefixes else ""
         raise PreconditionError(
             f"no snapshot covers {', '.join(hyp.universe)} over the research and certification "
-            f"windows at {hyp.resolution}",
+            f"windows{warmed} at {hyp.resolution}",
             remedy="load the data and run `kanso data snapshot`",
         )
     program = hypothesis_dir(ws, hyp_id) / PROGRAM_FILE

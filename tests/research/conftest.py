@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -341,6 +342,17 @@ def bars(window: tuple[date, date]) -> list[Bar]:
             )
         )
     return made
+
+
+DECEMBER = (date(2023, 12, 1), date(2023, 12, 31))
+"""The month before the research window: what a warmed hypothesis is fed first."""
+
+
+def load_december(ws: Workspace, *, freeze: bool = True) -> None:
+    """December's bars into the catalog, and into a new snapshot unless told not to."""
+    catalog.write(ws, bars(DECEMBER), ref=replace(dataset(), span=DECEMBER), source="synthetic")
+    if freeze:
+        snapshot.freeze(ws)
 
 
 def dataset() -> DatasetRef:

@@ -57,7 +57,15 @@ RESEARCHING: Final[Status] = "researching"
 ENDED: Final[frozenset[str]] = frozenset({"retired", "failed"})
 """The statuses `resume` undoes: the operator's own, and the one kanso used to write."""
 
-SCOPE: Final = ("universe", "resolution", "data_requirements", "construct", "sizing", "objective")
+SCOPE: Final = (
+    "universe",
+    "resolution",
+    "data_requirements",
+    "construct",
+    "sizing",
+    "objective",
+    "warmup",
+)
 """What a `best` is comparable under; a change to any of them clears it."""
 
 CONSTRUCT: Final = "construct"
@@ -65,9 +73,11 @@ CONSTRUCT: Final = "construct"
 
 SIZING: Final = "sizing"
 OBJECTIVE: Final = "objective"
-"""The scope field that joined in 0.4.0. A row pinned before it holds no key for it, which
-reads as `None` — the same answer a file with no `sizing` gives — so an older pin keeps its
-best until the file actually declares a rule."""
+WARMUP: Final = "warmup"
+"""`sizing` joined the scope in 0.4.0 and `warmup` in 0.8.0; `objective` in 0.5.0,
+answering from its own column. A row pinned before `sizing` or `warmup` holds no key for
+it, which reads as `None` — the same answer a file without the key gives — so an older pin
+keeps its best until the file actually declares a rule."""
 
 REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"
@@ -391,10 +401,12 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def scope_of(hyp: Hypothesis) -> dict[str, Any]:
-    """The six fields a metric is only comparable within, in a stable order.
+    """The seven fields a metric is only comparable within, in a stable order.
 
     The objective is one of them because a metric is a number in that objective's units:
     a best of 69 bps per trade compared against a Sharpe of 2 would keep nothing forever.
+    The warmup is one because a strategy fed its indicators before the open and one that
+    warmed on the window's own first sessions measured different runs over the same days.
 
     `hyp add` clears a best when they move, and composition refuses a certificate whose
     run pinned a hypothesis of another scope than the one registered now: one definition
@@ -407,6 +419,7 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
         CONSTRUCT: hyp.construct.id if hyp.construct else None,
         SIZING: hyp.sizing.model_dump() if hyp.sizing else None,
         OBJECTIVE: hyp.objective.id if hyp.objective else None,
+        WARMUP: hyp.warmup.model_dump() if hyp.warmup else None,
     }
 
 
@@ -415,8 +428,8 @@ def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
 
     The construct and the objective were pinned in their own columns before they joined
     the pins, and the columns are written with the pins, so a row from before then answers
-    from its column rather than reporting a move that never happened. `sizing` joined
-    later still and has no column: a pin without the key answers `None`.
+    from its column rather than reporting a move that never happened. `sizing` and
+    `warmup` joined later still and have no column: a pin without the key answers `None`.
     """
     pins = _pins(held)
     scope = {name: pins.get(name) for name in SCOPE}
