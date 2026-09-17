@@ -60,6 +60,20 @@ def test_design_constraints_are_claims() -> None:
     assert len(DESIGN_CONSTRAINTS) == 4
 
 
+BINDINGS = {
+    "the risk engine performs no balance or margin check for a margin account",
+    "LeveragedMarginModel asks zero margin of an instrument whose margin rates are zero",
+    "handle_bar(historical=True) routes to on_historical_data and never to on_bar",
+    "a Bar carries low and high, and every market point carries ts_init",
+}
+"""The claims recorded ahead of the work that rests on them; deleting one fails here."""
+
+
+def test_the_claims_later_work_rests_on_stay_listed_and_hold(verified: list[Fact]) -> None:
+    assert set(CLAIMS) >= BINDINGS
+    assert all(fact.holds for fact in verified if fact.claim in BINDINGS)
+
+
 def test_verify_is_repeatable() -> None:
     first = {fact.claim: fact.holds for fact in verify()}
     second = {fact.claim: fact.holds for fact in verify()}

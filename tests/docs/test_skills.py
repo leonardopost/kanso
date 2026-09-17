@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,3 +29,13 @@ def test_the_release_skill_does_not_ask_for_a_schema_version_bump() -> None:
     text = skill(MAINTAINER, "kanso-release")
     assert "confirm `schema_version` was bumped" not in text
     assert "nothing is bumped by hand" in text
+
+
+def test_the_release_skill_names_a_migration_fixture_that_exists() -> None:
+    """Step 1 once sent the maintainer to a fixture the suite did not have."""
+    text = skill(MAINTAINER, "kanso-release")
+    assert "on a workspace created by the previous release" not in text
+    named = re.findall(r"`(tests/state/fixtures/[a-z0-9_]+\.sql)`", text)
+    assert named
+    for path in named:
+        assert (ROOT / path).is_file(), path
