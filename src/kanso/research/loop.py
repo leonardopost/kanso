@@ -44,6 +44,12 @@ whatever it resembles, and the baseline is never redundant, since it is the best
 of the last run and its own signature is already stored. The trial count is the size
 of the search that found the result, and a spelling that repeats a bet already measured
 did not widen the search.
+
+**A benchmark is run once per run.** A hypothesis whose objective is measured against a
+hold of its first leg has that hold produced by the runner — the card's own request with
+the strategy replaced (`backtest.benchmark`) — in this process, before the baseline, and
+every card of the run is differenced against the same one, exactly as an attached
+construct's cards are against one host-alone run.
 """
 
 from __future__ import annotations
@@ -61,6 +67,7 @@ from kanso.criteria import CardRun, GateContext, criteria_version, gates, object
 from kanso.criteria.context import verdict
 from kanso.criteria.gates import strategy_integrity
 from kanso.criteria.integrity import check as check_integrity
+from kanso.criteria.objectives import measures_benchmark
 from kanso.data.instruments import resolve_universe
 from kanso.data.manifest import catalog_path
 from kanso.data.snapshot import covering
@@ -150,9 +157,13 @@ BASELINE_FAILED: Final = "baseline_failed"
 RESEARCHING: Final = "researching"
 
 _HOST_RUNS: dict[str, dict[str, CardRun]] = {}
-"""Host-alone runs, by run and then by snapshot and host version. The same host over the
-same data gives the same run for every card of a run, so it is computed once and reused;
-`end` drops the run's entry, so a process that researches all day holds one per live run."""
+"""Host-alone and benchmark runs, by run and then by what they were run on. The same host,
+or the same hold, over the same data gives the same run for every card of a run, so each
+is computed once and reused; `end` drops the run's entry, so a process that researches all
+day holds one of each per live run."""
+
+BENCHMARK_KEY: Final = "benchmark"
+"""The cache entries a benchmark run is kept under, beside the host runs of `_HOST_RUNS`."""
 
 
 @dataclass(frozen=True)
@@ -432,6 +443,24 @@ def _host_run(
     return setup.impl.host_run(host, snapshot_id, compute, cache)
 
 
+def _benchmark_run(setup: Setup, *, snapshot_id: str, cache: dict[str, CardRun]) -> CardRun | None:
+    """The hold a benchmark objective differences against, computed once per run.
+
+    Run in this process over the research window, as a composition or a certification run
+    is: the hold is kanso's own sleeve, so there is nothing to confine, and its request is
+    the card's with only the strategy replaced — the same snapshot, warmup prefix, money
+    and grains. Keyed by the snapshot and the prefix, because those are what a card's data
+    is; `None` for an objective that measures no benchmark.
+    """
+    if not measures_benchmark(setup.hyp):
+        return None
+    key = f"{BENCHMARK_KEY}@{snapshot_id}@{setup.prefix}"
+    if key not in cache:
+        request = _request(setup, b"", snapshot_id, budget_s=None, mem_cap_gb=None)
+        cache[key] = backtest.run(backtest.benchmark(request), setup.catalog).run
+    return cache[key]
+
+
 def _mem_cap(ws: Workspace, run: RunRecord) -> float:
     """What a card of this run may hold resident: the lane's share, never below the floor.
 
@@ -456,6 +485,7 @@ def _context(
     strategy_sha: str,
     directory: Path,
     params: Mapping[str, Any] | None = None,
+    benchmark_run: CardRun | None = None,
 ) -> GateContext:
     return GateContext(
         hyp=setup.hyp,
@@ -465,6 +495,7 @@ def _context(
         window=setup.window,
         run=card_run,
         host_run=host_run,
+        benchmark_run=benchmark_run,
         research_folds=setup.folds,
         snapshot_id=run.snapshot_id,
         strategy_sha=strategy_sha,
@@ -510,6 +541,7 @@ def _constraints(
     host_run: CardRun | None,
     strategy_sha: str,
     directory: Path,
+    benchmark_run: CardRun | None = None,
 ) -> list[GateResult]:
     """Every card-stage gate the classification chose, apart from the one already run."""
     registry = gates()
@@ -525,17 +557,23 @@ def _constraints(
             strategy_sha=strategy_sha,
             directory=directory,
             params=ref.params,
+            benchmark_run=benchmark_run,
         )
         results.append(registry[ref.id].evaluate(ctx))
     return results
 
 
-def _measure(setup: Setup, card_run: CardRun, host_run: CardRun | None) -> tuple[float, float]:
+def _measure(
+    setup: Setup,
+    card_run: CardRun,
+    host_run: CardRun | None,
+    benchmark_run: CardRun | None = None,
+) -> tuple[float, float]:
     """The objective and its standard error over the run's folds."""
     ref = setup.hyp.objective
     if ref is None:  # pragma: no cover - a classified hypothesis always carries one
         return 0.0, 0.0
-    return objectives()[ref.id].compute(card_run, setup.folds, host_run)
+    return objectives()[ref.id].compute(card_run, setup.folds, host_run, benchmark_run)
 
 
 def _grew_by(store: StateStore, run: RunRecord, source: bytes) -> int:
@@ -642,6 +680,7 @@ def _judge(
     directory: Path,
     tags: Sequence[Tag] = (),
     baseline: bool = False,
+    benchmark_run: CardRun | None = None,
 ) -> Card:
     """Steps 3 to 5: the constraints, the keep rule, the redundancy check and the record.
 
@@ -697,8 +736,9 @@ def _judge(
         host_run=host_run,
         strategy_sha=strategy_sha,
         directory=directory,
+        benchmark_run=benchmark_run,
     )
-    metric, se = _measure(setup, result.run, host_run)
+    metric, se = _measure(setup, result.run, host_run, benchmark_run)
     passed = integrity.passed and all(gate.passed for gate in constraints)
     kept = passed and _keeps(setup, store, run, source, metric, se)
     held = records.signature(result.run)
@@ -856,6 +896,7 @@ def begin(
             directory=directory,
             cache=host_cache,
         )
+        benchmark_run = _benchmark_run(setup, snapshot_id=snapshot.snapshot_id, cache=host_cache)
         result = _baseline(ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best)
         _admitted(store, hyp_id, lane)  # the baseline took minutes; the operator may have acted
     except KansoError as exc:
@@ -904,6 +945,7 @@ def begin(
         host_run=host_run,
         directory=directory,
         baseline=True,
+        benchmark_run=benchmark_run,
     )
     return records.require_active(store, hyp_id)
 
@@ -1068,6 +1110,9 @@ def card(
         directory=directory,
         cache=_HOST_RUNS.setdefault(run.run_id, {}),
     )
+    benchmark_run = _benchmark_run(
+        setup, snapshot_id=run.snapshot_id, cache=_HOST_RUNS.setdefault(run.run_id, {})
+    )
     result = backtest.run_subprocess(
         _request(
             setup,
@@ -1092,6 +1137,7 @@ def card(
         host_run=host_run,
         directory=directory,
         tags=tags,
+        benchmark_run=benchmark_run,
     )
 
 
