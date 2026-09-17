@@ -608,8 +608,10 @@ def stressed(run: CardRun, multiplier: float) -> CardRun:
     multiplying them is arithmetic on the recorded fills rather than another backtest. A
     fill is charged to the return period it falls in; a fill after the last period end
     changed no return and so changes none here. A book policy's `carry` is a rate on
-    borrowed notional and not a fill cost, so it is left as recorded, and under a monthly
-    reset the extra cost comes out of the book it fell in, the transfers standing as struck.
+    borrowed notional and not a fill cost, so it is left as recorded. Under a monthly reset
+    the transfers stand as struck and the cushion as recorded, so the extra cost stays in the
+    book across months where a real reset would have absorbed it at the next turn: a stressed
+    run's returns are exact, and its equity and drawdown are the more conservative for it.
     """
     extra = multiplier - 1.0
     ends = run.period_ends_ns

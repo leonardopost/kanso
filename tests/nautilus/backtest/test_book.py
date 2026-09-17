@@ -15,6 +15,7 @@ import pytest
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.objects import Price
 
+from kanso.criteria import drawdown_pct
 from kanso.criteria.run import NS_PER_DAY, Fill, midnight_ns
 from kanso.nautilus.backtest import RunRequest, _equity, execute, run
 from kanso.nautilus.costs import NS_PER_YEAR, carry
@@ -166,6 +167,24 @@ def test_a_surplus_is_set_aside_at_the_first_end_of_february_and_drawn_on_in_mar
     assert sum(card.returns) == pytest.approx(card.equity[-1] + card.cushion[-1] - CAPITAL)
 
 
+def test_a_reset_book_s_drawdown_is_bounded_by_the_month_it_fell_in(quarter: Path) -> None:
+    """The same fills without the reset draw down 15.0: 114,949.99 to 99,949.99 inside
+    January. With it, the 12,449.99 swept out at February's first end is no loss, and the
+    worst is February's own: 102,500 to 87,500 at March's first end, struck before the
+    cushion restores it — 15,000 again, where a peak kept across the sweep read 27.45."""
+    plain = run(request_over(booked(None)), quarter).run
+    reset = run(request_over(booked({"reset": "monthly"})), quarter).run
+
+    assert drawdown_pct(plain) == pytest.approx(15.0)
+    assert sum(reset.returns) == pytest.approx(sum(plain.returns))
+    february = reset.equity[JANUARY_ENDS : JANUARY_ENDS + 29]
+    assert (max(february), reset.equity[JANUARY_ENDS + 28] + reset.returns[JANUARY_ENDS + 29]) == (
+        pytest.approx(102_500.0),
+        pytest.approx(87_500.0),
+    )
+    assert drawdown_pct(reset) == pytest.approx(15.0)
+
+
 def test_a_deficit_the_cushion_cannot_cover_leaves_the_book_short(quarter: Path) -> None:
     """Short from the first bar, the book has lost by January 31 and has set nothing
     aside, so February's first end restores nothing and borrows nothing."""
@@ -202,7 +221,7 @@ def test_a_book_levered_past_its_equity_is_charged_the_carry_every_period(
 
     qty, paid, _ = entered(card)
     assert (qty, paid) == (15_000.0, 150_125.0)
-    assert card.cushion == tuple([0.0] * len(card.equity)), "no reset was declared"
+    assert card.cushion == (), "no reset was declared"
     opens = midnight_ns(QUARTER[0])
     previous = opens
     for index, (end, charged) in enumerate(zip(card.period_ends_ns, card.carry, strict=True)):

@@ -370,7 +370,9 @@ book:                              # scope: adding or changing any key clears `b
 
 `reset: monthly` moves a surplus over `capital` into a cushion outside the book and restores
 a deficit from that cushion while it lasts — never by borrowing — so a strategy is measured
-on the same book every month and a drawdown is bounded by the month it fell in. The
+on the same book every month. A drawdown is bounded by the month it fell in: the peak starts
+again at each month's first end, so a surplus swept out is no loss, and a loss the cushion
+could not restore carries on as a drawdown from `capital`. The
 transfer is not a return: returns are struck before it, and the run carries the cushion
 beside the equity curve. `financing_rate_bps` is charged per year on the notional held
 above the book's equity — gross exposure with shorts counted, less what the account is

@@ -1302,7 +1302,8 @@ def _equity(
                 cash += moved
             returns.append(value - previous_equity)
             value += moved
-            cushions.append(cushion)
+            if policy.resets:
+                cushions.append(cushion)
         else:
             returns.append(value - previous_equity)
         equity.append(value)

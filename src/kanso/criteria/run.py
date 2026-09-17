@@ -115,7 +115,8 @@ class CardRun:
 
     Three more series ride beside the equity curve when the hypothesis declares a `book`
     policy, each parallel to the period ends and empty when the run measured none.
-    `cushion` is what a monthly reset has moved out of the book by each period end, so
+    `cushion`, recorded under `reset: monthly` alone and what `max_drawdown` reads to know
+    the book was reset, is what the reset has moved out of the book by each period end, so
     `equity[i] - equity[i-1]` is `returns[i]` less the transfer that end made: returns are
     struck before the transfer, and the sum of the returns is the profit of book and
     cushion together. `carry` is the financing charged at each end on what the book held

@@ -278,10 +278,15 @@ before the transfer, so the sum of a run's returns is what book and cushion made
 and the run carries `cushion`, `carry` and `worst_ratio` beside its equity curve. The harness
 settles each period from the same functions when the next period's first point arrives, so
 `self.balance` reads the book the policy left. Two consequences are deliberate. The equity
-curve is the book after each transfer and `max_drawdown` seeds its peak at the capital, so on
-a reset book a drawdown is bounded by the month it fell in; and `cost_stress` multiplies fill
-costs and leaves the carry alone, because a rate on borrowed notional is not an execution
-cost. The engine enforces no margin and charges no financing here — kanso's instruments carry
+curve is the book after each transfer, and on a reset book a drawdown is bounded by the month
+it fell in: `max_drawdown` judges each end on the equity struck before its transfer against the
+peak so far, then starts the peak again at each month's first end from the higher of the
+capital and the book after it — so a surplus swept into the cushion is no loss, a loss the
+cushion restored ends with its month, and one it could not restore carries into the next as a
+drawdown from the capital. And `cost_stress` multiplies fill costs and leaves the carry alone,
+because a rate on borrowed notional is not an execution cost; the transfers stand as struck,
+so a stressed reset book carries its extra cost across months rather than having a turn
+absorb it, and its drawdown is the more conservative for that. The engine enforces no margin and charges no financing here — kanso's instruments carry
 no margin rates — so none of this is delegated to the venue. A sized sleeve gets no special
 case: a full-book entry that borrows pays the carry and can breach the floor (row 76).
 
