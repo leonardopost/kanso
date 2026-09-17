@@ -351,6 +351,14 @@ declares, and the card path accepts only the research window; a certification-wi
 is a refusal in code. The child process re-checks the points it was handed against the
 window it was asked for, so the refusal survives the trip across the process boundary.
 
+A `warmup` widens only the lower bound of that check. The runner resolves the sessions
+before the window in the parent, puts them on the request as a span, and the child admits
+points from the first of them — never a point at or after the window's close, prefix or
+not — while every order the strategy places before the window's first point is dropped
+before it is checked or recorded. The prefix is data the strategy may see and may not act
+on; the certification window stays data it may not see, and a warmed card refuses it
+exactly as a cold one does.
+
 **Code that could reach around it never executes.** The `strategy_integrity` gate is a
 syntax-tree check run *before* the backtest, not after. Imports are matched by full dotted
 path against an allow-list of exact leaves; every path that reaches the data catalog is
@@ -633,6 +641,13 @@ lists every refusal `deploy` makes and its code.
 the certificate with no decision left in them, and a loop that runs indefinitely cannot stop
 at every certificate to ask for a command with only one possible form. In the transcript
 above nothing was deployed by hand: `cert run` passed, and paper had the version.
+
+A stage node restarts flat, and a version whose hypothesis declares a `warmup` re-warms on
+every restart: the sessions before the window on the first, and on a restart the sessions
+at or before the stage's clock — the data it already replayed, fed again with every order
+dropped. What the session records released, and the clock the next restart resumes from,
+are the points after that instant, so a restart with nothing but its prefix to replay is
+idle and the clock stands.
 
 ## Promotion and demotion
 

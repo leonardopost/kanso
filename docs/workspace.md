@@ -129,6 +129,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
 | `data instruments resolve` that would change a definition the store holds for the same date | 2 · a correction is explicit: `--refresh` |
 | `research begin` after the store's definitions moved from what the newest covering snapshot pins | 2 · by name; `kanso data snapshot` pins what is held now |
+| `research begin` on a hypothesis whose `warmup` asks for more sessions before a window than the catalog holds | 2 · naming what it found and how far back to `kanso data load`; a snapshot has to cover the sessions too |
 | `cert run` on bytes already certified under the same plan and engine | 2 · a certificate is immutable |
 | `models check` or `cert plan` with no `models.yaml` | 2 · there is no default plan |
 | edit a file under `strategies/<id>/impl/<version>/` | 3 · at `deploy` and at `replay`, before either runs it |
@@ -836,7 +837,10 @@ be standing when the long-running node arrives.
 One directory per run of a node: `session.yaml`, the points released (`stream.jsonl`) and the
 order intents that came back (`intents.jsonl`). Replay writes one, a parity comparison writes
 two — one per code path — and a deployment that actually runs a node writes one. They are the
-evidence behind a `parity_replay` gate and behind a stage's realised window.
+evidence behind a `parity_replay` gate and behind a stage's realised window. The sessions a
+warmed target was fed before its range are not among the points released, and `clock_ns` is
+never inside them: a session claims what it was asked for, and a stage resumes into its
+window rather than into its prefix.
 
 They accumulate and nothing prunes them; the directory is gitignored. `kanso replay show`
 lists what is on disk, so deleting a session directory removes it from the listing cleanly —
