@@ -429,6 +429,16 @@ def test_leg_edge_subtracts_the_spells_the_host_s_own_run_closed() -> None:
     assert unchanged.skipped is not None, "a construct that added nothing is not judged"
 
 
+def test_leg_edge_judges_nothing_when_every_spell_closed_outside_the_window() -> None:
+    """A run whose trades were not cut to its window has no fold to count them by."""
+    late = spell(START + timedelta(days=20), 100.0)
+
+    result = leg_edge.evaluate(two_day_folds(late))
+
+    assert result.passed and result.skipped is not None
+    assert "inside the window's folds" in str(result.skipped)
+
+
 def test_leg_edge_ignores_a_spell_that_opened_nothing() -> None:
     days = [START + timedelta(days=i) for i in range(8)]
     empty = replace(spell(days[0], 0.0), avg_open=0.0)

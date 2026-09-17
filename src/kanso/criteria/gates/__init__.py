@@ -457,6 +457,10 @@ class _LegEdge:
             counted.append(len(inside))
             judged.append(_spell_sharpe(inside, fold.window) if inside else None)
         measured = [value for value in judged if value is not None]
+        if not measured:
+            return skipped(
+                self.id, f"{leg} closed no spell inside the window's folds, so nothing was judged"
+            )
         below = [value for value in measured if value < floor]
         return verdict(
             self.id,
