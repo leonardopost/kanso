@@ -20,10 +20,15 @@ research.
 registered or already has a directory; a `hypothesis.yaml` that does not parse as a
 hypothesis, declares another id, or carries a classification; a strategy the static
 alignment checks refuse against that hypothesis, or whose bytes this workspace already
-stores; and windows that would research past the end of the parent's research window or
-certify before the start of the parent's certification window. That last refusal is the
-embargo, stated as code: the parent's scores were measured on its research window, and an
-idea written from them certified there would be certified on the data that chose it.
+stores; and windows that would research past the end of the parent's research window,
+certify before the start of the parent's certification window, or certify inside the
+candidate's own embargo counted from the last day the parent researched. That last
+refusal is the embargo, stated as code. The idea was chosen by scores measured on the
+parent's research, so the last day it saw is the parent's, not the one the candidate
+declares, and `Windows.check_embargo`'s rule — no certification before `max(5 x horizon,
+1d)` after the last researched day — is applied from there, at the candidate's horizon.
+The parent's research end is the latest over every pin any of its runs held, because its
+best and its stalls outlive a re-pin that moves the windows.
 Every one of these is a complaint the model is asked again with, and a ladder that runs
 out fails the step.
 
@@ -52,6 +57,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, timedelta
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -70,7 +76,7 @@ from kanso.inbox import escalate
 from kanso.models import CallInputs, route
 from kanso.research import align, driver, lanes, records
 from kanso.research.scheduler import STALLED
-from kanso.schemas import Hypothesis, RunRecord, parse_yaml
+from kanso.schemas import Hypothesis, RunRecord, embargo_days, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
@@ -160,13 +166,12 @@ def explore(
             remedy=f"run `kanso research run {hyp_id}`",
         )
     newest = runs[-1]
-    parent = parse_yaml(
-        Hypothesis, store.get_blob(newest.hypothesis_sha).decode("utf-8"), HYPOTHESIS_FILE
-    )
+    parent = _pinned(store, newest.hypothesis_sha)
+    seen = max(_pinned(store, sha).windows.research.end for sha in {r.hypothesis_sha for r in runs})
     accepted: list[dict[str, Any]] = []
 
     def check(data: Mapping[str, object]) -> Sequence[str]:
-        complaints = _judge(ws, store, parent, data)
+        complaints = _judge(ws, store, parent, seen, data)
         if not complaints:
             accepted.append(dict(data))
         return complaints
@@ -332,9 +337,12 @@ def _taken(ws: Workspace, store: StateStore) -> list[str]:
 
 
 def _judge(
-    ws: Workspace, store: StateStore, parent: Hypothesis, data: Mapping[str, object]
+    ws: Workspace, store: StateStore, parent: Hypothesis, seen: date, data: Mapping[str, object]
 ) -> list[str]:
     """Everything wrong with one candidate, or nothing when it may be written.
+
+    `parent` is the newest pin of the hypothesis explored from, and `seen` the last day
+    any of its pins researched.
 
     Every check that can still be made is made, so one retry can correct them all: an id
     that is wrong does not hide a strategy already stored, and only the checks that read
@@ -374,21 +382,30 @@ def _judge(
             f"hypothesis_yaml: carries {', '.join(written)}; a candidate is written as a draft "
             "and classified by `kanso classify`, so leave all three out"
         )
-    complaints.extend(_embargo(parent, hyp))
+    complaints.extend(_embargo(parent, seen, hyp))
     complaints.extend(f"strategy_py: {problem}" for problem in align.problems(hyp, strategy))
     return complaints
 
 
-def _embargo(parent: Hypothesis, hyp: Hypothesis) -> list[str]:
+def _embargo(parent: Hypothesis, seen: date, hyp: Hypothesis) -> list[str]:
     """The parent's results may not choose data the candidate is certified on.
 
-    The explorer is shown scores measured on the parent's research window, so a candidate
-    that researched later than that window ends, or certified earlier than the parent's
-    certification window starts, would put what the parent's research saw on the far side
-    of the candidate's own embargo.
+    The explorer is shown scores measured on the parent's research, so the candidate's
+    embargo is counted from `seen`, the last day that research reached, and not from the
+    end of the research window the candidate declares — which its own `check_embargo`
+    has already measured from. A candidate that researched later than the parent's newest
+    research window ends, or certified earlier than its certification window starts, is
+    refused as well.
     """
     complaints: list[str] = []
     ours, theirs = hyp.windows, parent.windows
+    earliest = seen + timedelta(days=embargo_days(hyp.horizon))
+    if ours.certification.start < earliest:
+        complaints.append(
+            f"windows.certification.start: {ours.certification.start} is inside the embargo "
+            f"counted from the end of the parent's research ({seen}) for a {hyp.horizon} "
+            f"horizon; certification may not open before {earliest}"
+        )
     if ours.research.end > theirs.research.end:
         complaints.append(
             f"windows.research.end: {ours.research.end} is after the parent's research window "
@@ -450,6 +467,10 @@ def _write(
         rationale=rationale,
         escalation_id=entry.escalation_id,
     )
+
+
+def _pinned(store: StateStore, sha: str) -> Hypothesis:
+    return parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
 
 
 def _text(store: StateStore, sha: str) -> str:

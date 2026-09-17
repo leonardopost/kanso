@@ -27,7 +27,7 @@ from kanso.schemas import Hypothesis, ModelSpec, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
-from .conftest import DOCUMENT, HYP_ID, classify
+from .conftest import DOCUMENT, HYP_ID, RESEARCH, classify
 from .mocked import (  # noqa: F401
     PLAN,
     SEED,
@@ -149,6 +149,49 @@ def researched(ws: Workspace, store: StateStore) -> str:
 
 def parent_of(store: StateStore) -> Hypothesis:
     return parse_yaml(Hypothesis, yaml.safe_dump(DOCUMENT), "hypothesis.yaml")
+
+
+def judge(ws: Workspace, store: StateStore, data: dict[str, Any]) -> list[str]:
+    """Judge a candidate against the demo parent, whose only pin researched to its end."""
+    return explore._judge(ws, store, parent_of(store), RESEARCH[1], data)
+
+
+def windows(research: tuple[date, date], certification: date) -> dict[str, Any]:
+    return {
+        "research": {"start": research[0], "end": research[1]},
+        "certification": {"start": certification, "end": date(2024, 2, 29)},
+        "forward": {"start": date(2024, 3, 1)},
+    }
+
+
+EARLIER_PIN = "2020-01-01T00:00:00+00:00"
+"""When the older pin's run started: before any run a test drives, so it is never newest."""
+
+
+def pin_earlier(store: StateStore, hyp_id: str, **changes: Any) -> str:
+    """An older run of `hyp_id` under another `hypothesis.yaml`, as a re-pin leaves behind.
+
+    Copied from the newest run with its hypothesis blob replaced and its start moved before
+    it, so it is the same research under a pin nothing reads as the newest.
+    """
+    [newest] = [
+        dict(row)
+        for row in store.connection.execute("SELECT * FROM runs WHERE hyp_id = ?", (hyp_id,))
+    ]
+    sha = store.put_blob(yaml.safe_dump({**DOCUMENT, **changes}).encode("utf-8"))
+    row = {
+        **newest,
+        "run_id": "older-pin",
+        "tag": "20200101-1",
+        "hypothesis_sha": sha,
+        "started_at": EARLIER_PIN,
+        "ended_at": EARLIER_PIN,
+    }
+    store.connection.execute(
+        f"INSERT INTO runs ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
+        tuple(row.values()),
+    )
+    return "older-pin"
 
 
 # --- a candidate written -----------------------------------------------------
@@ -350,6 +393,18 @@ def test_a_hypothesis_never_researched_has_nothing_to_explore_from(
             },
             "windows.certification.start: 2024-02-01 is before the parent's certification",
         ),
+        (
+            # Its own research ends early enough for its own embargo; the parent's does not.
+            {
+                "hypothesis_yaml": candidate_yaml(
+                    horizon="3d",
+                    windows=windows((date(2023, 10, 1), date(2024, 1, 5)), date(2024, 2, 6)),
+                )
+            },
+            "windows.certification.start: 2024-02-06 is inside the embargo counted from the "
+            "end of the parent's research (2024-01-31) for a 3d horizon; certification may not "
+            "open before 2024-02-15",
+        ),
         ({"strategy_py": "def broken(:\n"}, "strategy_py: strategy.py does not parse"),
     ],
 )
@@ -358,7 +413,7 @@ def test_every_refusal_is_a_complaint_naming_what_to_change(
 ) -> None:
     classify(ws, store, DOCUMENT, SEED)
 
-    complaints = explore._judge(ws, store, parent_of(store), answer(**changes))
+    complaints = judge(ws, store, answer(**changes))
 
     assert any(complaint in said for said in complaints), complaints
 
@@ -368,7 +423,7 @@ def test_an_instrument_outside_the_candidate_s_universe_is_refused(
 ) -> None:
     source = BREAKOUT + "\nOTHER = 'OTHER.XNYS'\n"
 
-    complaints = explore._judge(ws, store, parent_of(store), answer(strategy_py=source))
+    complaints = judge(ws, store, answer(strategy_py=source))
 
     assert [said for said in complaints if "OTHER.XNYS" in said], complaints
 
@@ -378,7 +433,7 @@ def test_an_id_with_a_directory_is_taken_though_nothing_registered_it(
 ) -> None:
     ws.path("hypotheses", CANDIDATE_ID).mkdir(parents=True)
 
-    complaints = explore._judge(ws, store, parent_of(store), answer())
+    complaints = judge(ws, store, answer())
 
     assert complaints == [
         f"id: {CANDIDATE_ID!r} is taken — registered, reserved, or already a directory under "
@@ -394,13 +449,53 @@ def test_every_check_that_can_be_made_is_made_in_one_answer(
     store.put_blob(SEED)
     wrong = answer(id=HYP_ID, strategy_py=SEED.decode(), hypothesis_yaml="id: [unclosed")
 
-    complaints = explore._judge(ws, store, parent_of(store), wrong)
+    complaints = judge(ws, store, wrong)
 
     assert [said.split(":")[0] for said in complaints] == ["id", "strategy_py", "hypothesis_yaml"]
 
 
 def test_a_valid_candidate_earns_no_complaint(ws: Workspace, store: StateStore) -> None:
-    assert explore._judge(ws, store, parent_of(store), answer()) == []
+    assert judge(ws, store, answer()) == []
+
+
+def test_a_candidate_may_certify_on_the_first_day_after_its_embargo_from_the_parent(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A 3d horizon embargoes 15 days, counted from the parent's research end, 2024-01-31."""
+    boundary = candidate_yaml(
+        horizon="3d", windows=windows((date(2023, 10, 1), date(2024, 1, 5)), date(2024, 2, 15))
+    )
+
+    assert judge(ws, store, answer(hypothesis_yaml=boundary)) == []
+
+
+def test_the_embargo_is_counted_from_the_latest_research_any_pin_of_the_parent_held(
+    ws: Workspace, store: StateStore, researched: str, recorded: Recorder
+) -> None:
+    """A re-pin that moved the windows earlier leaves a best researched on the later ones."""
+    pin_earlier(
+        store,
+        researched,
+        windows=windows((date(2024, 1, 1), date(2024, 2, 10)), date(2024, 2, 16)),
+    )
+    # Outside the embargo from the newest pin's research end, inside it from the older one's.
+    inside = candidate_yaml(
+        windows=windows((date(2024, 1, 1), date(2024, 1, 20)), date(2024, 2, 6))
+    )
+    after = candidate_yaml(
+        windows=windows((date(2024, 1, 1), date(2024, 1, 20)), date(2024, 2, 15))
+    )
+    explorer(ws, [answer(hypothesis_yaml=inside), answer(hypothesis_yaml=after)])
+
+    written = explore.explore(ws, store, researched)
+
+    assert written.hyp_id == CANDIDATE_ID
+    retry = [call for call in recorded.calls if call.task_class == "explore"][1]
+    assert (
+        "windows.certification.start: 2024-02-06 is inside the embargo counted from the end of "
+        "the parent's research (2024-02-10) for a 1d horizon; certification may not open before "
+        "2024-02-15"
+    ) in retry.user
 
 
 # --- when a lane explores ----------------------------------------------------

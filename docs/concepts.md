@@ -258,21 +258,24 @@ drift rewind in one run leaves what another run earned standing.
 
 A re-seed moves the climb to another foot of the same hill; **exploring** asks for another
 hill. `kanso hyp explore ID` — or a daemon lane, once `[research] explore_after_stalls`
-stalls on one best have passed since the last exploration (zero, never, is the template)
-— calls the `explore` task class with what the hypothesis's research learned: its pinned
+stalls on one best have passed since the last exploration (zero, never, is the template) —
+calls the `explore` task class with what the hypothesis's research learned: its pinned
 `hypothesis.yaml` and `program.md`, its best `strategy.py`, the coverage of its cards by
-tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids
-of the gates that failed and nothing they measured. The answer is one new hypothesis,
-whole, judged on the ladder: an id nothing holds, a file that parses with that id and no
+tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of
+the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
+judged on the ladder: an id nothing holds, a file that parses with that id and no
 classification, a strategy the static alignment checks accept against it and whose bytes
 the workspace has never stored, and windows that neither research past the end of the
-parent's research window nor certify before the start of its certification window —
-because the parent's scores were measured there, and an idea chosen by them would be
-certified on the data that chose it. It is written as a draft to `hypotheses/<id>/`, a
-directory that did not exist, and registered by nothing: an `explored` escalation offers
-`hyp validate` and `hyp add`, and whether it gets a lane is yours. A lane's exploration
-that fails is an `explored_failed` event, never a failure of the lane, and any attempt
-starts the count over.
+parent's research window nor certify before the start of its certification window. Nor may
+the candidate certify inside its own embargo counted from the last day the *parent*
+researched — the latest research end of any pin the parent's runs held — rather than from
+the end of the research window the candidate declares: the idea was chosen by scores
+measured on the parent's research, so that is the last day it saw, and one certified sooner
+would be certified on data within the embargo of the data that chose it. It is written as a
+draft to `hypotheses/<id>/`, a directory that did not exist, and registered by nothing: an
+`explored` escalation offers `hyp validate` and `hyp add`, and whether it gets a lane is
+yours. A lane's exploration that fails is an `explored_failed` event, never a failure of
+the lane, and any attempt starts the count over.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search
