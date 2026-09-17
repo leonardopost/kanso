@@ -456,13 +456,16 @@ def test_walk_forward_consistency_reads_the_research_folds_against_the_benchmark
             hyp=make_hyp(**HOLD_HYP),
             params={"min_positive_folds": 1},
             research_run=RISING,
-            benchmark_run=HOLDING,
+            benchmark_run=RISING,
             benchmark_research_run=HOLDING,
         )
     )
     assert result.evidence["folds"] == pytest.approx(
         list(wf_sharpe_vs_hold.fold_values(RISING, 4, benchmark=HOLDING))
     )
+    assert result.evidence["certification"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(RISING, 4, benchmark=RISING)[0]
+    ), "the certified run is differenced against the certification window's hold"
 
 
 def test_walk_forward_consistency_counts_positive_folds() -> None:
