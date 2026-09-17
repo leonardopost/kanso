@@ -22,6 +22,7 @@ from kanso.workspace import Workspace
 from .conftest import (
     ALIGNED,
     CLASSIFIED,
+    EXPLORED,
     PLANNED,
     PROPOSED,
     credentialled,
@@ -100,6 +101,7 @@ def test_a_usable_answer_on_the_routed_tier_is_one_call(
         ("certify_plan", "frontier", PLANNED, "high", 4096),
         ("propose", "mid", PROPOSED, "medium", 4096),
         ("align_check", "cheap", ALIGNED, "none", 256),
+        ("explore", "frontier", EXPLORED, "high", 16384),
     ],
 )
 def test_each_task_class_is_routed_to_its_own_tier_effort_and_cap(

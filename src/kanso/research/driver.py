@@ -94,6 +94,7 @@ __all__ = [
     "TASK",
     "NothingNewError",
     "Outcome",
+    "coverage",
     "phase",
     "run",
 ]
@@ -384,7 +385,7 @@ def _dynamic(
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),
         "recent_cards": [_summary(row) for row in recent],
-        "coverage": _coverage(store, active),
+        "coverage": coverage(store, active),
         "phase": {
             "name": phase(ws.config.research, misses),
             "misses_since_keep": misses,
@@ -573,7 +574,7 @@ def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Ro
     return list(reversed(rows))
 
 
-def _coverage(store: StateStore, active: RunRecord) -> dict[str, dict[str, object]]:
+def coverage(store: StateStore, active: RunRecord) -> dict[str, dict[str, object]]:
     """Every card under this run's pins, read back by tag: how many, the best and the newest.
 
     One row per tag in `kanso.schemas.TAGS` that at least one card carries: the count, the

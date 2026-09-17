@@ -50,6 +50,7 @@ Mechanism = Literal[
 ]
 
 MINIMUM_EMBARGO = timedelta(days=1)
+PERCENT = 100.0
 EMBARGO_HORIZONS = 5
 INTEGRITY_GATE = "strategy_integrity"
 
@@ -180,6 +181,34 @@ class Benchmark(KansoModel):
     hold: Literal["first_leg"]
 
 
+Reset = Literal["monthly", "none"]
+
+
+class Book(KansoModel):
+    """How the book behaves between fills: a reset, a carry on what it borrows, a floor.
+
+    `reset: monthly` returns the book to `capital` at the first period end of each calendar
+    month: a surplus moves into a cushion outside the book, a deficit is restored from that
+    cushion while it lasts, and nothing is ever borrowed to restore it. `financing_rate_bps`
+    is charged per year on the notional the book holds above its equity — gross exposure,
+    shorts included, less what the account is worth — once per return period, by the runner.
+    `maintenance_pct` is the floor the `maintenance_margin` gate holds the book to: what the
+    end-of-period holdings would be worth at the period's adverse extreme, over their gross,
+    as a percentage. Operator-owned like `sizing`, and scope as a whole: every key changes
+    the equity path, so a `best` earned under one policy is not compared with a card run
+    under another.
+    """
+
+    reset: Reset = "none"
+    financing_rate_bps: float = Field(default=0.0, ge=0)
+    maintenance_pct: float | None = Field(default=None, gt=0, le=100)
+
+    @property
+    def funded(self) -> bool:
+        """Whether the policy moves money: a reset restores cash, a carry charges it."""
+        return self.reset != "none" or self.financing_rate_bps > 0
+
+
 class ConstructRef(KansoModel):
     """What `classify` decided this hypothesis is, in portfolio-construction terms."""
 
@@ -228,6 +257,7 @@ class Hypothesis(Versioned):
     windows: Windows
     warmup: Warmup | None = None
     benchmark: Benchmark | None = None
+    book: Book | None = None
     required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")
     objective: ObjectiveRef | None = None
@@ -269,8 +299,26 @@ class Hypothesis(Versioned):
         self.windows.check_embargo(self.horizon)
         self._check_resolution()
         self._check_costs()
+        self._check_book()
         self._check_constraints()
         return self
+
+    def _check_book(self) -> None:
+        """A maintenance floor the leverage ceiling can stand on.
+
+        A book fully levered to `max_leverage` holds equity of `100 / max_leverage` percent
+        of its gross before any price moves, so a floor above that would be breached by the
+        first entry the limits admit.
+        """
+        if self.book is None or self.book.maintenance_pct is None:
+            return
+        at_entry = PERCENT / self.risk_limits.max_leverage
+        if at_entry < self.book.maintenance_pct:
+            raise ValueError(
+                f"book.maintenance_pct: {self.book.maintenance_pct:g}% is above the "
+                f"{at_entry:g}% a book levered to max_leverage {self.risk_limits.max_leverage:g} "
+                "holds at entry, so the first entry the limits admit would breach it"
+            )
 
     def _check_resolution(self) -> None:
         required = self.data_requirements

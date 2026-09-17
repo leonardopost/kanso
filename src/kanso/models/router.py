@@ -2,7 +2,7 @@
 
 Every model call kanso makes goes through `route`, and `route` is the only place a client
 is constructed. That is what makes the ladder a property of the system rather than a habit
-of four call sites, and it is what makes the ledger complete: an attempt that is not routed
+of five call sites, and it is what makes the ledger complete: an attempt that is not routed
 is an attempt that is not recorded, and there is no way to make one.
 
 **The ladder.** A task class is routed to a tier, an effort and an output cap.
@@ -70,7 +70,7 @@ half the prompts ever written, and refusing those would be a denial of service, 
 protection."""
 
 CHECK_TASK: Final = "check"
-"""The task class a register check is ledgered under. Not one of the four call sites."""
+"""The task class a register check is ledgered under. Not one of the five call sites."""
 
 CHECK_MAX_OUTPUT: Final = 64
 

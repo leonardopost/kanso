@@ -69,8 +69,8 @@ never edits the file.
 | `kanso.toml` | `init` | **yes** — the whole file |
 | `.env` | `init` (empty, mode 600) | **yes** — kanso reads it at each use and writes it never |
 | `models.yaml` | `init` | **yes** |
-| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify` | **yes**, between runs |
-| `hypotheses/<id>/program.md` | `hyp new` | **yes**, between runs |
+| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
+| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
 | `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
@@ -78,7 +78,7 @@ never edits the file.
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
@@ -123,6 +123,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
+| declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
 | name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
@@ -370,8 +371,8 @@ benchmark:                         # scope: adding or changing it clears `best`
 
 The hold is not arithmetic on prices. It is a sleeve kanso ships
 (`src/kanso/templates/strategy_hold.py`) run by the same runner as the strategy — the same
-window, snapshot, venue model, costs, splits, capital, sizing budget and warmup, with every
-order in the warmup dropped like the strategy's — and never gated by `max_hold`, because it
+window, snapshot, venue model, costs, splits, capital, sizing budget, warmup and `book`
+policy, with every order in the warmup dropped like the strategy's — and never gated by `max_hold`, because it
 is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
 of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
 fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
@@ -392,6 +393,51 @@ wf_sharpe_vs_hold`, its parameters unchanged — or by clearing `construct`, `ob
 alone is refused the same way. The re-pin that adopts it clears `best` with a `best_cleared`
 event naming both fields that moved, `objective` and `benchmark`, and `strat compose`
 refuses (exit 2) a certificate earned before it, naming the same two.
+
+**`book` is yours, and it is scope as a whole.** Without it the book is what the fills
+leave: a strategy that made money compounds on its gains, one that lost keeps trading on
+what is left, borrowing costs nothing and nothing floors the margin. With it the runner
+applies a policy at every period end, once, in the extraction, and the harness mirrors it
+so `self.balance` reads the same book:
+
+```yaml
+book:                              # scope: adding or changing any key clears `best`
+  reset: monthly                   # the book returns to `capital` at the first period end of each month
+  financing_rate_bps: 250          # per year, on what the book holds above its equity, shorts included
+  maintenance_pct: 25              # floor for the `maintenance_margin` gate, in percent of gross
+```
+
+`reset: monthly` moves a surplus over `capital` into a cushion outside the book and restores
+a deficit from that cushion while it lasts — never by borrowing — so a strategy is measured
+on the same book every month. A drawdown is bounded by the month it fell in: the peak starts
+again at each month's first end, so a surplus swept out is no loss, and a loss the cushion
+could not restore carries on as a drawdown from `capital`. The
+transfer is not a return: returns are struck before it, and the run carries the cushion
+beside the equity curve. `financing_rate_bps` is charged per year on the notional held
+above the book's equity — gross exposure with shorts counted, less what the account is
+worth — once per return period, by the runner, in the extraction, as its own `carry`
+series; `cost_stress` multiplies fill costs and leaves it alone. `maintenance_pct` is the
+floor the `maintenance_margin` gate holds: each period's end-of-period holdings valued at
+the period's adverse extreme — longs at the lowest low, shorts at the highest high since the
+previous end — over their gross. A card is refused below it when its constraints include
+`maintenance_margin` (list it in `required_constraints` to hold every card to it), a paper
+window when the sleeve's do, and a composed version whenever the floor is declared: `strat
+compose` refuses (exit 2) a version whose own run over the certification window falls
+through it. `kanso hyp validate` refuses (exit 3) a floor above
+`100 / max_leverage`, which a book levered to the ceiling breaches at entry; a reset or a
+carry on a venue whose account is `cash`, which can neither fund a restore nor hold a
+borrowed notional; and an attached construct whose `book` is not its host's, because its
+cards run the host under its own file's policy and its version is deployed under the
+host's. Classification never touches the key.
+
+On a paper or live stage the node restarts flat at the version's capital every window, as
+it always has. What carries across a restart is the policy's own state, read from the
+version's newest recorded window on that stage that measured a period: the cushion it closed
+with, and its last period end, against which the next window's first month turn is judged.
+The first carry is charged from the instant the restart resumes trading, not from that end:
+every window ends flat, so the time the version spent off the stage — a stop, or a tenure
+on live before a demotion back to paper — held nothing to borrow against. A new version, or
+a version on a stage it has not run on, starts with nothing set aside.
 
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
@@ -441,7 +487,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id`, `warmup` or `benchmark` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup`, `benchmark` or `book` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.
@@ -480,9 +526,9 @@ tiers, context sizes, prices and the variable name each key is read from — nev
 default that name is `KANSO_<PROVIDER>_API_KEY`; `api_key_env` overrides it with another
 name, and an override replaces the standard name rather than adding to it.
 
-`routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check` — to a
-tier, a thinking effort and an output cap. `kanso models check` prints the register as the
-router reads it and then makes one minimal call to every configured model.
+`routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check`,
+`explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
+register as the router reads it and then makes one minimal call to every configured model.
 
 A workspace with no register is refused where a model is actually needed:
 
@@ -893,7 +939,7 @@ the certificate that cites it still stands, it just no longer has the stream to 
 ## `escalations/inbox.md`
 
 Append-only, and kanso means it. One line per escalation — `misaligned`, `cert_failed`,
-`promotable`, `demoted`, `deploy_blocked` — carrying an id, a timestamp, the kind, its
+`promotable`, `demoted`, `deploy_blocked`, `explored` — carrying an id, a timestamp, the kind, its
 subject, a summary and the commands that kind offers.
 
 `kanso inbox ack <id>` marks one read, and **the line in the file does not change**: it stays

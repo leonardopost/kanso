@@ -100,6 +100,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
         "objective": None,
         "warmup": None,
         "benchmark": None,
+        "book": None,
     }
 
 
@@ -356,6 +357,24 @@ def test_a_benchmark_names_the_leg_it_holds(ws: Workspace, store: StateStore) ->
     ]
 
 
+def test_a_change_of_book_policy_names_the_rule_that_moved(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A reset, a carry and a maintenance floor each change the equity path a metric reads."""
+    register(ws, store, document(book={"reset": "monthly"}))
+    set_best(store)
+
+    register(ws, store, document(book={"reset": "monthly", "financing_rate_bps": 100}))
+
+    assert record(ws, store).best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["reason"] for event in cleared] == [
+        "book changed from {'financing_rate_bps': 0.0, 'maintenance_pct': None, "
+        "'reset': 'monthly'} to {'reset': 'monthly', 'financing_rate_bps': 100.0, "
+        "'maintenance_pct': None}"
+    ], "the pinned side reads back from JSON with its keys sorted"
+
+
 def test_a_row_pinned_before_benchmark_joined_the_scope_keeps_the_best(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -367,6 +386,26 @@ def test_a_row_pinned_before_benchmark_joined_the_scope_keeps_the_best(
     ).fetchone()
     pins = json.loads(held["pins"])
     del pins["benchmark"]
+    store.connection.execute(
+        "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
+    )
+
+    register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
+
+
+def test_a_row_pinned_before_book_joined_the_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A row from before 0.8.0 has no `book` key in its pins, which reads as no policy."""
+    register(ws, store)
+    set_best(store)
+    held = store.connection.execute(
+        "SELECT pins FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    pins = json.loads(held["pins"])
+    del pins["book"]
     store.connection.execute(
         "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
     )

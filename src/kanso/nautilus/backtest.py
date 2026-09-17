@@ -95,7 +95,16 @@ from kanso.criteria import CardRun, Fill, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
-from kanso.nautilus.costs import fixed_half_spread, quote_half_spread, side_rate
+from kanso.nautilus.costs import (
+    carry,
+    fixed_half_spread,
+    maintenance_ratio,
+    month_turned,
+    policy_of,
+    quote_half_spread,
+    reset,
+    side_rate,
+)
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
@@ -109,6 +118,7 @@ __all__ = [
     "MEMORY",
     "RunRequest",
     "RunResult",
+    "booked",
     "checked",
     "child_env",
     "benchmark",
@@ -228,6 +238,18 @@ class RunRequest:
     The upper bound is the same in both. A prefix ends before the window opens, or on the
     day it opens: a stage restart's window opens on the day its clock stands in, and the
     sessions at or before the clock end on that day.
+
+    `cushion` and `settled_ns` are where a book policy stood before this window opened:
+    what a monthly reset had moved out of the book, and the last period end it settled.
+    Zero and `None` for a card, a certificate and a first deploy; on a stage restart what
+    the last window of the same version closed at, so a restore in the new window draws on
+    what earlier windows set aside and a month that turned across the restart resets at
+    the first end after it. `resumes_ns` is the instant a stage restart trades from — the
+    one after its clock — and `None` wherever trading begins at the window's open. The
+    first carry runs from the later of that instant and the settled end, never across the
+    gap between them: every stage window ends flat, so nothing was held while the version
+    was not running, however long ago it last settled. The book itself opens at `capital`
+    either way.
     """
 
     hyp: Hypothesis
@@ -244,6 +266,9 @@ class RunRequest:
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
     prefix: tuple[date, date] | None = None
+    cushion: float = 0.0
+    settled_ns: int | None = None
+    resumes_ns: int | None = None
 
     def __post_init__(self) -> None:
         if self.prefix is None:
@@ -259,6 +284,24 @@ class RunRequest:
     def bounds(self) -> tuple[int, int]:
         """The window as a half-open instant span `[opens, closes)` in nanoseconds."""
         return midnight_ns(self.window[0]), midnight_ns(self.window[1]) + NS_PER_DAY
+
+    @property
+    def carried_from_ns(self) -> int:
+        """The earliest instant a book policy's carry is charged from: the window's open,
+        or the instant a stage restart trades from when it is later."""
+        opens = self.bounds[0]
+        return opens if self.resumes_ns is None else max(opens, self.resumes_ns)
+
+    @property
+    def period_ns(self) -> int:
+        """The return period in nanoseconds; a period of no time at all is refused."""
+        length = int(parse_duration(self.period, "period").total_seconds() * NS_PER_SECOND)
+        if length <= 0:
+            raise ValidationError(
+                f"period: {self.period!r} is no time at all, so the window holds no return "
+                "periods to measure"
+            )
+        return length
 
     @property
     def span(self) -> tuple[date, date]:
@@ -746,6 +789,7 @@ def execute(
         arm(strategy, points)
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
+        booked(strategy, request)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
         engine.run(start=opens, end=closes - 1)
@@ -764,16 +808,45 @@ def execute(
     )
 
 
+def booked(strategy: object, request: RunRequest) -> None:
+    """Hand a sleeve the book policy its request runs under, when the hypothesis has one.
+
+    Every path that runs a sleeve calls this beside `arm` and `warm`, with the request its
+    run is extracted from, so the harness cuts the periods the extraction cuts and settles
+    them with the same policy from the same place.
+    """
+    from kanso.nautilus.cross_section import book
+
+    policy = policy_of(request.hyp.book)
+    if policy is None:
+        return
+    book(
+        strategy,
+        policy,
+        request.bounds[0],
+        request.period_ns,
+        cushion=request.cushion,
+        settled_ns=request.settled_ns,
+        carried_from_ns=request.carried_from_ns,
+    )
+
+
 def _own_peak_gb() -> float:
     """The peak resident size of the process that ran this, in gibibytes."""
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _MAXRSS_BYTES / GIB
+
+
+Point = tuple[int, str, float | None, float | None, float | None]
+"""One stream point: `(ts_init, instrument, price, low, high)`. The price is the mark, and
+the last two are the adverse range the point spans — a bar's low and high, a quote's bid and
+ask, a trade's own price twice — or nothing, for a point that prices nothing."""
 
 
 def checked(
     request: RunRequest,
     instruments: Sequence[object],
     groups: Sequence[Sequence[object]],
-) -> tuple[tuple[int, str, float | None], ...]:
+) -> tuple[Point, ...]:
     """Everything a run refuses before it builds an engine, and then its clock.
 
     Two refusals, both about data the run was handed rather than about the strategy. A
@@ -796,15 +869,16 @@ def checked(
     return _stream(request, groups)
 
 
-def _stream(
-    request: RunRequest, groups: Sequence[Sequence[object]]
-) -> tuple[tuple[int, str, float | None], ...]:
-    """Every point as `(ts_init, instrument, price)`, in the order the engine sees them.
+def _stream(request: RunRequest, groups: Sequence[Sequence[object]]) -> tuple[Point, ...]:
+    """Every point as `(ts_init, instrument, price, low, high)`, in the order the engine
+    sees them.
 
     This is both the clock the return periods are cut on — a period exists when it holds
     at least one data event — and the source of the marks the equity curve is struck at.
     Ties are broken by instrument and then by price, so two points at one instant always
-    order the same way and the mark they leave is reproducible.
+    order the same way and the mark they leave is reproducible. The range a point spans
+    rides beside its mark for the maintenance ratio: what a period's holdings were worth
+    at the period's worst prices.
 
     A point is admitted over the delivered span — the warmup prefix the request names and
     the window — and refused outside it; the upper bound is the window's own, prefix or
@@ -815,7 +889,7 @@ def _stream(
 
     opens, closes = request.delivered
     measured, _ = request.bounds
-    stream: list[tuple[int, str, float | None]] = []
+    stream: list[Point] = []
     for group in groups:
         for point in group:
             if is_marker(point):
@@ -827,9 +901,10 @@ def _stream(
                     f"requested window {request.span[0]}..{request.span[1]}",
                     remedy="load the window the run asked for and nothing else",
                 )
-            stream.append((ts, _instrument_of(point) or "", _price_of(point)))
+            low, high = _range_of(point)
+            stream.append((ts, _instrument_of(point) or "", _price_of(point), low, high))
     stream.sort(key=lambda item: (item[0], item[1], -1e308 if item[2] is None else item[2]))
-    if not any(ts >= measured for ts, _, _ in stream):
+    if not any(ts >= measured for ts, *_ in stream):
         raise PreconditionError(
             f"data: the catalog holds nothing for {request.hyp.id} over "
             f"{request.window[0]}..{request.window[1]}",
@@ -849,6 +924,21 @@ def _price_of(point: object) -> float | None:
     if isinstance(point, TradeTick):
         return float(point.price)
     return None
+
+
+def _range_of(point: object) -> tuple[float | None, float | None]:
+    """The adverse range a point spans: a bar's low and high, a quote's bid and ask, a
+    trade's own price on both sides, and nothing for a point that prices nothing."""
+    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+
+    if isinstance(point, Bar):
+        return float(point.low), float(point.high)
+    if isinstance(point, QuoteTick):
+        return float(point.bid_price), float(point.ask_price)
+    if isinstance(point, TradeTick):
+        price = float(point.price)
+        return price, price
+    return None, None
 
 
 def _ordered(groups: Sequence[Sequence[object]]) -> tuple[object, ...]:
@@ -905,10 +995,11 @@ def _add_run(
 def _extract(
     request: RunRequest,
     engine: Any,
-    stream: Sequence[tuple[int, str, float | None]],
+    stream: Sequence[Point],
     groups: Sequence[Sequence[object]],
 ) -> CardRun:
-    """The one measured object: returns, equity, trades and fills with costs applied."""
+    """The one measured object: returns, equity, trades and fills with costs applied, and
+    the book policy applied once at each period end."""
     model = VenueModel.model_validate(dict(request.venue_model))
     cache = engine.cache
     multipliers = {
@@ -922,24 +1013,40 @@ def _extract(
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
     trades = _trades(positions, by_position, multipliers)
-    ends, equity, held = _equity(request, stream, fills, multipliers, _adjusted(positions))
-    opening = request.capital
-    returns = tuple(
-        value - previous for value, previous in zip(equity, (opening, *equity), strict=False)
-    )
+    curve = _equity(request, stream, fills, multipliers, _adjusted(positions))
     return CardRun(
         window=request.window,
         period=request.period,
-        period_ends_ns=ends,
-        returns=returns,
-        equity=tuple(equity),
+        period_ends_ns=curve.ends,
+        returns=curve.returns,
+        equity=curve.equity,
         trades=trades,
         fills=fills,
-        capital=opening,
+        capital=request.capital,
         currency=model.currency,
         venue_model=dict(request.venue_model),
-        held=held,
+        held=curve.held,
+        cushion=curve.cushion,
+        carry=curve.carry,
+        worst_ratio=curve.worst_ratio,
     )
+
+
+@dataclass(frozen=True)
+class _Curve:
+    """What `_equity` strikes at every period end, each series parallel to `ends`.
+
+    The three book series are empty when the hypothesis declares no policy, so a run
+    without one is the run it always was, byte for byte.
+    """
+
+    ends: tuple[int, ...]
+    returns: tuple[float, ...]
+    equity: tuple[float, ...]
+    held: tuple[Held, ...]
+    cushion: tuple[float, ...] = ()
+    carry: tuple[float, ...] = ()
+    worst_ratio: tuple[float | None, ...] = ()
 
 
 def _spreads(
@@ -1122,11 +1229,11 @@ def _adjusted(positions: Sequence[Any]) -> tuple[tuple[int, str, float], ...]:
 
 def _equity(
     request: RunRequest,
-    stream: Sequence[tuple[int, str, float | None]],
+    stream: Sequence[Point],
     fills: Sequence[Fill],
     multipliers: Mapping[str, float],
     adjustments: Sequence[tuple[int, str, float]] = (),
-) -> tuple[tuple[int, ...], list[float], tuple[Held, ...]]:
+) -> _Curve:
     """The period ends and the equity struck at each, from cash and marked positions.
 
     A period exists when it holds at least one data event, and ends at the last one it
@@ -1148,14 +1255,26 @@ def _equity(
     rather than at nothing. No fill may precede the open: the harness drops every order
     over the prefix, and one that reached the venue anyway is refused here rather than
     measured.
+
+    **The book policy is applied here, once, at each end** (`kanso.nautilus.costs`), in
+    this order. The carry first: the yearly rate on what the marked book holds above its
+    equity, over the span since the previous end — or since the window's open for the
+    first, or since the instant a stage restart resumed when that is later — taken out of
+    cash, so it is in the period's return. Then the maintenance
+    ratio, on the cash the carry left and the end's holdings valued at the period's
+    adverse extreme — a long at the lowest low, a short at the highest high, printed at or
+    after the open since the previous end, whether or not the position was held at that
+    instant, so it is a floor like `max_hold`'s; a name that did not print is valued at
+    its mark. Then the reset, at the first end of a new calendar month: the return is
+    struck on the equity before the transfer, the transfer moves cash between the book
+    and the cushion, and the equity recorded is the book after it. The harness settles
+    the same period from the same functions when the first point of the next period is
+    delivered, so a sleeve's `balance` read at a period's last point is the equity struck
+    here before that end's carry and transfer, and any later read includes them.
     """
     opens, _ = request.bounds
-    period_ns = int(parse_duration(request.period, "period").total_seconds() * NS_PER_SECOND)
-    if period_ns <= 0:
-        raise ValidationError(
-            f"period: {request.period!r} is no time at all, so the window holds no return "
-            "periods to measure"
-        )
+    policy = policy_of(request.hyp.book)
+    period_ns = request.period_ns
     early = [fill for fill in fills if fill.ts_ns < opens]
     if early:
         raise ValidationError(
@@ -1163,24 +1282,37 @@ def _equity(
             "harness drops every order over the warmup prefix, so nothing may fill before it"
         )
     last_in: dict[int, int] = {}
-    for ts, _key, _price in stream:
+    for ts, *_ in stream:
         if ts < opens:
             continue
         last_in[(ts - opens) // period_ns] = ts
     ends = tuple(last_in[index] for index in sorted(last_in))
     marks: dict[str, float] = {}
+    lows: dict[str, float] = {}
+    highs: dict[str, float] = {}
     held: dict[str, float] = {}
     cash = request.capital
+    cushion = request.cushion
     equity: list[float] = []
+    returns: list[float] = []
+    cushions: list[float] = []
+    carries: list[float] = []
+    worsts: list[float | None] = []
     open_at: list[Held] = []
+    previous_end = request.settled_ns
+    previous_equity = request.capital
+    carried_from = request.carried_from_ns
     point = 0
     fill = 0
     split = 0
     for end in ends:
         while point < len(stream) and stream[point][0] <= end:
-            _ts, key, price = stream[point]
+            ts, key, price, low, high = stream[point]
             if price is not None:
                 marks[key] = price
+            if ts >= opens and low is not None and high is not None:
+                lows[key] = min(lows.get(key, low), low)
+                highs[key] = max(highs.get(key, high), high)
             point += 1
         while fill < len(fills) and fills[fill].ts_ns <= end:
             made = fills[fill]
@@ -1194,14 +1326,53 @@ def _equity(
             held[key] = held.get(key, 0.0) + change
             split += 1
         marked: list[float] = []
+        adverse: list[float] = []
         for key in sorted(held):
             qty = held[key]
-            worth = qty * marks.get(key, 0.0) * multipliers.get(key, 1.0)
+            mark = marks.get(key, 0.0)
+            multiplier = multipliers.get(key, 1.0)
+            worth = qty * mark * multiplier
             marked.append(worth)
             if qty:
                 open_at.append(Held(ts_ns=end, instrument_id=key, qty=qty, notional=abs(worth)))
-        equity.append(cash + fsum(marked))
-    return ends, equity, tuple(open_at)
+                floor = lows.get(key, mark) if qty > 0 else highs.get(key, mark)
+                adverse.append(qty * floor * multiplier)
+        value = cash + fsum(marked)
+        if policy is not None:
+            charged = carry(
+                fsum(abs(worth) for worth in marked),
+                value,
+                policy.financing_rate_bps,
+                end - (carried_from if previous_end is None else max(previous_end, carried_from)),
+            )
+            cash -= charged
+            value -= charged
+            worsts.append(maintenance_ratio(cash, adverse))
+            carries.append(charged)
+            moved = 0.0
+            if policy.resets and month_turned(previous_end, end):
+                moved, cushion = reset(value, request.capital, cushion)
+                cash += moved
+            returns.append(value - previous_equity)
+            value += moved
+            if policy.resets:
+                cushions.append(cushion)
+        else:
+            returns.append(value - previous_equity)
+        equity.append(value)
+        previous_equity = value
+        previous_end = end
+        lows.clear()
+        highs.clear()
+    return _Curve(
+        ends=ends,
+        returns=tuple(returns),
+        equity=tuple(equity),
+        held=tuple(open_at),
+        cushion=tuple(cushions),
+        carry=tuple(carries),
+        worst_ratio=tuple(worsts),
+    )
 
 
 # --- the two entry points ----------------------------------------------------

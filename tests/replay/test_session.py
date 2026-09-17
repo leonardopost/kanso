@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import date
+from typing import Any
 
 import pytest
 from nautilus_trader.model.identifiers import ClientId
@@ -28,6 +29,8 @@ from tests.replay.conftest import (
     INSTRUMENT,
     RAISING,
     RESTING,
+    REVERTING,
+    SPAN,
     SPLIT_SCHEDULE,
     bars,
     hypothesis,
@@ -356,3 +359,29 @@ def test_measured_is_the_window_s_own_catalog_points() -> None:
     assert len(kept) == len(bars(FORWARD))
     assert kept[0] is fed[3]
     assert not any(is_marker(point) for point in kept)
+
+
+# --- the book policy ------------------------------------------------------------
+
+BALANCED = REVERTING.replace(
+    b"notional=self.kanso_config.notional", b"notional=self.balance / 10"
+).replace(b"Buys the trough", b"Buys a tenth of its balance at the trough")
+
+
+def booked_request(book: dict[str, Any] | None) -> backtest.RunRequest:
+    fields = {} if book is None else {"book": book}
+    return request_for(source=BALANCED, window=SPAN, hyp=hypothesis(**fields))
+
+
+def test_the_two_paths_settle_a_book_policy_identically() -> None:
+    """A strategy sizing from its balance buys what the reset left on both paths, and both
+    measure the same book: the live path's harness settles each period as the backtest's."""
+    policy = {"reset": "monthly"}
+    node, engine = both(booked_request(policy), [instrument()], [tuple(bars(SPAN))])
+    unbooked = backtest.execute(booked_request(None), [instrument()], [tuple(bars(SPAN))])
+
+    assert node.intents == engine.intents
+    assert node.intents != unbooked.intents, "the reset moved what the balance sizes"
+    assert any(engine.run.cushion), "a surplus was set aside"
+    assert node.run.equity == engine.run.equity
+    assert node.run.cushion == engine.run.cushion

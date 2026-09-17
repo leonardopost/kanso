@@ -322,6 +322,7 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
         "min_trades",
         "max_hold",
         "max_drawdown",
+        "maintenance_margin",
         "position_size",
         "leg_edge",
     }
@@ -330,6 +331,7 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
     assert gates["min_trades"]["params"] == {"min": "int"}
     assert gates["min_trades"]["ranges"] == {"min": {"min": 1.0, "max": 10000.0}}
     assert gates["max_drawdown"]["ranges"] == {}
+    assert gates["maintenance_margin"]["params"] == gates["maintenance_margin"]["ranges"] == {}
     assert gates["min_trades"]["meaningful_when"]
     assert gates["position_size"]["params"] == {"min_pct": "float", "max_pct": "float"}
     assert gates["position_size"]["ranges"] == {

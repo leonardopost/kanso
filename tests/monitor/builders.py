@@ -127,12 +127,22 @@ def run_over(
     capital: float = CAPITAL,
     trades: tuple[Trade, ...] = (),
     fills: tuple[Fill, ...] = (),
+    cushion: tuple[float, ...] = (),
+    carry: tuple[float, ...] = (),
+    worst_ratio: tuple[float | None, ...] = (),
 ) -> CardRun:
-    """A daily run: one return period per day, ending a nanosecond before midnight."""
+    """A daily run: one return period per day, ending a nanosecond before midnight.
+
+    With a `cushion`, the equity is struck net of each day's transfer into it, as the
+    runner strikes it: the return is the day's profit and the curve is what the book kept.
+    """
     running = capital
+    held_back = 0.0
     equity: list[float] = []
-    for value in returns:
-        running += value
+    for index, value in enumerate(returns):
+        moved = (cushion[index] - held_back) if cushion else 0.0
+        held_back += moved
+        running += value - moved
         equity.append(running)
     return CardRun(
         window=(start, start + timedelta(days=len(returns) - 1)),
@@ -147,6 +157,9 @@ def run_over(
         capital=capital,
         currency="USD",
         venue_model=VENUE_MODEL,
+        cushion=cushion,
+        carry=carry,
+        worst_ratio=worst_ratio,
     )
 
 

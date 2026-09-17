@@ -10,10 +10,12 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from kanso.criteria.integrity import scan
 from kanso.criteria.run import midnight_ns
 from kanso.nautilus.backtest import HOLD, benchmark, run
-from kanso.schemas import Warmup
+from kanso.schemas import Hypothesis, Warmup
 
 from .conftest import (
     CAPITAL,
@@ -29,6 +31,8 @@ from .conftest import (
 
 OTHER = "OTHR.XNAS"
 DECEMBER = (date(2023, 12, 1), date(2023, 12, 31))
+TWO_MONTHS = (date(2024, 1, 1), date(2024, 2, 29))
+"""A window with a month end inside it, so a monthly reset has somewhere to fire."""
 
 
 def test_the_benchmark_keeps_everything_the_subject_pins_but_the_strategy(request_for) -> None:
@@ -101,6 +105,41 @@ def test_a_warmed_hold_buys_on_the_window_s_first_print(tmp_path: Path, request_
     (entry,) = result.run.fills
     assert entry.ts_ns >= midnight_ns(RESEARCH[0])
     assert result.run.period_ends_ns[0] >= midnight_ns(RESEARCH[0])
+
+
+def booked(book: dict[str, object] | None) -> Hypothesis:
+    """The benchmark hypothesis over two months, with a book policy or with none."""
+    fields = hypothesis().model_dump(by_alias=True, mode="json")
+    fields["benchmark"] = {"hold": "first_leg"}
+    fields["windows"] = {
+        "research": {"start": TWO_MONTHS[0].isoformat(), "end": TWO_MONTHS[1].isoformat()},
+        "certification": {"start": "2024-03-08", "end": "2024-03-31"},
+        "forward": {"start": "2024-04-01"},
+    }
+    if book is not None:
+        fields["book"] = book
+    return Hypothesis.model_validate(fields)
+
+
+def test_the_hold_keeps_the_book_policy_of_the_subject(tmp_path: Path, request_for) -> None:
+    """The hold's request is the subject's but for the strategy, so the hypothesis — and
+    with it the book policy — rides across: the hold is reset at the turn of the month and
+    carries what it borrows on the same terms. Measured on the saw-tooth over January and
+    February: both holds are worth 105,981.015 at January's last end, and at February's
+    first the policy returns the book to its capital and sets 4,982.515 aside, where the
+    hold declaring none rides on at 104,982.515. A hold of a fifth of the book borrows
+    nothing, so its carry is a series of zeros rather than no series at all."""
+    store = catalog(tmp_path / "booked", bars(TWO_MONTHS), [instrument()])
+    policy = {"reset": "monthly", "financing_rate_bps": 250.0}
+
+    held = run(benchmark(request_for(TWO_MONTHS, hypothesis_=booked(policy))), store).run
+    plain = run(benchmark(request_for(TWO_MONTHS, hypothesis_=booked(None))), store).run
+
+    assert (plain.cushion, plain.carry) == ((), ()), "no policy, no series"
+    assert len(held.cushion) == len(held.carry) == len(held.returns)
+    assert held.equity[30] == pytest.approx(plain.equity[30])
+    assert held.equity[31] == pytest.approx(held.capital), "January's gain moved out"
+    assert held.cushion[31] == pytest.approx(plain.equity[31] - held.capital)
 
 
 def test_the_shipped_hold_passes_the_integrity_scan() -> None:

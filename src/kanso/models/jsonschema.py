@@ -1,6 +1,6 @@
 """A validator for the answer schemas this package sends, and for nothing else.
 
-The four task classes answer with small, closed objects, and the same document is both
+The five task classes answer with small, closed objects, and the same document is both
 what goes on the wire as a schema and what the reply is checked against here. Keeping the
 checker in-package rather than taking a dependency on a general JSON Schema library is a
 deliberate trade: the vocabulary below covers everything the schemas use, a provider

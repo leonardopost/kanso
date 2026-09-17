@@ -87,6 +87,48 @@ def test_a_run_that_only_loses_draws_down_from_its_capital() -> None:
     assert drawdown_pct(run) == pytest.approx(15.0)
 
 
+TURN = date(2024, 1, 30)
+"""Four daily ends, January 30 to February 2: the month turns at the third."""
+
+
+def test_a_surplus_swept_to_the_cushion_is_not_a_drawdown() -> None:
+    """Up 150 by January 31, the first end of February moves it out and the book reads its
+    capital; February's 10 is measured from the capital, not from January's 1,150."""
+    run = build_run(
+        (100.0, 50.0, 0.0, -10.0),
+        start=TURN,
+        capital=1_000.0,
+        equity=(1_100.0, 1_150.0, 1_000.0, 990.0),
+        cushion=(0.0, 0.0, 150.0, 150.0),
+    )
+
+    assert drawdown_pct(run) == pytest.approx(1.0)
+    assert drawdown_pct(build_run((100.0, 50.0, -150.0, -10.0), capital=1_000.0)) == (
+        pytest.approx(16.0)
+    ), "the same curve read without the reset"
+
+
+def test_a_loss_the_cushion_restores_counts_in_the_month_it_fell_in() -> None:
+    """February's first end loses 100 and draws it back from the cushion: the book reads
+    its capital, but the drawdown struck before the transfer is still the month's."""
+    run = build_run(
+        (0.0, 0.0, -100.0, 0.0),
+        start=TURN,
+        capital=1_000.0,
+        equity=(1_000.0, 1_000.0, 1_000.0, 1_000.0),
+        cushion=(500.0, 500.0, 400.0, 400.0),
+    )
+
+    assert drawdown_pct(run) == pytest.approx(10.0)
+
+
+def test_a_loss_the_cushion_cannot_restore_carries_into_the_next_month() -> None:
+    run = build_run((-100.0, 0.0, -50.0, -50.0), start=TURN, capital=1_000.0, cushion=(0.0,) * 4)
+
+    assert run.equity == (900.0, 900.0, 850.0, 800.0)
+    assert drawdown_pct(run) == pytest.approx(20.0)
+
+
 def test_correlation_pairs_two_samples() -> None:
     assert correlation([1.0, 2.0, 3.0], [2.0, 4.0, 6.0]) == pytest.approx(1.0)
     assert correlation([1.0, 2.0, 3.0], [3.0, 2.0, 1.0]) == pytest.approx(-1.0)

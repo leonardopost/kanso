@@ -112,6 +112,18 @@ class CardRun:
     `held` is that last sum before it was taken: what each instrument was worth at each
     period end. It is what a size gate has to read, because the two notionals a run
     already carried are neither of them a position's value while it was open.
+
+    Three more series ride beside the equity curve when the hypothesis declares a `book`
+    policy, each parallel to the period ends and empty when the run measured none.
+    `cushion`, recorded under `reset: monthly` alone and what `max_drawdown` reads to know
+    the book was reset, is what the reset has moved out of the book by each period end, so
+    `equity[i] - equity[i-1]` is `returns[i]` less the transfer that end made: returns are
+    struck before the transfer, and the sum of the returns is the profit of book and
+    cushion together. `carry` is the financing charged at each end on what the book held
+    above its equity — already in the returns, kept apart because it is a rate on borrowed
+    notional and not a fill cost, so `cost_stress` leaves it alone. `worst_ratio` is the
+    book's equity over its gross with each end's holdings valued at the period's adverse
+    extreme, `None` at an end where nothing was held: what `maintenance_margin` reads.
     """
 
     window: tuple[date, date]
@@ -125,6 +137,9 @@ class CardRun:
     currency: str
     venue_model: Mapping[str, object]
     held: tuple[Held, ...] = ()
+    cushion: tuple[float, ...] = ()
+    carry: tuple[float, ...] = ()
+    worst_ratio: tuple[float | None, ...] = ()
 
     def __post_init__(self) -> None:
         start, end = self.window
@@ -143,6 +158,13 @@ class CardRun:
         ends = self.period_ends_ns
         if any(b <= a for a, b in zip(ends, ends[1:], strict=False)):
             raise ValidationError("period_ends_ns: the periods are not strictly increasing")
+        for name in ("cushion", "carry", "worst_ratio"):
+            series = getattr(self, name)
+            if series and len(series) != len(self.period_ends_ns):
+                raise ValidationError(
+                    f"{name}: a book series is parallel to the period ends, but it is "
+                    f"{len(series)} long against {len(self.period_ends_ns)} period ends"
+                )
 
     @property
     def bounds(self) -> tuple[int, int]:
@@ -175,4 +197,7 @@ class CardRun:
             trades=tuple(t for t in self.trades if opens <= t.closed_ns < closes),
             fills=tuple(f for f in self.fills if opens <= f.ts_ns < closes),
             held=tuple(h for h in self.held if opens <= h.ts_ns < closes),
+            cushion=tuple(self.cushion[i] for i in kept) if self.cushion else (),
+            carry=tuple(self.carry[i] for i in kept) if self.carry else (),
+            worst_ratio=tuple(self.worst_ratio[i] for i in kept) if self.worst_ratio else (),
         )

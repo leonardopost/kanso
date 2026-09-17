@@ -49,11 +49,12 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | command | what it does |
 |---|---|
 | `kanso hyp new ID` | scaffold `hypotheses/<id>/` with `hypothesis.yaml`, `program.md` and a `strategy.py` stub |
-| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints, the `warmup` an attached construct shares with its host, and a `benchmark` only on a horizon of a day or more (checked on a draft too) and where the objective measures one — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
-| `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with. A re-pin that changes the `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`, `objective.id`, `warmup` or `benchmark` (under a benchmark, the universe's first name too) — stripping the classification included — clears the hypothesis's best and records `best_cleared` naming the field, because a card's metric means nothing across any of them; the cards and their blobs stay in state |
+| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints, the `warmup` and the `book` an attached construct shares with its host, a `book` the venue's account and the leverage ceiling can hold, and a `benchmark` only on a horizon of a day or more (checked on a draft too) and where the objective measures one — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
+| `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with. A re-pin that changes the `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`, `objective.id`, `warmup`, `benchmark` (under a benchmark, the universe's first name too) or `book` — stripping the classification included — clears the hypothesis's best and records `best_cleared` naming the field, because a card's metric means nothing across any of them; the cards and their blobs stay in state |
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
 | `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state, and it is the only way research ends: no verdict and no run of failures ends one |
 | `kanso hyp resume ID` | undo an ending — a hypothesis you retired, or one an older kanso turned `failed` — back to `researching`, clearing the consecutive-failure count. Refused (exit 2) on a hypothesis research has not ended. Give it a lane with `kanso research queue add ID` |
+| `kanso hyp explore ID` | write one **new** hypothesis from what the research of `ID` learned, in one call to the best model on the register (the `explore` task class): the pinned `hypothesis.yaml` and `program.md`, the best `strategy.py`, the coverage of its cards by tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of its failing gates — never a number measured on a certification window. The candidate is judged on the ladder — an id that is not registered, reserved or already a directory; a file that parses with that id and carries no classification; a strategy the static alignment checks accept and whose bytes the workspace has never stored; windows that research no later than the parent's research window ends, certify no earlier than its certification window starts, and certify no sooner than the candidate's own embargo (`max(5 x horizon, 1d)`) counted from the latest research end of any pin the parent's runs held, the last day the idea saw — and written as a **draft** to `hypotheses/<id>/`, a directory that did not exist. Nothing is registered: an `explored` escalation offers `hyp validate` and `hyp add`. Refused (exit 2) for an id not registered and for a hypothesis never researched; past those two it is an attempt, and it also exits 2 with no model configured, as every model step does, and when no answer survives the ladder — each such failure an `explored_failed` event under `ID` which, like a candidate's `explored` event, starts a lane's count of `explore_after_stalls` over |
 | `kanso classify ID` | decide what the hypothesis **is** — construct, host, the keep rule's two parameters and the card-stage constraints — in one call to the best model on the register, and write the three keys into `hypothesis.yaml`, re-pinning it. The objective is not asked for: it follows from the hypothesis and the construct. A construct this build cannot run is recorded honestly and refused at `research begin`. `strategy.py` is replaced by the construct's stub only while the file is still one kanso wrote. A classification onto another construct clears the hypothesis's best on the same terms as `hyp add` |
 
 Editing `construct`, `objective` and `constraints` by hand and running `kanso hyp add` is
@@ -80,7 +81,10 @@ consecutive non-keeps — discards, crashes, repeated and redundant misses alike
 `redundant_pct` is the share of shared sessions on which two strategies holding the same
 book are one experiment; `local_cards` and `structural_cards` are the lengths of the two
 phases; `reseed_after_stalls` is the spell of stalls on one best after which the next run
-starts elsewhere. All are `[research]` keys of `kanso.toml`, and all are framework
+starts elsewhere; `explore_after_stalls` (0, never, in the template) is the spell of stalls
+on one best, since the last exploration, after which a daemon lane runs `hyp explore` on the
+stalled hypothesis once the driver has returned — a failure there is an `explored_failed`
+event and never the lane's. All are `[research]` keys of `kanso.toml`, and all are framework
 search rules rather than decisions an agent makes: they bound the search, they do not
 choose within it.
 
@@ -126,9 +130,10 @@ paths rather than claiming that they agreed.
 **A passing verdict composes and deploys by itself.** The construct's version is made and
 the paper stage is offered it, because both acts follow from the certificate with no
 decision left in them and a loop that runs indefinitely cannot stop at every certificate to
-ask for a command with only one possible form. A stage that cannot take the version — it is
-halted, the engine has moved, the catalog has no forward data, the limits leave no capital —
-escalates `deploy_blocked` and the certificate still stands. What is never automatic is the
+ask for a command with only one possible form. A version that cannot be composed — its book
+falls below the `book.maintenance_pct` its hypothesis declares — or a stage that cannot take
+it — it is halted, the engine has moved, the catalog has no forward data, the limits leave
+no capital — escalates `deploy_blocked` and the certificate still stands. What is never automatic is the
 next step: paper to live needs `promote --live --as NAME`.
 
 ## Strategies
@@ -140,8 +145,13 @@ engine returns the version that exists rather than a second copy of it, and a sl
 with different bytes, or the same bytes under a new engine, composes its strategy's next
 version. The certificate composed is the hypothesis's newest passing one, under the hypothesis
 as the registry pins it now: one earned under another universe, resolution, data requirement,
-construct, sizing rule, warmup or benchmark is refused (exit 2) by the field that moved, and so is a construct
-whose host's latest sleeve is not the one its run was pinned to.
+construct, sizing rule, warmup, benchmark or book policy is refused (exit 2) by the field that
+moved, and so is a construct
+whose host's latest sleeve is not the one its run was pinned to. A version whose own book, run
+over the sleeve's certification window, falls below the `book.maintenance_pct` its hypothesis
+declares is refused (exit 2) with the worst ratio and the floor, whether or not any card was
+held to `maintenance_margin`: no version is written to `strategy.yaml`, and the implementation
+generated to measure it stays in `impl/<version>/` until the next compose replaces it.
 
 `STRATEGY[@V]` is the notation every command below shares: a strategy id, optionally a
 version. Leaving the version out means the one the command's own rule picks — the latest
@@ -265,8 +275,10 @@ skipped. It then requires the objective the stage realised to fall **inside** th
 ninety-percent interval composition measured — a result above the band fails exactly as one
 below it does, because a stage that out-performs its certification is not reproducing the
 model that was certified, and promoting on it would promote an unexplained difference. Of
-the sleeve's card-stage constraints only the drawdown limit is judged; `min_trades` is
-recorded as skipped, since a research-window count cannot be met in a paper window.
+the sleeve's card-stage constraints the drawdown limit and, when the sleeve holds cards to
+it, `maintenance_margin` are judged on the stage's own run, and a breach of either fails;
+`min_trades` is recorded as skipped, since a research-window count cannot be met in a paper
+window.
 
 ## Models
 

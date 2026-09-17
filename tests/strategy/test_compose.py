@@ -13,6 +13,7 @@ from kanso.state import StateStore
 from kanso.strategy import composition, files, impl
 from kanso.strategy.composition import compose
 from kanso.workspace import Workspace
+from tests.criteria.builders import build_run, make_hyp
 from tests.research.conftest import (
     BOOK,
     DOCUMENT,
@@ -587,3 +588,102 @@ def test_a_warmed_sleeve_s_expectation_is_measured_warm_over_its_certification_w
     ]
     assert version.version == 1
     assert version.expectation.window.start.isoformat() == "2024-02-06"
+
+
+LEVERED = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Buys twice its capital on the first bar and holds it."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.bought = False
+
+    def on_bar(self, bar) -> None:
+        if not self.bought:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=2 * self.capital)
+            self.bought = True
+'''
+
+LEVERED_ID = "demo_levered"
+
+
+def levered_certificate(ws: Workspace, store: StateStore) -> Certificate:
+    """A passing certificate for a sleeve levered to its ceiling under a floor at that ceiling.
+
+    Half the book is equity at the entry's price, so the period's low already falls through
+    a 50% floor — one `hyp validate` admits at `max_leverage: 2` — at the first end: 48.64%
+    over the certification window. No plan held a card to the gate, so it certified.
+    """
+    return a_certificate(
+        ws,
+        store,
+        LEVERED_ID,
+        LEVERED,
+        construct={"id": "sleeve"},
+        objective_id="wf_sharpe_net",
+        doc=document(
+            id=LEVERED_ID,
+            risk_limits={"max_position_pct": 200, "max_drawdown_pct": 100, "max_leverage": 2},
+            book={"maintenance_pct": 50},
+        ),
+    )
+
+
+def test_strat_compose_refuses_a_version_whose_book_breaches_its_floor(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The command exits 2 with the worst ratio, the floor and a remedy, and no strategy
+    file is written."""
+    from typer.testing import CliRunner
+
+    from tests.cli.conftest import payload, run
+
+    levered_certificate(ws, store)
+
+    result = run(CliRunner(), "--workspace", ws.root, "strat", "compose", LEVERED_ID, "--json")
+
+    assert result.exit_code == 2, result.stdout
+    refused = payload(result)
+    assert "below the 50% floor book.maintenance_pct declares" in refused["error"]
+    assert "kanso hyp add" in refused["remedy"]
+    assert files.read(ws, LEVERED_ID) is None, "no version was written"
+    assert files.impl_dir(ws, LEVERED_ID, 1).is_dir(), "what measured it stays until replaced"
+
+
+def test_a_certificate_whose_version_breaches_its_floor_escalates_on_its_own(
+    ws: Workspace, store: StateStore
+) -> None:
+    from kanso.inbox import unread
+    from kanso.portfolio.lifecycle import on_certified
+
+    adoption = on_certified(ws, store, levered_certificate(ws, store))
+
+    assert adoption.version is None
+    assert adoption.blocked and "book.maintenance_pct" in adoption.blocked
+    entry = unread(store)[-1]
+    assert entry.kind == "deploy_blocked"
+    assert "falls to 48.64% of its gross" in entry.summary
+    assert "lower book.maintenance_pct" in entry.actions
+
+
+def test_a_version_whose_book_breaches_its_maintenance_floor_is_not_composed() -> None:
+    """The floor is the operator's whatever the plan chose, so the expectation run holds it."""
+    floored = make_hyp(book={"maintenance_pct": 30.0})
+    breached = build_run((0.0, 0.0), worst_ratio=(0.31, 0.2999))
+
+    with pytest.raises(PreconditionError, match="falls to 29.99% of its gross") as failure:
+        composition._check_margin(floored, breached)
+
+    assert "below the 30% floor book.maintenance_pct declares" in failure.value.message
+    assert failure.value.remedy is not None and "kanso hyp add" in failure.value.remedy
+    composition._check_margin(floored, build_run((0.0, 0.0), worst_ratio=(0.31, 0.3)))
+    composition._check_margin(make_hyp(), breached)
+    composition._check_margin(floored, build_run((0.0,)))
