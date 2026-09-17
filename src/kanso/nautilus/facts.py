@@ -142,7 +142,21 @@ ts_event, ts_init)` requires the two prices to share a precision and the two
 sizes to share a precision. `TradeTick(instrument_id, price, size,
 aggressor_side, trade_id, ts_event, ts_init)` requires a strictly positive
 size — a zero-size print cannot be represented and must be dropped or
-recorded as another type.
+recorded as another type. Every one of them carries `ts_init` as a readable
+attribute, and a `Bar` carries `low` and `high` beside `open` and `close`, with
+`low` at or under the lesser of the two and `high` at or over the greater — the
+adverse extreme of a period is readable off the point that closed it, at the
+instant that point became available.
+
+Historical data
+---------------
+`Actor.handle_bar(bar, historical=True)` routes to `handle_historical_data` and
+so to `on_historical_data`, never to `on_bar`, whatever the component's state:
+on a running actor a bar delivered as history reaches `on_historical_data`
+alone and the same bar delivered as live reaches `on_bar` alone. A bar that
+arrives in answer to `request_bars` is therefore invisible to the handler a
+strategy trades from, which is why a warm-up cannot be a request for history
+and has to be points fed through the ordinary stream.
 
 Live and sandbox nodes
 ----------------------
@@ -210,6 +224,20 @@ configures no per-strategy limit, no gross or net exposure limit and no
 portfolio-level cap, so any such limit must be enforced where the order size is
 chosen and where the deployed set is seen as a whole, with this as the
 per-order backstop underneath.
+
+**The risk engine performs no balance or margin check for a margin account.**
+`RiskEngine._check_orders_risk_for_account` returns `True` before it reads the
+free balance whenever `account.is_margin_account` (`risk/engine.pyx`, a `TODO`
+in the engine's own words). Measured: a limit order for 100,000 shares at 10.00
+— a million dollars — on a margin account funded with 1,000 is accepted and
+filled in full, where a cash account denies it with
+`NOTIONAL_EXCEEDS_FREE_BALANCE`. And `LeveragedMarginModel`, the model
+`BacktestEngine.add_venue` substitutes when none is configured, computes
+`notional / leverage x instrument.margin_init`, which is zero for every
+instrument kanso resolves because their margin rates are left at zero: the venue
+locks no margin, calls none and liquidates nothing. The only borrowing limit in
+a kanso backtest is the sleeve's own room, and financing, a monthly reset and a
+maintenance breach are kanso's arithmetic or nobody's.
 
 Network I/O
 -----------
@@ -1229,6 +1257,246 @@ def _check_risk_engine_config() -> tuple[bool, str]:
     )
 
 
+def _probe_oversized_limit(account_type: object) -> tuple[list[tuple[object, ...]], str]:
+    """One limit order a thousand times the account, and what the engine did with it.
+
+    Three minute bars at 10.00 on a venue funded with 1,000 USD; from the first bar's
+    handler the strategy submits a BUY limit for 100,000 shares at 10.00. The events the
+    order raised, and its final status name.
+    """
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import Bar, BarSpecification, BarType
+    from nautilus_trader.model.enums import (
+        AggregationSource,
+        BarAggregation,
+        OmsType,
+        OrderSide,
+        PriceType,
+    )
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity = _sample_equity()
+    minute = BarType(
+        equity.id,  # type: ignore[attr-defined]
+        BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    minute_ns = 60_000_000_000
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[object, ...]] = []
+            self.order: Any = None
+
+        def on_start(self) -> None:
+            self.subscribe_bars(minute)
+
+        def on_bar(self, bar_: object) -> None:
+            if self.order is None:
+                self.order = self.order_factory.limit(
+                    equity.id,  # type: ignore[attr-defined]
+                    OrderSide.BUY,
+                    Quantity.from_int(100_000),
+                    Price(10.0, 2),
+                )
+                self.submit_order(self.order)
+
+        def on_order_denied(self, event: object) -> None:
+            self.events.append(("denied", event.reason))  # type: ignore[attr-defined]
+
+        def on_order_filled(self, event: object) -> None:
+            self.events.append(("filled", float(event.last_qty), float(event.last_px)))  # type: ignore[attr-defined]
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=account_type,
+            base_currency=USD,
+            starting_balances=[Money(1_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(
+            [
+                Bar(
+                    minute,
+                    Price(10.0, 2),
+                    Price(10.5, 2),
+                    Price(9.5, 2),
+                    Price(10.0, 2),
+                    Quantity.from_int(1_000_000),
+                    ts_event=i * minute_ns,
+                    ts_init=i * minute_ns,
+                )
+                for i in range(1, 4)
+            ]
+        )
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return probe.events, str(probe.order.status_string())
+    finally:
+        engine.dispose()
+
+
+def _check_margin_account_skips_the_balance_check() -> tuple[bool, str]:
+    """`if account.is_margin_account: return True` — the engine's TODO, measured."""
+    from nautilus_trader.model.enums import AccountType
+
+    on_margin, margin_status = _probe_oversized_limit(AccountType.MARGIN)
+    on_cash, cash_status = _probe_oversized_limit(AccountType.CASH)
+    holds = (
+        on_margin == [("filled", 100_000.0, 10.0)]
+        and margin_status == "FILLED"
+        and len(on_cash) == 1
+        and on_cash[0][0] == "denied"
+        and "NOTIONAL_EXCEEDS_FREE_BALANCE" in str(on_cash[0][1])
+        and cash_status == "DENIED"
+    )
+    return holds, (
+        f"a BUY limit for 100,000 @ 10.00 on an account funded with 1,000 USD: margin -> "
+        f"{on_margin} ({margin_status}); cash -> {on_cash} ({cash_status}). The risk "
+        f"engine reads no balance for a margin account, so the only borrowing limit in a "
+        f"backtest is what the sleeve refuses itself"
+    )
+
+
+def _check_zero_instrument_margin_yields_zero_margin() -> tuple[bool, str]:
+    """The default margin model scales the instrument's own rate, and kanso's rate is zero."""
+    from decimal import Decimal
+
+    from nautilus_trader.accounting.margin_models import LeveragedMarginModel
+    from nautilus_trader.model.enums import PositionSide
+    from nautilus_trader.model.objects import Price, Quantity
+
+    instrument: Any = _sample_equity()
+    model = LeveragedMarginModel()
+    quantity, price = Quantity.from_int(100_000), Price.from_str("10.00")
+    initial = [
+        float(model.calculate_margin_init(instrument, quantity, price, Decimal(leverage)))
+        for leverage in (1, 4)
+    ]
+    maintenance = [
+        float(
+            model.calculate_margin_maint(
+                instrument, PositionSide.LONG, quantity, price, Decimal(leverage)
+            )
+        )
+        for leverage in (1, 4)
+    ]
+    rates = (float(instrument.margin_init), float(instrument.margin_maint))
+    holds = rates == (0.0, 0.0) and initial == [0.0, 0.0] and maintenance == [0.0, 0.0]
+    return holds, (
+        f"an Equity built from the fields kanso supplies carries margin_init/margin_maint "
+        f"{rates}; LeveragedMarginModel on 100,000 @ 10.00 at leverage 1 and 4 asks "
+        f"{initial} initial and {maintenance} maintenance: the venue locks no margin and "
+        f"liquidates nothing, so a maintenance rule is kanso's arithmetic"
+    )
+
+
+def _check_historical_bar_never_reaches_on_bar() -> tuple[bool, str]:
+    """`handle_bar(historical=True)` goes to `on_historical_data`, whatever the state."""
+    from nautilus_trader.cache.cache import Cache
+    from nautilus_trader.common.actor import Actor
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.model.identifiers import TraderId
+    from nautilus_trader.portfolio.portfolio import Portfolio
+
+    class _Recorder(Actor):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list[tuple[str, int]] = []
+
+        def on_bar(self, bar: object) -> None:
+            self.seen.append(("on_bar", int(bar.ts_init)))  # type: ignore[attr-defined]
+
+        def on_historical_data(self, data: object) -> None:
+            self.seen.append(("on_historical_data", int(data.ts_init)))  # type: ignore[attr-defined]
+
+    clock = TestClock()
+    cache = Cache()
+    msgbus = MessageBus(trader_id=TraderId("KANSO-001"), clock=clock)
+    actor = _Recorder()
+    actor.register_base(Portfolio(msgbus, cache, clock), msgbus, cache, clock)
+    actor.start()
+    state = actor.state.name
+    actor.handle_bar(_sample_bar(ts_event=1, ts_init=2), historical=True)
+    actor.handle_bar(_sample_bar(ts_event=3, ts_init=4))
+    actor.stop()
+    holds = actor.seen == [("on_historical_data", 2), ("on_bar", 4)]
+    return holds, (
+        f"a {state} actor handed one bar as history and one as live recorded {actor.seen}: "
+        f"history reaches on_historical_data alone and never on_bar, so a warm-up cannot be "
+        f"a request for bars and has to be points fed through the stream"
+    )
+
+
+def _check_bar_carries_low_high_and_ts_init() -> tuple[bool, str]:
+    """The adverse range of a period, and the instant every point became available."""
+    from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick, TradeTick
+    from nautilus_trader.model.enums import (
+        AggregationSource,
+        AggressorSide,
+        BarAggregation,
+        PriceType,
+    )
+    from nautilus_trader.model.identifiers import InstrumentId, TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    instrument_id = InstrumentId.from_str("AAPL.XNAS")
+    bar: Any = Bar(
+        BarType(
+            instrument_id,
+            BarSpecification(1, BarAggregation.DAY, PriceType.LAST),
+            AggregationSource.EXTERNAL,
+        ),
+        Price.from_str("10.00"),
+        Price.from_str("10.50"),
+        Price.from_str("9.50"),
+        Price.from_str("10.20"),
+        Quantity.from_int(1_000),
+        1_000,
+        2_000,
+    )
+    quote = QuoteTick(
+        instrument_id,
+        Price.from_str("9.99"),
+        Price.from_str("10.01"),
+        Quantity.from_int(1),
+        Quantity.from_int(1),
+        1_000,
+        2_000,
+    )
+    trade = TradeTick(
+        instrument_id,
+        Price.from_str("10.00"),
+        Quantity.from_int(1),
+        AggressorSide.BUYER,
+        TradeId("1"),
+        1_000,
+        2_000,
+    )
+    ohlc = tuple(float(getattr(bar, name)) for name in ("open", "high", "low", "close"))
+    stamps = [int(point.ts_init) for point in (bar, quote, trade)]
+    holds = (
+        ohlc[2] <= min(ohlc[0], ohlc[3]) <= max(ohlc[0], ohlc[3]) <= ohlc[1]
+        and stamps == [2_000, 2_000, 2_000]
+        and all(int(point.ts_event) == 1_000 for point in (bar, quote, trade))
+    )
+    return holds, (
+        f"Bar exposes open/high/low/close {ohlc} with low and high bracketing the two; "
+        f"Bar, QuoteTick and TradeTick stamped ts_event=1000, ts_init=2000 answer ts_init "
+        f"{stamps}, so a period's adverse extreme and the instant a point became public "
+        f"are both readable off the point itself"
+    )
+
+
 # --- network -----------------------------------------------------------------
 
 
@@ -1560,6 +1828,22 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "RiskEngineConfig caps notional per order per instrument and nothing wider",
         _check_risk_engine_config,
+    ),
+    (
+        "the risk engine performs no balance or margin check for a margin account",
+        _check_margin_account_skips_the_balance_check,
+    ),
+    (
+        "LeveragedMarginModel asks zero margin of an instrument whose margin rates are zero",
+        _check_zero_instrument_margin_yields_zero_margin,
+    ),
+    (
+        "handle_bar(historical=True) routes to on_historical_data and never to on_bar",
+        _check_historical_bar_never_reaches_on_bar,
+    ),
+    (
+        "a Bar carries low and high, and every market point carries ts_init",
+        _check_bar_carries_low_high_and_ts_init,
     ),
     (
         "nautilus_pyo3.HttpClient takes a default quota and per-key quotas",

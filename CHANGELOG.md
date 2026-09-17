@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **Four more engine facts `kanso doctor` re-checks.** The risk engine performs no balance or margin check for a margin account — measured on `nautilus_trader 1.231.0`: a limit order for 100,000 shares at 10.00 on an account funded with 1,000 USD is accepted and filled in full, where a cash account denies it with `NOTIONAL_EXCEEDS_FREE_BALANCE`; `LeveragedMarginModel`, the model the engine substitutes when none is configured, asks 0.00 USD of margin at leverage 1 and 4 for the instruments kanso resolves, whose margin rates are zero; `handle_bar(historical=True)` reaches `on_historical_data` and never `on_bar`, whatever the actor's state; and a `Bar` carries `low` and `high` while every market point carries `ts_init`. Nothing changes for an operator today. These are the bindings a warm-up, a financing charge and a maintenance rule will rest on, recorded where an engine upgrade that breaks one is caught first.
+
 ## v0.7.0 — 2026-09-11
 
 - **A backtest no longer borrows to keep a strategy's size.** Without a sizing rule an entry's room was a share of the starting capital however much the account had lost, and nothing refused the order: measured on a sleeve run from 2022, it kept buying full-size positions with its balance below zero. `max_position_pct` and `max_leverage` are now read on the smaller of the capital and the balance, with orders in flight counted as filled and resting limit and stop entries held back. Metrics change for an unsized sleeve that drew down below its capital, or that rested an entry beside another; the rest are unchanged.
