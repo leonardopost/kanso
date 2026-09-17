@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import replace
 from datetime import date
 from hashlib import sha256
 from pathlib import Path
@@ -11,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from kanso.criteria import SCOPED_FILES
-from kanso.data import catalog, snapshot
+from kanso.data import snapshot
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
 from kanso.research import loop, records
@@ -30,10 +29,9 @@ from .conftest import (
     RESEARCH,
     REVERTING,
     WEAK,
-    bars,
     classify,
-    dataset,
     document,
+    load_december,
     write_hypothesis,
 )
 
@@ -602,17 +600,10 @@ def test_a_refused_baseline_refuses_the_run_naming_the_rule(
 
 # --- warming --------------------------------------------------------------------
 
-DECEMBER = (date(2023, 12, 1), date(2023, 12, 31))
-
 
 def warmed(ws: Workspace, store: StateStore, sessions: int = 3) -> str:
     """The demo hypothesis, warming on this many sessions before each window."""
     return classify(ws, store, document(warmup={"sessions": sessions}))
-
-
-def load_december(ws: Workspace) -> None:
-    """The month before the research window, into the catalog and not yet into a snapshot."""
-    catalog.write(ws, bars(DECEMBER), ref=replace(dataset(), span=DECEMBER), source="synthetic")
 
 
 def test_a_warmed_hypothesis_needs_its_sessions_in_the_catalog(
@@ -635,7 +626,7 @@ def test_a_warmed_run_pins_a_snapshot_that_covers_the_prefix(
     ws: Workspace, store: StateStore
 ) -> None:
     hyp_id = warmed(ws, store)
-    load_december(ws)
+    load_december(ws, freeze=False)
 
     with pytest.raises(PreconditionError, match="and the warmup sessions before each"):
         loop.begin(ws, store, hyp_id)
