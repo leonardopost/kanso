@@ -510,6 +510,17 @@ def test_a_leg_edge_leg_the_universe_does_not_hold_is_refused(ws: Workspace) -> 
     )
 
 
+def test_a_leg_edge_leg_the_universe_does_not_hold_is_refused_from_constraints_too(
+    ws: Workspace,
+) -> None:
+    edge = {"id": "leg_edge", "params": {"leg": "EURO", "min_sharpe": 0.0}}
+    classification = {**SLEEVE_CLASSIFICATION, "constraints": [{"id": "strategy_integrity"}, edge]}
+
+    failure = refused(ws, document(**classification))
+
+    assert failure.message == "constraints.leg_edge.leg: 'EURO' is not in the universe (DEMO)"
+
+
 def test_a_leg_edge_leg_the_universe_holds_is_admissible(ws: Workspace) -> None:
     edge = {"id": "leg_edge", "params": {"leg": "DEMO", "min_sharpe": 0.0}}
 

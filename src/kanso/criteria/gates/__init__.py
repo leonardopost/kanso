@@ -422,20 +422,27 @@ class _LegEdge:
 
     A spell is one of the leg's closed positions, as the runner records a `Trade`, and its
     return is `pnl_net / notional` — net of the leg's own fill costs, in units of what the
-    position opened at. It belongs to the fold its close falls in, as every trade does
-    (`CardRun.between`): a spell open across a fold edge is counted by the fold that
-    closed it, and one still open when the window closes is counted by no fold, because a
-    run carries no mark for a single leg (`docs/backlog.md`). The Sharpe is annualised by
-    the spells the fold actually held per year, as `bootstrap` annualises the trades it
-    resamples; a fold whose spells cannot vary — one spell, or spells that all returned
-    the same — scores zero, as every Sharpe in the toolbox does, so a leg that switched
-    once in a fold clears only a floor at or below zero. A fold that closed no spell is
-    not judged, and a run in which the leg never closed one is skipped rather than failed:
-    the leg not trading is a different fault, and `min_trades` is where it is refused.
+    position opened at. It belongs to the fold its close falls in, as every trade does:
+    the gate reads each fold's own `trades`, which `CardRun.between` cut at the exact
+    instant the fold edge falls on, never the fold's day-rounded `bounds` — an edge inside
+    a day would otherwise put that day's spells in two folds. A spell open across a fold
+    edge is counted by the fold that closed it, and one still open when the window closes
+    is counted by no fold, because a run carries no mark for a single leg
+    (`docs/backlog.md`). The Sharpe is annualised by the spells the fold actually held per
+    year, as `bootstrap` annualises the trades it resamples; a fold whose spells cannot
+    vary — one spell, or spells that all returned the same — scores zero, as every Sharpe
+    in the toolbox does, so a leg that switched once in a fold clears only a floor at or
+    below zero. A fold that closed no spell is not judged, and a run in which the leg
+    never closed one is skipped rather than failed: the leg not trading is a different
+    fault, and `min_trades` is where it is refused. A third skip — the leg closed spells,
+    but none inside the window's folds — can arise only for a run whose trades were not
+    cut to its window, which the runner's never are.
 
     An attached construct's trades are its host's too, so the closed positions the host's
-    own run also closed — by instrument, instants, quantity and prices — are subtracted
-    first, and the remainder are what the candidate's rule did to the leg.
+    own run also closed — the same instrument, instants, quantity and prices — are
+    subtracted first, by identity: a spell the candidate altered in any of those is judged
+    whole, and one identical to the host's is not judged at all. The remainder are what
+    the candidate's rule did to the leg.
     """
 
     id: ClassVar[str] = "leg_edge"
@@ -444,16 +451,14 @@ class _LegEdge:
         leg, floor = text(ctx, "leg"), number(ctx, "min_sharpe")
         if leg is None or floor is None:
             return skipped(self.id, "no leg or no floor was chosen, so no spell was judged")
-        spells = [
-            trade for trade in _own_trades(ctx) if trade.instrument_id == leg and trade.notional > 0
-        ]
+        theirs = _host_keys(ctx)
+        spells = _spells(ctx.run.trades, leg, theirs)
         if not spells:
             return skipped(self.id, f"{leg} closed no spell of its own, so nothing was judged")
         judged: list[float | None] = []
         counted: list[int] = []
         for fold in ctx.run.folds(ctx.research_folds):
-            opens, closes = fold.bounds
-            inside = [t for t in spells if opens <= t.closed_ns < closes]
+            inside = _spells(fold.trades, leg, theirs)
             counted.append(len(inside))
             judged.append(_spell_sharpe(inside, fold.window) if inside else None)
         measured = [value for value in judged if value is not None]
@@ -477,15 +482,26 @@ class _LegEdge:
         )
 
 
-def _own_trades(ctx: GateContext) -> tuple[Trade, ...]:
-    """The run's closed positions less the ones its host's own run closed, by identity."""
+TradeKey = tuple[str, int, int, float, float, float]
+
+
+def _spells(trades: Sequence[Trade], leg: str, theirs: frozenset[TradeKey]) -> list[Trade]:
+    """`leg`'s closed positions among `trades` that opened something and are not the host's."""
+    return [
+        trade
+        for trade in trades
+        if trade.instrument_id == leg and trade.notional > 0 and _trade_key(trade) not in theirs
+    ]
+
+
+def _host_keys(ctx: GateContext) -> frozenset[TradeKey]:
+    """The closed positions the host's own run closed, by identity; none without a host."""
     if ctx.host_run is None:
-        return ctx.run.trades
-    theirs = {_trade_key(trade) for trade in ctx.host_run.trades}
-    return tuple(trade for trade in ctx.run.trades if _trade_key(trade) not in theirs)
+        return frozenset()
+    return frozenset(_trade_key(trade) for trade in ctx.host_run.trades)
 
 
-def _trade_key(trade: Trade) -> tuple[str, int, int, float, float, float]:
+def _trade_key(trade: Trade) -> TradeKey:
     return (
         trade.instrument_id,
         trade.opened_ns,

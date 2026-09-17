@@ -347,7 +347,7 @@ def test_leg_edge_is_the_annualised_sharpe_of_the_leg_s_spell_returns_per_fold()
     assert result.evidence["folds"][1] is None, "a fold that closed no spell is not judged"
     assert result.evidence["folds"][2] == 0.0, "one spell cannot vary"
     assert result.evidence["spells_per_fold"] == [2, 0, 1, 0]
-    assert result.evidence["n_spells"] == 3
+    assert result.evidence["n_spells"] == 3 == sum(result.evidence["spells_per_fold"])
     assert result.evidence["worst"] == 0.0
 
 
@@ -398,6 +398,26 @@ def test_leg_edge_counts_a_spell_by_the_fold_that_closed_it() -> None:
     result = leg_edge.evaluate(ctx)
 
     assert result.evidence["spells_per_fold"] == [0, 2, 0, 0]
+
+
+def test_leg_edge_counts_each_fold_s_own_spells_when_an_edge_falls_inside_a_day() -> None:
+    """Ten days into four folds cut at 06:00, 12:00 and 18:00, never at midnight.
+
+    `CardRun.between` cuts a fold's trades at the exact edge while its `bounds` are the
+    fold's whole calendar days, so day two belongs to the bounds of folds one and two
+    both: a gate reading `bounds` would count a spell closed on it twice.
+    """
+    days = [START + timedelta(days=i) for i in range(10)]
+    before_dawn = replace(spell(days[2], 100.0), opened_ns=at(days[1], 9), closed_ns=at(days[2], 3))
+    run = build_run((0.0,) * 10, trades=(spell(days[0], 50.0), before_dawn, spell(days[2], 300.0)))
+
+    result = leg_edge.evaluate(context(run, params={"leg": "LEG", "min_sharpe": 0.0}))
+
+    assert (
+        result.evidence["spells_per_fold"] == [len(f.trades) for f in run.folds(4)] == [2, 1, 0, 0]
+    )
+    assert sum(result.evidence["spells_per_fold"]) == result.evidence["n_spells"] == 3
+    assert result.evidence["folds"][1] == 0.0, "the 15:00 spell is the second fold's only one"
 
 
 def test_leg_edge_counts_a_spell_still_open_at_the_window_close_nowhere() -> None:
@@ -457,6 +477,7 @@ def test_leg_edge_without_a_leg_and_a_floor_judges_nothing(params: Any) -> None:
     result = leg_edge.evaluate(context(run, params=params))
 
     assert result.passed and result.skipped is not None
+    assert "no leg or no floor was chosen" in str(result.skipped)
 
 
 # --- max_drawdown -----------------------------------------------------------------
