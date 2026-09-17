@@ -281,8 +281,8 @@ classification.
 required_constraints:
 - id: position_size          # every position worth 95% to 105% of the capital, always
   params: {min_pct: 95.0, max_pct: 105.0}
-- id: leg_edge               # the hedge leg's own closed spells clear a Sharpe of zero in every fold
-  params: {leg: DEMO, min_sharpe: 0.0}
+- id: leg_edge               # the hedge leg's own spells clear a Sharpe of zero, every fold
+  params: {leg: DEMO.SIM, min_sharpe: 0.0}
 ```
 
 Before this existed, an instruction like that could only be prose in `program.md`, which

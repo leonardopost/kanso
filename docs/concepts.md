@@ -233,16 +233,17 @@ already over. There are seven.
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold with one spell cannot vary and scores zero; a leg that never closed one is skipped, not failed |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
-The fourth of those is the only one that carries a floor. `risk_limits` are three ceilings — a
-position may not exceed `max_position_pct`, the book may not exceed `max_leverage` — so a
-strategy holding a tenth of what its operator asked for satisfies all of them, and nothing in
-the package could say otherwise. `position_size` is measured on `run.held`: what each
-instrument was worth at each period end, marked at that period's price. Neither notional a run
-already carried says that. A fill's is traded value struck at one price, so a strategy that
-tops up in three orders looks like three small positions; a trade's is `peak_qty x avg_open`,
-an opening cost basis, which is biased upward by the strategy that rebalances toward a target
-as the price falls and blind to the drift of one entered once and left alone. A gate built on
-either would refuse the compliant strategy and pass the drifting one.
+The fourth of those is the only one that carries a floor on size. `risk_limits` are three
+ceilings — a position may not exceed `max_position_pct`, the book may not exceed
+`max_leverage` — so a strategy holding a tenth of what its operator asked for satisfies all
+of them, and nothing in the package could say otherwise. `position_size` is measured on
+`run.held`: what each instrument was worth at each period end, marked at that period's
+price. Neither notional a run already carried says that. A fill's is traded value struck at
+one price, so a strategy that tops up in three orders looks like three small positions; a
+trade's is `peak_qty x avg_open`, an opening cost basis, which is biased upward by the
+strategy that rebalances toward a target as the price falls and blind to the drift of one
+entered once and left alone. A gate built on either would refuse the compliant strategy and
+pass the drifting one.
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
@@ -299,7 +300,9 @@ by the spells the fold held per year, the way `bootstrap` annualises the trades 
 resamples. The leg is an `instrument` parameter: a value naming anything outside the
 hypothesis's universe is refused at `hyp validate` (exit 3), from `constraints` and from
 `required_constraints` alike. For an attached construct the spells the host's own run also
-closed are subtracted first, so what is judged is what the candidate's rule did to the leg.
+closed — the same instrument, instants, quantity and prices — are subtracted first, by
+identity: a spell the candidate altered in any of those is judged whole, and one identical to
+the host's is not judged at all.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.
