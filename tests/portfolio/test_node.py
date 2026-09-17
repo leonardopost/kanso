@@ -206,7 +206,7 @@ def test_a_version_with_nothing_released_holds_nothing(
     request = placed.request((date(2024, 3, 1), date(2024, 3, 2)))
     realised = node._realised(placed, request, None, ((),), {}, ())
 
-    benchmarked = node._benchmarked(realised, placed, request, ((),), (), 0)
+    benchmarked = node._benchmarked(realised, placed, request, ((),), ())
 
     assert benchmarked.benchmark is not None
     assert (benchmarked.benchmark.returns, benchmarked.benchmark.fills) == ((), ())

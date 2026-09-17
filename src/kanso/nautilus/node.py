@@ -29,9 +29,9 @@ stage carried is a fact about the window and not about the way it ended.
 
 **A benchmark is run beside the stage, not inside it.** A version whose sleeve is measured
 against a hold of its first leg has that hold produced after the node stops, by the backtest
-runner, over the points of that version's own window the feed released — the version's
-request with the strategy replaced — and stored beside what the version realised, so the
-paper and live gates difference against a hold of the same span. It is a separate engine
+runner, over the very points that version's realised window is extracted from — the
+version's request with the strategy replaced — and stored beside what the version realised,
+so the paper and live gates difference against a hold of the same periods. It is a separate engine
 rather than a second strategy in the node, because two strategies in one account share the
 book and the volume a fill walks, and the hold would move the version's fills.
 
@@ -209,8 +209,8 @@ class Realised:
     run: CardRun
     positions: tuple[Book, ...]
     benchmark: CardRun | None = None
-    """The hold of the first leg over the same released window, for a version whose
-    objective is measured against one; `None` otherwise."""
+    """The hold of the first leg over the points this window is measured on, for a version
+    whose objective is measured against one; `None` otherwise."""
 
     @property
     def pnl(self) -> float:
@@ -476,13 +476,12 @@ def run(
             intents=intents,
             halted=halt.reason,
         )
-        last_ns = client.last_ts
     finally:
         built.dispose()
     return replace(
         ran,
         realised=tuple(
-            _benchmarked(one, placed, request, groups, window.instruments, last_ns)
+            _benchmarked(one, placed, request, groups, window.instruments)
             for one, placed, request, groups in zip(
                 ran.realised, node.placements, requests, window.per_version, strict=True
             )
@@ -496,25 +495,23 @@ def _benchmarked(
     request: RunRequest,
     groups: Sequence[Sequence[Any]],
     instruments: Sequence[Any],
-    last_ns: int,
 ) -> Realised:
     """One version's realised window with the hold its objective differences against.
 
-    Run once the node has stopped, as its own engine over the points of the version's own
-    view that the feed released, from the version's request with the strategy replaced:
-    the same window, prefix, capital, grains and budget. A restart's view holds no prefix,
-    so the hold buys at the first point after the clock, as the version could; a halted
-    node released less than the window, and so does the hold.
+    Run once the node has stopped, as its own engine over the version's own view — the
+    points `_realised` extracts the version's window from — and from the version's request
+    with the strategy replaced: the same window, prefix, capital, grains and budget. The
+    two runs therefore have the same period ends and their folds pair. A restart's view
+    holds no prefix, so the hold buys at the first point after the clock, as the version
+    could. A halted node's version is still marked over its whole view, so the hold is
+    too; cutting the hold at the halt would difference a full window against part of one.
     """
     if not measures_benchmark(placed.hyp):
         return one
     held = backtest.benchmark(request)
-    released = tuple(
-        tuple(point for point in group if int(point.ts_init) <= last_ns) for group in groups
-    )
-    if not any(released):
+    if not any(groups):
         return replace(one, benchmark=backtest._empty(held))
-    return replace(one, benchmark=backtest.execute(held, instruments, released).run)
+    return replace(one, benchmark=backtest.execute(held, instruments, groups).run)
 
 
 def _prefix(placed: Placement, node: StageNode) -> tuple[date, date] | None:

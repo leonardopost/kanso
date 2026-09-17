@@ -413,3 +413,45 @@ def test_an_idle_restart_stores_an_empty_hold(ws: Workspace, store: StateStore) 
 
     assert idle.benchmark is not None
     assert (idle.benchmark.returns, idle.benchmark.fills) == ((), ())
+
+
+LATE_RAISING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Trades nothing, and asks the impossible of the tenth bar it sees."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.seen = 0
+
+    def on_bar(self, bar) -> None:
+        self.seen += 1
+        if self.seen == 10:
+            raise RuntimeError("the replay asked for the impossible")
+'''
+
+
+def test_a_halted_stage_holds_over_the_periods_its_version_is_marked_on(
+    ws: Workspace, store: StateStore
+) -> None:
+    deployable(ws, store, "held", sleeve=REVERTING, doc=HELD)
+    deployable(ws, store, "late", sleeve=LATE_RAISING, doc=document(id="late"))
+
+    made = deploy(ws, store, "paper")
+
+    assert made.halted is not None
+    assert made.session is not None and made.session.released == 10
+    held = next(result for result in made.results if result.strategy_id == "held")
+    hold = held.benchmark
+    assert hold is not None
+    assert len(held.run.period_ends_ns) == 31, "the version is marked over its whole view"
+    assert hold.period_ends_ns == held.run.period_ends_ns, (
+        "a hold cut at the halt would span ten sessions beside the version's thirty-one"
+    )

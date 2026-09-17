@@ -720,9 +720,10 @@ indicators and orders are what a run of it alone would produce.
 
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the
-points of that version's own window the feed released, from the version's request with the
+points that version's realised window is measured on, from the version's request with the
 strategy replaced, and the hold is recorded on the same `stage_run` event as the window the
-version realised. The paper and live gates difference the realised objective against the
+version realised. The two have the same periods, a halted window's included: the version is
+marked over its whole view after a halt, and so is its hold. The paper and live gates difference the realised objective against the
 holds of the same windows, joined as the windows are; a book recorded without its hold is
 skipped with the reason rather than judged against nothing. A separate engine, because two
 strategies in one account would share the book and the volume a fill walks.
