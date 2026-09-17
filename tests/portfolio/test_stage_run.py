@@ -354,3 +354,53 @@ def test_a_version_measures_on_a_stage_as_it_does_alone_whatever_its_stage_mate_
             "cold, the reverting sleeve needs three closes and buys the trough on the 5th; "
             "fed its mate's prefix it would have bought March's first bar"
         )
+
+
+# --- the book policy ----------------------------------------------------------------
+
+BOOKED = document(id="booked", book={"reset": "monthly"})
+"""A sleeve that buys once and holds, on a book reset at the turn of each month."""
+
+FEBRUARY_29_CLOSE_NS = int(datetime(2024, 2, 29, 16, 0, 1, tzinfo=UTC).timestamp()) * 1_000_000_000
+
+
+def test_a_restart_seeds_the_book_from_where_the_last_window_left_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The node restarts flat at the version's capital, but the cushion and the last end it
+    settled carry across: a window that closed in February with 500 set aside, restarted
+    in March, restores the entry's costs from that 500 at its first period end."""
+    from dataclasses import replace
+    from datetime import date
+
+    from kanso.nautilus.node import Realised
+
+    deployable(ws, store, "booked", sleeve=BUYER, doc=BOOKED)
+    first = deploy(ws, store, "paper").results[0]
+    assert set(first.run.cushion) == {0.0}, "March turns no month inside itself"
+    february = replace(
+        first.run,
+        window=(date(2024, 2, 29), date(2024, 2, 29)),
+        period_ends_ns=(FEBRUARY_29_CLOSE_NS,),
+        returns=(0.0,),
+        equity=(first.capital,),
+        trades=(),
+        fills=(),
+        held=(),
+        cushion=(500.0,),
+        carry=(0.0,),
+        worst_ratio=(None,),
+    )
+    records.record_stage_run(
+        store,
+        "paper",
+        "an-earlier-window",
+        [Realised("booked", 1, first.capital, february, ())],
+    )
+    store.connection.execute("UPDATE sessions SET clock_ts = ?", (str(MARCH_15_CLOSE_NS),))
+
+    second = deploy(ws, store, "paper").results[0].run
+
+    assert second.returns[0] < 0, "the entry's costs on March 16"
+    assert second.equity[0] == pytest.approx(first.capital), "restored at the month's first end"
+    assert second.cushion[0] == pytest.approx(500.0 + second.returns[0])

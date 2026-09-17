@@ -386,6 +386,13 @@ borrowed notional; and an attached construct whose `book` is not its host's, bec
 cards run the host under its own file's policy and its version is deployed under the
 host's. Classification never touches the key.
 
+On a paper or live stage the node restarts flat at the version's capital every window, as
+it always has. What carries across a restart is the policy's own state, read from the
+version's newest recorded window on that stage that measured a period: the cushion it closed
+with, and its last period end, from which the next window's first carry is charged and
+against which its first month turn is judged. A new version, or a version on a stage it has
+not run on, starts with nothing set aside.
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from

@@ -43,6 +43,7 @@ __all__ = [
     "approvals",
     "approve",
     "approved",
+    "book_seed",
     "clear_stage",
     "decode_run",
     "encode_run",
@@ -277,6 +278,23 @@ def stage_results(
     if strategy_id is not None and subject is None:
         found = [one for one in found if one.strategy_id == strategy_id]
     return found
+
+
+def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
+    """Where a version's book policy stood when its newest measured window closed.
+
+    The cushion a monthly reset had set aside and the last period end that window settled,
+    read from the newest recorded window that measured any period; zero and `None` when no
+    window has. A window that measured nothing — the version's universe was quiet — moved
+    nothing, so the one before it still holds the answer. The stage restarts flat at the
+    version's capital either way: what carries across a restart is the cushion, and the end
+    the next window's first carry and month turn are counted from.
+    """
+    for result in reversed(results):
+        run = result.run
+        if run.period_ends_ns:
+            return (run.cushion[-1] if run.cushion else 0.0), run.period_ends_ns[-1]
+    return 0.0, None
 
 
 def _result(detail: Mapping[str, Any]) -> StageResult:

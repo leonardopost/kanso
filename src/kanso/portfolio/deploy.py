@@ -474,7 +474,9 @@ def _restart(
 ) -> _Ran:
     """Build this stage's node, run it over what it has not replayed yet, and record it."""
     targets = {candidate.file.id: candidate.resolved for candidate in chosen}
-    placements = tuple(_placement(ws, targets[one.strategy_id], one) for one in admitted)
+    placements = tuple(
+        _seeded(store, stage, _placement(ws, targets[one.strategy_id], one)) for one in admitted
+    )
     clock = clock_of(store, stage)
     opens = _opens(placements, clock)
     closes = max(served_to(ws, tuple(placed.hyp.universe)) or opens for placed in placements)
@@ -504,6 +506,21 @@ def _opens(placements: tuple[Placement, ...], clock: int | None) -> date:
     if clock is not None:
         return day_of(clock)
     return min(placed.hyp.windows.forward.start for placed in placements)
+
+
+def _seeded(store: StateStore, stage: str, placed: Placement) -> Placement:
+    """The placement with its book policy where its last window on this stage left it.
+
+    Per version and per stage: a new version's book, and a version's book on a stage it has
+    not run on, start with nothing set aside."""
+    if placed.hyp.book is None:
+        return placed
+    cushion, settled_ns = records.book_seed(
+        records.stage_results(
+            store, strategy_id=placed.strategy_id, version=placed.version, stage=stage
+        )
+    )
+    return replace(placed, cushion=cushion, settled_ns=settled_ns)
 
 
 def _budgets(ws: Workspace, strategy_id: str, version: int) -> float:

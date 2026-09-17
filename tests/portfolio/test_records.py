@@ -288,3 +288,31 @@ def test_clearing_a_stage_reports_what_held_it(store: StateStore) -> None:
 
 def test_a_version_is_named_the_same_way_everywhere() -> None:
     assert records.subject_of("alpha", 3) == "alpha@3"
+
+
+def a_result(run: CardRun) -> records.StageResult:
+    return records.StageResult(
+        stage="paper",
+        session_id="s",
+        strategy_id="alpha",
+        version=1,
+        capital=100.0,
+        run=run,
+        positions=(),
+    )
+
+
+def test_a_book_is_seeded_from_the_newest_window_that_measured_a_period() -> None:
+    """A quiet window moved nothing, so the one before it still says where the book stood."""
+    booked = a_run(cushion=(0.0, 5.0, 7.5))
+    quiet = a_run(period_ends_ns=(), returns=(), equity=(), trades=(), fills=())
+
+    assert records.book_seed([a_result(a_run()), a_result(booked), a_result(quiet)]) == (7.5, 3)
+
+
+def test_a_window_measured_without_a_policy_seeds_no_cushion_but_its_last_end() -> None:
+    assert records.book_seed([a_result(a_run())]) == (0.0, 3)
+
+
+def test_a_version_that_never_measured_a_period_starts_from_nothing() -> None:
+    assert records.book_seed([]) == (0.0, None)

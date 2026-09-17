@@ -138,6 +138,11 @@ class Placement:
     loaded: Loaded
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    cushion: float = 0.0
+    settled_ns: int | None = None
+    """Where this version's book policy stood when its last window on the stage closed: the
+    cushion a monthly reset had set aside and the last period end it settled. The node
+    restarts flat at `capital` every window, and these are what carry the policy across."""
 
     @property
     def tag(self) -> str:
@@ -173,6 +178,8 @@ class Placement:
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
             prefix=prefix,
+            cushion=self.cushion,
+            settled_ns=self.settled_ns,
         )
 
 
