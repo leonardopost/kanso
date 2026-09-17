@@ -789,6 +789,25 @@ def test_a_filter_declares_its_host_s_resolution(ws: Workspace) -> None:
     assert failure.remedy == "set resolution to 1d, or attach as an overlay"
 
 
+def test_an_attached_construct_declares_its_host_s_warmup(ws: Workspace) -> None:
+    """The construct's card runs the host underneath it, warmed as the construct's file says."""
+    host_with(ws, warmup={"sessions": 20})
+
+    failure = refused(ws, document(**FILTER_CLASSIFICATION))
+
+    assert "warmup: host_sleeve@1 warms on 20 session(s) before its window" in failure.message
+    assert "this file declares 0" in failure.message
+    assert "set warmup to {sessions: 20}, or drop it" in (failure.remedy or "")
+
+
+def test_a_construct_warmed_as_its_host_is_admissible(ws: Workspace) -> None:
+    host_with(ws, warmup={"sessions": 20})
+
+    parsed = accepted(ws, document(warmup={"sessions": 20}, **FILTER_CLASSIFICATION))
+
+    assert parsed.warmup is not None and parsed.warmup.sessions == 20
+
+
 def test_an_overlay_may_keep_a_grain_of_its_own(ws: Workspace) -> None:
     host_with(ws, resolution="1d", horizon="1d")
 

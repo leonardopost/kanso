@@ -288,7 +288,9 @@ ledger over the clip orders, so `self.held(id)` and `ctx.book` are the host's an
 `ctx.clips` the overlay's, even in one name. A refused card places no order and is not a
 trial. The rule is scope: a `best` earned under one sizing is not compared with a card run
 under another, so adding or changing it clears the best — as does changing the objective,
-whose units the best is a number in.
+whose units the best is a number in, and the `warmup`, since a run whose indicators were
+fed before the open and one that spent the window's first sessions filling them measured
+different things over the same days.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.

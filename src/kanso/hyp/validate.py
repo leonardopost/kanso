@@ -380,14 +380,18 @@ def _check_host_strategy(ws: Workspace, hyp: Hypothesis, construct_id: str, host
 def _check_host_pairing(
     ws: Workspace, hyp: Hypothesis, construct_id: str, host: str, strategy: StrategyFile
 ) -> None:
-    """What an attached construct must agree with its host on: the grain, and the sizing rule.
+    """What an attached construct must agree with its host on: the grain, the warmup and
+    the sizing rule.
 
     A filter or an exit rule is consulted on the host's grain and has no clock of its own,
-    so its resolution is the host's. A budgeted overlay attaches to a budgeted host and an
-    unbudgeted one to an unbudgeted host, because the overlay's book is the host's budget
-    and its own together; and that book has to fit the ceilings the overlay's own file
-    declares, since an overlay card funds the venue and configures the host with them.
-    Read from the host sleeve's hypothesis file where the workspace holds one.
+    so its resolution is the host's. A card of an attached construct runs the host sleeve
+    underneath it, warmed as this file says, so the warmup has to be the host's own or the
+    host is measured cold — or warm — under a construct that never asked for that. A
+    budgeted overlay attaches to a budgeted host and an unbudgeted one to an unbudgeted
+    host, because the overlay's book is the host's budget and its own together; and that
+    book has to fit the ceilings the overlay's own file declares, since an overlay card
+    funds the venue and configures the host with them. Read from the host sleeve's
+    hypothesis file where the workspace holds one.
     """
     latest = strategy.latest()
     path = hypothesis_file(ws, latest.sleeve.hyp_id)
@@ -395,6 +399,14 @@ def _check_host_pairing(
         return
     host_hyp = load_yaml(Hypothesis, path)
     label = f"{host}@{latest.version}"
+    if hyp.warmup != host_hyp.warmup:
+        theirs = host_hyp.warmup.sessions if host_hyp.warmup else 0
+        raise ValidationError(
+            f"warmup: {label} warms on {theirs} session(s) before its window and this file "
+            f"declares {hyp.warmup.sessions if hyp.warmup else 0}; a construct runs its host "
+            "underneath it, and the host warms as the construct's own file says",
+            remedy=f"set warmup to {{sessions: {theirs}}}, or drop it, to match {path}",
+        )
     if construct_id in SIZELESS and hyp.resolution != host_hyp.resolution:
         raise ValidationError(
             f"resolution: {hyp.resolution} is not the host's {host_hyp.resolution}; a "

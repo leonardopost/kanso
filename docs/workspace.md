@@ -323,6 +323,33 @@ own position ceiling, and a filter or exit rule whose `resolution` is not its ho
 overlay's `capital` is the whole book its cards run on — host budget and its own — and its
 clips are sized to its own budget (`docs/constructs.md`).
 
+**`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
+the first sessions of every window are spent filling them and the run is measured cold;
+with it the runner feeds the strategy the sessions before the window and drops every order
+until the window opens:
+
+```yaml
+warmup:                            # scope: adding or changing it clears `best`
+  sessions: 20                     # sessions before the window fed to the strategy before it may trade
+```
+
+A session is a calendar day on which any instrument of the universe printed at the
+hypothesis's own `resolution`; the runner takes the last `sessions` of them before the
+window from the catalog, so the prefix is trading days rather than calendar days and a
+weekend or a holiday adds nothing. Over the prefix every handler runs and every attached
+overlay's `on_data` is asked, so their state warms too, but `submit_entry` and
+`submit_exit` return `None` — the same answer a refused filter gives — and nothing fills:
+the measured run begins at the window's first point with no position and no cold start. A
+card, a certificate, a replay and a stage node all warm on the same rule; a stage restart
+warms on the sessions at or before its clock. `research begin` refuses (exit 2) when the
+catalog holds fewer sessions before the window than the file asks for, naming what it
+found, and the snapshot it pins must cover the prefix as well as the two windows. Adding
+the key re-pins the hypothesis under a new sha and clears `best`, exactly as `sizing`
+does, and a certificate earned cold refuses to compose under it. The window's own bounds
+are unchanged: the upper bound of every window is what it was, and only the data fed
+before it widens. An attached construct declares the same `warmup` as its host, or
+`kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
@@ -370,9 +397,10 @@ comparable to each other; re-pinning underneath it would silently change the que
 cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
-`universe`, the `resolution`, the `data_requirements` or `construct.id` clears it —
-stripping the classification counts, since a draft has no construct and the best was earned
-as one — and the event log records `best_cleared` naming the field that moved. `kanso
+`universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
+`objective.id` or `warmup` clears it — stripping the classification counts, since a draft
+has no construct and the best was earned as one — and the event log records `best_cleared`
+naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.
 The cards and their blobs stay in state, and `strategy.py` still holds the best-so-far
 bytes, so the next `research begin` starts from them.
