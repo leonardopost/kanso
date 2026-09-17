@@ -137,26 +137,32 @@ Market data objects
 aggregation_source)` renders as `AAPL.XNAS-1-DAY-LAST-EXTERNAL` and parses back
 from that string. `Bar(bar_type, open, high, low, close, volume, ts_event,
 ts_init)` validates the OHLC ordering and raises `ValueError` on a high below
-the open. `QuoteTick(instrument_id, bid_price, ask_price, bid_size, ask_size,
+the open or the close, or a low above either (`high was < open`, `low was >
+close`). `QuoteTick(instrument_id, bid_price, ask_price, bid_size, ask_size,
 ts_event, ts_init)` requires the two prices to share a precision and the two
 sizes to share a precision. `TradeTick(instrument_id, price, size,
 aggressor_side, trade_id, ts_event, ts_init)` requires a strictly positive
 size — a zero-size print cannot be represented and must be dropped or
 recorded as another type. Every one of them carries `ts_init` as a readable
 attribute, and a `Bar` carries `low` and `high` beside `open` and `close`, with
-`low` at or under the lesser of the two and `high` at or over the greater — the
-adverse extreme of a period is readable off the point that closed it, at the
-instant that point became available.
+`low` at or under the lesser of the two and `high` at or over the greater
+because the constructor refuses anything else — the adverse extreme of a
+period is readable off the point that closed it, at the instant that point
+became available.
 
 Historical data
 ---------------
-`Actor.handle_bar(bar, historical=True)` routes to `handle_historical_data` and
-so to `on_historical_data`, never to `on_bar`, whatever the component's state:
-on a running actor a bar delivered as history reaches `on_historical_data`
-alone and the same bar delivered as live reaches `on_bar` alone. A bar that
-arrives in answer to `request_bars` is therefore invisible to the handler a
-strategy trades from, which is why a warm-up cannot be a request for history
-and has to be points fed through the ordinary stream.
+`Actor.handle_bar(bar, historical=True)` routes to `handle_historical_data`,
+never to `on_bar`, and `handle_historical_data` calls `on_historical_data`
+only while the component is starting or running (`common/actor.pyx`).
+Measured, with one bar handed as history and one as live in each state: a
+running actor records the first in `on_historical_data` alone and the second
+in `on_bar` alone; a ready actor (registered, not started) and a stopped one
+record nothing for either, so a bar delivered as history before `on_start`
+completes or after `stop` is dropped, not queued. A bar that arrives in answer
+to `request_bars` is invisible to the handler a strategy trades from in every
+state; points a strategy must trade from have to arrive through the ordinary
+stream.
 
 Live and sandbox nodes
 ----------------------
@@ -233,11 +239,15 @@ in the engine's own words). Measured: a limit order for 100,000 shares at 10.00
 filled in full, where a cash account denies it with
 `NOTIONAL_EXCEEDS_FREE_BALANCE`. And `LeveragedMarginModel`, the model
 `BacktestEngine.add_venue` substitutes when none is configured, computes
-`notional / leverage x instrument.margin_init`, which is zero for every
-instrument kanso resolves because their margin rates are left at zero: the venue
-locks no margin, calls none and liquidates nothing. The only borrowing limit in
-a kanso backtest is the sleeve's own room, and financing, a monthly reset and a
-maintenance breach are kanso's arithmetic or nobody's.
+`notional / leverage x instrument.margin_init`: zero for an instrument whose
+margin rates are zero, which is where kanso's resolver leaves them unless an
+entry's `override` names `margin_init` or `margin_maint` — both are accepted
+(`data/instruments.py`), and an instrument that arrives with a non-zero rate has
+the venue lock margin beside whatever kanso computes, the maker/taker rule in
+`AGENTS.md` again. Measured: rates of 0.5/0.25 have the model ask 500,000 initial
+and 250,000 maintenance on 100,000 shares at 10.00 at leverage 1. At zero the
+venue locks no margin, calls none and liquidates nothing, and the only borrowing
+limit in a kanso backtest is the sleeve's own room.
 
 Network I/O
 -----------
@@ -1368,40 +1378,66 @@ def _check_margin_account_skips_the_balance_check() -> tuple[bool, str]:
 
 
 def _check_zero_instrument_margin_yields_zero_margin() -> tuple[bool, str]:
-    """The default margin model scales the instrument's own rate, and kanso's rate is zero."""
+    """The default margin model scales the instrument's own rate, which kanso leaves at zero."""
     from decimal import Decimal
 
     from nautilus_trader.accounting.margin_models import LeveragedMarginModel
     from nautilus_trader.model.enums import PositionSide
-    from nautilus_trader.model.objects import Price, Quantity
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol
+    from nautilus_trader.model.instruments import Equity
+    from nautilus_trader.model.objects import Currency, Price, Quantity
 
-    instrument: Any = _sample_equity()
     model = LeveragedMarginModel()
     quantity, price = Quantity.from_int(100_000), Price.from_str("10.00")
-    initial = [
-        float(model.calculate_margin_init(instrument, quantity, price, Decimal(leverage)))
-        for leverage in (1, 4)
-    ]
-    maintenance = [
-        float(
-            model.calculate_margin_maint(
-                instrument, PositionSide.LONG, quantity, price, Decimal(leverage)
+
+    def asked(instrument: Any) -> tuple[list[float], list[float]]:
+        initial = [
+            float(model.calculate_margin_init(instrument, quantity, price, Decimal(leverage)))
+            for leverage in (1, 4)
+        ]
+        maintenance = [
+            float(
+                model.calculate_margin_maint(
+                    instrument, PositionSide.LONG, quantity, price, Decimal(leverage)
+                )
             )
-        )
-        for leverage in (1, 4)
-    ]
-    rates = (float(instrument.margin_init), float(instrument.margin_maint))
-    holds = rates == (0.0, 0.0) and initial == [0.0, 0.0] and maintenance == [0.0, 0.0]
+            for leverage in (1, 4)
+        ]
+        return initial, maintenance
+
+    unrated: Any = _sample_equity()
+    rates = (float(unrated.margin_init), float(unrated.margin_maint))
+    at_zero = asked(unrated)
+    rated = Equity(
+        instrument_id=InstrumentId.from_str("AAPL.XNAS"),
+        raw_symbol=Symbol("AAPL"),
+        currency=Currency.from_str("USD"),
+        price_precision=2,
+        price_increment=Price.from_str("0.01"),
+        lot_size=Quantity.from_int(1),
+        margin_init=Decimal("0.5"),
+        margin_maint=Decimal("0.25"),
+        ts_event=0,
+        ts_init=0,
+    )
+    at_rate = asked(rated)
+    holds = (
+        rates == (0.0, 0.0)
+        and at_zero == ([0.0, 0.0], [0.0, 0.0])
+        and at_rate == ([500_000.0, 125_000.0], [250_000.0, 62_500.0])
+    )
     return holds, (
-        f"an Equity built from the fields kanso supplies carries margin_init/margin_maint "
-        f"{rates}; LeveragedMarginModel on 100,000 @ 10.00 at leverage 1 and 4 asks "
-        f"{initial} initial and {maintenance} maintenance: the venue locks no margin and "
-        f"liquidates nothing, so a maintenance rule is kanso's arithmetic"
+        f"an Equity with the engine's default margin rates — the zeros kanso's resolver "
+        f"leaves in place unless an override names margin_init/margin_maint — carries "
+        f"{rates}, and LeveragedMarginModel on 100,000 @ 10.00 at leverage 1 and 4 asks it "
+        f"{at_zero[0]} initial and {at_zero[1]} maintenance: the venue locks no margin and "
+        f"liquidates nothing. The same at rates 0.5/0.25 asks {at_rate[0]} and {at_rate[1]}, "
+        f"so an instrument that arrives with a rate has the venue lock margin of its own"
     )
 
 
 def _check_historical_bar_never_reaches_on_bar() -> tuple[bool, str]:
-    """`handle_bar(historical=True)` goes to `on_historical_data`, whatever the state."""
+    """History never reaches `on_bar`; it reaches `on_historical_data` on a running actor."""
     from nautilus_trader.cache.cache import Cache
     from nautilus_trader.common.actor import Actor
     from nautilus_trader.common.component import MessageBus, TestClock
@@ -1424,16 +1460,26 @@ def _check_historical_bar_never_reaches_on_bar() -> tuple[bool, str]:
     msgbus = MessageBus(trader_id=TraderId("KANSO-001"), clock=clock)
     actor = _Recorder()
     actor.register_base(Portfolio(msgbus, cache, clock), msgbus, cache, clock)
-    actor.start()
-    state = actor.state.name
-    actor.handle_bar(_sample_bar(ts_event=1, ts_init=2), historical=True)
-    actor.handle_bar(_sample_bar(ts_event=3, ts_init=4))
-    actor.stop()
-    holds = actor.seen == [("on_historical_data", 2), ("on_bar", 4)]
+    recorded: dict[str, list[tuple[str, int]]] = {}
+    for stamp, step in enumerate((None, actor.start, actor.stop)):
+        if step is not None:
+            step()
+        seen = len(actor.seen)
+        actor.handle_bar(
+            _sample_bar(ts_event=4 * stamp + 1, ts_init=4 * stamp + 2), historical=True
+        )
+        actor.handle_bar(_sample_bar(ts_event=4 * stamp + 3, ts_init=4 * stamp + 4))
+        recorded[actor.state.name] = actor.seen[seen:]
+    holds = recorded == {
+        "READY": [],
+        "RUNNING": [("on_historical_data", 6), ("on_bar", 8)],
+        "STOPPED": [],
+    }
     return holds, (
-        f"a {state} actor handed one bar as history and one as live recorded {actor.seen}: "
-        f"history reaches on_historical_data alone and never on_bar, so a warm-up cannot be "
-        f"a request for bars and has to be points fed through the stream"
+        f"one bar handed as history and one as live in each state recorded {recorded}: "
+        f"history reaches on_historical_data on a running actor and never on_bar in any "
+        f"state, and a ready or stopped actor drops both, so points a strategy trades from "
+        f"have to arrive through the ordinary stream"
     )
 
 
@@ -1450,20 +1496,29 @@ def _check_bar_carries_low_high_and_ts_init() -> tuple[bool, str]:
     from nautilus_trader.model.objects import Price, Quantity
 
     instrument_id = InstrumentId.from_str("AAPL.XNAS")
-    bar: Any = Bar(
-        BarType(
-            instrument_id,
-            BarSpecification(1, BarAggregation.DAY, PriceType.LAST),
-            AggregationSource.EXTERNAL,
-        ),
-        Price.from_str("10.00"),
-        Price.from_str("10.50"),
-        Price.from_str("9.50"),
-        Price.from_str("10.20"),
-        Quantity.from_int(1_000),
-        1_000,
-        2_000,
+    bar_type = BarType(
+        instrument_id,
+        BarSpecification(1, BarAggregation.DAY, PriceType.LAST),
+        AggregationSource.EXTERNAL,
     )
+
+    def daily(high: str, low: str, close: str) -> Any:
+        return Bar(
+            bar_type,
+            Price.from_str("10.00"),
+            Price.from_str(high),
+            Price.from_str(low),
+            Price.from_str(close),
+            Quantity.from_int(1_000),
+            1_000,
+            2_000,
+        )
+
+    bar = daily("10.50", "9.50", "10.20")
+    refused = [
+        _raises(lambda: daily("9.00", "8.50", "8.80")),
+        _raises(lambda: daily("10.50", "10.30", "10.20")),
+    ]
     quote = QuoteTick(
         instrument_id,
         Price.from_str("9.99"),
@@ -1486,14 +1541,16 @@ def _check_bar_carries_low_high_and_ts_init() -> tuple[bool, str]:
     stamps = [int(point.ts_init) for point in (bar, quote, trade)]
     holds = (
         ohlc[2] <= min(ohlc[0], ohlc[3]) <= max(ohlc[0], ohlc[3]) <= ohlc[1]
+        and refused == ["ValueError: high was < open", "ValueError: low was > close"]
         and stamps == [2_000, 2_000, 2_000]
         and all(int(point.ts_event) == 1_000 for point in (bar, quote, trade))
     )
     return holds, (
-        f"Bar exposes open/high/low/close {ohlc} with low and high bracketing the two; "
-        f"Bar, QuoteTick and TradeTick stamped ts_event=1000, ts_init=2000 answer ts_init "
-        f"{stamps}, so a period's adverse extreme and the instant a point became public "
-        f"are both readable off the point itself"
+        f"Bar exposes open/high/low/close {ohlc} with low and high bracketing the two, and "
+        f"refuses a high under the open or a low over the close ({refused}); Bar, QuoteTick "
+        f"and TradeTick stamped ts_event=1000, ts_init=2000 answer ts_init {stamps}, so a "
+        f"period's adverse extreme and the instant a point became public are both readable "
+        f"off the point itself"
     )
 
 
