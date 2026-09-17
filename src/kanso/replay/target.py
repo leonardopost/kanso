@@ -29,7 +29,7 @@ from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import HYPOTHESIS_FILE, host_resolution, host_sizing, hypothesis_of
 from kanso.hyp import show as registration_of
-from kanso.nautilus.backtest import RunRequest, grains_of
+from kanso.nautilus.backtest import RunRequest, grains_of, warmup_prefix
 from kanso.research import records
 from kanso.schemas import Hypothesis, StrategyFile, VenueModel, parse_yaml
 
@@ -71,7 +71,12 @@ class Target:
         return tuple(self.hyp.universe)
 
     def request(self, window: tuple[date, date]) -> RunRequest:
-        """The run this target asks for over a range, on either code path."""
+        """The run this target asks for over a range, on either code path.
+
+        A warmed target is fed the sessions before the range on both paths alike, resolved
+        here from the catalog the target replays, so parity compares two runs that warmed
+        on the same span.
+        """
         return RunRequest(
             hyp=self.hyp,
             strategy_source=self.strategy_source,
@@ -83,6 +88,7 @@ class Target:
             period=self.period,
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
+            prefix=warmup_prefix(self.hyp, window, self.catalog, self.grains),
         )
 
 
