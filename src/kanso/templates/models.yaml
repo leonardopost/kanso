@@ -41,3 +41,4 @@ routing:                            # task_class → {tier, effort, max_output};
   certify_plan: {tier: frontier, effort: high,   max_output: 4096}   # once per hypothesis; decides what counts as proof
   propose:      {tier: mid,      effort: medium, max_output: 4096}   # every card, so it dominates spend
   align_check:  {tier: cheap,    effort: none,   max_output: 256}    # a yes/no after the deterministic checks passed
+  explore:      {tier: frontier, effort: high,   max_output: 16384}  # on request or after stalls; writes three whole files

@@ -29,7 +29,13 @@ def test_check_prints_the_routing_and_one_result_per_model(
     assert result.exit_code == Exit.OK, result.stdout
     checked = payload(result)
     assert checked["ok"] is True
-    assert set(checked["routing"]) == {"classify", "propose", "align_check", "certify_plan"}
+    assert set(checked["routing"]) == {
+        "classify",
+        "propose",
+        "align_check",
+        "certify_plan",
+        "explore",
+    }
     assert checked["routing"]["classify"]["tier"] == "frontier"
     assert checked["routing"]["align_check"]["effort"] == "none"
     assert [entry["id"] for entry in checked["models"]] == list(mocked.TIER_MODELS.values())

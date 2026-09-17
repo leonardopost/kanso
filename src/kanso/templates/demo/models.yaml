@@ -18,3 +18,4 @@ routing:                          # task_class → {tier, effort, max_output}; e
   certify_plan: {tier: frontier, effort: high,   max_output: 4096}
   propose:      {tier: mid,      effort: medium, max_output: 4096}
   align_check:  {tier: cheap,    effort: none,   max_output: 256}
+  explore:      {tier: frontier, effort: high,   max_output: 16384}

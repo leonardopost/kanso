@@ -1,4 +1,4 @@
-"""The four task classes: their prompts, their schemas and the stability of the prefix."""
+"""The five task classes: their prompts, their schemas and the stability of the prefix."""
 
 from __future__ import annotations
 
