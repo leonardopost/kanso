@@ -223,7 +223,7 @@ it reports it as `trials`, which is at or below the certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are seven.
+already over. There are eight.
 
 | gate | what it refuses |
 |---|---|
@@ -233,19 +233,21 @@ already over. There are seven.
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
+| `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold with one spell cannot vary and scores zero; a leg that never closed one is skipped, not failed |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
-`position_size` is the only one that carries a floor on size — `maintenance_margin` floors the
-book's margin, not a position's size. `risk_limits` are three ceilings — a
-position may not exceed `max_position_pct`, the book may not exceed `max_leverage` — so a
-strategy holding a tenth of what its operator asked for satisfies all of them, and nothing in
-the package could say otherwise. `position_size` is measured on `run.held`: what each
-instrument was worth at each period end, marked at that period's price. Neither notional a run
-already carried says that. A fill's is traded value struck at one price, so a strategy that
-tops up in three orders looks like three small positions; a trade's is `peak_qty x avg_open`,
-an opening cost basis, which is biased upward by the strategy that rebalances toward a target
-as the price falls and blind to the drift of one entered once and left alone. A gate built on
-either would refuse the compliant strategy and pass the drifting one.
+`position_size` is the only one that carries a floor on size: `min_trades` floors the trade
+count, `maintenance_margin` the book's margin and `leg_edge` a leg's Sharpe, none of them a
+position's size. `risk_limits` are three ceilings — a position may not exceed
+`max_position_pct`, the book may not exceed `max_leverage` — so a strategy holding a tenth of
+what its operator asked for satisfies all of them, and nothing in the package could say
+otherwise. `position_size` is measured on `run.held`: what each instrument was worth at each
+period end, marked at that period's price. Neither notional a run already carried says that.
+A fill's is traded value struck at one price, so a strategy that tops up in three orders looks
+like three small positions; a trade's is `peak_qty x avg_open`, an opening cost basis, which
+is biased upward by the strategy that rebalances toward a target as the price falls and blind
+to the drift of one entered once and left alone. A gate built on either would refuse the
+compliant strategy and pass the drifting one.
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
@@ -292,7 +294,7 @@ and charges no financing here — kanso's instruments carry no margin rates — 
 is delegated to the venue. A sized sleeve gets no special case: a full-book entry that
 borrows pays the carry and can breach the floor (row 76).
 
-The policy has edges, each recorded in `docs/backlog.md` row 84. `maintenance_margin` reads
+The policy has edges, each recorded in `docs/backlog.md` row 85. `maintenance_margin` reads
 end-of-period holdings, so a position opened and closed inside one period is never judged.
 The harness settles a period on a point delivered to the sleeve itself, so a grouped series
 the sleeve never subscribes to that holds a period's only point moves the runner's period end
@@ -329,6 +331,18 @@ whose units the best is a number in, the `warmup`, since a run whose indicators 
 fed before the open and one that spent the window's first sessions filling them measured
 different things over the same days, and the `book` policy as a whole, since a reset, a
 carry and a maintenance floor each change the equity path a metric is read from.
+
+**One leg on its own.** A pair's number is struck on the book, so a hedge that pays its
+spread at every switch and returns nothing of its own is invisible in it. `leg_edge` reads
+one named leg's closed spells — the runner's `Trade`s in that instrument — and holds the
+Sharpe of their returns to `min_sharpe` in every research fold that closed one, annualised
+by the spells the fold held per year, the way `bootstrap` annualises the trades it
+resamples. The leg is an `instrument` parameter: a value naming anything outside the
+hypothesis's universe is refused at `hyp validate` (exit 3), from `constraints` and from
+`required_constraints` alike. For an attached construct the spells the host's own run also
+closed — the same instrument, instants, quantity and prices — are subtracted first, by
+identity: a spell the candidate altered in any of those is judged whole, and one identical to
+the host's is not judged at all.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.

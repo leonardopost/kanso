@@ -324,6 +324,7 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
         "max_drawdown",
         "maintenance_margin",
         "position_size",
+        "leg_edge",
     }
     assert gates["strategy_integrity"]["required"] is True
     assert gates["min_trades"]["required"] is False
@@ -337,6 +338,8 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
         "min_pct": {"min": 0.0, "max": 1000.0},
         "max_pct": {"min": 0.0, "max": 1000.0},
     }
+    assert gates["leg_edge"]["params"] == {"leg": "instrument", "min_sharpe": "float"}
+    assert gates["leg_edge"]["ranges"] == {"min_sharpe": {"min": -10.0, "max": 10.0}}
 
 
 def test_an_unbounded_range_arrives_as_an_open_end(ws: Workspace) -> None:
