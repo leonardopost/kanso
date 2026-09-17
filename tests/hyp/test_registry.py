@@ -213,10 +213,11 @@ def test_reordering_the_universe_is_not_a_change_of_scope(ws: Workspace, store: 
 def test_a_change_of_scope_clears_the_best(
     ws: Workspace, store: StateStore, field: str, value: Any
 ) -> None:
-    register(ws, store)
+    """Held a day, so a benchmark is admissible; the horizon itself is not scope."""
+    register(ws, store, document(horizon="1d"))
     set_best(store)
 
-    register(ws, store, document(**{field: value}))
+    register(ws, store, document(horizon="1d", **{field: value}))
 
     found = record(ws, store)
     assert found.best_sha is None
@@ -341,10 +342,11 @@ def test_a_row_pinned_before_warmup_joined_the_scope_keeps_the_best(
 
 def test_a_benchmark_names_the_leg_it_holds(ws: Workspace, store: StateStore) -> None:
     """Under a benchmark the universe's order is scope: its first name is what is held."""
-    register(ws, store, document(universe=["DEMO", "EURO"], benchmark={"hold": "first_leg"}))
+    held = {"horizon": "1d", "benchmark": {"hold": "first_leg"}}
+    register(ws, store, document(universe=["DEMO", "EURO"], **held))
     set_best(store)
 
-    register(ws, store, document(universe=["EURO", "DEMO"], benchmark={"hold": "first_leg"}))
+    register(ws, store, document(universe=["EURO", "DEMO"], **held))
 
     assert record(ws, store).best_sha is None
     cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
