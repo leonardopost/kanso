@@ -232,9 +232,13 @@ class RunRequest:
     what a monthly reset had moved out of the book, and the last period end it settled.
     Zero and `None` for a card, a certificate and a first deploy; on a stage restart what
     the last window of the same version closed at, so a restore in the new window draws on
-    what earlier windows set aside, the first carry runs from that end rather than from
-    the window's midnight, and a month that turned across the restart resets at the first
-    end after it. The book itself opens at `capital` either way.
+    what earlier windows set aside and a month that turned across the restart resets at
+    the first end after it. `resumes_ns` is the instant a stage restart trades from — the
+    one after its clock — and `None` wherever trading begins at the window's open. The
+    first carry runs from the later of that instant and the settled end, never across the
+    gap between them: every stage window ends flat, so nothing was held while the version
+    was not running, however long ago it last settled. The book itself opens at `capital`
+    either way.
     """
 
     hyp: Hypothesis
@@ -253,6 +257,7 @@ class RunRequest:
     prefix: tuple[date, date] | None = None
     cushion: float = 0.0
     settled_ns: int | None = None
+    resumes_ns: int | None = None
 
     def __post_init__(self) -> None:
         if self.prefix is None:
@@ -268,6 +273,13 @@ class RunRequest:
     def bounds(self) -> tuple[int, int]:
         """The window as a half-open instant span `[opens, closes)` in nanoseconds."""
         return midnight_ns(self.window[0]), midnight_ns(self.window[1]) + NS_PER_DAY
+
+    @property
+    def carried_from_ns(self) -> int:
+        """The earliest instant a book policy's carry is charged from: the window's open,
+        or the instant a stage restart trades from when it is later."""
+        opens = self.bounds[0]
+        return opens if self.resumes_ns is None else max(opens, self.resumes_ns)
 
     @property
     def period_ns(self) -> int:
@@ -778,6 +790,7 @@ def booked(strategy: object, request: RunRequest) -> None:
         request.period_ns,
         cushion=request.cushion,
         settled_ns=request.settled_ns,
+        carried_from_ns=request.carried_from_ns,
     )
 
 
@@ -1209,7 +1222,8 @@ def _equity(
     **The book policy is applied here, once, at each end** (`kanso.nautilus.costs`), in
     this order. The carry first: the yearly rate on what the marked book holds above its
     equity, over the span since the previous end — or since the window's open for the
-    first — taken out of cash, so it is in the period's return. Then the maintenance
+    first, or since the instant a stage restart resumed when that is later — taken out of
+    cash, so it is in the period's return. Then the maintenance
     ratio, on the cash the carry left and the end's holdings valued at the period's
     adverse extreme — a long at the lowest low, a short at the highest high, printed at or
     after the open since the previous end, whether or not the position was held at that
@@ -1249,6 +1263,7 @@ def _equity(
     open_at: list[Held] = []
     previous_end = request.settled_ns
     previous_equity = request.capital
+    carried_from = request.carried_from_ns
     point = 0
     fill = 0
     split = 0
@@ -1290,7 +1305,7 @@ def _equity(
                 fsum(abs(worth) for worth in marked),
                 value,
                 policy.financing_rate_bps,
-                end - (opens if previous_end is None else previous_end),
+                end - (carried_from if previous_end is None else max(previous_end, carried_from)),
             )
             cash -= charged
             value -= charged

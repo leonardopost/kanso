@@ -416,14 +416,20 @@ class Strategy(KansoStrategy):
 '''
 
 
-@pytest.mark.parametrize("quoted", [False, True], ids=["fixed spread", "quoted spread"])
+@pytest.mark.parametrize(
+    ("quoted", "restarted"),
+    [(False, False), (True, False), (False, True)],
+    ids=["fixed spread", "quoted spread", "a restart settled ninety days before"],
+)
 def test_the_balance_read_before_acting_is_the_book_the_policy_left(
-    tmp_path: Path, quoted: bool
+    tmp_path: Path, quoted: bool, restarted: bool
 ) -> None:
     """Every balance read at a period end the sleeve did not trade in is the equity the
     card struck there before that end's own carry and transfer — so every earlier carry,
     every earlier reset and the fills of every earlier end, including the resting bid the
-    venue matched against the point that turned a period, are in it to the last cent."""
+    venue matched against the point that turned a period, are in it to the last cent. A
+    restart's seed is the harness's too: the cushion it draws on at the first end, which a
+    month turned since the settled end resets, and a first carry from the resumption."""
     fields = booked(
         {"reset": "monthly", "financing_rate_bps": 500.0}, max_position_pct=200.0, max_leverage=2.0
     ).model_dump(by_alias=True, mode="json")
@@ -432,6 +438,13 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
         fields["costs"] = {"commission_bps": 1.0, "slippage_bps": 2.0, "spread": "quotes"}
     hyp = Hypothesis.model_validate(fields)
     record = tmp_path / "balance.txt"
+    opens = midnight_ns(QUARTER[0])
+    seed = 1_000.0 if restarted else 0.0
+    restart = (
+        {"cushion": seed, "settled_ns": opens - 90 * NS_PER_DAY, "resumes_ns": opens + 3_600}
+        if restarted
+        else {}
+    )
     request = RunRequest(
         hyp=hyp,
         strategy_source=BOOK_PROBE,
@@ -440,6 +453,7 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
         venue_model=venue_model(hyp, quotes_available=quoted),
         capital=CAPITAL,
         overrides={"record": str(record)},
+        **restart,  # type: ignore[arg-type]
     )
     groups: list[tuple[object, ...]] = [tuple(bars(QUARTER))]
     if quoted:
@@ -458,16 +472,21 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
     moved = [
         index
         for index, cushion in enumerate(card.cushion)
-        if cushion != (card.cushion[index - 1] if index else 0.0)
+        if cushion != (card.cushion[index - 1] if index else seed)
     ]
-    assert moved == [31, 60], "a transfer at the first end of February and of March"
+    assert moved == ([0] if restarted else []) + [31, 60], (
+        "a transfer at the first end of February and of March, and a restart's at its first"
+    )
+    if restarted:
+        a_day = (card.held[0].notional - card.equity[0] - card.carry[0]) * 0.05 / 365.25
+        assert card.carry[0] < a_day, "not ninety days of it"
     compared = 0
     for line in record.read_text().splitlines():
         ts, balance = int(line.split()[0]), float(line.split()[1])
         if ts in filled:
             continue
         index = ends.index(ts)
-        before = card.cushion[index - 1] if index else 0.0
+        before = card.cushion[index - 1] if index else seed
         struck = card.equity[index] + card.carry[index] + card.cushion[index] - before
         assert balance == pytest.approx(struck, rel=1e-12), f"period {index}"
         compared += 1
@@ -477,12 +496,19 @@ def test_the_balance_read_before_acting_is_the_book_the_policy_left(
 # --- a restart ---------------------------------------------------------------------
 
 
-def test_a_restart_carries_from_the_end_it_settled_and_resets_across_the_turn(request_for) -> None:
-    """A stage restart names the last end the previous window settled: the first carry runs
-    from it rather than from the window's midnight, and a month that turned between the two
-    resets at the first end after it, drawing on the cushion the restart was seeded with."""
+@pytest.mark.parametrize(
+    "gone_ns", [NS_PER_DAY // 2, 90 * NS_PER_DAY], ids=["half a day", "ninety days"]
+)
+def test_a_restart_carries_from_the_instant_it_resumed_and_resets_across_the_turn(
+    request_for, gone_ns: int
+) -> None:
+    """A stage restart names the last end the previous window settled and the instant it
+    resumes trading. Every window ends flat, so the first carry runs from the resumption,
+    however long ago the version last settled — half a day or a whole tenure elsewhere —
+    and a month that turned between the two resets at the first end after it, drawing on
+    the cushion the restart was seeded with."""
     opens = midnight_ns(date(2024, 2, 1))
-    settled = opens - NS_PER_DAY // 2
+    resumes = opens + NS_PER_DAY // 4
     end = opens + NS_PER_DAY // 2
     request = request_for(
         hypothesis_=booked(
@@ -492,27 +518,41 @@ def test_a_restart_carries_from_the_end_it_settled_and_resets_across_the_turn(re
         ),
         window=(date(2024, 2, 1), date(2024, 2, 1)),
         cushion=1_000.0,
-        settled_ns=settled,
+        settled_ns=opens - gone_ns,
+        resumes_ns=resumes,
     )
     bought = Fill(
-        ts_ns=opens + 1, instrument_id=INSTRUMENT, side="BUY", qty=15_000, px=10.0, cost=0
+        ts_ns=resumes + 1, instrument_id=INSTRUMENT, side="BUY", qty=15_000, px=10.0, cost=0
     )
 
     curve = _equity(
         request,
-        [(opens + 1, INSTRUMENT, 10.0, 9.0, 10.0), (end, INSTRUMENT, 9.9, 9.9, 9.9)],
+        [(resumes + 1, INSTRUMENT, 10.0, 9.0, 10.0), (end, INSTRUMENT, 9.9, 9.9, 9.9)],
         [bought],
         {},
     )
 
     worth = 15_000 * 9.9
     value = CAPITAL - 150_000.0 + worth
-    charged = carry(worth, value, 500.0, end - settled)
+    charged = carry(worth, value, 500.0, end - resumes)
     assert curve.carry == (pytest.approx(charged),)
-    assert charged == pytest.approx((worth - value) * 0.05 * NS_PER_DAY / NS_PER_YEAR)
+    assert charged == pytest.approx((worth - value) * 0.05 * NS_PER_DAY / 4 / NS_PER_YEAR)
     assert curve.cushion == (0.0,), "the whole seed restores February's first deficit"
     assert curve.equity == (pytest.approx(value - charged + 1_000.0),)
     assert curve.returns == (pytest.approx(value - charged - CAPITAL),)
+
+
+def test_a_restart_that_resumes_before_the_window_opens_carries_from_the_open(
+    request_for,
+) -> None:
+    opens = midnight_ns(date(2024, 2, 1))
+    request = request_for(
+        hypothesis_=booked({"financing_rate_bps": 500.0}),
+        window=(date(2024, 2, 1), date(2024, 2, 1)),
+        resumes_ns=opens - NS_PER_DAY,
+    )
+
+    assert request.carried_from_ns == opens
 
 
 def test_a_restart_inside_the_month_it_settled_in_resets_nothing(request_for) -> None:

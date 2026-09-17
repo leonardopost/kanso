@@ -210,6 +210,7 @@ DENIED_BOOK: Final = frozenset(
         "_period_ns",
         "_cushion",
         "_settled_ns",
+        "_carried_from_ns",
         "_period_index",
         "_period_last_ns",
         "_turn",

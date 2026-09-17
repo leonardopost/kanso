@@ -394,9 +394,11 @@ host's. Classification never touches the key.
 On a paper or live stage the node restarts flat at the version's capital every window, as
 it always has. What carries across a restart is the policy's own state, read from the
 version's newest recorded window on that stage that measured a period: the cushion it closed
-with, and its last period end, from which the next window's first carry is charged and
-against which its first month turn is judged. A new version, or a version on a stage it has
-not run on, starts with nothing set aside.
+with, and its last period end, against which the next window's first month turn is judged.
+The first carry is charged from the instant the restart resumes trading, not from that end:
+every window ends flat, so the time the version spent off the stage — a stop, or a tenure
+on live before a demotion back to paper — held nothing to borrow against. A new version, or
+a version on a stage it has not run on, starts with nothing set aside.
 
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must

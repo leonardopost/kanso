@@ -681,7 +681,9 @@ idle and the clock stands. Two versions on one stage that subscribe one series a
 once, cut at the deeper warmup of the two, and each is handed only the span its own
 request delivers: a version without a `warmup` beside a warmed one sees nothing of the
 prefix, a shallower warmup sees nothing of a deeper one's, and every version's handlers,
-indicators and orders are what a run of it alone would produce.
+indicators and orders are what a run of it alone would produce. A version under a `book`
+policy is seeded on a restart with the cushion and the last settled end of its newest
+measured window on that stage, and its first carry runs from the instant it resumes.
 
 ## Promotion and demotion
 

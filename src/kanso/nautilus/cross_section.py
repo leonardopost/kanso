@@ -107,6 +107,7 @@ def book(
     period_ns: int,
     cushion: float = 0.0,
     settled_ns: int | None = None,
+    carried_from_ns: int | None = None,
 ) -> None:
     """Have the harness apply a book policy on the periods the runner's extraction cuts.
 
@@ -114,13 +115,17 @@ def book(
     read back and no manifest records. The harness needs three things the extraction has
     and it does not: the instant the return periods are cut from, their length, and where
     the book stood before this run — what earlier windows set aside in the cushion and the
-    last period end they settled, both zero and none except on a stage restart.
+    last period end they settled, both zero and none except on a stage restart — and the
+    earliest instant a carry runs from, the anchor unless a restart resumed later.
     """
     strategy._policy = policy  # type: ignore[attr-defined]
     strategy._anchor_ns = anchor_ns  # type: ignore[attr-defined]
     strategy._period_ns = period_ns  # type: ignore[attr-defined]
     strategy._cushion = cushion  # type: ignore[attr-defined]
     strategy._settled_ns = settled_ns  # type: ignore[attr-defined]
+    strategy._carried_from_ns = (  # type: ignore[attr-defined]
+        anchor_ns if carried_from_ns is None else carried_from_ns
+    )
 
 
 def deliver_from(strategy: object, from_ns: int) -> None:

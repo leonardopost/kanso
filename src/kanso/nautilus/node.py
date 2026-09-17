@@ -160,12 +160,16 @@ class Placement:
         return f"{self.loaded.sleeve.cls.__name__}-{self.tag}"
 
     def request(
-        self, window: tuple[date, date], prefix: tuple[date, date] | None = None
+        self,
+        window: tuple[date, date],
+        prefix: tuple[date, date] | None = None,
+        resumes_ns: int | None = None,
     ) -> RunRequest:
         """The run this version asks for over the stage's window.
 
         `prefix` is the sessions the version warms on, resolved by the node from its
-        catalog and its clock: a placement carries neither.
+        catalog and its clock, and `resumes_ns` the instant after that clock on a restart:
+        a placement carries neither.
         """
         return RunRequest(
             hyp=self.hyp,
@@ -180,6 +184,7 @@ class Placement:
             prefix=prefix,
             cushion=self.cushion,
             settled_ns=self.settled_ns,
+            resumes_ns=resumes_ns,
         )
 
 
@@ -411,7 +416,8 @@ def run(
         )
     opens_ns = midnight_ns(node.window[0]) if node.after is None else node.after + 1
     requests = tuple(
-        placed.request(node.window, _prefix(placed, node)) for placed in node.placements
+        placed.request(node.window, _prefix(placed, node), None if node.after is None else opens_ns)
+        for placed in node.placements
     )
     window = _window_data(requests, node.catalog, node.after)
     points = window.points

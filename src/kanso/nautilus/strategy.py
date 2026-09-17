@@ -351,6 +351,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._period_ns = 1
         self._cushion = 0.0
         self._settled_ns: int | None = None
+        self._carried_from_ns = 0
         self._period_index: int | None = None
         self._period_last_ns = 0
 
@@ -537,11 +538,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Charge the carry and move the reset's transfer, as the runner does at `end`."""
         value, gross = self._book_at(end)
         previous = self._settled_ns
+        since = self._carried_from_ns
         charged = carry(
             gross,
             value,
             policy.financing_rate_bps,
-            end - (self._anchor_ns if previous is None else previous),
+            end - (since if previous is None else max(previous, since)),
         )
         self._cash -= charged
         if policy.resets and month_turned(previous, end):
