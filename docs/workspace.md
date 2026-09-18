@@ -981,6 +981,15 @@ figure under 0.5 GB — half a gigabyte is twice the smallest baseline peak meas
 anything under it is a typo rather than a measurement — is read as 0.5 GB. An
 under-declaration therefore buys more lanes than the host can feed, not fewer.
 
+The figure is also what a card of that lane may hold: the loop kills a card child whose
+resident memory passes the lane's share, and the declaration is the first way that threshold
+can fall under 4 GB. It is never lowered below three times the run's *own* measured baseline
+peak, so the heavy hypothesis whose recorded peak you are declaring your way out of keeps
+the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
+the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
+six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
+rather than the declaration.
+
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another
 machine detects its own rather than inheriting one that describes a machine it never ran on.
