@@ -7,8 +7,10 @@ rather than fixtures.
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,7 +18,8 @@ import pytest
 from kanso.certify import certificate
 from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
-from kanso.models import Answer, Call, reset_mock, spend
+from kanso.hyp import STRATEGY_FILE
+from kanso.models import INSTRUCTIONS, Answer, Call, reset_mock, spend
 from kanso.models import router as router_module
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
@@ -310,6 +313,46 @@ def test_redundant_misses_count_toward_the_stall(
     assert outcome.reason == "stalled"
     assert (outcome.keeps, outcome.redundant) == (1, 2)
     assert records.active(store, prepared_hyp) is None
+
+
+def _fact_keys() -> set[str]:
+    """Every key `_dynamic` can put in the user turn, read out of its own source.
+
+    A list written by hand would go stale the first time a fact was added, which is the
+    defect this test exists for: the `redundant` array reached the proposer as an
+    undeclared key for a day, and 2,822 proposals were refused by a rule the instruction
+    never stated.
+    """
+    tree = ast.parse(Path(driver.__file__).read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_dynamic"):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.AnnAssign) and isinstance(inner.value, ast.Dict):
+                found |= {
+                    key.value
+                    for key in inner.value.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+            subscripted = (
+                isinstance(inner, ast.Subscript)
+                and isinstance(inner.value, ast.Name)
+                and inner.value.id == "facts"
+                and isinstance(inner.slice, ast.Constant)
+            )
+            if subscripted:
+                found.add(str(inner.slice.value))  # type: ignore[attr-defined, union-attr]
+    return found
+
+
+def test_every_fact_the_proposer_is_sent_is_named_in_its_instruction() -> None:
+    """A fact the instruction does not name is a rule the proposer was never told."""
+    said = INSTRUCTIONS["propose"]
+    keys = _fact_keys()
+    assert {"recent_cards", "coverage", "phase", "redundant"} <= keys, "the scan found them"
+    assert [key for key in sorted(keys) if f"`{key}`" not in said] == []
+    assert f"`{STRATEGY_FILE}`" in said, "the file itself, which is not a constant key"
 
 
 def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:

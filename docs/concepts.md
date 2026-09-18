@@ -251,7 +251,15 @@ a search fifty times narrower than the one that ran. What it may never be is a k
 keep rule is asked first, so a candidate that beats the best is a keep whatever it
 resembles. The baseline is exempt, since it is the last run's best and its signature is
 already stored; and signatures are stored for every judged run, redundant ones included,
-so the third spelling of an idea is refused against the second as well as the first. Signatures live under the pins — the hypothesis file, the snapshot, the
+so the third spelling of an idea is refused against the second as well as the first.
+
+The rule is in the proposer's instruction, with what a signature is and what to do with
+the refusals it is shown, for the same reason the phase is: a refusal the proposer was
+never told about is a wasted ladder. Measured in a live workspace before it was, 2,822
+proposals were refused in a day by a rule whose words — signature, redundant, session,
+`pct` — appeared nowhere in the 2,393 characters the proposer was given. Every fact the
+proposer is sent is named in that instruction, and a test reads the fact keys out of the
+driver's own source to keep it that way. Signatures live under the pins — the hypothesis file, the snapshot, the
 criteria — and a run under new pins starts with none.
 
 The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
