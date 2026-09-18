@@ -32,8 +32,8 @@ def test_anything_that_is_not_an_object_is_an_empty_answer(text: str) -> None:
     assert as_object(text) == {}
 
 
-MEASURED_SHIM_TIMEOUTS_S = {"cursor": 390.0, "claude": 240.0}
-"""The kill times the two workspace shims were measured at, in the operator's workspace."""
+MEASURED_SHIM_KILL_TIMES_S = (390.0, 240.0)
+"""The kill times the two shims running in the operator's workspace were measured at."""
 
 
 def test_the_request_timeout_leaves_a_shim_room_to_give_up_first() -> None:
@@ -45,5 +45,5 @@ def test_the_request_timeout_leaves_a_shim_room_to_give_up_first() -> None:
     `the request did not complete (ReadTimeout)`, which names nothing it was doing.
     """
     assert REQUEST_TIMEOUT_S == 420.0
-    assert all(kill < REQUEST_TIMEOUT_S for kill in MEASURED_SHIM_TIMEOUTS_S.values())
+    assert all(kill < REQUEST_TIMEOUT_S for kill in MEASURED_SHIM_KILL_TIMES_S)
     assert CONNECT_TIMEOUT_S < REQUEST_TIMEOUT_S

@@ -44,10 +44,9 @@ it answers with a status this client reports as `<model>: the provider answered 
 where a client timeout reports `<model>: the request did not complete (ReadTimeout)`,
 which names the transport and never what the shim was doing when it was cut off.
 
-Measured in the operator's workspace, the two shims kill at 390s (the one around the
-Cursor CLI) and 240s (the one around the Claude CLI). Both are under this figure, which
-is what keeps their own refusal the failure an operator reads, and a new shim's timeout
-belongs under it too.
+Measured in the operator's workspace, the two shims running there kill at 390s and 240s.
+Both are under this figure, which is what keeps their own refusal the failure an operator
+reads, and a new shim's timeout belongs under it too.
 """
 
 _FENCE: Final = "```"
