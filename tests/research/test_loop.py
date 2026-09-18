@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import date
 from hashlib import sha256
@@ -300,6 +301,13 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     assert event.detail["like"] == kept.sha7
     assert event.detail["pct"] == 100.0
     assert event.detail["metric"] == kept.metric, "the same snapshot and code give the same number"
+    # Both halves of the premise are recorded, because both halves are what refused it: a
+    # reader told only that two books matched could not tell this from the refusal kanso
+    # used to make on a book alone.
+    assert event.detail["like_metric"] == kept.metric
+    assert event.detail["floor"] > 0.0
+    assert f"{event.detail['floor']:.6g}" in refused.value.message
+    assert f"{event.detail['floor']:.6g}" in str(refused.value.remedy)
 
 
 def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restored(
@@ -357,14 +365,18 @@ def test_the_keep_rule_is_asked_before_the_signature(
 
 
 def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_toml(
-    ws: Workspace, store: StateStore, registered: str
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Measured: WEAK holds nothing on 10 of the window's 31 sessions, as the flat baseline
-    does on all 31 — a discard at the template's 97 percent, a redundant miss at 30.
+    does on all 31 — a book matched at 30 percent and not at the template's 97.
 
     The same run signed at period ends alone matched on 17: seven of those sessions WEAK
     opened and closed a position in, and was flat only at the instant it was sampled.
+
+    The floor is widened to admit any number, because the share is the clause under test
+    and WEAK's own result is 23 floors from the baseline's, which the test below is for.
     """
+    monkeypatch.setattr(loop, "_noise_floor", lambda *_: float("inf"))
     workspace = tuned(ws, redundant_pct=30)
     run = loop.begin(workspace, store, registered)
     edit(workspace, run, WEAK)
@@ -375,6 +387,36 @@ def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_to
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert (event.detail["matched"], event.detail["sessions"]) == (10, 31)
     assert event.detail["like"] == run.base_sha[:7]
+
+
+def test_a_book_already_held_that_earned_another_number_is_a_discard_not_a_repeat(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The matcher's premise, tested rather than asserted, on the run above with its own
+    floor back: WEAK holds the baseline's book on 10 of 31 sessions and scores -0.061605
+    against the baseline's 0.0, twenty-three times the 0.002631 that separates two results
+    here. Its result is not already known, so it is a card of the ordinary kind — counted,
+    coverable and shown to the next proposal as a change that was tried and measured.
+    """
+    workspace = tuned(ws, redundant_pct=30)
+    run = loop.begin(workspace, store, registered)
+    edit(workspace, run, WEAK)
+
+    made = loop.card(workspace, store, registered, "buy any fall")
+
+    assert made.status == "discard"
+    assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+    setup = loop._setup(workspace, store, loop._pinned(workspace, store, run))
+    floor = loop._noise_floor(setup, made.metric_se)
+    assert abs(made.metric - 0.0) > 20 * floor, "the baseline is flat and this one is not"
+    # The book did match at the configured share, so the share is not what let it through.
+    books = {
+        str(row["strategy_sha"]): json.loads(str(row["signature"]))
+        for row in store.connection.execute("SELECT strategy_sha, signature FROM signatures")
+    }
+    base, candidate = books[run.base_sha], books[made.strategy_sha]
+    shared = base.keys() & candidate.keys()
+    assert (sum(1 for day in shared if base[day] == candidate[day]), len(shared)) == (10, 31)
 
 
 def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(

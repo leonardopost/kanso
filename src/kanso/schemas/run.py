@@ -7,7 +7,8 @@ from cards, and its row is defined here so that every renderer produces the same
 A crashed card carries a zero metric by definition: nothing was measured, and letting a
 crash report anything else would let a timeout beat a working strategy. A `redundant` card
 is the opposite: it ran, it was measured, and what it measured was a book already judged
-under the run's pins, so it carries its real number and may never be a keep.
+under the run's pins and, to within the hypothesis's noise floor, that book's own number,
+so it carries its real number and may never be a keep.
 
 A card's `tags` are the proposer's own account of what the change was, drawn from the
 vocabulary `TAGS` fixes. The vocabulary is the package's rather than the model's because

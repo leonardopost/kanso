@@ -260,17 +260,59 @@ def test_a_signature_matches_on_the_share_of_shared_days_and_names_the_closest(
     records.record_signature(store, run, sha_b, stored_b, 1.0)
     candidate = {"2024-01-01": long, "2024-01-02": long, "2024-01-03": long}
 
-    like = records.redundant_with(store, run, candidate, 97)
+    like = records.redundant_with(store, run, candidate, 97, 1.0, 0.0)
     assert like is not None
     assert (like.like, like.matched, like.shared, like.pct) == (sha_b, 3, 3, 100.0)
-    loose = records.redundant_with(store, run, {"2024-01-01": long, "2024-01-03": []}, 60)
+    assert like.earned == 1.0, "the number the book it repeats earned, which the card cannot say"
+    loose = records.redundant_with(store, run, {"2024-01-01": long, "2024-01-03": []}, 60, 1.0, 0.0)
     assert loose is not None and loose.like == sha_a, "two of two shared days"
-    assert records.redundant_with(store, run, candidate, 100) is not None
+    assert records.redundant_with(store, run, candidate, 100, 1.0, 0.0) is not None
     unseen = {"2024-01-02": [["B.X", -1, True]]}
-    assert records.redundant_with(store, run, unseen, 97) is None, "shared, never matched"
-    assert records.redundant_with(store, run, {"2025-01-01": []}, 1) is None, "no shared day"
+    assert records.redundant_with(store, run, unseen, 97, 1.0, 0.0) is None, "shared, never matched"
+    assert records.redundant_with(store, run, {"2025-01-01": []}, 1, 1.0, 0.0) is None, "no shared"
     other = run.model_copy(update={"snapshot_id": "another"})
-    assert records.redundant_with(store, other, candidate, 1) is None, "pins bound the memory"
+    assert records.redundant_with(store, other, candidate, 1, 1.0, 0.0) is None, "pins bound it"
+
+
+def test_a_book_matched_on_every_day_is_no_anchor_when_the_number_it_earned_differs(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The second half of the matcher's premise, checked rather than asserted.
+
+    The floor is the hypothesis's own: a difference at or under it is one result measured
+    twice, and a difference over it is two results, whatever the books say. Measured on the
+    live workspace of 2026-09-18, the half that had never been checked was false on 106 of
+    3,092 refusals — 74 of them on one intraday hypothesis whose objective is a per-trade
+    edge, where one anchor's 289 matches scored -18.780 .. 9.179 around its own -4.5452.
+    """
+    run = loop.begin(ws, store, registered)
+    long = [["A.X", 1, True]]
+    held = {"2024-01-01": long, "2024-01-02": long}
+    sha = store.put_blob(b"a")
+    records.record_signature(store, run, sha, held, 1.0)
+
+    assert records.redundant_with(store, run, held, 100, 1.25, 0.25) is not None, "at the floor"
+    assert records.redundant_with(store, run, held, 100, 0.75, 0.25) is not None, "and below it"
+    assert records.redundant_with(store, run, held, 100, 1.26, 0.25) is None, "over it, so not one"
+    assert records.redundant_with(store, run, held, 100, 0.74, 0.25) is None, "either way"
+
+
+def test_a_stored_book_with_no_number_on_record_is_no_anchor_at_all(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A premise that cannot be tested has not been met, so such a row refuses nothing.
+
+    Only a row written before `signatures.metric` existed can be one, and 0004 empties the
+    table in the version that adds the column, so no released workspace holds one. The
+    reading is asserted because it is the answer to a NULL the schema admits.
+    """
+    run = loop.begin(ws, store, registered)
+    held = {"2024-01-01": [["A.X", 1, True]]}
+    sha = store.put_blob(b"a")
+    records.record_signature(store, run, sha, held, 1.0)
+    store.connection.execute("UPDATE signatures SET metric = NULL WHERE strategy_sha = ?", (sha,))
+
+    assert records.redundant_with(store, run, held, 100, 1.0, 1e9) is None
 
 
 def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
@@ -288,8 +330,12 @@ def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
     other = records.signature(a_run(trades=(a_trade("B.X", -3.0, opens, opens + 3_600 * 10**9),)))
 
     assert stored["2024-01-02"] == [["A.X", 1, False]], "held, and gone by the end"
-    assert records.redundant_with(store, run, other, 97) is None, "another name is another bet"
-    assert records.redundant_with(store, run, stored, 97) is not None, "and the same one is not"
+    assert records.redundant_with(store, run, other, 97, 1.0, 0.0) is None, (
+        "another name, another bet"
+    )
+    assert records.redundant_with(store, run, stored, 97, 1.0, 0.0) is not None, (
+        "the same one is not"
+    )
 
 
 def test_the_same_bytes_are_signed_once_under_one_set_of_pins(

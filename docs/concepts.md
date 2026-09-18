@@ -197,7 +197,7 @@ evaluate, record. Four outcomes, and each does something different to the lane.
 | `keep` | every constraint passed and the keep rule cleared | this becomes the run's `best`, and the hypothesis's when it beats that or the run already holds it; only then is the blob written to `hypotheses/<id>/strategy.py` |
 | `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base |
 | `crash` | the backtest raised, or exceeded its time or memory budget | the same restore, with the traceback tail recorded |
-| `redundant` | it did not keep, and it held the same book as a strategy already judged under the run's pins | the same restore; the card carries the metric it measured, the `redundant` event names the card it repeats, and the command that asked for it is refused |
+| `redundant` | it did not keep, it held the same book as a strategy already judged under the run's pins, and it earned that strategy's number to within the hypothesis's noise floor | the same restore; the card carries the metric it measured, the `redundant` event names the card it repeats and both numbers, and the command that asked for it is refused |
 
 `results.tsv` is rendered from state rather than appended to, so the history survives every
 restore. Three proposals into the demo:
@@ -241,21 +241,43 @@ than merged into "something was held", so the reading is strictly finer than sam
 ends alone and never coarser: two strategies that differed under the old reading differ
 under this one, and carrying a position over the close is not the same book as closing it
 before. Two strategies with the same signature on nearly every shared session made the
-same bets and earned the same number, however differently they were written — a threshold
-moved, a helper renamed, a condition spelt the other way — so the second is not an
-experiment. One that matches a strategy already judged under the run's pins on at least
-`[research] redundant_pct` percent of their shared sessions is **redundant**: a card of
-that status carrying the metric it measured, the lane restored as any non-keep restores
-it, a `redundant` event carrying the card it repeats, the command that asked for it
-refused, and the proposer shown that card by name on its next turn. It is a card because
-the backtest ran and a real number came back — the trial it counts as, the corner it fills
-in on the coverage table and the record the next run reads are all things the search
-actually did, and dropping them was measured deflating a certificate by a search more than
-a hundred times narrower than the one that ran. What it may never be is a keep: the keep
-rule is asked first, so a candidate that beats the best is a keep whatever it resembles.
-The baseline is exempt, since it is the last run's best and its signature is already
-stored; and signatures are stored for every judged run, redundant ones included, so the
-third spelling of an idea is refused against the second as well as the first.
+same bets, however differently they were written — a threshold moved, a helper renamed, a
+condition spelt the other way. Whether they also earned the same number is the rest of that
+sentence, and it is read rather than assumed: a signature is stored with the metric its card
+earned, and a candidate is **redundant** when it matches a strategy judged under the run's
+pins on at least `[research] redundant_pct` percent of their shared sessions *and* its own
+metric is within that hypothesis's noise floor — `max(min_delta, k_se x se)`, the floor
+the keep rule is struck from too — of what that strategy earned. Then it is a card of that
+status carrying the metric it measured, the lane restored as any non-keep restores it, a
+`redundant` event carrying the card it repeats and both numbers, the command that asked for
+it refused, and the proposer shown that card by name on its next turn.
+
+Both clauses, because "its result is already known" is a claim about the result, and the
+result is in hand when the refusal is decided. Measured across the 3,092 candidates the
+live workspace of 2026-09-18 had turned away, 106 had earned a number further from the
+book they repeated than that hypothesis's own floor, so the refusal asserted what their
+two numbers denied. Where the daily book does determine the number, nothing changes and
+loop memory is untouched: a vol-target sizing hypothesis refused 1,151 candidates, 1,090
+of them against one book scoring 0.4674, and their own scores sat a median 0.0039 and at
+most 0.0931 from it against a floor of 0.2713 — not one of the 1,151 is admitted, and a
+size that moves no result is still not an experiment. What the floor admits is the case
+the other way round: an intraday hypothesis measured on a per-trade edge, whose 289
+matches of one book scored -18.780 to 9.179 around that book's -4.5452, a median 9.096
+against a floor of 10.116, with 74 of its 325 refusals beyond it. The same book read by
+session, and not the same result.
+
+A redundant card is a card because the backtest ran and a real number came back — the
+trial it counts as, the corner it fills in on the coverage table and the record the next
+run reads are all things the search actually did, and dropping them was measured deflating
+a certificate by a search more than a hundred times narrower than the one that ran. What
+it may never be is a keep: the keep rule is asked first, so a candidate that beats the
+best is a keep whatever it resembles. Nor is there a gap between the two rules for a card
+to fall into unjudged — they are struck from one floor, which the keep rule doubles only
+when the file grew past its line budget, so a candidate that cleared the floor upward and
+not the doubled bar is neither a keep nor a repeat, which is what a discard is. The
+baseline is exempt, since it is the last run's best and its signature is already stored;
+and signatures are stored for every judged run, redundant ones included, so the third
+spelling of an idea is refused against the second as well as the first.
 
 The rule is in the proposer's instruction, with what a signature is and what to do with
 the refusals it is shown, for the same reason the phase is: a refusal the proposer was

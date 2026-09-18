@@ -45,9 +45,13 @@ Measured in a live workspace: of 201 signatures stored for an intraday hypothesi
 daily return period, 192 recorded a position on none of their 834 sampled days, so every
 candidate matched every other on all of them and every proposal after the first was
 refused. Two strategies with the same signature on nearly every shared day made the same
-bets and earned the same result, however differently they were written, so the second is
-not an experiment. Signatures are stored per strategy under the run's pins — the
-hypothesis file, the snapshot and the criteria — never per run, because two runs under
+bets, however differently they were written; whether they also earned the same result is
+the second half of that sentence, and it used to be asserted rather than read. It is read
+now — a signature is stored with the metric its card earned, and a candidate is redundant
+only when its own number is within the hypothesis's noise floor of that one — because the
+objective is computed before the refusal is decided and a premise that can be tested for
+nothing should not be assumed. Signatures are stored per strategy under the run's pins —
+the hypothesis file, the snapshot and the criteria — never per run, because two runs under
 the same pins ask the same question of the same data; and they are stored for every
 judged run, a redundant one included, so the third spelling of one idea is refused
 against the second as well as the first. The comparison is by day rather than by instant
@@ -100,7 +104,8 @@ run held at one of the day's period ends and false for what it held during the d
 at none of them, which is the difference between carrying a position over the close and
 closing it before. A day with nothing open maps to `[]`, because being flat is a position
 too, and no size enters, because a size is a parameter and a parameter is exactly what a
-signature exists to see through."""
+signature exists to see through. What the size did to the number is not lost with it: the
+row carries the metric the book earned, and `redundant_with` reads it."""
 
 _RUN_COLUMNS = (
     "run_id",
@@ -414,11 +419,18 @@ def _spanned(opened_ns: int, closed_ns: int) -> list[date]:
 
 @dataclass(frozen=True)
 class Redundancy:
-    """Which stored signature a candidate matched, and on how much of their shared days."""
+    """Which stored signature a candidate matched, on how much of it, and what it earned.
+
+    `earned` is the anchor's own metric, which is half of why the candidate is redundant
+    and the half no reading of the two books can show. The refusal names it beside the
+    candidate's, because "your result is already known" is a claim about two numbers and
+    an operator is owed both.
+    """
 
     like: str
     matched: int
     shared: int
+    earned: float
 
     @property
     def pct(self) -> float:
@@ -454,27 +466,63 @@ def record_signature(
 
 
 def redundant_with(
-    store: StateStore, run: RunRecord, held: Signature, pct: int
+    store: StateStore, run: RunRecord, held: Signature, pct: int, metric: float, floor: float
 ) -> Redundancy | None:
     """The stored signature under this run's pins that `held` matches on at least `pct`
-    percent of their shared days — the closest one, the earlier on a tie — or `None`.
+    percent of their shared days *and* whose own metric is within `floor` of `metric` —
+    the closest such one, the earlier on a tie — or `None`.
+
+    Both clauses, because the premise is both clauses. Two strategies that held the same
+    book on nearly every shared day made the same bets, and the inference drawn from that
+    is that they earned the same result; only the first half was ever checked, and the
+    second was asserted. It does not need to be: the objective is computed before this is
+    asked, so the claim can be tested at the cost of one number per stored book.
+
+    Measured against the live workspace of 2026-09-18, over the 3,092 candidates its five
+    refusing hypotheses turned away, with each hypothesis's median card standard error
+    standing in for the candidate's own. Where the daily book determines the number the
+    premise holds and the rule does not move: `sox_drag_budget`, whose thesis is a
+    vol-target budget with a cash-withholding cap, refused 1,151 candidates of which 1,090
+    matched one anchor scoring 0.4674, and their own scores sat a median 0.0039 and at most
+    0.0931 from it against a floor of 0.2713 — so none of the 1,151 is admitted, and a size
+    that moved no result is still not an experiment. `sox_drag` 0 of 742, `sox_main_b` 1 of
+    325, `sox_dir` 31 of 549. Where it does not, the premise fails outright: `sox_touch` is
+    intraday on a per-trade edge, and its 289 candidates matching anchor `ce5ef34` scored
+    -18.780 .. 9.179 against that anchor's -4.5452 and a floor of 10.116, a median 9.096
+    away and 74 of its 325 refusals further than the floor. 106 of 3,092 in all: the rule
+    refuses a repeat as it did, and stops refusing a measurement that disagreed with what
+    it was called a repeat of.
+
+    `floor` is struck from the candidate's own standard error, not the anchor's, which is
+    on record here and deliberately unread. The keep rule compares a candidate against
+    `best_metric` on the candidate's floor and never consults the best card's; one card,
+    one noise floor is the convention, and a second scale in the same loop would let two
+    rules disagree about whether one difference is a difference.
 
     Every signature stored under the pins is a candidate, the best card's included: the
     caller applies the keep rule first, so what reaches here has already failed to beat
-    the best, and matching it is the strongest reason of all to refuse the candidate.
-    Two signatures with no day in common match nothing.
+    the best, and matching it is the strongest reason of all to refuse the candidate. Two
+    signatures with no day in common match nothing, and a stored book carrying no metric
+    is nothing to compare against: a premise that cannot be tested has not been met, so it
+    is no anchor (`state/migrations/0006_signature_metric.sql`).
     """
     rows = store.connection.execute(
-        "SELECT strategy_sha, signature FROM signatures WHERE hyp_id = ? AND hypothesis_sha = ?"
-        " AND snapshot_id = ? AND criteria_version = ? ORDER BY created_at, rowid",
+        "SELECT strategy_sha, signature, metric FROM signatures WHERE hyp_id = ?"
+        " AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?"
+        " ORDER BY created_at, rowid",
         (run.hyp_id, run.hypothesis_sha, run.snapshot_id, run.criteria_version),
     ).fetchall()
     closest: Redundancy | None = None
     for row in rows:
+        if row["metric"] is None:
+            continue
+        earned = float(row["metric"])
+        if abs(metric - earned) > floor:
+            continue
         stored: Any = json.loads(str(row["signature"]))
         shared = held.keys() & stored.keys()
         matched = sum(1 for day in shared if held[day] == stored[day])
-        found = Redundancy(str(row["strategy_sha"]), matched, len(shared))
+        found = Redundancy(str(row["strategy_sha"]), matched, len(shared), earned)
         if not shared or found.pct < pct:
             continue
         if closest is None or found.pct > closest.pct:
