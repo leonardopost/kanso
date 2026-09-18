@@ -34,16 +34,33 @@ bytes are a blob; a keep that moves the hypothesis's best rewrites
 restores the lane copy from the best blob, or from the run's base before the first keep.
 `results.tsv` is rendered from the records afterwards, so no restore can lose history.
 
-**A result already known is not a trial.** After the keep rule has had its say, a card
+**A result already known is still a result.** After the keep rule has had its say, a card
 that did not keep is compared by what it held — its signature, `research/records.py` —
 against every strategy judged under the run's pins, and one that held the same book on
-`[research] redundant_pct` percent of their shared sessions is refused as *redundant*:
-no card, no trial, the lane restored, a `redundant` event, and `RedundantError` for the
-caller. The keep rule runs first so that a candidate which beats the best is a keep
-whatever it resembles, and the baseline is never redundant, since it is the best blob
-of the last run and its own signature is already stored. The trial count is the size
-of the search that found the result, and a spelling that repeats a bet already measured
-did not widen the search.
+`[research] redundant_pct` percent of their shared sessions *and* scored within the
+hypothesis's own noise floor of what that book earned is *redundant*: the card is recorded
+with that status and the metric it measured, the lane copy is restored as every non-keep
+restores it, a `redundant` event names the card it repeats and both numbers, and
+`RedundantError` reaches the caller. Both clauses, because "its result is already known"
+is a claim about the result: a candidate whose number differs from the book it repeats by
+more than the floor kanso already uses to say a difference is a difference has measured
+something the stored card did not, and refusing it as a repeat asserts what the two
+numbers deny. That candidate is an ordinary discard and it still appends a `same_book`
+event, because the book it matched is a fact about the search whichever way its number
+went, and the proposer that is told to move the number of a measured book cannot apply
+that rule unless it is shown the books that were measured. It is a card because the
+backtest ran: the engine time was spent, a real number came back, and the selection ranked
+that number and declined it. Refusing it without a record cost three things, all measured
+in a live workspace — the trial, so certificates deflated a Sharpe by a search fifty times
+narrower than the one that was run; the coverage entry, so a corner walked a thousand
+times read as unwalked to the proposer; and the idea itself, which the runs after this one
+could no longer see. What a redundant
+card may never be is a keep: the keep rule runs first, so a candidate that beats the best
+is a keep whatever it resembles, and the baseline is never redundant, since it is the best
+blob of the last run and its own signature is already stored. The two rules cannot both
+fire and cannot both miss what the other would catch — the keep bar is the same floor,
+doubled only when the file grew past its budget, so a candidate that cleared the floor
+upward and not the doubled bar is neither a keep nor a repeat, which is exactly what it is.
 
 **A benchmark is run once per run.** A hypothesis whose objective is measured against a
 hold of its first leg has that hold produced by the runner — the card's own request with
@@ -54,10 +71,12 @@ construct's cards are against one host-alone run.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
@@ -91,6 +110,7 @@ from kanso.nautilus import backtest, sizing
 from kanso.research import lanes, records
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
+from kanso.research.keep import noise_floor
 from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
@@ -116,6 +136,7 @@ __all__ = [
     "MIN_CARD_BUDGET_S",
     "REDUNDANT",
     "RESEARCHABLE",
+    "SAME_BOOK",
     "RedundantError",
     "Setup",
     "begin",
@@ -143,12 +164,34 @@ rather than a refusal anyone reads."""
 CARDED: Final = "card"
 ENDED: Final = "run_ended"
 REDUNDANT: Final = "redundant"
-"""The event a redundant miss appends under the hypothesis id: the candidate held the
-same book as a strategy already judged under the pins, and was refused without a card."""
+"""The event a redundant card appends under the hypothesis id, and the status it carries:
+the candidate held the same book as a strategy already judged under the pins, and scored
+what that strategy scored. The event is what names the card it repeats and the two numbers
+that agreed, which no column of `cards` holds."""
+
+SAME_BOOK: Final = "same_book"
+"""The event a card appends when it held a book already judged under the pins and earned
+a number further than the noise floor from it.
+
+It is no repeat — the two numbers deny it — so the card is an ordinary discard, nothing is
+refused and the status is not this. What the event carries is the half the card cannot:
+which book it matched and on how much of it. The argument for recording a repeat is the
+corner it fills in and the record the next run reads, and that argument says nothing about
+which way the number went, so it is made here too; the proposer is shown both kinds, and
+told which is which, because the rule it is given — hold a book already measured and move
+the number, and it is an experiment — cannot be applied by a model shown only the refusals.
+Measured on the live workspace of 2026-09-18, 106 of 3,092 refusals were this rather than
+a repeat, and each of them stores its own anchor, so a book re-trodden this way costs
+roughly `ceil(spread / 2 x floor)` backtests before matching resumes."""
 
 
 class RedundantError(PreconditionError):
-    """The candidate's result is already known: it held what a judged strategy held."""
+    """The candidate's result is already known: it held what a judged strategy held and
+    earned, within this hypothesis's noise floor, what that strategy earned.
+
+    Raised after the card is recorded, not instead of recording it. The card is the
+    measurement; this is the answer to whoever asked for another experiment and got none.
+    """
 
 
 BASELINE_FAILED: Final = "baseline_failed"
@@ -204,6 +247,81 @@ class Setup:
     @property
     def construct(self) -> str:
         return self.harness.construct
+
+    @property
+    def measured_under(self) -> str:
+        """A digest of what a card's number depends on and the run's pins do not carry.
+
+        A signature is selected by four pins — the hypothesis id and file, the snapshot
+        and the criteria version — on the premise that two runs under them ask the same
+        question of the same data. That is a premise about the *book*, and it is exactly
+        true of one. The number beside the book is also `[research] capital`, the balance
+        the harness starts with; `folds`, how many walk-forward folds the objective is
+        averaged over; `return_period`, the period its returns are struck on; the venue
+        model each fill is charged under, which `[research] broker` and `portfolio.yaml`
+        resolve together with the hypothesis's own costs; and, for an attached construct,
+        the version of the host the card is differenced against. The first three are
+        `kanso.toml` keys and the fourth is resolved from `kanso.toml` and
+        `portfolio.yaml`, all of them files an operator may edit between two cards; the
+        last is a per-run pin; and not one of them moves a hypothesis file, a snapshot id
+        or a package version. So the stored number carries this beside itself, and a row
+        measured under another reading is no anchor: `records.matched_book`.
+
+        Three more are resolved rather than declared, and each moves a number with every
+        pin and every `kanso.toml` key standing still.
+
+        `sleeve_budget` is what the run sizes to, and it reaches every fill as
+        `RunRequest.sleeve_budget`. For an attached construct it is the host's budget read
+        from the host's *currently registered* hypothesis (`_sleeve_budget` →
+        `hyp.registry.host_sizing`), and re-registering that file with another budget
+        composes no host version, so the host version above does not cover it. `grains`,
+        the bar sizes the run loads, is the host's registered resolution beside the
+        sleeve's own and moves by the same edit.
+
+        `prefix` is the warmup sessions a card is fed before the window, and `Setup` is
+        rebuilt for every card, so it is resolved from the catalog again for every card:
+        `backtest.warmup_prefix` takes the last N distinct days it finds, and a
+        `kanso data load` that adds a printed day inside the lookback moves the prefix by
+        that day between two cards of one run. `_benchmark_run` keys its cache on the
+        snapshot and the prefix together, which is this package's own statement that the
+        prefix is part of what a card's data is.
+
+        The claim is completeness against this dataclass, not against the world. Every
+        field of `Setup` is either digested here or moves no number, and
+        `tests/research/test_loop.py::test_every_field_of_a_setup_is_a_reading_or_is_not`
+        fails on a field that is neither. `hyp`, `harness`, `impl`, `host_source` and
+        `host_modifiers` are pinned already — the hypothesis file by its sha, this package
+        by the criteria version, the host's bytes by its version; `max_lines` is the keep
+        rule's line budget and no term of a metric; `catalog` is a path. What this cannot
+        carry is data. It fixes the *span* a card warms on and never the bars the catalog
+        holds inside it: those are the snapshot's business, a run pins one at `begin` and
+        holds it for its life, and a load that rewrites a day inside a span whose ends do
+        not move is a pin gone stale rather than a second reading.
+
+        Nothing else `[research]` declares reaches a card's number. `annualisation`,
+        `account` and `currency` look as though they would and do not: this package reads
+        none of the three anywhere, which
+        `tests/research/test_loop.py::test_the_settings_the_digest_leaves_out_move_no_number`
+        measures by running the same card under all three changed and reading back the
+        same metric. Wiring one of them is what makes that test fail, and it belongs here
+        on the same day.
+        """
+        digest = sha256()
+        measured: tuple[object, ...] = (
+            self.capital,
+            self.folds,
+            self.period,
+            self.venue_model.model_dump(mode="json"),
+            None if self.harness.host is None else self.harness.host.version,
+            self.sleeve_budget,
+            self.grains,
+            None if self.prefix is None else [day.isoformat() for day in self.prefix],
+        )
+        # No `default=`: a field this cannot serialise must raise here rather than be
+        # digested as a repr, which for an object without one carries an address and
+        # would give the same card two readings in two processes.
+        digest.update(json.dumps(measured, sort_keys=True).encode("utf-8"))
+        return digest.hexdigest()[:12]
 
 
 # --- setting a run up --------------------------------------------------------
@@ -687,6 +805,12 @@ def _judge(
     """Steps 3 to 5: the constraints, the keep rule, the redundancy check and the record.
 
     `baseline` exempts the run's first card from the redundancy check and nothing else.
+    The signature is taken and the card is written whatever the check says: a candidate
+    that ran is a card, and the check decides which status it carries and whether the
+    caller is refused, never whether there is a record. The measurement comes before the
+    check, which is what lets the check ask whether the result repeats as well as whether
+    the book does; the signature is stored with that measurement, so the next candidate is
+    compared against both.
     """
     n_trials = records.n_trials(store, run.hyp_id) + 1
     if result.refused is not None:
@@ -744,13 +868,23 @@ def _judge(
     passed = integrity.passed and all(gate.passed for gate in constraints)
     kept = passed and _keeps(setup, store, run, source, metric, se)
     held = records.signature(result.run)
-    if not kept and not baseline:
-        like = records.redundant_with(store, run, held, ws.config.research.redundant_pct)
-        if like is not None:
-            records.record_signature(store, run, strategy_sha, held)
-            _refuse_redundant(store, run, strategy_sha, desc, metric, like, directory=directory)
-    records.record_signature(store, run, strategy_sha, held)
-    return _record(
+    floor = _noise_floor(setup, se)
+    like = (
+        None
+        if kept or baseline
+        else records.matched_book(
+            store,
+            run,
+            held,
+            ws.config.research.redundant_pct,
+            metric,
+            floor,
+            setup.measured_under,
+        )
+    )
+    repeat = like is not None and like.agreed
+    records.record_signature(store, run, strategy_sha, held, metric, setup.measured_under)
+    made = _record(
         ws,
         store,
         setup,
@@ -758,7 +892,7 @@ def _judge(
         strategy_sha=strategy_sha,
         source=source,
         desc=desc,
-        status="keep" if kept else "discard",
+        status="keep" if kept else REDUNDANT if repeat else "discard",
         metric=metric,
         se=se,
         n_trades=len(result.run.trades),
@@ -770,27 +904,50 @@ def _judge(
         directory=directory,
         tags=tags,
     )
+    if like is not None:
+        _same_book(store, run, made.strategy_sha, desc, metric, floor, like)
+    return made
 
 
-def _refuse_redundant(
+def _noise_floor(setup: Setup, se: float) -> float:
+    """The scale on which two cards of this hypothesis are two results rather than one.
+
+    The keep rule's own floor, undoubled: `research/keep.py` says why a complexity clause
+    belongs to an improvement and not to a comparison.
+    """
+    ref = setup.hyp.objective
+    if ref is None:  # pragma: no cover - a classified hypothesis always carries one
+        return 0.0
+    return noise_floor(se, ref.params)
+
+
+def _same_book(
     store: StateStore,
     run: RunRecord,
     strategy_sha: str,
     desc: str,
     metric: float,
-    like: records.Redundancy,
-    *,
-    directory: Path,
-) -> NoReturn:
-    """Restore the lane copy, record the miss as an event, and refuse the card.
+    floor: float,
+    like: records.Match,
+) -> None:
+    """Name the book this card matched in an event, and refuse the caller when it repeats it.
 
-    The metric the redundant run measured travels on the event and nowhere else: it is
-    the number a card would have carried, and the reason there is no card is that the
-    same number was already on one.
+    The card is already written and the lane is already restored, both by `_record`, so
+    what is left here is what a card has no column for: which stored signature it matched,
+    on how many of their shared sessions, the metric it measured while doing it, the
+    metric that signature earned, and the floor the two of them sat inside. Those five
+    facts are the same whichever way the two numbers went, so one event shape carries both
+    kinds and the kind says which it is — `redundant` when they agreed and the turn is
+    refused, `same_book` when they did not and the card is an ordinary discard.
+
+    The refusal is what stops a redundant result being taken for a new one — the driver
+    counts it toward the stall, and an operator gets a non-zero exit — and it says both
+    halves, because a reader told only that two books matched cannot tell this refusal
+    from the one kanso used to make on a book alone. A match that did not agree refuses
+    nothing and returns: it was an experiment, and the record is all it owes.
     """
-    lanes.restore(store, directory, {STRATEGY_FILE: run.best_sha or run.base_sha})
     store.event(
-        REDUNDANT,
+        REDUNDANT if like.agreed else SAME_BOOK,
         run.hyp_id,
         {
             "run_id": run.run_id,
@@ -801,15 +958,23 @@ def _refuse_redundant(
             "sessions": like.shared,
             "pct": round(like.pct, 2),
             "metric": metric,
+            "like_metric": like.earned,
+            "floor": floor,
             "desc": desc,
         },
     )
+    if not like.agreed:
+        return
     raise RedundantError(
         f"{strategy_sha[:7]} held the same book as {like.like[:7]} on {like.matched} of "
-        f"{like.shared} sessions ({like.pct:.0f}%), so its result is already known and it "
-        "is not an experiment; the lane copy has been restored",
+        f"{like.shared} sessions ({like.pct:.0f}%) and scored {metric:.6g} against its "
+        f"{like.earned:.6g}, inside the {floor:.6g} that separates two results here, so its "
+        "result is already known and it is not an experiment; it is recorded as a redundant "
+        "card and the lane copy has been restored",
         remedy=(
-            "change what the strategy holds and when, not how it is written; "
+            f"move the result further than {floor:.6g} — a different instrument, side, set of "
+            "sessions or holding over a session's end, or a size that changes the number and "
+            "not only the book; "
             f"`kanso research show {run.hyp_id} --sha {like.like[:7]}` prints the card it repeats"
         ),
     )
@@ -1072,10 +1237,12 @@ def card(
 
     Stores the bytes, checks the static half of `strategy_integrity` before anything
     runs, backtests the research window in a subprocess under the run's budgets,
-    evaluates the constraints and the keep rule, and records the card — or raises
-    `RedundantError` with no card when what it held is what a judged strategy already
-    held. `tags` are the proposer's account of the change, from `kanso.schemas.TAGS`; a
-    card made by hand carries none.
+    evaluates the constraints and the keep rule, and records the card. A candidate that
+    ran, held what a judged strategy already held and scored what it scored is recorded all
+    the same, with the status `redundant` and the metric it measured, and then
+    `RedundantError` refuses the caller another experiment: the check decides the status,
+    never whether there is a record. `tags` are the proposer's account of the change, from
+    `kanso.schemas.TAGS`; a card made by hand carries none.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)

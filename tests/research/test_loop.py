@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+from dataclasses import fields, replace
 from datetime import date
 from hashlib import sha256
 from pathlib import Path
@@ -36,6 +38,7 @@ from .conftest import (
     classify,
     document,
     load_december,
+    write_days,
     write_envelope,
     write_hypothesis,
 )
@@ -290,11 +293,23 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     assert kept.sha7 in refused.value.message
     assert f"--sha {kept.sha7}" in str(refused.value.remedy)
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
-    assert records.n_trials(store, registered) == 2, "a known result is not a trial"
+    # The backtest ran and the number came back, so the card is written and counted; what
+    # the refusal denies is that it was a new experiment, not that it was measured.
+    again = records.cards_of(store, registered)[-1]
+    assert (again.status, again.metric) == ("redundant", kept.metric)
+    assert records.n_trials(store, registered) == 3
+    assert records.trial_metrics(store, registered) == [kept.metric, again.metric]
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert event.detail["like"] == kept.sha7
     assert event.detail["pct"] == 100.0
     assert event.detail["metric"] == kept.metric, "the same snapshot and code give the same number"
+    # Both halves of the premise are recorded, because both halves are what refused it: a
+    # reader told only that two books matched could not tell this from the refusal kanso
+    # used to make on a book alone.
+    assert event.detail["like_metric"] == kept.metric
+    assert event.detail["floor"] > 0.0
+    assert f"{event.detail['floor']:.6g}" in refused.value.message
+    assert f"{event.detail['floor']:.6g}" in str(refused.value.remedy)
 
 
 def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restored(
@@ -312,7 +327,8 @@ def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restor
         loop.card(ws, store, registered, "the same rule, spelt otherwise")
 
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == REVERTING
-    assert statuses(store) == ["keep", "keep"]
+    assert statuses(store) == ["keep", "keep", "redundant"]
+    assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert event.detail["like"] == kept.sha7
     assert event.detail["sessions"] == 31, "one session per day of the research window"
@@ -333,6 +349,115 @@ def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restor
     assert [row["sessions"] for row in stored] == [31]
 
 
+def test_a_book_already_measured_whose_number_moved_is_a_discard_and_still_on_record(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The other side of the second clause: the book matched and the numbers did not.
+
+    The stored anchor is moved a thousand away from what this data pays, which is the
+    shape the live workspace of 2026-09-18 measured on an intraday hypothesis whose
+    objective is a per-trade edge: one anchor, 289 matches, scores from -18.780 to 9.179
+    around its own -4.5452. Such a candidate is not a repeat and is not refused -- and
+    the fact that its book was already measured is still the one thing about it the next
+    proposal can act on, so it is recorded under its own kind.
+    """
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    store.connection.execute(
+        "UPDATE signatures SET metric = metric + 1000 WHERE strategy_sha = ?",
+        (kept.strategy_sha,),
+    )
+    edit(ws, run, REVERTING.replace(b"self.long = False", b"self.long = bool(0)"))
+
+    made = loop.card(ws, store, registered, "the same rule, spelt otherwise")
+
+    assert made.status == "discard", "an experiment, because the two numbers say so"
+    assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+    (event,) = store.events(kind=loop.SAME_BOOK, subject=registered)
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["matched"] == event.detail["sessions"] == 31
+    assert event.detail["pct"] == 100.0
+    assert event.detail["metric"] == made.metric
+    assert event.detail["like_metric"] == kept.metric + 1000
+    assert event.detail["desc"] == "the same rule, spelt otherwise"
+    assert event.detail["floor"] < 1000, "which is why the two numbers are two results"
+
+
+def _readings(store: StateStore, sha: str) -> list[tuple[float, str]]:
+    """What the stored books for these bytes earned, and what each was measured under.
+
+    A list because the reading is part of the key: the same bytes judged under a second
+    reading are a second row and not a replacement.
+    """
+    return [
+        (float(row["metric"]), str(row["measured_under"]))
+        for row in store.connection.execute(
+            "SELECT metric, measured_under FROM signatures WHERE strategy_sha = ? ORDER BY rowid",
+            (sha,),
+        )
+    ]
+
+
+def test_a_stored_number_is_measured_under_a_reading_the_four_pins_do_not_carry(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """`folds` moves a number with the hypothesis file, the snapshot and the criteria still.
+
+    A signature is selected on four pins, and `[research] folds` is in none of them: it is
+    a `kanso.toml` key, so it moves no hypothesis sha, no snapshot id, and no criteria
+    version, which is this package's version and a digest of `criteria/library/*.yaml`.
+    The same bytes over the same data measured over three folds instead of four earn a
+    different number, so the reading is stored beside the number and it moves with it —
+    beside the first reading's row and not over it, which is what leaves the four-fold
+    anchor standing for the day the operator sets `folds` back.
+    """
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    before = _readings(store, kept.strategy_sha)
+    loop.end(ws, store, registered)
+
+    other = tuned(ws, folds=3)
+    resumed = loop.begin(other, store, registered)
+
+    assert (resumed.hypothesis_sha, resumed.snapshot_id, resumed.criteria_version) == (
+        run.hypothesis_sha,
+        run.snapshot_id,
+        run.criteria_version,
+    ), "every pin the anchor is selected by stands still"
+    after = _readings(store, kept.strategy_sha)
+    assert len(before) == 1 and len(after) == 2, "a second reading is a second row"
+    assert after[0] == before[0], "the four-fold anchor is where the four-fold run left it"
+    assert after[1][0] != before[0][0], "and the same bytes over the same data earn another number"
+    assert after[1][1] != before[0][1], "which is why the reading is stored, and why it moved"
+
+
+def test_the_settings_the_digest_leaves_out_move_no_number(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """`annualisation`, `account` and `currency` look like a reading and are not.
+
+    All three are `[research]` keys of the rendered template, two of them commented there
+    as changing what a card is measured with, and this package reads none of them: a
+    venue's account type and currency come from the broker's declaration, the operator's
+    `venues.<MIC>` override and the shipped defaults, and no objective is passed an
+    annualisation. So the same bytes over the same data score the same number under all
+    three changed, and the digest does not name what changes nothing. Wiring any of them
+    is what makes this fail, and the digest has to take it on the same day.
+    """
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    before = _readings(store, kept.strategy_sha)
+    loop.end(ws, store, registered)
+
+    other = tuned(ws, annualisation=252, account='"cash"', currency='"EUR"')
+    loop.begin(other, store, registered)
+
+    assert _readings(store, kept.strategy_sha) == before
+
+
 def test_the_keep_rule_is_asked_before_the_signature(
     ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -351,11 +476,19 @@ def test_the_keep_rule_is_asked_before_the_signature(
 
 
 def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_toml(
-    ws: Workspace, store: StateStore, registered: str
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Measured: WEAK is flat at 17 of the window's 31 session ends, as the flat baseline is
-    at all of them — a discard at the template's 97 percent, a redundant miss at 50."""
-    workspace = tuned(ws, redundant_pct=50)
+    """Measured: WEAK holds nothing on 10 of the window's 31 sessions, as the flat baseline
+    does on all 31 — a book matched at 30 percent and not at the template's 97.
+
+    The same run signed at period ends alone matched on 17: seven of those sessions WEAK
+    opened and closed a position in, and was flat only at the instant it was sampled.
+
+    The floor is widened to admit any number, because the share is the clause under test
+    and WEAK's own result is 23 floors from the baseline's, which the test below is for.
+    """
+    monkeypatch.setattr(loop, "_noise_floor", lambda *_: float("inf"))
+    workspace = tuned(ws, redundant_pct=30)
     run = loop.begin(workspace, store, registered)
     edit(workspace, run, WEAK)
 
@@ -363,8 +496,38 @@ def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_to
         loop.card(workspace, store, registered, "buy any fall")
 
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
-    assert (event.detail["matched"], event.detail["sessions"]) == (17, 31)
+    assert (event.detail["matched"], event.detail["sessions"]) == (10, 31)
     assert event.detail["like"] == run.base_sha[:7]
+
+
+def test_a_book_already_held_that_earned_another_number_is_a_discard_not_a_repeat(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The matcher's premise, tested rather than asserted, on the run above with its own
+    floor back: WEAK holds the baseline's book on 10 of 31 sessions and scores -0.061605
+    against the baseline's 0.0, twenty-three times the 0.002631 that separates two results
+    here. Its result is not already known, so it is a card of the ordinary kind — counted,
+    coverable and shown to the next proposal as a change that was tried and measured.
+    """
+    workspace = tuned(ws, redundant_pct=30)
+    run = loop.begin(workspace, store, registered)
+    edit(workspace, run, WEAK)
+
+    made = loop.card(workspace, store, registered, "buy any fall")
+
+    assert made.status == "discard"
+    assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+    setup = loop._setup(workspace, store, loop._pinned(workspace, store, run))
+    floor = loop._noise_floor(setup, made.metric_se)
+    assert abs(made.metric - 0.0) > 20 * floor, "the baseline is flat and this one is not"
+    # The book did match at the configured share, so the share is not what let it through.
+    books = {
+        str(row["strategy_sha"]): json.loads(str(row["signature"]))
+        for row in store.connection.execute("SELECT strategy_sha, signature FROM signatures")
+    }
+    base, candidate = books[run.base_sha], books[made.strategy_sha]
+    shared = base.keys() & candidate.keys()
+    assert (sum(1 for day in shared if base[day] == candidate[day]), len(shared)) == (10, 31)
 
 
 def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(
@@ -383,7 +546,9 @@ def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_noth
     resumed = loop.begin(ws, store, registered)
 
     assert resumed.base_sha == sha256(REVERTING).hexdigest()
-    assert statuses(store) == ["keep", "keep", "keep"], "the baseline of the second run"
+    assert statuses(store) == ["keep", "redundant", "keep", "keep"], (
+        "the flat respelling, then the trough rule, then the baseline of the second run"
+    )
     assert len(store.events(kind=loop.REDUNDANT, subject=registered)) == 1
 
 
@@ -895,6 +1060,59 @@ def test_every_card_of_a_warmed_run_is_handed_the_same_prefix(
     assert request.prefix == setup.prefix
     assert request.window == RESEARCH
     assert loop._warmup_spans(setup) == (setup.prefix, (date(2024, 2, 3), date(2024, 2, 5)))
+
+
+def test_a_day_the_catalog_gained_moves_the_prefix_and_the_reading_with_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The prefix is resolved from the catalog for every card, so two cards can differ in it.
+
+    `_setup` is rebuilt per card and `backtest.warmup_prefix` takes the last N distinct
+    days it finds, so a `kanso data load` between two cards of one run moves what the
+    second is warmed on while the run's snapshot, its hypothesis file and this package all
+    stand still. The number moved with it and said nothing, which is what the digest is
+    for.
+    """
+    hyp = Hypothesis.model_validate(document(warmup={"sessions": 3}))
+    write_days(ws, (date(2023, 12, 1), date(2023, 12, 29)))
+
+    before = loop._setup(ws, store, hyp)
+    write_days(ws, (date(2023, 12, 30), date(2023, 12, 31)))
+    after = loop._setup(ws, store, hyp)
+
+    assert before.prefix == (date(2023, 12, 27), date(2023, 12, 29))
+    assert after.prefix == (date(2023, 12, 29), date(2023, 12, 31)), "two days the loader added"
+    assert before.measured_under != after.measured_under
+
+
+def test_every_field_of_a_setup_is_a_reading_or_is_not(ws: Workspace, store: StateStore) -> None:
+    """The digest claims completeness against `Setup`, so `Setup` is what states it.
+
+    A field added to the card's setup either moves a card's number — and belongs in the
+    digest, or a stored anchor outlives the reading it was measured under — or does not,
+    and the reason it does not is worth writing down once. This fails on a field that is
+    neither, which is the only way a claim of completeness can be kept.
+    """
+    read = {"capital", "folds", "period", "venue_model", "harness", "sleeve_budget", "grains"}
+    read |= {"prefix"}
+    pinned = {"hyp", "impl", "host_source", "host_modifiers"}
+    no_number = {"max_lines", "catalog"}
+
+    assert not read & (pinned | no_number)
+    assert read | pinned | no_number == {field.name for field in fields(loop.Setup)}
+
+    setup = loop._setup(ws, store, Hypothesis.model_validate(DOCUMENT))
+    for name, moved in (
+        ("capital", 1.0),
+        ("folds", 9),
+        ("period", "1h"),
+        ("sleeve_budget", 1234.0),
+        ("grains", ("1m",)),
+        ("prefix", (date(2023, 12, 29), date(2023, 12, 31))),
+    ):
+        assert replace(setup, **{name: moved}).measured_under != setup.measured_under, name
+    for name, same in (("max_lines", 999), ("catalog", ws.path("nowhere"))):
+        assert replace(setup, **{name: same}).measured_under == setup.measured_under, name
 
 
 def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore) -> None:

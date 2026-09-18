@@ -7,8 +7,11 @@ rather than fixtures.
 
 from __future__ import annotations
 
+import ast
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,7 +19,8 @@ import pytest
 from kanso.certify import certificate
 from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
-from kanso.models import Answer, Call, reset_mock, spend
+from kanso.hyp import STRATEGY_FILE
+from kanso.models import INSTRUCTIONS, Answer, Call, reset_mock, spend
 from kanso.models import router as router_module
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
@@ -36,6 +40,7 @@ from .mocked import (  # noqa: F401
     scripted,
     tuned,
 )
+from .test_scheduler import open_run
 
 NOWHERE = "--- a/strategy.py\n+++ b/strategy.py\n@@ -1,1 +1,1 @@\n-nowhere\n+here\n"
 """A diff whose context is in no version of any file."""
@@ -128,12 +133,14 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
     assert (outcome.missed, outcome.redundant) == (0, 18)
     assert outcome.reason == "cards"
     assert outcome.ended is False
-    # Every card of the run, the baseline included, is a trial; a redundant miss is not.
-    assert records.n_trials(store, prepared_hyp) == 13
+    # Every proposal that ran is a card and a trial, the baseline and the eighteen
+    # redundant results included: thirty proposals and one baseline.
+    assert records.n_trials(store, prepared_hyp) == 31
     assert statuses(store, prepared_hyp)[:4] == ["keep", "keep", "crash", "discard"]
-    # align_every is 10 and the baseline is the run's first card, so the check lands on
-    # the ninth card proposed; misses are not cards and do not advance it.
-    assert (outcome.checks, outcome.drifts) == (1, 0)
+    # align_every is 10 and the baseline is the run's first card, so the checks land on
+    # the ninth, nineteenth and twenty-ninth card proposed: every card advances the clock,
+    # and here every proposal is one.
+    assert (outcome.checks, outcome.drifts) == (3, 0)
     assert records.active(store, prepared_hyp) is not None
     assert outcome.best_sha == records.cards_of(store, prepared_hyp)[1].strategy_sha
 
@@ -263,24 +270,35 @@ def test_a_miss_counts_against_the_cards_asked_for_and_survives_a_resume(
     assert driver._trailing_non_keeps(store, active) == 2, "the discard and the miss"
 
 
-def test_a_redundant_card_is_a_miss_that_the_next_proposal_is_told_about(
+def test_a_redundant_card_is_recorded_and_the_next_proposal_is_told_what_it_repeated(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
-    """A candidate that held what a judged strategy held costs the backtest and no
-    trial; it counts toward the stall, survives a resume, and reaches the proposer by
-    the name of the card it repeated, since no card of its own will."""
+    """A candidate that held what a judged strategy held costs the backtest and is worth
+    what the backtest measured: a card of its own, a trial, and a coverage entry. It
+    still counts toward the stall exactly once, survives a resume, and reaches the next
+    proposal by the name of the card it repeated, which no card carries."""
     scripted(ws, propose=[proposal("revert"), proposal("revert", desc="the same bet again")])
 
     outcome = driver.run(ws, store, prepared_hyp, cards=2)
 
     assert (outcome.proposed, outcome.keeps, outcome.redundant, outcome.missed) == (2, 1, 1, 0)
-    assert statuses(store, prepared_hyp) == ["keep", "keep"]
+    assert statuses(store, prepared_hyp) == ["keep", "keep", "redundant"]
     (event,) = store.events(kind=research_loop.REDUNDANT, subject=prepared_hyp)
     kept = records.cards_of(store, prepared_hyp)[1]
+    repeat = records.cards_of(store, prepared_hyp)[2]
+    assert (repeat.desc, repeat.metric) == ("the same bet again", kept.metric)
+    assert records.trial_metrics(store, prepared_hyp) == [kept.metric, repeat.metric]
+    walked = driver.coverage(store, records.require_active(store, prepared_hyp))
+    assert walked["signal_mean_reversion"] == {
+        "count": 2,
+        "best_metric": kept.metric,
+        "best_status": "keep",
+        "newest": repeat.sha7,
+    }, "the corner is walked twice, and the redundant card is the newest thing in it"
     assert event.detail["like"] == kept.sha7
     assert event.detail["desc"] == "the same bet again"
     active = records.require_active(store, prepared_hyp)
-    assert driver._trailing_non_keeps(store, active) == 1, "the miss, after the keep"
+    assert driver._trailing_non_keeps(store, active) == 1, "the card, counted once"
     assert align.lane_strategy(store, active, ws.root / active.dir) == store.get_blob(
         kept.strategy_sha
     )
@@ -291,6 +309,75 @@ def test_a_redundant_card_is_a_miss_that_the_next_proposal_is_told_about(
     assert '"redundant"' in third.user
     assert f'"like": "{kept.sha7}"' in third.user
     assert "the same bet again" in third.user
+    assert json.loads(third.user)["redundant"] == [
+        {"desc": "the same bet again", "like": kept.sha7, "pct": 100.0, "repeat": True}
+    ], "a repeat, which is the kind the turn was refused for"
+
+
+def test_a_measured_book_whose_number_moved_reaches_the_next_proposal_as_no_repeat(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The other kind of book already measured, and the proposer is shown both.
+
+    The stored anchor is moved past this hypothesis's floor between the two cards, so the
+    second holds a book already measured and earns a number the first denies. Nothing is
+    refused -- it is an experiment and an ordinary discard -- and without a record of it
+    the proposer is shown nothing at all and re-treads the book it was never told about,
+    which is what the `redundant` fact exists to stop.
+    """
+    scripted(ws, propose=[proposal("revert"), proposal("revert", desc="the same bet again")])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    kept = records.cards_of(store, prepared_hyp)[1]
+    store.connection.execute(
+        "UPDATE signatures SET metric = metric + 1000 WHERE strategy_sha = ?",
+        (kept.strategy_sha,),
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert (outcome.redundant, outcome.discards, outcome.missed) == (0, 1, 0)
+    assert statuses(store, prepared_hyp) == ["keep", "keep", "discard"]
+    assert store.events(kind=research_loop.REDUNDANT, subject=prepared_hyp) == []
+    (event,) = store.events(kind=research_loop.SAME_BOOK, subject=prepared_hyp)
+    assert event.detail["like"] == kept.sha7
+
+    driver.run(ws, store, prepared_hyp, cards=1)
+
+    told = json.loads(recorded.of("propose")[-1].user)["redundant"]
+    assert told == [
+        {"desc": "the same bet again", "like": kept.sha7, "pct": 100.0, "repeat": False}
+    ]
+
+
+def test_a_redundant_card_advances_the_drift_clock_and_the_next_turn_s_last_diff(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A redundant result is a row in `cards`, and `align.since` counts rows in `cards`.
+
+    A driver that kept its own counter and skipped this one would check for drift half as
+    often as the number it resumes from says, for as long as the lane stayed redundant —
+    and would hand the next proposal the diff of the card before last while showing it the
+    redundant card as the newest thing tried.
+    """
+    workspace = tuned(ws, align_every=3)
+    scripted(workspace, propose=[proposal("revert")], align_check=[ALIGNED])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=3)
+
+    assert (outcome.keeps, outcome.redundant) == (1, 2)
+    # The baseline is the run's first card, so the third card proposed is the tenth
+    # counted here: the check lands on the second redundant result.
+    assert (outcome.checks, outcome.drifts) == (1, 0)
+    active = records.require_active(store, prepared_hyp)
+    assert align.since(store, active) == 1, "the persisted clock is the driver's own"
+    repeat = records.cards_of(store, prepared_hyp)[2]
+    added = [
+        line
+        for line in store.get_blob(repeat.strategy_sha).decode("utf-8").splitlines()
+        if line.startswith("Strategy.mode")
+    ][-1]
+    told = json.loads(recorded.of("propose")[2].user)["last_diff"]
+    assert f"+{added}" in told, "the redundant card is the change the last card made"
 
 
 def test_redundant_misses_count_toward_the_stall(
@@ -304,6 +391,131 @@ def test_redundant_misses_count_toward_the_stall(
     assert outcome.reason == "stalled"
     assert (outcome.keeps, outcome.redundant) == (1, 2)
     assert records.active(store, prepared_hyp) is None
+
+
+def test_a_crash_buys_a_repair_turn_carrying_the_change_that_crashed(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The idea in a crashed card was never judged, and the file that held it was restored
+    the moment it crashed — so the proposer is handed it back as a diff over the file it
+    now has, with the traceback, and asked for the same idea without the fault."""
+    scripted(ws, propose=[proposal("boom"), proposal("revert")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert (outcome.crashes, outcome.keeps) == (1, 1)
+    first, second = recorded.of("propose")
+    assert '"repair"' not in first.user, "nothing has crashed yet"
+    asked = json.loads(second.user)["repair"]
+    assert (asked["attempt"], asked["of"], asked["desc"]) == (1, driver.REPAIRS, "run in boom mode")
+    assert '+Strategy.mode = "boom"' in str(asked["diff"]), "the change, over the file in hand"
+    assert "the card asked for the impossible" in second.user, "and why it raised"
+
+
+def test_the_repairs_run_out_and_the_idea_is_dropped(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Two goes at one fault, then it is a miss like any other: a proposer that has not
+    read the traceback twice will not read it a third time, and the run has other ideas."""
+    scripted(ws, propose=[proposal("boom")])
+
+    driver.run(ws, store, prepared_hyp, cards=driver.REPAIRS + 2)
+
+    attempts = [
+        json.loads(call.user).get("repair", {}).get("attempt") for call in recorded.of("propose")
+    ]
+    assert attempts == [None, 1, 2, None]
+    assert statuses(store, prepared_hyp) == ["keep"] + ["crash"] * (driver.REPAIRS + 2)
+
+
+def test_a_repair_returned_verbatim_is_a_wrong_answer_and_not_a_second_crash(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """The repair diff runs from the file in hand to the bytes that crashed, so returning
+    it unchanged makes those bytes again — and bytes already carded under the pins are a
+    wrong answer on the ladder. That is what stops a repair costing a second identical
+    card, and it is the claim the whole bound rests on."""
+    scripted(ws, propose=[proposal("boom", tagged=False)])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert (outcome.crashes, outcome.missed, outcome.redundant) == (1, 2, 0)
+    assert statuses(store, prepared_hyp) == ["keep", "crash"], "one crash, carded once"
+
+
+def test_the_budget_is_spent_per_idea_and_the_next_crash_has_its_own(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The measurement the repair exists for is five consecutive crashes that were five
+    ideas, so a budget counted over the streak rather than over the idea would repair the
+    first of them and drop the four after it unjudged — which is what it was built to
+    stop. The fourth crash is a fresh idea's, and it owes a first repair."""
+    scripted(ws, propose=[proposal("boom")])
+
+    driver.run(ws, store, prepared_hyp, cards=2 * (driver.REPAIRS + 1))
+
+    attempts = [
+        json.loads(call.user).get("repair", {}).get("attempt") for call in recorded.of("propose")
+    ]
+    assert attempts == [None, *range(1, driver.REPAIRS + 1)] * 2
+
+
+def _fact_keys() -> set[str]:
+    """Every key `_dynamic` can put in the user turn, read out of its own source.
+
+    A list written by hand would go stale the first time a fact was added, which is the
+    defect this test exists for: the `redundant` array reached the proposer as an
+    undeclared key for a day, and 2,822 proposals were refused by a rule the instruction
+    never stated.
+
+    The scan reads literal string keys assigned in `_dynamic` and nowhere else, so a fact
+    added through `facts.update(...)` or in a helper would not be seen; and the check it
+    feeds asks only that the key word appears in backticks somewhere in the instruction,
+    which a word used for something else would satisfy. It catches a new undeclared key,
+    which is the defect; it is not a proof that every fact is explained.
+    """
+    tree = ast.parse(Path(driver.__file__).read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_dynamic"):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.AnnAssign) and isinstance(inner.value, ast.Dict):
+                found |= {
+                    key.value
+                    for key in inner.value.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+            subscripted = (
+                isinstance(inner, ast.Subscript)
+                and isinstance(inner.value, ast.Name)
+                and inner.value.id == "facts"
+                and isinstance(inner.slice, ast.Constant)
+            )
+            if subscripted:
+                found.add(str(inner.slice.value))  # type: ignore[attr-defined, union-attr]
+    return found
+
+
+def test_every_fact_the_proposer_is_sent_is_named_in_its_instruction() -> None:
+    """A fact the instruction does not name is a rule the proposer was never told."""
+    said = INSTRUCTIONS["propose"]
+    keys = _fact_keys()
+    assert {"recent_cards", "coverage", "phase", "redundant"} <= keys, "the scan found them"
+    assert [key for key in sorted(keys) if f"`{key}`" not in said] == []
+    assert f"`{STRATEGY_FILE}`" in said, "the file itself, which is not a constant key"
+
+
+def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None:
+    """A signature's mark is per session — the instrument, the side, and whether it was
+    still on at the end — so the same holding moved to another hour of the same session
+    is the same signature. The instruction told the proposer to change the time of day to
+    be in or out of the market, which is advice the rule refuses again, and a refusal the
+    proposer was never told about is the wasted ladder this whole paragraph exists for.
+    """
+    said = INSTRUCTIONS["propose"]
+    assert "a different time of day to be in or out of the market" not in said
+    assert "The reading is by session" in said
 
 
 def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
@@ -389,6 +601,95 @@ def test_recent_cards_reach_across_runs_under_the_same_pins(
     first = recorded.of("propose")[-1]
     assert "run in boom mode" in first.user
     assert first.user.count('"status": "crash"') == 2
+    # As the record of what was tried, never as a traceback over a file this run does not
+    # hold: the new run's own baseline card is the newest under the pins, and the crash
+    # tail and the repair are both read from that one row.
+    payload = json.loads(first.user)
+    assert "crash_tail" not in payload and "repair" not in payload
+
+
+def test_a_redundant_result_from_an_earlier_run_reaches_the_next_one(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Measured on one live hypothesis, 560 of 991 redundant refusals repeated an idea
+    from an earlier run against 18 within their own. Scoped to the run, the window a
+    proposer is shown was emptied by every reseed; scoped to the pins, it is not."""
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("revert"), proposal("revert", desc="the trough again")])
+    stalled = driver.run(workspace, store, prepared_hyp)
+    assert stalled.ended and stalled.redundant
+    reset_mock()
+    scripted(workspace, propose=[proposal("weak")])
+
+    driver.run(workspace, store, prepared_hyp, cards=1)
+
+    # Read out of the `redundant` fact itself: the descriptions are in `recent_cards`
+    # too, so a test that searched the whole prompt for them passed with the window
+    # scoped back to the run, which is the change it is here to hold down.
+    repeated = json.loads(recorded.of("propose")[-1].user)["redundant"]
+    kept = records.cards_of(store, prepared_hyp)[1]
+    assert [entry["desc"] for entry in repeated] == ["run in revert mode", "the trough again"]
+    assert {entry["like"] for entry in repeated} == {kept.sha7}, "the card each one repeated"
+    assert all(entry["pct"] >= 97.0 for entry in repeated)
+
+
+def test_both_kinds_of_book_share_one_window_and_the_newest_ten_win_it(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """One window, not one each, and `repeat` says which kind an entry is.
+
+    They are one fact to the proposer — this book has been held — so ten books is ten
+    books and a second window would be a longer prompt rather than a better one. What that
+    costs was measured: on the live workspace of 2026-09-18, 106 of 3,092 refusals are the
+    second kind, and because they arrive in runs, 506 turns would have been shown a repeat
+    they were not.
+    """
+    active = open_run(store, prepared_hyp)
+    kinds = [research_loop.REDUNDANT, research_loop.SAME_BOOK]
+    for n in range(driver.REDUNDANT_LINES + 2):
+        store.event(
+            kinds[n % 2],
+            prepared_hyp,
+            {"run_id": active.run_id, "like": "a" * 7, "pct": 99.0, "desc": f"book {n}"},
+        )
+
+    shown = driver._redundant_in(store, active)
+
+    assert [entry["desc"] for entry in shown] == [
+        f"book {n}" for n in reversed(range(2, driver.REDUNDANT_LINES + 2))
+    ], "the newest ten of both kinds, newest first"
+    assert [entry["repeat"] for entry in shown] == [
+        n % 2 == 0 for n in reversed(range(2, driver.REDUNDANT_LINES + 2))
+    ], "each says which kind it is, and neither kind has a window of its own"
+
+
+def test_a_book_measured_under_another_reading_still_says_the_idea_was_tried(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The window is the pins and not the reading, which is a fact about a card.
+
+    An entry is not an anchor — `records.matched_book` picks those under the reading the
+    asking card was measured with — it is the record that an idea has been tried, and an
+    idea tried under four folds was tried when the next run counts three.
+    """
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("revert"), proposal("revert", desc="the trough again")])
+    assert driver.run(workspace, store, prepared_hyp).redundant
+    reset_mock()
+
+    other = tuned(ws, stall_k=2, folds=3)
+    scripted(other, propose=[proposal("weak")])
+    driver.run(other, store, prepared_hyp, cards=1)
+
+    readings = {
+        row[0]
+        for row in store.connection.execute(
+            "SELECT DISTINCT measured_under FROM signatures WHERE hyp_id = ?", (prepared_hyp,)
+        )
+    }
+    assert len(readings) == 2, "the second run counts three folds, so its cards read another way"
+    told = json.loads(recorded.of("propose")[-1].user)["redundant"]
+    assert "the trough again" in [entry["desc"] for entry in told]
 
 
 def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(

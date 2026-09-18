@@ -1,0 +1,16 @@
+-- A signature is read a new way, so every signature read the old way is discarded.
+--
+-- Up to 0.8.1 a signature was what a run held at each period end and nothing else. A
+-- hypothesis whose positions close before the period does -- an intraday one under
+-- `[research] return_period = "1d"` -- was therefore flat at every sample point by
+-- construction: measured in a live workspace, 192 of one hypothesis's 201 stored
+-- signatures recorded a position on none of their 834 sampled days, so every candidate
+-- matched every other on all of them and every proposal after the first was refused as
+-- redundant. `research/records.py` now reads the spans of the positions a run opened and
+-- closed as well as what it held at each end.
+--
+-- The two readings are not comparable, and a signature cannot be recomputed without the
+-- backtest that produced it, so the rows go. The cards they belong to stay: what is lost
+-- is the memory of which books have been held, which the next run re-earns one card at a
+-- time.
+DELETE FROM signatures;

@@ -6,7 +6,7 @@ the next single change to `strategy.py`, applies it, and evaluates the result as
 There is no second evaluation path, so nothing the driver produces is judged more kindly
 than something a person produced.
 
-Four rules make the loop finite in effort while remaining infinite in time.
+Five rules make the loop finite in effort while remaining infinite in time.
 
 **A proposal is a diff, and a diff that does not fit is a wrong answer.** The model is
 given the file's exact bytes and returns a unified diff over them. Applying it happens
@@ -22,16 +22,35 @@ was asked three times and reached for a change already tried at least once, whic
 discard says too, so it counts toward the stall exactly as a discard does and is recorded
 as an event rather than a card. A ladder that runs out without ever proposing a repeat —
 answers that do not apply, or do not parse — is still a failure of the step. A candidate
-that ran and held the same book as a strategy already judged under the pins is a miss of
-the same kind, refused by the loop after the backtest rather than before it: recorded as a
-`redundant` event, counted toward the stall, and shown to the next proposal by name.
+that ran and held the same book as a strategy already judged under the pins is refused by
+the loop after the backtest rather than before it, and is not the same kind of thing: it
+cost the engine time and produced a real number, so it is a card with a status of its own,
+it counts as a trial and it enters the coverage. It is a card in every count a card is in:
+it advances the drift clock, and the diff that produced it is what the next turn is shown
+as `last_diff`. What it costs is the turn — it counts toward the stall like a discard —
+and the `redundant` event carries the one fact the card cannot, which is the card it
+repeated. A candidate that held such a book and moved the number past the floor is not
+refused at all; it appends a `same_book` event instead, and the next proposal is shown the
+two kinds in one list with `repeat` saying which.
+
+**A crash buys a repair, and only so many.** A card that raised spent a proposal and
+returned nothing: the idea in it was never judged, because it never ran. Measured in a
+live workspace, five consecutive crashes on one hypothesis were five state-handling slips
+— `'dict' object has no attribute 'append'`, an `InstrumentId` given as a `str`, an
+attribute read before it was set — on ideas straight out of that hypothesis's own declared
+families, and not one of the five was ever judged. So the turn after a crash is a repair:
+the proposer is given the traceback and the diff that produced it, over the file it now
+holds, and asked to make the same change with the fault fixed. `REPAIRS` of them, then the
+idea is dropped and the next turn asks for a new one — a proposer that cannot fix its own
+`AttributeError` in two goes is not going to, and the run has other things to try.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
 provider cache hits; the moving half is the current file, the last `context_cards` cards
 of the hypothesis under the run's pins — across runs, so a run that begins after a stall
 is not shown a blank slate and made to re-walk the last run's discards — the previous
-diff, the tail of a crash if the last card crashed, and the coverage table: every card
+diff, the tail of a crash if the last card crashed with the repair it owes, and the
+coverage table: every card
 under the pins, read back by the tags its proposer gave it, as a count, the best score
 and its status, and the newest card per tag. The recent cards say what was tried last;
 the coverage says what has been tried at all, in a size that does not grow with the
@@ -77,7 +96,7 @@ from kanso.models import CallInputs, route
 from kanso.research import align, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
-from kanso.schemas import Hypothesis, RunRecord, Tag, parse_yaml
+from kanso.schemas import Card, Hypothesis, RunRecord, Tag, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -89,6 +108,7 @@ __all__ = [
     "GATE_LINES",
     "LOCAL",
     "REDUNDANT_LINES",
+    "REPAIRS",
     "REPEATED",
     "STRUCTURAL",
     "TASK",
@@ -105,15 +125,44 @@ TASK: Final = "propose"
 CRASH_TAIL_LINES: Final = 50
 """How much of a crash a proposer is shown: the end, where the exception is."""
 
+REPAIRS: Final = 2
+"""How many repair turns one crashed idea buys before it is a miss like any other.
+
+A bound rather than a setting, like `CRASH_TAIL_LINES` beside it and unlike `stall_k`: it
+shapes one prompt rather than the search, and the number that matters is small. One repair
+catches the slip a traceback names outright, a second catches the one the first uncovers,
+and a third is a proposer that has stopped reading the traceback."""
+
 GATE_LINES: Final = 10
 """How many failing certification gates are fed back into the next proposal."""
 
 DRIFT_LINES: Final = 3
 """How many of a run's rewinds are fed back into the next proposal, newest first."""
 
-REDUNDANT_LINES: Final = 3
-"""How many of a run's redundant misses are fed back into the next proposal, newest
-first: a miss that leaves no card is otherwise invisible to the proposer that made it."""
+REDUNDANT_LINES: Final = 10
+"""How many books already measured are fed back into the next proposal, newest first.
+
+Both kinds count against it: the repeats, and the cards that held a measured book and
+moved the number past the floor. One window rather than one each, because they are one
+fact to the proposer — this book has been held — and the entry's `repeat` says which of
+the two it was. Ten books is ten books: a second window would make the prompt longer
+rather than better, and the proposer is steered by which book has been trodden, which both
+kinds name.
+
+What one kind takes from the other was measured rather than assumed, on the live workspace
+of 2026-09-18, by classifying each of its 3,092 refusals as 0.9.0 would and walking the
+stream a window at a time. 106 of the 3,092 are the second kind — 3.4% — but they arrive
+in runs, so 506 of the 3,092 turns would have been shown a repeat they were not: 1,049
+lines in all, a third of a line per turn, and on the intraday hypothesis where the second
+kind is 23% of the stream, 264 of 325 turns and 2.3 lines of the ten. That is the price of
+the newest ten being the newest ten, and it is paid in older repeats for newer books.
+
+Read across the pins rather than within the run, like `_recent` and unlike `_rewound_for`:
+a rewind is a fact about one run's file, but a book already held is a fact about the
+hypothesis, and every reseed used to wipe the record of it. Measured on one live
+hypothesis, 560 of 991 refusals repeated an idea from an *earlier* run against 18 within
+their own — thirty-one to one — so a window of three that only ever looked inside the run
+showed the proposer almost none of what it had already spent a backtest learning."""
 
 CARDS: Final = "cards"
 STALLED: Final = "stalled"
@@ -239,21 +288,20 @@ def run(
                 break
             continue
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
+        made: Card | None
         try:
-            card = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
+            made = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
         except research_loop.RedundantError:
-            proposed += 1
-            redundant += 1
-            misses += 1
-            if misses >= settings.stall_k:
-                reason = STALLED
-                break
-            continue
+            made = None
         proposed += 1
         waiting += 1
         previous = patch
-        tally[card.status] += 1
-        misses = 0 if card.status == "keep" else misses + 1
+        if made is None:
+            redundant += 1
+            misses += 1
+        else:
+            tally[made.status] += 1
+            misses = 0 if made.status == "keep" else misses + 1
         if waiting >= settings.align_every:
             aligned, _ = align.check(ws, store, hyp_id, lane)
             checks += 1
@@ -380,7 +428,16 @@ def _dynamic(
     misses: int,
 ) -> dict[str, object]:
     """What has changed since the last call: the file, the recent cards, the coverage of
-    every card under the pins by tag, the phase, and the last diff."""
+    every card under the pins by tag, the phase, and the last diff.
+
+    `crash_tail` is read from the newest of the recent cards and `repair` from the newest
+    card of the run, and those are the same row: `_recent` reaches across runs but orders
+    by `card_id`, a hypothesis has at most one active run, and a run opens with a baseline
+    card that ran — a baseline that did not is refused before the run exists. So a run
+    that begins after another stalled on a crash is shown that crash among its recent
+    cards, as the record of what was tried, and never as a traceback over a file it does
+    not hold.
+    """
     recent = _recent(store, active, ws.config.research.context_cards)
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),
@@ -396,6 +453,9 @@ def _dynamic(
     }
     if recent and recent[-1]["crash_tail"]:
         facts["crash_tail"] = _tail(str(recent[-1]["crash_tail"]), CRASH_TAIL_LINES)
+    owed = _repair(store, active, source)
+    if owed is not None:
+        facts["repair"] = owed
     failing = _failing_gates(store, active.hyp_id)
     if failing:
         facts["failing_certification_gates"] = failing
@@ -406,6 +466,55 @@ def _dynamic(
     if redundant:
         facts["redundant"] = redundant
     return facts
+
+
+def _repair(store: StateStore, active: RunRecord, source: bytes) -> dict[str, object] | None:
+    """The crashed idea this turn is asked to repair, or `None` when none is owed.
+
+    It lives in the driver's turn, and the two places it could have lived say why. The
+    router's ladder judges an answer against the file in hand and retries inside one call,
+    but a crash is not an answer — it is a card, and its fault is only known after a
+    backtest the ladder returned from long before. A sixth task class would reach the
+    routing table of every register an operator maintains by hand, and would buy nothing: a
+    repair asks the same question `propose` asks, over the same file, with one more fact,
+    which is also what keeps the stable half of the prompt byte-identical and the provider
+    cache warm.
+
+    The bound is read from the run's own tail rather than carried in memory, so a call
+    that resumes a run continues the count instead of starting it over, and it is spent
+    per idea rather than per spell of bad luck. The tail is counted in groups of
+    `REPAIRS + 1`: the first crash of a streak is a fresh idea, the `REPAIRS` crashes after
+    it are its repairs, and the crash after those is the fresh idea that the last one
+    bought — which owes a first repair of its own. Counting the streak instead would give
+    the run's first crashed idea two repairs and every idea after it none until something
+    landed, which is the case the repair exists for: five consecutive crashes were five
+    ideas, not one idea five times.
+
+    The diff runs from the file in hand to the bytes that crashed, so applying it exactly
+    reproduces the crash — which the `_carded` check then refuses, making a repair that
+    changes nothing a wrong answer on the ladder rather than a second identical card.
+    """
+    newest: sqlite3.Row | None = store.connection.execute(
+        "SELECT strategy_sha, status, description FROM cards WHERE run_id = ?"
+        " ORDER BY seq DESC LIMIT 1",
+        (active.run_id,),
+    ).fetchone()
+    if newest is None or str(newest["status"]) != "crash":
+        return None
+    streak = store.connection.execute(
+        "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
+        " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status != 'crash'), 0)",
+        (active.run_id, active.run_id),
+    ).fetchone()
+    attempt = int(streak[0]) % (REPAIRS + 1)
+    if attempt == 0:
+        return None
+    return {
+        "attempt": attempt,
+        "of": REPAIRS,
+        "desc": str(newest["description"]),
+        "diff": diffs.unified(source, store.get_blob(str(newest["strategy_sha"]))),
+    }
 
 
 def phase(settings: ResearchConfig, misses: int) -> str:
@@ -539,20 +648,53 @@ def _rewound_for(store: StateStore, active: RunRecord) -> list[str]:
 
 
 def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object]]:
-    """This run's newest redundant misses: what was tried, and which card it repeated.
+    """The newest books already measured under this run's pins: what was tried, and what
+    it matched.
 
-    A redundant candidate leaves no card, so without this it reaches the proposer as
-    nothing at all, and a proposer told nothing writes the same bet a third way.
+    Both kinds, and each says which it is. The card says a candidate was redundant; only
+    the event says which stored signature it matched and on how much of it, and that is
+    the half the proposer can act on — and a card that matched a book and moved the number
+    further than the floor has no status of its own at all, so without its event the
+    proposer is shown nothing and re-treads the book it was never told about. Its `repeat`
+    is `False`: the turn was not refused, and the rule the proposer is given — hold a book
+    already measured and move the number, and it is an experiment — is the rule that
+    admitted it.
+
+    Joined to `runs` so the window is the pins rather than the run, for the reason
+    `REDUNDANT_LINES` gives: the same bet spelled a third way is refused against the first
+    run's spelling as much as against this run's, and a proposer shown neither writes it a
+    fourth time.
+
+    The pins and not the reading. An entry is not an anchor — `records.matched_book` picks
+    those, under the reading the asking card was measured with — it is the record that an
+    idea has been tried, and an idea tried under three folds was tried. The reading could
+    not narrow this window in any case: `loop.Setup.measured_under` is a fact about a card
+    rather than about a run, since the warmup prefix it digests is resolved from the
+    catalog for every card and can move within one run, so there is no one reading a run
+    could be joined by.
     """
     rows = store.connection.execute(
-        "SELECT detail FROM events WHERE kind = ? AND subject = ?"
-        " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC LIMIT ?",
-        (research_loop.REDUNDANT, active.hyp_id, active.run_id, REDUNDANT_LINES),
+        "SELECT events.kind, events.detail FROM events JOIN runs"
+        " ON runs.run_id = json_extract(events.detail, '$.run_id')"
+        " WHERE events.kind IN (?, ?) AND events.subject = ? AND runs.hypothesis_sha = ?"
+        " AND runs.snapshot_id = ? AND runs.criteria_version = ?"
+        " ORDER BY events.event_id DESC LIMIT ?",
+        (
+            research_loop.REDUNDANT,
+            research_loop.SAME_BOOK,
+            active.hyp_id,
+            active.hypothesis_sha,
+            active.snapshot_id,
+            active.criteria_version,
+            REDUNDANT_LINES,
+        ),
     ).fetchall()
     found: list[dict[str, object]] = []
     for row in rows:
         detail = json.loads(str(row["detail"]))
-        found.append({key: detail.get(key) for key in ("desc", "like", "pct")})
+        entry: dict[str, object] = {key: detail.get(key) for key in ("desc", "like", "pct")}
+        entry["repeat"] = str(row["kind"]) == research_loop.REDUNDANT
+        found.append(entry)
     return found
 
 
@@ -626,17 +768,22 @@ def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.R
 
 def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:
     """How many cards and misses this run has recorded since its last keep, so a resume
-    continues the count rather than starting it over."""
+    continues the count rather than starting it over.
+
+    A redundant result is counted once, by its card. Only a `repeated` miss is counted
+    from the event log, because that one leaves no card at all; counting the `redundant`
+    event as well would advance the stall twice for one turn.
+    """
     cards = store.connection.execute(
         "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
         " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status = 'keep'), 0)",
         (active.run_id, active.run_id),
     ).fetchone()
     misses = store.connection.execute(
-        "SELECT COUNT(*) FROM events WHERE kind IN (?, ?) AND subject = ?"
+        "SELECT COUNT(*) FROM events WHERE kind = ? AND subject = ?"
         " AND json_extract(detail, '$.run_id') = ? AND ts > COALESCE("
         " (SELECT MAX(created_at) FROM cards WHERE run_id = ? AND status = 'keep'), '')",
-        (REPEATED, research_loop.REDUNDANT, active.hyp_id, active.run_id, active.run_id),
+        (REPEATED, active.hyp_id, active.run_id, active.run_id),
     ).fetchone()
     return int(cards[0]) + int(misses[0])
 

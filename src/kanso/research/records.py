@@ -16,7 +16,16 @@ included — because it numbers the cards and stamps the certificate, and no car
 dropped from a count that is part of a filename. `trial_metrics` is the narrower set the
 deflated Sharpe consumes: the cards that ran to a result and traded. A crash and a card
 that placed no order are edits that failed, not candidates the selection could have
-chosen, so counting them widens the search on paper without widening it in fact.
+chosen, so counting them widens the search on paper without widening it in fact. A
+redundant card is in both, because it is the other way round — it ran, it traded, and the
+selection ranked its number and declined it. That another candidate held the same book
+makes it a correlated trial, not a non-trial, and dropping it was measured costing
+certificates an `n_trials` of 7 and 8 against roughly a thousand backtests run and
+selected over — a hundredfold in the count they deflate by. What a correlated trial is
+worth is not settled by counting it: the metric enters the spread as well as the count,
+and a set dominated by repeats of one book narrows the spread faster than the count
+widens the term beside it. `docs/backlog.md` row 59 holds the measurement of both
+directions and the reason nothing else changes here.
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
@@ -25,16 +34,36 @@ owns it may rewind it, another run may only better it. So a run re-seeded from a
 keep climbs its own ancestry, and a drift rewind in one run leaves what another run earned
 standing (`docs/backlog.md` row 61).
 
-A **signature** is what a judged run held: for each period end, keyed by its UTC day, the
-sorted (instrument, sign) pairs open at that end. Two strategies with the same signature
-on nearly every shared day made the same bets and earned the same result, however
-differently they were written, so the second is not an experiment. Signatures are stored
-per strategy under the run's pins — the hypothesis file, the snapshot and the criteria —
-never per run, because two runs under the same pins ask the same question of the same
-data; and they are stored for every judged run, a redundant miss included, so the third
-spelling of one idea is refused against the second as well as the first. The comparison
-is by day rather than by position because it is a fact about sessions, and a day is what
-two runs over the same window share.
+A **signature** is what a judged run held, day by day: for each UTC day the run measured
+a period end in, the sorted (instrument, sign, at-an-end) marks of that day. Both of the
+run's own records of a position are read — what it held at each period end, and the spans
+of the positions it opened and closed — because a period end is a sample, and a sample
+taken once a day says nothing about a strategy that is flat by the close. The two are
+marked apart, so the reading is strictly finer than sampling the ends alone rather than a
+coarser one that would call two daily strategies alike for holding on the same days.
+Measured in a live workspace: of 201 signatures stored for an intraday hypothesis under a
+daily return period, 192 recorded a position on none of their 834 sampled days, so every
+candidate matched every other on all of them and every proposal after the first was
+refused. Two strategies with the same signature on nearly every shared day made the same
+bets, however differently they were written; whether they also earned the same result is
+the second half of that sentence, and it used to be asserted rather than read. It is read
+now — a signature is stored with the metric its card earned, and a candidate is redundant
+only when its own number is within the hypothesis's noise floor of that one — because the
+objective is computed before the refusal is decided and a premise that can be tested for
+nothing should not be assumed. Signatures are stored per strategy under the run's pins —
+the hypothesis file, the snapshot and the criteria — never per run, because two runs under
+the same pins ask the same question of the same data. That is a premise about the book and
+not about the number beside it: those pins fix no capital, no fold count, no return period,
+no cost model and no host version, and each of those moves a metric while every one of them
+stands still. So the number is stored with a digest of what it was measured under
+(`loop.Setup.measured_under`), and a row measured under another reading is matched by
+nothing — and kept beside it rather than replaced by it, because a reading the selection
+cannot reach is still the only anchor a run under that reading has. Signatures are stored
+for every judged run, a redundant one included, so the third spelling of one idea is
+refused against the second as well as the first. The comparison is
+by day rather than by instant because it is a fact about sessions, and a day is what two
+runs over the same window share. A stored signature is only ever compared with one read
+the same way, so the change of reading came with the migration that emptied the table.
 """
 
 from __future__ import annotations
@@ -42,7 +71,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from kanso.criteria.run import CardRun, day_of
@@ -53,19 +82,19 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
 
 __all__ = [
-    "Redundancy",
+    "Match",
     "Signature",
     "active",
     "best_of",
     "cards_of",
     "close",
     "insert",
+    "matched_book",
     "n_trials",
     "next_tag",
     "now",
     "record_card",
     "record_signature",
-    "redundant_with",
     "require_active",
     "runs_of",
     "set_best",
@@ -75,9 +104,14 @@ __all__ = [
 ]
 
 Signature = dict[str, list[list[object]]]
-"""What a run held at each period end: the end's UTC day, ISO-formatted, to the sorted
-`[instrument_id, sign]` pairs open at that instant. A day with nothing open maps to `[]`,
-because being flat is a position too."""
+"""What a run held on each day it measured: the day, ISO-formatted, to the sorted
+`[instrument_id, sign, at_an_end]` marks of that day. `at_an_end` is true for what the
+run held at one of the day's period ends and false for what it held during the day and
+at none of them, which is the difference between carrying a position over the close and
+closing it before. A day with nothing open maps to `[]`, because being flat is a position
+too, and no size enters, because a size is a parameter and a parameter is exactly what a
+signature exists to see through. What the size did to the number is not lost with it: the
+row carries the metric the book earned, and `matched_book` reads it."""
 
 _RUN_COLUMNS = (
     "run_id",
@@ -283,6 +317,15 @@ def trial_metrics(store: StateStore, hyp_id: str) -> list[float]:
     so its count and its spread describe the same search. A crash produced no metric to
     compare and a card that placed no order did not trade the hypothesis, and neither is
     excluded from `n_trials`, which counts cards.
+
+    A redundant card is one of these. The keep rule is asked before the signature, so a
+    candidate that beat the best would have been kept whatever it resembled: it is a
+    candidate the selection could have chosen, and it is here because the deflation prices
+    the candidates the search ran, not the ones a reader would call distinct. Whether
+    trials that repeat each other should count for less than a whole one is the same
+    question the hill-climbing path raises and is open on the same terms
+    (`docs/backlog.md` row 59) -- an answer would be one stated rule with its own test,
+    never a set quietly narrowed until a bar is passed.
     """
     rows = store.connection.execute(
         "SELECT metric FROM cards WHERE hyp_id = ? AND status != 'crash' AND n_trades > 0"
@@ -323,36 +366,120 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
 
 
 def signature(run: CardRun) -> Signature:
-    """What `run` held at each of its period ends, keyed by the end's UTC day.
+    """What `run` held on each UTC day it measured a period end in, and whether at its end.
 
-    Read from `CardRun.held`, which the runner extracts once per held instrument per
-    period end; the sign is the only part of the quantity that enters, because a size
-    is a parameter and a parameter is exactly what a signature exists to see through.
+    The days are the run's period ends: the sessions two runs over the same window are
+    both known to have measured. Each day is filled from both of the run's own records of
+    a position. `CardRun.held` is what the runner extracted once per held instrument per
+    period end, and marks its instrument and sign as held *at an end*. `CardRun.trades` is
+    every position the run opened and closed, each carrying the instants it spanned, and
+    marks each day it was open on — unless that instrument and sign were already held at
+    an end of that day, which would say nothing new.
+
+    The two marks are kept apart rather than merged, and that is the whole of the design.
+    Merged, a day would read "something was held", and two daily strategies whose only
+    difference is whether they carry the position over the close would read alike: measured
+    on the demo, the card scoring 9.99 and the card scoring 3.15 matched on every session.
+    Kept apart, the reading is strictly finer than sampling the ends alone — two runs that
+    differed under that reading differ under this one, because their end marks differ —
+    while a hypothesis that is flat at every end, and had no signature at all before, is
+    now told apart by what it held during the day.
+
+    Only the sign of a quantity enters, because a size is a parameter and a parameter is
+    what a signature exists to see through; a day the book flipped carries both signs,
+    since what was held over the day is the bet and the order is a detail.
+
+    The days are taken from the period ends and then widened by the days the holdings
+    themselves fall on, before the second reading is seeded from them — the runner samples
+    `held` at the period ends and no other instant, so the widening is unreachable today,
+    and seeding the two dicts from the same keys is what keeps it a widening rather than a
+    `KeyError` if that ever stops being true.
     """
-    ends: dict[int, list[list[object]]] = {ts: [] for ts in run.period_ends_ns}
+    ends: dict[date, set[tuple[str, int]]] = {day_of(ts): set() for ts in run.period_ends_ns}
     for held in run.held:
-        ends.setdefault(held.ts_ns, []).append([held.instrument_id, 1 if held.qty > 0 else -1])
-    return {day_of(ts).isoformat(): sorted(pairs) for ts, pairs in sorted(ends.items())}
+        ends.setdefault(day_of(held.ts_ns), set()).add((held.instrument_id, _sign(held.qty)))
+    during: dict[date, set[tuple[str, int]]] = {day: set() for day in ends}
+    for trade in run.trades:
+        mark = (trade.instrument_id, _sign(trade.qty))
+        for day in _spanned(trade.opened_ns, trade.closed_ns):
+            if day in during:
+                during[day].add(mark)
+    return {
+        day.isoformat(): sorted(
+            [[name, sign, True] for name, sign in held]
+            + [[name, sign, False] for name, sign in during[day] - held]
+        )
+        for day, held in sorted(ends.items())
+    }
+
+
+def _sign(qty: float) -> int:
+    return 1 if qty > 0 else -1
+
+
+def _spanned(opened_ns: int, closed_ns: int) -> list[date]:
+    """Every UTC day a position was open on, its first and its last included."""
+    first, last = day_of(opened_ns), day_of(closed_ns)
+    return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
 @dataclass(frozen=True)
-class Redundancy:
-    """Which stored signature a candidate matched, and on how much of their shared days."""
+class Match:
+    """Which stored signature a candidate matched, on how much of it, and what it earned.
+
+    `earned` is the anchor's own metric, which is half of why the candidate is redundant
+    and the half no reading of the two books can show. The refusal names it beside the
+    candidate's, because "your result is already known" is a claim about two numbers and
+    an operator is owed both.
+
+    `agreed` is that second half: whether the candidate's own metric came out within the
+    hypothesis's noise floor of `earned`. A match that agreed is a repeat and the loop
+    refuses the turn; a match that did not is an ordinary discard that nonetheless held a
+    book already measured, which is the one thing about it worth telling the next
+    proposal. Both are recorded, because a book matched is a fact either way and the
+    card has no column for it.
+    """
 
     like: str
     matched: int
     shared: int
+    earned: float
+    agreed: bool
 
     @property
     def pct(self) -> float:
         return 100.0 * self.matched / self.shared
 
 
-def record_signature(store: StateStore, run: RunRecord, sha: str, held: Signature) -> None:
-    """Store what these bytes held under this run's pins; the same bytes are written once."""
+def record_signature(
+    store: StateStore,
+    run: RunRecord,
+    sha: str,
+    held: Signature,
+    metric: float,
+    measured: str,
+) -> None:
+    """Store what these bytes held under this run's pins, what they earned, and under what.
+
+    The same bytes under the same pins and the same reading are written once: the second
+    judging replaces the row, book and number together, because the same bytes over the
+    same data measured the same way twice are one fact and not two. Under a second reading
+    they are a second row and not a replacement — the reading is the fifth column of the
+    key (`state/migrations/0008_signature_reading_is_a_key.sql`) — because the selection
+    reads a row only under the reading it was measured with, so replacing would leave a
+    run under the first reading with no anchor at all: an operator who sets
+    `[research] folds = 3`, runs cards and sets it back to 4 would lose the four-fold
+    anchor of every strategy re-judged in between.
+
+    `metric` is the objective the card was just recorded with, so a stored book is never on
+    record for a number no card carries, and `measured` is what that number was measured
+    under (`loop.Setup.measured_under`) — the pins say which question was asked and this
+    says which arithmetic answered it.
+    """
     store.connection.execute(
         "INSERT OR REPLACE INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
-        " criteria_version, signature, sessions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " criteria_version, signature, sessions, metric, measured_under, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             sha,
             run.hyp_id,
@@ -361,36 +488,140 @@ def record_signature(store: StateStore, run: RunRecord, sha: str, held: Signatur
             run.criteria_version,
             json.dumps(held, sort_keys=True),
             len(held),
+            metric,
+            measured,
             now().isoformat(),
         ),
     )
 
 
-def redundant_with(
-    store: StateStore, run: RunRecord, held: Signature, pct: int
-) -> Redundancy | None:
+def matched_book(
+    store: StateStore,
+    run: RunRecord,
+    held: Signature,
+    pct: int,
+    metric: float,
+    floor: float,
+    measured: str,
+) -> Match | None:
     """The stored signature under this run's pins that `held` matches on at least `pct`
-    percent of their shared days — the closest one, the earlier on a tie — or `None`.
+    percent of their shared days, and whether its own metric is within `floor` of
+    `metric` — the closest one that agreed, else the closest one at all, the earlier on a
+    tie — or `None` when no stored book was matched.
+
+    The agreeing match is preferred over a closer one that disagreed, so reporting the
+    second kind can never turn a repeat into a discard: a candidate matching one book on
+    every day whose number moved and another on 96% of them whose number did not is the
+    repeat it always was. The caller refuses only `agreed`, and records both — the
+    argument for recording a repeat is the corner it fills in and the record the next run
+    reads, and neither of those is about the number that came back.
+
+    That preference is why the rows are read in two passes rather than one. `json.loads`
+    of a stored book is what this function costs, and a row whose number disagreed can
+    never beat an agreeing one however much of it matched, so the books outside the floor
+    are parsed only when nothing inside it qualified. What that is worth is small and
+    measured rather than argued: over the four largest pin groups of the live workspace of
+    2026-09-18, driving this function on the books held out of each, a card costs 0.5 s to
+    1.0 s against groups of 23 MB to 46 MB, and the second pass falls away on 0.2% to 7.4%
+    of it. It is small because a pin group's numbers sit on top of each other — 88% to
+    99.6% of the pairs within one group fall inside that hypothesis's floor, against the
+    20% the same measurement gives over a whole hypothesis's numbers — and because the
+    second pass falls away exactly when an agreeing row matched, which is most of the
+    time: over the period in which any book was on record at all, 63.7% of `sox_main_b`'s
+    judged candidates found an agreeing anchor, and 84.9% to 94.1% of the other four
+    hypotheses' did. An earlier reading of this put `sox_main_b` at 9%, by counting the
+    3,043 of its 3,228 cards that were judged before the first signature row existed
+    (`2026-09-18T01:16:57Z`); a candidate that matched nothing because the table was empty
+    measures the table and not the matcher.
+    What a card pays here is the size of the pool and the shape a book is parsed into, and
+    neither is the ordering (`docs/backlog.md` row 89).
+
+    Both clauses make the refusal, because the premise is both clauses. Two strategies
+    that held the same book on nearly every shared day made the same bets, and the
+    inference drawn from that is that they earned the same result; only the first half
+    was ever checked, and the second was asserted. It does not need to be: the objective
+    is computed before this is asked, so the claim can be tested at the cost of one
+    number per stored book.
+
+    Measured against the live workspace of 2026-09-18, over the 3,092 candidates its five
+    refusing hypotheses turned away, with each hypothesis's median card standard error
+    standing in for the candidate's own. Where the daily book determines the number the
+    premise holds and the rule does not move: `sox_drag_budget`, whose thesis is a
+    vol-target budget with a cash-withholding cap, refused 1,151 candidates of which 1,090
+    matched one anchor scoring 0.4674, and their own scores sat a median 0.0039 and at most
+    0.0931 from it against a floor of 0.2713 — so none of the 1,151 is admitted, and a size
+    that moved no result is still not an experiment. `sox_drag` 0 of 742, `sox_main_b` 1 of
+    325, `sox_dir` 31 of 549. Where it does not, the premise fails outright: `sox_touch` is
+    intraday on a per-trade edge, and its 289 candidates matching anchor `ce5ef34` scored
+    -18.780 .. 9.179 against that anchor's -4.5452 and a floor of 10.116, a median 9.096
+    away and 74 of its 325 refusals further than the floor. 106 of 3,092 in all: the rule
+    refuses a repeat as it did, and stops refusing a measurement that disagreed with what
+    it was called a repeat of.
+
+    `floor` is struck from the candidate's own standard error, not the anchor's, which is
+    on record here and deliberately unread. The keep rule compares a candidate against
+    `best_metric` on the candidate's floor and never consults the best card's; one card,
+    one noise floor is the convention, and a second scale in the same loop would let two
+    rules disagree about whether one difference is a difference.
 
     Every signature stored under the pins is a candidate, the best card's included: the
     caller applies the keep rule first, so what reaches here has already failed to beat
-    the best, and matching it is the strongest reason of all to refuse the candidate.
-    Two signatures with no day in common match nothing.
+    the best, and matching it is the strongest reason of all to refuse the candidate. Two
+    signatures with no day in common match nothing, and a stored book carrying no metric
+    is nothing to compare against: a premise that cannot be tested has not been met, so it
+    is no anchor (`state/migrations/0006_signature_metric.sql`).
+
+    A stored number is refused the same way when it was not measured under what this run
+    measures under. The four pins fix the question and the data; they do not fix the
+    capital, the folds, the return period, the cost model or the host version an attached
+    construct is differenced against, and every one of those moves a number while every
+    pin stands still (`loop.Setup.measured_under`). So `measured` is a fifth term of the
+    selection rather than a check on the rows it returns: an anchor is a row measured the
+    way this card was, and `= ?` is false for the NULL a row written before the column
+    carries, which is the reading that column's migration states.
     """
     rows = store.connection.execute(
-        "SELECT strategy_sha, signature FROM signatures WHERE hyp_id = ? AND hypothesis_sha = ?"
-        " AND snapshot_id = ? AND criteria_version = ? ORDER BY created_at, rowid",
-        (run.hyp_id, run.hypothesis_sha, run.snapshot_id, run.criteria_version),
+        "SELECT strategy_sha, signature, metric FROM signatures WHERE hyp_id = ?"
+        " AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?"
+        " AND measured_under = ? ORDER BY created_at, rowid",
+        (
+            run.hyp_id,
+            run.hypothesis_sha,
+            run.snapshot_id,
+            run.criteria_version,
+            measured,
+        ),
     ).fetchall()
-    closest: Redundancy | None = None
+    within: list[sqlite3.Row] = []
+    beyond: list[sqlite3.Row] = []
+    for row in rows:
+        if row["metric"] is None:
+            continue
+        (within if abs(metric - float(row["metric"])) <= floor else beyond).append(row)
+    agreeing = _closest(held, within, pct, agreed=True)
+    return agreeing if agreeing is not None else _closest(held, beyond, pct, agreed=False)
+
+
+def _closest(held: Signature, rows: list[sqlite3.Row], pct: int, *, agreed: bool) -> Match | None:
+    """The row of `rows` whose book `held` matches on the largest share of their shared
+    days, the earlier on a tie, or `None` when none of them reaches `pct`.
+
+    Called twice by `matched_book`, over the rows whose numbers agreed with the
+    candidate's and then over the rest, which is what keeps the second parse out of the
+    common case: the ranking prefers an agreeing match to any disagreeing one, so once one
+    agreeing row qualifies no row of the other set can win, and `json.loads` is the cost
+    of this function. The rows arrive in the order the selection put them in, so the
+    strict `>` leaves a tie with the row stored first.
+    """
+    closest: Match | None = None
     for row in rows:
         stored: Any = json.loads(str(row["signature"]))
         shared = held.keys() & stored.keys()
-        matched = sum(1 for day in shared if held[day] == stored[day])
-        found = Redundancy(str(row["strategy_sha"]), matched, len(shared))
-        if not shared or found.pct < pct:
+        if not shared:
             continue
-        if closest is None or found.pct > closest.pct:
+        matched = sum(1 for day in shared if held[day] == stored[day])
+        found = Match(str(row["strategy_sha"]), matched, len(shared), float(row["metric"]), agreed)
+        if found.pct >= pct and (closest is None or found.pct > closest.pct):
             closest = found
     return closest
 

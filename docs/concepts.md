@@ -190,13 +190,14 @@ run could use.
 ## Card
 
 One experiment: store the lane's `strategy.py` as a blob under its sha256, run the backtest,
-evaluate, record. Three outcomes, and each does something different to the lane.
+evaluate, record. Four outcomes, and each does something different to the lane.
 
 | status | what it means | what happens to the lane |
 |---|---|---|
 | `keep` | every constraint passed and the keep rule cleared | this becomes the run's `best`, and the hypothesis's when it beats that or the run already holds it; only then is the blob written to `hypotheses/<id>/strategy.py` |
-| `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base |
+| `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base. One that held a book already judged under the pins and moved the number past that floor also appends a `same_book` event, naming the book and both numbers |
 | `crash` | the backtest raised, or exceeded its time or memory budget | the same restore, with the traceback tail recorded |
+| `redundant` | it did not keep, it held the same book as a strategy already judged under the run's pins, and it earned that strategy's number to within the hypothesis's noise floor | the same restore; the card carries the metric it measured, the `redundant` event names the card it repeats and both numbers, and the command that asked for it is refused |
 
 `results.tsv` is rendered from state rather than appended to, so the history survives every
 restore. Three proposals into the demo:
@@ -228,20 +229,89 @@ bounded by the vocabulary rather than by the hypothesis. A card made by hand car
 tags, and reaches the table under none.
 
 A card that ran and did not keep is then compared by what it **held**: its signature,
-which is for each session of the research window the instruments and sides open at its
-end, keyed by the session's day. Two strategies with the same signature on nearly every
-shared session made the same bets and earned the same number, however differently they
-were written — a threshold moved, a helper renamed, a condition spelt the other way — so
-the second is not an experiment. One that matches a strategy already judged under the
-run's pins on at least `[research] redundant_pct` percent of their shared sessions is
-**redundant**: no card, no trial, the lane restored, a `redundant` event carrying the
-metric it measured and the card it repeats, and the proposer shown that card by name on
-its next turn. The keep rule is asked first, so a candidate that beats the best is a keep
-whatever it resembles; the baseline is exempt, since it is the last run's best and its
-signature is already stored; and signatures are stored for every judged run, redundant
-misses included, so the third spelling of an idea is refused against the second as well as
-the first. Signatures live under the pins — the hypothesis file, the snapshot, the
-criteria — and a run under new pins starts with none.
+which is, for each session of the research window, the instruments and sides it held and
+whether each was still open at the session's end. Both of a run's own records of a
+position are read — what it held at each period end, and the spans of the positions it
+opened and closed — because a period end is a sample, and a hypothesis whose positions
+close before the session does is flat at every sample by construction. Signed from the
+ends alone, such a hypothesis matched every candidate against every other at 100 percent
+and never made an experiment again: measured in a live workspace, 192 of one's 201 stored
+signatures held nothing on any of their 834 sampled days. The two are marked apart rather
+than merged into "something was held", so the reading is strictly finer than sampling the
+ends alone and never coarser: two strategies that differed under the old reading differ
+under this one, and carrying a position over the close is not the same book as closing it
+before. Two strategies with the same signature on nearly every shared session made the
+same bets, however differently they were written — a threshold moved, a helper renamed, a
+condition spelt the other way. Whether they also earned the same number is the rest of that
+sentence, and it is read rather than assumed: a signature is stored with the metric its card
+earned, and a candidate is **redundant** when it matches a strategy judged under the run's
+pins on at least `[research] redundant_pct` percent of their shared sessions *and* its own
+metric is within that hypothesis's noise floor — `max(min_delta, k_se x se)`, the floor
+the keep rule is struck from too — of what that strategy earned. Then it is a card of that
+status carrying the metric it measured, the lane restored as any non-keep restores it, a
+`redundant` event carrying the card it repeats and both numbers, the command that asked for
+it refused, and the proposer shown that card by name on its next turn.
+
+Both clauses, because "its result is already known" is a claim about the result, and the
+result is in hand when the refusal is decided. Measured across the 3,092 candidates the
+live workspace of 2026-09-18 had turned away, 106 had earned a number further from the
+book they repeated than that hypothesis's own floor, so the refusal asserted what their
+two numbers denied. Where the daily book does determine the number, nothing changes and
+loop memory is untouched: a vol-target sizing hypothesis refused 1,151 candidates, 1,090
+of them against one book scoring 0.4674, and their own scores sat a median 0.0039 and at
+most 0.0931 from it against a floor of 0.2713 — not one of the 1,151 is admitted, and a
+size that moves no result is still not an experiment. What the floor admits is the case
+the other way round: an intraday hypothesis measured on a per-trade edge, whose 289
+matches of one book scored -18.780 to 9.179 around that book's -4.5452, a median 9.096
+against a floor of 10.116, with 74 of its 325 refusals beyond it. The same book read by
+session, and not the same result.
+
+A redundant card is a card because the backtest ran and a real number came back — the
+trial it counts as, the corner it fills in on the coverage table and the record the next
+run reads are all things the search actually did, and dropping them was measured deflating
+a certificate by a search more than a hundred times narrower than the one that ran. The
+same argument is owed to the 106, and it is paid in the only currency they lack: a card
+that matched a measured book and moved the number is an ordinary discard, with nothing in
+`cards` to say which book it matched, so it appends a `same_book` event carrying what the
+`redundant` event carries. The next proposals are shown both kinds in one list, each
+saying which it is — a proposer told to hold a measured book and move its number cannot
+apply that rule from the refusals alone, and each admitted candidate stores its own book,
+so a hypothesis whose spread is wide against its floor re-treads a book about
+`ceil(spread / 2 x floor)` times before matching resumes. What
+it may never be is a keep: the keep rule is asked first, so a candidate that beats the
+best is a keep whatever it resembles. Nor is there a gap between the two rules for a card
+to fall into unjudged — they are struck from one floor, which the keep rule doubles only
+when the file grew past its line budget, so a candidate that cleared the floor upward and
+not the doubled bar is neither a keep nor a repeat, which is what a discard is. The
+baseline is exempt, since it is the last run's best and its signature is already stored;
+and signatures are stored for every judged run, redundant ones included, so the third
+spelling of an idea is refused against the second as well as the first.
+
+The rule is in the proposer's instruction, with what a signature is and what to do with
+the refusals it is shown, for the same reason the phase is: a refusal the proposer was
+never told about is a wasted ladder. Measured in a live workspace before it was, 2,822
+proposals were refused in a day by a rule whose words — signature, redundant, session,
+`pct` — appeared nowhere in the 2,393 characters the proposer was given. Every fact the
+proposer is sent is named in that instruction, and a test reads the fact keys out of the
+driver's own source to keep it that way. Signatures live under the pins — the hypothesis
+file, the snapshot, the criteria — and a run under new pins starts with none. The number
+beside the book lives under one thing more, because those pins fix the question and the
+data and nothing about the arithmetic: `[research] capital`, `folds` and `return_period`,
+the venue model `[research] broker` and `portfolio.yaml` resolve, and the host version an
+attached construct is differenced against all move a number while every pin stands still.
+So do three the workspace declares nowhere: what the sleeve sizes to, which for an attached
+construct is its host's budget as the host's `hypothesis.yaml` is registered *now*; the bar
+grains the run loads, which is that same file's resolution beside the sleeve's own; and the
+warmup sessions a card is fed, which are resolved from the catalog for every card, so a
+`kanso data load` that adds a printed day inside the lookback moves them between two cards
+of one run.
+So a stored number carries a digest of what it was measured under, and an anchor is a row
+measured the way the asking card was. Edit one of those keys and the stored numbers stop
+being anchors until the books are measured again — which is the same statement as the one
+above, that a result already known is a claim about a result. Set the key back and the
+anchors are there again: a book judged under a second reading is stored beside the first
+and not over it, so nothing an operator can edit and undo costs the loop what it has
+already measured.
 
 The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
 Misses since the last keep set it: for the first `[research] local_cards` the proposer is
@@ -252,6 +322,15 @@ Then local again, round until a keep or a stall. The rule is in the proposer's i
 and the phase is a fact of every call, because a refusal the proposer was never told about
 is a wasted ladder. Both lengths, like `stall_k` and `redundant_pct`, are framework search
 rules: they bound the search and choose nothing within it.
+
+A crash is the one card whose idea was never judged, so the turn after it is a **repair**.
+The proposer is given the traceback and the change that produced it, as a diff over the
+file it now holds — the lane was restored the moment the card crashed — and asked for the
+same idea with the fault fixed rather than for a new experiment. Two repairs, then the
+idea is dropped and the next turn asks for something else. Measured in a live workspace
+before this existed: five consecutive crashes on one hypothesis were five state-handling
+slips on ideas out of that hypothesis's own declared families, each costing a whole
+proposal and returning nothing, and not one of the five was ever judged.
 
 A stall is where the memory is read one more time. `[research] reseed_after_stalls`
 consecutive stalls on the same best — counted since the last reseed — say the best is a
@@ -298,8 +377,13 @@ that found the result, and no card may be dropped from a number that is part of 
 One certification gate deflates the result by that search, and it counts a narrower set: a
 **trial** is a card that ran to a result and traded. A crash produced no metric to compare
 and a card that placed no order did not trade the hypothesis, so neither is a candidate the
-selection could have kept. The gate's count and the spread it deflates by are the same set —
-it reports it as `trials`, which is at or below the certificate's `n_trials`.
+selection could have kept. A redundant card is one — it ran, it traded, and the keep rule
+was asked before the signature, so it would have been kept had it beaten the best. That
+another candidate held the same book makes it a correlated trial rather than no trial, and
+how much less than one a correlated trial is worth is open on the same terms as the
+hill-climbing path it sits on (`docs/backlog.md` row 59). The gate's count and the spread
+it deflates by are the same set — it reports it as `trials`, which is at or below the
+certificate's `n_trials`.
 
 ## What a card must satisfy
 

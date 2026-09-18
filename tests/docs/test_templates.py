@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import get_args
 
 from kanso.config import Config, render_config
+from kanso.research import driver
+from kanso.schemas import CardStatus
+from tests.docs.test_pages import spelled
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "src" / "kanso" / "templates"
 
@@ -72,3 +76,24 @@ def test_the_scaffold_says_a_bar_only_hypothesis_needs_a_fixed_spread() -> None:
     costs = text[text.index("# costs:") : text.index("# capital:")]
     assert "`quotes` needs `quote` in data_requirements" in costs
     assert "`kanso hyp validate` refuses (exit 3)" in costs
+
+
+def test_the_program_states_the_repair_budget_the_driver_enforces() -> None:
+    """The program tells an interactive proposer how many goes one fault buys, in words,
+    and the driver holds the same number as a constant. The two drifted apart once: the
+    driver spent the budget on the run's crash streak while this page, and `docs/cli.md`
+    with it, promised it per idea."""
+    stated = re.search(r"if (\w+) goes do not fix it", template("program.md"))
+    assert stated is not None
+    assert spelled(stated.group(1)) == driver.REPAIRS
+
+
+def test_the_program_names_every_status_a_card_can_carry_and_only_the_printed_ones() -> None:
+    """Step 3 tells the proposer to read one output line and names the statuses it can
+    say; step 4 covers the one the command refuses instead of printing. A status in the
+    wrong half is a page that contradicts itself, which `redundant` did."""
+    text = template("program.md")
+    listed = re.search(r"`([a-z|]+) \u00b7 metric \u00b7 \u0394 \u00b7 reason`", text)
+    assert listed is not None
+    assert set(listed.group(1).split("|")) == set(get_args(CardStatus)) - {"redundant"}
+    assert "`redundant` (exit 2)" in text, "the status the command refuses rather than prints"

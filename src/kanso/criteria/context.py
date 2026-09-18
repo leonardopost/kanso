@@ -73,7 +73,9 @@ class GateContext:
       a result and traded — whose count and spread are how wide the search that produced
       the candidate was. A crash and a card that placed no order are edits that failed,
       not attempts at the hypothesis, so neither is a trial here even though both are
-      cards and both are counted by the `n_trials` a certificate records;
+      cards and both are counted by the `n_trials` a certificate records. A card refused
+      as redundant is a trial: it ran, it traded, and the keep rule was asked before its
+      signature was, so the selection ranked its number and declined it;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
       pinned, which is what the scope rule is checked against;
     * `datasets` are the pinned snapshot's datasets with their observed and documented

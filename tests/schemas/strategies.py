@@ -264,7 +264,7 @@ def gate_results(draw: st.DrawFn) -> GateResult:
 
 @st.composite
 def cards(draw: st.DrawFn) -> Card:
-    status = draw(st.sampled_from(["keep", "discard", "crash"]))
+    status = draw(st.sampled_from(["keep", "discard", "crash", "redundant"]))
     return Card(
         run_id=draw(IDENTIFIERS),
         lane=draw(st.from_regex(r"\A[a-z0-9_]{1,16}\Z")),

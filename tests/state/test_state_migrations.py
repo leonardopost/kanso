@@ -217,18 +217,65 @@ def test_a_database_that_cannot_run_in_wal_is_refused(
         StateStore(db_path)
 
 
+@pytest.mark.parametrize("nth", range(1, len(migrations()) + 1))
 def test_a_migration_another_process_applied_first_is_not_reported_as_ours(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
+    db_path: Path, nth: int
 ) -> None:
-    # The loser of a concurrent migrate: its own script fails because the winner already
-    # created the tables, and by then the stamped version already covers the migration.
-    contended = (store_module.Migration(2, "0002_contended.sql", "SELECT nonexistent_fn();"),)
-    monkeypatch.setattr(store_module, "migrations", lambda: contended)
-    observed = iter([0, 2])
-    monkeypatch.setattr(StateStore, "schema_version", lambda _self: next(observed))
-    with StateStore(db_path) as store:
-        assert store.migrate() == []
-        assert store.connection.in_transaction is False
+    """The loser of a concurrent migrate re-reads the version under the write lock.
+
+    The handover is the interleaving two processes were measured taking: the loser reads
+    the version, decides its `nth` migration is pending, and only then reaches
+    `BEGIN IMMEDIATE`, by which time the winner has applied everything and committed. It
+    is driven here by a trace callback on the loser's connection, which SQLite calls
+    before the statement it names runs — so the winner takes the write lock the loser has
+    not taken yet, on a second connection, and no version number is invented.
+
+    Under a check made only before the lock, `nth` 4 and 5 leave the database unusable
+    for good: both migrations succeed a second time and stamp their older number over the
+    winner's, and the ALTER in 0006 then fails against a column that is already there.
+    """
+    winner_applied: list[str] = []
+    begins: list[str] = []
+    with StateStore(db_path) as winner, StateStore(db_path) as loser:
+
+        def hand_over(statement: str) -> None:
+            if not statement.upper().startswith("BEGIN"):
+                return
+            begins.append(statement)
+            if len(begins) == nth:
+                winner_applied.extend(winner.migrate())
+
+        loser.connection.set_trace_callback(hand_over)
+        applied = loser.migrate()
+        loser.connection.set_trace_callback(None)
+
+        assert applied == [m.name for m in migrations()[: nth - 1]], (
+            "the loser reports what it applied itself and nothing the winner did"
+        )
+        assert winner_applied == [m.name for m in migrations()[nth - 1 :]]
+        assert loser.schema_version() == SCHEMA_VERSION
+        assert loser.pending() == []
+        assert loser.tables() == sorted(TABLES)
+        assert loser.connection.in_transaction is False
+        usable(loser, db_path)
+
+
+def test_a_migration_file_is_cut_where_sqlite_says_a_statement_ends() -> None:
+    """Comments and their semicolons are not statement boundaries; the last `;` is the end."""
+    sql = "-- one; two\nCREATE TABLE a (x TEXT DEFAULT 'a;b');\nDROP TABLE a;\n-- trailing\n"
+    assert list(store_module._statements(sql)) == [
+        "-- one; two\nCREATE TABLE a (x TEXT DEFAULT 'a;b');",
+        "\nDROP TABLE a;",
+    ]
+    assert list(store_module._statements("")) == []
+
+
+def test_every_shipped_migration_is_cut_into_statements_that_run() -> None:
+    """Each shipped file yields at least one statement, and none of them is empty."""
+    for migration in migrations():
+        cut = list(store_module._statements(migration.sql))
+        assert cut, migration.name
+        assert "".join(cut) == migration.sql[: migration.sql.rindex(";") + 1], migration.name
 
 
 def test_a_card_recorded_before_the_memory_migration_reads_back_with_no_tags(
@@ -272,6 +319,256 @@ def test_a_card_recorded_before_the_memory_migration_reads_back_with_no_tags(
         assert "signatures" in store.tables()
         (card,) = records.cards_of(store, "old")
         assert card.tags == []
+
+
+def test_signatures_written_under_the_old_reading_are_emptied_by_the_migration(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0004 empties `signatures`: a signature read at period ends alone cannot be
+    compared with one that also reads what a position spanned, and cannot be recomputed
+    without the backtest that produced it, so the row goes and the card stays."""
+    older = migrations()[:3]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("b" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
+            " criteria_version, signature, sessions, created_at) VALUES (?, 'old', 'h', 's',"
+            " '0.8.1', '{\"2026-01-01\": []}', 1, 't')",
+            ("b" * 64,),
+        )
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM signatures").fetchone()[0] == 1
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[3:]]
+        assert store.connection.execute("SELECT COUNT(*) FROM signatures").fetchone()[0] == 0
+
+
+def test_the_cards_table_is_rebuilt_to_admit_a_redundant_card_and_keeps_its_rows(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`status` carries a CHECK, which ALTER TABLE cannot widen, so 0005 rebuilds the
+    table. The rows, the autoincrement and the indexes come across; the old shape refuses
+    a redundant card and the new one takes it."""
+    from kanso.schemas import resolve_venue_model
+
+    venue = json.dumps(resolve_venue_model("XNAS", max_leverage=1.0).model_dump(mode="json"))
+    older = migrations()[:4]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("c" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO runs (run_id, hyp_id, tag, lane, dir, base_sha, hypothesis_sha,"
+            " program_sha, snapshot_id, criteria_version, card_budget_s, baseline_wall_s,"
+            " baseline_peak_mem_gb, started_at) VALUES ('r', 'old', '20260101-1', 'op', 'd',"
+            " ?, ?, ?, 's', '0.8.1', 60, 1, 1, '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, "c" * 64, "c" * 64),
+        )
+        conn.execute(
+            "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+            " n_trials, n_trades, wall_s, venue_model, tags, created_at) VALUES ('r', 'old', 1,"
+            " 'op', ?, 'keep', 1.0, 1, 3, 1.0, ?, '[\"exit_stop\"]',"
+            " '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, venue),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+                " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 2,"
+                " 'op', ?, 'redundant', 1.0, 2, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+                ("c" * 64, venue),
+            )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[4:]]
+        conn = store.connection
+        (kept,) = conn.execute("SELECT card_id, status, tags FROM cards").fetchall()
+        assert (kept["card_id"], kept["status"], kept["tags"]) == (1, "keep", '["exit_stop"]')
+        conn.execute(
+            "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+            " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 2, 'op',"
+            " ?, 'redundant', 1.0, 2, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, venue),
+        )
+        assert conn.execute("SELECT MAX(card_id) FROM cards").fetchone()[0] == 2
+        # AUTOINCREMENT or not, the id after a one-row table is 2; the difference is
+        # whether a freed id is handed out again, so the rebuilt table is asked that.
+        conn.execute("DELETE FROM cards WHERE card_id = 2")
+        conn.execute(
+            "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+            " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 3, 'op',"
+            " ?, 'redundant', 1.0, 3, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, venue),
+        )
+        assert conn.execute("SELECT MAX(card_id) FROM cards").fetchone()[0] == 3, (
+            "the high-water mark came across, so no card_id is ever reused"
+        )
+        assert sorted(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'cards'"
+                " AND name NOT LIKE 'sqlite_%'"
+            )
+        ) == ["cards_hyp", "cards_run", "cards_strategy_sha"]
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+                " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 4,"
+                " 'op', ?, 'promising', 1.0, 4, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+                ("c" * 64, venue),
+            )
+
+
+def test_a_signature_written_before_the_metric_column_reads_back_without_a_number(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0006 adds `signatures.metric` over rows that exist, and such a row has no number.
+
+    Nothing released can hold one — 0004 empties this table in the same version — but the
+    column is nullable, so the reading has to be stated: a stored book with no result on
+    record is not an anchor, because the premise it would be matched against cannot be
+    tested. The row is reached the only way it can be: by stopping the migrations one
+    short and writing it by hand.
+    """
+    older = migrations()[:5]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("d" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
+            " criteria_version, signature, sessions, created_at) VALUES (?, 'old', 'h', 's',"
+            " '0.9.0', '{\"2026-01-01\": []}', 1, 't')",
+            ("d" * 64,),
+        )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[5:]]
+        (row,) = store.connection.execute("SELECT sessions, metric FROM signatures").fetchall()
+        assert (row["sessions"], row["metric"]) == (1, None)
+
+
+def test_a_signature_written_before_the_reading_column_reads_back_without_one(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0007 adds `signatures.measured_under`, and such a row says nothing about its number.
+
+    The four pins a signature is selected by fix the question and the data and nothing
+    about the arithmetic — the capital, the folds, the return period, the cost model and
+    an attached construct's host version all move a number while every pin stands still —
+    so the number carries what it was measured under, and a row that carries none is no
+    anchor. `research/records.py` gets that for free: SQL's `=` is false for NULL.
+    """
+    older = migrations()[:6]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("e" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
+            " criteria_version, signature, sessions, metric, created_at) VALUES (?, 'old', 'h',"
+            " 's', '0.9.0', '{\"2026-01-01\": []}', 1, 1.5, 't')",
+            ("e" * 64,),
+        )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[6:]]
+        (row,) = store.connection.execute(
+            "SELECT metric, measured_under FROM signatures"
+        ).fetchall()
+        assert (row["metric"], row["measured_under"]) == (1.5, None)
+        (matched,) = store.connection.execute(
+            "SELECT COUNT(*) FROM signatures WHERE measured_under = ?", ("any reading",)
+        ).fetchone()
+        assert matched == 0, "a row with no reading matches no reading, which is the rule"
+
+
+def test_the_reading_becomes_part_of_the_signature_key_and_the_rows_come_across(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0007 left the reading out of the key, so two readings of one strategy collided.
+
+    `record_signature` writes with `INSERT OR REPLACE`, and the selection reads a row only
+    under the reading it was measured with, so the older reading's anchor was dropped by
+    the newer one and no run under it could find a repeat again. 0008 rebuilds the table
+    with the reading as a fifth key column: the rows come across, and the same bytes under
+    two readings are two rows where the old shape kept one.
+    """
+    older = migrations()[:7]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("f" * 64,)
+        )
+        write = (
+            "INSERT OR REPLACE INTO signatures (strategy_sha, hyp_id, hypothesis_sha,"
+            " snapshot_id, criteria_version, signature, sessions, metric, measured_under,"
+            " created_at) VALUES (?, 'old', 'h', 's', '0.9.0', '{\"2026-01-01\": []}',"
+            " 1, ?, ?, 't')"
+        )
+        conn.execute(write, ("f" * 64, 1.0, "four folds"))
+        conn.execute(write, ("f" * 64, 2.0, "three folds"))
+        assert [
+            tuple(row) for row in conn.execute("SELECT metric, measured_under FROM signatures")
+        ] == [(2.0, "three folds")], "the older reading's anchor was replaced by the newer one"
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[7:]]
+        conn = store.connection
+        assert [
+            tuple(row) for row in conn.execute("SELECT metric, measured_under FROM signatures")
+        ] == [(2.0, "three folds")], "the row that survived comes across"
+        conn.execute(write, ("f" * 64, 1.0, "four folds"))
+        assert sorted(
+            tuple(row) for row in conn.execute("SELECT measured_under, metric FROM signatures")
+        ) == [("four folds", 1.0), ("three folds", 2.0)], "and now both readings stand"
+        conn.execute(write, ("f" * 64, 1.5, "four folds"))
+        assert sorted(
+            tuple(row) for row in conn.execute("SELECT measured_under, metric FROM signatures")
+        ) == [("four folds", 1.5), ("three folds", 2.0)], (
+            "the same bytes under one reading are still one row"
+        )
 
 
 # --- a database this package cannot correctly write, in either direction ------

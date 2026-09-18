@@ -154,11 +154,13 @@ def test_a_keep_rewrites_the_workspace_strategy(runner: CliRunner, registered: P
     assert workspace_copy == REVERTING
 
 
-def test_the_same_bytes_over_the_same_snapshot_are_a_known_result_and_not_a_card(
+def test_the_same_bytes_over_the_same_snapshot_are_a_known_result_and_a_redundant_card(
     runner: CliRunner, registered: Path
 ) -> None:
     """Determinism is the property every other card comparison rests on, and it is why
-    the second run of the same book is refused: its number is already on a card."""
+    the second run of the same book is refused: its number is already on a card. The
+    refusal is of the turn, not of the record — the result was measured, so it is a card
+    of its own status, a trial, and a row in `results.tsv` like any other."""
     begin(runner, registered)
     edit(registered, REVERTING)
     first = card(runner, registered, "fade the rolling mean")
@@ -173,6 +175,17 @@ def test_the_same_bytes_over_the_same_snapshot_are_a_known_result_and_not_a_card
         (event,) = store.events(kind="redundant", subject=HYP_ID)
         assert event.detail["metric"] == first["metric"]
         assert event.detail["like"] == first["strategy_sha"][:7]
+    rows = [
+        row.split("\t")
+        for row in (registered / "hypotheses" / HYP_ID / "results.tsv").read_text().splitlines()[1:]
+    ]
+    assert [(row[-2], row[-1]) for row in rows] == [
+        ("discard", "baseline"),
+        ("keep", "fade the rolling mean"),
+        ("redundant", "again"),
+    ]
+    assert rows[-1][1] == rows[-2][1], "the same book measured the same number"
+    assert rows[-1][3] == "3", "and it is the third trial"
     assert (lane(registered) / "strategy.py").read_text() == REVERTING
 
 

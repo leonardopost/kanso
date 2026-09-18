@@ -245,6 +245,13 @@ remedy: run `kanso migrate`
 kanso and running a command is not consent to rewrite the record of your research, so
 `kanso migrate` is a separate act you take when you are ready to take it.
 
+**Two `kanso migrate` at once is one migration.** The write lock serialises them, and each
+migration re-reads the stamped version while it holds that lock, so the one that arrives
+second applies nothing and reports `nothing pending`. That second reading is what keeps
+the schema and the number moving together: a migration applied to a database that has
+already moved past it would stamp its own older version over the newer one and leave a
+`state.db` whose schema no `kanso migrate` could reach again.
+
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
 the workspace has no

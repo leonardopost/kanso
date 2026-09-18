@@ -12,9 +12,10 @@ refused instead of corrupting the database.
 Schema versioning is SQLite's own `PRAGMA user_version` rather than a table kanso
 maintains, so the version is readable from a database kanso has never opened and cannot
 disagree with the tables. Migrations are `migrations/NNNN_name.sql`, applied in numeric
-order, each in one transaction that ends by stamping its own number; a partially applied
-migration therefore cannot exist, and re-running `migrate` on a current database is a
-no-op.
+order, each in one write transaction that reads the stamped version under the write lock
+and ends by stamping its own number; a partially applied migration therefore cannot
+exist, no migration is applied to a database that has already moved past it, and
+re-running `migrate` on a current database is a no-op.
 
 Blobs are content addressed: the sha256 of the bytes is the key, storing the same bytes
 twice is one row, and every reader accepts any unique prefix of a key, which is what lets
@@ -185,6 +186,26 @@ def _enable_wal(conn: sqlite3.Connection, timeout_s: float) -> str:
         time.sleep(0.01)
 
 
+def _statements(sql: str) -> Iterator[str]:
+    """The complete statements of a migration file, in order.
+
+    `executescript` is the obvious way to run one and cannot be used: it commits the
+    transaction it is called inside, and the version a migration is safe to apply under
+    has to be read inside that transaction. So the file is cut here and each statement is
+    executed on the open transaction instead. The cut is `sqlite3.complete_statement`,
+    which is SQLite's own parser: a `;` inside a comment, a string literal or a trigger
+    body does not end a statement, and every migration file ends with one, which
+    `tests/state/test_state_migrations.py` asserts of the shipped files.
+    """
+    parts = sql.split(";")
+    chunk = ""
+    for part in parts[:-1]:
+        chunk += part + ";"
+        if sqlite3.complete_statement(chunk):
+            yield chunk
+            chunk = ""
+
+
 def _normalise_prefix(prefix: str) -> str:
     """Lower-case and check a sha or sha prefix; raise `ValidationError` if it cannot be one."""
     candidate = prefix.strip().lower()
@@ -311,29 +332,34 @@ class StateStore:
     def migrate(self) -> list[str]:
         """Apply every pending migration in order and return the names applied.
 
-        Each migration runs in its own transaction that ends by stamping its version, so
-        an interrupted run leaves the database on the last complete migration. A second
-        process migrating the same database concurrently is serialised by the write lock;
-        the loser sees the work already done and reports nothing applied.
+        Each migration runs in its own write transaction that ends by stamping its
+        version, so an interrupted run leaves the database on the last complete
+        migration. A second process migrating the same database concurrently is
+        serialised by the write lock, and the version is read twice for it: once to skip
+        the work, and again inside the transaction, because the first read is made before
+        the lock is held and the winner can commit between them. The loser then sees the
+        work already done and reports nothing applied.
+
+        The second read is what keeps the stamp monotonic, and nothing else does. A
+        migration re-applied to a database that has moved past it does not reliably fail:
+        `0004` is a `DELETE` and `0005` rebuilds a table it has already renamed away, so
+        both succeed a second time and stamp their own older number over the newer one.
+        The schema is then ahead of the number stamped on it, the next `migrate` runs the
+        migrations in between again, and the first of those that cannot repeat — `0006`,
+        an `ALTER TABLE ... ADD COLUMN` — refuses the database for good.
         """
-        conn = self.connection
         applied: list[str] = []
         for migration in migrations():
             if migration.version <= self.schema_version():
                 continue
-            script = (
-                "BEGIN IMMEDIATE;\n"
-                f"{migration.sql}\n"
-                f"PRAGMA user_version = {migration.version};\n"
-                "COMMIT;"
-            )
             try:
-                conn.executescript(script)
+                with self._write() as conn:
+                    if migration.version <= self.schema_version():
+                        continue
+                    for statement in _statements(migration.sql):
+                        conn.execute(statement)
+                    conn.execute(f"PRAGMA user_version = {migration.version}")
             except sqlite3.Error as exc:
-                if conn.in_transaction:
-                    conn.execute("ROLLBACK")
-                if self.schema_version() >= migration.version:
-                    continue
                 raise KansoError(f"migration {migration.name} failed: {exc}") from exc
             applied.append(migration.name)
         return applied

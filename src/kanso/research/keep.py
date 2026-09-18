@@ -7,7 +7,9 @@ research window's contiguous folds; the metric is their mean and `metric_se` the
 standard error. An improvement counts only when it clears `max(min_delta, k_se x se)` —
 the operator's smallest interesting difference, and the spread of the folds that produced
 the number. Both parameters come from the hypothesis's own `objective.params`, chosen at
-classification, so the bar is set before any result is seen.
+classification, so the bar is set before any result is seen. That floor is the one scale
+on which this hypothesis calls two numbers different, so the redundancy rule reads it from
+here too rather than choosing a second one (`noise_floor`, `research/records.py`).
 
 **The comparison is strict.** Equal is not better. A loop that kept ties would drift
 across a plateau of indistinguishable strategies and call the drift progress.
@@ -30,7 +32,7 @@ from typing import Final
 
 from kanso.schemas import ObjectiveParams
 
-__all__ = ["COMPLEXITY_FACTOR", "grew_by", "keep", "line_count", "threshold"]
+__all__ = ["COMPLEXITY_FACTOR", "grew_by", "keep", "line_count", "noise_floor", "threshold"]
 
 COMPLEXITY_FACTOR: Final = 2.0
 """What `k_se` is multiplied by when a keep grows the file past the line budget."""
@@ -50,6 +52,21 @@ def _params(params: Mapping[str, float] | ObjectiveParams) -> tuple[float, float
     if isinstance(params, ObjectiveParams):
         return params.min_delta, params.k_se
     return float(params["min_delta"]), float(params["k_se"])
+
+
+def noise_floor(se: float, params: Mapping[str, float] | ObjectiveParams) -> float:
+    """`max(min_delta, k_se x se)`: the smallest difference that is a difference at all.
+
+    The scale under every comparison this hypothesis makes, with no complexity clause in
+    it. The keep rule asks whether a candidate is *better* than the best by this much and
+    doubles the `k_se` term when the file grew, because added lines are added parameters
+    and an improvement bought with them must pay for them. The redundancy rule asks
+    whether a candidate's number is the *same* number as one already measured, which is
+    two-sided and has nothing to do with how the file was written, so it takes this floor
+    undoubled.
+    """
+    min_delta, k_se = _params(params)
+    return max(min_delta, k_se * se)
 
 
 def threshold(
