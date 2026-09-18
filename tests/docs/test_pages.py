@@ -17,6 +17,7 @@ import pytest
 from kanso.classify import catalogue
 from kanso.config import Config, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
+from kanso.models.wire import REQUEST_TIMEOUT_S
 from tests.cli.test_doctor import CHECKS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,6 +131,14 @@ def test_the_workspace_page_states_the_fixed_spread_a_bar_only_hypothesis_needs(
 
 def test_the_workspace_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:
     assert "it paces nothing" in prose(section(page("workspace.md"), "`portfolio.yaml`"))
+
+
+def test_the_wait_the_workspace_page_states_is_the_one_the_client_waits() -> None:
+    """The page tells an operator what their own shim's timeout has to stay under."""
+    models = prose(section(page("workspace.md"), "`models.yaml`"))
+    stated = re.search(r"waits \*\*(\w+) minutes\*\*", models)
+    assert stated is not None
+    assert spelled(stated.group(1)) * 60 == REQUEST_TIMEOUT_S
 
 
 def test_the_lane_memory_floor_the_workspace_page_states_is_the_one_the_package_clamps_to() -> None:
