@@ -57,8 +57,10 @@ not about the number beside it: those pins fix no capital, no fold count, no ret
 no cost model and no host version, and each of those moves a metric while every one of them
 stands still. So the number is stored with a digest of what it was measured under
 (`loop.Setup.measured_under`), and a row measured under another reading is matched by
-nothing. Signatures are stored for every judged run, a redundant one included, so the third
-spelling of one idea is refused against the second as well as the first. The comparison is
+nothing — and kept beside it rather than replaced by it, because a reading the selection
+cannot reach is still the only anchor a run under that reading has. Signatures are stored
+for every judged run, a redundant one included, so the third spelling of one idea is
+refused against the second as well as the first. The comparison is
 by day rather than by instant because it is a fact about sessions, and a day is what two
 runs over the same window share. A stored signature is only ever compared with one read
 the same way, so the change of reading came with the migration that emptied the table.
@@ -459,12 +461,20 @@ def record_signature(
 ) -> None:
     """Store what these bytes held under this run's pins, what they earned, and under what.
 
-    The same bytes are written once: a second judging under the same pins replaces the
-    row, book and number together, because the same bytes over the same data measured
-    twice are one fact and not two. `metric` is the objective the card was just recorded
-    with, so a stored book is never on record for a number no card carries, and `measured`
-    is what that number was measured under (`loop.Setup.measured_under`) — the pins say
-    which question was asked and this says which arithmetic answered it.
+    The same bytes under the same pins and the same reading are written once: the second
+    judging replaces the row, book and number together, because the same bytes over the
+    same data measured the same way twice are one fact and not two. Under a second reading
+    they are a second row and not a replacement — the reading is the fifth column of the
+    key (`state/migrations/0008_signature_reading_is_a_key.sql`) — because the selection
+    reads a row only under the reading it was measured with, so replacing would leave a
+    run under the first reading with no anchor at all: an operator who sets
+    `[research] folds = 3`, runs cards and sets it back to 4 would lose the four-fold
+    anchor of every strategy re-judged in between.
+
+    `metric` is the objective the card was just recorded with, so a stored book is never on
+    record for a number no card carries, and `measured` is what that number was measured
+    under (`loop.Setup.measured_under`) — the pins say which question was asked and this
+    says which arithmetic answered it.
     """
     store.connection.execute(
         "INSERT OR REPLACE INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"

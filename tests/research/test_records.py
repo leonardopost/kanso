@@ -468,6 +468,38 @@ def test_the_same_bytes_are_signed_once_under_one_set_of_pins(
     ], "the book and the number it earned are replaced together, being one measurement"
 
 
+def test_the_same_bytes_under_two_readings_are_two_anchors(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A second reading is a second row, because the first is the only anchor its runs have.
+
+    The selection reads a row under the reading it was measured with, so a write that
+    replaced the older reading would leave every run under it with nothing to be refused
+    against — an operator who sets `[research] folds = 3`, runs cards and sets it back to
+    4 would have bought that with one line of `kanso.toml` and undone nothing by undoing
+    it. So the reading is part of the key and the two rows stand together
+    (`state/migrations/0008_signature_reading_is_a_key.sql`).
+    """
+    run = loop.begin(ws, store, registered)
+    held = {"2024-01-01": [["A.X", 1, True]]}
+    sha = store.put_blob(b"a")
+    records.record_signature(store, run, sha, held, 1.0, UNDER)
+    records.record_signature(store, run, sha, held, 9.0, "three folds")
+
+    four = records.matched_book(store, run, held, 100, 1.0, 0.25, UNDER)
+    assert four is not None and (four.earned, four.agreed) == (1.0, True), (
+        "the first reading's number is where it was left"
+    )
+    three = records.matched_book(store, run, held, 100, 9.0, 0.25, "three folds")
+    assert three is not None and (three.earned, three.agreed) == (9.0, True), "and so is the other"
+    assert (
+        store.connection.execute(
+            "SELECT COUNT(*) FROM signatures WHERE strategy_sha = ?", (sha,)
+        ).fetchone()[0]
+        == 2
+    )
+
+
 def test_a_card_keeps_the_tags_its_proposer_gave_it(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:

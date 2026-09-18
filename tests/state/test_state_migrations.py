@@ -517,6 +517,60 @@ def test_a_signature_written_before_the_reading_column_reads_back_without_one(
         assert matched == 0, "a row with no reading matches no reading, which is the rule"
 
 
+def test_the_reading_becomes_part_of_the_signature_key_and_the_rows_come_across(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0007 left the reading out of the key, so two readings of one strategy collided.
+
+    `record_signature` writes with `INSERT OR REPLACE`, and the selection reads a row only
+    under the reading it was measured with, so the older reading's anchor was dropped by
+    the newer one and no run under it could find a repeat again. 0008 rebuilds the table
+    with the reading as a fifth key column: the rows come across, and the same bytes under
+    two readings are two rows where the old shape kept one.
+    """
+    older = migrations()[:7]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("f" * 64,)
+        )
+        write = (
+            "INSERT OR REPLACE INTO signatures (strategy_sha, hyp_id, hypothesis_sha,"
+            " snapshot_id, criteria_version, signature, sessions, metric, measured_under,"
+            " created_at) VALUES (?, 'old', 'h', 's', '0.9.0', '{\"2026-01-01\": []}',"
+            " 1, ?, ?, 't')"
+        )
+        conn.execute(write, ("f" * 64, 1.0, "four folds"))
+        conn.execute(write, ("f" * 64, 2.0, "three folds"))
+        assert [
+            tuple(row) for row in conn.execute("SELECT metric, measured_under FROM signatures")
+        ] == [(2.0, "three folds")], "the older reading's anchor was replaced by the newer one"
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[7:]]
+        conn = store.connection
+        assert [
+            tuple(row) for row in conn.execute("SELECT metric, measured_under FROM signatures")
+        ] == [(2.0, "three folds")], "the row that survived comes across"
+        conn.execute(write, ("f" * 64, 1.0, "four folds"))
+        assert sorted(
+            tuple(row) for row in conn.execute("SELECT measured_under, metric FROM signatures")
+        ) == [("four folds", 1.0), ("three folds", 2.0)], "and now both readings stand"
+        conn.execute(write, ("f" * 64, 1.5, "four folds"))
+        assert sorted(
+            tuple(row) for row in conn.execute("SELECT measured_under, metric FROM signatures")
+        ) == [("four folds", 1.5), ("three folds", 2.0)], (
+            "the same bytes under one reading are still one row"
+        )
+
+
 # --- a database this package cannot correctly write, in either direction ------
 
 

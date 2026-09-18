@@ -302,7 +302,10 @@ attached construct is differenced against all move a number while every pin stan
 So a stored number carries a digest of what it was measured under, and an anchor is a row
 measured the way the asking card was. Edit one of those keys and the stored numbers stop
 being anchors until the books are measured again — which is the same statement as the one
-above, that a result already known is a claim about a result.
+above, that a result already known is a claim about a result. Set the key back and the
+anchors are there again: a book judged under a second reading is stored beside the first
+and not over it, so nothing an operator can edit and undo costs the loop what it has
+already measured.
 
 The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
 Misses since the last keep set it: for the first `[research] local_cards` the proposer is

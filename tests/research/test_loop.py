@@ -382,12 +382,19 @@ def test_a_book_already_measured_whose_number_moved_is_a_discard_and_still_on_re
     assert event.detail["floor"] < 1000, "which is why the two numbers are two results"
 
 
-def _reading(store: StateStore, sha: str) -> tuple[float, str]:
-    """What the stored book for these bytes earned, and what it was measured under."""
-    row = store.connection.execute(
-        "SELECT metric, measured_under FROM signatures WHERE strategy_sha = ?", (sha,)
-    ).fetchone()
-    return float(row["metric"]), str(row["measured_under"])
+def _readings(store: StateStore, sha: str) -> list[tuple[float, str]]:
+    """What the stored books for these bytes earned, and what each was measured under.
+
+    A list because the reading is part of the key: the same bytes judged under a second
+    reading are a second row and not a replacement.
+    """
+    return [
+        (float(row["metric"]), str(row["measured_under"]))
+        for row in store.connection.execute(
+            "SELECT metric, measured_under FROM signatures WHERE strategy_sha = ? ORDER BY rowid",
+            (sha,),
+        )
+    ]
 
 
 def test_a_stored_number_is_measured_under_a_reading_the_four_pins_do_not_carry(
@@ -399,12 +406,14 @@ def test_a_stored_number_is_measured_under_a_reading_the_four_pins_do_not_carry(
     a `kanso.toml` key, so it moves no hypothesis sha, no snapshot id, and no criteria
     version, which is this package's version and a digest of `criteria/library/*.yaml`.
     The same bytes over the same data measured over three folds instead of four earn a
-    different number, so the reading is stored beside the number and it moves with it.
+    different number, so the reading is stored beside the number and it moves with it —
+    beside the first reading's row and not over it, which is what leaves the four-fold
+    anchor standing for the day the operator sets `folds` back.
     """
     run = loop.begin(ws, store, registered)
     edit(ws, run, REVERTING)
     kept = loop.card(ws, store, registered, "the trough rule")
-    before = _reading(store, kept.strategy_sha)
+    before = _readings(store, kept.strategy_sha)
     loop.end(ws, store, registered)
 
     other = tuned(ws, folds=3)
@@ -415,9 +424,11 @@ def test_a_stored_number_is_measured_under_a_reading_the_four_pins_do_not_carry(
         run.snapshot_id,
         run.criteria_version,
     ), "every pin the anchor is selected by stands still"
-    after = _reading(store, kept.strategy_sha)
-    assert after[0] != before[0], "and the same bytes over the same data earn another number"
-    assert after[1] != before[1], "which is why the reading is stored, and why it moved"
+    after = _readings(store, kept.strategy_sha)
+    assert len(before) == 1 and len(after) == 2, "a second reading is a second row"
+    assert after[0] == before[0], "the four-fold anchor is where the four-fold run left it"
+    assert after[1][0] != before[0][0], "and the same bytes over the same data earn another number"
+    assert after[1][1] != before[0][1], "which is why the reading is stored, and why it moved"
 
 
 def test_the_settings_the_digest_leaves_out_move_no_number(
@@ -436,13 +447,13 @@ def test_the_settings_the_digest_leaves_out_move_no_number(
     run = loop.begin(ws, store, registered)
     edit(ws, run, REVERTING)
     kept = loop.card(ws, store, registered, "the trough rule")
-    before = _reading(store, kept.strategy_sha)
+    before = _readings(store, kept.strategy_sha)
     loop.end(ws, store, registered)
 
     other = tuned(ws, annualisation=252, account='"cash"', currency='"EUR"')
     loop.begin(other, store, registered)
 
-    assert _reading(store, kept.strategy_sha) == before
+    assert _readings(store, kept.strategy_sha) == before
 
 
 def test_the_keep_rule_is_asked_before_the_signature(
