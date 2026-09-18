@@ -70,6 +70,20 @@ def test_detect_reads_the_env_overrides(tmp_path: Path) -> None:
     assert env.plan == plan_for(env.detected, reserved_cores=0, reserved_mem_gb=0, cores_per_lane=1)
 
 
+def test_detect_reads_a_declared_memory_per_lane_over_the_recorded_baselines(
+    tmp_path: Path,
+) -> None:
+    """The recorded peak belongs to whatever hypothesis was heaviest; the declaration
+    belongs to the one researching now, and detection prefers it."""
+    _write_runs(tmp_path / "state.db", [4.3])
+    ws = FakeWorkspace(root=tmp_path, config=FakeConfig(env=FakeEnv(mem_per_lane_gb=2.0)))
+
+    env = detect(ws)
+
+    assert env.plan.mem_per_lane_gb == 2.0
+    assert env.plan == plan_for(env.detected, mem_per_lane_gb=2.0, baseline_peak_mem_gb=4.3)
+
+
 def test_detect_reads_the_live_stage_and_the_recorded_baselines(tmp_path: Path) -> None:
     (tmp_path / "portfolio.yaml").write_text(PORTFOLIO_LIVE)
     _write_runs(tmp_path / "state.db", [1.0, 4.0, 2.0])

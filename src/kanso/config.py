@@ -81,6 +81,7 @@ class EnvConfig(BaseModel):
     reserved_cores: int | None = Field(default=None, ge=0)
     reserved_mem_gb: float | None = Field(default=None, ge=0)
     cores_per_lane: int | None = Field(default=None, gt=0)
+    mem_per_lane_gb: float | None = Field(default=None, gt=0)
 
 
 class MonitorConfig(BaseModel):

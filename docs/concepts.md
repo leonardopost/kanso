@@ -138,9 +138,13 @@ plan into `envelope.yaml`: two cores and 4 GB per lane, less a reservation of on
 formula says, so a host too small to satisfy it still researches, one card at a time. The
 memory figure per lane starts at that 4 GB floor and is recalibrated to 1.5× the largest
 baseline card actually recorded, so the plan tightens once the machine has seen real work.
-`[env]` in `kanso.toml` overrides the reservations and the cores per lane; an override is
-clamped to what the formula can use, so an implausible number yields a small plan rather
-than a crash.
+`[env]` in `kanso.toml` overrides the reservations, the cores per lane and that memory
+figure; an override is clamped to what the formula can use, so an implausible number yields
+a small plan rather than a crash. `mem_per_lane_gb` replaces the derived figure outright,
+because the calibration reads the heaviest run the workspace ever recorded and that may be a
+heavier hypothesis than the one now researching — an overlay on one-second bars leaves a
+peak a daily sleeve will never approach, and every lane is charged for it until you say
+otherwise.
 
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked

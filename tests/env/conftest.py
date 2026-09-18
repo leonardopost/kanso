@@ -70,6 +70,7 @@ class FakeEnv:
     reserved_cores: int | None = None
     reserved_mem_gb: float | None = None
     cores_per_lane: int | None = None
+    mem_per_lane_gb: float | None = None
 
 
 @dataclass(frozen=True)

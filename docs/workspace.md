@@ -967,7 +967,16 @@ exactly until the next detection.
 It is honest about what it is: a hand-edited `lanes: 9` **is** believed, and
 `kanso research status` will show nine lanes. The file is a measurement, not a claim to be
 validated, which is why the durable override lives somewhere else: `[env] reserved_cores`,
-`reserved_mem_gb` and `cores_per_lane` in `kanso.toml` are read on every detection.
+`reserved_mem_gb`, `cores_per_lane` and `mem_per_lane_gb` in `kanso.toml` are read on every
+detection.
+
+`mem_per_lane_gb` **replaces** the derived memory per lane rather than raising its floor.
+The derivation charges every lane 1.5× the largest baseline peak any run in the workspace
+ever recorded, which is the right figure only while every hypothesis is as heavy as the
+heaviest: a one-second overlay that once peaked at 4.3 GB charges every lane 6.45 GB, and a
+16 GB machine then plans a single lane while the daily hypothesis actually researching peaks
+at 0.25 GB. Declare what a lane costs now and the plan uses it; it is clamped to 0.5 GB, so
+a typo yields a small plan rather than a division by nothing.
 
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another

@@ -13,15 +13,24 @@ The plan is derived, not measured:
     lanes            max(1, min((cores_total - reserved_cores) // cores_per_lane,
                                 (mem_gb - reserved_mem_gb) // mem_per_lane_gb))
 
-`[env] reserved_cores`, `reserved_mem_gb` and `cores_per_lane` in `kanso.toml` override
-the first three. The floor of one lane means a host too small for the formula still
-researches, one card at a time. `mem_per_lane_gb` is rounded to two decimals before
-`lanes` is computed, so the numbers written to the file reproduce the lane count.
+`[env] reserved_cores`, `reserved_mem_gb`, `cores_per_lane` and `mem_per_lane_gb` in
+`kanso.toml` override all four. The floor of one lane means a host too small for the
+formula still researches, one card at a time. `mem_per_lane_gb` is rounded to two
+decimals before `lanes` is computed, so the numbers written to the file reproduce the
+lane count.
 
 Before the first baseline card there is nothing to calibrate against and
 `mem_per_lane_gb` is its 4 GB floor; re-detecting after a baseline may change `lanes`.
 The baseline peaks are read out of `state.db` with a read-only connection: detection
 observes state and never writes it.
+
+The calibration reads the largest peak over every run the workspace ever recorded, which
+is the right figure only while every hypothesis is as heavy as the heaviest. Measured in
+a live workspace: one one-second overlay hypothesis peaked at 4.3 GB, so every lane was
+charged 6.45 GB and a 16 GB machine planned a single lane, while the daily hypothesis
+actually researching peaked at 0.25 GB. `[env] mem_per_lane_gb` is the operator's answer
+to that — it replaces the derived figure outright rather than raising its floor, so a
+declaration can be smaller than the recorded peak as well as larger.
 """
 
 from __future__ import annotations
@@ -52,6 +61,14 @@ REMEDY = "re-run `kanso env detect`"
 
 CORES_PER_LANE = 2
 MIN_MEM_PER_LANE_GB = 4.0
+MIN_DECLARED_MEM_PER_LANE_GB = 0.5
+"""The smallest `[env] mem_per_lane_gb` a declaration is read as, and never zero.
+
+A lane is a Python process with the engine loaded and a run's points in it; the smallest
+baseline peak measured in a live workspace is 0.25 GB, for a daily sleeve on one name.
+Half a gigabyte is twice that, so a declaration below it is a typo rather than a
+measurement, and a zero or a negative one would divide the machine's memory by nothing.
+"""
 BASELINE_HEADROOM = 1.5
 RESERVED_COLOCATED = (2, 8.0)
 RESERVED_ALONE = (1, 4.0)
@@ -64,13 +81,20 @@ def plan_for(
     reserved_cores: int | None = None,
     reserved_mem_gb: float | None = None,
     cores_per_lane: int | None = None,
+    mem_per_lane_gb: float | None = None,
     baseline_peak_mem_gb: float | None = None,
 ) -> Plan:
     """Derive the lane plan. Pure: the same inputs always give the same plan.
 
     A `None` override takes the default for its field. Overrides are clamped to what
-    the formula can use — a reservation is never negative and a lane always gets at
-    least one core — so an implausible `kanso.toml` yields a small plan, never a crash.
+    the formula can use — a reservation is never negative, a lane always gets at least
+    one core and at least `MIN_DECLARED_MEM_PER_LANE_GB` of memory — so an implausible
+    `kanso.toml` yields a small plan, never a crash.
+
+    `mem_per_lane_gb` replaces the derived memory figure rather than joining its
+    maxima: the derivation charges every lane the largest baseline peak the workspace
+    ever recorded, and an operator whose heaviest hypothesis is not the one researching
+    is declaring what a lane costs now, which may be well under that peak.
     """
     default_cores, default_mem = RESERVED_COLOCATED if live_colocated else RESERVED_ALONE
     cores = max(0, default_cores if reserved_cores is None else reserved_cores)
@@ -79,6 +103,8 @@ def plan_for(
     per_lane_mem = MIN_MEM_PER_LANE_GB
     if baseline_peak_mem_gb is not None:
         per_lane_mem = max(per_lane_mem, BASELINE_HEADROOM * baseline_peak_mem_gb)
+    if mem_per_lane_gb is not None:
+        per_lane_mem = max(MIN_DECLARED_MEM_PER_LANE_GB, mem_per_lane_gb)
     per_lane_mem = round(per_lane_mem, 2)
     by_cores = (detected.cores_total - cores) // per_lane_cores
     by_memory = math.floor((detected.mem_gb - memory) / per_lane_mem)
@@ -117,7 +143,7 @@ def detect(ws: Workspace | None = None) -> Envelope:
         nautilus_version=engine_version(),
         nautilus_wheel_ok=compatible,
     )
-    reserved_cores, reserved_mem_gb, cores_per_lane = overrides(ws)
+    reserved_cores, reserved_mem_gb, cores_per_lane, mem_per_lane_gb = overrides(ws)
     return Envelope(
         detected=detected,
         plan=plan_for(
@@ -126,6 +152,7 @@ def detect(ws: Workspace | None = None) -> Envelope:
             reserved_cores=reserved_cores,
             reserved_mem_gb=reserved_mem_gb,
             cores_per_lane=cores_per_lane,
+            mem_per_lane_gb=mem_per_lane_gb,
             baseline_peak_mem_gb=max_baseline_peak_mem_gb(_path(ws, "state.db")),
         ),
         detected_at=_now(),
@@ -208,7 +235,9 @@ def max_baseline_peak_mem_gb(db: Path | None) -> float | None:
     return peak if peak is not None and peak > 0 else None
 
 
-def overrides(ws: Workspace | None) -> tuple[int | None, float | None, int | None]:
+def overrides(
+    ws: Workspace | None,
+) -> tuple[int | None, float | None, int | None, float | None]:
     """The `[env]` overrides, if the workspace configuration carries any.
 
     Read by name rather than by field access, so a configuration without an `[env]`
@@ -219,6 +248,7 @@ def overrides(ws: Workspace | None) -> tuple[int | None, float | None, int | Non
         _as_int(getattr(section, "reserved_cores", None)),
         _as_number(getattr(section, "reserved_mem_gb", None)),
         _as_int(getattr(section, "cores_per_lane", None)),
+        _as_number(getattr(section, "mem_per_lane_gb", None)),
     )
 
 
