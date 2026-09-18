@@ -34,16 +34,21 @@ bytes are a blob; a keep that moves the hypothesis's best rewrites
 restores the lane copy from the best blob, or from the run's base before the first keep.
 `results.tsv` is rendered from the records afterwards, so no restore can lose history.
 
-**A result already known is not a trial.** After the keep rule has had its say, a card
+**A result already known is still a result.** After the keep rule has had its say, a card
 that did not keep is compared by what it held — its signature, `research/records.py` —
 against every strategy judged under the run's pins, and one that held the same book on
-`[research] redundant_pct` percent of their shared sessions is refused as *redundant*:
-no card, no trial, the lane restored, a `redundant` event, and `RedundantError` for the
-caller. The keep rule runs first so that a candidate which beats the best is a keep
-whatever it resembles, and the baseline is never redundant, since it is the best blob
-of the last run and its own signature is already stored. The trial count is the size
-of the search that found the result, and a spelling that repeats a bet already measured
-did not widen the search.
+`[research] redundant_pct` percent of their shared sessions is *redundant*: the card is
+recorded with that status and the metric it measured, the lane copy is restored as every
+non-keep restores it, a `redundant` event names the card it repeats, and `RedundantError`
+reaches the caller. It is a card because the backtest ran: the engine time was spent, a
+real number came back, and the selection ranked that number and declined it. Refusing it
+without a record cost three things, all measured in a live workspace — the trial, so
+certificates deflated a Sharpe by a search fifty times narrower than the one that was run;
+the coverage entry, so a corner walked a thousand times read as unwalked to the proposer;
+and the idea itself, which the runs after this one could no longer see. What a redundant
+card may never be is a keep: the keep rule runs first, so a candidate that beats the best
+is a keep whatever it resembles, and the baseline is never redundant, since it is the best
+blob of the last run and its own signature is already stored.
 
 **A benchmark is run once per run.** A hypothesis whose objective is measured against a
 hold of its first leg has that hold produced by the runner — the card's own request with
@@ -143,12 +148,17 @@ rather than a refusal anyone reads."""
 CARDED: Final = "card"
 ENDED: Final = "run_ended"
 REDUNDANT: Final = "redundant"
-"""The event a redundant miss appends under the hypothesis id: the candidate held the
-same book as a strategy already judged under the pins, and was refused without a card."""
+"""The event a redundant card appends under the hypothesis id, and the status it carries:
+the candidate held the same book as a strategy already judged under the pins. The event is
+what names the card it repeats, which no column of `cards` holds."""
 
 
 class RedundantError(PreconditionError):
-    """The candidate's result is already known: it held what a judged strategy held."""
+    """The candidate's result is already known: it held what a judged strategy held.
+
+    Raised after the card is recorded, not instead of recording it. The card is the
+    measurement; this is the answer to whoever asked for another experiment and got none.
+    """
 
 
 BASELINE_FAILED: Final = "baseline_failed"
@@ -687,6 +697,9 @@ def _judge(
     """Steps 3 to 5: the constraints, the keep rule, the redundancy check and the record.
 
     `baseline` exempts the run's first card from the redundancy check and nothing else.
+    The signature is taken and the card is written whatever the check says: a candidate
+    that ran is a card, and the check decides which status it carries and whether the
+    caller is refused, never whether there is a record.
     """
     n_trials = records.n_trials(store, run.hyp_id) + 1
     if result.refused is not None:
@@ -744,13 +757,13 @@ def _judge(
     passed = integrity.passed and all(gate.passed for gate in constraints)
     kept = passed and _keeps(setup, store, run, source, metric, se)
     held = records.signature(result.run)
-    if not kept and not baseline:
-        like = records.redundant_with(store, run, held, ws.config.research.redundant_pct)
-        if like is not None:
-            records.record_signature(store, run, strategy_sha, held)
-            _refuse_redundant(store, run, strategy_sha, desc, metric, like, directory=directory)
+    like = (
+        None
+        if kept or baseline
+        else records.redundant_with(store, run, held, ws.config.research.redundant_pct)
+    )
     records.record_signature(store, run, strategy_sha, held)
-    return _record(
+    made = _record(
         ws,
         store,
         setup,
@@ -758,7 +771,7 @@ def _judge(
         strategy_sha=strategy_sha,
         source=source,
         desc=desc,
-        status="keep" if kept else "discard",
+        status="keep" if kept else "discard" if like is None else REDUNDANT,
         metric=metric,
         se=se,
         n_trades=len(result.run.trades),
@@ -770,6 +783,9 @@ def _judge(
         directory=directory,
         tags=tags,
     )
+    if like is not None:
+        _refuse_redundant(store, run, made.strategy_sha, desc, metric, like)
+    return made
 
 
 def _refuse_redundant(
@@ -779,16 +795,15 @@ def _refuse_redundant(
     desc: str,
     metric: float,
     like: records.Redundancy,
-    *,
-    directory: Path,
 ) -> NoReturn:
-    """Restore the lane copy, record the miss as an event, and refuse the card.
+    """Name the card this one repeats in an event, and refuse the caller another experiment.
 
-    The metric the redundant run measured travels on the event and nowhere else: it is
-    the number a card would have carried, and the reason there is no card is that the
-    same number was already on one.
+    The card is already written and the lane is already restored, both by `_record`, so
+    what is left here is the one fact a card has no column for: which stored signature it
+    matched, on how many of their shared sessions, and the metric it measured while doing
+    it. The refusal is what stops a redundant result being taken for a new one — the
+    driver counts it toward the stall, and an operator gets a non-zero exit.
     """
-    lanes.restore(store, directory, {STRATEGY_FILE: run.best_sha or run.base_sha})
     store.event(
         REDUNDANT,
         run.hyp_id,
@@ -807,7 +822,8 @@ def _refuse_redundant(
     raise RedundantError(
         f"{strategy_sha[:7]} held the same book as {like.like[:7]} on {like.matched} of "
         f"{like.shared} sessions ({like.pct:.0f}%), so its result is already known and it "
-        "is not an experiment; the lane copy has been restored",
+        "is not an experiment; it is recorded as a redundant card and the lane copy has "
+        "been restored",
         remedy=(
             "change what the strategy holds and when, not how it is written; "
             f"`kanso research show {run.hyp_id} --sha {like.like[:7]}` prints the card it repeats"

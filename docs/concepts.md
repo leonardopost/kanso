@@ -190,13 +190,14 @@ run could use.
 ## Card
 
 One experiment: store the lane's `strategy.py` as a blob under its sha256, run the backtest,
-evaluate, record. Three outcomes, and each does something different to the lane.
+evaluate, record. Four outcomes, and each does something different to the lane.
 
 | status | what it means | what happens to the lane |
 |---|---|---|
 | `keep` | every constraint passed and the keep rule cleared | this becomes the run's `best`, and the hypothesis's when it beats that or the run already holds it; only then is the blob written to `hypotheses/<id>/strategy.py` |
 | `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base |
 | `crash` | the backtest raised, or exceeded its time or memory budget | the same restore, with the traceback tail recorded |
+| `redundant` | it did not keep, and it held the same book as a strategy already judged under the run's pins | the same restore; the card carries the metric it measured, the `redundant` event names the card it repeats, and the command that asked for it is refused |
 
 `results.tsv` is rendered from state rather than appended to, so the history survives every
 restore. Three proposals into the demo:
@@ -240,13 +241,17 @@ every shared session made the same bets and earned the same number, however diff
 they were written — a threshold moved, a helper renamed, a condition spelt the other way — so
 the second is not an experiment. One that matches a strategy already judged under the
 run's pins on at least `[research] redundant_pct` percent of their shared sessions is
-**redundant**: no card, no trial, the lane restored, a `redundant` event carrying the
-metric it measured and the card it repeats, and the proposer shown that card by name on
-its next turn. The keep rule is asked first, so a candidate that beats the best is a keep
-whatever it resembles; the baseline is exempt, since it is the last run's best and its
-signature is already stored; and signatures are stored for every judged run, redundant
-misses included, so the third spelling of an idea is refused against the second as well as
-the first. Signatures live under the pins — the hypothesis file, the snapshot, the
+**redundant**: a card of that status carrying the metric it measured, the lane restored
+as any non-keep restores it, a `redundant` event carrying the card it repeats, the command
+that asked for it refused, and the proposer shown that card by name on its next turn. It
+is a card because the backtest ran and a real number came back — the trial it counts as,
+the corner it fills in on the coverage table and the record the next run reads are all
+things the search actually did, and dropping them was measured deflating a certificate by
+a search fifty times narrower than the one that ran. What it may never be is a keep: the
+keep rule is asked first, so a candidate that beats the best is a keep whatever it
+resembles. The baseline is exempt, since it is the last run's best and its signature is
+already stored; and signatures are stored for every judged run, redundant ones included,
+so the third spelling of an idea is refused against the second as well as the first. Signatures live under the pins — the hypothesis file, the snapshot, the
 criteria — and a run under new pins starts with none.
 
 The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
@@ -304,8 +309,13 @@ that found the result, and no card may be dropped from a number that is part of 
 One certification gate deflates the result by that search, and it counts a narrower set: a
 **trial** is a card that ran to a result and traded. A crash produced no metric to compare
 and a card that placed no order did not trade the hypothesis, so neither is a candidate the
-selection could have kept. The gate's count and the spread it deflates by are the same set —
-it reports it as `trials`, which is at or below the certificate's `n_trials`.
+selection could have kept. A redundant card is one — it ran, it traded, and the keep rule
+was asked before the signature, so it would have been kept had it beaten the best. That
+another candidate held the same book makes it a correlated trial rather than no trial, and
+how much less than one a correlated trial is worth is open on the same terms as the
+hill-climbing path it sits on (`docs/backlog.md` row 59). The gate's count and the spread
+it deflates by are the same set — it reports it as `trials`, which is at or below the
+certificate's `n_trials`.
 
 ## What a card must satisfy
 

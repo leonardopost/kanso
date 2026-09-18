@@ -16,7 +16,11 @@ included — because it numbers the cards and stamps the certificate, and no car
 dropped from a count that is part of a filename. `trial_metrics` is the narrower set the
 deflated Sharpe consumes: the cards that ran to a result and traded. A crash and a card
 that placed no order are edits that failed, not candidates the selection could have
-chosen, so counting them widens the search on paper without widening it in fact.
+chosen, so counting them widens the search on paper without widening it in fact. A
+redundant card is in both, because it is the other way round — it ran, it traded, and the
+selection ranked its number and declined it. That another candidate held the same book
+makes it a correlated trial, not a non-trial, and dropping it was measured costing a
+certificate a factor of fifty in the count it deflates by (`docs/backlog.md` row 59).
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
@@ -297,6 +301,15 @@ def trial_metrics(store: StateStore, hyp_id: str) -> list[float]:
     so its count and its spread describe the same search. A crash produced no metric to
     compare and a card that placed no order did not trade the hypothesis, and neither is
     excluded from `n_trials`, which counts cards.
+
+    A redundant card is one of these. The keep rule is asked before the signature, so a
+    candidate that beat the best would have been kept whatever it resembled: it is a
+    candidate the selection could have chosen, and it is here because the deflation prices
+    the candidates the search ran, not the ones a reader would call distinct. Whether
+    trials that repeat each other should count for less than a whole one is the same
+    question the hill-climbing path raises and is open on the same terms
+    (`docs/backlog.md` row 59) -- an answer would be one stated rule with its own test,
+    never a set quietly narrowed until a bar is passed.
     """
     rows = store.connection.execute(
         "SELECT metric FROM cards WHERE hyp_id = ? AND status != 'crash' AND n_trades > 0"

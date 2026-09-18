@@ -128,8 +128,9 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
     assert (outcome.missed, outcome.redundant) == (0, 18)
     assert outcome.reason == "cards"
     assert outcome.ended is False
-    # Every card of the run, the baseline included, is a trial; a redundant miss is not.
-    assert records.n_trials(store, prepared_hyp) == 13
+    # Every proposal that ran is a card and a trial, the baseline and the eighteen
+    # redundant results included: thirty proposals and one baseline.
+    assert records.n_trials(store, prepared_hyp) == 31
     assert statuses(store, prepared_hyp)[:4] == ["keep", "keep", "crash", "discard"]
     # align_every is 10 and the baseline is the run's first card, so the check lands on
     # the ninth card proposed; misses are not cards and do not advance it.
@@ -263,24 +264,29 @@ def test_a_miss_counts_against_the_cards_asked_for_and_survives_a_resume(
     assert driver._trailing_non_keeps(store, active) == 2, "the discard and the miss"
 
 
-def test_a_redundant_card_is_a_miss_that_the_next_proposal_is_told_about(
+def test_a_redundant_card_is_recorded_and_the_next_proposal_is_told_what_it_repeated(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
-    """A candidate that held what a judged strategy held costs the backtest and no
-    trial; it counts toward the stall, survives a resume, and reaches the proposer by
-    the name of the card it repeated, since no card of its own will."""
+    """A candidate that held what a judged strategy held costs the backtest and is worth
+    what the backtest measured: a card of its own, a trial, and a coverage entry. It
+    still counts toward the stall exactly once, survives a resume, and reaches the next
+    proposal by the name of the card it repeated, which no card carries."""
     scripted(ws, propose=[proposal("revert"), proposal("revert", desc="the same bet again")])
 
     outcome = driver.run(ws, store, prepared_hyp, cards=2)
 
     assert (outcome.proposed, outcome.keeps, outcome.redundant, outcome.missed) == (2, 1, 1, 0)
-    assert statuses(store, prepared_hyp) == ["keep", "keep"]
+    assert statuses(store, prepared_hyp) == ["keep", "keep", "redundant"]
     (event,) = store.events(kind=research_loop.REDUNDANT, subject=prepared_hyp)
     kept = records.cards_of(store, prepared_hyp)[1]
+    repeat = records.cards_of(store, prepared_hyp)[2]
+    assert (repeat.desc, repeat.metric) == ("the same bet again", kept.metric)
+    assert records.trial_metrics(store, prepared_hyp) == [kept.metric, repeat.metric]
+    assert driver.coverage(store, records.require_active(store, prepared_hyp)), "a corner walked"
     assert event.detail["like"] == kept.sha7
     assert event.detail["desc"] == "the same bet again"
     active = records.require_active(store, prepared_hyp)
-    assert driver._trailing_non_keeps(store, active) == 1, "the miss, after the keep"
+    assert driver._trailing_non_keeps(store, active) == 1, "the card, counted once"
     assert align.lane_strategy(store, active, ws.root / active.dir) == store.get_blob(
         kept.strategy_sha
     )
@@ -389,6 +395,26 @@ def test_recent_cards_reach_across_runs_under_the_same_pins(
     first = recorded.of("propose")[-1]
     assert "run in boom mode" in first.user
     assert first.user.count('"status": "crash"') == 2
+
+
+def test_a_redundant_result_from_an_earlier_run_reaches_the_next_one(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Measured on one live hypothesis, 560 of 991 redundant refusals repeated an idea
+    from an earlier run against 18 within their own. Scoped to the run, the window a
+    proposer is shown was emptied by every reseed; scoped to the pins, it is not."""
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("revert"), proposal("revert", desc="the trough again")])
+    stalled = driver.run(workspace, store, prepared_hyp)
+    assert stalled.ended and stalled.redundant
+    reset_mock()
+    scripted(workspace, propose=[proposal("weak")])
+
+    driver.run(workspace, store, prepared_hyp, cards=1)
+
+    first = recorded.of("propose")[-1]
+    assert '"redundant"' in first.user
+    assert "the trough again" in first.user, "the earlier run's refusal, under the same pins"
 
 
 def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(

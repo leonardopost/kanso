@@ -306,6 +306,78 @@ def test_signatures_written_under_the_old_reading_are_emptied_by_the_migration(
         assert store.connection.execute("SELECT COUNT(*) FROM signatures").fetchone()[0] == 0
 
 
+def test_the_cards_table_is_rebuilt_to_admit_a_redundant_card_and_keeps_its_rows(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`status` carries a CHECK, which ALTER TABLE cannot widen, so 0005 rebuilds the
+    table. The rows, the autoincrement and the indexes come across; the old shape refuses
+    a redundant card and the new one takes it."""
+    from kanso.schemas import resolve_venue_model
+
+    venue = json.dumps(resolve_venue_model("XNAS", max_leverage=1.0).model_dump(mode="json"))
+    older = migrations()[:4]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("c" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO runs (run_id, hyp_id, tag, lane, dir, base_sha, hypothesis_sha,"
+            " program_sha, snapshot_id, criteria_version, card_budget_s, baseline_wall_s,"
+            " baseline_peak_mem_gb, started_at) VALUES ('r', 'old', '20260101-1', 'op', 'd',"
+            " ?, ?, ?, 's', '0.8.1', 60, 1, 1, '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, "c" * 64, "c" * 64),
+        )
+        conn.execute(
+            "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+            " n_trials, n_trades, wall_s, venue_model, tags, created_at) VALUES ('r', 'old', 1,"
+            " 'op', ?, 'keep', 1.0, 1, 3, 1.0, ?, '[\"exit_stop\"]',"
+            " '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, venue),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+                " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 2,"
+                " 'op', ?, 'redundant', 1.0, 2, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+                ("c" * 64, venue),
+            )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[4:]]
+        conn = store.connection
+        (kept,) = conn.execute("SELECT card_id, status, tags FROM cards").fetchall()
+        assert (kept["card_id"], kept["status"], kept["tags"]) == (1, "keep", '["exit_stop"]')
+        conn.execute(
+            "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+            " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 2, 'op',"
+            " ?, 'redundant', 1.0, 2, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, venue),
+        )
+        assert conn.execute("SELECT MAX(card_id) FROM cards").fetchone()[0] == 2
+        assert sorted(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'cards'"
+                " AND name NOT LIKE 'sqlite_%'"
+            )
+        ) == ["cards_hyp", "cards_run", "cards_strategy_sha"]
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+                " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 3,"
+                " 'op', ?, 'promising', 1.0, 3, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+                ("c" * 64, venue),
+            )
+
+
 # --- a database this package cannot correctly write, in either direction ------
 
 

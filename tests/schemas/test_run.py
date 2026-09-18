@@ -104,6 +104,16 @@ def test_a_crashed_card_measures_nothing() -> None:
     assert crashed.crash_tail == "boom"
 
 
+def test_a_redundant_card_reports_what_it_measured() -> None:
+    """It ran: nothing about repeating another card's book zeroes its own number, and the
+    status is the only thing that says the result was already known."""
+    repeat = Card.model_validate({**CARD, "status": "redundant", "metric": 1.25})
+    assert (repeat.status, repeat.metric) == ("redundant", 1.25)
+    assert repeat.row().split("\t")[-2] == "redundant"
+    with pytest.raises(ValidationError, match="crash_tail"):
+        Card.model_validate({**CARD, "status": "redundant", "crash_tail": "boom"})
+
+
 def test_only_a_crash_carries_a_traceback() -> None:
     with pytest.raises(ValidationError, match="crash_tail"):
         Card.model_validate({**CARD, "crash_tail": "boom"})

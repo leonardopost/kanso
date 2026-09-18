@@ -713,7 +713,9 @@ class _DeflatedSharpe:
     and their spread is the distribution it was taken from, so both must describe the
     same set or the bar is measured against a search that never happened. That set is
     `trial_metrics`, which excludes a crash and a card that placed no order — those are
-    edits that failed rather than candidates the selection could have chosen. The length,
+    edits that failed rather than candidates the selection could have chosen — and includes
+    one refused as redundant, which is a candidate the selection ranked and declined. The
+    length,
     skewness and kurtosis of the research return series supply the sampling distribution.
     Both the estimate and the spread are taken back out of annualised units first, so the
     deflation is done in the units the return series was actually sampled in.

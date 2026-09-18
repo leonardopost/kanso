@@ -22,9 +22,12 @@ was asked three times and reached for a change already tried at least once, whic
 discard says too, so it counts toward the stall exactly as a discard does and is recorded
 as an event rather than a card. A ladder that runs out without ever proposing a repeat —
 answers that do not apply, or do not parse — is still a failure of the step. A candidate
-that ran and held the same book as a strategy already judged under the pins is a miss of
-the same kind, refused by the loop after the backtest rather than before it: recorded as a
-`redundant` event, counted toward the stall, and shown to the next proposal by name.
+that ran and held the same book as a strategy already judged under the pins is refused by
+the loop after the backtest rather than before it, and is not the same kind of thing: it
+cost the engine time and produced a real number, so it is a card with a status of its own,
+it counts as a trial and it enters the coverage. What it costs is the turn — it counts
+toward the stall like a discard — and the `redundant` event carries the one fact the card
+cannot, which is the card it repeated.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
@@ -111,9 +114,15 @@ GATE_LINES: Final = 10
 DRIFT_LINES: Final = 3
 """How many of a run's rewinds are fed back into the next proposal, newest first."""
 
-REDUNDANT_LINES: Final = 3
-"""How many of a run's redundant misses are fed back into the next proposal, newest
-first: a miss that leaves no card is otherwise invisible to the proposer that made it."""
+REDUNDANT_LINES: Final = 10
+"""How many redundant results are fed back into the next proposal, newest first.
+
+Read across the pins rather than within the run, like `_recent` and unlike `_rewound_for`:
+a rewind is a fact about one run's file, but a book already held is a fact about the
+hypothesis, and every reseed used to wipe the record of it. Measured on one live
+hypothesis, 560 of 991 refusals repeated an idea from an *earlier* run against 18 within
+their own — thirty-one to one — so a window of three that only ever looked inside the run
+showed the proposer almost none of what it had already spent a backtest learning."""
 
 CARDS: Final = "cards"
 STALLED: Final = "stalled"
@@ -539,15 +548,28 @@ def _rewound_for(store: StateStore, active: RunRecord) -> list[str]:
 
 
 def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object]]:
-    """This run's newest redundant misses: what was tried, and which card it repeated.
+    """The newest redundant results under this run's pins: what was tried, and what it repeated.
 
-    A redundant candidate leaves no card, so without this it reaches the proposer as
-    nothing at all, and a proposer told nothing writes the same bet a third way.
+    The card says a candidate was redundant; only the event says which stored signature it
+    matched and on how much of it, and that is the half the proposer can act on. Joined to
+    `runs` so the window is the pins rather than the run, for the reason `REDUNDANT_LINES`
+    gives: the same bet spelled a third way is refused against the first run's spelling as
+    much as against this run's, and a proposer shown neither writes it a fourth time.
     """
     rows = store.connection.execute(
-        "SELECT detail FROM events WHERE kind = ? AND subject = ?"
-        " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC LIMIT ?",
-        (research_loop.REDUNDANT, active.hyp_id, active.run_id, REDUNDANT_LINES),
+        "SELECT events.detail FROM events JOIN runs"
+        " ON runs.run_id = json_extract(events.detail, '$.run_id')"
+        " WHERE events.kind = ? AND events.subject = ? AND runs.hypothesis_sha = ?"
+        " AND runs.snapshot_id = ? AND runs.criteria_version = ?"
+        " ORDER BY events.event_id DESC LIMIT ?",
+        (
+            research_loop.REDUNDANT,
+            active.hyp_id,
+            active.hypothesis_sha,
+            active.snapshot_id,
+            active.criteria_version,
+            REDUNDANT_LINES,
+        ),
     ).fetchall()
     found: list[dict[str, object]] = []
     for row in rows:
@@ -626,17 +648,22 @@ def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.R
 
 def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:
     """How many cards and misses this run has recorded since its last keep, so a resume
-    continues the count rather than starting it over."""
+    continues the count rather than starting it over.
+
+    A redundant result is counted once, by its card. Only a `repeated` miss is counted
+    from the event log, because that one leaves no card at all; counting the `redundant`
+    event as well would advance the stall twice for one turn.
+    """
     cards = store.connection.execute(
         "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
         " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status = 'keep'), 0)",
         (active.run_id, active.run_id),
     ).fetchone()
     misses = store.connection.execute(
-        "SELECT COUNT(*) FROM events WHERE kind IN (?, ?) AND subject = ?"
+        "SELECT COUNT(*) FROM events WHERE kind = ? AND subject = ?"
         " AND json_extract(detail, '$.run_id') = ? AND ts > COALESCE("
         " (SELECT MAX(created_at) FROM cards WHERE run_id = ? AND status = 'keep'), '')",
-        (REPEATED, research_loop.REDUNDANT, active.hyp_id, active.run_id, active.run_id),
+        (REPEATED, active.hyp_id, active.run_id, active.run_id),
     ).fetchone()
     return int(cards[0]) + int(misses[0])
 

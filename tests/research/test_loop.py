@@ -290,7 +290,12 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     assert kept.sha7 in refused.value.message
     assert f"--sha {kept.sha7}" in str(refused.value.remedy)
     assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
-    assert records.n_trials(store, registered) == 2, "a known result is not a trial"
+    # The backtest ran and the number came back, so the card is written and counted; what
+    # the refusal denies is that it was a new experiment, not that it was measured.
+    again = records.cards_of(store, registered)[-1]
+    assert (again.status, again.metric) == ("redundant", kept.metric)
+    assert records.n_trials(store, registered) == 3
+    assert records.trial_metrics(store, registered) == [kept.metric, again.metric]
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert event.detail["like"] == kept.sha7
     assert event.detail["pct"] == 100.0
@@ -312,7 +317,8 @@ def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restor
         loop.card(ws, store, registered, "the same rule, spelt otherwise")
 
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == REVERTING
-    assert statuses(store) == ["keep", "keep"]
+    assert statuses(store) == ["keep", "keep", "redundant"]
+    assert records.best_of(store, registered) == (kept.strategy_sha, kept.metric)
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert event.detail["like"] == kept.sha7
     assert event.detail["sessions"] == 31, "one session per day of the research window"
@@ -387,7 +393,9 @@ def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_noth
     resumed = loop.begin(ws, store, registered)
 
     assert resumed.base_sha == sha256(REVERTING).hexdigest()
-    assert statuses(store) == ["keep", "keep", "keep"], "the baseline of the second run"
+    assert statuses(store) == ["keep", "redundant", "keep", "keep"], (
+        "the flat respelling, then the trough rule, then the baseline of the second run"
+    )
     assert len(store.events(kind=loop.REDUNDANT, subject=registered)) == 1
 
 

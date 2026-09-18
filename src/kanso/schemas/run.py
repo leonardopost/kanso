@@ -5,7 +5,9 @@ evaluated `strategy.py` inside it. Neither is a workspace file. `results.tsv` is
 from cards, and its row is defined here so that every renderer produces the same bytes.
 
 A crashed card carries a zero metric by definition: nothing was measured, and letting a
-crash report anything else would let a timeout beat a working strategy.
+crash report anything else would let a timeout beat a working strategy. A `redundant` card
+is the opposite: it ran, it was measured, and what it measured was a book already judged
+under the run's pins, so it carries its real number and may never be a keep.
 
 A card's `tags` are the proposer's own account of what the change was, drawn from the
 vocabulary `TAGS` fixes. The vocabulary is the package's rather than the model's because
@@ -30,7 +32,7 @@ from kanso.schemas.base import (
 )
 from kanso.schemas.venue import VenueModel
 
-CardStatus = Literal["keep", "discard", "crash"]
+CardStatus = Literal["keep", "discard", "crash", "redundant"]
 
 Tag = Literal[
     "signal_trend",
