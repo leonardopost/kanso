@@ -9,6 +9,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from kanso.env import Detected, Plan, plan_for
+from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 
 
 def detected(cores_total: int, mem_gb: int) -> Detected:
@@ -115,11 +116,18 @@ def test_a_declared_memory_per_lane_is_clamped_and_never_zero(declared: float) -
     assert plan.lanes == 3  # min((8 - 1) // 2, floor(12 / 0.5)) = min(3, 24)
 
 
-@pytest.mark.parametrize("baseline_peak_mem_gb", [None, 2.0, 6.0])
-def test_leaving_it_unset_derives_the_figure_as_before(baseline_peak_mem_gb: float | None) -> None:
-    host = detected(32, 64)
-    assert plan_for(host, baseline_peak_mem_gb=baseline_peak_mem_gb) == plan_for(
-        host, baseline_peak_mem_gb=baseline_peak_mem_gb, mem_per_lane_gb=None
+@pytest.mark.parametrize(
+    "baseline_peak_mem_gb, per_lane, lanes", [(None, 4.0, 15), (2.0, 4.0, 15), (6.0, 9.0, 6)]
+)
+def test_leaving_it_unset_derives_the_figure_as_before(
+    baseline_peak_mem_gb: float | None, per_lane: float, lanes: int
+) -> None:
+    """The figures the derivation gave before the override existed, on one host: the
+    floor, the floor again under a small peak, and 1.5x a peak that clears it."""
+    plan = plan_for(detected(32, 64), baseline_peak_mem_gb=baseline_peak_mem_gb)
+    assert (plan.mem_per_lane_gb, plan.lanes) == (per_lane, lanes)
+    assert plan == plan_for(
+        detected(32, 64), baseline_peak_mem_gb=baseline_peak_mem_gb, mem_per_lane_gb=None
     )
 
 
@@ -164,6 +172,7 @@ def test_a_negative_reservation_is_clamped_to_zero() -> None:
     baseline_peak_mem_gb=st.one_of(
         st.none(), st.floats(min_value=0.01, max_value=512, allow_nan=False)
     ),
+    mem_per_lane_gb=st.one_of(st.none(), st.floats(min_value=-4, max_value=1024, allow_nan=False)),
 )
 def test_every_plan_is_usable(
     cores_total: int,
@@ -173,6 +182,7 @@ def test_every_plan_is_usable(
     reserved_mem_gb: int | None,
     cores_per_lane: int | None,
     baseline_peak_mem_gb: float | None,
+    mem_per_lane_gb: float | None,
 ) -> None:
     plan = plan_for(
         detected(cores_total, mem_gb),
@@ -181,11 +191,15 @@ def test_every_plan_is_usable(
         reserved_mem_gb=reserved_mem_gb,
         cores_per_lane=cores_per_lane,
         baseline_peak_mem_gb=baseline_peak_mem_gb,
+        mem_per_lane_gb=mem_per_lane_gb,
     )
     assert isinstance(plan, Plan)
     assert plan.lanes >= 1
     assert plan.cores_per_lane >= 1
-    assert plan.mem_per_lane_gb >= 4.0
+    # Undeclared, a lane is never charged under the 4 GB floor; declared, never under the
+    # floor a declaration is read at, which is the only way the figure falls below 4.
+    floor = MIN_DECLARED_MEM_PER_LANE_GB if mem_per_lane_gb is not None else 4.0
+    assert plan.mem_per_lane_gb >= floor
     assert plan.reserved_cores >= 0
     assert plan.reserved_mem_gb >= 0
     assert plan.live_colocated is live_colocated
