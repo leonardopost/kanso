@@ -411,7 +411,16 @@ def _dynamic(
     misses: int,
 ) -> dict[str, object]:
     """What has changed since the last call: the file, the recent cards, the coverage of
-    every card under the pins by tag, the phase, and the last diff."""
+    every card under the pins by tag, the phase, and the last diff.
+
+    `crash_tail` is read from the newest of the recent cards and `repair` from the newest
+    card of the run, and those are the same row: `_recent` reaches across runs but orders
+    by `card_id`, a hypothesis has at most one active run, and a run opens with a baseline
+    card that ran — a baseline that did not is refused before the run exists. So a run
+    that begins after another stalled on a crash is shown that crash among its recent
+    cards, as the record of what was tried, and never as a traceback over a file it does
+    not hold.
+    """
     recent = _recent(store, active, ws.config.research.context_cards)
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),

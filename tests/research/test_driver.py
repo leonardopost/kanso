@@ -550,6 +550,11 @@ def test_recent_cards_reach_across_runs_under_the_same_pins(
     first = recorded.of("propose")[-1]
     assert "run in boom mode" in first.user
     assert first.user.count('"status": "crash"') == 2
+    # As the record of what was tried, never as a traceback over a file this run does not
+    # hold: the new run's own baseline card is the newest under the pins, and the crash
+    # tail and the repair are both read from that one row.
+    payload = json.loads(first.user)
+    assert "crash_tail" not in payload and "repair" not in payload
 
 
 def test_a_redundant_result_from_an_earlier_run_reaches_the_next_one(
