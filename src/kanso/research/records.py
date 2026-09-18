@@ -355,7 +355,7 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
 
 
 def signature(run: CardRun) -> Signature:
-    """What `run` held on each UTC day it measured a period end in, and when in the day.
+    """What `run` held on each UTC day it measured a period end in, and whether at its end.
 
     The days are the run's period ends: the sessions two runs over the same window are
     both known to have measured. Each day is filled from both of the run's own records of
