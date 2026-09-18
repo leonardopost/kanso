@@ -383,6 +383,23 @@ def test_the_repairs_run_out_and_the_idea_is_dropped(
     assert statuses(store, prepared_hyp) == ["keep"] + ["crash"] * (driver.REPAIRS + 2)
 
 
+def test_the_budget_is_spent_per_idea_and_the_next_crash_has_its_own(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The measurement the repair exists for is five consecutive crashes that were five
+    ideas, so a budget counted over the streak rather than over the idea would repair the
+    first of them and drop the four after it unjudged — which is what it was built to
+    stop. The fourth crash is a fresh idea's, and it owes a first repair."""
+    scripted(ws, propose=[proposal("boom")])
+
+    driver.run(ws, store, prepared_hyp, cards=2 * (driver.REPAIRS + 1))
+
+    attempts = [
+        json.loads(call.user).get("repair", {}).get("attempt") for call in recorded.of("propose")
+    ]
+    assert attempts == [None, *range(1, driver.REPAIRS + 1)] * 2
+
+
 def _fact_keys() -> set[str]:
     """Every key `_dynamic` can put in the user turn, read out of its own source.
 

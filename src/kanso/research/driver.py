@@ -455,28 +455,36 @@ def _repair(store: StateStore, active: RunRecord, source: bytes) -> dict[str, ob
     cache warm.
 
     The bound is read from the run's own tail rather than carried in memory, so a call
-    that resumes a run continues the count instead of starting it over. One crashed card
-    owes the first repair and a second crash the second; past `REPAIRS` nothing is owed and
-    the proposer is asked for a fresh idea. The diff runs from the file in hand to the
-    bytes that crashed, so applying it exactly reproduces the crash — which the `_carded`
-    check then refuses, making a repair that changes nothing a wrong answer on the ladder
-    rather than a second identical card.
+    that resumes a run continues the count instead of starting it over, and it is spent
+    per idea rather than per spell of bad luck. The tail is counted in groups of
+    `REPAIRS + 1`: the first crash of a streak is a fresh idea, the `REPAIRS` crashes after
+    it are its repairs, and the crash after those is the fresh idea that the last one
+    bought — which owes a first repair of its own. Counting the streak instead would give
+    the run's first crashed idea two repairs and every idea after it none until something
+    landed, which is the case the repair exists for: five consecutive crashes were five
+    ideas, not one idea five times.
+
+    The diff runs from the file in hand to the bytes that crashed, so applying it exactly
+    reproduces the crash — which the `_carded` check then refuses, making a repair that
+    changes nothing a wrong answer on the ladder rather than a second identical card.
     """
-    rows = store.connection.execute(
+    newest: sqlite3.Row | None = store.connection.execute(
         "SELECT strategy_sha, status, description FROM cards WHERE run_id = ?"
-        " ORDER BY seq DESC LIMIT ?",
-        (active.run_id, REPAIRS + 1),
-    ).fetchall()
-    crashed: list[sqlite3.Row] = []
-    for row in rows:
-        if str(row["status"]) != "crash":
-            break
-        crashed.append(row)
-    if not crashed or len(crashed) > REPAIRS:
+        " ORDER BY seq DESC LIMIT 1",
+        (active.run_id,),
+    ).fetchone()
+    if newest is None or str(newest["status"]) != "crash":
         return None
-    newest = crashed[0]
+    streak = store.connection.execute(
+        "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
+        " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status != 'crash'), 0)",
+        (active.run_id, active.run_id),
+    ).fetchone()
+    attempt = int(streak[0]) % (REPAIRS + 1)
+    if attempt == 0:
+        return None
     return {
-        "attempt": len(crashed),
+        "attempt": attempt,
         "of": REPAIRS,
         "desc": str(newest["description"]),
         "diff": diffs.unified(source, store.get_blob(str(newest["strategy_sha"]))),
