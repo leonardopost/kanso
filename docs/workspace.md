@@ -975,8 +975,11 @@ The derivation charges every lane 1.5× the largest baseline peak any run in the
 ever recorded, which is the right figure only while every hypothesis is as heavy as the
 heaviest: a one-second overlay that once peaked at 4.3 GB charges every lane 6.45 GB, and a
 16 GB machine then plans a single lane while the daily hypothesis actually researching peaks
-at 0.25 GB. Declare what a lane costs now and the plan uses it; it is clamped to 0.5 GB, so
-a typo yields a small plan rather than a division by nothing.
+at 0.25 GB. Declare what a lane costs now and the plan uses it. A figure at or below zero is
+refused with the rest of `kanso.toml` (exit 3, as `cores_per_lane = 0` is), and a positive
+figure under 0.5 GB — half a gigabyte is twice the smallest baseline peak measured, so
+anything under it is a typo rather than a measurement — is read as 0.5 GB. An
+under-declaration therefore buys more lanes than the host can feed, not fewer.
 
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another

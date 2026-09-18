@@ -67,7 +67,10 @@ MIN_DECLARED_MEM_PER_LANE_GB = 0.5
 A lane is a Python process with the engine loaded and a run's points in it; the smallest
 baseline peak measured in a live workspace is 0.25 GB, for a daily sleeve on one name.
 Half a gigabyte is twice that, so a declaration below it is a typo rather than a
-measurement, and a zero or a negative one would divide the machine's memory by nothing.
+measurement. A zero or a negative one never arrives from `kanso.toml` — `EnvConfig`
+declares the field `gt=0`, so the workspace is refused before any plan is derived — but
+`plan_for` is a pure function anyone may call, and this floor is what keeps it from
+dividing the machine's memory by nothing.
 """
 BASELINE_HEADROOM = 1.5
 RESERVED_COLOCATED = (2, 8.0)
@@ -89,7 +92,11 @@ def plan_for(
     A `None` override takes the default for its field. Overrides are clamped to what
     the formula can use — a reservation is never negative, a lane always gets at least
     one core and at least `MIN_DECLARED_MEM_PER_LANE_GB` of memory — so an implausible
-    `kanso.toml` yields a small plan, never a crash.
+    number yields a plan rather than a crash. What each clamp then costs differs:
+    a reservation or a core count clamped upward yields a smaller plan, while a memory
+    declaration clamped up to the floor yields the largest plan the cores allow, which
+    is more lanes than the host can feed rather than fewer. A declaration at or below
+    zero never reaches here from a workspace (`EnvConfig` declares the field `gt=0`).
 
     `mem_per_lane_gb` replaces the derived memory figure rather than joining its
     maxima: the derivation charges every lane the largest baseline peak the workspace

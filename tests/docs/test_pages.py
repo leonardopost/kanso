@@ -16,6 +16,7 @@ import pytest
 
 from kanso.classify import catalogue
 from kanso.config import Config, render_config
+from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from tests.cli.test_doctor import CHECKS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -129,6 +130,14 @@ def test_the_workspace_page_states_the_fixed_spread_a_bar_only_hypothesis_needs(
 
 def test_the_workspace_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:
     assert "it paces nothing" in prose(section(page("workspace.md"), "`portfolio.yaml`"))
+
+
+def test_the_lane_memory_floor_the_workspace_page_states_is_the_one_the_package_clamps_to() -> None:
+    """The page tells an operator what a small `[env] mem_per_lane_gb` is read as."""
+    envelope = prose(section(page("workspace.md"), "`envelope.yaml`"))
+    stated = re.search(r"figure under ([\d.]+) GB", envelope)
+    assert stated is not None
+    assert float(stated.group(1)) == MIN_DECLARED_MEM_PER_LANE_GB
 
 
 def test_the_who_writes_what_table_lists_the_mock_script() -> None:
