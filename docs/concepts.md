@@ -430,7 +430,9 @@ spells that all returned the same, or spells whose returns differ only in the la
 the divisions that struck them, which is not variation and would otherwise divide a mean by
 a figure near zero. A skipped `leg_edge` records its reason in its evidence as well as in
 its skip, because a card stores the evidence and a pass with an empty one reads as a leg
-that was judged and cleared.
+that was judged and cleared. It is the one gate that records it there: the others' skips
+leave the evidence empty, and none of them is read as a named instrument having earned
+its place.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.

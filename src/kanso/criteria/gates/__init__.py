@@ -555,8 +555,10 @@ same notional can still divide to figures a few units in the last place apart �
 around 1e-16 at a return of a few tenths. Dividing a mean by one of those is not a Sharpe.
 Measured on a live card, a fold of four spells whose returns agreed to fifteen digits
 scored -6113058453210397.0. This floor sits four orders of magnitude above that arithmetic
-and ten below any dispersion a leg's returns actually carry, so it catches the one without
-reaching the other.
+and six below the narrowest spread the suite asserts is real — a pair of returns 1e-6
+apart — so it catches the one without reaching the other. It is an absolute spread, which
+holds while returns are fractions of one: a pair this close at a return in the thousands
+divides to a figure it would not catch, and `pnl_net / notional` is not that.
 """
 
 

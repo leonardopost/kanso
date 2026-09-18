@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, timedelta
+from math import nextafter
 from pathlib import Path
 from typing import Any
 
@@ -493,10 +494,13 @@ def test_leg_edge_without_a_leg_and_a_floor_judges_nothing(params: Any) -> None:
     assert "no leg or no floor was chosen" in str(result.skipped)
 
 
-# Two returns that differ in the last bits of the division that struck them: measured in a
-# live workspace, hypothesis sox_dir recorded folds of this shape for SOXS.ARCA and the
-# third of them scored -6113058453210397.0, because stdev of them is around 4e-17.
-DENORMAL_RETURNS = (0.2735268775372813, 0.2735268775372814)
+# Two adjacent doubles, constructed rather than measured: they reproduce the spread of the
+# measured case, around 5e-17 at a return of a few tenths. What was measured, in a live
+# workspace, is the consequence — hypothesis sox_dir's baseline card recorded leg
+# SOXS.ARCA's folds as [0.2735268775372813, -0.5352387464408962, -6113058453210397.0,
+# 0.5114293200522522], the third a fold whose spells' returns agreed to fifteen digits. The
+# returns themselves were not recorded, so a pair standing in for them is all this can be.
+DENORMAL_RETURNS = (0.31, nextafter(0.31, 1.0))
 
 
 def test_leg_edge_scores_zero_for_a_fold_whose_spells_vary_only_in_the_last_bits() -> None:
