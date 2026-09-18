@@ -217,18 +217,65 @@ def test_a_database_that_cannot_run_in_wal_is_refused(
         StateStore(db_path)
 
 
+@pytest.mark.parametrize("nth", range(1, len(migrations()) + 1))
 def test_a_migration_another_process_applied_first_is_not_reported_as_ours(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
+    db_path: Path, nth: int
 ) -> None:
-    # The loser of a concurrent migrate: its own script fails because the winner already
-    # created the tables, and by then the stamped version already covers the migration.
-    contended = (store_module.Migration(2, "0002_contended.sql", "SELECT nonexistent_fn();"),)
-    monkeypatch.setattr(store_module, "migrations", lambda: contended)
-    observed = iter([0, 2])
-    monkeypatch.setattr(StateStore, "schema_version", lambda _self: next(observed))
-    with StateStore(db_path) as store:
-        assert store.migrate() == []
-        assert store.connection.in_transaction is False
+    """The loser of a concurrent migrate re-reads the version under the write lock.
+
+    The handover is the interleaving two processes were measured taking: the loser reads
+    the version, decides its `nth` migration is pending, and only then reaches
+    `BEGIN IMMEDIATE`, by which time the winner has applied everything and committed. It
+    is driven here by a trace callback on the loser's connection, which SQLite calls
+    before the statement it names runs — so the winner takes the write lock the loser has
+    not taken yet, on a second connection, and no version number is invented.
+
+    Under a check made only before the lock, `nth` 4 and 5 leave the database unusable
+    for good: both migrations succeed a second time and stamp their older number over the
+    winner's, and the ALTER in 0006 then fails against a column that is already there.
+    """
+    winner_applied: list[str] = []
+    begins: list[str] = []
+    with StateStore(db_path) as winner, StateStore(db_path) as loser:
+
+        def hand_over(statement: str) -> None:
+            if not statement.upper().startswith("BEGIN"):
+                return
+            begins.append(statement)
+            if len(begins) == nth:
+                winner_applied.extend(winner.migrate())
+
+        loser.connection.set_trace_callback(hand_over)
+        applied = loser.migrate()
+        loser.connection.set_trace_callback(None)
+
+        assert applied == [m.name for m in migrations()[: nth - 1]], (
+            "the loser reports what it applied itself and nothing the winner did"
+        )
+        assert winner_applied == [m.name for m in migrations()[nth - 1 :]]
+        assert loser.schema_version() == SCHEMA_VERSION
+        assert loser.pending() == []
+        assert loser.tables() == sorted(TABLES)
+        assert loser.connection.in_transaction is False
+        usable(loser, db_path)
+
+
+def test_a_migration_file_is_cut_where_sqlite_says_a_statement_ends() -> None:
+    """Comments and their semicolons are not statement boundaries; the last `;` is the end."""
+    sql = "-- one; two\nCREATE TABLE a (x TEXT DEFAULT 'a;b');\nDROP TABLE a;\n-- trailing\n"
+    assert list(store_module._statements(sql)) == [
+        "-- one; two\nCREATE TABLE a (x TEXT DEFAULT 'a;b');",
+        "\nDROP TABLE a;",
+    ]
+    assert list(store_module._statements("")) == []
+
+
+def test_every_shipped_migration_is_cut_into_statements_that_run() -> None:
+    """Each shipped file yields at least one statement, and none of them is empty."""
+    for migration in migrations():
+        cut = list(store_module._statements(migration.sql))
+        assert cut, migration.name
+        assert "".join(cut) == migration.sql[: migration.sql.rindex(";") + 1], migration.name
 
 
 def test_a_card_recorded_before_the_memory_migration_reads_back_with_no_tags(
