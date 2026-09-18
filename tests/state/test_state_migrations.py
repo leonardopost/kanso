@@ -390,6 +390,43 @@ def test_the_cards_table_is_rebuilt_to_admit_a_redundant_card_and_keeps_its_rows
             )
 
 
+def test_a_signature_written_before_the_metric_column_reads_back_without_a_number(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0006 adds `signatures.metric` over rows that exist, and such a row has no number.
+
+    Nothing released can hold one — 0004 empties this table in the same version — but the
+    column is nullable, so the reading has to be stated: a stored book with no result on
+    record is not an anchor, because the premise it would be matched against cannot be
+    tested. The row is reached the only way it can be: by stopping the migrations one
+    short and writing it by hand.
+    """
+    older = migrations()[:5]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("d" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
+            " criteria_version, signature, sessions, created_at) VALUES (?, 'old', 'h', 's',"
+            " '0.9.0', '{\"2026-01-01\": []}', 1, 't')",
+            ("d" * 64,),
+        )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[5:]]
+        (row,) = store.connection.execute("SELECT sessions, metric FROM signatures").fetchall()
+        assert (row["sessions"], row["metric"]) == (1, None)
+
+
 # --- a database this package cannot correctly write, in either direction ------
 
 

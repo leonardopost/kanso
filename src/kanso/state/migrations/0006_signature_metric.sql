@@ -1,0 +1,24 @@
+-- What a stored book earned, beside the book: the second half of the matcher's premise.
+--
+-- `research/records.py` refuses a candidate whose book matches a stored one on enough of
+-- their shared sessions, on a premise it states in words: "two strategies with the same
+-- signature on nearly every shared day made the same bets and earned the same result".
+-- Only the first clause was ever checked; the second was asserted. Measured in the live
+-- workspace on 2026-09-18, the assertion does not hold where the daily book does not
+-- determine the number: on the intraday hypothesis `sox_touch`, whose objective is a
+-- per-trade edge, 289 candidates matched anchor `ce5ef34` and earned -18.780 .. 9.179
+-- against its own noise floor of 10.116, so their books agreed and their results did not.
+--
+-- The result is in hand when the refusal is decided, so the premise can be tested rather
+-- than asserted -- but only against a number the stored book is on record for. It is
+-- written here, by the statement that writes the signature, rather than joined from
+-- `cards`: the same bytes under the same pins can carry a crashed card, a card whose
+-- order the harness refused and a card that ran, and a premise must not depend on which
+-- of them a join happens to pick.
+--
+-- The column is nullable, and NULL means the result is not on record, which is not an
+-- anchor at all -- a premise that cannot be tested has not been met. No released
+-- workspace can hold such a row, because 0004 empties this table in the same version;
+-- the rule is written down because a row without a number needs an answer, not because
+-- one is expected.
+ALTER TABLE signatures ADD COLUMN metric REAL;

@@ -256,8 +256,8 @@ def test_a_signature_matches_on_the_share_of_shared_days_and_names_the_closest(
     stored_a = {"2024-01-01": long, "2024-01-02": long, "2024-01-03": []}
     stored_b = {"2024-01-01": long, "2024-01-02": long, "2024-01-03": long}
     sha_a, sha_b = store.put_blob(b"a"), store.put_blob(b"b")
-    records.record_signature(store, run, sha_a, stored_a)
-    records.record_signature(store, run, sha_b, stored_b)
+    records.record_signature(store, run, sha_a, stored_a, 1.0)
+    records.record_signature(store, run, sha_b, stored_b, 1.0)
     candidate = {"2024-01-01": long, "2024-01-02": long, "2024-01-03": long}
 
     like = records.redundant_with(store, run, candidate, 97)
@@ -284,7 +284,7 @@ def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
     opens = midnight_ns(date(2024, 1, 2)) + 10 * 3_600 * 10**9
     run = loop.begin(ws, store, registered)
     stored = records.signature(a_run(trades=(a_trade("A.X", 3.0, opens, opens + 3_600 * 10**9),)))
-    records.record_signature(store, run, store.put_blob(b"a"), stored)
+    records.record_signature(store, run, store.put_blob(b"a"), stored, 1.0)
     other = records.signature(a_run(trades=(a_trade("B.X", -3.0, opens, opens + 3_600 * 10**9),)))
 
     assert stored["2024-01-02"] == [["A.X", 1, False]], "held, and gone by the end"
@@ -297,15 +297,15 @@ def test_the_same_bytes_are_signed_once_under_one_set_of_pins(
 ) -> None:
     run = loop.begin(ws, store, registered)
     sha = store.put_blob(b"a")
-    records.record_signature(store, run, sha, {"2024-01-01": []})
-    records.record_signature(store, run, sha, {"2024-01-01": [["A.X", 1, True]]})
+    records.record_signature(store, run, sha, {"2024-01-01": []}, 0.25)
+    records.record_signature(store, run, sha, {"2024-01-01": [["A.X", 1, True]]}, 0.75)
 
     rows = store.connection.execute(
-        "SELECT signature, sessions FROM signatures WHERE strategy_sha = ?", (sha,)
+        "SELECT signature, sessions, metric FROM signatures WHERE strategy_sha = ?", (sha,)
     ).fetchall()
-    assert [(row["signature"], row["sessions"]) for row in rows] == [
-        ('{"2024-01-01": [["A.X", 1, true]]}', 1)
-    ]
+    assert [(row["signature"], row["sessions"], row["metric"]) for row in rows] == [
+        ('{"2024-01-01": [["A.X", 1, true]]}', 1, 0.75)
+    ], "the book and the number it earned are replaced together, being one measurement"
 
 
 def test_a_card_keeps_the_tags_its_proposer_gave_it(

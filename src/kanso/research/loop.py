@@ -762,7 +762,7 @@ def _judge(
         if kept or baseline
         else records.redundant_with(store, run, held, ws.config.research.redundant_pct)
     )
-    records.record_signature(store, run, strategy_sha, held)
+    records.record_signature(store, run, strategy_sha, held, metric)
     made = _record(
         ws,
         store,

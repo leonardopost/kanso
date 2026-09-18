@@ -425,11 +425,20 @@ class Redundancy:
         return 100.0 * self.matched / self.shared
 
 
-def record_signature(store: StateStore, run: RunRecord, sha: str, held: Signature) -> None:
-    """Store what these bytes held under this run's pins; the same bytes are written once."""
+def record_signature(
+    store: StateStore, run: RunRecord, sha: str, held: Signature, metric: float
+) -> None:
+    """Store what these bytes held under this run's pins, and what they earned holding it.
+
+    The same bytes are written once: a second judging under the same pins replaces the
+    row, book and number together, because the same bytes over the same data measured
+    twice are one fact and not two. `metric` is the objective the card was just recorded
+    with, so a stored book is never on record for a number no card carries.
+    """
     store.connection.execute(
         "INSERT OR REPLACE INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
-        " criteria_version, signature, sessions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " criteria_version, signature, sessions, metric, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             sha,
             run.hyp_id,
@@ -438,6 +447,7 @@ def record_signature(store: StateStore, run: RunRecord, sha: str, held: Signatur
             run.criteria_version,
             json.dumps(held, sort_keys=True),
             len(held),
+            metric,
             now().isoformat(),
         ),
     )
