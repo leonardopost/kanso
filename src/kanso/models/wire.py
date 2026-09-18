@@ -32,8 +32,23 @@ from kanso.schemas.models import ModelSpec
 __all__ = ["api_key", "as_object", "post"]
 
 CONNECT_TIMEOUT_S: Final = 15.0
-REQUEST_TIMEOUT_S: Final = 300.0
-"""Long enough for a frontier model thinking hard at a four-thousand-token cap."""
+REQUEST_TIMEOUT_S: Final = 420.0
+"""Long enough that whatever is on the other end gives up before this client does.
+
+A frontier model thinking hard at a four-thousand-token cap answers well inside this, but
+a model reached through a workspace shim — a `local` entry whose `base_url` is a process
+an operator wrote around a vendor's own CLI — is not one request: it is a CLI run, and one
+measured in a live workspace regularly takes more than four minutes on a `propose`. The
+shim is the side that knows what it launched, so it must be the side that gives up first:
+it answers with a status this client reports as `<model>: the provider answered 504`,
+where a client timeout reports `<model>: the request did not complete (ReadTimeout)`,
+which names the transport and never what the shim was doing when it was cut off.
+
+Measured in the operator's workspace, the two shims kill at 390s (the one around the
+Cursor CLI) and 240s (the one around the Claude CLI). Both are under this figure, which
+is what keeps their own refusal the failure an operator reads, and a new shim's timeout
+belongs under it too.
+"""
 
 _FENCE: Final = "```"
 

@@ -530,6 +530,15 @@ name, and an override replaces the standard name rather than adding to it.
 `explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
 register as the router reads it and then makes one minimal call to every configured model.
 
+One call connects within fifteen seconds and then waits **seven minutes** for the answer,
+and neither client retries — the router's ladder is the only retry kanso has. A model you
+serve yourself, a `local` entry whose `base_url` is a process you wrote around a vendor's
+CLI, should give up sooner than that: a `propose` through such a shim regularly runs for
+more than four minutes, and whichever side gives up first decides what you read. The shim's
+own status arrives as `<model>: the provider answered 504`; kanso giving up first arrives as
+`<model>: the request did not complete (ReadTimeout)`, which names nothing the shim was
+doing.
+
 A workspace with no register is refused where a model is actually needed:
 
 ```
