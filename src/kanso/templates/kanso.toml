@@ -41,6 +41,8 @@ n_fail = 3                # escalate on every n-th consecutive certification fai
 # reserved_cores = 2
 # reserved_mem_gb = 8
 # cores_per_lane = 2
+# mem_per_lane_gb = 2     # replaces the derived figure (1.5x the largest baseline peak any run ever recorded); set it when that peak belongs to a heavier hypothesis than the one now researching
+#                         it is also the resident memory a card of that lane may hold before the parent kills it, never below three times that run's own baseline peak
 
 [monitor]
 interval = "5m"

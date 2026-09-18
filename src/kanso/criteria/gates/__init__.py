@@ -30,7 +30,7 @@ Nothing is declared here and left unimplemented: every gate in the library resol
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import date, timedelta
 from hashlib import sha256
@@ -436,9 +436,10 @@ class _LegEdge:
     is counted by no fold, because a run carries no mark for a single leg
     (`docs/backlog.md`). The Sharpe is annualised by the spells the fold actually held per
     year, as `bootstrap` annualises the trades it resamples; a fold whose spells cannot
-    vary — one spell, or spells that all returned the same — scores zero, as every Sharpe
-    in the toolbox does, so a leg that switched once in a fold clears only a floor at or
-    below zero. A fold that closed no spell is not judged, and a run in which the leg
+    vary — one spell, spells that all returned the same, or spells that returned the same
+    but for the last bits of the arithmetic (`SPELL_SPREAD_FLOOR`) — scores zero, as every
+    Sharpe in the toolbox does, so a leg that switched once in a fold clears only a floor
+    at or below zero. A fold that closed no spell is not judged, and a run in which the leg
     never closed one is skipped rather than failed: the leg not trading is a different
     fault, and `min_trades` is where it is refused. A third skip — the leg closed spells,
     but none inside the window's folds — can arise only for a run whose trades were not
@@ -449,6 +450,11 @@ class _LegEdge:
     subtracted first, by identity: a spell the candidate altered in any of those is judged
     whole, and one identical to the host's is not judged at all. The remainder are what
     the candidate's rule did to the leg.
+
+    Every one of the three skips carries its reason in its evidence as well as in its skip,
+    with whatever it did reach: a card records a gate's evidence, and a `leg_edge` that
+    passed with an empty one told the operator that the leg was judged and cleared, which is
+    the opposite of what happened.
     """
 
     id: ClassVar[str] = "leg_edge"
@@ -456,11 +462,15 @@ class _LegEdge:
     def evaluate(self, ctx: GateContext) -> GateResult:
         leg, floor = text(ctx, "leg"), number(ctx, "min_sharpe")
         if leg is None or floor is None:
-            return skipped(self.id, "no leg or no floor was chosen, so no spell was judged")
+            return _unjudged("no leg or no floor was chosen, so no spell was judged", {})
         theirs = _host_keys(ctx)
         spells = _spells(ctx.run.trades, leg, theirs)
+        chosen: dict[str, object] = {"leg": leg, "min_sharpe": floor}
         if not spells:
-            return skipped(self.id, f"{leg} closed no spell of its own, so nothing was judged")
+            return _unjudged(
+                f"{leg} closed no spell of its own, so nothing was judged",
+                {**chosen, "n_spells": 0},
+            )
         judged: list[float | None] = []
         counted: list[int] = []
         for fold in ctx.run.folds(ctx.research_folds):
@@ -469,8 +479,9 @@ class _LegEdge:
             judged.append(_spell_sharpe(inside, fold.window) if inside else None)
         measured = [value for value in judged if value is not None]
         if not measured:
-            return skipped(
-                self.id, f"{leg} closed no spell inside the window's folds, so nothing was judged"
+            return _unjudged(
+                f"{leg} closed no spell inside the window's folds, so nothing was judged",
+                {**chosen, "folds": judged, "spells_per_fold": counted, "n_spells": len(spells)},
             )
         below = [value for value in measured if value < floor]
         return verdict(
@@ -486,6 +497,24 @@ class _LegEdge:
                 "worst": min(measured),
             },
         )
+
+
+def _unjudged(reason: str, evidence: Mapping[str, object]) -> GateResult:
+    """A `leg_edge` skip whose evidence says what its skip says, and what it did reach.
+
+    `skipped` records the reason in its own field and leaves the evidence empty, which is
+    right for a gate read through `kanso research card`: the renderer prints the reason in
+    the evidence's place. A card's stored gate row is read as evidence alone, though, and a
+    `leg_edge` PASS with `{}` — one was recorded in a live workspace — says nothing at all.
+    """
+    return GateResult.model_validate(
+        {
+            "id": _LegEdge.id,
+            "pass": True,
+            "skipped": reason,
+            "evidence": {"reason": reason, **evidence},
+        }
+    )
 
 
 TradeKey = tuple[str, int, int, float, float, float]
@@ -518,11 +547,32 @@ def _trade_key(trade: Trade) -> TradeKey:
     )
 
 
+SPELL_SPREAD_FLOOR: Final = 1e-12
+"""A spread of spell returns no wider than this is no spread: the fold cannot vary.
+
+A spell's return is `pnl_net / notional`, and two spells that earned the same thing on the
+same notional can still divide to figures a few units in the last place apart — a spread
+around 1e-16 at a return of a few tenths. Dividing a mean by one of those is not a Sharpe.
+Measured on a live card, a fold of four spells whose returns agreed to fifteen digits
+scored -6113058453210397.0. This floor sits four orders of magnitude above that arithmetic
+and six below the narrowest spread the suite asserts is real — a pair of returns 1e-6
+apart — so it catches the one without reaching the other. It is an absolute spread, which
+holds while returns are fractions of one: a pair this close at a return in the thousands
+divides to a figure it would not catch, and `pnl_net / notional` is not that.
+"""
+
+
 def _spell_sharpe(spells: Sequence[Trade], window: tuple[date, date]) -> float:
-    """Annualised Sharpe of per-spell returns; spells that cannot vary score zero."""
+    """Annualised Sharpe of per-spell returns; spells that cannot vary score zero.
+
+    Cannot vary is one spell, spells that all returned the same, and spells that returned
+    the same but for the last bits of the divisions that struck them. The bootstrap's
+    `_sharpe_of` guards the same division at zero; this one guards it at
+    `SPELL_SPREAD_FLOOR`, because a denormal spread is not variation either.
+    """
     returns = [trade.pnl_net / trade.notional for trade in spells]
     dispersion = stdev(returns)
-    if dispersion == 0.0:
+    if dispersion <= SPELL_SPREAD_FLOOR:
         return 0.0
     return mean(returns) / dispersion * sqrt(len(returns) / years(window))
 

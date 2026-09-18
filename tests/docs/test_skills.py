@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from kanso.config import EnvConfig
+
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGED = ROOT / "src" / "kanso" / "skills"
 MAINTAINER = ROOT / "skills"
@@ -12,6 +14,16 @@ MAINTAINER = ROOT / "skills"
 
 def skill(root: Path, name: str) -> str:
     return (root / name / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_the_env_skill_names_every_override_the_configuration_declares() -> None:
+    """A key the skill omits is one an operator in exactly its situation — a host
+    planning a single lane — cannot learn exists."""
+    text = skill(PACKAGED, "kanso-env")
+    overrides = next(line for line in text.splitlines() if "`kanso.toml [env]`" in line)
+    for name in EnvConfig.model_fields:
+        assert f"`{name}`" in overrides, name
+    assert "**replaces** the derived memory per lane" in text
 
 
 def test_the_hypothesis_skill_names_the_spread_a_bar_only_hypothesis_needs() -> None:

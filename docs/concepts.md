@@ -138,9 +138,13 @@ plan into `envelope.yaml`: two cores and 4 GB per lane, less a reservation of on
 formula says, so a host too small to satisfy it still researches, one card at a time. The
 memory figure per lane starts at that 4 GB floor and is recalibrated to 1.5× the largest
 baseline card actually recorded, so the plan tightens once the machine has seen real work.
-`[env]` in `kanso.toml` overrides the reservations and the cores per lane; an override is
-clamped to what the formula can use, so an implausible number yields a small plan rather
-than a crash.
+`[env]` in `kanso.toml` overrides the reservations, the cores per lane and that memory
+figure; an override is clamped to what the formula can use, so an implausible number yields
+a small plan rather than a crash. `mem_per_lane_gb` replaces the derived figure outright,
+because the calibration reads the heaviest run the workspace ever recorded and that may be a
+heavier hypothesis than the one now researching — an overlay on one-second bars leaves a
+peak a daily sleeve will never approach, and every lane is charged for it until you say
+otherwise.
 
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
@@ -311,7 +315,7 @@ already over. There are eight.
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
-| `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold with one spell cannot vary and scores zero; a leg that never closed one is skipped, not failed |
+| `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 `position_size` is the only one that carries a floor on size: `min_trades` floors the trade
@@ -421,7 +425,14 @@ hypothesis's universe is refused at `hyp validate` (exit 3), from `constraints` 
 `required_constraints` alike. For an attached construct the spells the host's own run also
 closed — the same instrument, instants, quantity and prices — are subtracted first, by
 identity: a spell the candidate altered in any of those is judged whole, and one identical to
-the host's is not judged at all.
+the host's is not judged at all. A fold whose spells cannot vary scores zero — one spell,
+spells that all returned the same, or spells whose returns differ only in the last bits of
+the divisions that struck them, which is not variation and would otherwise divide a mean by
+a figure near zero. A skipped `leg_edge` records its reason in its evidence as well as in
+its skip, because a card stores the evidence and a pass with an empty one reads as a leg
+that was judged and cleared. It is the one gate that records it there: the others' skips
+leave the evidence empty, and none of them is read as a named instrument having earned
+its place.
 
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.

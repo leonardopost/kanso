@@ -530,6 +530,15 @@ name, and an override replaces the standard name rather than adding to it.
 `explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
 register as the router reads it and then makes one minimal call to every configured model.
 
+One call connects within fifteen seconds and then waits **seven minutes** for the answer,
+and neither client retries — the router's ladder is the only retry kanso has. A model you
+serve yourself, a `local` entry whose `base_url` is a process you wrote around a vendor's
+CLI, should give up sooner than that: a `propose` through such a shim regularly runs for
+more than four minutes, and whichever side gives up first decides what you read. The shim's
+own status arrives as `<model>: the provider answered 504`; kanso giving up first arrives as
+`<model>: the request did not complete (ReadTimeout)`, which names nothing the shim was
+doing.
+
 A workspace with no register is refused where a model is actually needed:
 
 ```
@@ -958,7 +967,28 @@ exactly until the next detection.
 It is honest about what it is: a hand-edited `lanes: 9` **is** believed, and
 `kanso research status` will show nine lanes. The file is a measurement, not a claim to be
 validated, which is why the durable override lives somewhere else: `[env] reserved_cores`,
-`reserved_mem_gb` and `cores_per_lane` in `kanso.toml` are read on every detection.
+`reserved_mem_gb`, `cores_per_lane` and `mem_per_lane_gb` in `kanso.toml` are read on every
+detection.
+
+`mem_per_lane_gb` **replaces** the derived memory per lane rather than raising its floor.
+The derivation charges every lane 1.5× the largest baseline peak any run in the workspace
+ever recorded, which is the right figure only while every hypothesis is as heavy as the
+heaviest: a one-second overlay that once peaked at 4.3 GB charges every lane 6.45 GB, and a
+16 GB machine then plans a single lane while the daily hypothesis actually researching peaks
+at 0.25 GB. Declare what a lane costs now and the plan uses it. A figure at or below zero is
+refused with the rest of `kanso.toml` (exit 3, as `cores_per_lane = 0` is), and a positive
+figure under 0.5 GB — half a gigabyte is twice the smallest baseline peak measured, so
+anything under it is a typo rather than a measurement — is read as 0.5 GB. An
+under-declaration therefore buys more lanes than the host can feed, not fewer.
+
+The figure is also what a card of that lane may hold: the loop kills a card child whose
+resident memory passes the lane's share, and the declaration is the first way that threshold
+can fall under 4 GB. It is never lowered below three times the run's *own* measured baseline
+peak, so the heavy hypothesis whose recorded peak you are declaring your way out of keeps
+the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
+the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
+six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
+rather than the declaration.
 
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another

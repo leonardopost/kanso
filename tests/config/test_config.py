@@ -56,6 +56,7 @@ def test_rendered_template_parses_with_the_documented_defaults(tmp_path: Path) -
     assert config.env.reserved_cores is None
     assert config.env.reserved_mem_gb is None
     assert config.env.cores_per_lane is None
+    assert config.env.mem_per_lane_gb is None
     assert config.monitor.interval == "5m"
     assert config.webhook.url is None
     assert config.adapters == {}
@@ -140,6 +141,7 @@ def test_the_flat_field_names_are_accepted_directly() -> None:
         '[data]\nadjusted = "yes"\n',
         "[certify]\nn_fail = 0\n",
         "[env]\ncores_per_lane = 0\n",
+        "[env]\nmem_per_lane_gb = 0\n",
         '[skills]\ntargets = "a"\n',
     ],
 )

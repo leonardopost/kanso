@@ -25,7 +25,7 @@ models:
   - id: <cheap-model-id>
     provider: <provider>
     protocol: openai_compat        # any hosted or local server speaking the OpenAI-compatible protocol: set base_url; a local server usually needs no key
-    base_url: http://localhost:<port>/v1
+    base_url: http://localhost:<port>/v1   # a server you run yourself must give up before kanso's seven minutes, so its own status is the failure reported
     tier: cheap
     local: true
     ctx: 32000

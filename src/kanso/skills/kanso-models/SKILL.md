@@ -16,5 +16,6 @@ metadata:
 
 ## Rules
 - Never put API keys in `models.yaml` or in chat.
+- A model you serve yourself — a `local` entry whose `base_url` is a process you wrote around a vendor's CLI — must give up before kanso does. One call connects within fifteen seconds and then waits seven minutes for the answer, and whichever side gives up first decides what the operator reads: the shim's own status arrives as `the provider answered 504`, kanso's as `the request did not complete (ReadTimeout)`, which names nothing the shim was doing. The two shims measured in a live workspace kill at 390s and 240s.
 - Every tier must have at least one model, or `kanso research begin` exits 2; `tier` may list several tiers (the demo's mock lists all three).
 - Model ids change; use the provider's current id and record `cost_in`/`cost_out` from its pricing page.
