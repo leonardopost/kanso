@@ -466,7 +466,9 @@ def _mem_cap(ws: Workspace, run: RunRecord) -> float:
 
     The floor is three times what the baseline actually needed, so a run whose own
     starting point is heavier than the lane plan expected still gets cards rather than a
-    string of kills.
+    string of kills. The lane's share is `[env] mem_per_lane_gb` where one is declared,
+    which is the only way this threshold falls under the plan's own 4 GB floor
+    (`docs/workspace.md`, `envelope.yaml`).
     """
     floor = HEADROOM * run.baseline_peak_mem_gb
     envelope = read_envelope(ws)
