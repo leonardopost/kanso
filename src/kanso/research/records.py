@@ -526,8 +526,13 @@ def matched_book(
     of it. It is small because a pin group's numbers sit on top of each other — 88% to
     99.6% of the pairs within one group fall inside that hypothesis's floor, against the
     20% the same measurement gives over a whole hypothesis's numbers — and because the
-    hypothesis this costs most, `sox_main_b` with 3,228 cards, matched no stored book at
-    all on 91% of its judged candidates, and a card that matches nothing pays both passes.
+    second pass falls away exactly when an agreeing row matched, which is most of the
+    time: over the period in which any book was on record at all, 63.7% of `sox_main_b`'s
+    judged candidates found an agreeing anchor, and 84.9% to 94.1% of the other four
+    hypotheses' did. An earlier reading of this put `sox_main_b` at 9%, by counting the
+    3,043 of its 3,228 cards that were judged before the first signature row existed
+    (`2026-09-18T01:16:57Z`); a candidate that matched nothing because the table was empty
+    measures the table and not the matcher.
     What a card pays here is the size of the pool and the shape a book is parsed into, and
     neither is the ordering (`docs/backlog.md` row 89).
 
