@@ -18,6 +18,7 @@ from kanso.classify import catalogue
 from kanso.config import Config, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.models.wire import REQUEST_TIMEOUT_S
+from kanso.research import driver
 from tests.cli.test_doctor import CHECKS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -266,3 +267,12 @@ def test_a_backlog_count_the_readme_states_is_the_count_the_table_holds() -> Non
     if stated is None:
         return
     assert (spelled(stated[1]), spelled(stated[2])) == (len(rows), len(rows) - closed)
+
+
+def test_the_repair_budget_the_cli_page_states_is_the_one_the_driver_enforces() -> None:
+    """A bound written in words on a page and held as a constant in a module: the two
+    drifted apart once, when the driver spent it on the run's crash streak while the page
+    promised it per idea."""
+    stated = re.search(r"(\w+) repairs per idea", prose(page("cli.md")))
+    assert stated is not None
+    assert spelled(stated.group(1).lower()) == driver.REPAIRS

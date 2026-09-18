@@ -1088,9 +1088,11 @@ def card(
 
     Stores the bytes, checks the static half of `strategy_integrity` before anything
     runs, backtests the research window in a subprocess under the run's budgets,
-    evaluates the constraints and the keep rule, and records the card — or raises
-    `RedundantError` with no card when what it held is what a judged strategy already
-    held. `tags` are the proposer's account of the change, from `kanso.schemas.TAGS`; a
+    evaluates the constraints and the keep rule, and records the card. A candidate that
+    ran and held what a judged strategy already held is recorded all the same, with the
+    status `redundant` and the metric it measured, and then `RedundantError` refuses the
+    caller another experiment: the check decides the status, never whether there is a
+    record. `tags` are the proposer's account of the change, from `kanso.schemas.TAGS`; a
     card made by hand carries none.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))

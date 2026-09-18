@@ -19,8 +19,9 @@ that placed no order are edits that failed, not candidates the selection could h
 chosen, so counting them widens the search on paper without widening it in fact. A
 redundant card is in both, because it is the other way round — it ran, it traded, and the
 selection ranked its number and declined it. That another candidate held the same book
-makes it a correlated trial, not a non-trial, and dropping it was measured costing a
-certificate a factor of fifty in the count it deflates by (`docs/backlog.md` row 59).
+makes it a correlated trial, not a non-trial, and dropping it was measured costing
+certificates an `n_trials` of 7 and 8 against roughly a thousand backtests run and
+selected over — a hundredfold in the count they deflate by (`docs/backlog.md` row 59).
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
