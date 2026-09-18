@@ -287,7 +287,13 @@ def test_a_redundant_card_is_recorded_and_the_next_proposal_is_told_what_it_repe
     repeat = records.cards_of(store, prepared_hyp)[2]
     assert (repeat.desc, repeat.metric) == ("the same bet again", kept.metric)
     assert records.trial_metrics(store, prepared_hyp) == [kept.metric, repeat.metric]
-    assert driver.coverage(store, records.require_active(store, prepared_hyp)), "a corner walked"
+    walked = driver.coverage(store, records.require_active(store, prepared_hyp))
+    assert walked["signal_mean_reversion"] == {
+        "count": 2,
+        "best_metric": kept.metric,
+        "best_status": "keep",
+        "newest": repeat.sha7,
+    }, "the corner is walked twice, and the redundant card is the newest thing in it"
     assert event.detail["like"] == kept.sha7
     assert event.detail["desc"] == "the same bet again"
     active = records.require_active(store, prepared_hyp)
@@ -383,6 +389,21 @@ def test_the_repairs_run_out_and_the_idea_is_dropped(
     assert statuses(store, prepared_hyp) == ["keep"] + ["crash"] * (driver.REPAIRS + 2)
 
 
+def test_a_repair_returned_verbatim_is_a_wrong_answer_and_not_a_second_crash(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """The repair diff runs from the file in hand to the bytes that crashed, so returning
+    it unchanged makes those bytes again — and bytes already carded under the pins are a
+    wrong answer on the ladder. That is what stops a repair costing a second identical
+    card, and it is the claim the whole bound rests on."""
+    scripted(ws, propose=[proposal("boom", tagged=False)])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert (outcome.crashes, outcome.missed, outcome.redundant) == (1, 2, 0)
+    assert statuses(store, prepared_hyp) == ["keep", "crash"], "one crash, carded once"
+
+
 def test_the_budget_is_spent_per_idea_and_the_next_crash_has_its_own(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
@@ -407,6 +428,12 @@ def _fact_keys() -> set[str]:
     defect this test exists for: the `redundant` array reached the proposer as an
     undeclared key for a day, and 2,822 proposals were refused by a rule the instruction
     never stated.
+
+    The scan reads literal string keys assigned in `_dynamic` and nowhere else, so a fact
+    added through `facts.update(...)` or in a helper would not be seen; and the check it
+    feeds asks only that the key word appears in backticks somewhere in the instruction,
+    which a word used for something else would satisfy. It catches a new undeclared key,
+    which is the defect; it is not a proof that every fact is explained.
     """
     tree = ast.parse(Path(driver.__file__).read_text(encoding="utf-8"))
     found: set[str] = set()
@@ -540,9 +567,14 @@ def test_a_redundant_result_from_an_earlier_run_reaches_the_next_one(
 
     driver.run(workspace, store, prepared_hyp, cards=1)
 
-    first = recorded.of("propose")[-1]
-    assert '"redundant"' in first.user
-    assert "the trough again" in first.user, "the earlier run's refusal, under the same pins"
+    # Read out of the `redundant` fact itself: the descriptions are in `recent_cards`
+    # too, so a test that searched the whole prompt for them passed with the window
+    # scoped back to the run, which is the change it is here to hold down.
+    repeated = json.loads(recorded.of("propose")[-1].user)["redundant"]
+    kept = records.cards_of(store, prepared_hyp)[1]
+    assert [entry["desc"] for entry in repeated] == ["run in revert mode", "the trough again"]
+    assert {entry["like"] for entry in repeated} == {kept.sha7}, "the card each one repeated"
+    assert all(entry["pct"] >= 97.0 for entry in repeated)
 
 
 def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(

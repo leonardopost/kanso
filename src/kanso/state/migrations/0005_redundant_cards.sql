@@ -4,7 +4,7 @@
 -- the engine time was spent and the number it produced was thrown away with it. Four
 -- things went with the card: the trial (certificates recorded n_trials of 7 and 8 against
 -- about a thousand backtests actually run and selected over, so the deflated Sharpe was
--- computed on a search fifty times too narrow), the coverage entry the proposer reads a
+-- computed on a search more than a hundred times too narrow), the coverage entry the proposer reads a
 -- corner's emptiness from, the record of the idea for the runs after this one, and the
 -- traceable link between the refusal and what it measured.
 --

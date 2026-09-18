@@ -273,6 +273,25 @@ def test_a_signature_matches_on_the_share_of_shared_days_and_names_the_closest(
     assert records.redundant_with(store, other, candidate, 1) is None, "pins bound the memory"
 
 
+def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The defect was a pair, not a reading: two candidates of an intraday hypothesis,
+    both flat at every period end, signed as two empty dicts and matched each other on
+    every one of 834 shared days. `signature` and `redundant_with` are each tested; this
+    is the composition on the shape that produced the defect, with nothing held at an end.
+    """
+    opens = midnight_ns(date(2024, 1, 2)) + 10 * 3_600 * 10**9
+    run = loop.begin(ws, store, registered)
+    stored = records.signature(a_run(trades=(a_trade("A.X", 3.0, opens, opens + 3_600 * 10**9),)))
+    records.record_signature(store, run, store.put_blob(b"a"), stored)
+    other = records.signature(a_run(trades=(a_trade("B.X", -3.0, opens, opens + 3_600 * 10**9),)))
+
+    assert stored["2024-01-02"] == [["A.X", 1, False]], "held, and gone by the end"
+    assert records.redundant_with(store, run, other, 97) is None, "another name is another bet"
+    assert records.redundant_with(store, run, stored, 97) is not None, "and the same one is not"
+
+
 def test_the_same_bytes_are_signed_once_under_one_set_of_pins(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:

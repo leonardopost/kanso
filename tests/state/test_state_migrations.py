@@ -362,6 +362,18 @@ def test_the_cards_table_is_rebuilt_to_admit_a_redundant_card_and_keeps_its_rows
             ("c" * 64, venue),
         )
         assert conn.execute("SELECT MAX(card_id) FROM cards").fetchone()[0] == 2
+        # AUTOINCREMENT or not, the id after a one-row table is 2; the difference is
+        # whether a freed id is handed out again, so the rebuilt table is asked that.
+        conn.execute("DELETE FROM cards WHERE card_id = 2")
+        conn.execute(
+            "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+            " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 3, 'op',"
+            " ?, 'redundant', 1.0, 3, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+            ("c" * 64, venue),
+        )
+        assert conn.execute("SELECT MAX(card_id) FROM cards").fetchone()[0] == 3, (
+            "the high-water mark came across, so no card_id is ever reused"
+        )
         assert sorted(
             str(row[0])
             for row in conn.execute(
@@ -372,8 +384,8 @@ def test_the_cards_table_is_rebuilt_to_admit_a_redundant_card_and_keeps_its_rows
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
-                " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 3,"
-                " 'op', ?, 'promising', 1.0, 3, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
+                " n_trials, n_trades, wall_s, venue_model, created_at) VALUES ('r', 'old', 4,"
+                " 'op', ?, 'promising', 1.0, 4, 3, 1.0, ?, '2026-01-01T00:00:00+00:00')",
                 ("c" * 64, venue),
             )
 
