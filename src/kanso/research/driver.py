@@ -143,8 +143,19 @@ REDUNDANT_LINES: Final = 10
 """How many books already measured are fed back into the next proposal, newest first.
 
 Both kinds count against it: the repeats, and the cards that held a measured book and
-moved the number past the floor. One list, because they are one fact to the proposer —
-this book has been held — and the entry's `repeat` says which of the two it was.
+moved the number past the floor. One window rather than one each, because they are one
+fact to the proposer — this book has been held — and the entry's `repeat` says which of
+the two it was. Ten books is ten books: a second window would make the prompt longer
+rather than better, and the proposer is steered by which book has been trodden, which both
+kinds name.
+
+What one kind takes from the other was measured rather than assumed, on the live workspace
+of 2026-09-18, by classifying each of its 3,092 refusals as 0.9.0 would and walking the
+stream a window at a time. 106 of the 3,092 are the second kind — 3.4% — but they arrive
+in runs, so 506 of the 3,092 turns would have been shown a repeat they were not: 1,049
+lines in all, a third of a line per turn, and on the intraday hypothesis where the second
+kind is 23% of the stream, 264 of 325 turns and 2.3 lines of the ten. That is the price of
+the newest ten being the newest ten, and it is paid in older repeats for newer books.
 
 Read across the pins rather than within the run, like `_recent` and unlike `_rewound_for`:
 a rewind is a fact about one run's file, but a book already held is a fact about the
@@ -653,6 +664,14 @@ def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object
     `REDUNDANT_LINES` gives: the same bet spelled a third way is refused against the first
     run's spelling as much as against this run's, and a proposer shown neither writes it a
     fourth time.
+
+    The pins and not the reading. An entry is not an anchor — `records.matched_book` picks
+    those, under the reading the asking card was measured with — it is the record that an
+    idea has been tried, and an idea tried under three folds was tried. The reading could
+    not narrow this window in any case: `loop.Setup.measured_under` is a fact about a card
+    rather than about a run, since the warmup prefix it digests is resolved from the
+    catalog for every card and can move within one run, so there is no one reading a run
+    could be joined by.
     """
     rows = store.connection.execute(
         "SELECT events.kind, events.detail FROM events JOIN runs"

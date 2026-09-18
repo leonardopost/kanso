@@ -40,6 +40,7 @@ from .mocked import (  # noqa: F401
     scripted,
     tuned,
 )
+from .test_scheduler import open_run
 
 NOWHERE = "--- a/strategy.py\n+++ b/strategy.py\n@@ -1,1 +1,1 @@\n-nowhere\n+here\n"
 """A diff whose context is in no version of any file."""
@@ -630,6 +631,65 @@ def test_a_redundant_result_from_an_earlier_run_reaches_the_next_one(
     assert [entry["desc"] for entry in repeated] == ["run in revert mode", "the trough again"]
     assert {entry["like"] for entry in repeated} == {kept.sha7}, "the card each one repeated"
     assert all(entry["pct"] >= 97.0 for entry in repeated)
+
+
+def test_both_kinds_of_book_share_one_window_and_the_newest_ten_win_it(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """One window, not one each, and `repeat` says which kind an entry is.
+
+    They are one fact to the proposer — this book has been held — so ten books is ten
+    books and a second window would be a longer prompt rather than a better one. What that
+    costs was measured: on the live workspace of 2026-09-18, 106 of 3,092 refusals are the
+    second kind, and because they arrive in runs, 506 turns would have been shown a repeat
+    they were not.
+    """
+    active = open_run(store, prepared_hyp)
+    kinds = [research_loop.REDUNDANT, research_loop.SAME_BOOK]
+    for n in range(driver.REDUNDANT_LINES + 2):
+        store.event(
+            kinds[n % 2],
+            prepared_hyp,
+            {"run_id": active.run_id, "like": "a" * 7, "pct": 99.0, "desc": f"book {n}"},
+        )
+
+    shown = driver._redundant_in(store, active)
+
+    assert [entry["desc"] for entry in shown] == [
+        f"book {n}" for n in reversed(range(2, driver.REDUNDANT_LINES + 2))
+    ], "the newest ten of both kinds, newest first"
+    assert [entry["repeat"] for entry in shown] == [
+        n % 2 == 0 for n in reversed(range(2, driver.REDUNDANT_LINES + 2))
+    ], "each says which kind it is, and neither kind has a window of its own"
+
+
+def test_a_book_measured_under_another_reading_still_says_the_idea_was_tried(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The window is the pins and not the reading, which is a fact about a card.
+
+    An entry is not an anchor — `records.matched_book` picks those under the reading the
+    asking card was measured with — it is the record that an idea has been tried, and an
+    idea tried under four folds was tried when the next run counts three.
+    """
+    workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("revert"), proposal("revert", desc="the trough again")])
+    assert driver.run(workspace, store, prepared_hyp).redundant
+    reset_mock()
+
+    other = tuned(ws, stall_k=2, folds=3)
+    scripted(other, propose=[proposal("weak")])
+    driver.run(other, store, prepared_hyp, cards=1)
+
+    readings = {
+        row[0]
+        for row in store.connection.execute(
+            "SELECT DISTINCT measured_under FROM signatures WHERE hyp_id = ?", (prepared_hyp,)
+        )
+    }
+    assert len(readings) == 2, "the second run counts three folds, so its cards read another way"
+    told = json.loads(recorded.of("propose")[-1].user)["redundant"]
+    assert "the trough again" in [entry["desc"] for entry in told]
 
 
 def test_a_description_that_is_not_one_line_is_corrected_on_the_ladder(
