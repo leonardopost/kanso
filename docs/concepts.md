@@ -229,14 +229,18 @@ bounded by the vocabulary rather than by the hypothesis. A card made by hand car
 tags, and reaches the table under none.
 
 A card that ran and did not keep is then compared by what it **held**: its signature,
-which is, for each session of the research window, the instruments and sides it held at
-any point of that session, keyed by its day. Both of a run's own records of a position are
-read — what it held at each period end, and the spans of the positions it opened and
-closed — because a period end is a sample, and a hypothesis whose positions close before
-the session does is flat at every sample by construction. Signed from the ends alone, such
-a hypothesis matched every candidate against every other at 100 percent and never made an
-experiment again: measured in a live workspace, 192 of one's 201 stored signatures held
-nothing on any of their 834 sampled days. Two strategies with the same signature on nearly
+which is, for each session of the research window, the instruments and sides it held and
+whether each was still open at the session's end. Both of a run's own records of a
+position are read — what it held at each period end, and the spans of the positions it
+opened and closed — because a period end is a sample, and a hypothesis whose positions
+close before the session does is flat at every sample by construction. Signed from the
+ends alone, such a hypothesis matched every candidate against every other at 100 percent
+and never made an experiment again: measured in a live workspace, 192 of one's 201 stored
+signatures held nothing on any of their 834 sampled days. The two are marked apart rather
+than merged into "something was held", so the reading is strictly finer than sampling the
+ends alone and never coarser: two strategies that differed under the old reading differ
+under this one, and carrying a position over the close is not the same book as closing it
+before. Two strategies with the same signature on nearly
 every shared session made the same bets and earned the same number, however differently
 they were written — a threshold moved, a helper renamed, a condition spelt the other way — so
 the second is not an experiment. One that matches a strategy already judged under the
