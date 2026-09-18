@@ -210,6 +210,17 @@ def test_a_position_signs_every_day_it_spanned_and_a_day_the_run_never_measured_
     }
 
 
+def test_a_holding_on_a_day_the_run_measured_no_period_end_in_widens_the_signature() -> None:
+    """The runner samples `held` at the period ends and nowhere else, so this cannot
+    happen today — and the line that widens the days for it is defence, which has to
+    defend. Reading the second half of the day from keys the first half had not been
+    given made it raise `KeyError` on the one case it was written for."""
+    stray = midnight_ns(date(2024, 1, 9)) + 1 * 3_600 * 10**9
+    run = a_run(held=(Held(stray, "A.X", 1.0, 10.0),))
+
+    assert records.signature(run)["2024-01-09"] == [["A.X", 1, True]]
+
+
 def test_a_day_the_book_flipped_carries_both_sides_once() -> None:
     """Long then short is neither long nor short, and holding it twice is holding it once."""
     day = midnight_ns(date(2024, 1, 2))

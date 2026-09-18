@@ -372,11 +372,17 @@ def signature(run: CardRun) -> Signature:
     Only the sign of a quantity enters, because a size is a parameter and a parameter is
     what a signature exists to see through; a day the book flipped carries both signs,
     since what was held over the day is the bet and the order is a detail.
+
+    The days are taken from the period ends and then widened by the days the holdings
+    themselves fall on, before the second reading is seeded from them — the runner samples
+    `held` at the period ends and no other instant, so the widening is unreachable today,
+    and seeding the two dicts from the same keys is what keeps it a widening rather than a
+    `KeyError` if that ever stops being true.
     """
     ends: dict[date, set[tuple[str, int]]] = {day_of(ts): set() for ts in run.period_ends_ns}
-    during: dict[date, set[tuple[str, int]]] = {day: set() for day in ends}
     for held in run.held:
         ends.setdefault(day_of(held.ts_ns), set()).add((held.instrument_id, _sign(held.qty)))
+    during: dict[date, set[tuple[str, int]]] = {day: set() for day in ends}
     for trade in run.trades:
         mark = (trade.instrument_id, _sign(trade.qty))
         for day in _spanned(trade.opened_ns, trade.closed_ns):
