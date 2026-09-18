@@ -6,7 +6,7 @@ the next single change to `strategy.py`, applies it, and evaluates the result as
 There is no second evaluation path, so nothing the driver produces is judged more kindly
 than something a person produced.
 
-Four rules make the loop finite in effort while remaining infinite in time.
+Five rules make the loop finite in effort while remaining infinite in time.
 
 **A proposal is a diff, and a diff that does not fit is a wrong answer.** The model is
 given the file's exact bytes and returns a unified diff over them. Applying it happens
@@ -29,12 +29,24 @@ it counts as a trial and it enters the coverage. What it costs is the turn — i
 toward the stall like a discard — and the `redundant` event carries the one fact the card
 cannot, which is the card it repeated.
 
+**A crash buys a repair, and only so many.** A card that raised spent a proposal and
+returned nothing: the idea in it was never judged, because it never ran. Measured in a
+live workspace, five consecutive crashes on one hypothesis were five state-handling slips
+— `'dict' object has no attribute 'append'`, an `InstrumentId` given as a `str`, an
+attribute read before it was set — on ideas straight out of that hypothesis's own declared
+families, and not one of the five was ever judged. So the turn after a crash is a repair:
+the proposer is given the traceback and the diff that produced it, over the file it now
+holds, and asked to make the same change with the fault fixed. `REPAIRS` of them, then the
+idea is dropped and the next turn asks for a new one — a proposer that cannot fix its own
+`AttributeError` in two goes is not going to, and the run has other things to try.
+
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
 provider cache hits; the moving half is the current file, the last `context_cards` cards
 of the hypothesis under the run's pins — across runs, so a run that begins after a stall
 is not shown a blank slate and made to re-walk the last run's discards — the previous
-diff, the tail of a crash if the last card crashed, and the coverage table: every card
+diff, the tail of a crash if the last card crashed with the repair it owes, and the
+coverage table: every card
 under the pins, read back by the tags its proposer gave it, as a count, the best score
 and its status, and the newest card per tag. The recent cards say what was tried last;
 the coverage says what has been tried at all, in a size that does not grow with the
@@ -92,6 +104,7 @@ __all__ = [
     "GATE_LINES",
     "LOCAL",
     "REDUNDANT_LINES",
+    "REPAIRS",
     "REPEATED",
     "STRUCTURAL",
     "TASK",
@@ -107,6 +120,14 @@ TASK: Final = "propose"
 
 CRASH_TAIL_LINES: Final = 50
 """How much of a crash a proposer is shown: the end, where the exception is."""
+
+REPAIRS: Final = 2
+"""How many repair turns one crashed idea buys before it is a miss like any other.
+
+A bound rather than a setting, like `CRASH_TAIL_LINES` beside it and unlike `stall_k`: it
+shapes one prompt rather than the search, and the number that matters is small. One repair
+catches the slip a traceback names outright, a second catches the one the first uncovers,
+and a third is a proposer that has stopped reading the traceback."""
 
 GATE_LINES: Final = 10
 """How many failing certification gates are fed back into the next proposal."""
@@ -405,6 +426,9 @@ def _dynamic(
     }
     if recent and recent[-1]["crash_tail"]:
         facts["crash_tail"] = _tail(str(recent[-1]["crash_tail"]), CRASH_TAIL_LINES)
+    owed = _repair(store, active, source)
+    if owed is not None:
+        facts["repair"] = owed
     failing = _failing_gates(store, active.hyp_id)
     if failing:
         facts["failing_certification_gates"] = failing
@@ -415,6 +439,47 @@ def _dynamic(
     if redundant:
         facts["redundant"] = redundant
     return facts
+
+
+def _repair(store: StateStore, active: RunRecord, source: bytes) -> dict[str, object] | None:
+    """The crashed idea this turn is asked to repair, or `None` when none is owed.
+
+    It lives in the driver's turn, and the two places it could have lived say why. The
+    router's ladder judges an answer against the file in hand and retries inside one call,
+    but a crash is not an answer — it is a card, and its fault is only known after a
+    backtest the ladder returned from long before. A sixth task class would reach the
+    routing table of every register an operator maintains by hand, and would buy nothing: a
+    repair asks the same question `propose` asks, over the same file, with one more fact,
+    which is also what keeps the stable half of the prompt byte-identical and the provider
+    cache warm.
+
+    The bound is read from the run's own tail rather than carried in memory, so a call
+    that resumes a run continues the count instead of starting it over. One crashed card
+    owes the first repair and a second crash the second; past `REPAIRS` nothing is owed and
+    the proposer is asked for a fresh idea. The diff runs from the file in hand to the
+    bytes that crashed, so applying it exactly reproduces the crash — which the `_carded`
+    check then refuses, making a repair that changes nothing a wrong answer on the ladder
+    rather than a second identical card.
+    """
+    rows = store.connection.execute(
+        "SELECT strategy_sha, status, description FROM cards WHERE run_id = ?"
+        " ORDER BY seq DESC LIMIT ?",
+        (active.run_id, REPAIRS + 1),
+    ).fetchall()
+    crashed: list[sqlite3.Row] = []
+    for row in rows:
+        if str(row["status"]) != "crash":
+            break
+        crashed.append(row)
+    if not crashed or len(crashed) > REPAIRS:
+        return None
+    newest = crashed[0]
+    return {
+        "attempt": len(crashed),
+        "of": REPAIRS,
+        "desc": str(newest["description"]),
+        "diff": diffs.unified(source, store.get_blob(str(newest["strategy_sha"]))),
+    }
 
 
 def phase(settings: ResearchConfig, misses: int) -> str:

@@ -272,6 +272,15 @@ and the phase is a fact of every call, because a refusal the proposer was never 
 is a wasted ladder. Both lengths, like `stall_k` and `redundant_pct`, are framework search
 rules: they bound the search and choose nothing within it.
 
+A crash is the one card whose idea was never judged, so the turn after it is a **repair**.
+The proposer is given the traceback and the change that produced it, as a diff over the
+file it now holds — the lane was restored the moment the card crashed — and asked for the
+same idea with the fault fixed rather than for a new experiment. Two repairs, then the
+idea is dropped and the next turn asks for something else. Measured in a live workspace
+before this existed: five consecutive crashes on one hypothesis were five state-handling
+slips on ideas out of that hypothesis's own declared families, each costing a whole
+proposal and returning nothing, and not one of the five was ever judged.
+
 A stall is where the memory is read one more time. `[research] reseed_after_stalls`
 consecutive stalls on the same best — counted since the last reseed — say the best is a
 ridge the climb cannot leave, so the scheduler **re-seeds**: the next run starts from the

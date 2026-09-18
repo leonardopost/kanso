@@ -8,6 +8,7 @@ rather than fixtures.
 from __future__ import annotations
 
 import ast
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -313,6 +314,41 @@ def test_redundant_misses_count_toward_the_stall(
     assert outcome.reason == "stalled"
     assert (outcome.keeps, outcome.redundant) == (1, 2)
     assert records.active(store, prepared_hyp) is None
+
+
+def test_a_crash_buys_a_repair_turn_carrying_the_change_that_crashed(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The idea in a crashed card was never judged, and the file that held it was restored
+    the moment it crashed — so the proposer is handed it back as a diff over the file it
+    now has, with the traceback, and asked for the same idea without the fault."""
+    scripted(ws, propose=[proposal("boom"), proposal("revert")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert (outcome.crashes, outcome.keeps) == (1, 1)
+    first, second = recorded.of("propose")
+    assert '"repair"' not in first.user, "nothing has crashed yet"
+    asked = json.loads(second.user)["repair"]
+    assert (asked["attempt"], asked["of"], asked["desc"]) == (1, driver.REPAIRS, "run in boom mode")
+    assert '+Strategy.mode = "boom"' in str(asked["diff"]), "the change, over the file in hand"
+    assert "the card asked for the impossible" in second.user, "and why it raised"
+
+
+def test_the_repairs_run_out_and_the_idea_is_dropped(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Two goes at one fault, then it is a miss like any other: a proposer that has not
+    read the traceback twice will not read it a third time, and the run has other ideas."""
+    scripted(ws, propose=[proposal("boom")])
+
+    driver.run(ws, store, prepared_hyp, cards=driver.REPAIRS + 2)
+
+    attempts = [
+        json.loads(call.user).get("repair", {}).get("attempt") for call in recorded.of("propose")
+    ]
+    assert attempts == [None, 1, 2, None]
+    assert statuses(store, prepared_hyp) == ["keep"] + ["crash"] * (driver.REPAIRS + 2)
 
 
 def _fact_keys() -> set[str]:
