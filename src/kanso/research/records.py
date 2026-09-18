@@ -506,6 +506,21 @@ def matched_book(
     argument for recording a repeat is the corner it fills in and the record the next run
     reads, and neither of those is about the number that came back.
 
+    That preference is why the rows are read in two passes rather than one. `json.loads`
+    of a stored book is what this function costs, and a row whose number disagreed can
+    never beat an agreeing one however much of it matched, so the books outside the floor
+    are parsed only when nothing inside it qualified. What that is worth is small and
+    measured rather than argued: over the four largest pin groups of the live workspace of
+    2026-09-18, driving this function on the books held out of each, a card costs 0.5 s to
+    1.0 s against groups of 23 MB to 46 MB, and the second pass falls away on 0.2% to 7.4%
+    of it. It is small because a pin group's numbers sit on top of each other — 88% to
+    99.6% of the pairs within one group fall inside that hypothesis's floor, against the
+    20% the same measurement gives over a whole hypothesis's numbers — and because the
+    hypothesis this costs most, `sox_main_b` with 3,228 cards, matched no stored book at
+    all on 91% of its judged candidates, and a card that matches nothing pays both passes.
+    What a card pays here is the size of the pool and the shape a book is parsed into, and
+    neither is the ordering (`docs/backlog.md` row 89).
+
     Both clauses make the refusal, because the premise is both clauses. Two strategies
     that held the same book on nearly every shared day made the same bets, and the
     inference drawn from that is that they earned the same result; only the first half
@@ -562,20 +577,36 @@ def matched_book(
             measured,
         ),
     ).fetchall()
-    closest: Match | None = None
+    within: list[sqlite3.Row] = []
+    beyond: list[sqlite3.Row] = []
     for row in rows:
         if row["metric"] is None:
             continue
-        earned = float(row["metric"])
+        (within if abs(metric - float(row["metric"])) <= floor else beyond).append(row)
+    agreeing = _closest(held, within, pct, agreed=True)
+    return agreeing if agreeing is not None else _closest(held, beyond, pct, agreed=False)
+
+
+def _closest(held: Signature, rows: list[sqlite3.Row], pct: int, *, agreed: bool) -> Match | None:
+    """The row of `rows` whose book `held` matches on the largest share of their shared
+    days, the earlier on a tie, or `None` when none of them reaches `pct`.
+
+    Called twice by `matched_book`, over the rows whose numbers agreed with the
+    candidate's and then over the rest, which is what keeps the second parse out of the
+    common case: the ranking prefers an agreeing match to any disagreeing one, so once one
+    agreeing row qualifies no row of the other set can win, and `json.loads` is the cost
+    of this function. The rows arrive in the order the selection put them in, so the
+    strict `>` leaves a tie with the row stored first.
+    """
+    closest: Match | None = None
+    for row in rows:
         stored: Any = json.loads(str(row["signature"]))
         shared = held.keys() & stored.keys()
-        matched = sum(1 for day in shared if held[day] == stored[day])
-        found = Match(
-            str(row["strategy_sha"]), matched, len(shared), earned, abs(metric - earned) <= floor
-        )
-        if not shared or found.pct < pct:
+        if not shared:
             continue
-        if closest is None or (found.agreed, found.pct) > (closest.agreed, closest.pct):
+        matched = sum(1 for day in shared if held[day] == stored[day])
+        found = Match(str(row["strategy_sha"]), matched, len(shared), float(row["metric"]), agreed)
+        if found.pct >= pct and (closest is None or found.pct > closest.pct):
             closest = found
     return closest
 

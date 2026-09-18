@@ -352,6 +352,41 @@ def test_a_match_whose_number_agreed_is_preferred_to_a_closer_one_that_did_not(
     )
 
 
+def test_a_book_outside_the_floor_is_not_parsed_once_an_agreeing_one_has_matched(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ranking prefers an agreeing match, so a disagreeing row cannot win it back.
+
+    `json.loads` of a stored book is what the matcher costs — 0.5 s to 1.0 s a card over
+    the live workspace's largest pin groups — so a row that cannot change the answer is
+    not parsed. Counting the parses is the only way to state that, since the answer is the
+    same either way, which is the point.
+    """
+    run = loop.begin(ws, store, registered)
+    long = [["A.X", 1, True]]
+    held = {"2024-01-01": long, "2024-01-02": long}
+    agreeing, disagreeing = store.put_blob(b"agreeing"), store.put_blob(b"disagreeing")
+    records.record_signature(store, run, agreeing, held, 1.0, UNDER)
+    records.record_signature(store, run, disagreeing, held, 9.0, UNDER)
+
+    parsed: list[str] = []
+    loads = records.json.loads
+    monkeypatch.setattr(records.json, "loads", lambda text: parsed.append(text) or loads(text))
+
+    found = records.matched_book(store, run, held, 100, 1.0, 0.25, UNDER)
+    assert found is not None and (found.like, found.agreed) == (agreeing, True)
+    assert len(parsed) == 1, "the book whose number disagreed was never read"
+
+    parsed.clear()
+    moved = records.matched_book(store, run, held, 100, 9.0, 0.25, UNDER)
+    assert moved is not None and (moved.like, moved.agreed) == (disagreeing, True)
+    assert len(parsed) == 1, "and it is the other way round when the other number agrees"
+
+    parsed.clear()
+    assert records.matched_book(store, run, held, 100, 5.0, 0.25, UNDER) is not None
+    assert len(parsed) == 2, "with no agreeing book at all, both are read and one is named"
+
+
 def test_a_stored_book_with_no_number_on_record_is_no_anchor_at_all(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
