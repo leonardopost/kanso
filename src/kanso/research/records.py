@@ -21,7 +21,11 @@ redundant card is in both, because it is the other way round — it ran, it trad
 selection ranked its number and declined it. That another candidate held the same book
 makes it a correlated trial, not a non-trial, and dropping it was measured costing
 certificates an `n_trials` of 7 and 8 against roughly a thousand backtests run and
-selected over — a hundredfold in the count they deflate by (`docs/backlog.md` row 59).
+selected over — a hundredfold in the count they deflate by. What a correlated trial is
+worth is not settled by counting it: the metric enters the spread as well as the count,
+and a set dominated by repeats of one book narrows the spread faster than the count
+widens the term beside it. `docs/backlog.md` row 59 holds the measurement of both
+directions and the reason nothing else changes here.
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when

@@ -240,22 +240,22 @@ signatures held nothing on any of their 834 sampled days. The two are marked apa
 than merged into "something was held", so the reading is strictly finer than sampling the
 ends alone and never coarser: two strategies that differed under the old reading differ
 under this one, and carrying a position over the close is not the same book as closing it
-before. Two strategies with the same signature on nearly
-every shared session made the same bets and earned the same number, however differently
-they were written — a threshold moved, a helper renamed, a condition spelt the other way — so
-the second is not an experiment. One that matches a strategy already judged under the
-run's pins on at least `[research] redundant_pct` percent of their shared sessions is
-**redundant**: a card of that status carrying the metric it measured, the lane restored
-as any non-keep restores it, a `redundant` event carrying the card it repeats, the command
-that asked for it refused, and the proposer shown that card by name on its next turn. It
-is a card because the backtest ran and a real number came back — the trial it counts as,
-the corner it fills in on the coverage table and the record the next run reads are all
-things the search actually did, and dropping them was measured deflating a certificate by
-a search fifty times narrower than the one that ran. What it may never be is a keep: the
-keep rule is asked first, so a candidate that beats the best is a keep whatever it
-resembles. The baseline is exempt, since it is the last run's best and its signature is
-already stored; and signatures are stored for every judged run, redundant ones included,
-so the third spelling of an idea is refused against the second as well as the first.
+before. Two strategies with the same signature on nearly every shared session made the
+same bets and earned the same number, however differently they were written — a threshold
+moved, a helper renamed, a condition spelt the other way — so the second is not an
+experiment. One that matches a strategy already judged under the run's pins on at least
+`[research] redundant_pct` percent of their shared sessions is **redundant**: a card of
+that status carrying the metric it measured, the lane restored as any non-keep restores
+it, a `redundant` event carrying the card it repeats, the command that asked for it
+refused, and the proposer shown that card by name on its next turn. It is a card because
+the backtest ran and a real number came back — the trial it counts as, the corner it fills
+in on the coverage table and the record the next run reads are all things the search
+actually did, and dropping them was measured deflating a certificate by a search more than
+a hundred times narrower than the one that ran. What it may never be is a keep: the keep
+rule is asked first, so a candidate that beats the best is a keep whatever it resembles.
+The baseline is exempt, since it is the last run's best and its signature is already
+stored; and signatures are stored for every judged run, redundant ones included, so the
+third spelling of an idea is refused against the second as well as the first.
 
 The rule is in the proposer's instruction, with what a signature is and what to do with
 the refusals it is shown, for the same reason the phase is: a refusal the proposer was
@@ -263,8 +263,8 @@ never told about is a wasted ladder. Measured in a live workspace before it was,
 proposals were refused in a day by a rule whose words — signature, redundant, session,
 `pct` — appeared nowhere in the 2,393 characters the proposer was given. Every fact the
 proposer is sent is named in that instruction, and a test reads the fact keys out of the
-driver's own source to keep it that way. Signatures live under the pins — the hypothesis file, the snapshot, the
-criteria — and a run under new pins starts with none.
+driver's own source to keep it that way. Signatures live under the pins — the hypothesis
+file, the snapshot, the criteria — and a run under new pins starts with none.
 
 The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
 Misses since the last keep set it: for the first `[research] local_cards` the proposer is
