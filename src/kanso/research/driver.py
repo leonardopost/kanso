@@ -29,7 +29,9 @@ it counts as a trial and it enters the coverage. It is a card in every count a c
 it advances the drift clock, and the diff that produced it is what the next turn is shown
 as `last_diff`. What it costs is the turn — it counts toward the stall like a discard —
 and the `redundant` event carries the one fact the card cannot, which is the card it
-repeated.
+repeated. A candidate that held such a book and moved the number past the floor is not
+refused at all; it appends a `same_book` event instead, and the next proposal is shown the
+two kinds in one list with `repeat` saying which.
 
 **A crash buys a repair, and only so many.** A card that raised spent a proposal and
 returned nothing: the idea in it was never judged, because it never ran. Measured in a
@@ -138,7 +140,11 @@ DRIFT_LINES: Final = 3
 """How many of a run's rewinds are fed back into the next proposal, newest first."""
 
 REDUNDANT_LINES: Final = 10
-"""How many redundant results are fed back into the next proposal, newest first.
+"""How many books already measured are fed back into the next proposal, newest first.
+
+Both kinds count against it: the repeats, and the cards that held a measured book and
+moved the number past the floor. One list, because they are one fact to the proposer —
+this book has been held — and the entry's `repeat` says which of the two it was.
 
 Read across the pins rather than within the run, like `_recent` and unlike `_rewound_for`:
 a rewind is a fact about one run's file, but a book already held is a fact about the
@@ -631,22 +637,32 @@ def _rewound_for(store: StateStore, active: RunRecord) -> list[str]:
 
 
 def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object]]:
-    """The newest redundant results under this run's pins: what was tried, and what it repeated.
+    """The newest books already measured under this run's pins: what was tried, and what
+    it matched.
 
-    The card says a candidate was redundant; only the event says which stored signature it
-    matched and on how much of it, and that is the half the proposer can act on. Joined to
-    `runs` so the window is the pins rather than the run, for the reason `REDUNDANT_LINES`
-    gives: the same bet spelled a third way is refused against the first run's spelling as
-    much as against this run's, and a proposer shown neither writes it a fourth time.
+    Both kinds, and each says which it is. The card says a candidate was redundant; only
+    the event says which stored signature it matched and on how much of it, and that is
+    the half the proposer can act on — and a card that matched a book and moved the number
+    further than the floor has no status of its own at all, so without its event the
+    proposer is shown nothing and re-treads the book it was never told about. Its `repeat`
+    is `False`: the turn was not refused, and the rule the proposer is given — hold a book
+    already measured and move the number, and it is an experiment — is the rule that
+    admitted it.
+
+    Joined to `runs` so the window is the pins rather than the run, for the reason
+    `REDUNDANT_LINES` gives: the same bet spelled a third way is refused against the first
+    run's spelling as much as against this run's, and a proposer shown neither writes it a
+    fourth time.
     """
     rows = store.connection.execute(
-        "SELECT events.detail FROM events JOIN runs"
+        "SELECT events.kind, events.detail FROM events JOIN runs"
         " ON runs.run_id = json_extract(events.detail, '$.run_id')"
-        " WHERE events.kind = ? AND events.subject = ? AND runs.hypothesis_sha = ?"
+        " WHERE events.kind IN (?, ?) AND events.subject = ? AND runs.hypothesis_sha = ?"
         " AND runs.snapshot_id = ? AND runs.criteria_version = ?"
         " ORDER BY events.event_id DESC LIMIT ?",
         (
             research_loop.REDUNDANT,
+            research_loop.SAME_BOOK,
             active.hyp_id,
             active.hypothesis_sha,
             active.snapshot_id,
@@ -657,7 +673,9 @@ def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object
     found: list[dict[str, object]] = []
     for row in rows:
         detail = json.loads(str(row["detail"]))
-        found.append({key: detail.get(key) for key in ("desc", "like", "pct")})
+        entry: dict[str, object] = {key: detail.get(key) for key in ("desc", "like", "pct")}
+        entry["repeat"] = str(row["kind"]) == research_loop.REDUNDANT
+        found.append(entry)
     return found
 
 

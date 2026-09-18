@@ -347,6 +347,41 @@ def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restor
     assert [row["sessions"] for row in stored] == [31]
 
 
+def test_a_book_already_measured_whose_number_moved_is_a_discard_and_still_on_record(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The other side of the second clause: the book matched and the numbers did not.
+
+    The stored anchor is moved a thousand away from what this data pays, which is the
+    shape the live workspace of 2026-09-18 measured on an intraday hypothesis whose
+    objective is a per-trade edge: one anchor, 289 matches, scores from -18.780 to 9.179
+    around its own -4.5452. Such a candidate is not a repeat and is not refused -- and
+    the fact that its book was already measured is still the one thing about it the next
+    proposal can act on, so it is recorded under its own kind.
+    """
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, registered, "the trough rule")
+    store.connection.execute(
+        "UPDATE signatures SET metric = metric + 1000 WHERE strategy_sha = ?",
+        (kept.strategy_sha,),
+    )
+    edit(ws, run, REVERTING.replace(b"self.long = False", b"self.long = bool(0)"))
+
+    made = loop.card(ws, store, registered, "the same rule, spelt otherwise")
+
+    assert made.status == "discard", "an experiment, because the two numbers say so"
+    assert store.events(kind=loop.REDUNDANT, subject=registered) == []
+    (event,) = store.events(kind=loop.SAME_BOOK, subject=registered)
+    assert event.detail["like"] == kept.sha7
+    assert event.detail["matched"] == event.detail["sessions"] == 31
+    assert event.detail["pct"] == 100.0
+    assert event.detail["metric"] == made.metric
+    assert event.detail["like_metric"] == kept.metric + 1000
+    assert event.detail["desc"] == "the same rule, spelt otherwise"
+    assert event.detail["floor"] < 1000, "which is why the two numbers are two results"
+
+
 def test_the_keep_rule_is_asked_before_the_signature(
     ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

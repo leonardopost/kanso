@@ -308,6 +308,44 @@ def test_a_redundant_card_is_recorded_and_the_next_proposal_is_told_what_it_repe
     assert '"redundant"' in third.user
     assert f'"like": "{kept.sha7}"' in third.user
     assert "the same bet again" in third.user
+    assert json.loads(third.user)["redundant"] == [
+        {"desc": "the same bet again", "like": kept.sha7, "pct": 100.0, "repeat": True}
+    ], "a repeat, which is the kind the turn was refused for"
+
+
+def test_a_measured_book_whose_number_moved_reaches_the_next_proposal_as_no_repeat(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """The other kind of book already measured, and the proposer is shown both.
+
+    The stored anchor is moved past this hypothesis's floor between the two cards, so the
+    second holds a book already measured and earns a number the first denies. Nothing is
+    refused -- it is an experiment and an ordinary discard -- and without a record of it
+    the proposer is shown nothing at all and re-treads the book it was never told about,
+    which is what the `redundant` fact exists to stop.
+    """
+    scripted(ws, propose=[proposal("revert"), proposal("revert", desc="the same bet again")])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    kept = records.cards_of(store, prepared_hyp)[1]
+    store.connection.execute(
+        "UPDATE signatures SET metric = metric + 1000 WHERE strategy_sha = ?",
+        (kept.strategy_sha,),
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert (outcome.redundant, outcome.discards, outcome.missed) == (0, 1, 0)
+    assert statuses(store, prepared_hyp) == ["keep", "keep", "discard"]
+    assert store.events(kind=research_loop.REDUNDANT, subject=prepared_hyp) == []
+    (event,) = store.events(kind=research_loop.SAME_BOOK, subject=prepared_hyp)
+    assert event.detail["like"] == kept.sha7
+
+    driver.run(ws, store, prepared_hyp, cards=1)
+
+    told = json.loads(recorded.of("propose")[-1].user)["redundant"]
+    assert told == [
+        {"desc": "the same bet again", "like": kept.sha7, "pct": 100.0, "repeat": False}
+    ]
 
 
 def test_a_redundant_card_advances_the_drift_clock_and_the_next_turn_s_last_diff(

@@ -45,12 +45,16 @@ restores it, a `redundant` event names the card it repeats and both numbers, and
 is a claim about the result: a candidate whose number differs from the book it repeats by
 more than the floor kanso already uses to say a difference is a difference has measured
 something the stored card did not, and refusing it as a repeat asserts what the two
-numbers deny. It is a card because the backtest ran: the engine time was spent, a real
-number came back, and the selection ranked that number and declined it. Refusing it
-without a record cost three things, all measured in a live workspace — the trial, so
-certificates deflated a Sharpe by a search fifty times narrower than the one that was run;
-the coverage entry, so a corner walked a thousand times read as unwalked to the proposer;
-and the idea itself, which the runs after this one could no longer see. What a redundant
+numbers deny. That candidate is an ordinary discard and it still appends a `same_book`
+event, because the book it matched is a fact about the search whichever way its number
+went, and the proposer that is told to move the number of a measured book cannot apply
+that rule unless it is shown the books that were measured. It is a card because the
+backtest ran: the engine time was spent, a real number came back, and the selection ranked
+that number and declined it. Refusing it without a record cost three things, all measured
+in a live workspace — the trial, so certificates deflated a Sharpe by a search fifty times
+narrower than the one that was run; the coverage entry, so a corner walked a thousand
+times read as unwalked to the proposer; and the idea itself, which the runs after this one
+could no longer see. What a redundant
 card may never be is a keep: the keep rule runs first, so a candidate that beats the best
 is a keep whatever it resembles, and the baseline is never redundant, since it is the best
 blob of the last run and its own signature is already stored. The two rules cannot both
@@ -130,6 +134,7 @@ __all__ = [
     "MIN_CARD_BUDGET_S",
     "REDUNDANT",
     "RESEARCHABLE",
+    "SAME_BOOK",
     "RedundantError",
     "Setup",
     "begin",
@@ -161,6 +166,21 @@ REDUNDANT: Final = "redundant"
 the candidate held the same book as a strategy already judged under the pins, and scored
 what that strategy scored. The event is what names the card it repeats and the two numbers
 that agreed, which no column of `cards` holds."""
+
+SAME_BOOK: Final = "same_book"
+"""The event a card appends when it held a book already judged under the pins and earned
+a number further than the noise floor from it.
+
+It is no repeat — the two numbers deny it — so the card is an ordinary discard, nothing is
+refused and the status is not this. What the event carries is the half the card cannot:
+which book it matched and on how much of it. The argument for recording a repeat is the
+corner it fills in and the record the next run reads, and that argument says nothing about
+which way the number went, so it is made here too; the proposer is shown both kinds, and
+told which is which, because the rule it is given — hold a book already measured and move
+the number, and it is an experiment — cannot be applied by a model shown only the refusals.
+Measured on the live workspace of 2026-09-18, 106 of 3,092 refusals were this rather than
+a repeat, and each of them stores its own anchor, so a book re-trodden this way costs
+roughly `ceil(spread / 2 x floor)` backtests before matching resumes."""
 
 
 class RedundantError(PreconditionError):
@@ -775,10 +795,9 @@ def _judge(
     like = (
         None
         if kept or baseline
-        else records.redundant_with(
-            store, run, held, ws.config.research.redundant_pct, metric, floor
-        )
+        else records.matched_book(store, run, held, ws.config.research.redundant_pct, metric, floor)
     )
+    repeat = like is not None and like.agreed
     records.record_signature(store, run, strategy_sha, held, metric)
     made = _record(
         ws,
@@ -788,7 +807,7 @@ def _judge(
         strategy_sha=strategy_sha,
         source=source,
         desc=desc,
-        status="keep" if kept else "discard" if like is None else REDUNDANT,
+        status="keep" if kept else REDUNDANT if repeat else "discard",
         metric=metric,
         se=se,
         n_trades=len(result.run.trades),
@@ -801,7 +820,7 @@ def _judge(
         tags=tags,
     )
     if like is not None:
-        _refuse_redundant(store, run, made.strategy_sha, desc, metric, floor, like)
+        _same_book(store, run, made.strategy_sha, desc, metric, floor, like)
     return made
 
 
@@ -817,28 +836,33 @@ def _noise_floor(setup: Setup, se: float) -> float:
     return noise_floor(se, ref.params)
 
 
-def _refuse_redundant(
+def _same_book(
     store: StateStore,
     run: RunRecord,
     strategy_sha: str,
     desc: str,
     metric: float,
     floor: float,
-    like: records.Redundancy,
-) -> NoReturn:
-    """Name the card this one repeats in an event, and refuse the caller another experiment.
+    like: records.Match,
+) -> None:
+    """Name the book this card matched in an event, and refuse the caller when it repeats it.
 
     The card is already written and the lane is already restored, both by `_record`, so
     what is left here is what a card has no column for: which stored signature it matched,
     on how many of their shared sessions, the metric it measured while doing it, the
-    metric that signature earned, and the floor the two of them sat inside. The refusal is
-    what stops a redundant result being taken for a new one — the driver counts it toward
-    the stall, and an operator gets a non-zero exit — and it says both halves, because a
-    reader told only that two books matched cannot tell this refusal from the one kanso
-    used to make on a book alone.
+    metric that signature earned, and the floor the two of them sat inside. Those five
+    facts are the same whichever way the two numbers went, so one event shape carries both
+    kinds and the kind says which it is — `redundant` when they agreed and the turn is
+    refused, `same_book` when they did not and the card is an ordinary discard.
+
+    The refusal is what stops a redundant result being taken for a new one — the driver
+    counts it toward the stall, and an operator gets a non-zero exit — and it says both
+    halves, because a reader told only that two books matched cannot tell this refusal
+    from the one kanso used to make on a book alone. A match that did not agree refuses
+    nothing and returns: it was an experiment, and the record is all it owes.
     """
     store.event(
-        REDUNDANT,
+        REDUNDANT if like.agreed else SAME_BOOK,
         run.hyp_id,
         {
             "run_id": run.run_id,
@@ -854,6 +878,8 @@ def _refuse_redundant(
             "desc": desc,
         },
     )
+    if not like.agreed:
+        return
     raise RedundantError(
         f"{strategy_sha[:7]} held the same book as {like.like[:7]} on {like.matched} of "
         f"{like.shared} sessions ({like.pct:.0f}%) and scored {metric:.6g} against its "

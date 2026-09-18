@@ -76,19 +76,19 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
 
 __all__ = [
-    "Redundancy",
+    "Match",
     "Signature",
     "active",
     "best_of",
     "cards_of",
     "close",
     "insert",
+    "matched_book",
     "n_trials",
     "next_tag",
     "now",
     "record_card",
     "record_signature",
-    "redundant_with",
     "require_active",
     "runs_of",
     "set_best",
@@ -105,7 +105,7 @@ at none of them, which is the difference between carrying a position over the cl
 closing it before. A day with nothing open maps to `[]`, because being flat is a position
 too, and no size enters, because a size is a parameter and a parameter is exactly what a
 signature exists to see through. What the size did to the number is not lost with it: the
-row carries the metric the book earned, and `redundant_with` reads it."""
+row carries the metric the book earned, and `matched_book` reads it."""
 
 _RUN_COLUMNS = (
     "run_id",
@@ -418,19 +418,27 @@ def _spanned(opened_ns: int, closed_ns: int) -> list[date]:
 
 
 @dataclass(frozen=True)
-class Redundancy:
+class Match:
     """Which stored signature a candidate matched, on how much of it, and what it earned.
 
     `earned` is the anchor's own metric, which is half of why the candidate is redundant
     and the half no reading of the two books can show. The refusal names it beside the
     candidate's, because "your result is already known" is a claim about two numbers and
     an operator is owed both.
+
+    `agreed` is that second half: whether the candidate's own metric came out within the
+    hypothesis's noise floor of `earned`. A match that agreed is a repeat and the loop
+    refuses the turn; a match that did not is an ordinary discard that nonetheless held a
+    book already measured, which is the one thing about it worth telling the next
+    proposal. Both are recorded, because a book matched is a fact either way and the
+    card has no column for it.
     """
 
     like: str
     matched: int
     shared: int
     earned: float
+    agreed: bool
 
     @property
     def pct(self) -> float:
@@ -465,18 +473,27 @@ def record_signature(
     )
 
 
-def redundant_with(
+def matched_book(
     store: StateStore, run: RunRecord, held: Signature, pct: int, metric: float, floor: float
-) -> Redundancy | None:
+) -> Match | None:
     """The stored signature under this run's pins that `held` matches on at least `pct`
-    percent of their shared days *and* whose own metric is within `floor` of `metric` —
-    the closest such one, the earlier on a tie — or `None`.
+    percent of their shared days, and whether its own metric is within `floor` of
+    `metric` — the closest one that agreed, else the closest one at all, the earlier on a
+    tie — or `None` when no stored book was matched.
 
-    Both clauses, because the premise is both clauses. Two strategies that held the same
-    book on nearly every shared day made the same bets, and the inference drawn from that
-    is that they earned the same result; only the first half was ever checked, and the
-    second was asserted. It does not need to be: the objective is computed before this is
-    asked, so the claim can be tested at the cost of one number per stored book.
+    The agreeing match is preferred over a closer one that disagreed, so reporting the
+    second kind can never turn a repeat into a discard: a candidate matching one book on
+    every day whose number moved and another on 96% of them whose number did not is the
+    repeat it always was. The caller refuses only `agreed`, and records both — the
+    argument for recording a repeat is the corner it fills in and the record the next run
+    reads, and neither of those is about the number that came back.
+
+    Both clauses make the refusal, because the premise is both clauses. Two strategies
+    that held the same book on nearly every shared day made the same bets, and the
+    inference drawn from that is that they earned the same result; only the first half
+    was ever checked, and the second was asserted. It does not need to be: the objective
+    is computed before this is asked, so the claim can be tested at the cost of one
+    number per stored book.
 
     Measured against the live workspace of 2026-09-18, over the 3,092 candidates its five
     refusing hypotheses turned away, with each hypothesis's median card standard error
@@ -512,20 +529,20 @@ def redundant_with(
         " ORDER BY created_at, rowid",
         (run.hyp_id, run.hypothesis_sha, run.snapshot_id, run.criteria_version),
     ).fetchall()
-    closest: Redundancy | None = None
+    closest: Match | None = None
     for row in rows:
         if row["metric"] is None:
             continue
         earned = float(row["metric"])
-        if abs(metric - earned) > floor:
-            continue
         stored: Any = json.loads(str(row["signature"]))
         shared = held.keys() & stored.keys()
         matched = sum(1 for day in shared if held[day] == stored[day])
-        found = Redundancy(str(row["strategy_sha"]), matched, len(shared), earned)
+        found = Match(
+            str(row["strategy_sha"]), matched, len(shared), earned, abs(metric - earned) <= floor
+        )
         if not shared or found.pct < pct:
             continue
-        if closest is None or found.pct > closest.pct:
+        if closest is None or (found.agreed, found.pct) > (closest.agreed, closest.pct):
             closest = found
     return closest
 

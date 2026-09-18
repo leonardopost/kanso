@@ -195,7 +195,7 @@ evaluate, record. Four outcomes, and each does something different to the lane.
 | status | what it means | what happens to the lane |
 |---|---|---|
 | `keep` | every constraint passed and the keep rule cleared | this becomes the run's `best`, and the hypothesis's when it beats that or the run already holds it; only then is the blob written to `hypotheses/<id>/strategy.py` |
-| `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base |
+| `discard` | a constraint failed, or the improvement did not clear its noise floor | `strategy.py` is restored from `best`, else from the run's base. One that held a book already judged under the pins and moved the number past that floor also appends a `same_book` event, naming the book and both numbers |
 | `crash` | the backtest raised, or exceeded its time or memory budget | the same restore, with the traceback tail recorded |
 | `redundant` | it did not keep, it held the same book as a strategy already judged under the run's pins, and it earned that strategy's number to within the hypothesis's noise floor | the same restore; the card carries the metric it measured, the `redundant` event names the card it repeats and both numbers, and the command that asked for it is refused |
 
@@ -269,7 +269,15 @@ session, and not the same result.
 A redundant card is a card because the backtest ran and a real number came back — the
 trial it counts as, the corner it fills in on the coverage table and the record the next
 run reads are all things the search actually did, and dropping them was measured deflating
-a certificate by a search more than a hundred times narrower than the one that ran. What
+a certificate by a search more than a hundred times narrower than the one that ran. The
+same argument is owed to the 106, and it is paid in the only currency they lack: a card
+that matched a measured book and moved the number is an ordinary discard, with nothing in
+`cards` to say which book it matched, so it appends a `same_book` event carrying what the
+`redundant` event carries. The next proposals are shown both kinds in one list, each
+saying which it is — a proposer told to hold a measured book and move its number cannot
+apply that rule from the refusals alone, and each admitted candidate stores its own book,
+so a hypothesis whose spread is wide against its floor re-treads a book about
+`ceil(spread / 2 x floor)` times before matching resumes. What
 it may never be is a keep: the keep rule is asked first, so a candidate that beats the
 best is a keep whatever it resembles. Nor is there a gap between the two rules for a card
 to fall into unjudged — they are struck from one floor, which the keep rule doubles only

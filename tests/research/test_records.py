@@ -260,18 +260,18 @@ def test_a_signature_matches_on_the_share_of_shared_days_and_names_the_closest(
     records.record_signature(store, run, sha_b, stored_b, 1.0)
     candidate = {"2024-01-01": long, "2024-01-02": long, "2024-01-03": long}
 
-    like = records.redundant_with(store, run, candidate, 97, 1.0, 0.0)
-    assert like is not None
+    like = records.matched_book(store, run, candidate, 97, 1.0, 0.0)
+    assert like is not None and like.agreed
     assert (like.like, like.matched, like.shared, like.pct) == (sha_b, 3, 3, 100.0)
     assert like.earned == 1.0, "the number the book it repeats earned, which the card cannot say"
-    loose = records.redundant_with(store, run, {"2024-01-01": long, "2024-01-03": []}, 60, 1.0, 0.0)
+    loose = records.matched_book(store, run, {"2024-01-01": long, "2024-01-03": []}, 60, 1.0, 0.0)
     assert loose is not None and loose.like == sha_a, "two of two shared days"
-    assert records.redundant_with(store, run, candidate, 100, 1.0, 0.0) is not None
+    assert records.matched_book(store, run, candidate, 100, 1.0, 0.0) is not None
     unseen = {"2024-01-02": [["B.X", -1, True]]}
-    assert records.redundant_with(store, run, unseen, 97, 1.0, 0.0) is None, "shared, never matched"
-    assert records.redundant_with(store, run, {"2025-01-01": []}, 1, 1.0, 0.0) is None, "no shared"
+    assert records.matched_book(store, run, unseen, 97, 1.0, 0.0) is None, "shared, never matched"
+    assert records.matched_book(store, run, {"2025-01-01": []}, 1, 1.0, 0.0) is None, "no shared"
     other = run.model_copy(update={"snapshot_id": "another"})
-    assert records.redundant_with(store, other, candidate, 1, 1.0, 0.0) is None, "pins bound it"
+    assert records.matched_book(store, other, candidate, 1, 1.0, 0.0) is None, "pins bound it"
 
 
 def test_a_book_matched_on_every_day_is_no_anchor_when_the_number_it_earned_differs(
@@ -291,10 +291,48 @@ def test_a_book_matched_on_every_day_is_no_anchor_when_the_number_it_earned_diff
     sha = store.put_blob(b"a")
     records.record_signature(store, run, sha, held, 1.0)
 
-    assert records.redundant_with(store, run, held, 100, 1.25, 0.25) is not None, "at the floor"
-    assert records.redundant_with(store, run, held, 100, 0.75, 0.25) is not None, "and below it"
-    assert records.redundant_with(store, run, held, 100, 1.26, 0.25) is None, "over it, so not one"
-    assert records.redundant_with(store, run, held, 100, 0.74, 0.25) is None, "either way"
+    at_the_floor = records.matched_book(store, run, held, 100, 1.25, 0.25)
+    assert at_the_floor is not None and at_the_floor.agreed, "at the floor"
+    below = records.matched_book(store, run, held, 100, 0.75, 0.25)
+    assert below is not None and below.agreed, "and below it"
+    over = records.matched_book(store, run, held, 100, 1.26, 0.25)
+    assert over is not None and not over.agreed, (
+        "over it: the book still matched, the number did not"
+    )
+    under = records.matched_book(store, run, held, 100, 0.74, 0.25)
+    assert under is not None and not under.agreed, "either way"
+    assert (over.like, over.pct, over.earned) == (sha, 100.0, 1.0), (
+        "and the match is on record in full, because the card has no column for it"
+    )
+
+
+def test_a_match_whose_number_agreed_is_preferred_to_a_closer_one_that_did_not(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Reporting the second kind can never turn a repeat into a discard.
+
+    A candidate matching one stored book on every day whose number moved, and another on
+    three of four whose number did not, is the repeat it always was: the agreeing match
+    is preferred over the closer one, and only when there is none at all does the closest
+    book stand on its own.
+    """
+    run = loop.begin(ws, store, registered)
+    long = [["A.X", 1, True]]
+    every = {f"2024-01-0{day}": long for day in range(1, 5)}
+    three_of_four = {**every, "2024-01-04": []}
+    exact, near = store.put_blob(b"exact"), store.put_blob(b"near")
+    records.record_signature(store, run, exact, every, 9.0)
+    records.record_signature(store, run, near, three_of_four, 1.0)
+
+    found = records.matched_book(store, run, every, 70, 1.0, 0.25)
+    assert found is not None and found.agreed
+    assert (found.like, found.pct) == (near, 75.0), "the agreeing match, though it matched less"
+
+    alone = records.matched_book(store, run, every, 90, 1.0, 0.25)
+    assert alone is not None and not alone.agreed
+    assert (alone.like, alone.pct, alone.earned) == (exact, 100.0, 9.0), (
+        "and with no agreeing match under the share, the book that did match is still named"
+    )
 
 
 def test_a_stored_book_with_no_number_on_record_is_no_anchor_at_all(
@@ -312,7 +350,7 @@ def test_a_stored_book_with_no_number_on_record_is_no_anchor_at_all(
     records.record_signature(store, run, sha, held, 1.0)
     store.connection.execute("UPDATE signatures SET metric = NULL WHERE strategy_sha = ?", (sha,))
 
-    assert records.redundant_with(store, run, held, 100, 1.0, 1e9) is None
+    assert records.matched_book(store, run, held, 100, 1.0, 1e9) is None
 
 
 def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
@@ -320,7 +358,7 @@ def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
 ) -> None:
     """The defect was a pair, not a reading: two candidates of an intraday hypothesis,
     both flat at every period end, signed as two empty dicts and matched each other on
-    every one of 834 shared days. `signature` and `redundant_with` are each tested; this
+    every one of 834 shared days. `signature` and `matched_book` are each tested; this
     is the composition on the shape that produced the defect, with nothing held at an end.
     """
     opens = midnight_ns(date(2024, 1, 2)) + 10 * 3_600 * 10**9
@@ -330,12 +368,10 @@ def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
     other = records.signature(a_run(trades=(a_trade("B.X", -3.0, opens, opens + 3_600 * 10**9),)))
 
     assert stored["2024-01-02"] == [["A.X", 1, False]], "held, and gone by the end"
-    assert records.redundant_with(store, run, other, 97, 1.0, 0.0) is None, (
+    assert records.matched_book(store, run, other, 97, 1.0, 0.0) is None, (
         "another name, another bet"
     )
-    assert records.redundant_with(store, run, stored, 97, 1.0, 0.0) is not None, (
-        "the same one is not"
-    )
+    assert records.matched_book(store, run, stored, 97, 1.0, 0.0) is not None, "the same one is not"
 
 
 def test_the_same_bytes_are_signed_once_under_one_set_of_pins(
