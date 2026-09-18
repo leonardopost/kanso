@@ -25,9 +25,11 @@ answers that do not apply, or do not parse — is still a failure of the step. A
 that ran and held the same book as a strategy already judged under the pins is refused by
 the loop after the backtest rather than before it, and is not the same kind of thing: it
 cost the engine time and produced a real number, so it is a card with a status of its own,
-it counts as a trial and it enters the coverage. What it costs is the turn — it counts
-toward the stall like a discard — and the `redundant` event carries the one fact the card
-cannot, which is the card it repeated.
+it counts as a trial and it enters the coverage. It is a card in every count a card is in:
+it advances the drift clock, and the diff that produced it is what the next turn is shown
+as `last_diff`. What it costs is the turn — it counts toward the stall like a discard —
+and the `redundant` event carries the one fact the card cannot, which is the card it
+repeated.
 
 **A crash buys a repair, and only so many.** A card that raised spent a proposal and
 returned nothing: the idea in it was never judged, because it never ran. Measured in a
@@ -92,7 +94,7 @@ from kanso.models import CallInputs, route
 from kanso.research import align, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
-from kanso.schemas import Hypothesis, RunRecord, Tag, parse_yaml
+from kanso.schemas import Card, Hypothesis, RunRecord, Tag, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -269,21 +271,20 @@ def run(
                 break
             continue
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
+        made: Card | None
         try:
-            card = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
+            made = research_loop.card(ws, store, hyp_id, desc, lane=lane, tags=tags)
         except research_loop.RedundantError:
-            proposed += 1
-            redundant += 1
-            misses += 1
-            if misses >= settings.stall_k:
-                reason = STALLED
-                break
-            continue
+            made = None
         proposed += 1
         waiting += 1
         previous = patch
-        tally[card.status] += 1
-        misses = 0 if card.status == "keep" else misses + 1
+        if made is None:
+            redundant += 1
+            misses += 1
+        else:
+            tally[made.status] += 1
+            misses = 0 if made.status == "keep" else misses + 1
         if waiting >= settings.align_every:
             aligned, _ = align.check(ws, store, hyp_id, lane)
             checks += 1

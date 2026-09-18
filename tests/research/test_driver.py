@@ -136,9 +136,10 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
     # redundant results included: thirty proposals and one baseline.
     assert records.n_trials(store, prepared_hyp) == 31
     assert statuses(store, prepared_hyp)[:4] == ["keep", "keep", "crash", "discard"]
-    # align_every is 10 and the baseline is the run's first card, so the check lands on
-    # the ninth card proposed; misses are not cards and do not advance it.
-    assert (outcome.checks, outcome.drifts) == (1, 0)
+    # align_every is 10 and the baseline is the run's first card, so the checks land on
+    # the ninth, nineteenth and twenty-ninth card proposed: every card advances the clock,
+    # and here every proposal is one.
+    assert (outcome.checks, outcome.drifts) == (3, 0)
     assert records.active(store, prepared_hyp) is not None
     assert outcome.best_sha == records.cards_of(store, prepared_hyp)[1].strategy_sha
 
@@ -301,6 +302,37 @@ def test_a_redundant_card_is_recorded_and_the_next_proposal_is_told_what_it_repe
     assert '"redundant"' in third.user
     assert f'"like": "{kept.sha7}"' in third.user
     assert "the same bet again" in third.user
+
+
+def test_a_redundant_card_advances_the_drift_clock_and_the_next_turn_s_last_diff(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A redundant result is a row in `cards`, and `align.since` counts rows in `cards`.
+
+    A driver that kept its own counter and skipped this one would check for drift half as
+    often as the number it resumes from says, for as long as the lane stayed redundant —
+    and would hand the next proposal the diff of the card before last while showing it the
+    redundant card as the newest thing tried.
+    """
+    workspace = tuned(ws, align_every=3)
+    scripted(workspace, propose=[proposal("revert")], align_check=[ALIGNED])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=3)
+
+    assert (outcome.keeps, outcome.redundant) == (1, 2)
+    # The baseline is the run's first card, so the third card proposed is the tenth
+    # counted here: the check lands on the second redundant result.
+    assert (outcome.checks, outcome.drifts) == (1, 0)
+    active = records.require_active(store, prepared_hyp)
+    assert align.since(store, active) == 1, "the persisted clock is the driver's own"
+    repeat = records.cards_of(store, prepared_hyp)[2]
+    added = [
+        line
+        for line in store.get_blob(repeat.strategy_sha).decode("utf-8").splitlines()
+        if line.startswith("Strategy.mode")
+    ][-1]
+    told = json.loads(recorded.of("propose")[2].user)["last_diff"]
+    assert f"+{added}" in told, "the redundant card is the change the last card made"
 
 
 def test_redundant_misses_count_toward_the_stall(
