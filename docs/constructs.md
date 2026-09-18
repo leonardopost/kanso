@@ -295,14 +295,16 @@ remedy: certify and compose the host sleeve first, or name another host
 
 Which objective a construct is scored on is the one deterministic domain rule in kanso: it
 follows from the construct's `objective_mode` and the hypothesis's horizon, and no model
-chooses it. The four are total over that grid.
+chooses it. The five are total over that grid and over whether the hypothesis declares a
+`benchmark`.
 
 | objective | mode | horizon | measures |
 |---|---|---|---|
 | `net_edge_bps` | absolute | under 1d | fold-wise mean net P&L per trade, in basis points |
-| `wf_sharpe_net` | absolute | 1d or more | fold-wise annualised Sharpe of net returns, zero risk-free rate |
+| `wf_sharpe_net` | absolute, without a `benchmark` | 1d or more | fold-wise annualised Sharpe of net returns, zero risk-free rate |
 | `marginal_net_edge_bps` | relative | under 1d | what the construct adds to its host's edge per trade, differenced fold by fold |
 | `marginal_wf_sharpe` | relative | 1d or more | the same difference, on the walk-forward Sharpe |
+| `wf_sharpe_vs_hold` | absolute, with a `benchmark` | 1d or more | the fold-wise Sharpe minus that of holding the universe's first leg, differenced fold by fold |
 
 A sub-daily holding period gives few return periods and many trades, so the edge per trade
 is the estimate with a sample behind it; a day or longer gives enough return periods for a
@@ -318,6 +320,18 @@ The relative objectives are **differenced fold by fold**, not as a difference of
 summaries, so the standard error an improvement has to clear is the paired one. That is what
 makes the keep rule's noise floor mean anything for an attached construct: the host's own
 variation is subtracted out before the spread is measured.
+
+`wf_sharpe_vs_hold` is the same pairing against a benchmark rather than a host. It applies
+only where the hypothesis declares `benchmark: {hold: first_leg}` (`docs/workspace.md`), and
+`wf_sharpe_net` only where it does not, so the operator's declaration — never a model —
+decides between them. A hypothesis held under a day and a construct measured relative to its
+host (every attached construct but `alpha`) have no objective that measures a hold, and
+`kanso hyp validate` refuses one that declares the key — the first on a draft too, before
+`kanso classify` asks a model anything. The hold is a run, not a price
+series: `templates/strategy_hold.py` through the same runner, so its costs, splits, book and
+warmup are the strategy's own arithmetic. The bootstrap band a certificate and an expectation
+record for it is the resampled Sharpe of the strategy's trades less the hold's fold-wise
+Sharpe, so the paper and live gates compare a realised difference with a band of differences.
 
 ## Adding one
 

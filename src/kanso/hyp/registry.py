@@ -65,6 +65,7 @@ SCOPE: Final = (
     "sizing",
     "objective",
     "warmup",
+    "benchmark",
     "book",
 )
 """What a `best` is comparable under; a change to any of them clears it."""
@@ -75,11 +76,13 @@ CONSTRUCT: Final = "construct"
 SIZING: Final = "sizing"
 OBJECTIVE: Final = "objective"
 WARMUP: Final = "warmup"
+BENCHMARK: Final = "benchmark"
 BOOK: Final = "book"
-"""`sizing` joined the scope in 0.4.0, `warmup` and `book` in 0.8.0; `objective` in 0.5.0,
-answering from its own column. A row pinned before `sizing`, `warmup` or `book` holds no
-key for it, which reads as `None` — the same answer a file without the key gives — so an
-older pin keeps its best until the file actually declares a rule."""
+"""`sizing` joined the scope in 0.4.0, and `warmup`, `benchmark` and `book` in 0.8.0;
+`objective` in 0.5.0, answering from its own column. A row pinned before `sizing`,
+`warmup`, `benchmark` or `book` holds no key for it, which reads as `None` — the same
+answer a file without the key gives — so an older pin keeps its best until the file
+actually declares a rule."""
 
 REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"
@@ -403,14 +406,17 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def scope_of(hyp: Hypothesis) -> dict[str, Any]:
-    """The eight fields a metric is only comparable within, in a stable order.
+    """The nine fields a metric is only comparable within, in a stable order.
 
     The objective is one of them because a metric is a number in that objective's units:
     a best of 69 bps per trade compared against a Sharpe of 2 would keep nothing forever.
     The warmup is one because a strategy fed its indicators before the open and one that
     warmed on the window's own first sessions measured different runs over the same days.
-    The book policy is one as a whole, because a reset, a carry and a maintenance floor
-    each change the equity path a metric is read from.
+    The benchmark is one because a Sharpe over a hold is not a Sharpe, and it names the leg
+    held: the universe is compared as a set, but which of its names is first is the
+    benchmark, so reordering a universe under a benchmark moves the scope. The book policy
+    is one as a whole, because a reset, a carry and a maintenance floor each change the
+    equity path a metric is read from.
 
     `hyp add` clears a best when they move, and composition refuses a certificate whose
     run pinned a hypothesis of another scope than the one registered now: one definition
@@ -424,6 +430,9 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
         SIZING: hyp.sizing.model_dump() if hyp.sizing else None,
         OBJECTIVE: hyp.objective.id if hyp.objective else None,
         WARMUP: hyp.warmup.model_dump() if hyp.warmup else None,
+        BENCHMARK: (
+            {**hyp.benchmark.model_dump(), "leg": hyp.universe[0]} if hyp.benchmark else None
+        ),
         BOOK: hyp.book.model_dump() if hyp.book else None,
     }
 
@@ -433,8 +442,9 @@ def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
 
     The construct and the objective were pinned in their own columns before they joined
     the pins, and the columns are written with the pins, so a row from before then answers
-    from its column rather than reporting a move that never happened. `sizing`, `warmup`
-    and `book` joined later still and have no column: a pin without the key answers `None`.
+    from its column rather than reporting a move that never happened. `sizing`, `warmup`,
+    `benchmark` and `book` joined later still and have no column: a pin without the key
+    answers `None`.
     """
     pins = _pins(held)
     scope = {name: pins.get(name) for name in SCOPE}

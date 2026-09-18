@@ -296,6 +296,24 @@ def test_warmup_is_optional_and_carries_its_sessions() -> None:
     assert warmed.warmup.sessions == 20
 
 
+def test_a_benchmark_is_a_hold_of_the_first_leg() -> None:
+    with pytest.raises(ValidationError, match="benchmark.hold"):
+        build(benchmark={"hold": "last_leg"})
+
+
+def test_benchmark_is_optional_and_names_what_is_held() -> None:
+    assert build().benchmark is None
+    held = build(benchmark={"hold": "first_leg"})
+    assert held.benchmark is not None
+    assert held.benchmark.hold == "first_leg"
+
+
+@given(hypotheses())
+def test_a_benchmark_survives_the_round_trip(hyp: Hypothesis) -> None:
+    again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
+    assert again.benchmark == hyp.benchmark
+
+
 @given(hypotheses())
 def test_a_warmup_survives_the_round_trip(hyp: Hypothesis) -> None:
     again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))

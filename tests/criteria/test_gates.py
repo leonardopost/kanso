@@ -30,7 +30,9 @@ from kanso.criteria.gates import (
     stressed,
     walk_forward_consistency,
 )
+from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.criteria.run import NS_PER_SECOND, Fill
+from kanso.errors import PreconditionError
 from tests.criteria.builders import (
     START,
     at,
@@ -46,6 +48,14 @@ from tests.criteria.builders import (
 DAYS = [date(2024, 1, 1 + i) for i in range(4)]
 FLAT = (0.0, 0.0, 0.0, 0.0)
 SHARPE_HYP = {"objective": {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}}
+HOLD_HYP = {
+    "benchmark": {"hold": "first_leg"},
+    "objective": {"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 1.0}},
+}
+"""A hypothesis measured against a hold of its first leg."""
+RISING = build_run((3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0))
+HOLDING = build_run((1.0, 2.0, 1.0, 3.0, 2.0, 1.0, 2.0, 2.0))
+"""A strategy's eight days and a hold's over the same eight, so each fold is two days."""
 
 
 def trading_run(*pnl: float, cost: float = 0.0) -> Any:
@@ -616,7 +626,58 @@ def test_embargoed_window_without_its_context_judges_nothing(overrides: Any) -> 
     assert result.passed and result.skipped is not None
 
 
+def test_embargoed_window_reads_each_window_against_its_own_benchmark() -> None:
+    result = embargoed_window.evaluate(
+        context(
+            RISING,
+            hyp=make_hyp(**HOLD_HYP),
+            params={"min_fraction": 0.0},
+            research_run=RISING,
+            benchmark_run=RISING,
+            benchmark_research_run=HOLDING,
+        )
+    )
+    assert result.evidence["certification"] == pytest.approx(0.0)
+    assert result.evidence["research"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(RISING, 4, benchmark=HOLDING)[0]
+    )
+    assert not result.passed, "a strategy that only matched its hold beat nothing"
+
+
+def test_a_benchmark_objective_without_its_benchmark_run_is_a_refusal_not_a_verdict() -> None:
+    with pytest.raises(PreconditionError, match="benchmark's run"):
+        embargoed_window.evaluate(
+            context(
+                RISING,
+                hyp=make_hyp(**HOLD_HYP),
+                params={"min_fraction": 0.0},
+                research_run=RISING,
+                host_run=HOLDING,
+                host_research_run=HOLDING,
+            )
+        )
+
+
 # --- walk_forward_consistency -----------------------------------------------------
+
+
+def test_walk_forward_consistency_reads_the_research_folds_against_the_benchmark() -> None:
+    result = walk_forward_consistency.evaluate(
+        context(
+            RISING,
+            hyp=make_hyp(**HOLD_HYP),
+            params={"min_positive_folds": 1},
+            research_run=RISING,
+            benchmark_run=RISING,
+            benchmark_research_run=HOLDING,
+        )
+    )
+    assert result.evidence["folds"] == pytest.approx(
+        list(wf_sharpe_vs_hold.fold_values(RISING, 4, benchmark=HOLDING))
+    )
+    assert result.evidence["certification"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(RISING, 4, benchmark=RISING)[0]
+    ), "the certified run is differenced against the certification window's hold"
 
 
 def test_walk_forward_consistency_counts_positive_folds() -> None:
@@ -707,6 +768,16 @@ def test_position_size_judges_every_period_and_not_the_middle_one() -> None:
     assert not result.passed
     assert result.evidence["n_outside"] == 1
     assert result.evidence["median_pct"] == 100.0, "the median would have passed it"
+
+
+def test_a_benchmark_run_is_never_read_as_a_host() -> None:
+    """A sleeve measured against a hold sizes and times its own book, not the book less the hold."""
+    band = {"min_pct": 95.0, "max_pct": 105.0}
+    alone = position_size.evaluate(sized(9_900.0, 10_000.0, params=band))
+    beside = position_size.evaluate(
+        sized(9_900.0, 10_000.0, params=band, benchmark_run=build_run((0.0, 0.0), capital=10_000.0))
+    )
+    assert beside == alone
 
 
 def test_position_size_reads_a_floor_on_its_own() -> None:
@@ -823,6 +894,19 @@ def test_deflated_sharpe_fails_below_the_floor() -> None:
     ).passed
 
 
+def test_deflated_sharpe_deflates_the_research_estimate_over_its_benchmark() -> None:
+    research = RISING
+    over = deflated_sharpe.evaluate(
+        sharpe_context(hyp=make_hyp(**HOLD_HYP), benchmark_research_run=HOLDING)
+    )
+    alone = deflated_sharpe.evaluate(sharpe_context())
+    scale = alone.evidence["sharpe"] / wf_sharpe_net.compute(research, 4)[0]
+    assert over.evidence["sharpe"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(research, 4, benchmark=HOLDING)[0] * scale
+    )
+    assert over.evidence["sharpe"] < alone.evidence["sharpe"]
+
+
 def test_deflated_sharpe_is_skipped_on_a_per_trade_objective() -> None:
     result = deflated_sharpe.evaluate(sharpe_context(hyp=make_hyp()))
     assert result.passed
@@ -902,6 +986,24 @@ def test_cost_stress_fails_an_edge_that_is_only_the_cost_model() -> None:
     assert not cost_stress.evaluate(context(run, params={"mult_a": 3.0, "mult_b": 4.0})).passed
 
 
+def test_cost_stress_measures_the_stressed_run_against_the_unstressed_benchmark() -> None:
+    run = build_run(
+        (3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0),
+        fills=(fill(date(2024, 1, 2), cost=1.0),),
+    )
+    result = cost_stress.evaluate(
+        context(
+            run,
+            hyp=make_hyp(**HOLD_HYP),
+            params={"mult_a": 2.0, "mult_b": 3.0},
+            benchmark_run=HOLDING,
+        )
+    )
+    assert result.evidence["metric_a"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(stressed(run, 2.0), 4, benchmark=HOLDING)[0]
+    )
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -957,6 +1059,34 @@ def test_bootstrap_of_a_sharpe_objective_reports_a_sharpe_interval() -> None:
     )
     low, high = result.evidence["objective_ci90"]
     assert low < high
+
+
+def test_bootstrap_of_a_benchmark_objective_is_a_band_of_differences_from_the_hold() -> None:
+    """The same draws, moved by what the hold scored: a band in the objective's own units."""
+    run = build_run(
+        (3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0),
+        trades=tuple(
+            trade(day, pnl=value)
+            for day, value in zip(DAYS, (100.0, -40.0, 30.0, 60.0), strict=True)
+        ),
+    )
+    alone = bootstrap.evaluate(
+        context(run, hyp=make_hyp(**SHARPE_HYP), params={"n": 500}, strategy_sha="c" * 64)
+    )
+    over = bootstrap.evaluate(
+        context(
+            run,
+            hyp=make_hyp(**HOLD_HYP),
+            params={"n": 500},
+            strategy_sha="c" * 64,
+            benchmark_run=HOLDING,
+        )
+    )
+    level = wf_sharpe_net.compute(HOLDING, 4)[0]
+    assert over.evidence["objective_ci90"] == pytest.approx(
+        [bound - level for bound in alone.evidence["objective_ci90"]]
+    )
+    assert over.evidence["mdd_p95"] == alone.evidence["mdd_p95"]
 
 
 @pytest.mark.parametrize(

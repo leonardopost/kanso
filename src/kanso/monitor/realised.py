@@ -17,6 +17,11 @@ last window's closing value, so the recorded series is one series over the join.
 day produces two partial periods ending at the same instant, and a run's periods are strictly
 increasing. They are added together, which is what one day's return means.
 
+**A benchmark is joined the same way.** Each window a version measured against a hold
+recorded that hold beside it, and the windows' holds are one run by the same arithmetic, so
+the two runs a gate differences share their period ends. A version with any window that
+recorded no hold has no benchmark, rather than one that skips a window.
+
 **The book is the last window's, not every window's.** Positions are recorded before the
 flatten, so each window's book is what that window ended holding; only the most recent one is
 still standing, and that is what a stage exposure limit is about.
@@ -34,7 +39,7 @@ from kanso.criteria.run import NS_PER_DAY, CardRun, day_of, midnight_ns
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.portfolio.records import StageResult
 
-__all__ = ["Tenure", "combined", "tenure"]
+__all__ = ["Tenure", "combined", "combined_benchmark", "joined", "tenure"]
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,7 @@ class Tenure:
     joined_ns: int
     clock_ns: int
     windows: int
+    benchmark: CardRun | None = None
 
     @property
     def gross(self) -> float:
@@ -71,14 +77,27 @@ class Tenure:
 
 def combined(results: Sequence[StageResult]) -> CardRun | None:
     """The windows a stage closed for one version, as one continuous run."""
-    if not results:
+    return joined([result.run for result in results])
+
+
+def combined_benchmark(results: Sequence[StageResult]) -> CardRun | None:
+    """The holds those windows recorded beside the version, as one run; `None` unless
+    every window recorded one."""
+    holds = [result.benchmark for result in results]
+    if not holds or any(hold is None for hold in holds):
+        return None
+    return joined([hold for hold in holds if hold is not None])
+
+
+def joined(runs: Sequence[CardRun]) -> CardRun | None:
+    """Consecutive windows' runs as one continuous run."""
+    if not runs:
         return None
     per_end: dict[int, float] = {}
     cushion_at: dict[int, float] = {}
     carry_at: dict[int, float] = {}
     worst_at: dict[int, float | None] = {}
-    for result in results:
-        run = result.run
+    for run in runs:
         for index, (ts, value) in enumerate(zip(run.period_ends_ns, run.returns, strict=True)):
             per_end[ts] = per_end.get(ts, 0.0) + value
             if run.cushion:
@@ -89,7 +108,7 @@ def combined(results: Sequence[StageResult]) -> CardRun | None:
                 worst_at[ts] = _lower(worst_at.get(ts), run.worst_ratio[index])
     ends = tuple(sorted(per_end))
     returns = tuple(per_end[ts] for ts in ends)
-    capital = results[0].run.capital
+    capital = runs[0].capital
     running = capital
     held_back = 0.0
     equity: list[float] = []
@@ -100,28 +119,28 @@ def combined(results: Sequence[StageResult]) -> CardRun | None:
         held_back = cushion
         equity.append(running)
         cushions.append(cushion)
-    last = results[-1].run
+    last = runs[-1]
     return CardRun(
-        window=(results[0].run.window[0], last.window[1]),
+        window=(runs[0].window[0], last.window[1]),
         period=last.period,
         period_ends_ns=ends,
         returns=returns,
         equity=tuple(equity),
         trades=tuple(
             sorted(
-                (trade for result in results for trade in result.run.trades),
+                (trade for run in runs for trade in run.trades),
                 key=lambda trade: trade.closed_ns,
             )
         ),
         fills=tuple(
             sorted(
-                (fill for result in results for fill in result.run.fills),
+                (fill for run in runs for fill in run.fills),
                 key=lambda fill: fill.ts_ns,
             )
         ),
         held=tuple(
             sorted(
-                (item for result in results for item in result.run.held),
+                (item for run in runs for item in run.held),
                 key=lambda item: (item.ts_ns, item.instrument_id),
             )
         ),
@@ -164,4 +183,5 @@ def tenure(stage: str, results: Sequence[StageResult], clock_ns: int | None) -> 
             clock_ns if clock_ns is not None else midnight_ns(run.window[1]) + NS_PER_DAY - 1
         ),
         windows=len(results),
+        benchmark=combined_benchmark(results),
     )

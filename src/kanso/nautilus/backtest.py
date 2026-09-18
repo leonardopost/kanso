@@ -32,6 +32,11 @@ What comes back from a failed child is the tail of its traceback and, when the f
 one kanso itself raised, that refusal's remedy — so a caller reporting a card that did not
 run can name the fault that occurred rather than assume every one of them is the code's.
 
+**A benchmark is a run too.** A hypothesis measured against a hold of its first leg is
+measured against a request this module derives from the subject's own (`benchmark`) and
+runs like any other, so the hold pays the costs, takes the splits and keeps the book the
+subject does, and no objective ever prices a benchmark from bars.
+
 **The same request twice gives the same numbers.** Every global random source is seeded
 from the snapshot id, every aggregation is over a sorted sequence, and no set or dict
 iteration order reaches a number.
@@ -79,6 +84,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
+from functools import cache
 from itertools import chain
 from math import fsum
 from pathlib import Path
@@ -115,6 +121,7 @@ __all__ = [
     "booked",
     "checked",
     "child_env",
+    "benchmark",
     "execute",
     "main",
     "run",
@@ -136,6 +143,10 @@ OVERLAY: Final = "overlay"
 
 SLEEVE_ENTRY: Final = "Strategy"
 MODIFIER_ENTRY: Final = "Modifier"
+
+HOLD: Final = Path(__file__).resolve().parents[1] / "templates" / "strategy_hold.py"
+"""The sleeve kanso ships as the benchmark a `benchmark: {hold: first_leg}` hypothesis
+is measured against."""
 
 ALLOWED_ENV: Final = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
 """The only ambient variables a card subprocess inherits. No catalog path is among
@@ -407,6 +418,32 @@ def _bar_grains(request: RunRequest) -> tuple[str, ...]:
 LOOKBACK_DOUBLINGS: Final = 5
 """How many spans `warmup_prefix` asks the catalog for before giving up: twice the sessions
 asked for in calendar days, doubled each time, so thirty-two times them at most."""
+
+
+@cache
+def _hold_source() -> bytes:
+    return HOLD.read_bytes()
+
+
+def benchmark(request: RunRequest) -> RunRequest:
+    """The run a benchmark objective differences `request` against: a hold of its first leg.
+
+    Everything the subject's request pins is kept — the hypothesis, the window and its
+    warmup prefix, the snapshot, the venue model, the capital, the return period, the
+    grains and the sizing budget — and only the strategy is replaced, by the sleeve kanso
+    ships, with no attached construct, no override and no budget of wall time or memory.
+    So the hold is produced by this runner and nowhere else: its costs, its splits, its
+    book and whatever the runner applies to a run in future are the subject's own
+    arithmetic rather than a second one written for a benchmark.
+    """
+    return replace(
+        request,
+        strategy_source=_hold_source(),
+        modifiers=(),
+        overrides={},
+        budget_s=None,
+        mem_cap_gb=None,
+    )
 
 
 def warmup_prefix(

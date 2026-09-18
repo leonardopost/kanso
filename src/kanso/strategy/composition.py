@@ -22,7 +22,9 @@ same snapshot — it is reused rather than recomputed, because two resamplings o
 run are two chances for the record and the expectation to disagree about the same thing.
 With too few closed trades to resample, the interval is the point estimate and the
 drawdown is the one the run actually took: an honest band of zero width beats an invented
-one.
+one. A sleeve measured against a benchmark has the benchmark run beside it over the same
+window, from the same request with the strategy replaced, and its band is a band of
+differences from that hold.
 
 **The same bytes under the same engine are one version**, whatever position or state that
 version is in: certification is automatic and so is this, so a plan re-run on the same
@@ -45,6 +47,7 @@ from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, drawdown_pct, gates, objectives
 from kanso.criteria.gates import worst_margin
+from kanso.criteria.objectives import measures_benchmark
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError
 from kanso.hyp import HYPOTHESIS_FILE, Registration, moved, scope_of
@@ -194,11 +197,11 @@ def expectation(
             remedy=f"run `kanso classify {hyp.id}` and certify it again",
         )
     start, end = _window(hyp)
-    run = _measure(ws, manifest, version, hyp, capital)
+    run, benchmark = _measure(ws, manifest, version, hyp, capital)
     _check_margin(hyp, run)
     objective = objectives()[hyp.objective.id]
-    value, _ = objective.compute(run, ws.config.research.folds)
-    low, high, worst = _bands(ws, passed, version, hyp, run, value, objective.id)
+    value, _ = objective.compute(run, ws.config.research.folds, benchmark=benchmark)
+    low, high, worst = _bands(ws, passed, version, hyp, run, value, objective.id, benchmark)
     return Expectation(
         objective_id=objective.id,
         value=value,
@@ -445,8 +448,9 @@ def _measure(
     version: StrategyVersion,
     hyp: Hypothesis,
     capital: float,
-) -> CardRun:
-    """One run of the implementation over the sleeve's certification window."""
+) -> tuple[CardRun, CardRun | None]:
+    """One run of the implementation over the sleeve's certification window, and the
+    benchmark's run over it when the sleeve's objective is measured against one."""
     sleeve, attached = impl.sources(ws, manifest)
     catalog = catalog_path(ws)
     grains = _grains(manifest.sleeve.config)
@@ -463,7 +467,10 @@ def _measure(
         sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
         prefix=backtest.warmup_prefix(hyp, _window(hyp), catalog, grains),
     )
-    return backtest.run(request, catalog).run
+    measured = backtest.run(request, catalog).run
+    if not measures_benchmark(hyp):
+        return measured, None
+    return measured, backtest.run(backtest.benchmark(request), catalog).run
 
 
 def _grains(config: Mapping[str, Any]) -> tuple[str, ...]:
@@ -479,6 +486,7 @@ def _bands(
     run: CardRun,
     value: float,
     objective_id: str,
+    benchmark: CardRun | None = None,
 ) -> tuple[float, float, float]:
     """The interval and the drawdown percentile: the certificate's, or a fresh resampling.
 
@@ -501,6 +509,7 @@ def _bands(
             research_folds=ws.config.research.folds,
             snapshot_id=version.pins.snapshot_id,
             strategy_sha=version.sleeve.strategy_sha,
+            benchmark_run=benchmark,
         )
     )
     if result.skipped is not None:

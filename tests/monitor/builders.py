@@ -306,6 +306,7 @@ def write_book(
     positions: tuple[Book, ...] = (),
     session_id: str = "session-1",
     capital: float = CAPITAL,
+    benchmark: CardRun | None = None,
 ) -> None:
     """One closed window, recorded the way a stage node records what it realised."""
     records.record_stage_run(
@@ -319,6 +320,7 @@ def write_book(
                 capital=capital,
                 run=run,
                 positions=positions,
+                benchmark=benchmark,
             )
         ],
     )
@@ -409,6 +411,7 @@ def gate_context(
     hyp: Hypothesis | None = None,
     ci90: tuple[float, float] | None = (-0.5, 0.5),
     folds: int = 4,
+    benchmark: CardRun | None = None,
 ) -> GateContext:
     """What the monitor hands one gate, with only the piece under test varied."""
     measured = run or flat_run()
@@ -425,4 +428,5 @@ def gate_context(
         strategy_sha="a" * 64,
         expectation=expectation,
         session=record,
+        benchmark_run=benchmark,
     )

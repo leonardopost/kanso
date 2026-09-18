@@ -27,6 +27,15 @@ the position; flattening makes the loss explicit and realises the P&L into the r
 paper and live gates read. The book is measured *before* the flatten, because the exposure a
 stage carried is a fact about the window and not about the way it ended.
 
+**A benchmark is run beside the stage, not inside it.** A version whose sleeve is measured
+against a hold of its first leg has that hold produced after the node stops, by the backtest
+runner, over the very points that version's realised window is extracted from — the
+version's request with the strategy replaced — and stored beside what the version realised,
+so the paper and live gates difference against a hold of the same periods. It is a separate
+engine rather than a second strategy in the node, because two strategies in one account
+share the book and the volume a fill walks (nautilus_trader 1.231; `facts.py` asserts the
+walk), and the hold would move the version's fills.
+
 Engine facts this module relies on (nautilus_trader 1.231.0):
 
 * `TradingNode(config, loop)` builds a kernel whose `msgbus`, `cache`, `portfolio`, `clock`,
@@ -55,7 +64,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final
 
@@ -71,6 +80,7 @@ from nautilus_trader.config import (
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import TraderId
 
+from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits
@@ -211,6 +221,9 @@ class Realised:
     capital: float
     run: CardRun
     positions: tuple[Book, ...]
+    benchmark: CardRun | None = None
+    """The hold of the first leg over the points this window is measured on, for a version
+    whose objective is measured against one; `None` otherwise."""
 
     @property
     def pnl(self) -> float:
@@ -468,7 +481,7 @@ def run(
             for strategy in strategies
             for i in strategy.intents
         )
-        return StageRun(
+        ran = StageRun(
             stage=node.stage,
             window=node.window,
             points=market,
@@ -480,6 +493,40 @@ def run(
         )
     finally:
         built.dispose()
+    return replace(
+        ran,
+        realised=tuple(
+            _benchmarked(one, placed, request, groups, window.instruments)
+            for one, placed, request, groups in zip(
+                ran.realised, node.placements, requests, window.per_version, strict=True
+            )
+        ),
+    )
+
+
+def _benchmarked(
+    one: Realised,
+    placed: Placement,
+    request: RunRequest,
+    groups: Sequence[Sequence[Any]],
+    instruments: Sequence[Any],
+) -> Realised:
+    """One version's realised window with the hold its objective differences against.
+
+    Run once the node has stopped, as its own engine over the version's own view — the
+    points `_realised` extracts the version's window from — and from the version's request
+    with the strategy replaced: the same window, prefix, capital, grains and budget. The
+    two runs therefore have the same period ends and their folds pair. A restart's view
+    holds no prefix, so the hold buys at the first point after the clock, as the version
+    could. A halted node's version is still marked over its whole view, so the hold is
+    too; cutting the hold at the halt would difference a full window against part of one.
+    """
+    if not measures_benchmark(placed.hyp):
+        return one
+    held = backtest.benchmark(request)
+    if not any(groups):
+        return replace(one, benchmark=backtest._empty(held))
+    return replace(one, benchmark=backtest.execute(held, instruments, groups).run)
 
 
 def _prefix(placed: Placement, node: StageNode) -> tuple[date, date] | None:
@@ -510,6 +557,7 @@ def _idle(node: StageNode, requests: Sequence[RunRequest]) -> StageRun:
                 capital=placed.capital,
                 run=backtest._empty(request),
                 positions=(),
+                benchmark=backtest._empty(request) if measures_benchmark(placed.hyp) else None,
             )
             for placed, request in zip(node.placements, requests, strict=True)
         ),

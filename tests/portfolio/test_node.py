@@ -193,6 +193,26 @@ def test_a_version_with_nothing_new_gets_an_empty_window_rather_than_a_refusal(
     assert realised.pnl == 0.0
 
 
+def test_a_version_with_nothing_released_holds_nothing(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """A stage-mate's market moved and this version's did not: an empty hold, not a refusal."""
+    held = hypothesis(
+        id=composed_strategy.id,
+        benchmark={"hold": "first_leg"},
+        objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    )
+    placed = a_placement(ws, composed_strategy.id, hyp=held)
+    request = placed.request((date(2024, 3, 1), date(2024, 3, 2)))
+    realised = node._realised(placed, request, None, ((),), {}, ())
+
+    benchmarked = node._benchmarked(realised, placed, request, ((),), ())
+
+    assert benchmarked.benchmark is not None
+    assert (benchmarked.benchmark.returns, benchmarked.benchmark.fills) == ((), ())
+    assert benchmarked.run == realised.run
+
+
 def test_a_stage_window_holding_an_undeclared_split_is_refused_like_any_other(
     placement: Placement,
 ) -> None:

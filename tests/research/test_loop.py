@@ -11,9 +11,11 @@ import pytest
 
 from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
+from kanso.criteria.objectives import wf_sharpe_net
 from kanso.data import snapshot
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
+from kanso.nautilus import backtest
 from kanso.research import loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
 from kanso.schemas import Hypothesis, RunRecord
@@ -879,3 +881,71 @@ def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore
 
     assert setup.prefix is None
     assert loop._warmup_spans(setup) == ()
+
+
+# --- a benchmark -------------------------------------------------------------
+
+
+HELD = document(
+    benchmark={"hold": "first_leg"},
+    objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+)
+"""The demo sleeve, measured against a hold of its one instrument."""
+
+
+def test_a_card_is_measured_against_the_hold_the_runner_produced(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A strategy that trades nothing scores minus what the hold scored, fold by fold."""
+    hyp_id = classify(ws, store, HELD)
+
+    run = loop.begin(ws, store, hyp_id)
+
+    setup = loop._setup(ws, store, Hypothesis.model_validate(HELD))
+    request = loop._request(setup, FLAT, run.snapshot_id, budget_s=None, mem_cap_gb=None)
+    hold = backtest.run(backtest.benchmark(request), setup.catalog).run
+    assert len(hold.fills) == 1 and hold.trades == ()
+    held, spread = wf_sharpe_net.compute(hold, setup.folds)
+    baseline = records.cards_of(store, hyp_id)[0]
+    assert (baseline.metric, baseline.metric_se) == pytest.approx((-held, spread))
+    assert baseline.metric != 0.0
+
+
+def test_every_card_of_a_run_is_differenced_against_one_hold(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hyp_id = classify(ws, store, HELD)
+    derived: list[object] = []
+    original = backtest.benchmark
+
+    def counted(request: backtest.RunRequest) -> backtest.RunRequest:
+        derived.append(request.window)
+        return original(request)
+
+    monkeypatch.setattr(loop.backtest, "benchmark", counted)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    loop.card(ws, store, hyp_id, "buy the trough")
+    edit(ws, run, WEAK)
+    loop.card(ws, store, hyp_id, "buy any fall")
+
+    assert derived == [RESEARCH]
+    trough = records.cards_of(store, hyp_id)[1]
+    assert (trough.metric, trough.metric_se) == pytest.approx((14.527, 2.255), abs=1e-3), (
+        "measured on the saw-tooth: the trough-buyer's 15.689 by wf_sharpe_net, less the hold's"
+    )
+    assert [key for key in loop._HOST_RUNS[run.run_id] if key.startswith("benchmark")] == [
+        f"benchmark@{run.snapshot_id}@None"
+    ]
+    loop.end(ws, store, hyp_id)
+    assert run.run_id not in loop._HOST_RUNS
+
+
+def test_an_objective_that_measures_no_benchmark_runs_no_hold(
+    ws: Workspace, store: StateStore
+) -> None:
+    setup = loop._setup(ws, store, Hypothesis.model_validate(DOCUMENT))
+    cache: dict[str, object] = {}
+
+    assert loop._benchmark_run(setup, snapshot_id="a" * 64, cache=cache) is None  # type: ignore[arg-type]
+    assert cache == {}

@@ -161,6 +161,26 @@ class Warmup(KansoModel):
     sessions: int = Field(gt=0)
 
 
+FIRST_LEG: Final = "first_leg"
+"""The one benchmark: the universe's first instrument, bought and held."""
+
+
+class Benchmark(KansoModel):
+    """What the objective has to beat, when the operator says it must beat something.
+
+    `hold: first_leg` is the universe's first instrument bought on the first print of the
+    window and held to its close: the run a strategy trading that leg is worth nothing
+    beside unless it does better. The runner produces it — the same engine, costs, splits,
+    sizing and warmup as the strategy it is measured against, from a sleeve kanso ships —
+    and the objective is the strategy's fold-wise Sharpe minus the hold's, fold by fold.
+    Operator-owned like `sizing`, so classification neither reads nor writes it, and
+    scope: a best that beat nothing is not compared with a card that has to beat a hold,
+    and the leg held is part of it, so reordering the universe moves it too.
+    """
+
+    hold: Literal["first_leg"]
+
+
 Reset = Literal["monthly", "none"]
 
 
@@ -236,6 +256,7 @@ class Hypothesis(Versioned):
     risk_limits: RiskLimits
     windows: Windows
     warmup: Warmup | None = None
+    benchmark: Benchmark | None = None
     book: Book | None = None
     required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")

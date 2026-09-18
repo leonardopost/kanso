@@ -99,6 +99,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
         "sizing": None,
         "objective": None,
         "warmup": None,
+        "benchmark": None,
         "book": None,
     }
 
@@ -207,15 +208,17 @@ def test_reordering_the_universe_is_not_a_change_of_scope(ws: Workspace, store: 
         ("data_requirements", ["bar", "quote"]),
         ("sizing", {"mode": "full_book", "budget": 100.0}),
         ("warmup", {"sessions": 20}),
+        ("benchmark", {"hold": "first_leg"}),
     ],
 )
 def test_a_change_of_scope_clears_the_best(
     ws: Workspace, store: StateStore, field: str, value: Any
 ) -> None:
-    register(ws, store)
+    """Held a day, so a benchmark is admissible; the horizon itself is not scope."""
+    register(ws, store, document(horizon="1d"))
     set_best(store)
 
-    register(ws, store, document(**{field: value}))
+    register(ws, store, document(horizon="1d", **{field: value}))
 
     found = record(ws, store)
     assert found.best_sha is None
@@ -338,6 +341,22 @@ def test_a_row_pinned_before_warmup_joined_the_scope_keeps_the_best(
     assert record(ws, store).best_sha == "c" * 64
 
 
+def test_a_benchmark_names_the_leg_it_holds(ws: Workspace, store: StateStore) -> None:
+    """Under a benchmark the universe's order is scope: its first name is what is held."""
+    held = {"horizon": "1d", "benchmark": {"hold": "first_leg"}}
+    register(ws, store, document(universe=["DEMO", "EURO"], **held))
+    set_best(store)
+
+    register(ws, store, document(universe=["EURO", "DEMO"], **held))
+
+    assert record(ws, store).best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["reason"] for event in cleared] == [
+        "benchmark changed from {'hold': 'first_leg', 'leg': 'DEMO'} to "
+        "{'hold': 'first_leg', 'leg': 'EURO'}"
+    ]
+
+
 def test_a_change_of_book_policy_names_the_rule_that_moved(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -354,6 +373,26 @@ def test_a_change_of_book_policy_names_the_rule_that_moved(
         "'reset': 'monthly'} to {'reset': 'monthly', 'financing_rate_bps': 100.0, "
         "'maintenance_pct': None}"
     ], "the pinned side reads back from JSON with its keys sorted"
+
+
+def test_a_row_pinned_before_benchmark_joined_the_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A row from before 0.8.0 has no `benchmark` key in its pins, which reads as none."""
+    register(ws, store)
+    set_best(store)
+    held = store.connection.execute(
+        "SELECT pins FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    pins = json.loads(held["pins"])
+    del pins["benchmark"]
+    store.connection.execute(
+        "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
+    )
+
+    register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
 
 
 def test_a_row_pinned_before_book_joined_the_scope_keeps_the_best(

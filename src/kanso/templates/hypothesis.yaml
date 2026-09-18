@@ -36,6 +36,9 @@ windows:                           # dates YYYY-MM-DD; certification.start ≥ r
 #                                  # first, every order dropped until the window opens,
 #                                  # so it trades from the open with its indicators full. `research begin` refuses
 #                                  # (exit 2) when the catalog holds fewer; the snapshot must cover them
+# benchmark:                       # yours: classification never touches it. Scope: changing it, or the universe's order, clears `best`
+#   hold: first_leg                # the objective becomes wf_sharpe_vs_hold: the Sharpe over buying universe[0] on the
+#                                  # first print and never exiting, run by the same runner; a day or longer, sleeve or alpha only
 # book:                            # yours: classification never touches it. Scope: changing any key clears `best`
 #   reset: monthly                 # monthly | none. At the first period end of each calendar month the book returns to
 #                                  # `capital`: a surplus moves to a cushion outside the book, a deficit is restored from

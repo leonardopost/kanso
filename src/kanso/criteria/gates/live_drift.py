@@ -57,8 +57,11 @@ class _LiveDrift:
         if ctx.session.elapsed_s < window_s:
             return skipped(self.id, TOO_SHORT)
         closes = ctx.session.clock_ns + 1
-        rolling = ctx.run.between(closes - int(window_s * NS_PER_SECOND), closes)
-        realised = objective.compute(rolling, ctx.research_folds, ctx.host_run)[0]
+        opens = closes - int(window_s * NS_PER_SECOND)
+        rolling = ctx.run.between(opens, closes)
+        # The benchmark rolls with the book: a difference is only paired over one span.
+        against = None if ctx.benchmark_run is None else ctx.benchmark_run.between(opens, closes)
+        realised = objective.compute(rolling, ctx.research_folds, ctx.host_run, against)[0]
         return verdict(
             self.id,
             realised >= floor,

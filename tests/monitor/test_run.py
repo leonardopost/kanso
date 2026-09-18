@@ -573,3 +573,51 @@ def test_the_default_paper_stage_capital_is_what_the_limits_are_taken_of(
     assert exposure is not None
     assert exposure.capital == CAPITAL
     assert exposure.max_gross == CAPITAL
+
+
+# --- a benchmark ----------------------------------------------------------------
+
+
+HOLD_OBJECTIVE: dict[str, Any] = {
+    "benchmark": {"hold": "first_leg"},
+    "objective": {"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 0.5}},
+}
+
+
+def held_deployment(ws: Workspace, store: StateStore, hold: Any) -> Any:
+    """A paper deployment of a sleeve measured against a hold, whose book recorded `hold`."""
+    varied = run_over(tuple(float(100 + (day % 3) * 50) for day in range(20)))
+    pin_hypothesis(store, hypothesis(**HOLD_OBJECTIVE))
+    write_plan(ws, plan())
+    write_strategy(ws, store, version(ci90=WIDE, objective_id="wf_sharpe_vs_hold"))
+    write_book(store, "paper", run=varied, benchmark=hold)
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+    return varied
+
+
+def test_the_paper_objective_is_differenced_against_the_hold_the_stage_stored(
+    ws: Workspace, store: StateStore
+) -> None:
+    from kanso.criteria.objectives import wf_sharpe_vs_hold
+
+    hold = run_over(tuple(float(100 + (day % 4) * 40) for day in range(20)))
+    varied = held_deployment(ws, store, hold)
+
+    outcomes = monitor.run_once(ws, store, demote=Recorder())
+
+    (paper,) = [gate for gate in _version_outcome(outcomes).gates if gate.id == "paper_forward"]
+    assert paper.evidence["realised"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(varied, ws.config.research.folds, benchmark=hold)[0]
+    )
+
+
+def test_a_book_recorded_without_its_hold_is_skipped_naming_what_is_missing(
+    ws: Workspace, store: StateStore
+) -> None:
+    held_deployment(ws, store, None)
+
+    outcomes = monitor.run_once(ws, store, demote=Recorder())
+
+    judged = _version_outcome(outcomes)
+    assert judged.skipped is not None and "benchmark's run" in judged.skipped
+    assert judged.actions == ()

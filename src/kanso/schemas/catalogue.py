@@ -121,7 +121,13 @@ class IntBounds(KansoModel):
 
 
 class Applies(KansoModel):
-    """An objective's selection predicate. Every stated clause must hold."""
+    """An objective's selection predicate. Every stated clause must hold.
+
+    `benchmark` is whether the hypothesis declares one: `true` applies only to a
+    hypothesis that has to beat a benchmark, `false` only to one that does not, and an
+    unstated clause to both. It is what keeps an objective measured against a hold from
+    displacing the absolute one it sits beside at the same horizon.
+    """
 
     mechanism: list[Mechanism] | None = None
     objective_mode: ObjectiveMode | None = None
@@ -130,6 +136,7 @@ class Applies(KansoModel):
     universe_size: IntBounds | None = None
     data_requirements: list[CatalogueId] | None = None
     history_days: IntBounds | None = None
+    benchmark: bool | None = None
 
 
 class CriteriaItem(KansoModel):

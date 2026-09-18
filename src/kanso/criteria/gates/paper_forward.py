@@ -76,7 +76,9 @@ class _PaperForward:
         required = max(duration, multiple * horizon)
         elapsed = ctx.session.elapsed_s
         low, high = band
-        realised = objective.compute(ctx.run, ctx.research_folds, ctx.host_run)[0]
+        realised = objective.compute(ctx.run, ctx.research_folds, ctx.host_run, ctx.benchmark_run)[
+            0
+        ]
         observed = drawdown_pct(ctx.run)
         limit = ctx.hyp.risk_limits.max_drawdown_pct
         constraints, within_risk = _constraints(ctx, observed, limit)

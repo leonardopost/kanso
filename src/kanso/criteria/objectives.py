@@ -5,13 +5,18 @@ research window's contiguous folds and the folds are then averaged, so the numbe
 reports carries its own standard error and the keep rule has a noise floor to clear. A
 relative objective is the same statistic differenced fold by fold against the host's run,
 because the standard error of the differences is what a marginal improvement has to beat
-— the difference of two separately averaged metrics would throw that pairing away.
+— the difference of two separately averaged metrics would throw that pairing away. A
+benchmark objective is the same pairing against a benchmark the hypothesis declares — a
+hold of its first leg, produced by the runner over the same window, data, costs and book —
+so a strategy that only rode the market it trades scores nothing.
 
 Which objective a hypothesis gets is the one deterministic domain rule in the system: the
 `applies` predicate over the hypothesis's own attributes, with `min` inclusive and `max`
 exclusive, and the lowest priority winning among those that apply. The shipped set is
 total over mechanism, objective mode and horizon either side of a day, so classification
-always has an objective to write and never has to invent one: at or above a day the
+always has an objective to write and never has to invent one; a hypothesis that declares
+a benchmark trades the absolute Sharpe for the Sharpe over that benchmark, and the
+`benchmark` clause keeps the two disjoint. At or above a day the
 statistic is a Sharpe of returns, below it the mean edge per trade, since a sub-daily
 holding period produces too few return periods for a Sharpe to mean anything and enough
 trades for a per-trade edge to.
@@ -42,8 +47,11 @@ from kanso.schemas import (
 
 ABSOLUTE: Final = "absolute"
 RELATIVE: Final = "relative"
+BENCHMARK: Final = "benchmark"
+"""The third mode: differenced against the hypothesis's benchmark run rather than a host's,
+so a caller knows which second run to produce."""
 
-SHARPE_FAMILY: Final = frozenset({"wf_sharpe_net", "marginal_wf_sharpe"})
+SHARPE_FAMILY: Final = frozenset({"wf_sharpe_net", "marginal_wf_sharpe", "wf_sharpe_vs_hold"})
 """The objectives a deflated Sharpe has something to deflate."""
 
 
@@ -52,14 +60,30 @@ class Objective(Protocol):
 
     id: ClassVar[str]
     mode: ClassVar[str]
+    statistic: ClassVar[str]
 
     def fold_values(
-        self, run: CardRun, folds: int, host: CardRun | None = None
+        self,
+        run: CardRun,
+        folds: int,
+        host: CardRun | None = None,
+        benchmark: CardRun | None = None,
     ) -> tuple[float, ...]:
-        """The statistic on each fold, in window order."""
+        """The statistic on each fold, in window order.
+
+        `host` is the host-alone run a relative objective differences against and
+        `benchmark` the benchmark run a benchmark objective does; each objective reads the
+        one its mode names, so a caller hands over both whenever it has them.
+        """
         ...
 
-    def compute(self, run: CardRun, folds: int, host: CardRun | None = None) -> tuple[float, float]:
+    def compute(
+        self,
+        run: CardRun,
+        folds: int,
+        host: CardRun | None = None,
+        benchmark: CardRun | None = None,
+    ) -> tuple[float, float]:
         """The metric and its standard error: the mean of the folds and their spread."""
         ...
 
@@ -71,30 +95,72 @@ STATISTICS: Final[Mapping[str, Callable[[CardRun], float]]] = MappingProxyType(
 
 
 class _FoldObjective:
-    """A statistic averaged over folds, absolutely or against a host run."""
+    """A statistic averaged over folds, absolutely, against a host run or a benchmark run."""
 
     id: ClassVar[str]
     mode: ClassVar[str]
     statistic: ClassVar[str]
 
     def fold_values(
-        self, run: CardRun, folds: int, host: CardRun | None = None
+        self,
+        run: CardRun,
+        folds: int,
+        host: CardRun | None = None,
+        benchmark: CardRun | None = None,
     ) -> tuple[float, ...]:
         measure = STATISTICS[self.statistic]
         own = tuple(measure(fold) for fold in run.folds(folds))
         if self.mode == ABSOLUTE:
             return own
-        if host is None:
-            raise PreconditionError(
-                f"{self.id}: a relative objective is measured against the host's run, "
-                "and none was supplied"
-            )
-        against = tuple(measure(fold) for fold in host.folds(folds))
+        against = tuple(measure(fold) for fold in _against(self, host, benchmark).folds(folds))
         return tuple(a - b for a, b in zip(own, against, strict=True))
 
-    def compute(self, run: CardRun, folds: int, host: CardRun | None = None) -> tuple[float, float]:
-        values = self.fold_values(run, folds, host)
+    def compute(
+        self,
+        run: CardRun,
+        folds: int,
+        host: CardRun | None = None,
+        benchmark: CardRun | None = None,
+    ) -> tuple[float, float]:
+        values = self.fold_values(run, folds, host, benchmark)
         return mean(values), standard_error(values)
+
+
+def _against(objective: Objective, host: CardRun | None, benchmark: CardRun | None) -> CardRun:
+    """The run a relative or benchmark objective differences against, or the refusal."""
+    if objective.mode == BENCHMARK:
+        if benchmark is None:
+            raise PreconditionError(
+                f"{objective.id}: a benchmark objective is measured against the benchmark's "
+                "run, and none was supplied"
+            )
+        return benchmark
+    if host is None:
+        raise PreconditionError(
+            f"{objective.id}: a relative objective is measured against the host's run, "
+            "and none was supplied"
+        )
+    return host
+
+
+def benchmark_level(objective: Objective, folds: int, benchmark: CardRun | None) -> float:
+    """What the benchmark scored on this objective's statistic, averaged over the folds.
+
+    Zero for an objective that measures no benchmark. A resampling of the strategy's own
+    trades knows nothing of the benchmark, so this is the constant it is moved by to read
+    in the objective's units: the strategy's statistic less the hold's.
+    """
+    if objective.mode != BENCHMARK:
+        return 0.0
+    measure = STATISTICS[objective.statistic]
+    return mean(tuple(measure(fold) for fold in _against(objective, None, benchmark).folds(folds)))
+
+
+def measures_benchmark(hyp: Hypothesis) -> bool:
+    """Whether this hypothesis's objective needs a benchmark run beside the strategy's."""
+    ref = hyp.objective
+    found = None if ref is None else REGISTRY.get(ref.id)
+    return found is not None and found.mode == BENCHMARK
 
 
 class _WfSharpeNet(_FoldObjective):
@@ -129,15 +195,30 @@ class _MarginalNetEdgeBps(_FoldObjective):
     statistic = "edge_bps"
 
 
+class _WfSharpeVsHold(_FoldObjective):
+    """The run's fold-wise Sharpe minus the benchmark hold's, fold by fold."""
+
+    id = "wf_sharpe_vs_hold"
+    mode = BENCHMARK
+    statistic = "sharpe"
+
+
 wf_sharpe_net: Final[Objective] = _WfSharpeNet()
 net_edge_bps: Final[Objective] = _NetEdgeBps()
 marginal_wf_sharpe: Final[Objective] = _MarginalWfSharpe()
 marginal_net_edge_bps: Final[Objective] = _MarginalNetEdgeBps()
+wf_sharpe_vs_hold: Final[Objective] = _WfSharpeVsHold()
 
 REGISTRY: Final[Mapping[str, Objective]] = MappingProxyType(
     {
         objective.id: objective
-        for objective in (wf_sharpe_net, net_edge_bps, marginal_wf_sharpe, marginal_net_edge_bps)
+        for objective in (
+            wf_sharpe_net,
+            net_edge_bps,
+            marginal_wf_sharpe,
+            marginal_net_edge_bps,
+            wf_sharpe_vs_hold,
+        )
     }
 )
 """The implemented objectives, for a caller that already knows the id it wants."""
@@ -191,7 +272,26 @@ def applies_to(applies: Applies, hyp: Hypothesis, mode: str) -> bool:
         hyp.data_requirements
     ):
         return False
+    if applies.benchmark is not None and applies.benchmark != (hyp.benchmark is not None):
+        return False
     return applies.history_days is None or _within_int(applies.history_days, history_days(hyp))
+
+
+def measures_a_hold_over(items: Sequence[CriteriaItem], hyp: Hypothesis) -> bool:
+    """Whether some objective that measures a benchmark admits this hypothesis's horizon.
+
+    Read from the toolbox's `benchmark: true` clauses, in either mode, so a hypothesis can be
+    refused a benchmark before it is classified: below every such horizon no classification
+    could choose an objective that measures the hold.
+    """
+    horizon = parse_duration(hyp.horizon, "horizon").total_seconds()
+    return any(
+        item.kind == "objective"
+        and item.applies is not None
+        and item.applies.benchmark is True
+        and (item.applies.horizon is None or _within_duration(item.applies.horizon, horizon))
+        for item in items
+    )
 
 
 def applicable(items: Sequence[CriteriaItem], hyp: Hypothesis, mode: str) -> list[tuple[int, str]]:

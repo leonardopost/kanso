@@ -96,13 +96,16 @@ seam that would make it runnable — late on purpose. `docs/constructs.md` is th
 A run optimises **exactly one scalar**. Which one is not a free choice: it follows from the
 construct's objective mode and the hypothesis's horizon, by the one deterministic domain
 rule in the system. A sub-daily sleeve is scored on net edge per trade; a daily-or-longer
-sleeve on a walk-forward net Sharpe; an attached construct on the marginal version of
-whichever of those applies.
+sleeve on a walk-forward net Sharpe — or, when the operator declares a `benchmark`, on
+that Sharpe less the Sharpe of holding the universe's first leg over the same folds; an
+attached construct on the marginal version of whichever of the first two applies.
 
 `absolute` objectives score the construct alone. `relative` objectives score its **marginal
 effect on its host**: the host is run by itself once per run, and every card's number is the
 difference. A neutral modifier therefore scores exactly zero, which is what the baseline of
-an attached construct should be. Here is one, on a filter attached to the demo sleeve:
+an attached construct should be. A benchmark objective is the same difference against a
+hold run by the same runner rather than against a host, so a strategy that only rode its
+market scores zero too. Here is a relative one, on a filter attached to the demo sleeve:
 
 ```
 $ kanso research begin demo_filter
@@ -404,8 +407,9 @@ trial. The rule is scope: a `best` earned under one sizing is not compared with 
 under another, so adding or changing it clears the best — as does changing the objective,
 whose units the best is a number in, the `warmup`, since a run whose indicators were
 fed before the open and one that spent the window's first sessions filling them measured
-different things over the same days, and the `book` policy as a whole, since a reset, a
-carry and a maintenance floor each change the equity path a metric is read from.
+different things over the same days, the `benchmark`, since a Sharpe over a hold of the
+first leg is not a Sharpe, and the `book` policy as a whole, since a reset, a carry and a
+maintenance floor each change the equity path a metric is read from.
 
 **One leg on its own.** A pair's number is struck on the book, so a hedge that pays its
 spread at every switch and returns nothing of its own is invisible in it. `leg_edge` reads
@@ -684,6 +688,13 @@ $ kanso cert run demo_mr --json
 }
 ```
 
+A subject whose hypothesis declares a `benchmark` is certified against a hold of its first
+leg over each window — two more runs of the one runner, from the subject's own request for
+that window with the strategy replaced — and every gate that measures the objective reads the
+certification hold beside the certification run and the research hold beside the research
+run. `param_plateau` moves the subject's parameters and re-runs the subject alone: the hold
+it is differenced against stays the one it was measured against.
+
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
@@ -721,7 +732,9 @@ pointer to source that might change — it is a closed record of four things.
 - **`expectation`**: what composition measured by running that implementation over the
   sleeve's certification window — the objective, a ninety-percent interval and the
   ninety-fifth-percentile drawdown. The paper and live gates judge the deployment against
-  this band, so it is measured rather than declared.
+  this band, so it is measured rather than declared. A sleeve measured against a
+  `benchmark` has the hold run over the same window, and its value and its band are
+  differences from it.
 
 The identity really is the bytes. In a workspace that has just certified and composed:
 
@@ -785,6 +798,16 @@ prefix, a shallower warmup sees nothing of a deeper one's, and every version's h
 indicators and orders are what a run of it alone would produce. A version under a `book`
 policy is seeded on a restart with the cushion and the last settled end of its newest
 measured window on that stage, and its first carry runs from the instant it resumes.
+
+A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
+stage rather than inside it: once the node stops, the backtest runner runs the hold over the
+points that version's realised window is measured on, from the version's request with the
+strategy replaced, and the hold is recorded on the same `stage_run` event as the window the
+version realised. The two have the same periods, a halted window's included: the version is
+marked over its whole view after a halt, and so is its hold. The paper and live gates difference the realised objective against the
+holds of the same windows, joined as the windows are; a book recorded without its hold is
+skipped with the reason rather than judged against nothing. A separate engine, because two
+strategies in one account would share the book and the volume a fill walks.
 
 ## Promotion and demotion
 

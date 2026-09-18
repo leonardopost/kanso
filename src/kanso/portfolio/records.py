@@ -211,6 +211,9 @@ class StageResult:
     capital: float
     run: CardRun
     positions: tuple[tuple[str, float, float], ...]
+    benchmark: CardRun | None = None
+    """The hold the version's objective differences against, over the same window; absent
+    from a window recorded for a version whose objective measures none."""
 
     @property
     def pnl(self) -> float:
@@ -246,6 +249,8 @@ def record_stage_run(
                 {"instrument": name, "qty": qty, "price": price} for name, qty, price in positions
             ],
         }
+        if one.benchmark is not None:
+            detail["benchmark"] = encode_run(one.benchmark)
         store.event(STAGE_RUN, subject_of(one.strategy_id, one.version), detail)
         made.append(
             StageResult(
@@ -256,6 +261,7 @@ def record_stage_run(
                 capital=one.capital,
                 run=one.run,
                 positions=positions,
+                benchmark=one.benchmark,
             )
         )
     return made
@@ -310,6 +316,7 @@ def _result(detail: Mapping[str, Any]) -> StageResult:
             (str(p["instrument"]), float(p["qty"]), float(p["price"]))
             for p in detail.get("positions", [])
         ),
+        benchmark=None if detail.get("benchmark") is None else decode_run(detail["benchmark"]),
     )
 
 

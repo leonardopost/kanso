@@ -49,8 +49,8 @@ Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 | command | what it does |
 |---|---|
 | `kanso hyp new ID` | scaffold `hypotheses/<id>/` with `hypothesis.yaml`, `program.md` and a `strategy.py` stub |
-| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints, the `warmup` and the `book` an attached construct shares with its host, and a `book` the venue's account and the leverage ceiling can hold — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
-| `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with. A re-pin that changes the `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`, `objective.id`, `warmup` or `book` — stripping the classification included — clears the hypothesis's best and records `best_cleared` naming the field, because a card's metric means nothing across any of them; the cards and their blobs stay in state |
+| `kanso hyp validate PATH` | say whether the file is admissible — the id, windows, embargo, universe resolution, construct, its parameters, objective and constraints, the `warmup` and the `book` an attached construct shares with its host, a `book` the venue's account and the leverage ceiling can hold, and a `benchmark` only on a horizon of a day or more (checked on a draft too) and where the objective measures one — and change nothing either way: not the file, not the catalog's instrument store, not `instruments.yaml` |
+| `kanso hyp add PATH` | register it, or re-pin an already registered one, under the sha256 of its bytes. Refused while a run is active (exit 2), because a run is pinned to the bytes it began with. A re-pin that changes the `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`, `objective.id`, `warmup`, `benchmark` (under a benchmark, the universe's first name too) or `book` — stripping the classification included — clears the hypothesis's best and records `best_cleared` naming the field, because a card's metric means nothing across any of them; the cards and their blobs stay in state |
 | `kanso hyp show [ID]` | one registration — status, pin, construct, objective, best — or all of them |
 | `kanso hyp retire ID` | end a hypothesis. Its cards, blobs and certificates stay in state, and it is the only way research ends: no verdict and no run of failures ends one |
 | `kanso hyp resume ID` | undo an ending — a hypothesis you retired, or one an older kanso turned `failed` — back to `researching`, clearing the consecutive-failure count. Refused (exit 2) on a hypothesis research has not ended. Give it a lane with `kanso research queue add ID` |
@@ -145,7 +145,8 @@ engine returns the version that exists rather than a second copy of it, and a sl
 with different bytes, or the same bytes under a new engine, composes its strategy's next
 version. The certificate composed is the hypothesis's newest passing one, under the hypothesis
 as the registry pins it now: one earned under another universe, resolution, data requirement,
-construct, sizing rule, warmup or book policy is refused (exit 2) by the field that moved, and so is a construct
+construct, sizing rule, warmup, benchmark or book policy is refused (exit 2) by the field that
+moved, and so is a construct
 whose host's latest sleeve is not the one its run was pinned to. A version whose own book, run
 over the sleeve's certification window, falls below the `book.maintenance_pct` its hypothesis
 declares is refused (exit 2) with the worst ratio and the floor, whether or not any card was

@@ -2,6 +2,7 @@ id: wf_sharpe_net
 kind: objective
 applies:
   objective_mode: absolute
+  benchmark: false
   horizon: {min: 1d}
 priority: 20
 meaningful_when: "A holding period of a day or more produces enough return periods for a Sharpe to mean something; below that, use a per-trade edge."

@@ -354,6 +354,7 @@ def _judge(
                     strategy_sha=version.sleeve.strategy_sha,
                     expectation=version.expectation.model_dump(mode="json"),
                     session=record,
+                    benchmark_run=held.benchmark,
                 )
             )
         )

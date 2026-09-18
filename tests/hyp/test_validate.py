@@ -501,6 +501,7 @@ def test_an_objective_that_does_not_apply_is_refused(ws: Workspace) -> None:
     assert failure.message.startswith("objective.id:")
     assert "does not apply" in failure.message
     assert "net_edge_bps" in failure.message
+    assert (failure.remedy or "").startswith("name one of the applicable objectives")
 
 
 def test_a_relative_objective_on_a_sleeve_is_refused(ws: Workspace) -> None:
@@ -515,6 +516,73 @@ def test_a_relative_objective_on_a_sleeve_is_refused(ws: Workspace) -> None:
     failure = refused(ws, document(**classification))
 
     assert "does not apply" in failure.message
+
+
+DAILY_SLEEVE: dict[str, Any] = {
+    "horizon": "1d",
+    "resolution": "1d",
+    "construct": {"id": "sleeve", "rationale": "a strategy of its own"},
+    "constraints": [{"id": "strategy_integrity"}],
+}
+
+
+def test_a_daily_sleeve_measured_against_a_hold_is_admissible(ws: Workspace) -> None:
+    parsed = accepted(
+        ws,
+        document(
+            benchmark={"hold": "first_leg"},
+            objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 1.0}},
+            **DAILY_SLEEVE,
+        ),
+    )
+
+    assert parsed.benchmark is not None and parsed.benchmark.hold == "first_leg"
+
+
+def test_a_benchmark_takes_the_absolute_sharpe_s_place(ws: Workspace) -> None:
+    """A declared benchmark and an objective that ignores it are two answers to one question."""
+    failure = refused(
+        ws,
+        document(
+            benchmark={"hold": "first_leg"},
+            objective={"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}},
+            **DAILY_SLEEVE,
+        ),
+    )
+
+    assert failure.message.startswith("objective.id: 'wf_sharpe_net' does not apply")
+    assert "wf_sharpe_vs_hold" in failure.message
+    assert failure.remedy == "set objective.id to wf_sharpe_vs_hold, or remove benchmark"
+
+
+def test_removing_a_benchmark_moves_the_objective_back(ws: Workspace) -> None:
+    failure = refused(
+        ws,
+        document(
+            objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 1.0}},
+            **DAILY_SLEEVE,
+        ),
+    )
+
+    assert failure.message.startswith("objective.id: 'wf_sharpe_vs_hold' does not apply")
+    assert failure.remedy == (
+        "declare `benchmark: {hold: first_leg}`, or set objective.id to wf_sharpe_net"
+    )
+
+
+def test_a_benchmark_below_a_day_is_refused_before_classification(ws: Workspace) -> None:
+    """A sub-daily hypothesis is measured per trade, and a hold has no trades to pair with.
+
+    Refused on the draft, so `kanso classify` never asks a model to classify it.
+    """
+    draft = refused(ws, document(benchmark={"hold": "first_leg"}))
+    classified = refused(ws, document(benchmark={"hold": "first_leg"}, **SLEEVE_CLASSIFICATION))
+
+    assert draft.message.startswith("benchmark: declared on a 30m horizon")
+    assert (
+        draft.remedy == "remove benchmark from this file, or lengthen the horizon to a day or more"
+    )
+    assert (classified.message, classified.remedy) == (draft.message, draft.remedy)
 
 
 def test_an_objective_parameter_outside_its_range_is_refused(ws: Workspace) -> None:
@@ -933,3 +1001,31 @@ def test_a_host_without_a_hypothesis_file_is_paired_with_nothing(ws: Workspace) 
     write_strategy(ws, HOST_ID)
 
     assert accepted(ws, document(sizing=OWN_BUDGET, capital=100_000, **OVERLAY_CLASSIFICATION))
+
+
+def test_a_benchmark_on_a_construct_measured_against_its_host_is_refused(ws: Workspace) -> None:
+    host_with(ws, horizon="1d", resolution="1d")
+
+    failure = refused(
+        ws,
+        document(
+            benchmark={"hold": "first_leg"},
+            horizon="1d",
+            resolution="1d",
+            **{
+                **OVERLAY_CLASSIFICATION,
+                "objective": {
+                    "id": "marginal_wf_sharpe",
+                    "params": {"min_delta": 0.0, "k_se": 1.0},
+                },
+            },
+        ),
+    )
+
+    assert failure.message.startswith(
+        "benchmark: declared, and marginal_wf_sharpe measures nothing against it"
+    )
+    assert (
+        failure.remedy
+        == "remove benchmark from this file; the construct is measured against its host"
+    )

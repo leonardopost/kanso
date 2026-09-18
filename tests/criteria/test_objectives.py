@@ -1,4 +1,4 @@
-"""The four objectives, the fold arithmetic they aggregate with, and their applicability."""
+"""The five objectives, the fold arithmetic they aggregate with, and their applicability."""
 
 from __future__ import annotations
 
@@ -11,14 +11,19 @@ import pytest
 from kanso.criteria import applicable_objectives, catalogue, objectives
 from kanso.criteria.objectives import (
     ABSOLUTE,
+    BENCHMARK,
     RELATIVE,
+    SHARPE_FAMILY,
     applies_to,
+    benchmark_level,
     history_days,
     marginal_net_edge_bps,
     marginal_wf_sharpe,
+    measures_benchmark,
     net_edge_bps,
     resolution_seconds,
     wf_sharpe_net,
+    wf_sharpe_vs_hold,
 )
 from kanso.errors import PreconditionError
 from kanso.schemas import Applies, Hypothesis
@@ -81,6 +86,56 @@ def test_a_relative_objective_refuses_to_measure_without_a_host() -> None:
         marginal_wf_sharpe.compute(edges(1.0, 2.0, 3.0, 4.0), 4)
 
 
+def test_a_benchmark_objective_differences_the_folds_against_the_benchmark() -> None:
+    """The pairing is the relative one's, against the hold rather than a host."""
+    candidate = build_run((1.0, 3.0, 2.0, 4.0, 1.0, 5.0, 2.0, 6.0))
+    hold = build_run((1.0, 2.0, 1.0, 2.0, 3.0, 1.0, 3.0, 1.0))
+    own = wf_sharpe_net.fold_values(candidate, 4)
+    against = wf_sharpe_net.fold_values(hold, 4)
+    values = wf_sharpe_vs_hold.fold_values(candidate, 4, benchmark=hold)
+    assert values == pytest.approx(tuple(a - b for a, b in zip(own, against, strict=True)))
+    metric, _ = wf_sharpe_vs_hold.compute(candidate, 4, benchmark=hold)
+    assert metric == pytest.approx(sum(values) / 4)
+
+
+def test_a_benchmark_objective_never_reads_the_host_slot() -> None:
+    """A host run beside a benchmark objective is a construct's, not what it has to beat."""
+    run = edges(1.0, 2.0, 3.0, 4.0)
+    with pytest.raises(PreconditionError, match="benchmark's run"):
+        wf_sharpe_vs_hold.compute(run, 4, host=run)
+
+
+def test_a_relative_objective_never_reads_the_benchmark_slot() -> None:
+    run = edges(1.0, 2.0, 3.0, 4.0)
+    with pytest.raises(PreconditionError, match="host's run"):
+        marginal_wf_sharpe.compute(run, 4, benchmark=run)
+
+
+def test_the_benchmark_level_is_what_the_hold_scored_and_zero_without_one() -> None:
+    hold = build_run((1.0, 2.0, 1.0, 2.0, 3.0, 1.0, 3.0, 1.0))
+    assert benchmark_level(wf_sharpe_vs_hold, 4, hold) == pytest.approx(
+        wf_sharpe_net.compute(hold, 4)[0]
+    )
+    assert benchmark_level(wf_sharpe_net, 4, hold) == 0.0
+    with pytest.raises(PreconditionError, match="benchmark's run"):
+        benchmark_level(wf_sharpe_vs_hold, 4, None)
+
+
+def test_the_benchmark_objective_is_a_sharpe() -> None:
+    assert wf_sharpe_vs_hold.mode == BENCHMARK
+    assert "wf_sharpe_vs_hold" in SHARPE_FAMILY
+
+
+def test_only_a_benchmark_objective_asks_for_a_benchmark_run() -> None:
+    params = {"min_delta": 0.0, "k_se": 1.0}
+    held = make_hyp(
+        benchmark={"hold": "first_leg"}, objective={"id": "wf_sharpe_vs_hold", "params": params}
+    )
+    assert measures_benchmark(held)
+    assert not measures_benchmark(make_hyp())
+    assert not measures_benchmark(make_hyp(objective=None, construct=None, constraints=None))
+
+
 def test_the_sharpe_objectives_read_the_return_series() -> None:
     run = build_run((1.0, 3.0, 2.0, 4.0, 1.0, 5.0, 2.0, 6.0))
     metric, _ = wf_sharpe_net.compute(run, 4)
@@ -101,16 +156,20 @@ def test_every_catalogued_objective_resolves_to_its_implementation() -> None:
         "net_edge_bps",
         "marginal_wf_sharpe",
         "marginal_net_edge_bps",
+        "wf_sharpe_vs_hold",
     }
     assert all(objective.id == name for name, objective in found.items())
 
 
-def test_the_objective_set_is_total_over_mechanism_mode_and_horizon() -> None:
-    for mechanism, mode, horizon in product(MECHANISMS, (ABSOLUTE, RELATIVE), ("12h", "1d")):
-        hyp = make_hyp(mechanism=mechanism, horizon=horizon)
+def test_the_objective_set_is_total_over_mechanism_mode_horizon_and_benchmark() -> None:
+    for mechanism, mode, horizon, benchmark in product(
+        MECHANISMS, (ABSOLUTE, RELATIVE), ("12h", "1d"), (None, {"hold": "first_leg"})
+    ):
+        hyp = make_hyp(mechanism=mechanism, horizon=horizon, benchmark=benchmark)
+        case = f"{mechanism} / {mode} / {horizon} / {benchmark}"
         found = applicable_objectives(hyp, mode)
-        assert found, f"no objective applies to {mechanism} / {mode} / {horizon}"
-        assert len(found) == 1, f"{mechanism} / {mode} / {horizon} is ambiguous: {found}"
+        assert found, f"no objective applies to {case}"
+        assert len(found) == 1, f"{case} is ambiguous: {found}"
 
 
 @pytest.mark.parametrize(
@@ -128,6 +187,22 @@ def test_a_day_is_the_boundary_min_inclusive_and_max_exclusive(
     mode: str, horizon: str, expected: str
 ) -> None:
     hyp = make_hyp(horizon=horizon)
+    assert applicable_objectives(hyp, mode) == [(catalogue()[expected].priority, expected)]
+
+
+@pytest.mark.parametrize(
+    ("mode", "horizon", "expected"),
+    [
+        (ABSOLUTE, "1d", "wf_sharpe_vs_hold"),
+        (ABSOLUTE, "5d", "wf_sharpe_vs_hold"),
+        (ABSOLUTE, "23h", "net_edge_bps"),
+        (RELATIVE, "1d", "marginal_wf_sharpe"),
+    ],
+)
+def test_a_declared_benchmark_displaces_only_the_absolute_sharpe(
+    mode: str, horizon: str, expected: str
+) -> None:
+    hyp = make_hyp(horizon=horizon, benchmark={"hold": "first_leg"})
     assert applicable_objectives(hyp, mode) == [(catalogue()[expected].priority, expected)]
 
 
@@ -159,10 +234,19 @@ def _predicate(**clauses: Any) -> Applies:
         ({"data_requirements": ["quote"]}, False),
         ({"history_days": {"min": 300}}, True),
         ({"history_days": {"max": 300}}, False),
+        ({"benchmark": False}, True),
+        ({"benchmark": True}, False),
     ],
 )
 def test_every_clause_of_the_predicate_is_evaluated(clauses: Any, holds: bool) -> None:
     assert applies_to(_predicate(**clauses), make_hyp(), ABSOLUTE) is holds
+
+
+def test_a_benchmark_clause_reads_whether_the_hypothesis_declares_one() -> None:
+    held = make_hyp(benchmark={"hold": "first_leg"})
+    assert applies_to(_predicate(benchmark=True), held, ABSOLUTE)
+    assert not applies_to(_predicate(benchmark=False), held, ABSOLUTE)
+    assert applies_to(_predicate(), held, ABSOLUTE)
 
 
 def test_an_empty_predicate_applies_to_everything() -> None:

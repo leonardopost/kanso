@@ -357,6 +357,14 @@ def test_the_objective_table_names_what_wins_in_each_mode(ws: Workspace) -> None
     assert table["absolute"]["applicable"][0]["priority"] == 10
 
 
+def test_a_declared_benchmark_is_what_the_absolute_table_selects(ws: Workspace) -> None:
+    """The operator's declaration picks the objective the model is shown; it never chooses."""
+    held = hypothesis(horizon="1d", windows=windows_for("1d"), benchmark={"hold": "first_leg"})
+    table = objectives(held, ws.config.research.folds)
+    assert table["absolute"]["selected"] == "wf_sharpe_vs_hold"
+    assert table["relative"]["selected"] == "marginal_wf_sharpe"
+
+
 # --- the objective set is total ----------------------------------------------
 
 MECHANISMS: tuple[Mechanism, ...] = (

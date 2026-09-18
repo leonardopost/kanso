@@ -121,6 +121,8 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
+| declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
+| add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
 | declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
 | name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
@@ -358,6 +360,40 @@ are unchanged: the upper bound of every window is what it was, and only the data
 before it widens. An attached construct declares the same `warmup` as its host, or
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
+**`benchmark` is yours, and it is scope.** A strategy trading one instrument can show a
+healthy Sharpe by holding that instrument through a rising market. Declaring a benchmark
+makes the objective the strategy's Sharpe *over* a hold of the universe's first leg:
+
+```yaml
+benchmark:                         # scope: adding or changing it clears `best`
+  hold: first_leg                  # buy universe[0] on the first print it may trade on, never exit
+```
+
+The hold is not arithmetic on prices. It is a sleeve kanso ships
+(`src/kanso/templates/strategy_hold.py`) run by the same runner as the strategy — the same
+window, snapshot, venue model, costs, splits, capital, sizing budget, warmup and `book`
+policy, with every order in the warmup dropped like the strategy's — and never gated by `max_hold`, because it
+is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
+of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
+fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
+path that measures the objective — each card of a run (once per run, then reused), both
+certification windows (a `param_plateau` perturbation moves the strategy and never the
+hold), the expectation composition measures, and every window a stage node closes, where it
+is stored beside the version's realised run for the paper and live gates. `kanso hyp
+validate` and `kanso hyp add` refuse (exit 3), naming `benchmark`, a benchmark on a horizon
+under a day, which is measured per trade — on a draft as on a classified file, so
+`kanso classify` is never asked to classify one — and, on a classified file, on a construct
+measured relative to its host (every attached construct but `alpha`). The leg held is scope
+with the key: reordering the universe of a hypothesis that declares one clears `best`.
+
+On a file already classified, the key is adopted in the same edit as `objective.id:
+wf_sharpe_vs_hold`, its parameters unchanged — or by clearing `construct`, `objective` and
+`constraints` and running `kanso classify` again. Adding the key alone is refused (exit 3):
+`wf_sharpe_net` no longer applies, and the remedy names the id to write; removing the key
+alone is refused the same way. The re-pin that adopts it clears `best` with a `best_cleared`
+event naming both fields that moved, `objective` and `benchmark`, and `strat compose`
+refuses (exit 2) a certificate earned before it, naming the same two.
+
 **`book` is yours, and it is scope as a whole.** Without it the book is what the fills
 leave: a strategy that made money compounds on its gains, one that lost keeps trading on
 what is left, borrowing costs nothing and nothing floors the margin. With it the runner
@@ -451,7 +487,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id`, `warmup` or `book` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup`, `benchmark` or `book` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.

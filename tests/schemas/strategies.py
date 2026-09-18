@@ -11,6 +11,7 @@ from kanso.schemas import (
     TAGS,
     Applies,
     AttachedRef,
+    Benchmark,
     Book,
     Card,
     Certificate,
@@ -196,6 +197,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         ),
         windows=draw(windows(horizon)),
         warmup=draw(st.none() | st.builds(Warmup, sessions=st.integers(1, 250))),
+        benchmark=draw(st.none() | st.just(Benchmark(hold="first_leg"))),
         book=draw(st.none() | books(max_leverage)),
         construct=draw(construct_refs()) if classified else None,
         objective=ObjectiveRef(
@@ -618,6 +620,7 @@ def criteria_items(draw: st.DrawFn) -> CriteriaItem:
         applies=Applies(
             objective_mode=draw(st.none() | st.sampled_from(["absolute", "relative"])),
             horizon=draw(st.none() | st.just({"min": "1d"})),
+            benchmark=draw(st.none() | st.booleans()),
         ),
         priority=draw(st.integers(0, 100)),
         meaningful_when=draw(st.none() | SAFE_TEXT),

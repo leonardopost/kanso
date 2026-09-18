@@ -56,6 +56,8 @@ from kanso.schemas.duration import (
 )
 from kanso.schemas.envelope import Detected, Envelope, Plan
 from kanso.schemas.hypothesis import (
+    FIRST_LEG,
+    Benchmark,
     Book,
     ConstraintRef,
     ConstructRef,
@@ -191,6 +193,8 @@ __all__ = [
     "RiskLimits",
     "Book",
     "Sizing",
+    "Benchmark",
+    "FIRST_LEG",
     "Warmup",
     "Route",
     "Routing",
