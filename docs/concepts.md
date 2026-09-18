@@ -299,6 +299,12 @@ beside the book lives under one thing more, because those pins fix the question 
 data and nothing about the arithmetic: `[research] capital`, `folds` and `return_period`,
 the venue model `[research] broker` and `portfolio.yaml` resolve, and the host version an
 attached construct is differenced against all move a number while every pin stands still.
+So do three the workspace declares nowhere: what the sleeve sizes to, which for an attached
+construct is its host's budget as the host's `hypothesis.yaml` is registered *now*; the bar
+grains the run loads, which is that same file's resolution beside the sleeve's own; and the
+warmup sessions a card is fed, which are resolved from the catalog for every card, so a
+`kanso data load` that adds a printed day inside the lookback moves them between two cards
+of one run.
 So a stored number carries a digest of what it was measured under, and an anchor is a row
 measured the way the asking card was. Edit one of those keys and the stored numbers stop
 being anchors until the books are measured again — which is the same statement as the one

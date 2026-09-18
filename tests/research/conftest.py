@@ -348,9 +348,14 @@ DECEMBER = (date(2023, 12, 1), date(2023, 12, 31))
 """The month before the research window: what a warmed hypothesis is fed first."""
 
 
+def write_days(ws: Workspace, span: tuple[date, date]) -> None:
+    """These days' bars into the catalog and into no snapshot: what `kanso data load` does."""
+    catalog.write(ws, bars(span), ref=replace(dataset(), span=span), source="synthetic")
+
+
 def load_december(ws: Workspace, *, freeze: bool = True) -> None:
     """December's bars into the catalog, and into a new snapshot unless told not to."""
-    catalog.write(ws, bars(DECEMBER), ref=replace(dataset(), span=DECEMBER), source="synthetic")
+    write_days(ws, DECEMBER)
     if freeze:
         snapshot.freeze(ws)
 

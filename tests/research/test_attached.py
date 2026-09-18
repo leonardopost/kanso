@@ -15,6 +15,7 @@ import pytest
 
 from kanso.env.envelope import engine_version
 from kanso.errors import PreconditionError
+from kanso.hyp.registry import hypothesis_of
 from kanso.research import loop, records
 from kanso.schemas import StrategyFile, resolve_venue_model, write_yaml
 from kanso.state import StateStore
@@ -117,6 +118,41 @@ def compose_host(
 def attached(ws: Workspace, store: StateStore, **changes: Any) -> str:
     """The filter hypothesis, classified onto the composed host."""
     return classify(ws, store, {**FILTER, **changes}, ALLOWING)
+
+
+def test_a_host_budget_re_registered_moves_the_reading_and_no_version(
+    ws: Workspace, store: StateStore
+) -> None:
+    """An attached run sizes to its host's budget, read from the host as registered now.
+
+    `_sleeve_budget` asks `hyp.registry.host_sizing`, which reads the host's registered
+    `hypothesis.yaml`, and the number reaches every fill as `RunRequest.sleeve_budget`.
+    Re-registering that file with another budget composes no host version, so
+    `harness.host.version` says nothing about it: without the budget in the digest the
+    same bytes would anchor a number they can no longer earn.
+    """
+    compose_host(ws, store, SIZED_HOST, sized=True)
+    hyp_id = attached(ws, store)
+    hyp = hypothesis_of(ws, store, hyp_id)
+
+    before = loop._setup(ws, store, hyp, version=1)
+    register(
+        ws,
+        store,
+        write_hypothesis(
+            ws,
+            document(id=HOST, sizing={"mode": "full_book", "budget": 20_000}, **BOOK),
+            SIZED_HOST,
+        ),
+    )
+    after = loop._setup(ws, store, hyp, version=1)
+
+    assert (before.sleeve_budget, after.sleeve_budget) == (10_000, 20_000)
+    assert before.harness.host is not None and after.harness.host is not None
+    assert before.harness.host.version == after.harness.host.version == 1, (
+        "the host was not composed again, so the version the card differences against stands"
+    )
+    assert before.measured_under != after.measured_under
 
 
 def test_a_modifier_that_changes_nothing_scores_exactly_zero(

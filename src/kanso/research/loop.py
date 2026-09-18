@@ -267,6 +267,37 @@ class Setup:
         or a package version. So the stored number carries this beside itself, and a row
         measured under another reading is no anchor: `records.matched_book`.
 
+        Three more are resolved rather than declared, and each moves a number with every
+        pin and every `kanso.toml` key standing still.
+
+        `sleeve_budget` is what the run sizes to, and it reaches every fill as
+        `RunRequest.sleeve_budget`. For an attached construct it is the host's budget read
+        from the host's *currently registered* hypothesis (`_sleeve_budget` →
+        `hyp.registry.host_sizing`), and re-registering that file with another budget
+        composes no host version, so the host version above does not cover it. `grains`,
+        the bar sizes the run loads, is the host's registered resolution beside the
+        sleeve's own and moves by the same edit.
+
+        `prefix` is the warmup sessions a card is fed before the window, and `Setup` is
+        rebuilt for every card, so it is resolved from the catalog again for every card:
+        `backtest.warmup_prefix` takes the last N distinct days it finds, and a
+        `kanso data load` that adds a printed day inside the lookback moves the prefix by
+        that day between two cards of one run. `_benchmark_run` keys its cache on the
+        snapshot and the prefix together, which is this package's own statement that the
+        prefix is part of what a card's data is.
+
+        The claim is completeness against this dataclass, not against the world. Every
+        field of `Setup` is either digested here or moves no number, and
+        `tests/research/test_loop.py::test_every_field_of_a_setup_is_a_reading_or_is_not`
+        fails on a field that is neither. `hyp`, `harness`, `impl`, `host_source` and
+        `host_modifiers` are pinned already — the hypothesis file by its sha, this package
+        by the criteria version, the host's bytes by its version; `max_lines` is the keep
+        rule's line budget and no term of a metric; `catalog` is a path. What this cannot
+        carry is data. It fixes the *span* a card warms on and never the bars the catalog
+        holds inside it: those are the snapshot's business, a run pins one at `begin` and
+        holds it for its life, and a load that rewrites a day inside a span whose ends do
+        not move is a pin gone stale rather than a second reading.
+
         Nothing else `[research]` declares reaches a card's number. `annualisation`,
         `account` and `currency` look as though they would and do not: this package reads
         none of the three anywhere, which
@@ -282,6 +313,9 @@ class Setup:
             self.period,
             self.venue_model.model_dump(mode="json"),
             None if self.harness.host is None else self.harness.host.version,
+            self.sleeve_budget,
+            self.grains,
+            None if self.prefix is None else [day.isoformat() for day in self.prefix],
         )
         # No `default=`: a field this cannot serialise must raise here rather than be
         # digested as a repr, which for an object without one carries an address and

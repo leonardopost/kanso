@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import fields, replace
 from datetime import date
 from hashlib import sha256
 from pathlib import Path
@@ -37,6 +38,7 @@ from .conftest import (
     classify,
     document,
     load_december,
+    write_days,
     write_envelope,
     write_hypothesis,
 )
@@ -1058,6 +1060,59 @@ def test_every_card_of_a_warmed_run_is_handed_the_same_prefix(
     assert request.prefix == setup.prefix
     assert request.window == RESEARCH
     assert loop._warmup_spans(setup) == (setup.prefix, (date(2024, 2, 3), date(2024, 2, 5)))
+
+
+def test_a_day_the_catalog_gained_moves_the_prefix_and_the_reading_with_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The prefix is resolved from the catalog for every card, so two cards can differ in it.
+
+    `_setup` is rebuilt per card and `backtest.warmup_prefix` takes the last N distinct
+    days it finds, so a `kanso data load` between two cards of one run moves what the
+    second is warmed on while the run's snapshot, its hypothesis file and this package all
+    stand still. The number moved with it and said nothing, which is what the digest is
+    for.
+    """
+    hyp = Hypothesis.model_validate(document(warmup={"sessions": 3}))
+    write_days(ws, (date(2023, 12, 1), date(2023, 12, 29)))
+
+    before = loop._setup(ws, store, hyp)
+    write_days(ws, (date(2023, 12, 30), date(2023, 12, 31)))
+    after = loop._setup(ws, store, hyp)
+
+    assert before.prefix == (date(2023, 12, 27), date(2023, 12, 29))
+    assert after.prefix == (date(2023, 12, 29), date(2023, 12, 31)), "two days the loader added"
+    assert before.measured_under != after.measured_under
+
+
+def test_every_field_of_a_setup_is_a_reading_or_is_not(ws: Workspace, store: StateStore) -> None:
+    """The digest claims completeness against `Setup`, so `Setup` is what states it.
+
+    A field added to the card's setup either moves a card's number — and belongs in the
+    digest, or a stored anchor outlives the reading it was measured under — or does not,
+    and the reason it does not is worth writing down once. This fails on a field that is
+    neither, which is the only way a claim of completeness can be kept.
+    """
+    read = {"capital", "folds", "period", "venue_model", "harness", "sleeve_budget", "grains"}
+    read |= {"prefix"}
+    pinned = {"hyp", "impl", "host_source", "host_modifiers"}
+    no_number = {"max_lines", "catalog"}
+
+    assert not read & (pinned | no_number)
+    assert read | pinned | no_number == {field.name for field in fields(loop.Setup)}
+
+    setup = loop._setup(ws, store, Hypothesis.model_validate(DOCUMENT))
+    for name, moved in (
+        ("capital", 1.0),
+        ("folds", 9),
+        ("period", "1h"),
+        ("sleeve_budget", 1234.0),
+        ("grains", ("1m",)),
+        ("prefix", (date(2023, 12, 29), date(2023, 12, 31))),
+    ):
+        assert replace(setup, **{name: moved}).measured_under != setup.measured_under, name
+    for name, same in (("max_lines", 999), ("catalog", ws.path("nowhere"))):
+        assert replace(setup, **{name: same}).measured_under == setup.measured_under, name
 
 
 def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore) -> None:
