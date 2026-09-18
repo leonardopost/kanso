@@ -493,6 +493,57 @@ def test_leg_edge_without_a_leg_and_a_floor_judges_nothing(params: Any) -> None:
     assert "no leg or no floor was chosen" in str(result.skipped)
 
 
+# Two returns that differ in the last bits of the division that struck them: measured in a
+# live workspace, hypothesis sox_dir recorded folds of this shape for SOXS.ARCA and the
+# third of them scored -6113058453210397.0, because stdev of them is around 4e-17.
+DENORMAL_RETURNS = (0.2735268775372813, 0.2735268775372814)
+
+
+def test_leg_edge_scores_zero_for_a_fold_whose_spells_vary_only_in_the_last_bits() -> None:
+    """A spread of 1e-16 is not variation, and a Sharpe of 1e17 is not a measurement."""
+    spread = DENORMAL_RETURNS[1] - DENORMAL_RETURNS[0]
+    assert 0.0 < spread < 1e-15, "the two returns differ, but only in the last bits"
+    days = [START + timedelta(days=i) for i in range(8)]
+    pair = (
+        spell(days[0], DENORMAL_RETURNS[0], notional=1.0),
+        spell(days[1], DENORMAL_RETURNS[1], notional=1.0),
+    )
+
+    result = leg_edge.evaluate(two_day_folds(*pair))
+
+    assert result.evidence["folds"][0] == 0.0
+    assert result.passed, "a fold that cannot vary scores zero, which clears a floor of zero"
+
+
+def test_leg_edge_still_measures_a_spread_a_leg_s_returns_really_carry() -> None:
+    """The floor catches the arithmetic and never a difference a fill produced."""
+    days = [START + timedelta(days=i) for i in range(8)]
+    pair = (spell(days[0], 0.010000, notional=1.0), spell(days[1], 0.010001, notional=1.0))
+
+    result = leg_edge.evaluate(two_day_folds(*pair))
+
+    assert result.evidence["folds"][0] > 0.0
+
+
+def test_a_leg_edge_skip_carries_its_reason_and_what_it_reached_in_its_evidence() -> None:
+    """A card stores a gate's evidence, so a PASS with an empty one tells the operator
+    that the leg was judged and cleared, which is the opposite of what happened."""
+    days = [START + timedelta(days=i) for i in range(8)]
+    none_chosen = leg_edge.evaluate(context(build_run(FLAT * 2), params={}))
+    never_traded = leg_edge.evaluate(two_day_folds(spell(days[0], 100.0, leg="OTHER")))
+    outside = leg_edge.evaluate(two_day_folds(spell(START + timedelta(days=20), 100.0)))
+
+    for result in (none_chosen, never_traded, outside):
+        assert result.passed and result.skipped is not None
+        assert result.evidence["reason"] == result.skipped
+    assert none_chosen.evidence == {"reason": none_chosen.skipped}
+    assert never_traded.evidence["leg"] == "LEG"
+    assert never_traded.evidence["n_spells"] == 0
+    assert outside.evidence["spells_per_fold"] == [0, 0, 0, 0]
+    assert outside.evidence["folds"] == [None, None, None, None]
+    assert outside.evidence["n_spells"] == 1
+
+
 # --- max_drawdown -----------------------------------------------------------------
 
 
