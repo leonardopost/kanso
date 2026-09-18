@@ -13,8 +13,9 @@ metadata:
 2. If `detected.nautilus_wheel_ok` is false, the installed `nautilus_trader` wheel is not compatible with this host: its platform tag needs a newer OS than the host runs, or a different architecture. kanso supports macOS 26+ on arm64 and Linux x86_64; an older macOS has no published wheel for the pinned engine and is not supported. Report the tag and the host version rather than guessing a fix, and never edit the kanso package's own `pyproject.toml`.
 3. If `detected.on_ac_power` is false and the operator wants 24/7 research: say so; the daemon uses `caffeinate -i` on macOS but cannot override battery sleep policies.
 4. For unattended operation, point the operator at the service-unit recipe in `docs/` (launchd on macOS, systemd on Linux) that runs `kanso research start`; never install a unit without their say-so.
-5. Re-run `kanso env detect` after the first baseline card of any hypothesis: `mem_per_lane_gb` is calibrated from measured peaks and `lanes` may change.
+5. Re-run `kanso env detect` after the first baseline card of any hypothesis: `mem_per_lane_gb` is calibrated from measured peaks — unless `[env] mem_per_lane_gb` declares it, in which case the declaration is used whole — and `lanes` may change.
 
 ## Rules
-- Never hand-edit `plan.lanes` upward. Override reserved resources in `kanso.toml [env]` (`reserved_cores`, `reserved_mem_gb`, `cores_per_lane`) and re-detect.
+- Never hand-edit `plan.lanes` upward. Override reserved resources in `kanso.toml [env]` (`reserved_cores`, `reserved_mem_gb`, `cores_per_lane`, `mem_per_lane_gb`) and re-detect.
+- `mem_per_lane_gb` **replaces** the derived memory per lane rather than raising its floor, so a declaration may be well under the recorded peak: it is the answer when the calibration's peak belongs to a heavier hypothesis than the one now researching (an overlay on one-second bars against a daily sleeve). It is also the resident memory a card of that lane may hold before it is killed — never below three times its own run's baseline peak — so declare what a lane costs now, not the smallest number that buys lanes.
 - `live_colocated` is derived from `portfolio.yaml`; a live stage with strategies reserves 2 cores + 8 GB by default.
