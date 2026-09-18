@@ -25,16 +25,26 @@ owns it may rewind it, another run may only better it. So a run re-seeded from a
 keep climbs its own ancestry, and a drift rewind in one run leaves what another run earned
 standing (`docs/backlog.md` row 61).
 
-A **signature** is what a judged run held: for each period end, keyed by its UTC day, the
-sorted (instrument, sign) pairs open at that end. Two strategies with the same signature
-on nearly every shared day made the same bets and earned the same result, however
-differently they were written, so the second is not an experiment. Signatures are stored
-per strategy under the run's pins — the hypothesis file, the snapshot and the criteria —
-never per run, because two runs under the same pins ask the same question of the same
-data; and they are stored for every judged run, a redundant miss included, so the third
-spelling of one idea is refused against the second as well as the first. The comparison
-is by day rather than by position because it is a fact about sessions, and a day is what
-two runs over the same window share.
+A **signature** is what a judged run held, day by day: for each UTC day the run measured
+a period end in, the sorted (instrument, sign, at-an-end) marks of that day. Both of the
+run's own records of a position are read — what it held at each period end, and the spans
+of the positions it opened and closed — because a period end is a sample, and a sample
+taken once a day says nothing about a strategy that is flat by the close. The two are
+marked apart, so the reading is strictly finer than sampling the ends alone rather than a
+coarser one that would call two daily strategies alike for holding on the same days.
+Measured in a live workspace: of 201 signatures stored for an intraday hypothesis under a
+daily return period, 192 recorded a position on none of their 834 sampled days, so every
+candidate matched every other on all of them and every proposal after the first was
+refused. Two strategies with the same signature on nearly every shared day made the same
+bets and earned the same result, however differently they were written, so the second is
+not an experiment. Signatures are stored per strategy under the run's pins — the
+hypothesis file, the snapshot and the criteria — never per run, because two runs under
+the same pins ask the same question of the same data; and they are stored for every
+judged run, a redundant one included, so the third spelling of one idea is refused
+against the second as well as the first. The comparison is by day rather than by instant
+because it is a fact about sessions, and a day is what two runs over the same window
+share. A stored signature is only ever compared with one read the same way, so the change
+of reading came with the migration that emptied the table.
 """
 
 from __future__ import annotations
@@ -42,7 +52,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from kanso.criteria.run import CardRun, day_of
@@ -75,9 +85,13 @@ __all__ = [
 ]
 
 Signature = dict[str, list[list[object]]]
-"""What a run held at each period end: the end's UTC day, ISO-formatted, to the sorted
-`[instrument_id, sign]` pairs open at that instant. A day with nothing open maps to `[]`,
-because being flat is a position too."""
+"""What a run held on each day it measured: the day, ISO-formatted, to the sorted
+`[instrument_id, sign, at_an_end]` marks of that day. `at_an_end` is true for what the
+run held at one of the day's period ends and false for what it held during the day and
+at none of them, which is the difference between carrying a position over the close and
+closing it before. A day with nothing open maps to `[]`, because being flat is a position
+too, and no size enters, because a size is a parameter and a parameter is exactly what a
+signature exists to see through."""
 
 _RUN_COLUMNS = (
     "run_id",
@@ -323,16 +337,55 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
 
 
 def signature(run: CardRun) -> Signature:
-    """What `run` held at each of its period ends, keyed by the end's UTC day.
+    """What `run` held on each UTC day it measured a period end in, and when in the day.
 
-    Read from `CardRun.held`, which the runner extracts once per held instrument per
-    period end; the sign is the only part of the quantity that enters, because a size
-    is a parameter and a parameter is exactly what a signature exists to see through.
+    The days are the run's period ends: the sessions two runs over the same window are
+    both known to have measured. Each day is filled from both of the run's own records of
+    a position. `CardRun.held` is what the runner extracted once per held instrument per
+    period end, and marks its instrument and sign as held *at an end*. `CardRun.trades` is
+    every position the run opened and closed, each carrying the instants it spanned, and
+    marks each day it was open on — unless that instrument and sign were already held at
+    an end of that day, which would say nothing new.
+
+    The two marks are kept apart rather than merged, and that is the whole of the design.
+    Merged, a day would read "something was held", and two daily strategies whose only
+    difference is whether they carry the position over the close would read alike: measured
+    on the demo, the card scoring 9.99 and the card scoring 3.15 matched on every session.
+    Kept apart, the reading is strictly finer than sampling the ends alone — two runs that
+    differed under that reading differ under this one, because their end marks differ —
+    while a hypothesis that is flat at every end, and had no signature at all before, is
+    now told apart by what it held during the day.
+
+    Only the sign of a quantity enters, because a size is a parameter and a parameter is
+    what a signature exists to see through; a day the book flipped carries both signs,
+    since what was held over the day is the bet and the order is a detail.
     """
-    ends: dict[int, list[list[object]]] = {ts: [] for ts in run.period_ends_ns}
+    ends: dict[date, set[tuple[str, int]]] = {day_of(ts): set() for ts in run.period_ends_ns}
+    during: dict[date, set[tuple[str, int]]] = {day: set() for day in ends}
     for held in run.held:
-        ends.setdefault(held.ts_ns, []).append([held.instrument_id, 1 if held.qty > 0 else -1])
-    return {day_of(ts).isoformat(): sorted(pairs) for ts, pairs in sorted(ends.items())}
+        ends.setdefault(day_of(held.ts_ns), set()).add((held.instrument_id, _sign(held.qty)))
+    for trade in run.trades:
+        mark = (trade.instrument_id, _sign(trade.qty))
+        for day in _spanned(trade.opened_ns, trade.closed_ns):
+            if day in during:
+                during[day].add(mark)
+    return {
+        day.isoformat(): sorted(
+            [[name, sign, True] for name, sign in held]
+            + [[name, sign, False] for name, sign in during[day] - held]
+        )
+        for day, held in sorted(ends.items())
+    }
+
+
+def _sign(qty: float) -> int:
+    return 1 if qty > 0 else -1
+
+
+def _spanned(opened_ns: int, closed_ns: int) -> list[date]:
+    """Every UTC day a position was open on, its first and its last included."""
+    first, last = day_of(opened_ns), day_of(closed_ns)
+    return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
 @dataclass(frozen=True)

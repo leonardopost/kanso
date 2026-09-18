@@ -274,6 +274,38 @@ def test_a_card_recorded_before_the_memory_migration_reads_back_with_no_tags(
         assert card.tags == []
 
 
+def test_signatures_written_under_the_old_reading_are_emptied_by_the_migration(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0004 empties `signatures`: a signature read at period ends alone cannot be
+    compared with one that also reads what a position spanned, and cannot be recomputed
+    without the backtest that produced it, so the row goes and the card stays."""
+    older = migrations()[:3]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("b" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
+            " criteria_version, signature, sessions, created_at) VALUES (?, 'old', 'h', 's',"
+            " '0.8.1', '{\"2026-01-01\": []}', 1, 't')",
+            ("b" * 64,),
+        )
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM signatures").fetchone()[0] == 1
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[3:]]
+        assert store.connection.execute("SELECT COUNT(*) FROM signatures").fetchone()[0] == 0
+
+
 # --- a database this package cannot correctly write, in either direction ------
 
 

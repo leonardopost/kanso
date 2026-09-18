@@ -353,9 +353,13 @@ def test_the_keep_rule_is_asked_before_the_signature(
 def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_toml(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
-    """Measured: WEAK is flat at 17 of the window's 31 session ends, as the flat baseline is
-    at all of them — a discard at the template's 97 percent, a redundant miss at 50."""
-    workspace = tuned(ws, redundant_pct=50)
+    """Measured: WEAK holds nothing on 10 of the window's 31 sessions, as the flat baseline
+    does on all 31 — a discard at the template's 97 percent, a redundant miss at 30.
+
+    The same run signed at period ends alone matched on 17: seven of those sessions WEAK
+    opened and closed a position in, and was flat only at the instant it was sampled.
+    """
+    workspace = tuned(ws, redundant_pct=30)
     run = loop.begin(workspace, store, registered)
     edit(workspace, run, WEAK)
 
@@ -363,7 +367,7 @@ def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_to
         loop.card(workspace, store, registered, "buy any fall")
 
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
-    assert (event.detail["matched"], event.detail["sessions"]) == (17, 31)
+    assert (event.detail["matched"], event.detail["sessions"]) == (10, 31)
     assert event.detail["like"] == run.base_sha[:7]
 
 
