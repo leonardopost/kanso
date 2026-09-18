@@ -71,10 +71,12 @@ construct's cards are against one host-alone run.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
@@ -245,6 +247,47 @@ class Setup:
     @property
     def construct(self) -> str:
         return self.harness.construct
+
+    @property
+    def measured_under(self) -> str:
+        """A digest of what a card's number depends on and the run's pins do not carry.
+
+        A signature is selected by four pins — the hypothesis id and file, the snapshot
+        and the criteria version — on the premise that two runs under them ask the same
+        question of the same data. That is a premise about the *book*, and it is exactly
+        true of one. The number beside the book is also `[research] capital`, the balance
+        the harness starts with; `folds`, how many walk-forward folds the objective is
+        averaged over; `return_period`, the period its returns are struck on; the venue
+        model each fill is charged under, which `[research] broker` and `portfolio.yaml`
+        resolve together with the hypothesis's own costs; and, for an attached construct,
+        the version of the host the card is differenced against. The first three are
+        `kanso.toml` keys and the fourth is resolved from `kanso.toml` and
+        `portfolio.yaml`, all of them files an operator may edit between two cards; the
+        last is a per-run pin; and not one of them moves a hypothesis file, a snapshot id
+        or a package version. So the stored number carries this beside itself, and a row
+        measured under another reading is no anchor: `records.matched_book`.
+
+        Nothing else `[research]` declares reaches a card's number. `annualisation`,
+        `account` and `currency` look as though they would and do not: this package reads
+        none of the three anywhere, which
+        `tests/research/test_loop.py::test_the_settings_the_digest_leaves_out_move_no_number`
+        measures by running the same card under all three changed and reading back the
+        same metric. Wiring one of them is what makes that test fail, and it belongs here
+        on the same day.
+        """
+        digest = sha256()
+        measured: tuple[object, ...] = (
+            self.capital,
+            self.folds,
+            self.period,
+            self.venue_model.model_dump(mode="json"),
+            None if self.harness.host is None else self.harness.host.version,
+        )
+        # No `default=`: a field this cannot serialise must raise here rather than be
+        # digested as a repr, which for an object without one carries an address and
+        # would give the same card two readings in two processes.
+        digest.update(json.dumps(measured, sort_keys=True).encode("utf-8"))
+        return digest.hexdigest()[:12]
 
 
 # --- setting a run up --------------------------------------------------------
@@ -795,10 +838,18 @@ def _judge(
     like = (
         None
         if kept or baseline
-        else records.matched_book(store, run, held, ws.config.research.redundant_pct, metric, floor)
+        else records.matched_book(
+            store,
+            run,
+            held,
+            ws.config.research.redundant_pct,
+            metric,
+            floor,
+            setup.measured_under,
+        )
     )
     repeat = like is not None and like.agreed
-    records.record_signature(store, run, strategy_sha, held, metric)
+    records.record_signature(store, run, strategy_sha, held, metric, setup.measured_under)
     made = _record(
         ws,
         store,

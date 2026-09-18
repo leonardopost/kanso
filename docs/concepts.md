@@ -294,7 +294,15 @@ proposals were refused in a day by a rule whose words — signature, redundant, 
 `pct` — appeared nowhere in the 2,393 characters the proposer was given. Every fact the
 proposer is sent is named in that instruction, and a test reads the fact keys out of the
 driver's own source to keep it that way. Signatures live under the pins — the hypothesis
-file, the snapshot, the criteria — and a run under new pins starts with none.
+file, the snapshot, the criteria — and a run under new pins starts with none. The number
+beside the book lives under one thing more, because those pins fix the question and the
+data and nothing about the arithmetic: `[research] capital`, `folds` and `return_period`,
+the venue model `[research] broker` and `portfolio.yaml` resolve, and the host version an
+attached construct is differenced against all move a number while every pin stands still.
+So a stored number carries a digest of what it was measured under, and an anchor is a row
+measured the way the asking card was. Edit one of those keys and the stored numbers stop
+being anchors until the books are measured again — which is the same statement as the one
+above, that a result already known is a claim about a result.
 
 The search driven by a model has a **phase**, and the phase is a rule rather than a mood.
 Misses since the last keep set it: for the first `[research] local_cards` the proposer is

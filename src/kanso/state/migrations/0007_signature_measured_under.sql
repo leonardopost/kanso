@@ -1,0 +1,22 @@
+-- What the stored number was measured under, which the four pins do not say.
+--
+-- `research/records.py` selects an anchor on (hyp_id, hypothesis_sha, snapshot_id,
+-- criteria_version), on a premise it states in words: two runs under the same pins ask
+-- the same question of the same data. That holds for the book -- which is what those
+-- pins were chosen for -- and not for the number beside it. A card's metric is also the
+-- balance the harness started with, the folds the objective was averaged over, the
+-- period its returns were struck on, the cost model each fill was charged under and,
+-- for an attached construct, the host version it was differenced against. `capital`,
+-- `folds`, `return_period` and `broker` are `kanso.toml` keys an operator may edit
+-- between two cards; the venue overrides are `portfolio.yaml`; and `host_version` is a
+-- per-run pin the four do not include. None of them moves `hypothesis_sha`, none moves
+-- `snapshot_id`, and `criteria_version` is this package's version and a digest of
+-- `criteria/library/*.yaml`, so none of them moves that either.
+--
+-- So a stored book carries a digest of what its number was measured under, and an anchor
+-- is a row whose digest equals the asking run's. A row under another reading is matched
+-- on nothing: SQL's `=` is false for NULL, so a row written before this column -- which
+-- can only be one this branch wrote, since 0004 empties the table and 0006 adds the
+-- metric in the same version -- is no anchor either, for the reason 0006 gives about a
+-- missing number. A premise that cannot be tested has not been met.
+ALTER TABLE signatures ADD COLUMN measured_under TEXT;

@@ -474,6 +474,49 @@ def test_a_signature_written_before_the_metric_column_reads_back_without_a_numbe
         assert (row["sessions"], row["metric"]) == (1, None)
 
 
+def test_a_signature_written_before_the_reading_column_reads_back_without_one(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0007 adds `signatures.measured_under`, and such a row says nothing about its number.
+
+    The four pins a signature is selected by fix the question and the data and nothing
+    about the arithmetic — the capital, the folds, the return period, the cost model and
+    an attached construct's host version all move a number while every pin stands still —
+    so the number carries what it was measured under, and a row that carries none is no
+    anchor. `research/records.py` gets that for free: SQL's `=` is false for NULL.
+    """
+    older = migrations()[:6]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('old', 'researching', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')", ("e" * 64,)
+        )
+        conn.execute(
+            "INSERT INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
+            " criteria_version, signature, sessions, metric, created_at) VALUES (?, 'old', 'h',"
+            " 's', '0.9.0', '{\"2026-01-01\": []}', 1, 1.5, 't')",
+            ("e" * 64,),
+        )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[6:]]
+        (row,) = store.connection.execute(
+            "SELECT metric, measured_under FROM signatures"
+        ).fetchall()
+        assert (row["metric"], row["measured_under"]) == (1.5, None)
+        (matched,) = store.connection.execute(
+            "SELECT COUNT(*) FROM signatures WHERE measured_under = ?", ("any reading",)
+        ).fetchone()
+        assert matched == 0, "a row with no reading matches no reading, which is the rule"
+
+
 # --- a database this package cannot correctly write, in either direction ------
 
 

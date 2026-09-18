@@ -52,12 +52,16 @@ only when its own number is within the hypothesis's noise floor of that one — 
 objective is computed before the refusal is decided and a premise that can be tested for
 nothing should not be assumed. Signatures are stored per strategy under the run's pins —
 the hypothesis file, the snapshot and the criteria — never per run, because two runs under
-the same pins ask the same question of the same data; and they are stored for every
-judged run, a redundant one included, so the third spelling of one idea is refused
-against the second as well as the first. The comparison is by day rather than by instant
-because it is a fact about sessions, and a day is what two runs over the same window
-share. A stored signature is only ever compared with one read the same way, so the change
-of reading came with the migration that emptied the table.
+the same pins ask the same question of the same data. That is a premise about the book and
+not about the number beside it: those pins fix no capital, no fold count, no return period,
+no cost model and no host version, and each of those moves a metric while every one of them
+stands still. So the number is stored with a digest of what it was measured under
+(`loop.Setup.measured_under`), and a row measured under another reading is matched by
+nothing. Signatures are stored for every judged run, a redundant one included, so the third
+spelling of one idea is refused against the second as well as the first. The comparison is
+by day rather than by instant because it is a fact about sessions, and a day is what two
+runs over the same window share. A stored signature is only ever compared with one read
+the same way, so the change of reading came with the migration that emptied the table.
 """
 
 from __future__ import annotations
@@ -446,19 +450,26 @@ class Match:
 
 
 def record_signature(
-    store: StateStore, run: RunRecord, sha: str, held: Signature, metric: float
+    store: StateStore,
+    run: RunRecord,
+    sha: str,
+    held: Signature,
+    metric: float,
+    measured: str,
 ) -> None:
-    """Store what these bytes held under this run's pins, and what they earned holding it.
+    """Store what these bytes held under this run's pins, what they earned, and under what.
 
     The same bytes are written once: a second judging under the same pins replaces the
     row, book and number together, because the same bytes over the same data measured
     twice are one fact and not two. `metric` is the objective the card was just recorded
-    with, so a stored book is never on record for a number no card carries.
+    with, so a stored book is never on record for a number no card carries, and `measured`
+    is what that number was measured under (`loop.Setup.measured_under`) — the pins say
+    which question was asked and this says which arithmetic answered it.
     """
     store.connection.execute(
         "INSERT OR REPLACE INTO signatures (strategy_sha, hyp_id, hypothesis_sha, snapshot_id,"
-        " criteria_version, signature, sessions, metric, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " criteria_version, signature, sessions, metric, measured_under, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             sha,
             run.hyp_id,
@@ -468,13 +479,20 @@ def record_signature(
             json.dumps(held, sort_keys=True),
             len(held),
             metric,
+            measured,
             now().isoformat(),
         ),
     )
 
 
 def matched_book(
-    store: StateStore, run: RunRecord, held: Signature, pct: int, metric: float, floor: float
+    store: StateStore,
+    run: RunRecord,
+    held: Signature,
+    pct: int,
+    metric: float,
+    floor: float,
+    measured: str,
 ) -> Match | None:
     """The stored signature under this run's pins that `held` matches on at least `pct`
     percent of their shared days, and whether its own metric is within `floor` of
@@ -522,12 +540,27 @@ def matched_book(
     signatures with no day in common match nothing, and a stored book carrying no metric
     is nothing to compare against: a premise that cannot be tested has not been met, so it
     is no anchor (`state/migrations/0006_signature_metric.sql`).
+
+    A stored number is refused the same way when it was not measured under what this run
+    measures under. The four pins fix the question and the data; they do not fix the
+    capital, the folds, the return period, the cost model or the host version an attached
+    construct is differenced against, and every one of those moves a number while every
+    pin stands still (`loop.Setup.measured_under`). So `measured` is a fifth term of the
+    selection rather than a check on the rows it returns: an anchor is a row measured the
+    way this card was, and `= ?` is false for the NULL a row written before the column
+    carries, which is the reading that column's migration states.
     """
     rows = store.connection.execute(
         "SELECT strategy_sha, signature, metric FROM signatures WHERE hyp_id = ?"
         " AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?"
-        " ORDER BY created_at, rowid",
-        (run.hyp_id, run.hypothesis_sha, run.snapshot_id, run.criteria_version),
+        " AND measured_under = ? ORDER BY created_at, rowid",
+        (
+            run.hyp_id,
+            run.hypothesis_sha,
+            run.snapshot_id,
+            run.criteria_version,
+            measured,
+        ),
     ).fetchall()
     closest: Match | None = None
     for row in rows:
