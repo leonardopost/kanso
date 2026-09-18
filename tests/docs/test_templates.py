@@ -48,6 +48,14 @@ def test_the_currency_key_is_commented_as_the_account_currency_check() -> None:
     assert "venues carry more than one account currency" in line
 
 
+def test_the_memory_per_lane_example_names_both_things_that_set_it() -> None:
+    """The comment stated the derivation as the whole rule after a declaration could
+    replace it, in the file an operator reads to learn where the figure came from."""
+    line = line_with(template("envelope.yaml"), "mem_per_lane_gb:")
+    assert "`[env] mem_per_lane_gb` when declared" in line
+    assert "max(4, 1.5 × max baseline peak_mem_gb over runs)" in line
+
+
 def test_the_stage_speed_is_commented_as_unpaced_in_this_version() -> None:
     line = line_with(template("portfolio.yaml"), "speed:")
     assert "replays unpaced whatever this says" in line

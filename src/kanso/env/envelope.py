@@ -9,7 +9,8 @@ The plan is derived, not measured:
     live_colocated   the `live` stage of `portfolio.yaml` carries at least one strategy
     reserved         2 cores and 8 GB when colocated, else 1 core and 4 GB
     cores_per_lane   2
-    mem_per_lane_gb  max(4, 1.5 x the largest baseline peak memory recorded over runs)
+    mem_per_lane_gb  `[env] mem_per_lane_gb` when declared, else
+                     max(4, 1.5 x the largest baseline peak memory recorded over runs)
     lanes            max(1, min((cores_total - reserved_cores) // cores_per_lane,
                                 (mem_gb - reserved_mem_gb) // mem_per_lane_gb))
 
@@ -19,7 +20,7 @@ formula still researches, one card at a time. `mem_per_lane_gb` is rounded to tw
 decimals before `lanes` is computed, so the numbers written to the file reproduce the
 lane count.
 
-Before the first baseline card there is nothing to calibrate against and
+Before the first baseline card there is nothing to calibrate against and, undeclared,
 `mem_per_lane_gb` is its 4 GB floor; re-detecting after a baseline may change `lanes`.
 The baseline peaks are read out of `state.db` with a read-only connection: detection
 observes state and never writes it.
