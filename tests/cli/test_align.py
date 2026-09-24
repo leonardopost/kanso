@@ -3,11 +3,13 @@
 Drift is not an error, so the command does not exit like one. What these tests assert is
 that a drift is reported with exit 0 having already been repaired — the lane rewound, the
 escalation written — and that an operator reading the object can tell the two verdicts
-apart without interpreting an exit code.
+apart without interpreting an exit code. And that a lane on the run's base is never put to
+the model at all: nobody proposed those bytes, so there is no drift in them to report.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -21,12 +23,14 @@ from .conftest import HYP_ID, at, edit, lane, payload
 def test_a_run_that_still_tests_its_thesis_is_aligned(runner: CliRunner, mocked_ws: Path) -> None:
     mocked.scripted(mocked_ws, align_check=[mocked.ALIGNED])
     assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
+    edit(mocked_ws, mocked.EDITED)
 
     result = at(runner, mocked_ws, "align", "check", HYP_ID, "--json")
 
     assert result.exit_code == Exit.OK, result.stdout
     checked = payload(result)
     assert checked["aligned"] is True
+    assert checked["judged"] is True
     assert checked["reason"] is None
     assert checked["id"] == HYP_ID
     assert checked["lane"] == "op"
@@ -67,6 +71,31 @@ def test_the_deterministic_checks_come_first_and_cost_no_call(
     assert payload(result)["aligned"] is False
 
 
+def test_the_run_s_base_is_never_judged(runner: CliRunner, mocked_ws: Path) -> None:
+    # The model would say drift, so a check that asked it would report one and escalate.
+    mocked.scripted(mocked_ws, align_check=[mocked.DRIFTED])
+    assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
+    base = hashlib.sha256((lane(mocked_ws) / "strategy.py").read_bytes()).hexdigest()
+
+    result = at(runner, mocked_ws, "align", "check", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    checked = payload(result)
+    assert (checked["aligned"], checked["judged"], checked["reason"]) == (True, False, None)
+    assert (checked["sha"], checked["cards_checked"]) == (base, 1)
+    assert payload(at(runner, mocked_ws, "inbox", "--json"))["unread"] == 0
+
+
+def test_a_check_that_judged_nothing_says_so(runner: CliRunner, mocked_ws: Path) -> None:
+    mocked.scripted(mocked_ws)
+    assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
+
+    result = at(runner, mocked_ws, "align", "check", HYP_ID)
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert "nothing new to judge, so no model was asked" in result.stdout
+
+
 def test_align_check_reads_as_the_verdict_and_the_count(runner: CliRunner, mocked_ws: Path) -> None:
     mocked.scripted(mocked_ws, align_check=[mocked.ALIGNED])
     assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
@@ -81,6 +110,7 @@ def test_align_check_reads_as_the_verdict_and_the_count(runner: CliRunner, mocke
 def test_a_drift_reads_as_the_reason_and_where_to_look(runner: CliRunner, mocked_ws: Path) -> None:
     mocked.scripted(mocked_ws, align_check=[mocked.DRIFTED])
     assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
+    edit(mocked_ws, mocked.EDITED)
 
     result = at(runner, mocked_ws, "align", "check", HYP_ID)
 

@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from kanso import inbox
 from kanso.certify import certificate
 from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
@@ -932,6 +933,25 @@ def test_the_drifts_this_run_was_rewound_for_reach_the_next_proposal(
     assert "rewound_for" in proposals[1].user
     assert DRIFTED["reason"] in proposals[1].user
     assert proposals[2].user.count(str(DRIFTED["reason"])) == 1, "the aligned check adds none"
+
+
+def test_a_run_whose_lane_never_leaves_its_base_puts_nothing_to_the_alignment_model(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """What a live daemon did ten times in under two hours, with the model scripted to
+    answer as it answered there. Nothing keeps, so every check finds the lane back on the
+    bytes the run was handed; asked about them, the model judged the seed against the
+    thesis, and each check "rewound" the run onto the bytes it was already on, told the
+    proposer so, and escalated."""
+    workspace = tuned(ws, align_every=1)
+    scripted(workspace, propose=[proposal("boom")], align_check=[DRIFTED])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=3)
+
+    assert (outcome.crashes, outcome.checks, outcome.drifts) == (3, 3, 0)
+    assert recorded.of("align_check") == []
+    assert inbox.unread(store) == []
+    assert all("rewound_for" not in call.user for call in recorded.of("propose"))
 
 
 def test_only_this_run_s_rewinds_reach_it_and_only_the_newest_few(

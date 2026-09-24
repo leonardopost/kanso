@@ -92,6 +92,10 @@ class Strategy(KansoStrategy):
 '''
 """`flat` trades nothing, `boom` raises on the first bar, and the three in `MODES` fade."""
 
+EDITED = SEED.replace('mode = "flat"', 'mode = "revert"')
+"""The seed as an agent edits it in the lane: bytes the run was not handed, so a check
+puts them to the model, which never judges the run's base."""
+
 
 def mode_diff(mode: str, *, tagged: bool = True) -> str:
     """A diff that makes the strategy run in `mode`, and that applies however often.
