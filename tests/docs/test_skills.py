@@ -63,6 +63,14 @@ def test_the_align_skill_says_the_run_s_base_is_never_judged() -> None:
     assert "The run's base is never judged" in text
 
 
+def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:
+    """An agent declaring a US split without a zone gets a UTC day, which lands the split
+    inside a winter post-market; the skill is where it learns the key exists."""
+    text = skill(PACKAGED, "kanso-data")
+    assert "`override.info.timezone`" in text
+    assert "first session that traded at the new price" in text
+
+
 def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
     """This file ships into every workspace on `kanso init` and `kanso skills sync`, so a
     status it omits is one an operator meets in `results.tsv` with nothing to read. It

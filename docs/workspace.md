@@ -596,10 +596,10 @@ deleting it costs you the overrides and a round of resolution, not the definitio
 ### The split schedule
 
 An equity's `override.info.splits` is where you declare the splits it has been through. It
-is the only structured override, and it is the one thing that makes a window containing a
-corporate action researchable: kanso applies a split at its ex-date — cancelling resting
-orders, rescaling every open position, resyncing the portfolio behind it — instead of
-reading the restated price as a return.
+and `info.timezone` beside it are the only structured overrides, and they are the one thing
+that makes a window containing a corporate action researchable: kanso applies a split at
+its ex-date — cancelling resting orders, rescaling every open position, resyncing the
+portfolio behind it — instead of reading the restated price as a return.
 
 ```yaml
 SOXS:
@@ -608,6 +608,7 @@ SOXS:
   corporate_actions: adjust_all
   override:
     info:
+      timezone: America/New_York                # where the listing's sessions are dated
       splits:
         - {ex_date: 2026-07-15, ratio: 0.1}     # a one-for-ten reverse split
         - {ex_date: 2021-03-02, ratio: 4.0}     # a four-for-one split
@@ -619,6 +620,20 @@ An entry holds `ex_date` and `ratio` and nothing else — a ratio of `1.0`, a re
 ex-date and any other key are refused by name (exit 3). In particular a schedule carries no
 **cash**: money moves in exactly one place in kanso, the runner's extraction, and a cash
 event has an announcement date, so it belongs in the data as a `corporate_action` point.
+
+`ex_date` is the first session that trades at the new price, and `info.timezone` says where
+that session is dated: the IANA zone the instrument trades in, `America/New_York` for a US
+listing. The split holds from the first instant after the midnight that opens the ex-date
+there. That one instant falls between the old share count's last point and the new count's
+first for every grain at once: after the 20:00 close of a session's minute bars, and after
+the daily bar kanso stamps at the following midnight, because a bar is stamped at its close
+and that bar is the session before's. Without `info.timezone` the ex-date is a UTC day, as
+it was before the key existed, and that is wrong for any listing whose session runs past
+UTC midnight — in winter 19:00 New York is already the next UTC day, so the split lands
+inside a post-market and rescales a position that session bought at a price the split
+never touched. A zone the host's zone database does not know is refused by name (exit 3).
+Adding the key changes the definition, so it is a correction like any schedule change: say
+which date each split first traded at its new price, then `--refresh` and re-snapshot.
 
 Two consequences worth knowing. A schedule is part of the definition, so it is part of
 `definition_checksum` and therefore of the snapshot a run is pinned to: adding one to an

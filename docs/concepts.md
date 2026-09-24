@@ -725,8 +725,9 @@ before one.
 
 You declare the splits an equity has been through in its own definition, as
 `override.info.splits` in `instruments.yaml` (`docs/workspace.md`). The **venue** applies
-them: on the first market point whose reference time reaches an ex-date, and one call
-before that point is matched against anything, the simulated exchange cancels every resting
+them: on the first market point stamped after the midnight that opens an ex-date where the
+instrument trades (`info.timezone`, or UTC when it names none), and one call before that
+point is matched against anything, the simulated exchange cancels every resting
 order in that instrument, rescales every open position, and resyncs the portfolio index
 behind the change.
 

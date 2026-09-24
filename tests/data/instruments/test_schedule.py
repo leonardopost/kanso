@@ -80,6 +80,20 @@ def test_a_schedule_the_sleeve_could_not_apply_is_refused_at_construction() -> N
         built(info={"splits": [{"ex_date": EX, "ratio": 0.1, "cash": 0.25}]})
 
 
+def test_the_zone_a_schedule_is_dated_in_reaches_the_content_address() -> None:
+    """Naming the zone moves the instant a split takes effect, so it is a correction the
+    snapshot must see, exactly as a restated ratio is."""
+    dated = built(info={**SCHEDULE, "timezone": "America/New_York"})
+
+    assert definition_checksum(built(info=SCHEDULE)) != definition_checksum(dated)
+    assert [split.zone for split in schedule_of(dated)] == ["America/New_York"]
+
+
+def test_a_zone_the_host_does_not_know_is_refused_at_construction() -> None:
+    with pytest.raises(ValidationError, match="is not a zone this host's zone database holds"):
+        built(info={**SCHEDULE, "timezone": "America/Gotham"})
+
+
 def test_info_that_is_not_a_map_is_refused_by_the_engine_s_own_words() -> None:
     with pytest.raises(ValidationError, match="Equity rejected its fields"):
         built(info=[{"ex_date": EX, "ratio": 0.1}])

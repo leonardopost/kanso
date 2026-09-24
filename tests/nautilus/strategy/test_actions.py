@@ -232,6 +232,110 @@ def test_an_exit_after_the_split_is_sized_against_the_shares_it_left(backtest) -
     ]
 
 
+# --- when the ex-date begins --------------------------------------------------
+
+WINTER_EX = date(2024, 1, 17)
+"""A Wednesday under EST, when New York midnight is 05:00Z and 19:00 New York is 00:00Z."""
+EVE = date(2024, 1, 16)
+NEW_YORK_SCHEDULE = {
+    "splits": [{"ex_date": WINTER_EX.isoformat(), "ratio": 0.1}],
+    "timezone": "America/New_York",
+}
+UTC_SCHEDULE = {"splits": [{"ex_date": WINTER_EX.isoformat(), "ratio": 0.1}]}
+
+
+def new_york_ns(day: date, hour: int, minute: int = 0) -> int:
+    """`hour:minute` New York time on `day`, in nanoseconds since the epoch."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    opened = datetime(
+        day.year, day.month, day.day, hour, minute, tzinfo=ZoneInfo("America/New_York")
+    )
+    return int(opened.timestamp()) * 1_000_000_000
+
+
+def tape(*prints: tuple[int, float]) -> list[object]:
+    """One bar per `(ts_event, close)`, in the order given."""
+    return [_dated(bar(DEMO, 0, close), ts_event) for ts_event, close in prints]
+
+
+EVENING = (
+    (new_york_ns(EVE, 18, 30), 10.0),
+    (new_york_ns(EVE, 18, 45), 10.0),
+    (new_york_ns(EVE, 19, 30), 10.0),
+    (new_york_ns(EVE, 19, 59), 10.0),
+)
+"""Bought at 18:30 and sold at 19:59 New York on the eve of a winter ex-date: the old share
+count's session, although everything after 19:00 New York is already the ex-date in UTC."""
+
+
+def test_an_intraday_position_the_evening_before_the_ex_date_is_not_adjusted(backtest) -> None:
+    run = backtest(
+        Holder(config(), exit_on=3),
+        instruments=[equity(DEMO, info=NEW_YORK_SCHEDULE)],
+        data=tape(*EVENING),
+    )
+
+    assert list(held(run).adjustments) == []
+    assert [(intent.side, intent.qty) for intent in run.strategy.intents] == [
+        ("BUY", 1_005.0),
+        ("SELL", 1_005.0),
+    ]
+
+
+def test_dated_in_utc_the_same_evening_is_already_the_ex_date(backtest) -> None:
+    """What an instrument naming no zone gets, and why a US listing should name one: the
+    split lands at 19:00 New York and rescales a position the evening's tape never split."""
+    run = backtest(
+        Holder(config(), exit_on=3),
+        instruments=[equity(DEMO, info=UTC_SCHEDULE)],
+        data=tape(*EVENING),
+    )
+
+    assert int(held(run).adjustments[0].ts_event) == new_york_ns(EVE, 19, 30)
+    assert run.strategy.intents[-1].qty == 100.0
+
+
+def test_a_position_held_overnight_is_adjusted_once_at_the_first_point_of_the_ex_date(
+    backtest,
+) -> None:
+    run = backtest(
+        Holder(config()),
+        instruments=[equity(DEMO, info=NEW_YORK_SCHEDULE)],
+        data=tape(
+            (new_york_ns(EVE, 19, 30), 10.0),
+            (new_york_ns(EVE, 19, 59), 10.0),
+            (new_york_ns(WINTER_EX, 4, 1), 100.0),
+            (new_york_ns(WINTER_EX, 9, 31), 100.0),
+        ),
+    )
+    position = held(run)
+
+    assert [float(event.quantity_change) for event in position.adjustments] == [-905.0]
+    assert int(position.adjustments[0].ts_event) == new_york_ns(WINTER_EX, 4, 1)
+    assert [count for _ts, count in run.strategy.seen] == [0.0, 1_005.0, 100.0, 100.0]
+
+
+def test_a_bar_stamped_at_the_ex_date_s_midnight_is_matched_in_the_old_count(backtest) -> None:
+    """A daily bar is stamped at its close, the midnight after its session, so the bar
+    stamped at the ex-date's New York midnight is the eve's, priced in the old share count,
+    and the split holds from the bar after it."""
+    run = backtest(
+        Holder(config()),
+        instruments=[equity(DEMO, info=NEW_YORK_SCHEDULE)],
+        data=tape(
+            (new_york_ns(EVE, 0), 10.0),
+            (new_york_ns(WINTER_EX, 0), 10.0),
+            (new_york_ns(date(2024, 1, 18), 0), 100.0),
+            (new_york_ns(date(2024, 1, 19), 0), 100.0),
+        ),
+    )
+
+    assert [count for _ts, count in run.strategy.seen] == [0.0, 1_005.0, 100.0, 100.0]
+    assert int(held(run).adjustments[0].ts_event) == new_york_ns(date(2024, 1, 18), 0)
+
+
 # --- the order that must not survive the action -------------------------------
 
 

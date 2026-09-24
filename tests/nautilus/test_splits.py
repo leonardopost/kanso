@@ -17,6 +17,8 @@ from hypothesis import strategies as st
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus.splits import (
     KEY,
+    UTC_ZONE,
+    ZONE_KEY,
     Move,
     Split,
     ledger,
@@ -68,8 +70,62 @@ def test_a_schedule_is_read_in_ex_date_order_whatever_order_it_was_written_in() 
     ]
 
 
-def test_a_split_takes_effect_at_the_midnight_that_opens_its_ex_date() -> None:
-    assert Split(ex_date=date(1970, 1, 2), ratio=0.5).effective_ns == 86_400_000_000_000
+def test_a_split_takes_effect_just_after_the_midnight_that_opens_its_ex_date() -> None:
+    """After, not at: a point stamped at that midnight closes the previous session."""
+    assert Split(ex_date=date(1970, 1, 2), ratio=0.5).effective_ns == 86_400_000_000_001
+
+
+@pytest.mark.parametrize(
+    ("ex_date", "hours_behind"), [(date(2021, 3, 2), 5), (date(2024, 7, 15), 4)]
+)
+def test_a_split_takes_effect_just_after_midnight_where_its_instrument_trades(
+    ex_date: date, hours_behind: int
+) -> None:
+    """The 2021 SOXL split under UTC took effect at 19:00 New York, inside the post-market
+    of a session already trading at the new price, and adjusted positions bought that day a
+    second time. Dated in New York it falls between the 20:00 close and the 04:00 open, and
+    New York midnight is 05:00Z in winter and 04:00Z in summer."""
+    from kanso.criteria.run import NS_PER_SECOND, midnight_ns
+
+    split = Split(ex_date=ex_date, ratio=15.0, zone="America/New_York")
+
+    assert split.effective_ns == midnight_ns(ex_date) + hours_behind * 3_600 * NS_PER_SECOND + 1
+
+
+def test_a_schedule_is_dated_in_the_zone_its_instrument_names() -> None:
+    carried = {**info(entry(), entry(ex_date="2024-06-01")), ZONE_KEY: "America/New_York"}
+
+    assert {split.zone for split in schedule(carried, WHO)} == {"America/New_York"}
+
+
+def test_a_schedule_whose_instrument_names_no_zone_is_dated_in_utc() -> None:
+    assert schedule(info(entry()), WHO)[0].zone == UTC_ZONE
+
+
+@pytest.mark.parametrize("zone", ["", 5, None, "Mars/Olympus_Mons", "../etc"])
+def test_a_zone_that_names_no_zone_is_refused(zone: object) -> None:
+    with pytest.raises(ValidationError) as raised:
+        schedule({**info(entry()), ZONE_KEY: zone}, WHO)
+
+    assert f"info.{ZONE_KEY}" in raised.value.message
+    assert "America/New_York" in (raised.value.remedy or "")
+
+
+def test_a_mistyped_zone_is_refused_before_any_split_is_declared() -> None:
+    with pytest.raises(ValidationError, match="is not a zone"):
+        schedule({ZONE_KEY: "America/NewYork"}, WHO)
+
+
+def test_a_price_printed_at_the_midnight_is_restated_and_one_printed_after_is_not() -> None:
+    """The sleeve's view and the venue's agree on which side of the split a point is."""
+    from kanso.nautilus.splits import restating
+
+    split = Split(ex_date=EX, ratio=0.1, zone="America/New_York")
+    midnight = split.effective_ns - 1
+
+    assert restating((split,), midnight, midnight + 60_000_000_000) == 0.1
+    assert restating((split,), midnight + 1, midnight + 60_000_000_000) == 1.0
+    assert restating((split,), midnight - 1, midnight) == 1.0
 
 
 def test_a_schedule_that_is_not_a_list_is_refused() -> None:

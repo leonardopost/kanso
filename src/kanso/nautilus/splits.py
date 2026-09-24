@@ -22,6 +22,20 @@ later definition rather than an overwrite. It is also content-addressed for free
 `engine_fields` is `to_dict` and `info` is one of its keys, so a schedule reaches
 `definition_checksum`, `instruments_checksum` and the `snapshot_id` with nothing added.
 
+**A split falls between two sessions, and the zone says where that is.** `ex_date` is the
+first session that trades at the new price, dated where the instrument trades, and the
+split holds from the first instant after the midnight that opens that day in the zone
+`info.timezone` names. After, not at: kanso stamps a bar at its close, so a daily bar
+stamped at that midnight is the previous session's, and it is matched in the old share
+count. That one instant is right for every grain a session is cut into, because a session
+that neither crosses its own midnight nor has a bar stamped past it has all of its points
+on one side: a US listing's minute bars run 04:00 to 20:00 New York and its daily bar is
+stamped at the next New York midnight, so a New York midnight falls after the last minute
+of the old count and at or before the daily bar that closes it. Without `info.timezone`
+the zone is UTC, the convention before the key existed, and it is wrong for any listing
+whose session crosses UTC midnight: 19:00 New York in winter is inside the post-market,
+so a position bought that session at the new price would be adjusted a second time.
+
 **The schedule carries no cash.** `ratio` and an ex-date, and nothing else. A cash
 dividend moves money, and money in kanso moves in exactly one place — the runner's
 extraction, once per fill — so a definition that paid cash would be a second place costs
@@ -71,16 +85,19 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import ROUND_FLOOR, Decimal
 from typing import Any, Final
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from kanso.criteria.run import day_of, midnight_ns
+from kanso.criteria.run import NS_PER_SECOND, day_of, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 
 __all__ = [
     "FIELDS",
     "KEY",
+    "UTC_ZONE",
+    "ZONE_KEY",
     "Ledger",
     "Move",
     "Split",
@@ -99,6 +116,12 @@ KEY: Final = "splits"
 FIELDS: Final = ("ex_date", "ratio")
 """Everything a schedule entry holds. `cash` is refused by name; see the module note."""
 
+ZONE_KEY: Final = "timezone"
+"""The key an instrument's `info` names the zone its sessions are dated in under."""
+
+UTC_ZONE: Final = "UTC"
+"""The zone a schedule is dated in when its instrument names none."""
+
 REASON: Final = "split"
 """What a `PositionAdjusted` this module raises says it is for."""
 
@@ -110,16 +133,23 @@ class Split:
     `ratio` follows `CorporateAction.ratio` — shares held after per share held before, so
     4.0 is a four-for-one split and 0.1 a one-for-ten reverse split. A ratio of one is not
     a split and is refused, because an entry that changes nothing is a mistake rather than
-    a no-op.
+    a no-op. `zone` is the IANA zone `ex_date` is dated in: the instrument's
+    `info.timezone`, or UTC when it names none.
     """
 
     ex_date: date
     ratio: float
+    zone: str = UTC_ZONE
 
     @property
     def effective_ns(self) -> int:
-        """The instant the split takes effect: the UTC midnight opening its ex-date."""
-        return midnight_ns(self.ex_date)
+        """The first instant the new share count holds: one nanosecond after the midnight
+        that opens the ex-date in `zone`, so a point stamped at that midnight — the previous
+        session's daily bar, stamped at its close — is still the old count's."""
+        opened = datetime.combine(self.ex_date, time(), tzinfo=ZoneInfo(self.zone))
+        offset = opened.utcoffset()
+        seconds = 0 if offset is None else int(offset.total_seconds())
+        return midnight_ns(self.ex_date) - seconds * NS_PER_SECOND + 1
 
 
 def schedule(info: Mapping[str, Any] | None, who: str) -> tuple[Split, ...]:
@@ -127,10 +157,13 @@ def schedule(info: Mapping[str, Any] | None, who: str) -> tuple[Split, ...]:
 
     `who` names the instrument in any refusal, because a schedule is read in three places
     — resolution, the sleeve and the runner — and the operator's next action is the same
-    in all three: correct the entry in `instruments.yaml`.
+    in all three: correct the entry in `instruments.yaml`. Every split is dated in the zone
+    `info.timezone` names, or in UTC when it names none, and a zone is checked whether or
+    not a split is declared yet, so a mistyped one is refused before it dates anything.
     """
     if not info:
         return ()
+    zone = _zone(info.get(ZONE_KEY, UTC_ZONE), who)
     declared = info.get(KEY)
     if declared is None:
         return ()
@@ -140,7 +173,7 @@ def schedule(info: Mapping[str, Any] | None, who: str) -> tuple[Split, ...]:
             f"of entries, each naming {' and '.join(FIELDS)}",
             remedy=f"write info.{KEY} as a list of `{{ex_date, ratio}}` entries",
         )
-    found = tuple(sorted(_entry(item, who, index) for index, item in enumerate(declared)))
+    found = tuple(sorted(_entry(item, who, index, zone) for index, item in enumerate(declared)))
     days = [split.ex_date for split in found]
     duplicated = sorted({day for day in days if days.count(day) > 1})
     if duplicated:
@@ -160,8 +193,30 @@ def schedule_of(instrument: Any) -> tuple[Split, ...]:
     return schedule(getattr(instrument, "info", None), str(instrument.id))
 
 
-def _entry(item: object, who: str, index: int) -> Split:
-    """One schedule entry, validated field by field."""
+def _zone(value: object, who: str) -> str:
+    """The zone a schedule is dated in: an IANA name this host's zone database resolves."""
+    remedy = (
+        f"write info.{ZONE_KEY} as the IANA zone the instrument's sessions are dated in, "
+        "e.g. America/New_York for a US listing"
+    )
+    if not isinstance(value, str) or not value:
+        raise ValidationError(
+            f"{who}: info.{ZONE_KEY} is {value!r}, and it names the zone a split's ex-date "
+            f"is dated in",
+            remedy=remedy,
+        )
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValidationError(
+            f"{who}: info.{ZONE_KEY} {value!r} is not a zone this host's zone database holds",
+            remedy=remedy,
+        ) from None
+    return value
+
+
+def _entry(item: object, who: str, index: int, zone: str) -> Split:
+    """One schedule entry, validated field by field, dated in `zone`."""
     where = f"{who}: info.{KEY}[{index}]"
     if not isinstance(item, Mapping):
         raise ValidationError(
@@ -186,7 +241,9 @@ def _entry(item: object, who: str, index: int) -> Split:
             f"{where} declares no {', '.join(missing)}",
             remedy="write it as `{ex_date: 2026-07-15, ratio: 0.1}`",
         )
-    return Split(ex_date=_day(item["ex_date"], where), ratio=_ratio(item["ratio"], where))
+    return Split(
+        ex_date=_day(item["ex_date"], where), ratio=_ratio(item["ratio"], where), zone=zone
+    )
 
 
 def _day(value: object, where: str) -> date:
