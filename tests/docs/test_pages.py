@@ -103,9 +103,11 @@ def test_both_pages_say_the_run_s_base_is_never_judged() -> None:
     )
     assert "The run's base is never judged" in row
     assert "Nor is the file the last check left the lane on" in row
+    assert "`judged: false`" in row
     alignment = prose(section(page("concepts.md"), "Alignment"))
     assert "The run's base is never judged" in alignment
     assert "Nor is the file the last check left the lane on judged again" in alignment
+    assert "`judged: false`" in alignment
 
 
 def test_the_workspace_page_lists_every_section_the_parser_declares() -> None:

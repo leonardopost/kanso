@@ -30,6 +30,7 @@ def test_a_run_that_still_tests_its_thesis_is_aligned(runner: CliRunner, mocked_
     assert result.exit_code == Exit.OK, result.stdout
     checked = payload(result)
     assert checked["aligned"] is True
+    assert checked["judged"] is True
     assert checked["reason"] is None
     assert checked["id"] == HYP_ID
     assert checked["lane"] == "op"
@@ -80,9 +81,19 @@ def test_the_run_s_base_is_never_judged(runner: CliRunner, mocked_ws: Path) -> N
 
     assert result.exit_code == Exit.OK, result.stdout
     checked = payload(result)
-    assert (checked["aligned"], checked["reason"]) == (True, None)
+    assert (checked["aligned"], checked["judged"], checked["reason"]) == (True, False, None)
     assert (checked["sha"], checked["cards_checked"]) == (base, 1)
     assert payload(at(runner, mocked_ws, "inbox", "--json"))["unread"] == 0
+
+
+def test_a_check_that_judged_nothing_says_so(runner: CliRunner, mocked_ws: Path) -> None:
+    mocked.scripted(mocked_ws)
+    assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
+
+    result = at(runner, mocked_ws, "align", "check", HYP_ID)
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert "nothing new to judge, so no model was asked" in result.stdout
 
 
 def test_align_check_reads_as_the_verdict_and_the_count(runner: CliRunner, mocked_ws: Path) -> None:

@@ -86,14 +86,15 @@ def test_a_source_that_still_tests_the_idea_marks_its_cards_aligned(
     scripted(ws, align_check=[ALIGNED])
     hyp_id = started(ws, store)
     write_lane(ws, hyp_id, REVERTING)
-    assert research.card(ws, store, hyp_id, "trade the trough").status == "keep"
+    kept = research.card(ws, store, hyp_id, "trade the trough")
+    assert kept.status == "keep"
 
     assert align.check(ws, store, hyp_id) == (True, None)
     assert spend(store, lane="op").calls == 1
     assert aligned_flags(store, hyp_id) == [1, 1]
 
     run = records.require_active(store, hyp_id)
-    assert align.checkpoint(store, run).cards == 2
+    assert align.checkpoint(store, run) == align.Checkpoint(2, kept.strategy_sha, judged=True)
     assert align.since(store, run) == 0
     assert [e.kind for e in store.events(subject=hyp_id)].count(align.ALIGNED) == 1
 
@@ -122,8 +123,8 @@ def test_a_lane_restored_to_the_run_s_base_is_not_judged_and_raises_nothing(
 
     assert spend(store, lane="op").calls == 0
     assert inbox.unread(store) == []
-    assert aligned_flags(store, hyp_id) == [1, 1], "nothing judged them, so nothing marks them"
-    assert align.checkpoint(store, run) == align.Checkpoint(cards=2, sha=run.base_sha)
+    assert aligned_flags(store, hyp_id) == [1, 1]
+    assert align.checkpoint(store, run) == align.Checkpoint(2, run.base_sha, judged=False)
     assert align.since(store, run) == 0
     kinds = [e.kind for e in store.events(subject=hyp_id)]
     assert (kinds.count(align.ALIGNED), kinds.count(align.DRIFTED)) == (1, 0)
@@ -150,6 +151,78 @@ def test_the_base_is_not_judged_after_a_check_has_moved_on_from_it(
     run = records.require_active(store, hyp_id)
     assert align.checkpoint(store, run) == align.Checkpoint(cards=2, sha=run.base_sha)
     assert lane_file(ws, hyp_id) == SEED
+
+
+def test_a_check_that_judges_nothing_never_counts_a_keep_it_did_not_judge(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A keep an operator carded and then took back out of the lane is still a proposal no
+    check has seen. The check that finds the base back in the lane judges nothing, so it
+    leaves that keep ahead of the checkpoint rather than behind it, and the check that next
+    finds it in the lane judges it — instead of a later drift "rewinding" onto the keep."""
+    scripted(ws, align_check=[DRIFTED])
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    write_lane(ws, hyp_id, REVERTING)
+    assert research.card(ws, store, hyp_id, "trade the trough").status == "keep"
+    write_lane(ws, hyp_id, SEED)
+
+    assert align.check(ws, store, hyp_id) == (True, None)
+    assert align.checkpoint(store, run) == align.Checkpoint(cards=1, sha=run.base_sha)
+    assert spend(store, lane="op").calls == 0
+
+    write_lane(ws, hyp_id, WEAK)
+    assert research.card(ws, store, hyp_id, "react to every step").status == "discard"
+    assert lane_file(ws, hyp_id) == REVERTING
+
+    assert align.check(ws, store, hyp_id) == (False, DRIFTED["reason"])
+
+    assert spend(store, lane="op").calls == 1
+    assert aligned_flags(store, hyp_id) == [1, 0, 0]
+    assert lane_file(ws, hyp_id) == SEED
+    assert records.best_of(store, hyp_id)[0] == run.base_sha
+    assert [entry.kind for entry in inbox.unread(store)] == ["misaligned"]
+
+
+def test_a_drift_never_rewinds_onto_the_bytes_it_found_drifted(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A check judges the lane and hands its verdict to every card since the last one, so a
+    lane rewritten by hand can pass a keep it never held. Once the keep's own bytes are found
+    drifted, it is no ground to rewind to, whatever an earlier verdict said of it."""
+    scripted(ws, align_check=[ALIGNED, DRIFTED])
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    write_lane(ws, hyp_id, REVERTING)
+    assert research.card(ws, store, hyp_id, "trade the trough").status == "keep"
+    write_lane(ws, hyp_id, EDITED)
+    assert align.check(ws, store, hyp_id) == (True, None)
+    write_lane(ws, hyp_id, WEAK)
+    assert research.card(ws, store, hyp_id, "react to every step").status == "discard"
+    assert lane_file(ws, hyp_id) == REVERTING
+
+    assert align.check(ws, store, hyp_id) == (False, DRIFTED["reason"])
+
+    assert lane_file(ws, hyp_id) == SEED
+    assert aligned_flags(store, hyp_id) == [1, 0, 0]
+    assert records.best_of(store, hyp_id)[0] == run.base_sha
+
+
+def test_a_file_a_check_passed_is_stored_for_the_next_check_to_difference_from(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A check can pass bytes no card holds — an edit made by hand and checked before it is
+    carded — and the next check differences from them, which it cannot from a hash alone."""
+    scripted(ws, align_check=[ALIGNED, ALIGNED])
+    hyp_id = started(ws, store)
+    write_lane(ws, hyp_id, EDITED)
+    assert align.check(ws, store, hyp_id) == (True, None)
+    write_lane(ws, hyp_id, REVERTING)
+
+    assert align.check(ws, store, hyp_id) == (True, None)
+
+    assert spend(store, lane="op").calls == 2
+    assert store.get_blob(align.checkpoint(store, records.require_active(store, hyp_id)).sha)
 
 
 def test_a_lane_back_on_the_file_a_check_passed_is_not_asked_again(
@@ -199,7 +272,7 @@ def test_a_proposal_that_kept_is_put_to_the_model_and_its_drift_rewound(
     assert aligned_flags(store, hyp_id) == [1, 0]
     assert [entry.kind for entry in inbox.unread(store)] == ["misaligned"]
     run = records.require_active(store, hyp_id)
-    assert align.checkpoint(store, run) == align.Checkpoint(cards=2, sha=run.base_sha)
+    assert align.checkpoint(store, run) == align.Checkpoint(2, run.base_sha, judged=True)
 
 
 def test_the_syntax_tree_still_reads_the_base(ws: Workspace, store: StateStore) -> None:

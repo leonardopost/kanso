@@ -5,7 +5,9 @@ what an operator reaches for after editing the lane's `strategy.py` by hand. The
 deterministic checks come first and the model is asked only when they pass, so a drift the
 syntax tree can prove costs nothing. Nor is the model asked about a lane still on the run's
 base, which no check judges, or on the bytes the last check left it on, which one already
-has: the command reports it aligned, and the check is recorded.
+has. The syntax tree still reads them, and one that passes it is reported aligned with
+`judged: false`: the check is recorded, and the object says nothing was judged, so an
+operator does not take the answer for a fresh verdict.
 
 Drift is not an error, so it is not an error exit either. A check that finds the run has
 wandered has already rewound it — the lane copy is back on the last aligned keep, `best`
@@ -59,15 +61,17 @@ def _check(ws: Workspace, hyp_id: str) -> Report:
         "run_id": run.run_id,
         "lane": run.lane,
         "aligned": aligned,
+        "judged": mark.judged,
         "reason": reason,
         "sha": mark.sha,
         "cards_checked": mark.cards,
         "best_sha": run.best_sha,
         "best_metric": run.best_metric,
     }
+    verdict = "yes" if mark.judged else "yes · nothing new to judge, so no model was asked"
     lines = [
         field("hypothesis", f"{hyp_id} · run {run.run_id} · lane {run.lane}"),
-        field("aligned", "yes" if aligned else f"no — {reason}"),
+        field("aligned", verdict if aligned else f"no — {reason}"),
         field("cards", f"{mark.cards} checked · lane on {mark.sha[:7]}"),
     ]
     if not aligned:
