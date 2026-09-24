@@ -131,9 +131,12 @@ count is therefore never evidence of anything, and no probe can see it.
 
 kanso's answer is that **coverage is what was served**. Every loader compares what arrived
 against what was asked for, records the *served* span in the manifest — never the requested
-one — and reports the difference as a shortfall. `kanso data show` prints the served spans
-and the holes between them, snapshots are pinned by coverage, and `data backfill` clamps to
-the measured floor and says that it did.
+one — and reports the difference as a shortfall. `kanso data show` prints the served spans,
+the days between them the source was asked for and answered empty, and the holes left;
+snapshots are pinned by coverage, which counts the first two and never the request; and
+`data backfill` clamps to the measured floor and says that it did. The answer that counts is
+a request answered with nothing at all: a truncated answer says nothing about the days it
+left out, which stay a hole until a backfill asks for them again.
 
 So: if a load returns fewer days than the spec named, read the manifest's span. It is the
 truth about what you hold.

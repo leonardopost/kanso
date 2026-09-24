@@ -8,7 +8,16 @@ from typer.testing import CliRunner
 
 from kanso.errors import Exit
 
-from .conftest import FIRST, INSTRUMENT, LAST, at, payload, write_instruments, write_spec
+from .conftest import (
+    CHUNK_EDGES,
+    FIRST,
+    INSTRUMENT,
+    LAST,
+    at,
+    payload,
+    write_instruments,
+    write_spec,
+)
 
 
 def test_a_workspace_holding_nothing_says_so(runner: CliRunner, workspace: Path) -> None:
@@ -29,6 +38,7 @@ def test_show_reports_the_served_span_of_every_series(runner: CliRunner, loaded:
     assert series["type"] == "bar"
     assert series["resolution"] == "1h"
     assert series["spans"] == [[str(FIRST), str(LAST)]]
+    assert series["empty"] == []
     assert series["gaps"] == []
     assert series["rows"] == document["rows"] > 0
 
@@ -49,8 +59,72 @@ def test_show_reports_the_gap_between_two_loads(runner: CliRunner, workspace: Pa
 
     [series] = document["series"]
     assert series["gaps"] == [["2024-02-01", "2024-02-29"]]
+    assert series["empty"] == []
     assert document["datasets"] == 2
     assert "gap 2024-02-01..2024-02-29" in at(runner, workspace, "data", "show").stdout
+
+
+def test_show_reads_state_so_it_refuses_a_database_behind_the_schema(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The answers a source gave live in `state.db`, which only `migrate` moves."""
+    import sqlite3
+
+    connection = sqlite3.connect(loaded / "state.db")
+    try:
+        connection.execute("PRAGMA user_version = 0")
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = at(runner, loaded, "data", "show", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert "kanso migrate" in payload(result)["remedy"]
+
+
+def reasked(runner: CliRunner, root: Path) -> Path:
+    """Backfill the chunked workspace once more, which asks for exactly its two gaps."""
+    spec = root / "data.yaml"
+    result = at(runner, root, "data", "backfill", "--loader", "synthetic", "--spec", spec)
+    assert result.exit_code == Exit.OK, result.stdout
+    return root
+
+
+def test_show_lists_under_empty_what_a_source_answered_empty_between_two_spans(
+    runner: CliRunner, chunked: Path
+) -> None:
+    [before] = payload(at(runner, chunked, "data", "show", "--json"))["series"]
+    assert (before["empty"], before["gaps"]) == ([], CHUNK_EDGES)
+
+    result = at(runner, reasked(runner, chunked), "data", "show", "--json")
+
+    assert result.exit_code == Exit.OK
+    document = payload(result)
+    [series] = document["series"]
+    assert series["spans"] == before["spans"]
+    assert series["spans"] == [
+        ["2024-01-02", "2024-03-01"],
+        ["2024-03-04", "2024-03-29"],
+        ["2024-04-01", "2024-06-28"],
+    ]
+    assert series["empty"] == CHUNK_EDGES
+    assert series["gaps"] == []
+    assert document["datasets"] == 6
+
+
+def test_show_prints_each_range_answered_empty_on_a_line_of_its_own(
+    runner: CliRunner, chunked: Path
+) -> None:
+    assert "gap 2024-03-02..2024-03-03" in at(runner, chunked, "data", "show").stdout
+
+    result = at(runner, reasked(runner, chunked), "data", "show")
+
+    assert result.exit_code == Exit.OK
+    lines = [line.strip() for line in result.stdout.splitlines()]
+    assert "answered empty 2024-03-02..2024-03-03" in lines
+    assert "answered empty 2024-03-30..2024-03-31" in lines
+    assert not any(line.startswith("gap ") for line in lines)
 
 
 def test_snapshot_freezes_what_is_held_and_records_it(runner: CliRunner, loaded: Path) -> None:

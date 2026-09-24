@@ -29,13 +29,26 @@ dataset spans — whole UTC days, so a span that ends mid-day still covers that 
 contain the research window and the certification window end to end. A snapshot missing
 one instrument's quotes for one day of certification does not cover, because a run pinned
 to it would silently research a different universe than the one it names.
+
+The spans are joined across one thing more than what was served: the days between two
+served spans of a series that its source was asked for and answered with nothing, which
+the state store's event log records. That is how a weekend or a holiday at the edge of a
+chunked fetch stops splitting a series although no session is missing, and
+`manifest.answered` is the rule, the same one `data show` reports by. It is read from the
+store where `covering` is asked, not from the snapshot: an answer is a fact about the
+source, pinned to no bytes, so a snapshot taken before a gap was asked covers once the
+source has answered it empty. With no store there is no answer, and coverage is what was
+served alone. An answer never reaches before a series' first served day or past its last,
+and a day of a gap nobody answered stays a hole. The one day this cannot tell from a
+closed one is a trading day the source holds nothing for, asked alone; kanso keeps no
+calendar, so it is counted, and `data show` lists every such range.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -45,8 +58,11 @@ from pydantic import Field, model_validator
 
 from kanso.data.manifest import (
     Manifest,
+    answered_empty,
     contains,
+    covered,
     manifests,
+    series_subject,
     snapshots_path,
 )
 from kanso.errors import PreconditionError, ValidationError
@@ -55,6 +71,7 @@ from kanso.schemas.hypothesis import Windows
 from kanso.schemas.yamlio import load_yaml, write_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - kept out of the runtime import graph
+    from kanso.state import StateStore
     from kanso.workspace import Workspace
 
 UNKNOWN_PUBLICATION: Final = "unknown"
@@ -169,17 +186,22 @@ def covering(
     resolution: str | None,
     windows: Windows,
     prefixes: Sequence[tuple[date, date]] = (),
+    *,
+    store: StateStore | None,
 ) -> Snapshot | None:
     """The newest snapshot covering the universe, pinning the instruments the store holds.
 
     Newest is the latest `created_at`. A snapshot covers when, for every instrument and
-    every required type at `resolution`, the union of the spans it pins contains both
-    windows; the forward window is never loaded, so it is never required. `prefixes` are
-    the warmup spans a warmed hypothesis is fed before its windows, and they are required
-    on the same terms, because a card loads them from the pinned data. A snapshot
-    whose covering datasets include one with an unknown publication does not qualify:
-    research may not be pinned to data whose availability nobody declared. `None` when
-    no snapshot covers.
+    every required type at `resolution`, the union of the spans it pins — each series'
+    served spans joined across the days between them its source answered empty, read
+    from `store` — contains both windows; the forward window is never loaded, so it is
+    never required. `store` is asked for, not defaulted, because a caller without one has
+    to say so: `None` is a place no answer was ever recorded, and coverage there is what
+    was served alone. `prefixes` are the warmup spans a warmed hypothesis is fed before
+    its windows, and they are required on the same terms, because a card loads them from
+    the pinned data. A snapshot whose covering datasets include one with an unknown
+    publication does not qualify: research may not be pinned to data whose availability
+    nobody declared. `None` when no snapshot covers.
 
     A run reproduces the instruments its snapshot pins only if the store still holds
     them, so among the covering snapshots the newest whose instrument checksum is the
@@ -190,6 +212,7 @@ def covering(
     is refused first, since no snapshot can pin what does not exist.
     """
     held = manifests(ws)
+    answers = {} if store is None else answered_empty(store)
     required = (
         *((window.start, window.end) for window in (windows.research, windows.certification)),
         *prefixes,
@@ -199,7 +222,7 @@ def covering(
         picked = [held[name] for name in snapshot.datasets if name in held]
         if len(picked) != len(snapshot.datasets):
             continue
-        if _covers(picked, universe, types, resolution, required):
+        if _covers(picked, universe, types, resolution, required, answers):
             candidates.append(snapshot)
     if not candidates:
         return None
@@ -275,8 +298,13 @@ def _covers(
     types: Sequence[str],
     resolution: str | None,
     windows: Sequence[tuple[date, date]],
+    answers: Mapping[str, Sequence[tuple[date, date]]],
 ) -> bool:
-    """True when these manifests cover every instrument and type over every window."""
+    """True when these manifests cover every instrument and type over every window.
+
+    An empty answer joins two served spans of the series it was recorded for and no
+    other, so the spans are covered series by series before they are pooled.
+    """
     for instrument in universe:
         for required in types:
             relied = [
@@ -288,7 +316,14 @@ def _covers(
             ]
             if any(manifest.publication == UNKNOWN_PUBLICATION for manifest in relied):
                 return False
-            spans = [manifest.span for manifest in relied]
+            served: dict[tuple[str, str, str | None], list[tuple[date, date]]] = {}
+            for manifest in relied:
+                served.setdefault(manifest.filed_under, []).append(manifest.span)
+            spans = [
+                span
+                for key, found in served.items()
+                for span in covered(found, answers.get(series_subject(key), ()))
+            ]
             if not all(contains(spans, window) for window in windows):
                 return False
     return True

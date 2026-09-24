@@ -255,7 +255,9 @@ already moved past it would stamp its own older version over the newer one and l
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
 the workspace has no
-registered hypotheses, no cards, no best pointer, no certificate of record and no approvals.
+registered hypotheses, no cards, no best pointer, no certificate of record and no approvals —
+nor any record of what a source answered empty, so every gap a backfill closed that way is a
+gap again until `kanso data backfill` asks once more.
 What survives is what is file-backed: `catalog/` still serves its data, `certificates/<hyp>/`
 still holds the certificate YAML and the certified `<sha7>.py`, `strategies/<id>/` still holds
 `strategy.yaml` and its `impl/` directories, and `kanso strat show` and `kanso replay
@@ -677,6 +679,54 @@ the dataset they follow in `supersedes`. The manifest records the span that was 
 never the span that was asked for, because a source may answer a five-year request with two
 years, HTTP 200 and no warning.
 
+**Coverage counts one fact the manifests do not hold**: the days between two served spans of
+a series that its source was asked for and answered with nothing, which `state.db` records
+as each empty chunk comes back. A backfill is chunked, and a chunk edge that falls on a
+weekend leaves the spans either side a weekend apart; the next backfill asks for exactly
+those days. In a fresh `kanso init --demo` workspace, after `kanso data instruments resolve`:
+
+```
+$ kanso data backfill --loader synthetic --spec demo.yaml --to 2024-04-30
+loader     synthetic · demo.yaml
+2024-01-02..2024-01-31 DEMO.SIM bar → written · 8580 rows
+2024-02-01..2024-03-01 DEMO.SIM bar → written · 8580 rows
+2024-03-02..2024-03-31 DEMO.SIM bar → written · 7800 rows
+2024-04-01..2024-04-30 DEMO.SIM bar → written · 8580 rows
+total      4 chunk(s) · 33540 rows written
+$ kanso data show
+DEMO.SIM bar 1m · 2024-01-02..2024-03-01, 2024-03-04..2024-03-29, 2024-04-01..2024-04-30 · 33540 rows
+           DEMO.SIM-bar-1m-raw-20240131 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240301 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240329 · synthetic · 7800 rows
+           DEMO.SIM-bar-1m-raw-20240430 · synthetic · 8580 rows
+           gap 2024-03-02..2024-03-03
+           gap 2024-03-30..2024-03-31
+total      4 dataset(s) · 33540 rows
+$ kanso data backfill --loader synthetic --spec demo.yaml --to 2024-04-30
+loader     synthetic · demo.yaml
+2024-03-02..2024-03-03 DEMO.SIM bar → empty
+2024-03-30..2024-03-31 DEMO.SIM bar → empty
+total      2 chunk(s) · 0 rows written
+$ kanso data show
+DEMO.SIM bar 1m · 2024-01-02..2024-03-01, 2024-03-04..2024-03-29, 2024-04-01..2024-04-30 · 33540 rows
+           DEMO.SIM-bar-1m-raw-20240131 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240301 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240329 · synthetic · 7800 rows
+           DEMO.SIM-bar-1m-raw-20240430 · synthetic · 8580 rows
+           answered empty 2024-03-02..2024-03-03
+           answered empty 2024-03-30..2024-03-31
+total      4 dataset(s) · 33540 rows
+```
+
+The served spans are what they were; the two weekends are now coverage, so `research begin`
+pins a snapshot across them — the one taken before they were asked, since a snapshot pins
+bytes and the answers are not bytes — and a third backfill plans nothing. An answer counts
+only between two served spans and only on the days it names: a month answered empty before
+a series' first served day is not coverage, and the days a chunk was asked for and did not
+serve stay a gap until a backfill asks for them again. kanso keeps no calendar, so a weekday
+answered empty — a holiday, or a day the source simply holds nothing for — reads the same
+and is counted; the `answered empty` lines are where to look for one.
+
 A **snapshot** freezes what is held: the dataset checksums plus the checksum of the resolved
 instruments. Every run is pinned to one, and to the instruments as much as to the data:
 `research begin` hands out only a snapshot whose instrument checksum is the store's own, and
@@ -711,9 +761,10 @@ remedy: pass --replace to delete and rewrite the overlapped span
 (exit 2). Here the data is yours to replace; you just have to say so.
 
 **The manifests are the record of what the catalog holds**, and `kanso data show` reads them
-rather than the parquet files. Delete a parquet by hand and `data show` keeps reporting the
-dataset, its span and its row count; `kanso doctor` has no catalog check at all. The loss
-surfaces only when a run needs the rows, as a baseline or card that did not run (exit 2):
+— with the empty answers `state.db` recorded — rather than the parquet files. Delete a
+parquet by hand and `data show` keeps reporting the dataset, its span and its row count;
+`kanso doctor` has no catalog check at all. The loss surfaces only when a run needs the
+rows, as a baseline or card that did not run (exit 2):
 
 ```
 error: the baseline card of demo_mr did not run: exception: …
@@ -1107,7 +1158,9 @@ step on a new host.
 inherits your certified work.** Copy the directory and you have everything. Clone the
 repository and you have the data, every certificate, the composed implementations and the
 source of every hypothesis — reproduced to the digit — but not the record: no research
-history, no `best` pointer, no trial count, no approvals, no version or session index. That is
+history, no `best` pointer, no trial count, no approvals, no version or session index, and no
+record of what a source answered empty, so a window across a weekend a backfill closed that
+way is refused by `research begin` until `kanso data backfill` asks for it again. That is
 the design rather than an accident: the record is what one machine did, and approvals in
 particular must never travel, because real capital always needs a person to say so again on
 the machine that will trade. `kanso doctor` names the situation when it meets it — the
