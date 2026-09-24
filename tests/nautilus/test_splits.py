@@ -21,6 +21,7 @@ from kanso.nautilus.splits import (
     ZONE_KEY,
     Move,
     Split,
+    in_lieu,
     ledger,
     quantity_after,
     schedule,
@@ -233,8 +234,8 @@ def sell(ts: int, qty: float, px: float) -> Move:
     return Move(ts_ns=ts, qty=-qty, px=px)
 
 
-def split(ts: int, change: float) -> Move:
-    return Move(ts_ns=ts, qty=change)
+def split(ts: int, change: float, ratio: float | None = None, cash: float = 0.0) -> Move:
+    return Move(ts_ns=ts, qty=change, ratio=ratio, cash=cash)
 
 
 def test_a_position_with_no_moves_at_all_is_empty() -> None:
@@ -312,12 +313,60 @@ def test_a_split_is_applied_before_a_fill_stamped_at_the_same_instant() -> None:
     assert book.realized == 0.0
 
 
-def test_a_split_that_takes_a_position_to_flat_leaves_the_basis_alone() -> None:
-    """Guarded rather than reached: `apply_to` refuses such an adjustment by name."""
-    book = ledger([buy(1, 100.0, 10.0), split(2, -100.0)])
+@pytest.mark.parametrize("ratio", [0.001, None])
+def test_a_position_paid_out_to_flat_realises_its_whole_book(ratio: float | None) -> None:
+    """100 shares bought at ten, a one-for-a-thousand reverse split, 900 paid in lieu: the
+    position closed at nine a share, whether or not the ledger knows the split's ratio."""
+    book = ledger([buy(1, 100.0, 10.0), split(2, -100.0, ratio=ratio, cash=900.0)])
 
     assert book.peak == 100.0
-    assert book.realized == 0.0
+    assert book.realized == pytest.approx(-100.0)
+
+
+def test_a_fraction_paid_at_cost_realises_nothing_and_counts_as_coming_back() -> None:
+    """1,005 at ten, one-for-ten, five old shares paid at ten: the payout is a close at cost,
+    and what came back per opening share is still ten once the 100 are sold at a hundred."""
+    book = ledger(
+        [buy(1, 1_005.0, 10.0), split(2, -905.0, ratio=0.1, cash=50.0), sell(3, 100.0, 100.0)]
+    )
+
+    assert book.realized == pytest.approx(0.0)
+    assert book.avg_close == pytest.approx(10.0)
+    assert book.peak == pytest.approx(1_005.0)
+
+
+def test_a_short_owes_the_fraction_it_cannot_deliver() -> None:
+    """Short 1,005 at ten through one-for-ten: 100 new shares still owed, five old shares
+    bought back in lieu at twelve — a debit of 60, and a loss of ten on those five."""
+    book = ledger([sell(1, 1_005.0, 10.0), split(2, 905.0, ratio=0.1, cash=-60.0)])
+
+    assert book.realized == pytest.approx(-10.0)
+    assert book.basis == pytest.approx(100.0)
+
+
+def test_without_the_ratio_a_payout_is_realised_whole_and_the_total_is_the_same() -> None:
+    """The fraction's cost stays in the shares still held, and the payout is realised at
+    once; once the position closes the two ways of booking it agree to the cent."""
+    known = ledger(
+        [buy(1, 1_005.0, 10.0), split(2, -905.0, ratio=0.1, cash=40.0), sell(3, 100.0, 90.0)]
+    )
+    unknown = ledger([buy(1, 1_005.0, 10.0), split(2, -905.0, cash=40.0), sell(3, 100.0, 90.0)])
+
+    assert unknown.realized == pytest.approx(known.realized)
+    assert known.realized == pytest.approx(40.0 - 50.0 + (90.0 - 100.0) * 100.0)
+
+
+def test_a_float_ratio_does_not_cost_a_share_the_issuer_delivers() -> None:
+    """1,200 shares through a one-for-twelve reverse split are 100, not 99: the ratio is a
+    float, and 1,200 x 0.0833... is 99.999999999999996 until it is rounded."""
+    assert quantity_after(1_200.0, 1.0 / 12.0, 1.0) == 100.0
+    assert in_lieu(1_200.0, 1.0 / 12.0, 1.0, 5.0, 1.0) == 0.0
+
+
+def test_the_fraction_is_paid_at_the_old_price_and_a_short_pays_it() -> None:
+    assert in_lieu(1_005.0, 0.1, 1.0, 10.0, 1.0) == pytest.approx(50.0)
+    assert in_lieu(-1_005.0, 0.1, 1.0, 10.0, 1.0) == pytest.approx(-50.0)
+    assert in_lieu(5.0, 0.1, 1.0, 10.0, 100.0) == pytest.approx(5_000.0)
 
 
 def test_the_basis_is_the_one_number_quoted_in_the_shares_still_held() -> None:

@@ -1012,7 +1012,10 @@ def _extract(
     by_position: dict[int, list[Fill]] = {}
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
-    trades = _trades(positions, by_position, multipliers)
+    schedules = {
+        str(instrument.id): splits.schedule_of(instrument) for instrument in cache.instruments()
+    }
+    trades = _trades(positions, by_position, multipliers, schedules)
     curve = _equity(request, stream, fills, multipliers, _adjusted(positions))
     return CardRun(
         window=request.window,
@@ -1166,6 +1169,7 @@ def _trades(
     positions: Sequence[Any],
     by_position: Mapping[int, Sequence[Fill]],
     multipliers: Mapping[str, float],
+    schedules: Mapping[str, Sequence[splits.Split]] | None = None,
 ) -> tuple[Trade, ...]:
     """Closed positions as trades, netted of the costs of the fills that made them.
 
@@ -1180,6 +1184,10 @@ def _trades(
     computed against the second, so a position that spanned a one-for-ten reverse split
     reported a 9,000 profit on a 50 loss. With no adjustment the ledger reproduces the
     engine's own numbers exactly, which is why there is one arithmetic here and not two.
+
+    What a split paid out in lieu is in the profit, realised at the split. A position the
+    payout left flat closed there, and the engine dated no close, so it is dated by the
+    adjustment that closed it.
     """
     trades: list[Trade] = []
     for index, position in enumerate(positions):
@@ -1188,12 +1196,16 @@ def _trades(
         fills = tuple(by_position.get(index, ()))
         cost = fsum(fill.cost for fill in fills)
         name = str(position.instrument_id)
-        book = splits.ledger(splits.moves_of(position), multipliers.get(name, 1.0))
+        schedule = () if schedules is None else schedules.get(name, ())
+        book = splits.ledger(splits.moves_of(position, schedule), multipliers.get(name, 1.0))
         opened = min(fills, key=lambda fill: fill.ts_ns) if fills else None
+        closed = int(position.ts_closed) or max(
+            (int(event.ts_event) for event in position.adjustments), default=0
+        )
         trades.append(
             Trade(
                 opened_ns=int(position.ts_opened),
-                closed_ns=int(position.ts_closed),
+                closed_ns=closed,
                 instrument_id=name,
                 qty=book.peak if opened is None or opened.side == "BUY" else -book.peak,
                 avg_open=book.avg_open,
@@ -1206,23 +1218,30 @@ def _trades(
     return tuple(trades)
 
 
-def _adjusted(positions: Sequence[Any]) -> tuple[tuple[int, str, float], ...]:
-    """Every split adjustment the run applied, once each, as `(ts, instrument, change)`.
+def _adjusted(positions: Sequence[Any]) -> tuple[tuple[int, str, float, float], ...]:
+    """Every split adjustment the run applied, once each, as `(ts, instrument, change,
+    paid)`: the quantity change and the cash the split paid in lieu of the fraction it left.
 
     Read off the positions the same way the fills are, and deduplicated by event id for
     the same reason: a netting position that closed and reopened lives in the cache twice,
     once as the snapshot taken before the reset and once as the live object.
     """
     seen: set[str] = set()
-    found: list[tuple[int, str, float]] = []
+    found: list[tuple[int, str, float, float]] = []
     for position in positions:
         for event in position.adjustments:
             key = str(event.id)
             if key in seen or event.quantity_change is None:
                 continue
             seen.add(key)
+            paid = 0.0 if event.pnl_change is None else event.pnl_change.as_double()
             found.append(
-                (int(event.ts_event), str(event.instrument_id), float(event.quantity_change))
+                (
+                    int(event.ts_event),
+                    str(event.instrument_id),
+                    float(event.quantity_change),
+                    paid,
+                )
             )
     return tuple(sorted(found))
 
@@ -1232,7 +1251,7 @@ def _equity(
     stream: Sequence[Point],
     fills: Sequence[Fill],
     multipliers: Mapping[str, float],
-    adjustments: Sequence[tuple[int, str, float]] = (),
+    adjustments: Sequence[tuple[int, str, float, float]] = (),
 ) -> _Curve:
     """The period ends and the equity struck at each, from cash and marked positions.
 
@@ -1247,7 +1266,9 @@ def _equity(
     position's own ledger rather than recomputed from a ratio, so what the curve marks is
     exactly the share count the engine went on to trade. Without it the ex-day's price is
     marked against the pre-split count and the curve reports the whole action as return —
-    measured on a one-for-ten reverse split, 190,450 against a true 99,950.
+    measured on a one-for-ten reverse split, 190,450 against a true 99,950. What the split
+    paid in lieu of the fraction it left goes into cash at the same instant, so across a
+    split the curve moves only with the price.
 
     A stream may begin before the window with the warmup prefix. No period ends inside it
     — the first period is the window's first — but its points are consumed for the marks,
@@ -1322,8 +1343,9 @@ def _equity(
             held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
             fill += 1
         while split < len(adjustments) and adjustments[split][0] <= end:
-            _ts, key, change = adjustments[split]
+            _ts, key, change, paid = adjustments[split]
             held[key] = held.get(key, 0.0) + change
+            cash += paid
             split += 1
         marked: list[float] = []
         adverse: list[float] = []

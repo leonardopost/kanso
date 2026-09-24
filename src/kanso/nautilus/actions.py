@@ -76,7 +76,7 @@ from nautilus_trader.model.identifiers import InstrumentId, StrategyId
 from kanso.nautilus import splits
 from kanso.nautilus.splits import Split
 
-__all__ = ["NAME", "CorporateActions", "modules"]
+__all__ = ["NAME", "CorporateActions", "last_price", "modules"]
 
 NAME: Final = "CorporateActions"
 """What the venue's log calls this module, suffixed with the venue it was loaded into."""
@@ -153,9 +153,12 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         **Cancel**, because a resting order is priced and sized in shares that no longer
         exist and the exchange is about to match it against restated prices. **Adjust**
         every open position in the instrument, whichever sleeve holds it, because a split
-        reaches every holder. **Resync**, because `Portfolio` caches a net position per
-        instrument and would otherwise keep the pre-split count, so the next exit would be
-        sized against shares nobody holds — measured, 1,005 sold against 100 held.
+        reaches every holder, and pay out the fraction it leaves at the last price the book
+        quotes in the old count — before the restatement below replaces it; a position the
+        payout leaves flat is re-indexed as closed. **Resync**, because `Portfolio` caches a
+        net position per instrument and would otherwise keep the pre-split count, so the
+        next exit would be sized against shares nobody holds — measured, 1,005 sold against
+        100 held.
         **Restate the book**, because the matching engine quotes the instrument at its last
         print until it prints again, and the point that applied the split may be another
         instrument's: an order that name's handler sends into this one would fill at the
@@ -165,11 +168,14 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         self._cancel(instrument_id, ts_init)
         instrument = self.exchange.instruments[instrument_id]
         lot = float(instrument.lot_size or instrument.size_increment)
+        multiplier = float(instrument.multiplier)
+        book = self.exchange.get_matching_engine(instrument_id).get_book()
         for position in sorted(
             self.cache.positions_open(instrument_id=instrument_id),
             key=lambda held: str(held.id),
         ):
-            splits.apply_to(position, split, lot, ts_event)
+            splits.apply_to(position, split, lot, ts_event, last_price(book, position), multiplier)
+            self.cache.update_position(position)
         self.portfolio.initialize_positions()
         self._applied.add((str(instrument_id), split.ex_date))
         self._restate_book(instrument_id, split, ts_event, ts_init)
@@ -216,6 +222,16 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
                 )
             )
         self.exchange.process(ts_init)
+
+
+def last_price(book: Any, position: Any) -> float:
+    """An instrument's last price in the old share count, before a split restates it: the
+    midpoint its book still quotes, which is the close before the ex-date, or the position's
+    own last fill when the book holds no quote."""
+    bid, ask = book.best_bid_price(), book.best_ask_price()
+    if bid is None or ask is None:
+        return float(position.last_px)
+    return (float(bid) + float(ask)) / 2.0
 
 
 def modules(venue: str) -> list[CorporateActions]:

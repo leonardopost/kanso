@@ -19,7 +19,6 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
 from kanso.criteria.run import midnight_ns
-from kanso.errors import PreconditionError
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 from .conftest import DEMO, HEDGE, VENUE, bar, equity
@@ -369,17 +368,62 @@ def test_a_venue_with_nothing_resting_sends_no_cancel(backtest) -> None:
     assert [order.is_canceled for order in run.engine.cache.orders()] == [False]
 
 
-def test_a_position_a_split_would_wipe_out_is_refused_by_name(backtest) -> None:
-    """kanso holds no cash to pay a fractional position out in lieu, and says so."""
-    with pytest.raises(PreconditionError) as raised:
-        backtest(
-            Holder(config(capital=50.0, max_position_pct=100.0)),
-            instruments=[equity(DEMO, info=SCHEDULE)],
-            data=series(),
-        )
+def test_a_position_under_one_new_lot_is_paid_out_whole_and_left_flat(backtest) -> None:
+    """What an issuer does with a holding a reverse split leaves under one share, and what
+    used to stop the card: the shares are paid at the last price in the old count, and the
+    position is flat and indexed as closed, so the next entry opens a fresh one."""
+    run = backtest(
+        Holder(config(capital=50.0, max_position_pct=100.0)),
+        instruments=[equity(DEMO, info=SCHEDULE)],
+        data=series(),
+    )
+    position = held(run)
+    bought = float(position.events[0].last_qty)
 
-    assert "less than one lot of it" in raised.value.message
-    assert "max_position_pct" in (raised.value.remedy or "")
+    assert 0.0 < bought < 10.0
+    assert position.is_closed
+    assert [float(event.quantity_change) for event in position.adjustments] == [-bought]
+    assert [event.pnl_change.as_double() for event in position.adjustments] == [bought * 10.0]
+    assert run.engine.cache.positions_open() == []
+
+
+class Book:
+    """An L1 book as `last_price` reads it: a best bid and a best ask, or none."""
+
+    def __init__(self, bid: float | None, ask: float | None) -> None:
+        self.bid, self.ask = bid, ask
+
+    def best_bid_price(self) -> float | None:
+        return self.bid
+
+    def best_ask_price(self) -> float | None:
+        return self.ask
+
+
+class Filled:
+    last_px = 9.5
+
+
+@pytest.mark.parametrize(
+    ("bid", "ask", "price"), [(9.9, 10.1, 10.0), (None, 10.1, 9.5), (9.9, None, 9.5)]
+)
+def test_the_fraction_is_valued_at_the_book_s_midpoint_or_the_last_fill(
+    bid: float | None, ask: float | None, price: float
+) -> None:
+    """The book still quotes the close before the ex-date when a split is applied; a book
+    with no quote falls back to the last price the position itself traded at."""
+    from kanso.nautilus.actions import last_price
+
+    assert last_price(Book(bid, ask), Filled()) == pytest.approx(price)
+
+
+def test_the_fraction_a_split_leaves_is_paid_at_the_close_before_the_ex_date(backtest) -> None:
+    """1,005 at ten through one-for-ten: 100 shares held and five old shares paid at ten."""
+    position = held(
+        backtest(Holder(config()), instruments=[equity(DEMO, info=SCHEDULE)], data=series())
+    )
+
+    assert [event.pnl_change.as_double() for event in position.adjustments] == [50.0]
 
 
 # --- what the venue does not repair, and why ----------------------------------
@@ -390,7 +434,9 @@ def test_the_account_is_unmoved_at_the_ex_date_and_wrong_from_the_closing_fill(
 ) -> None:
     """Measured on nautilus_trader 1.231.0, and the reason `criteria.integrity` denies it.
 
-    Nothing moves the balance at the action: `Portfolio.initialize_positions` recomputes
+    Nothing moves the balance at the action — not the 50 the split pays in lieu either, which
+    `apply_adjustment` adds to the position's own `realized_pnl` and to nothing else:
+    `Portfolio.initialize_positions` recomputes
     maintenance margin alone, and kanso's resolved instruments carry a zero margin rate, so
     the account reads its 100,000 at every bar up to and including the ex-date. The 9,000
     arrives at the closing fill, where `MarginAccount.calculate_pnls` credits
@@ -407,6 +453,6 @@ def test_the_account_is_unmoved_at_the_ex_date_and_wrong_from_the_closing_fill(
     position = held(run)
 
     assert float(account.balance_total(None)) == 109_000.0
-    assert float(position.realized_pnl) == 9_000.0
+    assert float(position.realized_pnl) == 9_050.0  # the engine adds the 50 paid in lieu
     assert (float(position.avg_px_open), float(position.peak_qty)) == (10.0, 1_005.0)
     assert run.engine.cache.positions()[0].is_closed

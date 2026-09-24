@@ -639,9 +639,10 @@ Two consequences worth knowing. A schedule is part of the definition, so it is p
 `definition_checksum` and therefore of the snapshot a run is pinned to: adding one to an
 instrument already resolved as of that date is a *correction*, which the plain command
 refuses (exit 2) and `--refresh` performs, and re-snapshotting afterwards is what a later
-run reproduces. And a position too small to survive a reverse split — under one lot after
-the ratio — is refused rather than silently deleted, because kanso holds no cash to pay it
-out in lieu.
+run reproduces. And the shares a reverse split leaves short of a whole lot are paid out in
+cash at the close before the ex-date, as an issuer pays them — 1,005 shares through a
+one-for-ten split keep 100 and are paid five old shares' worth — so a position under one new
+lot is paid out whole and closes at the split rather than stopping the run.
 
 The schedule goes here rather than in the data because a split is the one corporate action
 with no honest publication instant. A dividend carries the day it was declared; a split

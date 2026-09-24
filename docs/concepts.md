@@ -749,10 +749,13 @@ numbers come from the fills and the adjustments instead.
 
 The card's own numbers come out of that: the equity curve folds the quantity change in at
 the ex-date, and a trade is measured in the shares it opened with — its size and `avg_open`
-are what was actually bought, `avg_close` is what came back per opening share, and the only
-profit or loss a split itself produces is the fractional residue a reverse split truncates
-away. A position too small to survive one — under a lot after the ratio — is refused rather
-than deleted, since kanso holds no cash to pay it out in lieu.
+are what was actually bought, `avg_close` is what came back per opening share, and a split
+itself produces no profit or loss. The shares a split leaves short of a whole lot are paid
+out in cash, as an issuer pays them, at the last price in the old count — the close before
+the ex-date: the venue writes the amount on the split's own adjustment, the extraction
+books it into cash at the split and into the trade the position closes as, and the harness
+books the same amount into `balance` when it sees the adjustment, so the three read one
+number. A position under one new lot is paid out whole and closes at the split.
 
 **A window holding a split you have not declared is refused.** When the run's data carries a
 `corporate_action` point of kind `split` whose ex-date falls inside the window, and the

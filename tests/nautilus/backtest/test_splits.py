@@ -125,15 +125,15 @@ def card(
 # --- what the card says -------------------------------------------------------
 
 
-def test_a_reverse_split_moves_the_equity_curve_by_the_residue_and_nothing_else(
-    request_for,
-) -> None:
-    """1,005 at ten becomes 100 at a hundred: 10,050 of value becomes 10,000, and that is all."""
+def test_a_reverse_split_moves_the_equity_curve_by_nothing(request_for) -> None:
+    """1,005 at ten becomes 100 at a hundred and five old shares paid out at ten: 10,050 of
+    value is still 10,050, so the curve moves by the entry's cost and by nothing else. Before
+    the payout the five shares were dropped, and the curve fell 50 on a bookkeeping change."""
     equity = card(request_for).equity
 
     assert equity[0] == pytest.approx(CAPITAL - 5.025)
-    assert equity[(EX - RESEARCH[0]).days] == pytest.approx(CAPITAL - 55.025)
-    assert max(equity) - min(equity) == pytest.approx(55.0)
+    assert equity[(EX - RESEARCH[0]).days] == pytest.approx(CAPITAL - 5.025)
+    assert max(equity) - min(equity) == pytest.approx(5.0)
 
 
 def test_the_exit_is_sized_against_the_shares_the_split_left(request_for) -> None:
@@ -147,23 +147,98 @@ def test_the_exit_is_sized_against_the_shares_the_split_left(request_for) -> Non
 
 
 def test_the_trade_is_measured_in_the_shares_it_opened_with(request_for) -> None:
-    """`notional` is still what was put in, and the profit is the residue plus the costs."""
+    """`notional` is still what was put in; what came back is 100 shares sold at a hundred and
+    five old shares paid out at ten, 10,050 per 1,005 opening shares; the profit is the costs."""
     trade = card(request_for).trades[0]
 
     assert trade.qty == 1_005.0
     assert trade.avg_open == 10.0
-    assert trade.avg_close == pytest.approx(10_000.0 / 1_005.0)
+    assert trade.avg_close == pytest.approx(10.0)
     assert trade.notional == pytest.approx(10_050.0)
     assert trade.cost == pytest.approx(10.025)
-    assert trade.pnl_net == pytest.approx(-60.025)
+    assert trade.pnl_net == pytest.approx(-10.025)
 
 
 def test_a_position_still_open_at_the_close_is_marked_at_the_shares_it_holds(request_for) -> None:
-    """No exit at all, so the last equity is cash plus 100 shares rather than plus 1,005."""
+    """No exit at all, so the last equity is cash — the payout in it — plus 100 shares rather
+    than plus 1,005."""
     held = card(request_for, exit_on=0)
 
     assert held.trades == ()
-    assert held.equity[-1] == pytest.approx(CAPITAL - 55.025)
+    assert held.equity[-1] == pytest.approx(CAPITAL - 5.025)
+
+
+RECORDER = b"""
+from pathlib import Path
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    record: str = ""
+    notional: float = 10_050.0
+    again_on: int = 0
+    again_notional: float = 500.0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys on the first session and on `again_on`, and writes down every balance.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        self.seen += 1
+        acted = self.seen in (1, self.kanso_config.again_on)
+        with Path(self.kanso_config.record).open("a") as out:
+            out.write(f"{bar.ts_init} {self.balance!r} {int(acted)}\\n")
+        if acted:
+            again = self.seen == self.kanso_config.again_on
+            notional = self.kanso_config.again_notional if again else self.kanso_config.notional
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=notional)
+"""
+
+
+def recorded(request_for, record: Path, **overrides: float) -> CardRun:
+    """One run of the restated window by the recorder, its balances written to `record`."""
+    request = request_for(RESEARCH, source=RECORDER, overrides={"record": str(record), **overrides})
+    return execute(request, [instrument(info=REVERSE)], [tuple(restated())]).run
+
+
+def test_the_balance_a_sleeve_reads_holds_the_payout_the_card_books(
+    request_for, tmp_path: Path
+) -> None:
+    """The harness books what the split paid in lieu when it sees the adjustment, so the
+    balance a sleeve reads on the ex-date and after it is the equity the card strikes."""
+    from .test_balance import assert_the_same
+
+    record = tmp_path / "balance.txt"
+    run = recorded(request_for, record)
+
+    assert_the_same(run, record, at_least=15)
+    assert run.equity[(EX - RESEARCH[0]).days] == pytest.approx(CAPITAL - 5.025)
+
+
+def test_a_position_paid_out_to_flat_is_a_trade_closed_at_the_split(
+    request_for, tmp_path: Path
+) -> None:
+    """Five shares through one-for-ten are paid out whole: a trade closed at the ex-date's
+    first point, at cost, and a fresh position when the sleeve buys again after it."""
+    from .test_balance import assert_the_same
+
+    record = tmp_path / "balance.txt"
+    again = (EX - RESEARCH[0]).days + 3
+    run = recorded(request_for, record, notional=50.0, again_on=again)
+    ex_point = next(bar.ts_event for bar in restated() if bar.ts_event >= midnight_ns(EX))
+
+    (paid_out,) = run.trades
+    assert paid_out.closed_ns == ex_point
+    assert paid_out.avg_close == pytest.approx(paid_out.avg_open)
+    assert paid_out.pnl_net == pytest.approx(-paid_out.cost)
+    assert [fill.side for fill in run.fills] == ["BUY", "BUY"]
+    assert_the_same(run, record, at_least=15)
 
 
 def test_a_forward_split_is_the_same_arithmetic_the_other_way(request_for) -> None:
@@ -255,14 +330,26 @@ def test_the_same_window_read_from_a_catalog_says_the_same_thing(
 # --- the adjustment ledger the extraction reads -------------------------------
 
 
-class Adjustment:
-    """One `PositionAdjusted` as the extraction reads it: an id, an instant and a change."""
+class Paid:
+    """A `pnl_change` as the extraction reads it: an amount."""
 
-    def __init__(self, key: str, change: float | None = -905.0) -> None:
+    def __init__(self, amount: float) -> None:
+        self.amount = amount
+
+    def as_double(self) -> float:
+        return self.amount
+
+
+class Adjustment:
+    """One `PositionAdjusted` as the extraction reads it: an id, an instant, a change and
+    what the split paid in lieu of the fraction it left."""
+
+    def __init__(self, key: str, change: float | None = -905.0, paid: float | None = None) -> None:
         self.id = key
         self.ts_event = 1_000
         self.instrument_id = INSTRUMENT
         self.quantity_change = change
+        self.pnl_change = None if paid is None else Paid(paid)
 
 
 class Held:
@@ -275,9 +362,13 @@ class Held:
 def test_one_adjustment_held_by_two_positions_is_counted_once() -> None:
     """A netting position lives in the cache twice while a snapshot of it survives, and a
     quantity change counted twice would halve the position the equity curve marks."""
-    shared = Adjustment("A")
+    shared = Adjustment("A", paid=50.0)
 
-    assert _adjusted([Held(shared), Held(shared)]) == ((1_000, INSTRUMENT, -905.0),)
+    assert _adjusted([Held(shared), Held(shared)]) == ((1_000, INSTRUMENT, -905.0, 50.0),)
+
+
+def test_an_adjustment_that_paid_nothing_in_lieu_carries_a_zero_payment() -> None:
+    assert _adjusted([Held(Adjustment("A"))]) == ((1_000, INSTRUMENT, -905.0, 0.0),)
 
 
 def test_an_adjustment_that_changes_no_quantity_changes_no_holding() -> None:

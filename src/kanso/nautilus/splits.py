@@ -43,6 +43,17 @@ and credits are applied. A dividend also has an announcement date, which is what
 loadable as an ordinary `corporate_action` point with an honest `ts_init`. A `cash` key in
 a schedule entry is therefore refused by name rather than ignored.
 
+**The fraction a split leaves is paid out, and booked where money is.** A share count floors
+onto the lot, and the shares that do not make a whole new lot are what an issuer pays out in
+lieu: 1,005 shares through a one-for-ten reverse split are 100 shares and five old shares'
+worth of cash. The venue values those at the instrument's last price in the old count, the
+close before the ex-date, and writes the amount on the split's own adjustment event as its
+`pnl_change`. The venue moves no money with it. The runner's extraction books it — into the
+equity curve at the split, and into the trade the position closes as — and the harness
+books the same amount into `balance` when it sees the adjustment, so a card, its
+certificate and a sleeve's own balance read one number. A position smaller than one new lot
+is paid out whole and left flat, which is what an issuer does with it.
+
 **What the engine permits, measured against nautilus_trader 1.231.0.**
 
 * `Position.apply_adjustment(PositionAdjusted(...))` is the mechanism: a public `cpdef`
@@ -72,6 +83,12 @@ a schedule entry is therefore refused by name rather than ignored.
   exists: kanso reads neither `realized_pnl` nor `avg_px_open` nor `peak_qty`, and
   `criteria.integrity` denies a researched strategy the account and the cache, so no card
   can be sized off a number the engine cannot keep honest.
+* `apply_adjustment` adds a `pnl_change` to the position's own `realized_pnl` and to nothing
+  else: no account balance moves and nothing is published. An adjustment that takes the
+  quantity to zero leaves the position `FLAT` — `is_closed` — with `ts_closed` unset and
+  the cache's open index unchanged, so the venue re-indexes it with `Cache.update_position`
+  and the extraction dates the trade by the adjustment. The next fill in that instrument
+  snapshots the flat position and opens a fresh one, as it does after any close.
 * The synthetic-fill route — a SELL and a BUY that rebase the basis — is forbidden and not
   merely discouraged: it drives `signed_qty` through zero, which trips the reopen branch of
   `Position.apply` and **clears `_events`, `_trade_ids` and `_adjustments`**, deleting the
@@ -102,6 +119,7 @@ __all__ = [
     "Move",
     "Split",
     "apply_to",
+    "in_lieu",
     "ledger",
     "moves_of",
     "quantity_after",
@@ -283,44 +301,61 @@ def _ratio(value: object, where: str) -> float:
     return ratio
 
 
+RESIDUE: Final = 1e-9
+"""The share count under which what a split leaves is float noise rather than a fraction."""
+
+EXACT: Final = Decimal("1e-9")
+"""What a split's product of shares and ratio is rounded to before it is floored: the ratio
+is a float, so a one-for-twelve reverse split times 1,200 shares is 99.999999999999996 and
+not the 100 the issuer delivers."""
+
+
 def quantity_after(signed_qty: float, ratio: float, lot: float) -> float:
     """The signed quantity a position holds after a split, floored onto the lot size.
 
     A share count is not divisible: 1,005 shares through a one-for-ten reverse split is
-    100 whole shares and a half-share the issuer pays out in cash. kanso holds no cash for
-    it — the schedule carries none — so the residue is dropped and shows up in the equity
-    curve as the small loss it is.
+    100 whole shares and a half-share the issuer pays out in cash (`in_lieu`).
     """
     step = Decimal(str(lot))
-    scaled = Decimal(repr(abs(signed_qty))) * Decimal(repr(ratio))
+    scaled = (Decimal(repr(abs(signed_qty))) * Decimal(repr(ratio))).quantize(EXACT)
     units = (scaled / step).to_integral_value(rounding=ROUND_FLOOR) * step
     return float(units) * (1.0 if signed_qty > 0 else -1.0)
 
 
-def apply_to(position: Any, split: Split, lot: float, ts_ns: int) -> Any:
-    """Adjust one open position for this split, and hand back the event it applied.
+def in_lieu(signed_qty: float, ratio: float, lot: float, price: float, multiplier: float) -> float:
+    """The cash a split pays for the shares it leaves short of a whole lot, signed.
+
+    Valued at `price`, the last price in the old share count: 1,005 shares at ten through a
+    one-for-ten reverse split keep 100 new shares and are paid five old shares' worth, 50.
+    A long position is paid; a short one pays, since it owes the fraction it cannot deliver.
+    """
+    target = quantity_after(signed_qty, ratio, lot)
+    left = Decimal(repr(signed_qty)) - Decimal(repr(target)) / Decimal(repr(ratio))
+    return float(left.quantize(EXACT)) * price * multiplier
+
+
+def apply_to(
+    position: Any, split: Split, lot: float, ts_ns: int, price: float, multiplier: float = 1.0
+) -> Any:
+    """Adjust one open position for this split, pay out the fraction it leaves, and hand
+    back the event it applied.
 
     The target quantity is computed here rather than left to the engine, which rounds a
     `quantity_change` to the instrument's size precision half-to-even: 1,005 shares through
     a one-for-ten reverse split would become 100 by rounding rather than by the flooring a
-    fractional-share cash-out actually is.
+    fractional-share cash-out actually is. What the flooring leaves is valued at `price` —
+    the last price in the old share count — and carried on the event as its `pnl_change`,
+    where the runner's extraction and the harness read it; a position under one new lot is
+    paid out whole and left flat.
     """
     from nautilus_trader.core.uuid import UUID4
     from nautilus_trader.model.enums import PositionAdjustmentType
     from nautilus_trader.model.events import PositionAdjusted
+    from nautilus_trader.model.objects import Money
 
-    target = quantity_after(position.signed_qty, split.ratio, lot)
-    if target == 0.0:
-        raise PreconditionError(
-            f"split: {position.instrument_id} holds {position.quantity} on {split.ex_date}, "
-            f"and a ratio of {split.ratio} leaves less than one lot of it; kanso applies a "
-            f"split as a quantity change and holds no cash to pay a position out in lieu",
-            remedy=(
-                "raise risk_limits.max_position_pct so a position survives the split, or "
-                f"drop {position.instrument_id} from a universe whose window spans "
-                f"{split.ex_date}"
-            ),
-        )
+    signed = float(position.signed_qty)
+    target = quantity_after(signed, split.ratio, lot)
+    paid = in_lieu(signed, split.ratio, lot, price, multiplier)
     event = PositionAdjusted(
         trader_id=position.trader_id,
         strategy_id=position.strategy_id,
@@ -328,8 +363,8 @@ def apply_to(position: Any, split: Split, lot: float, ts_ns: int) -> Any:
         position_id=position.id,
         account_id=position.account_id,
         adjustment_type=PositionAdjustmentType.COMMISSION,
-        quantity_change=Decimal(repr(target - position.signed_qty)),
-        pnl_change=None,
+        quantity_change=Decimal(repr(target - signed)),
+        pnl_change=Money(paid, position.settlement_currency) if paid else None,
         reason=REASON,
         event_id=UUID4(),
         ts_event=ts_ns,
@@ -359,13 +394,17 @@ class Move:
     """One thing that happened to a position: a fill, or a split's quantity change.
 
     A fill carries a side and a price; an adjustment carries neither, and its `qty` is the
-    signed change the engine applied. Both are flat tuples rather than engine objects, so
-    the arithmetic below is a pure function anyone can call with numbers.
+    signed change the engine applied. An adjustment also carries the split's `ratio` when
+    the instrument's schedule names it, and the `cash` the split paid for the fraction it
+    left (`in_lieu`). All are flat tuples rather than engine objects, so the arithmetic below
+    is a pure function anyone can call with numbers.
     """
 
     ts_ns: int
     qty: float
     px: float | None = None
+    ratio: float | None = None
+    cash: float = 0.0
 
     @property
     def is_fill(self) -> bool:
@@ -410,6 +449,12 @@ def ledger(moves: Iterable[Move], multiplier: float = 1.0) -> Ledger:
     — which is what lets one implementation serve a position that saw a split and one that
     did not.
 
+    The fraction a split pays out in lieu is realised at the split, like a close: against
+    the basis rescaled by the split's own ratio, at the price the payment implies. When the
+    ratio is not known the rescale is the floored count's, which leaves the fraction's cost
+    in the shares still held; the payment is then realised whole, so the position's total is
+    the same either way once it closes, and one paid out to flat realises its whole book.
+
     Commissions are not in `realized`, and are not missing from it: the simulated venue is
     cost-neutral, because kanso's resolved instruments carry a zero maker and taker rate,
     and cost is applied once per fill in the runner's extraction. Reading the fills rather
@@ -428,9 +473,21 @@ def ledger(moves: Iterable[Move], multiplier: float = 1.0) -> Ledger:
     for move in sorted(moves, key=lambda item: (item.ts_ns, item.is_fill)):
         if not move.is_fill:
             moved = running + move.qty
-            scale = 1.0 if running == 0.0 or moved == 0.0 else moved / running
-            basis /= scale
-            factor *= scale
+            if move.ratio is not None and running != 0.0:
+                residue = running * move.ratio - moved
+                basis /= move.ratio
+                factor *= move.ratio
+                if abs(residue) > RESIDUE:
+                    realized += move.cash - residue * basis * multiplier
+                    close_value += abs(move.cash) / multiplier
+                    close_units += abs(residue) / factor
+            elif moved == 0.0:
+                realized += move.cash - running * basis * multiplier
+            else:
+                realized += move.cash
+                scale = 1.0 if running == 0.0 else moved / running
+                basis /= scale
+                factor *= scale
             running = moved
         else:
             price = move.px or 0.0
@@ -461,8 +518,13 @@ def ledger(moves: Iterable[Move], multiplier: float = 1.0) -> Ledger:
     )
 
 
-def moves_of(position: Any) -> tuple[Move, ...]:
-    """One position's fills and split adjustments, as the flat moves `ledger` replays."""
+def moves_of(position: Any, schedule: Sequence[Split] = ()) -> tuple[Move, ...]:
+    """One position's fills and split adjustments, as the flat moves `ledger` replays.
+
+    An adjustment is matched to the split it applied through `schedule`: the latest one
+    effective at or before it, since the venue applies each split at the first point after
+    its instant. It carries that split's ratio and the cash its event paid in lieu.
+    """
     from nautilus_trader.model.enums import OrderSide
 
     made = [
@@ -473,10 +535,18 @@ def moves_of(position: Any) -> tuple[Move, ...]:
         )
         for fill in position.events
     ]
-    made.extend(
-        Move(ts_ns=int(event.ts_event), qty=float(event.quantity_change))
-        for event in position.adjustments
-    )
+    ordered = sorted(schedule, key=lambda split: split.effective_ns)
+    for event in position.adjustments:
+        ts = int(event.ts_event)
+        applied = [split.ratio for split in ordered if split.effective_ns <= ts]
+        made.append(
+            Move(
+                ts_ns=ts,
+                qty=float(event.quantity_change),
+                ratio=applied[-1] if applied else None,
+                cash=0.0 if event.pnl_change is None else event.pnl_change.as_double(),
+            )
+        )
     return tuple(made)
 
 
