@@ -19,7 +19,7 @@ from typer.testing import CliRunner
 from kanso.errors import Exit
 
 from . import mocked
-from .conftest import HYP_ID, at, payload
+from .conftest import HYP_ID, at, edit, payload
 
 
 @pytest.fixture
@@ -27,6 +27,7 @@ def escalated(runner: CliRunner, mocked_ws: Path) -> Path:
     """A workspace with one unread escalation: a run that stopped testing its thesis."""
     mocked.scripted(mocked_ws, align_check=[mocked.DRIFTED])
     assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
+    edit(mocked_ws, mocked.EDITED)
     assert at(runner, mocked_ws, "align", "check", HYP_ID).exit_code == Exit.OK
     return mocked_ws
 

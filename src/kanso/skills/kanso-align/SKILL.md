@@ -9,7 +9,7 @@ metadata:
 # kanso-align
 
 ## Steps
-1. `kanso align check <id> --json` → `{aligned, reason}`. Deterministic checks (universe, resolution, data types) run first; the model is consulted only if they pass.
+1. `kanso align check <id> --json` → `{aligned, reason}`. Deterministic checks (universe, resolution, data types) run first; the model is consulted only if they pass and the lane holds bytes nothing has answered for. The run's base is never judged, and neither is the file the last check left the lane on: a lane on either reports `aligned` with no model call and no escalation.
 2. Aligned → say so in one line. Drifted → report `reason` and what kanso did: restored the lane directory's `strategy.py` from the last aligned keep's snapshot, re-pointed `best_sha` to it (and rewrote `hypotheses/<id>/strategy.py`), reset `best_metric`, flagged the drifted cards, wrote an inbox entry, and continued researching.
 3. If the operator wants the drifted direction, it is a **new hypothesis** (skill `kanso-hypothesis`), never an edit to this one. Then `kanso inbox ack <entry-id>`.
 

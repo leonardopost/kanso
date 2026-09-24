@@ -3,7 +3,9 @@
 The driver runs this check on a clock; this command runs the same one on demand, which is
 what an operator reaches for after editing the lane's `strategy.py` by hand. The
 deterministic checks come first and the model is asked only when they pass, so a drift the
-syntax tree can prove costs nothing.
+syntax tree can prove costs nothing. Nor is the model asked about a lane still on the run's
+base, which no check judges, or on the bytes the last check left it on, which one already
+has: the command reports it aligned, and the check is recorded.
 
 Drift is not an error, so it is not an error exit either. A check that finds the run has
 wandered has already rewound it — the lane copy is back on the last aligned keep, `best`

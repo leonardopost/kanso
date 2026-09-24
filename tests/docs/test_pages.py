@@ -95,6 +95,19 @@ def test_both_pages_say_a_lane_writes_no_log_of_its_own() -> None:
         assert "`events` table" in text, name
 
 
+def test_both_pages_say_the_run_s_base_is_never_judged() -> None:
+    """A model asked about the bytes a run was handed judged a seed nobody proposed, and
+    each drift it reported "rewound" a run onto the bytes it was already on."""
+    row = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso align check")
+    )
+    assert "The run's base is never judged" in row
+    assert "Nor is the file the last check left the lane on" in row
+    alignment = prose(section(page("concepts.md"), "Alignment"))
+    assert "The run's base is never judged" in alignment
+    assert "Nor is the file the last check left the lane on judged again" in alignment
+
+
 def test_the_workspace_page_lists_every_section_the_parser_declares() -> None:
     toml = section(page("workspace.md"), "`kanso.toml`")
     for name in Config.model_fields:

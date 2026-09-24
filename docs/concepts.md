@@ -563,6 +563,52 @@ card, which may have been thrown away.
 The first keep has nothing to beat: with no `best`, passing every constraint is the whole
 rule.
 
+## Alignment
+
+A run optimises a number, and the cheapest way to move a number is often to stop testing
+the hypothesis: trade an instrument outside the universe, read a finer bar than the idea is
+about, exploit something the thesis never claimed. None of that breaks `strategy_integrity`
+— the code is well-behaved, it answers a different question — so it is checked separately:
+every `[research] align_every` cards, and whenever `kanso align check ID` asks.
+
+The syntax tree is read first. An instrument literal outside `universe`, a bar whose step or
+aggregation is not `resolution`, and a subscription or handler for a type outside
+`data_requirements` are facts about the file, stated rather than judged, and they cost
+nothing. Only a file that passes them is shown to a model — the `align_check` task class —
+with the thesis, the file and the diff since the last check.
+
+A drift is rewound rather than stopped: research is indefinite, and stopping it on a
+judgement call would hand the model a veto. The lane and `best` go back to the newest keep of
+the run that no check has marked drifted, else to the run's base; the cards since the last
+check are marked not aligned, so no rewind or re-seed starts from them; the reason reaches
+the run's next proposals; and a `misaligned` escalation tells you. The run carries on from
+ground that was checked.
+
+**The run's base is never judged.** A check judges what the loop proposed, and no model
+proposed the bytes a run was handed — the workspace `strategy.py`, or a keep an earlier run
+made. No rewind can go behind them either, so a verdict against them moves nothing. Asked
+anyway, once every proposal since the last check had failed to keep and the lane had been
+restored to its base, a model judged a deliberately simple reference seed against a thesis
+describing what the search was for, and the run was "rewound" onto the bytes it was already
+on: the cards since the check marked, the proposer told the run had been rewound, an
+escalation raised, and not one byte moved. Observed in a live workspace on 2026-09-24: ten
+`misaligned` escalations in an hour and three quarters across four lanes, every one rewound
+to its own run's base, for reasons such as "Fixed-clock baseline, not signal-driven". A
+check that finds the lane on its base asks no model and raises nothing. It is recorded as an
+`aligned` event, so the next check differences from there, and every card keeps the mark it
+had — the baseline card among them, which no check has ever marked.
+
+Nor is the file the last check left the lane on judged again, whether the check passed it or
+rewound to it. A keep moves the lane to new bytes, and every card after it that does not keep
+restores the lane to that keep, so the loop is back on that file only when nothing has kept
+since; its answer is on record, and a drift verdict could only rewind the lane to where it
+already stands.
+
+The syntax tree still reads both. What it finds is a fact about the bytes rather than an
+opinion of them, and a check that answered `aligned` for a file that names an instrument
+outside the universe would assert what the tree disproves, whoever wrote the file — so a
+base that fails it is reported as drift whenever a check finds the lane on it.
+
 ## The embargo
 
 The certification window is the data that judges a strategy, so the loop that writes the

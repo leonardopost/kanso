@@ -20,13 +20,35 @@ other half of the check and costs a call. A literal the checks cannot read — a
 built at runtime, a step read from the config — is not evidence of drift and is passed
 over: this is a detector of stated intent, not a proof of its absence.
 
-`check` is the whole check: the syntax tree first, the model only if it passed, and the
-recovery if either says no. Recovery is the point. A drifted run is not stopped — research
-is indefinite and stopping it on a judgement call would hand the model a veto — it is
-*rewound*: the lane copy and `best` go back to the last keep this run made while it was
-still aligned, or to the bytes the run began with when it made none, the cards since the
-last check are marked not aligned so no later reader trusts them, and the operator is told.
-The run then carries on from ground that was checked.
+`check` is the whole check: the syntax tree first, the model only if it passed and the lane
+holds something to judge, and the recovery if either says no. Recovery is the point. A
+drifted run is not stopped — research is indefinite and stopping it on a judgement call
+would hand the model a veto — it is *rewound*: the lane copy and `best` go back to the last
+keep this run made while it was still aligned, or to the bytes the run began with when it
+made none, the cards since the last check are marked not aligned so no later reader trusts
+them, and the operator is told. The run then carries on from ground that was checked.
+
+A check judges what the loop proposed, so the model is never asked about the run's base.
+No model proposed the bytes a run was handed — the workspace `strategy.py`, or a keep an
+earlier run made — and no rewind can go behind them, so a verdict against them moves
+nothing. Asked anyway, once every proposal since the last check had failed to keep and the
+lane had been restored to its base, a model judged a deliberately simple reference seed
+against a thesis that describes what the search is for, and the recovery "rewound" the run
+to the bytes it was already on: it marked the cards since the last check, told the proposer
+the run had been rewound, and escalated, and not one byte moved. The same is true of the
+bytes the last check left the lane on, the file it passed or the file it rewound to. The
+loop's lane is back on them only when nothing has kept since — a keep moves the lane to new
+bytes, and every card after it that does not keep restores the lane to that keep — so their
+answer is already on record, and a drift verdict could only rewind the lane to where it
+stands. A lane on either is not put to the model and raises nothing: the check is recorded
+as an `aligned` event, so `checkpoint` advances and the next check differences from here,
+and every card keeps the mark it had, since nothing judged it.
+
+The syntax tree still reads both. What it finds is a fact about the bytes rather than an
+opinion of them: it costs nothing, it says the same thing every time it is asked, and a
+check that answered `aligned` for a file whose tree names an instrument outside the universe
+would assert what the tree disproves, whoever wrote the file. So a base that fails it is
+reported as drift whenever a check finds the lane on it, as any other file that fails it is.
 """
 
 from __future__ import annotations
@@ -306,10 +328,12 @@ def check(
 ) -> tuple[bool, str | None]:
     """Check the active run's `strategy.py` against its thesis, and rewind it on drift.
 
-    The deterministic checks run first and the model is asked only when they pass, so a
-    drift the syntax tree can prove costs nothing. Either way the cards since the last
-    check are marked with the verdict, the verdict is an event, and a drift also reverts
-    the lane copy, re-points `best`, rewrites the workspace copy and escalates.
+    The deterministic checks run first, whatever the lane holds, so a drift the syntax
+    tree can prove costs nothing. The model is asked only when they pass and the lane holds
+    bytes nothing has answered for — neither the run's base nor the bytes the last check
+    left it on; a lane on either is recorded as checked and nothing more. A verdict marks
+    the cards since the last check and is an event, and a drift also reverts the lane
+    copy, re-points `best`, rewrites the workspace copy and escalates.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     hyp = parse_yaml(
@@ -317,19 +341,19 @@ def check(
     )
     directory = ws.root / run.dir
     source = lane_strategy(store, run, directory)
+    sha = sha256(source).hexdigest()
     mark = checkpoint(store, run)
     counted = _card_count(store, run)
     ok, reason = align_static(hyp, source)
-    if ok:
+    asked = ok and sha not in (run.base_sha, mark.sha)
+    if asked:
         ok, reason = _ask(ws, store, hyp, source, mark, lane)
-    _mark(store, run, mark.cards, aligned=ok)
     if ok:
-        store.event(
-            ALIGNED,
-            hyp_id,
-            {"run_id": run.run_id, "cards": counted, "sha": sha256(source).hexdigest()},
-        )
+        if asked:
+            _mark(store, run, mark.cards, aligned=True)
+        store.event(ALIGNED, hyp_id, {"run_id": run.run_id, "cards": counted, "sha": sha})
         return True, None
+    _mark(store, run, mark.cards, aligned=False)
     restored = _revert(ws, store, run, directory)
     store.event(
         DRIFTED,

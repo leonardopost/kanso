@@ -55,6 +55,14 @@ def test_the_release_skill_names_a_migration_fixture_that_exists() -> None:
         assert (ROOT / path).is_file(), path
 
 
+def test_the_align_skill_says_the_run_s_base_is_never_judged() -> None:
+    """This file ships into every workspace, and it is what an agent reads to explain a
+    `misaligned` entry. Told only that the model is asked once the syntax tree passes, an
+    agent would take a check of a run still on its base for a verdict on it."""
+    text = skill(PACKAGED, "kanso-align")
+    assert "The run's base is never judged" in text
+
+
 def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
     """This file ships into every workspace on `kanso init` and `kanso skills sync`, so a
     status it omits is one an operator meets in `results.tsv` with nothing to read. It
