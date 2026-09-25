@@ -148,7 +148,10 @@ otherwise.
 
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
-before every card, and the first two are compared against the blobs the run pinned.
+before every card, and the first two are compared against the blobs the run pinned. The one
+thing kanso writes beside them is `.card/`, the directory a card's points travel to its
+child through, which exists while the card runs and is emptied by the next card when a
+killed lane left it behind.
 
 A lane writes no log of its own. What a run did — every card, its metric, its verdict and
 each change of status — is recorded in `state.db`, as the card rows and the `events` table

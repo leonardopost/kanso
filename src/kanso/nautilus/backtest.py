@@ -80,10 +80,10 @@ import os
 import pickle
 import random
 import resource
+import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
@@ -190,6 +190,13 @@ so a stop costs the card in flight and never leaves it running unbudgeted. Once 
 no card is started at all: `run_subprocess` refuses before it reads the window and again
 before it spawns.
 """
+
+CARD_ROOM: Final = ".card"
+"""The directory inside a lane a card's payload, report and stream travel through. A dot
+directory, so the scope check a card passes before it runs ignores it."""
+
+REQUEST_FILE: Final = "request.pkl"
+RESULT_FILE: Final = "result.pkl"
 
 PARENT_POLL_S: Final = 0.5
 """How often a card asks whether the process that started it is still its parent."""
@@ -1459,6 +1466,13 @@ def run_subprocess(
     class found under the name it was pickled by (`main`). They travel in the payload, not
     the environment: the child is handed where an extension lives, never the catalog, and
     still inherits no credential.
+
+    The payload is written to `<workdir>/.card/`, the lane's own transfer directory, as two
+    pickles in sequence on one file — the extensions, then the request and its points — so
+    the points are streamed to disk once rather than held a second time as bytes. The
+    directory is emptied before the card and removed after it, so a lane killed mid-card
+    leaves at most one payload behind, and its next card reclaims it: a payload is the whole
+    window's points, hundreds of megabytes for a window of minute bars.
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -1474,24 +1488,31 @@ def run_subprocess(
     # In the parent, where a refusal is a refusal: the child is a card, and an exception
     # inside one is a crash the run records rather than a message the operator reads.
     splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
-    payload = pickle.dumps(
-        {
-            "extensions": [list(source) for source in extensions],
-            "run": pickle.dumps(
-                {
-                    "request": request.plain(),
-                    "instruments": list(instruments),
-                    "groups": list(groups),
-                },
+    room = _card_room(workdir)
+    try:
+        with (room / REQUEST_FILE).open("wb") as handle:
+            pickle.dump(
+                {"extensions": [list(source) for source in extensions]},
+                handle,
                 protocol=pickle.HIGHEST_PROTOCOL,
-            ),
-        },
-        protocol=pickle.HIGHEST_PROTOCOL,
-    )
-    with tempfile.TemporaryDirectory(prefix="kanso-card-") as transfer:
-        room = Path(transfer)
-        (room / "request.pkl").write_bytes(payload)
+            )
+            pickle.dump(
+                {"request": request.plain(), "instruments": instruments, "groups": groups},
+                handle,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
         return _supervised(request, room, workdir)
+    finally:
+        shutil.rmtree(room, ignore_errors=True)
+
+
+def _card_room(workdir: Path) -> Path:
+    """The lane's one transfer directory, emptied for the card about to use it: whatever a
+    card killed with its lane left there is reclaimed here, and nothing accumulates."""
+    room = workdir / CARD_ROOM
+    shutil.rmtree(room, ignore_errors=True)
+    room.mkdir()
+    return room
 
 
 def child_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -1518,7 +1539,7 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
     longer its parent (`_end_with`): it leads its own session, so a lane killed outright
     cannot take it down, and without that it would run on with nobody watching its budget.
     """
-    result_path = room / "result.pkl"
+    result_path = room / RESULT_FILE
     _refuse_if_interrupted()
     started = time.monotonic()
     with (room / "stderr.txt").open("wb") as errors:
@@ -1527,7 +1548,7 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
                 sys.executable,
                 "-c",
                 _BOOTSTRAP,
-                str(room / "request.pkl"),
+                str(room / REQUEST_FILE),
                 str(result_path),
                 str(os.getpid()),
             ],
@@ -1723,11 +1744,11 @@ def main(argv: Sequence[str]) -> int:
     The third argument is the pid of the process that started the card, which it outlives
     by at most `PARENT_POLL_S` (`_end_with`).
 
-    The payload is read in two layers. The outer one names the workspace extensions the
-    parent imported, and they are imported here before the inner one — the request and its
-    points — is unpickled, because a point of an extension's custom type is an instance of a
-    class that exists only once its module has been imported, under the name it was pickled
-    by.
+    The payload is two pickles in sequence on one file. The first names the workspace
+    extensions the parent imported, and they are imported here before the second — the
+    request and its points — is unpickled, because a point of an extension's custom type is
+    an instance of a class that exists only once its module has been imported, under the name
+    it was pickled by.
     """
     from kanso.ext import reimport
 
@@ -1735,9 +1756,10 @@ def main(argv: Sequence[str]) -> int:
     threading.Thread(
         target=_end_with, args=(int(argv[2]),), name="kanso-card-parent", daemon=True
     ).start()
-    handed = pickle.loads(request_path.read_bytes())
-    reimport((str(directory), str(name)) for directory, name in handed["extensions"])
-    payload = pickle.loads(handed["run"])
+    with request_path.open("rb") as handle:
+        handed = pickle.load(handle)
+        reimport((str(directory), str(name)) for directory, name in handed["extensions"])
+        payload = pickle.load(handle)
     try:
         result = execute(payload["request"], payload["instruments"], payload["groups"])
     except SizingError as refused:

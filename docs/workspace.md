@@ -843,10 +843,18 @@ prune.
 The lane directories, and the only place research edits anything.
 
 ```
-runs/<lane>/<hyp>/   hypothesis.yaml, program.md, strategy.py — and nothing else
-runs/daemon.pid      the supervisor's pid, and its lock
-runs/daemon.log      whatever the daemon and its children write to a stream
+runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
+runs/<lane>/<hyp>/.card/   a card's payload, report and output, only while the card runs
+runs/daemon.pid            the supervisor's pid, and its lock
+runs/daemon.log            whatever the daemon and its children write to a stream
 ```
+
+`.card/` is how a card's points reach the child that runs it: the lane writes the window's
+points there, the card writes back what it measured, and the lane removes the directory once
+it has read it. A lane killed in the middle of a card leaves that one payload behind — it can
+be hundreds of megabytes for a window of minute bars — and the lane's next card empties the
+directory before it writes, so a lane never holds more than one. The scope check a card
+passes ignores it, as it ignores every dot-file.
 
 A lane writes no log of its own, and no file under `runs/` records what a run did. The
 record of a run is in `state.db` — the run row, every card with its metric and verdict, and
@@ -857,8 +865,9 @@ supervisor and every lane it spawns share, for whatever they print; it is not st
 not per lane.
 
 `kanso research begin` prints the lane directory, copies the three scoped files into it and
-pins them. Exactly those three files are there; a card runs in a subprocess with its cwd set
-to that directory, and lanes never share files. **One active run per hypothesis:**
+pins them. Exactly those three files are there, and `.card/` beside them while a card runs;
+a card runs in a subprocess with its cwd set to that directory, and lanes never share files.
+**One active run per hypothesis:**
 
 ```
 error: demo_mr already has an active run (d7220ee4…)
