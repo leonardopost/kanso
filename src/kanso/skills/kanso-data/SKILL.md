@@ -30,6 +30,7 @@ A hypothesis's `universe` is a list of plain ids. kanso turns each into a Nautil
        columns: {ts_event: timestamp, open: o, high: h, low: l, close: c, volume: v}
        adjusted: false
    ```
+   A trade file maps `ts_event`, `price` and `size`, and `aggressor_side` (`buyer|seller|none`) and `trade_id` where the file records them. Map `aggressor_side` only to a column that holds the side: left unmapped, every print is loaded with no aggressor, never a guessed one, because the simulated venue lets a print reach a resting order only from the side that can trade with it (a buyer's print never fills a resting buy beneath it).
    Synthetic data for tests/demos: `loader: synthetic`, `model: ou|gbm`, `seed`, `start`, `end`, `resolution`, `instruments`, `venue`.
 2. `kanso data load --loader csv_parquet --spec <file>` → writes the dataset to the catalog and its manifest under `catalog/manifests/`. A load overlapping data already held is refused (exit 2); `--replace` deletes and rewrites the overlapped span, and is refused outright where a snapshot pins it.
 3. `kanso data backfill --loader <id> --spec <file>` → fills history back to the source's earliest servable date and closes any gaps. Run `--dry-run` first and report the chunk count and estimated bytes to the operator before a large pull. It is resumable and idempotent, so an interrupt is safe and a re-run costs nothing; never restart one by hand from the beginning. Reaching the source's history floor ends it normally, and the reported floor is the answer to "why does my data start there".

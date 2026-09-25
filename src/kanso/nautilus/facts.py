@@ -243,6 +243,14 @@ the buy under either probability, because the buy's own side is not at its price
 only a market locked at 9.50 leaves it to the model. At zero or one the model draws
 no random number, so `limit_fill` is deterministic either way.
 
+**A print reaches a resting order only from the side that can trade with it.**
+`process_trade_tick` moves only the ask down for a seller's print, only the bid up for
+a buyer's, and both sides to the print for one with no aggressor. Measured, the same buy
+at 9.50 against a print at 9.49: a seller's print, or one with no aggressor, fills it at
+9.50; a buyer's never does, at any probability. A bar's own prints carry no such label —
+the engine walks them as book updates — so this bites only on trade data, which is why
+a trade file that records no side is loaded as `NO_AGGRESSOR` and never given one.
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -643,11 +651,12 @@ def _minute_type() -> Any:
     )
 
 
-def _limit_points(kind: str, *prices: float) -> list[object]:
+def _limit_points(kind: str, *prices: float, side: Any = None) -> list[object]:
     """A market at 10.00 for an order to rest against, then one point per price.
 
     A bar is flat at 10.00 but for its low, or its high when the price is above ten; a
-    print is at the price; a quote takes the prices two at a time, as a bid and an ask.
+    print is at the price, a seller's below ten and a buyer's above unless `side` names its
+    aggressor; a quote takes the prices two at a time, as a bid and an ask.
     """
     from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
     from nautilus_trader.model.enums import AggressorSide
@@ -674,6 +683,8 @@ def _limit_points(kind: str, *prices: float) -> list[object]:
         ts = (index + 1) * _MINUTE_NS
         if kind == "trade":
             aggressor = AggressorSide.SELLER if price < 10.0 else AggressorSide.BUYER
+            if index and side is not None:
+                aggressor = side
             made.append(
                 TradeTick(
                     instrument_id,
@@ -811,6 +822,27 @@ def _check_a_touched_limit_is_the_fill_models_to_fill() -> tuple[bool, str]:
         + "; ".join(seen)
         + ". A limit the market only reaches is the fill model's to fill, and one it goes "
         "beyond fills at its own price as a maker whatever the model says"
+    )
+
+
+def _check_a_buyer_s_print_never_reaches_a_resting_buy() -> tuple[bool, str]:
+    """What a trade file's aggressor column decides: a buyer's print moves only the bid, so
+    a resting buy beneath it is never reached; a seller's print, and one with no aggressor,
+    move the ask down to the print and fill it."""
+    from nautilus_trader.model.enums import AggressorSide, aggressor_side_to_str
+
+    seen = {
+        aggressor_side_to_str(side): _probe_resting_limit(
+            1.0, _limit_points("trade", 9.49, side=side), "BUY"
+        )
+        for side in (AggressorSide.BUYER, AggressorSide.SELLER, AggressorSide.NO_AGGRESSOR)
+    }
+    filled = [(10.0, 9.5, "MAKER")]
+    holds = seen == {"BUYER": [], "SELLER": filled, "NO_AGGRESSOR": filled}
+    return holds, (
+        f"a buy at 9.50 resting against a print at 10.00, then a print at 9.49 by each "
+        f"aggressor, filled: {seen}. A buyer's print moves only the bid up, so it never reaches "
+        "a resting buy; a seller's or no one's moves the ask down to it"
     )
 
 
@@ -2292,6 +2324,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a quote reaching a resting limit from the far side of the book fills it whatever "
         "prob_fill_on_limit is",
         _check_a_quote_reaching_a_limit_from_the_far_side_fills_it,
+    ),
+    (
+        "a buyer's print never reaches a resting buy beneath it, where a seller's print or one "
+        "with no aggressor does",
+        _check_a_buyer_s_print_never_reaches_a_resting_buy,
     ),
     (
         "closing a position costs the same whatever was closed before it",

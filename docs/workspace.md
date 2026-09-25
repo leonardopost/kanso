@@ -493,7 +493,9 @@ costs:
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
 price — a bar whose low is the limit, or a print at it. Under `through` the market has to go
 beyond it: a low one tick under the buy, a high one tick over the sell, or a print past
-either, and the order then fills at its own price. It is deterministic either way — the
+either, and the order then fills at its own price. A print counts only from the side that
+can trade with the order — a seller's print or one with no aggressor for a buy, never a
+buyer's (`docs/concepts.md`, Delivery). It is deterministic either way — the
 venue's fill model is asked with a probability of exactly one or exactly zero and draws
 nothing — and it reaches every run of the hypothesis alike: a card, a certificate, a replay
 on either code path and a stage, whose simulated exchange is built from the same venue

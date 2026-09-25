@@ -15,6 +15,16 @@ Numeric timestamps are read only when the spec declares their unit, because seco
 milliseconds and nanoseconds are indistinguishable in a column of integers for any epoch
 a workspace cares about.
 
+**A side a file does not record is no side.** A trade file that maps no `aggressor_side`
+column is loaded with every print `NO_AGGRESSOR`, never a guess. A fabricated aggressor
+would flow into every statistic that reads one, and into matching: under nautilus_trader
+1.231.0 a seller's print moves only the simulated ask down, a buyer's only the bid up, and
+one with no aggressor moves both sides to the print (`kanso.nautilus.facts`), so a print
+labelled a buyer's never reaches a resting buy beneath it. Measured on an operator's
+closing-auction prints loaded without the column, when this loader called every such print
+a buyer's: 98 limit-on-close buys resting under them, 0 filled; the same files with the
+side mapped as `none`, all 98 filled at their limits.
+
 Availability follows the same rule as every other loader with no adapter behind it: a
 file is `realtime` and `ts_init == ts_event` unless the spec maps a `ts_init` column. A
 spec that declares `publication: delayed` must map one and must name the publication
@@ -45,6 +55,7 @@ from pathlib import Path
 from typing import ClassVar, Final, Literal
 from zoneinfo import ZoneInfo
 
+from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import InstrumentId
 from pydantic import Field, model_validator
 
@@ -470,9 +481,9 @@ def _build_trade(
     ts_event: int,
     ts_init: int,
 ) -> object:
-    side = "buyer"
+    side = AggressorSide.NO_AGGRESSOR
     if "aggressor_side" in columns:
-        side = str(_cell(row, columns["aggressor_side"], entry))
+        side = aggressor(str(_cell(row, columns["aggressor_side"], entry)))
     trade_id = f"{entry.instrument}-{ts_event}"
     if "trade_id" in columns:
         trade_id = str(_cell(row, columns["trade_id"], entry))
@@ -480,7 +491,7 @@ def _build_trade(
         instrument_id(entry.instrument, entry.venue),
         _ticks(_cell(row, columns["price"], entry), entry.price_precision, entry, "price"),
         _ticks(_cell(row, columns["size"], entry), entry.size_precision, entry, "size"),
-        aggressor(side),
+        side,
         trade_id,
         entry.price_precision,
         entry.size_precision,

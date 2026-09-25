@@ -733,6 +733,14 @@ fills it under either. Both code paths build their venue from the same configura
 card and a stage fill the same resting orders, and the rule draws no random number, so they
 fill them the same way every time.
 
+A trade print reaches a resting order only from the side that can trade with it: the engine
+moves only the ask down for a seller's print and only the bid up for a buyer's, so a
+buyer's print below a resting buy never fills it, while a seller's print or one with no
+aggressor does. What side a print carries is therefore a fact about the data, and a trade
+file that records none is loaded with no aggressor rather than a guessed one
+(`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
+unfilled.
+
 **A fill that rested can be charged as one.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
 the venue reported the fill as a maker's, in which case it pays exactly that and nothing
