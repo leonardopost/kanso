@@ -187,6 +187,22 @@ a run is pinned. The store is resolved before it is frozen: a snapshot over inst
 is refused while the store holds no definition, since the checksum of nothing pins nothing a
 run could use.
 
+**Covers** is counted in whole UTC days, from the spans the datasets **served** — never from
+what was asked of the source — and from one thing more: the days between two served spans
+of a series that its source was asked for and answered with nothing. A chunked backfill
+whose chunk edge falls on a weekend or a holiday is served up to the session before the edge
+and from the session after it, so the series comes back in pieces although no session is
+missing. kanso keeps no trading calendar to call those days closed, so it counts the
+source's own answer: `data backfill` asks for every gap again, and a gap answered empty is
+closed by the answer. An answer never reaches before a series' first served day or past its
+last — a month asked before an instrument listed is not coverage — and a day of a gap nobody
+answered stays a hole, so a chunk that served data and stopped short leaves the rest a gap
+until it is asked for again. What this cannot tell apart is a weekday the source holds
+nothing for and a holiday: asked alone, both come back empty, and both are counted.
+`kanso data show` lists every range answered empty, so the difference can be read against
+the venue's calendar. The answers live in `state.db` rather than in the snapshot, so a
+snapshot taken before a gap was asked for covers once the source has answered it.
+
 ## Card
 
 One experiment: store the lane's `strategy.py` as a blob under its sha256, run the backtest,
@@ -725,8 +741,9 @@ before one.
 
 You declare the splits an equity has been through in its own definition, as
 `override.info.splits` in `instruments.yaml` (`docs/workspace.md`). The **venue** applies
-them: on the first market point whose reference time reaches an ex-date, and one call
-before that point is matched against anything, the simulated exchange cancels every resting
+them: on the first market point stamped after the midnight that opens an ex-date where the
+instrument trades (`info.timezone`, or UTC when it names none), and one call before that
+point is matched against anything, the simulated exchange cancels every resting
 order in that instrument, rescales every open position, and resyncs the portfolio index
 behind the change.
 
@@ -748,10 +765,13 @@ numbers come from the fills and the adjustments instead.
 
 The card's own numbers come out of that: the equity curve folds the quantity change in at
 the ex-date, and a trade is measured in the shares it opened with — its size and `avg_open`
-are what was actually bought, `avg_close` is what came back per opening share, and the only
-profit or loss a split itself produces is the fractional residue a reverse split truncates
-away. A position too small to survive one — under a lot after the ratio — is refused rather
-than deleted, since kanso holds no cash to pay it out in lieu.
+are what was actually bought, `avg_close` is what came back per opening share, and a split
+itself produces no profit or loss. The shares a split leaves short of a whole lot are paid
+out in cash, as an issuer pays them, at the last price in the old count — the close before
+the ex-date: the venue writes the amount on the split's own adjustment, the extraction
+books it into cash at the split and into the trade the position closes as, and the harness
+books the same amount into `balance` when the venue announces the split, so the three read one
+number. A position under one new lot is paid out whole and closes at the split.
 
 **A window holding a split you have not declared is refused.** When the run's data carries a
 `corporate_action` point of kind `split` whose ex-date falls inside the window, and the

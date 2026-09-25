@@ -6,20 +6,29 @@ renders these records as one JSON object or as a few terse lines.
 
 Three verbs write data and they share one mechanism. `load` writes exactly the range its
 spec names. `backfill` walks history from the source's floor forward to what is already
-held, and `sync` walks from each dataset's served end towards now; both also close the
-gaps inside an existing span that `show` reports. Both are chunked, and the manifest each
-chunk writes is its checkpoint: an interrupted run resumes at the first chunk with no
-manifest, and a repeated run finds nothing missing and fetches nothing. A chunk a source
-serves nothing for leaves no manifest, so it is recorded in the event log instead and is
-not asked for twice.
+held, and asks again for exactly the days of every gap inside it that `show` reports;
+`sync` walks from each series' served end towards now, or from a named dataset's, which
+is how the dataset in front of a gap is extended on purpose. Both are chunked, and the
+manifest each chunk writes is its checkpoint: an interrupted run resumes at the first
+chunk with no manifest, and a repeated run finds nothing missing and fetches nothing. A
+chunk a source serves nothing for leaves no manifest, so it is recorded in the event log
+instead and is not asked for twice.
 
 A dataset a snapshot pins is immutable, which the catalog enforces at the write. Backfill
 and sync never rewrite one: a backfilled chunk covers days no held dataset covers, and a
 sync writes a successor dataset recording `supersedes`.
 
-Coverage is what was served. Every span here is the span a loader's points actually
-covered, never the span that was asked for, and the difference is reported rather than
-smoothed over.
+Coverage is what was served, and between two served spans of one series, what the source
+was asked for and answered with nothing. Every span here is the span a loader's points
+actually covered, never the span that was asked for, and the difference is reported rather
+than smoothed over. The empty answer is the one fact coverage takes from the event log: a
+chunk edge that falls on a weekend or a holiday leaves the served spans on either side a
+few days apart, and kanso keeps no calendar to call those days closed, so it counts the
+source's own answer for exactly those days. `kanso.data.manifest` states the rule — inside
+a series only, day by day, a truncated answer's missing days a hole until they are asked
+again — and its one blind spot: a trading day the source holds nothing for, asked alone,
+reads as closed. So `show` reports the served spans, every range answered empty between
+them, and the gaps, and a gap backfill asked for and was answered empty is no longer one.
 """
 
 from __future__ import annotations
@@ -40,7 +49,18 @@ from kanso.data import catalog, registry
 from kanso.data import instruments as reference
 from kanso.data import snapshot as snapshots
 from kanso.data.loader import DatasetRef, Loader, loaders
-from kanso.data.manifest import Manifest, data_path, manifests, merge
+from kanso.data.manifest import (
+    EMPTY_CHUNK,
+    Manifest,
+    answered,
+    answered_empty,
+    covered,
+    data_path,
+    holes,
+    manifests,
+    merge,
+    series_subject,
+)
 from kanso.data.snapshot import Snapshot
 from kanso.errors import PreconditionError, ValidationError
 
@@ -53,9 +73,6 @@ CHUNK_DAYS: Final = 30
 that a decade of history is hundreds of requests rather than thousands."""
 
 DAY: Final = timedelta(days=1)
-
-EMPTY_CHUNK: Final = "data_chunk_empty"
-"""The event kind recording a chunk a source served nothing for, so it is asked once."""
 
 LOADED: Final = "data_loaded"
 BACKFILLED: Final = "data_backfilled"
@@ -72,15 +89,19 @@ RESOLVED: Final = "instruments_resolved"
 class Series:
     """Every dataset the store holds for one instrument, type and resolution.
 
-    A series is what coverage is asked of: `research begin` pins a snapshot when the union
-    of a series' spans contains its windows, so the union and the holes in it are the two
-    facts `data show` exists to report.
+    A series is what coverage is asked of: `research begin` pins a snapshot when a
+    series' covered spans contain its windows. Every day from the first served to the last
+    is exactly one of three things, and they are what `data show` exists to report:
+    served (`spans`), asked for and answered empty (`empty`), or a hole (`gaps`).
+    `answers` is every range the series' source answered empty, wherever it fell, as the
+    event log recorded it; only the part of it between two served spans is ever counted.
     """
 
     instrument: str
     type: str
     resolution: str | None
     datasets: tuple[Manifest, ...]
+    answers: tuple[tuple[date, date], ...] = ()
 
     @property
     def spans(self) -> list[tuple[date, date]]:
@@ -88,12 +109,23 @@ class Series:
         return merge([manifest.span for manifest in self.datasets])
 
     @property
+    def empty(self) -> list[tuple[date, date]]:
+        """The days between two served spans that the source answered empty when asked."""
+        return answered(self.spans, self.answers)
+
+    @property
+    def coverage(self) -> list[tuple[date, date]]:
+        """The spans coverage counts: the served ones, joined across the `empty` days."""
+        return covered(self.spans, self.answers)
+
+    @property
     def gaps(self) -> list[tuple[date, date]]:
-        """The days between the first and the last served day that nothing serves."""
-        spans = self.spans
-        return [
-            (left[1] + DAY, right[0] - DAY) for left, right in zip(spans, spans[1:], strict=False)
-        ]
+        """The days between the first and the last served day that coverage does not count.
+
+        Nothing serves them and no answer closes them, so they are what a backfill asks for
+        again.
+        """
+        return holes(self.coverage)
 
     @property
     def rows(self) -> int:
@@ -107,13 +139,19 @@ class Series:
             "resolution": self.resolution,
             "rows": self.rows,
             "spans": [[str(start), str(end)] for start, end in self.spans],
+            "empty": [[str(start), str(end)] for start, end in self.empty],
             "gaps": [[str(start), str(end)] for start, end in self.gaps],
             "datasets": [_dataset_payload(manifest) for manifest in self.datasets],
         }
 
 
-def series(ws: Workspace) -> list[Series]:
-    """Every series the store holds, in instrument, type and resolution order."""
+def series(ws: Workspace, store: StateStore) -> list[Series]:
+    """Every series the store holds, in instrument, type and resolution order.
+
+    Each carries the ranges its source answered empty, as the event log in `store` holds
+    them.
+    """
+    answers = answered_empty(store)
     grouped: dict[tuple[str, str, str | None], list[Manifest]] = {}
     for manifest in manifests(ws).values():
         grouped.setdefault(manifest.filed_under, []).append(manifest)
@@ -123,6 +161,7 @@ def series(ws: Workspace) -> list[Series]:
             type=key[1],
             resolution=key[2],
             datasets=tuple(sorted(found, key=lambda m: (m.span, m.dataset_id))),
+            answers=tuple(answers.get(series_subject(key), ())),
         )
         for key, found in sorted(
             grouped.items(), key=lambda item: (item[0][0], item[0][1], item[0][2] or "")
@@ -448,12 +487,15 @@ def backfill(
     floor, to the earliest day already held, or to `end`. Reaching the floor is a normal
     outcome and is reported, never an error. Every chunk that writes leaves a manifest, so
     an interrupted backfill resumes at the first chunk with none and a repeated one finds
-    nothing missing.
+    nothing missing. A gap is asked for again day for day, and a day between two served
+    spans that the source already answered empty is not missing, so it is never planned —
+    a dry run included.
     """
     document = read_spec(spec)
     _declared(document, loader_id, spec)
     loader = loader_for(ws, loader_id)
     held = manifests(ws)
+    answers = answered_empty(store)
     fetches: list[Fetch] = []
     clamps: list[str] = []
     notes: list[str] = []
@@ -461,31 +503,32 @@ def backfill(
 
     for ref in loader.discover(document):
         floor = ref.span[0]
-        mine = [
-            m for m in held.values() if m.filed_under == (ref.instrument, ref.type, ref.resolution)
-        ]
-        spans = [m.span for m in mine]
+        key = (ref.instrument, ref.type, ref.resolution)
+        mine = Series(
+            *key,
+            datasets=tuple(m for m in held.values() if m.filed_under == key),
+            answers=tuple(answers.get(series_subject(key), ())),
+        )
         wanted_start = floor if start is None else max(start, floor)
         if start is not None and start < floor:
             clamps.append(
                 f"{ref.instrument} {ref.type}: {start} is before the source's history floor "
                 f"{floor}, so the backfill starts there"
             )
-        wanted_end = (
-            end if end is not None else (min(s[0] for s in spans) - DAY if spans else ref.span[1])
-        )
+        spans = mine.spans
+        wanted_end = end if end is not None else (spans[0][0] - DAY if spans else ref.span[1])
         window = ref.window((wanted_start, wanted_end)) if wanted_start <= wanted_end else None
         targets: list[tuple[date, date]] = []
         if window is not None:
-            targets += missing(spans, window)
-        for gap in Series(ref.instrument, ref.type, ref.resolution, tuple(mine)).gaps:
+            targets += missing(mine.coverage, window)
+        for gap in mine.gaps:
             clipped = ref.window(gap)
             if clipped is not None:
                 targets.append(clipped)
         if not targets:
             notes.append(f"{ref.instrument} {ref.type}: nothing missing before {wanted_end}")
             continue
-        per_day = _rows_per_day(mine)
+        per_day = _rows_per_day(mine.datasets)
         for target in merge(targets):
             for chunk in chunked(target):
                 over = dataclass_replace(ref, span=(chunk.start, chunk.end))
@@ -533,9 +576,14 @@ def _fetch(
     source: str,
     supersedes: str | None = None,
 ) -> Fetch:
-    """Fetch the chunk `ref` spans and write it, unless it was already asked and served nothing."""
+    """Fetch the chunk `ref` spans and write it, unless it was already asked and served nothing.
+
+    An empty answer is recorded against the series, as the range that was asked: it is the
+    checkpoint that keeps the chunk from being asked twice, and between two served spans it
+    is what coverage counts.
+    """
     chunk = Chunk(*ref.span)
-    subject = _checkpoint_subject(ref)
+    subject = series_subject((ref.instrument, ref.type, ref.resolution))
     if _already_empty(store, subject, chunk):
         return Fetch(ref.instrument, ref.type, ref.resolution, chunk, outcome="empty")
     points = list(loader.load(ref, ref.span))
@@ -552,11 +600,6 @@ def _fetch(
         dataset_id=written.manifest.dataset_id,
         outcome="written",
     )
-
-
-def _checkpoint_subject(ref: DatasetRef) -> str:
-    """What an empty-chunk checkpoint is filed under: the series, never the dataset."""
-    return f"{ref.instrument}|{ref.type}|{ref.resolution or '-'}"
 
 
 def _already_empty(store: StateStore, subject: str, chunk: Chunk) -> bool:

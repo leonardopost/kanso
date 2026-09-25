@@ -63,6 +63,14 @@ def test_the_align_skill_says_the_run_s_base_is_never_judged() -> None:
     assert "The run's base is never judged" in text
 
 
+def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:
+    """An agent declaring a US split without a zone gets a UTC day, which lands the split
+    inside a winter post-market; the skill is where it learns the key exists."""
+    text = skill(PACKAGED, "kanso-data")
+    assert "`override.info.timezone`" in text
+    assert "first session that traded at the new price" in text
+
+
 def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
     """This file ships into every workspace on `kanso init` and `kanso skills sync`, so a
     status it omits is one an operator meets in `results.tsv` with nothing to read. It
@@ -73,3 +81,13 @@ def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
         assert f"`{status}`" in text or f"**{status}**" in text, status
     assert "no card, no trial" not in text
     assert "so it is a trial, a `results.tsv` row and a coverage entry like any other" in text
+
+
+def test_the_data_skill_says_what_answered_empty_means() -> None:
+    """An agent reading `data show` for an operator meets `empty` beside `gaps`, and told
+    nothing would either ask for those days again or call a trading day a holiday."""
+    text = skill(PACKAGED, "kanso-data")
+    step = next(line for line in text.splitlines() if "`kanso data show` →" in line)
+    assert "(`empty`, counted as coverage)" in step
+    assert "A gap is what `kanso data backfill` asks for again" in step
+    assert "a weekday under `empty` that the venue traded" in step

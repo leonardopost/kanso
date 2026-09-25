@@ -722,13 +722,15 @@ def _books(
         if owner not in owners or position.is_closed:
             continue
         name = str(position.instrument_id)
+        held = kernel.cache.instrument(position.instrument_id)
+        schedule = () if held is None else splits.schedule_of(held)
         found[owner, name] = Book(
             instrument_id=name,
             qty=float(position.signed_qty),
             # At cost where the window published no price, and at the position's own
             # split-aware basis rather than `avg_px_open`, which a corporate action leaves
             # quoted in shares the position no longer holds.
-            price=marks.get(name, splits.ledger(splits.moves_of(position)).basis),
+            price=marks.get(name, splits.ledger(splits.moves_of(position, schedule)).basis),
         )
     return found
 

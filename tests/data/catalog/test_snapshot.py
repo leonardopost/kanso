@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date
 
 import pytest
@@ -13,6 +14,7 @@ from kanso.data import manifest as m
 from kanso.data import snapshot as snap
 from kanso.errors import Exit, PreconditionError, ValidationError
 from kanso.schemas.hypothesis import Windows
+from kanso.state import StateStore
 from tests.data.catalog.conftest import (
     AAPL,
     MSFT,
@@ -182,7 +184,7 @@ def test_taking_a_snapshot_pins_what_it_names(ws: FakeWorkspace) -> None:
 def test_covering_finds_a_snapshot_that_holds_both_windows(ws: FakeWorkspace) -> None:
     load_bars(ws, count=25)
     taken = snap.freeze(ws)
-    found = snap.covering(ws, [AAPL], ["bar"], "1d", windows())
+    found = snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None)
     assert found is not None
     assert found.snapshot_id == taken.snapshot_id
 
@@ -190,26 +192,26 @@ def test_covering_finds_a_snapshot_that_holds_both_windows(ws: FakeWorkspace) ->
 def test_covering_refuses_a_snapshot_missing_a_day_of_certification(ws: FakeWorkspace) -> None:
     load_bars(ws, count=18)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows()) is None
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None) is None
 
 
 def test_covering_refuses_a_snapshot_missing_an_instrument(ws: FakeWorkspace) -> None:
     load_bars(ws, count=25)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL, MSFT], ["bar"], "1d", windows()) is None
+    assert snap.covering(ws, [AAPL, MSFT], ["bar"], "1d", windows(), store=None) is None
 
 
 def test_covering_refuses_a_snapshot_missing_a_required_type(ws: FakeWorkspace) -> None:
     load_bars(ws, count=25)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar", "quote"], "1d", windows()) is None
+    assert snap.covering(ws, [AAPL], ["bar", "quote"], "1d", windows(), store=None) is None
 
 
 def test_covering_accepts_the_second_instrument_once_it_is_loaded(ws: FakeWorkspace) -> None:
     load_bars(ws, count=25)
     load_bars(ws, count=25, instrument=MSFT)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL, MSFT], ["bar"], "1d", windows()) is not None
+    assert snap.covering(ws, [AAPL, MSFT], ["bar"], "1d", windows(), store=None) is not None
 
 
 def test_a_gap_inside_the_span_is_not_coverage(ws: FakeWorkspace) -> None:
@@ -217,24 +219,24 @@ def test_a_gap_inside_the_span_is_not_coverage(ws: FakeWorkspace) -> None:
     load_bars(ws, start=JAN1, count=16)
     load_bars(ws, start=date(2024, 1, 18), count=8)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows()) is None
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None) is None
 
     load_bars(ws, start=date(2024, 1, 17), count=1)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows()) is not None
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None) is not None
 
 
 def test_covering_refuses_a_dataset_at_another_resolution(ws: FakeWorkspace) -> None:
     load_bars(ws, count=25)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar"], "1m", windows()) is None
+    assert snap.covering(ws, [AAPL], ["bar"], "1m", windows(), store=None) is None
 
 
 def test_an_unaggregated_type_answers_at_any_resolution(ws: FakeWorkspace) -> None:
     load_bars(ws, count=25)
     load_quotes(ws, count=25)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar", "quote"], "1d", windows()) is not None
+    assert snap.covering(ws, [AAPL], ["bar", "quote"], "1d", windows(), store=None) is not None
 
 
 def test_research_is_never_pinned_to_data_whose_publication_nobody_declared(
@@ -242,7 +244,7 @@ def test_research_is_never_pinned_to_data_whose_publication_nobody_declared(
 ) -> None:
     load_bars(ws, count=25, publication="unknown")
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows()) is None
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None) is None
 
 
 def test_the_newest_covering_snapshot_wins(ws: FakeWorkspace) -> None:
@@ -253,7 +255,7 @@ def test_the_newest_covering_snapshot_wins(ws: FakeWorkspace) -> None:
 
     assert first.snapshot_id != second.snapshot_id
     assert second.created_at > first.created_at
-    found = snap.covering(ws, [AAPL], ["bar"], "1d", windows())
+    found = snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None)
     assert found is not None
     assert found.snapshot_id == second.snapshot_id
 
@@ -262,21 +264,21 @@ def test_a_snapshot_whose_manifest_has_gone_is_skipped(ws: FakeWorkspace) -> Non
     written = load_bars(ws, count=25)
     snap.freeze(ws)
     m.remove_manifest(ws, written.manifest.dataset_id)
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows()) is None
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None) is None
 
 
 def test_covering_ignores_the_forward_window(ws: FakeWorkspace) -> None:
     """`forward` is never backtested, so no snapshot is ever asked to hold it."""
     load_bars(ws, count=25)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows()) is not None
+    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=None) is not None
 
 
 # --- the instrument pin, read back ---------------------------------------------
 
 
 def covering(ws: FakeWorkspace, *universe: str) -> snap.Snapshot | None:
-    return snap.covering(ws, list(universe or (AAPL,)), ["bar"], "1d", windows())
+    return snap.covering(ws, list(universe or (AAPL,)), ["bar"], "1d", windows(), store=None)
 
 
 def test_freezing_refuses_an_empty_store_over_instrument_data(ws: FakeWorkspace) -> None:
@@ -384,8 +386,126 @@ def test_covering_requires_the_warmup_sessions_as_well(ws: FakeWorkspace) -> Non
     load_bars(ws, count=25)
     snap.freeze(ws)
     before = (date(2023, 12, 27), date(2023, 12, 31))
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), prefixes=(before,)) is None
+    assert (
+        snap.covering(ws, [AAPL], ["bar"], "1d", windows(), prefixes=(before,), store=None) is None
+    )
 
     load_bars(ws, start=date(2023, 12, 20), count=12)
     snap.freeze(ws)
-    assert snap.covering(ws, [AAPL], ["bar"], "1d", windows(), prefixes=(before,)) is not None
+    assert (
+        snap.covering(ws, [AAPL], ["bar"], "1d", windows(), prefixes=(before,), store=None)
+        is not None
+    )
+
+
+# --- the days a source answered empty ------------------------------------------------
+
+
+@pytest.fixture
+def store(ws: FakeWorkspace) -> Iterator[StateStore]:
+    """A migrated state store: where the answers a source gave are read from."""
+    with StateStore(ws.root / "state.db") as opened:
+        opened.migrate()
+        yield opened
+
+
+def answer_empty(
+    store: StateStore,
+    start: date,
+    end: date,
+    series: tuple[str, str, str | None] = (AAPL, "bar", "1d"),
+) -> None:
+    """What a backfill records when the source answers a chunk with nothing."""
+    store.event(m.EMPTY_CHUNK, m.series_subject(series), {"start": str(start), "end": str(end)})
+
+
+def covers(
+    ws: FakeWorkspace,
+    store: StateStore | None,
+    prefixes: tuple[tuple[date, date], ...] = (),
+) -> bool:
+    found = snap.covering(ws, [AAPL], ["bar"], "1d", windows(), prefixes, store=store)
+    return found is not None
+
+
+def weekend_split(ws: FakeWorkspace) -> snap.Snapshot:
+    """Two chunks either side of a weekend inside the research window: Friday, then Monday."""
+    load_bars(ws, start=JAN1, count=5)
+    load_bars(ws, start=date(2024, 1, 8), count=13)
+    return snap.freeze(ws)
+
+
+def test_a_weekend_the_source_answered_empty_joins_the_spans_either_side(
+    ws: FakeWorkspace, store: StateStore
+) -> None:
+    taken = weekend_split(ws)
+    assert not covers(ws, store)
+
+    answer_empty(store, date(2024, 1, 6), date(2024, 1, 7))
+
+    found = snap.covering(ws, [AAPL], ["bar"], "1d", windows(), store=store)
+    assert found is not None
+    assert found.snapshot_id == taken.snapshot_id
+
+
+def test_without_a_store_no_answer_is_counted(ws: FakeWorkspace, store: StateStore) -> None:
+    """`store=None` is a place no answer was ever recorded: coverage is what was served."""
+    weekend_split(ws)
+    answer_empty(store, date(2024, 1, 6), date(2024, 1, 7))
+
+    assert covers(ws, store)
+    assert not covers(ws, None)
+
+
+def test_a_holiday_weekend_covers_only_once_every_day_of_it_is_answered(
+    ws: FakeWorkspace, store: StateStore
+) -> None:
+    """Friday the 12th, then Tuesday the 16th: the Monday is a holiday no calendar here knows."""
+    load_bars(ws, start=JAN1, count=12)
+    load_bars(ws, start=date(2024, 1, 16), count=10)
+    snap.freeze(ws)
+
+    answer_empty(store, date(2024, 1, 13), date(2024, 1, 14))
+    assert not covers(ws, store)
+
+    answer_empty(store, date(2024, 1, 15), date(2024, 1, 15))
+    assert covers(ws, store)
+
+
+def test_an_answer_before_the_first_served_day_or_after_the_last_covers_nothing(
+    ws: FakeWorkspace, store: StateStore
+) -> None:
+    """Asked before the instrument listed, or past where its source ends: not coverage."""
+    load_bars(ws, start=date(2024, 1, 3), count=16)
+    snap.freeze(ws)
+
+    answer_empty(store, date(2023, 12, 1), date(2024, 1, 2))
+    answer_empty(store, date(2024, 1, 19), date(2024, 1, 31))
+
+    assert not covers(ws, store)
+
+
+def test_an_answer_closes_a_hole_only_in_the_series_it_was_asked_of(
+    ws: FakeWorkspace, store: StateStore
+) -> None:
+    weekend_split(ws)
+    for other in ((AAPL, "bar", "1m"), (AAPL, "quote", None), (MSFT, "bar", "1d")):
+        answer_empty(store, date(2024, 1, 6), date(2024, 1, 7), other)
+    assert not covers(ws, store)
+
+    answer_empty(store, date(2024, 1, 6), date(2024, 1, 7))
+    assert covers(ws, store)
+
+
+def test_a_warmup_prefix_counts_the_days_answered_empty_as_well(
+    ws: FakeWorkspace, store: StateStore
+) -> None:
+    load_bars(ws, start=date(2023, 12, 20), count=10)
+    load_bars(ws, start=JAN1, count=25)
+    snap.freeze(ws)
+    before = ((date(2023, 12, 27), date(2023, 12, 31)),)
+    assert not covers(ws, store, before)
+
+    answer_empty(store, date(2023, 12, 30), date(2023, 12, 31))
+
+    assert covers(ws, store, before)

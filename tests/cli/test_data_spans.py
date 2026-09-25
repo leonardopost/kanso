@@ -113,7 +113,45 @@ def test_a_series_reports_the_holes_between_its_datasets() -> None:
 
     assert series.spans == [span("2024-01-01", "2024-01-10"), span("2024-01-21", "2024-01-31")]
     assert series.gaps == [span("2024-01-11", "2024-01-20")]
+    assert series.empty == []
     assert series.rows == 44
+
+
+def test_a_series_reports_what_its_source_answered_empty_apart_from_its_gaps() -> None:
+    """Served to Friday the 5th and from Tuesday the 16th, with two of the holes asked.
+
+    The weekend and the holiday weekend were answered empty; the week between them was
+    never asked, so it stays the one gap, and the served spans are what they were.
+    """
+    early = manifest(
+        dataset_id="DEMO.SIM-bar-1d-raw-20240105", span=span("2024-01-01", "2024-01-05")
+    )
+    late = manifest(
+        dataset_id="DEMO.SIM-bar-1d-raw-20240131", span=span("2024-01-16", "2024-01-31")
+    )
+    answers = (span("2024-01-06", "2024-01-07"), span("2024-01-13", "2024-01-15"))
+
+    series = Series("DEMO.SIM", "bar", "1d", (early, late), answers=answers)
+
+    assert series.spans == [span("2024-01-01", "2024-01-05"), span("2024-01-16", "2024-01-31")]
+    assert series.empty == list(answers)
+    assert series.gaps == [span("2024-01-08", "2024-01-12")]
+    assert series.coverage == [span("2024-01-01", "2024-01-07"), span("2024-01-13", "2024-01-31")]
+    document = series.payload()
+    assert document["spans"] == [["2024-01-01", "2024-01-05"], ["2024-01-16", "2024-01-31"]]
+    assert document["empty"] == [["2024-01-06", "2024-01-07"], ["2024-01-13", "2024-01-15"]]
+    assert document["gaps"] == [["2024-01-08", "2024-01-12"]]
+
+
+def test_one_load_is_one_span_whatever_its_source_answered_around_it() -> None:
+    """A single load has no hole to close, so no answer outside it is ever counted."""
+    answers = (span("2023-12-30", "2023-12-31"), span("2024-02-01", "2024-02-04"))
+
+    series = Series("DEMO.SIM", "bar", "1d", (manifest(),), answers=answers)
+
+    assert series.spans == series.coverage == [span("2024-01-01", "2024-01-31")]
+    assert series.empty == []
+    assert series.gaps == []
 
 
 def test_a_dataset_reports_the_provenance_it_has_and_omits_the_rest() -> None:

@@ -110,6 +110,22 @@ def test_both_pages_say_the_run_s_base_is_never_judged() -> None:
     assert "`judged: false`" in alignment
 
 
+def test_the_pages_say_an_empty_answer_between_two_served_spans_is_coverage() -> None:
+    """A chunk edge on a weekend split a series with no session missing, while the pages
+    said coverage was the served spans and `data show` listed the weekend as a gap."""
+    row = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso data show")
+    )
+    assert "**answered empty**" in row
+    assert "An answered-empty range is coverage and a gap is not" in row
+    concepts = prose(section(page("concepts.md"), "Snapshot"))
+    assert "and from one thing more: the days between two served spans" in concepts
+    assert "a weekday the source holds nothing for and a holiday" in concepts
+    workspace = page("workspace.md")
+    assert "Coverage counts one fact the manifests do not hold" in prose(workspace)
+    assert "answered empty 2024-03-02..2024-03-03" in workspace
+
+
 def test_the_workspace_page_lists_every_section_the_parser_declares() -> None:
     toml = section(page("workspace.md"), "`kanso.toml`")
     for name in Config.model_fields:

@@ -2,8 +2,9 @@
 
 The three writing verbs share one mechanism and differ only in which days they ask for.
 `load` writes the range its spec names, `backfill` walks history backwards to what is held
-and `sync` walks forwards from what is held; `show` reports the served spans and the holes
-between them, and `snapshot` freezes what is held into the thing a run is pinned to.
+and `sync` walks forwards from what is held; `show` reports the served spans, the days
+between them a source answered empty when asked, and the holes left, and `snapshot`
+freezes what is held into the thing a run is pinned to.
 
 `instruments resolve` and `instruments show` are the reference half, and `adapters` says
 what is registered here: the package's own loaders, the manual instrument provider and
@@ -78,7 +79,7 @@ def load_command(
 
 @app.command("show")
 def show_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
-    """List the datasets, the spans they served and the gaps between them."""
+    """List the datasets, the spans they served, the days answered empty and the gaps."""
     emit(as_json or global_json(ctx), lambda: _show(open_workspace(ctx)))
 
 
@@ -197,7 +198,8 @@ def _load(ws: Workspace, loader: str, spec: Path, replace: bool) -> Report:
 
 
 def _show(ws: Workspace) -> Report:
-    found = commands.series(ws)
+    with store(ws) as opened:
+        found = commands.series(ws, opened)
     data: dict[str, Any] = {
         "series": [item.payload() for item in found],
         "datasets": sum(len(item.datasets) for item in found),
@@ -214,6 +216,8 @@ def _show(ws: Workspace) -> Report:
             lines.append(
                 indent(f"{manifest.dataset_id} · {manifest.source} · {manifest.row_count} rows")
             )
+        for start, end in item.empty:
+            lines.append(indent(f"answered empty {start}..{end}"))
         for start, end in item.gaps:
             lines.append(indent(f"gap {start}..{end}"))
     lines.append(field("total", f"{data['datasets']} dataset(s) · {data['rows']} rows"))

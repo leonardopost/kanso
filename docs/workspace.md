@@ -255,7 +255,9 @@ already moved past it would stamp its own older version over the newer one and l
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
 the workspace has no
-registered hypotheses, no cards, no best pointer, no certificate of record and no approvals.
+registered hypotheses, no cards, no best pointer, no certificate of record and no approvals —
+nor any record of what a source answered empty, so every gap a backfill closed that way is a
+gap again until `kanso data backfill` asks once more.
 What survives is what is file-backed: `catalog/` still serves its data, `certificates/<hyp>/`
 still holds the certificate YAML and the certified `<sha7>.py`, `strategies/<id>/` still holds
 `strategy.yaml` and its `impl/` directories, and `kanso strat show` and `kanso replay
@@ -596,10 +598,10 @@ deleting it costs you the overrides and a round of resolution, not the definitio
 ### The split schedule
 
 An equity's `override.info.splits` is where you declare the splits it has been through. It
-is the only structured override, and it is the one thing that makes a window containing a
-corporate action researchable: kanso applies a split at its ex-date — cancelling resting
-orders, rescaling every open position, resyncing the portfolio behind it — instead of
-reading the restated price as a return.
+and `info.timezone` beside it are the only structured overrides, and they are the one thing
+that makes a window containing a corporate action researchable: kanso applies a split at
+its ex-date — cancelling resting orders, rescaling every open position, resyncing the
+portfolio behind it — instead of reading the restated price as a return.
 
 ```yaml
 SOXS:
@@ -608,6 +610,7 @@ SOXS:
   corporate_actions: adjust_all
   override:
     info:
+      timezone: America/New_York                # where the listing's sessions are dated
       splits:
         - {ex_date: 2026-07-15, ratio: 0.1}     # a one-for-ten reverse split
         - {ex_date: 2021-03-02, ratio: 4.0}     # a four-for-one split
@@ -620,13 +623,28 @@ ex-date and any other key are refused by name (exit 3). In particular a schedule
 **cash**: money moves in exactly one place in kanso, the runner's extraction, and a cash
 event has an announcement date, so it belongs in the data as a `corporate_action` point.
 
+`ex_date` is the first session that trades at the new price, and `info.timezone` says where
+that session is dated: the IANA zone the instrument trades in, `America/New_York` for a US
+listing. The split holds from the first instant after the midnight that opens the ex-date
+there. That one instant falls between the old share count's last point and the new count's
+first for every grain at once: after the 20:00 close of a session's minute bars, and after
+the daily bar kanso stamps at the following midnight, because a bar is stamped at its close
+and that bar is the session before's. Without `info.timezone` the ex-date is a UTC day, as
+it was before the key existed, and that is wrong for any listing whose session runs past
+UTC midnight — in winter 19:00 New York is already the next UTC day, so the split lands
+inside a post-market and rescales a position that session bought at a price the split
+never touched. A zone the host's zone database does not know is refused by name (exit 3).
+Adding the key changes the definition, so it is a correction like any schedule change: say
+which date each split first traded at its new price, then `--refresh` and re-snapshot.
+
 Two consequences worth knowing. A schedule is part of the definition, so it is part of
 `definition_checksum` and therefore of the snapshot a run is pinned to: adding one to an
 instrument already resolved as of that date is a *correction*, which the plain command
 refuses (exit 2) and `--refresh` performs, and re-snapshotting afterwards is what a later
-run reproduces. And a position too small to survive a reverse split — under one lot after
-the ratio — is refused rather than silently deleted, because kanso holds no cash to pay it
-out in lieu.
+run reproduces. And the shares a reverse split leaves short of a whole lot are paid out in
+cash at the close before the ex-date, as an issuer pays them — 1,005 shares through a
+one-for-ten split keep 100 and are paid five old shares' worth — so a position under one new
+lot is paid out whole and closes at the split rather than stopping the run.
 
 The schedule goes here rather than in the data because a split is the one corporate action
 with no honest publication instant. A dividend carries the day it was declared; a split
@@ -639,7 +657,10 @@ The schedule is applied by the simulated venue rather than by a strategy, and no
 `strategy.py` can read it: it names every split of the instrument's life, including ones
 after the window a card is judged on, so `.cache` — the one route to an instrument — is
 denied by `strategy_integrity`, along with everything the engine computes against a
-position's opening basis (see `docs/concepts.md`).
+position's opening basis (see `docs/concepts.md`). The strategy base holds none of it either:
+the venue announces each split on the bus as it applies it, which is how the harness restates
+a price printed before the split and books a payment in lieu, so all a sleeve ever holds is
+a split that has already happened.
 
 ## `catalog/`
 
@@ -660,6 +681,54 @@ that extends the end and a `backfill` that reaches further back both mint fresh 
 the dataset they follow in `supersedes`. The manifest records the span that was **served**,
 never the span that was asked for, because a source may answer a five-year request with two
 years, HTTP 200 and no warning.
+
+**Coverage counts one fact the manifests do not hold**: the days between two served spans of
+a series that its source was asked for and answered with nothing, which `state.db` records
+as each empty chunk comes back. A backfill is chunked, and a chunk edge that falls on a
+weekend leaves the spans either side a weekend apart; the next backfill asks for exactly
+those days. In a fresh `kanso init --demo` workspace, after `kanso data instruments resolve`:
+
+```
+$ kanso data backfill --loader synthetic --spec demo.yaml --to 2024-04-30
+loader     synthetic · demo.yaml
+2024-01-02..2024-01-31 DEMO.SIM bar → written · 8580 rows
+2024-02-01..2024-03-01 DEMO.SIM bar → written · 8580 rows
+2024-03-02..2024-03-31 DEMO.SIM bar → written · 7800 rows
+2024-04-01..2024-04-30 DEMO.SIM bar → written · 8580 rows
+total      4 chunk(s) · 33540 rows written
+$ kanso data show
+DEMO.SIM bar 1m · 2024-01-02..2024-03-01, 2024-03-04..2024-03-29, 2024-04-01..2024-04-30 · 33540 rows
+           DEMO.SIM-bar-1m-raw-20240131 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240301 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240329 · synthetic · 7800 rows
+           DEMO.SIM-bar-1m-raw-20240430 · synthetic · 8580 rows
+           gap 2024-03-02..2024-03-03
+           gap 2024-03-30..2024-03-31
+total      4 dataset(s) · 33540 rows
+$ kanso data backfill --loader synthetic --spec demo.yaml --to 2024-04-30
+loader     synthetic · demo.yaml
+2024-03-02..2024-03-03 DEMO.SIM bar → empty
+2024-03-30..2024-03-31 DEMO.SIM bar → empty
+total      2 chunk(s) · 0 rows written
+$ kanso data show
+DEMO.SIM bar 1m · 2024-01-02..2024-03-01, 2024-03-04..2024-03-29, 2024-04-01..2024-04-30 · 33540 rows
+           DEMO.SIM-bar-1m-raw-20240131 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240301 · synthetic · 8580 rows
+           DEMO.SIM-bar-1m-raw-20240329 · synthetic · 7800 rows
+           DEMO.SIM-bar-1m-raw-20240430 · synthetic · 8580 rows
+           answered empty 2024-03-02..2024-03-03
+           answered empty 2024-03-30..2024-03-31
+total      4 dataset(s) · 33540 rows
+```
+
+The served spans are what they were; the two weekends are now coverage, so `research begin`
+pins a snapshot across them — the one taken before they were asked, since a snapshot pins
+bytes and the answers are not bytes — and a third backfill plans nothing. An answer counts
+only between two served spans and only on the days it names: a month answered empty before
+a series' first served day is not coverage, and the days a chunk was asked for and did not
+serve stay a gap until a backfill asks for them again. kanso keeps no calendar, so a weekday
+answered empty — a holiday, or a day the source simply holds nothing for — reads the same
+and is counted; the `answered empty` lines are where to look for one.
 
 A **snapshot** freezes what is held: the dataset checksums plus the checksum of the resolved
 instruments. Every run is pinned to one, and to the instruments as much as to the data:
@@ -695,9 +764,10 @@ remedy: pass --replace to delete and rewrite the overlapped span
 (exit 2). Here the data is yours to replace; you just have to say so.
 
 **The manifests are the record of what the catalog holds**, and `kanso data show` reads them
-rather than the parquet files. Delete a parquet by hand and `data show` keeps reporting the
-dataset, its span and its row count; `kanso doctor` has no catalog check at all. The loss
-surfaces only when a run needs the rows, as a baseline or card that did not run (exit 2):
+— with the empty answers `state.db` recorded — rather than the parquet files. Delete a
+parquet by hand and `data show` keeps reporting the dataset, its span and its row count;
+`kanso doctor` has no catalog check at all. The loss surfaces only when a run needs the
+rows, as a baseline or card that did not run (exit 2):
 
 ```
 error: the baseline card of demo_mr did not run: exception: …
@@ -1091,7 +1161,9 @@ step on a new host.
 inherits your certified work.** Copy the directory and you have everything. Clone the
 repository and you have the data, every certificate, the composed implementations and the
 source of every hypothesis — reproduced to the digit — but not the record: no research
-history, no `best` pointer, no trial count, no approvals, no version or session index. That is
+history, no `best` pointer, no trial count, no approvals, no version or session index, and no
+record of what a source answered empty, so a window across a weekend a backfill closed that
+way is refused by `research begin` until `kanso data backfill` asks for it again. That is
 the design rather than an accident: the record is what one machine did, and approvals in
 particular must never travel, because real capital always needs a person to say so again on
 the machine that will trade. `kanso doctor` names the situation when it meets it — the

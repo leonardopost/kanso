@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -160,6 +160,106 @@ def test_merge_never_loses_a_day(spans: list[tuple[date, date]]) -> None:
     assert merged == sorted(merged)
     for span in ordered:
         assert m.contains(merged, span)
+
+
+# --- what an empty answer adds to coverage -----------------------------------------
+
+
+def jan(day: int) -> date:
+    """A day of January 2024, whose first is a Monday."""
+    return date(2024, 1, day)
+
+
+def test_a_weekend_answered_empty_between_two_served_spans_is_coverage() -> None:
+    """A chunk edge on a Saturday: Friday served, Monday served, the weekend asked alone."""
+    served = [(jan(1), jan(5)), (jan(8), jan(19))]
+
+    assert m.holes(served) == [(jan(6), jan(7))]
+    assert not m.contains(m.covered(served, []), (jan(3), jan(10)))
+    assert m.answered(served, [(jan(6), jan(7))]) == [(jan(6), jan(7))]
+    assert m.covered(served, [(jan(6), jan(7))]) == [(jan(1), jan(19))]
+    assert m.contains(m.covered(served, [(jan(6), jan(7))]), (jan(3), jan(10)))
+
+
+def test_a_holiday_weekend_closes_only_on_the_days_an_answer_names() -> None:
+    """Saturday to the Monday holiday, asked in two pieces, one of which was never answered."""
+    served = [(jan(1), jan(12)), (jan(16), jan(19))]
+    answers = [(jan(13), jan(14))]
+
+    assert m.answered(served, answers) == [(jan(13), jan(14))]
+    assert m.holes(m.covered(served, answers)) == [(jan(15), jan(15))]
+    assert m.holes(m.covered(served, [*answers, (jan(15), jan(15))])) == []
+
+
+def test_an_answer_before_the_first_served_day_or_after_the_last_extends_nothing() -> None:
+    """Asked before the instrument listed, or past where the source ends: not coverage."""
+    served = [(jan(3), jan(10))]
+    answers = [(jan(1), jan(2)), (jan(11), jan(20))]
+
+    assert m.answered(served, answers) == []
+    assert m.covered(served, answers) == served
+
+
+def test_an_answer_over_served_days_counts_only_the_hole_it_reaches() -> None:
+    served = [(jan(1), jan(5)), (jan(8), jan(19))]
+
+    assert m.answered(served, [(jan(3), jan(10)), (jan(18), jan(25))]) == [(jan(6), jan(7))]
+
+
+QUARTER = st.dates(min_value=date(2024, 1, 1), max_value=date(2024, 3, 31))
+
+
+@given(
+    served=st.lists(st.tuples(QUARTER, QUARTER), min_size=1, max_size=6),
+    answers=st.lists(st.tuples(QUARTER, QUARTER), max_size=6),
+)
+def test_every_day_from_the_first_served_to_the_last_is_served_answered_or_a_hole(
+    served: list[tuple[date, date]], answers: list[tuple[date, date]]
+) -> None:
+    """The three things `data show` reports never overlap and never leave a day out."""
+    served = [(min(a, b), max(a, b)) for a, b in served]
+    answers = [(min(a, b), max(a, b)) for a, b in answers]
+    spans = m.merge(served)
+    empty = m.answered(served, answers)
+    gaps = m.holes(m.covered(served, answers))
+
+    def within(day: date, ranges: list[tuple[date, date]]) -> bool:
+        return any(start <= day <= end for start, end in ranges)
+
+    assert empty == m.merge(empty)
+    assert all(spans[0][0] < start and end < spans[-1][1] for start, end in empty + gaps)
+    day = spans[0][0]
+    while day <= spans[-1][1]:
+        kinds = [within(day, spans), within(day, empty), within(day, gaps)]
+        assert kinds.count(True) == 1, day
+        assert kinds[1] == (within(day, answers) and not kinds[0]), day
+        day += timedelta(days=1)
+
+
+def test_empty_answers_are_read_back_under_the_series_they_were_filed_under(
+    tmp_path: Path,
+) -> None:
+    """The subject is the spelling state already holds, so it can never change."""
+    from kanso.state import StateStore
+
+    with StateStore(tmp_path / "state.db") as store:
+        store.migrate()
+        store.event(
+            m.EMPTY_CHUNK,
+            m.series_subject(("AAPL.XNAS", "bar", "1d")),
+            {"start": "2024-01-06", "end": "2024-01-07"},
+        )
+        store.event(
+            m.EMPTY_CHUNK,
+            m.series_subject(("AAPL.XNAS", "quote", None)),
+            {"start": "2024-01-13", "end": "2024-01-15"},
+        )
+        store.event("data_backfilled", "synthetic", {"chunks": 2})
+
+        assert m.answered_empty(store) == {
+            "AAPL.XNAS|bar|1d": [(jan(6), jan(7))],
+            "AAPL.XNAS|quote|-": [(jan(13), jan(15))],
+        }
 
 
 def test_shortfall_is_silent_when_the_request_was_served() -> None:

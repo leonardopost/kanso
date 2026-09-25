@@ -287,6 +287,16 @@ That is a design constraint and nothing in kanso can repair it; the runner reads
 none of those numbers and `criteria.integrity` denies a researched strategy all
 of them.
 
+An adjustment's `pnl_change` is added to the position's own `realized_pnl` and to
+nothing else — no account balance moves — which is where a split's payment in lieu
+travels to the runner's extraction and the harness. An adjustment that takes the quantity
+to zero leaves the position `FLAT`, so `is_closed`, with `ts_closed` still zero and the
+cache still listing it open; `Cache.update_position` re-indexes it by its own state, and
+kanso dates the trade by the adjustment.
+
+`MessageBus.publish` calls every handler subscribed to its topic before it returns, which
+is what lets the venue announce a split to every sleeve inside the call that applies it.
+
 `Portfolio.initialize_positions()` resyncs the net-position index behind such an
 adjustment. It is declared on the kernel's `Portfolio` and **not** on the
 read-only `PortfolioFacade` that a component's `portfolio` attribute is typed
@@ -1607,8 +1617,9 @@ def _check_http_download() -> tuple[bool, str]:
     )
 
 
-def _check_position_adjustment() -> tuple[bool, str]:
-    """A split is applied as a `PositionAdjusted`, which must cost the position nothing."""
+def _sample_position() -> tuple[Any, Callable[[str, float | None], Any]]:
+    """A 1,005-share position at ten opened by one fill, and a maker of the adjustment a
+    split applies to it: the quantity change, and what it paid in lieu, or nothing."""
     from decimal import Decimal
 
     from nautilus_trader.core.uuid import UUID4
@@ -1654,22 +1665,32 @@ def _check_position_adjustment() -> tuple[bool, str]:
         ts_init=0,
     )
     position = Position(instrument=instrument, fill=filled)
-    position.apply_adjustment(
-        PositionAdjusted(
+
+    def adjustment(change: str, paid: float | None) -> Any:
+        return PositionAdjusted(
             trader_id=trader_id,
             strategy_id=strategy_id,
             instrument_id=instrument.id,
             position_id=position.id,
             account_id=account_id,
             adjustment_type=PositionAdjustmentType.COMMISSION,
-            quantity_change=Decimal("-905"),
-            pnl_change=None,
+            quantity_change=Decimal(change),
+            pnl_change=None if paid is None else Money(paid, instrument.quote_currency),
             reason="split",
             event_id=UUID4(),
             ts_event=1,
             ts_init=1,
         )
-    )
+
+    return position, adjustment
+
+
+def _check_position_adjustment() -> tuple[bool, str]:
+    """A split is applied as a `PositionAdjusted`, which must cost the position nothing."""
+    from nautilus_trader.model.enums import PositionAdjustmentType
+
+    position, adjustment = _sample_position()
+    position.apply_adjustment(adjustment("-905", None))
     members = sorted(member.name for member in PositionAdjustmentType)
     holds = (
         float(position.quantity) == 100.0
@@ -1686,6 +1707,53 @@ def _check_position_adjustment() -> tuple[bool, str]:
         f"commission, and keeps avg_px_open={position.avg_px_open} peak_qty={position.peak_qty}; "
         f"PositionAdjustmentType is {members}, so a split has no member of its own and the "
         f"use is off-label but free, and the opening basis stays in pre-split units"
+    )
+
+
+def _check_adjustment_to_flat() -> tuple[bool, str]:
+    """A split that pays a position out whole leaves it flat and undated, listed open until
+    the cache re-indexes it, and its payment reaches the position's own P&L and no more."""
+    from nautilus_trader.cache.cache import Cache
+    from nautilus_trader.model.enums import OmsType
+
+    position, adjustment = _sample_position()
+    cache = Cache()
+    cache.add_position(position, OmsType.NETTING)
+    position.apply_adjustment(adjustment("-1005", 50.0))
+    listed = [str(held.id) for held in cache.positions_open()]
+    cache.update_position(position)
+    reindexed = [str(held.id) for held in cache.positions_open()]
+    closed = [str(held.id) for held in cache.positions_closed()]
+    holds = (
+        position.is_closed
+        and int(position.ts_closed) == 0
+        and float(position.realized_pnl) == 50.0
+        and len(position.events) == 1
+        and listed == [str(position.id)]
+        and reindexed == []
+        and closed == [str(position.id)]
+    )
+    return holds, (
+        f"a 1,005-share position adjusted by -1,005 with 50 paid is closed={position.is_closed} "
+        f"with ts_closed={position.ts_closed}, realized_pnl={position.realized_pnl} and "
+        f"{len(position.events)} fill(s); the cache lists it open {listed} until "
+        f"update_position, then open {reindexed} and closed {closed}"
+    )
+
+
+def _check_publish_is_synchronous() -> tuple[bool, str]:
+    """A split announced on the bus is taken in before the point that applied it moves on."""
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.model.identifiers import TraderId
+
+    msgbus = MessageBus(trader_id=TraderId("KANSO-001"), clock=TestClock())
+    heard: list[object] = []
+    msgbus.subscribe(topic="kanso.restated", handler=heard.append)
+    msgbus.publish(topic="kanso.restated", msg="split")
+    before_return = list(heard)
+    return before_return == ["split"], (
+        f"a handler subscribed to a topic had heard {before_return} when publish returned, "
+        f"so a venue's announcement is taken in inside the call that applies the split"
     )
 
 
@@ -1922,6 +1990,15 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a position adjustment changes the quantity and leaves the fills, the commissions "
         "and the opening basis alone",
         _check_position_adjustment,
+    ),
+    (
+        "a position adjustment to zero leaves the position flat and undated until the cache "
+        "re-indexes it, and its pnl_change reaches only the position's own realized P&L",
+        _check_adjustment_to_flat,
+    ),
+    (
+        "MessageBus.publish calls every handler subscribed to the topic before it returns",
+        _check_publish_is_synchronous,
     ),
     (
         "Portfolio.initialize_positions resyncs the net-position index the facade does not declare",

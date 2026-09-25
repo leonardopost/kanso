@@ -520,6 +520,34 @@ def loaded(_prepared: Path, tmp_path: Path) -> Path:
     return root
 
 
+CHUNK_EDGES: list[list[str]] = [["2024-03-02", "2024-03-03"], ["2024-03-30", "2024-03-31"]]
+"""Where thirty-day chunks of the whole spec break the series apart.
+
+The third chunk opens on Saturday the 2nd of March and serves from the Monday, and the
+fourth opens on Monday the 1st of April after a third that asked to Sunday the 31st and was
+served to the Friday: two weekends, and no session missing from either."""
+
+
+@pytest.fixture
+def chunked(runner: CliRunner, workspace: Path) -> Path:
+    """A workspace holding the whole spec as a chunked backfill left it, as `data.yaml`.
+
+    Nothing has been asked twice, so the weekends at two chunk edges are still gaps.
+    """
+    write_instruments(workspace)
+    assert (
+        at(runner, workspace, "data", "instruments", "resolve", "--as-of", str(FIRST)).exit_code
+        == 0
+    )
+    spec = write_spec(workspace)
+    result = at(
+        runner, workspace, "data", "backfill", "--loader", "synthetic", "--spec", spec, "--json"
+    )
+    assert result.exit_code == 0, result.stdout
+    assert [chunk["outcome"] for chunk in payload(result)["chunks"]] == ["written"] * 6
+    return workspace
+
+
 @pytest.fixture
 def registered(runner: CliRunner, loaded: Path) -> Path:
     """That workspace with the demo hypothesis written, registered and classified."""

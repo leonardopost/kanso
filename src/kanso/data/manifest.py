@@ -1,4 +1,4 @@
-"""Dataset identity, the manifest a written dataset carries, and the store's layout.
+"""Dataset identity, the manifest a written dataset carries, coverage, and the store's layout.
 
 A **dataset** is one instrument, one data type, one resolution and one adjustment basis,
 served over one span of dates. Its id is derived, never invented: the same five
@@ -11,6 +11,26 @@ The span in a manifest is the span that was **served**, never the span that was 
 for. A source may return less than the requested range with a success status and no
 warning; recording the request would claim coverage the dataset lacks, and snapshots are
 pinned by coverage. `shortfall` renders the difference so a caller can surface it.
+
+Coverage is counted in whole UTC days, and it counts one fact besides what was served: the
+days **between two served spans of one series** that the source was asked for and answered
+with nothing. A chunked fetch whose edge falls on a weekend or a market holiday serves up
+to the last session before the edge and from the first after it, so the served spans of
+two adjacent chunks sit one to three days apart although no day the market traded is
+missing. kanso holds no trading calendar and adds none, so it counts the source's own
+answer instead: `data backfill` and `data sync` record every chunk a source answered empty
+in the event log (`EMPTY_CHUNK`, filed under `series_subject`), and backfill asks again for
+exactly the days of every hole, so a hole of closed days alone is answered on the next
+pass. `answered` is the rule, and the one implementation both `data show` and a snapshot's
+coverage use. An answer closes a hole only **inside** a series — never before its first
+served day or after its last, where a range answered empty is a day before the instrument
+listed, or beyond the source's floor, and is not coverage — and only day by day: the days
+of a hole nobody answered stay a hole. The requested span is still never coverage, so a
+truncated answer — a chunk that served data and stopped early — leaves its missing days a
+hole until a backfill asks for exactly those days and the source answers them empty, or
+serves them. What this cannot see is a trading day the source itself holds nothing for:
+asked alone, it is indistinguishable from a closed day without a calendar, so it is counted
+as answered, and `data show` lists every such range so an operator can see it.
 
 Because the id carries the span's end but not its start, re-loading the same series to
 the same end reuses the id and is therefore a replacement rather than a duplicate, while
@@ -26,6 +46,7 @@ space. This module owns the paths and the manifest files; `catalog.py` owns the 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
@@ -37,7 +58,15 @@ from kanso.schemas.base import NonEmpty, Sha256, Versioned
 from kanso.schemas.yamlio import load_yaml, write_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - kept out of the runtime import graph
+    from kanso.state import StateStore
     from kanso.workspace import Workspace
+
+EMPTY_CHUNK: Final = "data_chunk_empty"
+"""The event kind recording a range a source was asked for and answered with nothing.
+
+`data backfill` and `data sync` append one per empty chunk, filed under the series and
+never the dataset, with the range as `{"start": ..., "end": ...}`; the range is asked
+once, and between two served spans it is coverage."""
 
 CATALOG_DIR: Final = "catalog"
 """The store's directory in the workspace."""
@@ -254,6 +283,62 @@ def merge(spans: list[tuple[date, date]]) -> list[tuple[date, date]]:
 def contains(spans: list[tuple[date, date]], window: tuple[date, date]) -> bool:
     """True when the union of `spans` contains every day of `window`."""
     return any(span[0] <= window[0] and window[1] <= span[1] for span in merge(spans))
+
+
+def holes(spans: Sequence[tuple[date, date]]) -> list[tuple[date, date]]:
+    """The days between the first and the last day of `spans` that none of them covers."""
+    merged = merge(list(spans))
+    return [
+        (left[1] + timedelta(days=1), right[0] - timedelta(days=1))
+        for left, right in zip(merged, merged[1:], strict=False)
+    ]
+
+
+def answered(
+    served: Sequence[tuple[date, date]], empty: Iterable[tuple[date, date]]
+) -> list[tuple[date, date]]:
+    """The days between two `served` spans of one series that a source answered empty.
+
+    `served` is what a series' datasets served and `empty` every range its source was
+    asked for and answered with nothing, wherever it falls. Only the days of a hole count:
+    an answer before the first served day or after the last extends nothing, a day that
+    was served is served whatever else was said of it, and a hole's days that no answer
+    names stay a hole. What comes back is merged and in order, and it is what coverage
+    adds to the served spans — `covered` — and what `data show` lists as answered empty.
+    """
+    asked = merge(list(empty))
+    return [
+        (max(hole[0], start), min(hole[1], end))
+        for hole in holes(served)
+        for start, end in asked
+        if overlaps(hole, (start, end))
+    ]
+
+
+def covered(
+    served: Sequence[tuple[date, date]], empty: Iterable[tuple[date, date]]
+) -> list[tuple[date, date]]:
+    """The spans coverage counts: what was served, joined across the days answered empty."""
+    return merge([*served, *answered(served, empty)])
+
+
+def series_subject(filed_under: tuple[str, str, str | None]) -> str:
+    """What the event log files a series' empty answers under: the series, never a dataset."""
+    instrument, kind, resolution = filed_under
+    return f"{instrument}|{kind}|{resolution or '-'}"
+
+
+def answered_empty(store: StateStore) -> dict[str, list[tuple[date, date]]]:
+    """Every range a source was asked for and answered with nothing, by `series_subject`."""
+    found: dict[str, list[tuple[date, date]]] = {}
+    for event in store.events(kind=EMPTY_CHUNK):
+        found.setdefault(event.subject, []).append(
+            (
+                date.fromisoformat(str(event.detail["start"])),
+                date.fromisoformat(str(event.detail["end"])),
+            )
+        )
+    return found
 
 
 def shortfall(requested: tuple[date, date], served: tuple[date, date]) -> str | None:
