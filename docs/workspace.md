@@ -456,6 +456,32 @@ commission and no spread, so under the defaults a bar-only hypothesis is refused
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason.
 
+`costs.maker_bps` charges a fill that rested on the book apart from the rest:
+
+```yaml
+costs:
+  commission_bps: 0.35             # every fill that took liquidity pays these three
+  slippage_bps: 0.5
+  spread: fixed_bps
+  fixed_bps: 1.0
+  maker_bps: -0.2                  # a fill that rested pays this alone; negative is a rebate
+```
+
+A fill the venue reports as a maker's — a limit that waited on the book until the market
+reached it (`docs/concepts.md`, Delivery) — pays exactly `maker_bps` of its notional and
+nothing else: no slippage, because it filled at its own price, and no half-spread, because
+the spread is what a resting order earns rather than pays. Negative is a net rebate, the way
+a per-share-priced account that pays for displayed liquidity can come out ahead on a fill
+that rested. Every other fill — a market order, a limit that was marketable when it arrived
+— is charged commission, slippage and half the spread exactly as before, and so is a maker's
+fill under a model that states no `maker_bps`: leave the key out and no number moves. It is
+applied where every cost is, once, in the runner's extraction, and `self.balance` books the
+same rate. `cost_stress` multiplies a charge and divides a rebate, so a stress of one or more
+never lets a fill earn more. What a sleeve reserves when it sizes is the larger of the maker
+rate and the others, since an order cannot know whether it will rest. A fill a broker reports
+with no liquidity side is charged as a taker's. The key is inherited like the rest of the
+block, and a layer can restate it but not remove it.
+
 `costs.limit_fill` is the one key of the block that is not a charge: it is how the simulated
 venue fills a limit order resting on the book.
 

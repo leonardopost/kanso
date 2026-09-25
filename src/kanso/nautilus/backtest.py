@@ -9,10 +9,12 @@ attached modifiers.
 
 **Costs are applied here and nowhere else.** The simulated venue is cost-neutral
 (`kanso.nautilus.venue`), and commission, slippage and half the spread on each side are
-deducted per fill in this extraction. One application means one number: a card, a
-certification gate, a composition expectation and a realised paper objective all read the
-same arithmetic, and a cost model can be re-applied to recorded fills without re-running
-anything.
+deducted per fill in this extraction — or, for a fill the venue reports as a maker's under a
+venue model that states `maker_bps`, that rate alone (`kanso.nautilus.costs.fill_rate`). One
+application means one number: a card, a certification gate, a composition expectation and a
+realised paper objective all read the same arithmetic, and a cost model can be re-applied to
+recorded fills without re-running anything, because each fill records whether it was a
+maker's.
 
 **The window is a refusal, not a parameter.** A request may name only a window the
 hypothesis declares, and the card path — `run_subprocess` — accepts only the research
@@ -60,8 +62,10 @@ raised in a strategy handler is logged and re-raised, so a failing card fails th
 rather than passing quietly; the engine's simulated exchange processes an order on the
 next data instant, so every fill is stamped at a data instant; `Position` carries
 `ts_opened`, `ts_closed`, the `OrderFilled` events that made it and the `PositionAdjusted`
-events applied to it, which together are the whole trade record; with `use_random_ids`
-left off the exchange generates deterministic trade ids.
+events applied to it, which together are the whole trade record; an `OrderFilled` carries
+the `liquidity_side` the matching engine gave its order — `MAKER` for a limit that rested
+on the book until the market reached it, `TAKER` for an order marketable when it arrived;
+with `use_random_ids` left off the exchange generates deterministic trade ids.
 """
 
 from __future__ import annotations
@@ -97,13 +101,13 @@ from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
 from kanso.nautilus.costs import (
     carry,
+    fill_rate,
     fixed_half_spread,
     maintenance_ratio,
     month_turned,
     policy_of,
     quote_half_spread,
     reset,
-    side_rate,
 )
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
@@ -1151,21 +1155,29 @@ def _fill(
     spreads: Mapping[str, tuple[tuple[int, ...], tuple[float, ...]]],
     model: VenueModel,
 ) -> Fill:
-    """One execution, with the cost this venue model charges it, applied once."""
-    from nautilus_trader.model.enums import order_side_to_str
+    """One execution, with the cost this venue model charges it, applied once.
+
+    A fill the venue reports as a maker's pays the model's `maker_bps` when it states one;
+    every other fill pays commission, slippage and half the spread (`costs.fill_rate`).
+    """
+    from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
     instrument_id = str(event.instrument_id)
     qty = float(event.last_qty)
     px = float(event.last_px)
     notional = qty * px * multipliers.get(instrument_id, 1.0)
     half = _half_spread(instrument_id, int(event.ts_event), spreads, model)
+    maker = event.liquidity_side == LiquiditySide.MAKER
+    costs = model.costs
+    rate = fill_rate(costs.commission_bps, costs.slippage_bps, half, costs.maker_bps, maker=maker)
     return Fill(
         ts_ns=int(event.ts_event),
         instrument_id=instrument_id,
         side=order_side_to_str(event.order_side),
         qty=qty,
         px=px,
-        cost=notional * side_rate(model.costs.commission_bps, model.costs.slippage_bps, half),
+        cost=notional * rate,
+        maker=maker,
     )
 
 

@@ -8,6 +8,12 @@ whose leverage is the hypothesis's `max_leverage`, USD, zero commission and one 
 point of slippage, with the spread taken from quotes when quotes are available, and a
 resting limit order filled when the market reaches its price.
 
+A fill that rested on the book may be charged apart. `maker_bps`, when a layer states it, is
+the whole charge on a fill the venue reports as a maker's — no slippage, since a resting
+limit fills at its own price, and no half-spread, since the spread is what it earns rather
+than what it pays — and it may be negative, a rebate. Unstated, a maker's fill is charged
+like any other, which is how every fill was charged before the key existed.
+
 The cost model carries one key that is not a charge. `limit_fill` is the matching rule the
 simulated venue is built with: `touch` fills a resting limit the market only reached, and
 `through` fills it only once the market trades beyond its price. It decides which fills a
@@ -60,17 +66,23 @@ class CostsOverride(KansoModel):
     slippage_bps: float | None = Field(default=None, ge=0)
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
+    maker_bps: float | None = Field(default=None, allow_inf_nan=False)
     limit_fill: LimitFill | None = None
 
 
 class Costs(KansoModel):
     """A complete cost model: what the runner charges, once, to every fill, and whether the
-    venue fills a resting limit the market only touched (`limit_fill`)."""
+    venue fills a resting limit the market only touched (`limit_fill`).
+
+    `maker_bps` is the charge on a fill the venue reports as a maker's, in place of all three
+    of the others; negative is a rebate, and `None` charges a maker's fill like any other.
+    """
 
     commission_bps: float = Field(ge=0)
     slippage_bps: float = Field(ge=0)
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
+    maker_bps: float | None = Field(default=None, allow_inf_nan=False)
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
 
     @model_validator(mode="after")
@@ -140,6 +152,7 @@ def _merge_costs(
         "slippage_bps": DEFAULT_SLIPPAGE_BPS,
         "spread": "quotes" if quotes_available else "fixed_bps",
         "fixed_bps": None,
+        "maker_bps": None,
         "limit_fill": DEFAULT_LIMIT_FILL,
     }
     origin: Origin = "default"

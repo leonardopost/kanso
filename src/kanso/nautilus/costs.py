@@ -1,9 +1,13 @@
 """What a trade and a book cost: the arithmetic the runner charges and the harness reads.
 
 Commission, slippage and half the spread are charged on every fill, once, by the runner's
-extraction (`kanso.nautilus.backtest`); the simulated venue charges nothing. A sleeve's harness
-needs the same number while it runs, to know what its account holds, so the arithmetic lives
-here and both call it: the balance a strategy sizes against is the equity the runner strikes.
+extraction (`kanso.nautilus.backtest`); the simulated venue charges nothing. A fill that
+rested on the book — one the venue reports as a maker's — pays the venue model's
+`maker_bps` instead of all three when the model states one: it filled at its own price, so
+it slipped nothing, and the spread is what it earns rather than pays. A negative rate is a
+rebate. A sleeve's harness needs the same number while it runs, to know what its account
+holds, so the arithmetic lives here and both call it: the balance a strategy sizes against
+is the equity the runner strikes.
 
 The book policy a hypothesis declares is the same shape of promise at the period end. A
 monthly reset moves a surplus into a cushion and restores a deficit from it; a financing
@@ -39,6 +43,7 @@ __all__ = [
     "NS_PER_YEAR",
     "BookPolicy",
     "carry",
+    "fill_rate",
     "fixed_half_spread",
     "maintenance_ratio",
     "month_turned",
@@ -75,6 +80,25 @@ def quote_half_spread(bid: float, ask: float) -> float:
 def side_rate(commission_bps: float, slippage_bps: float, half_spread: float) -> float:
     """What one fill costs per unit of notional: commission, slippage and half the spread."""
     return (commission_bps + slippage_bps) / BPS + half_spread
+
+
+def fill_rate(
+    commission_bps: float,
+    slippage_bps: float,
+    half_spread: float,
+    maker_bps: float | None,
+    *,
+    maker: bool,
+) -> float:
+    """What one fill costs per unit of notional under a venue model.
+
+    A maker's fill pays `maker_bps` and nothing else when the model states it, which may be
+    negative; every other fill — and a maker's, under a model that states no `maker_bps` —
+    pays commission, slippage and half the spread, exactly as `side_rate` strikes it.
+    """
+    if maker and maker_bps is not None:
+        return maker_bps / BPS
+    return side_rate(commission_bps, slippage_bps, half_spread)
 
 
 @dataclass(frozen=True)

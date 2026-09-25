@@ -34,7 +34,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import date, timedelta
 from hashlib import sha256
-from math import e, inf, sqrt
+from math import e, fsum, inf, sqrt
 from statistics import NormalDist, median
 from typing import ClassVar, Final
 
@@ -785,24 +785,27 @@ class _DeflatedSharpe:
 
 
 def stressed(run: CardRun, multiplier: float) -> CardRun:
-    """The same run with every recorded cost multiplied, re-applied to its own series.
+    """The same run with every recorded cost made worse by a multiple, re-applied to its own
+    series.
 
     Costs are applied once, by the runner, in the extraction that produced this run, so
-    multiplying them is arithmetic on the recorded fills rather than another backtest. A
-    fill is charged to the return period it falls in; a fill after the last period end
-    changed no return and so changes none here. A book policy's `carry` is a rate on
-    borrowed notional and not a fill cost, so it is left as recorded. Under a monthly reset
-    the transfers stand as struck and the cushion as recorded, so the extra cost stays in the
-    book across months where a real reset would have absorbed it at the next turn: a stressed
-    run's returns are exact, and its equity and drawdown are the more conservative for it.
+    stressing them is arithmetic on the recorded fills rather than another backtest. A charge
+    is multiplied; a rebate — the negative charge a venue model's `maker_bps` can put on a
+    fill that rested — is divided, so under a multiple of one or more every fill costs more
+    or earns less, and no stress ever makes a rebate pay better. A fill is charged to the
+    return period it falls in; a fill after the last period end changed no return and so
+    changes none here. A book policy's `carry` is a rate on borrowed notional and not a fill
+    cost, so it is left as recorded. Under a monthly reset the transfers stand as struck and
+    the cushion as recorded, so the extra cost stays in the book across months where a real
+    reset would have absorbed it at the next turn: a stressed run's returns are exact, and
+    its equity and drawdown are the more conservative for it.
     """
-    extra = multiplier - 1.0
     ends = run.period_ends_ns
     added = [0.0] * len(ends)
     for fill in run.fills:
         index = bisect_left(ends, fill.ts_ns)
         if index < len(ends):
-            added[index] += fill.cost * extra
+            added[index] += _surcharge(fill.cost, multiplier)
     running = 0.0
     equity: list[float] = []
     for value, charge in zip(run.equity, added, strict=True):
@@ -812,12 +815,33 @@ def stressed(run: CardRun, multiplier: float) -> CardRun:
         run,
         returns=tuple(r - charge for r, charge in zip(run.returns, added, strict=True)),
         equity=tuple(equity),
-        trades=tuple(
-            replace(t, pnl_net=t.pnl_net - t.cost * extra, cost=t.cost * multiplier)
-            for t in run.trades
-        ),
-        fills=tuple(replace(f, cost=f.cost * multiplier) for f in run.fills),
+        trades=tuple(_stressed_trade(trade, multiplier) for trade in run.trades),
+        fills=tuple(replace(f, cost=_worsened(f.cost, multiplier)) for f in run.fills),
     )
+
+
+def _worsened(cost: float, multiplier: float) -> float:
+    """One recorded fill cost under a cost multiple: a charge grows, a rebate shrinks."""
+    return cost * multiplier if cost >= 0.0 else cost / multiplier
+
+
+def _surcharge(cost: float, multiplier: float) -> float:
+    """What a cost multiple adds to one recorded fill cost, struck for a charge exactly as it
+    always was: the charge times the multiple less one."""
+    return cost * (multiplier - 1.0) if cost >= 0.0 else cost / multiplier - cost
+
+
+def _stressed_trade(trade: Trade, multiplier: float) -> Trade:
+    """A closed trade under a cost multiple, its fills' charges and rebates apart."""
+    rebates = fsum(fill.cost for fill in trade.fills if fill.cost < 0.0)
+    if rebates == 0.0:
+        return replace(
+            trade,
+            pnl_net=trade.pnl_net - trade.cost * (multiplier - 1.0),
+            cost=trade.cost * multiplier,
+        )
+    cost = (trade.cost - rebates) * multiplier + rebates / multiplier
+    return replace(trade, pnl_net=trade.pnl_net - (cost - trade.cost), cost=cost)
 
 
 class _CostStress:

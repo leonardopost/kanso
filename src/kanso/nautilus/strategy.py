@@ -88,6 +88,7 @@ from nautilus_trader.model.data import (
 from nautilus_trader.model.enums import (
     AggregationSource,
     BarAggregation,
+    LiquiditySide,
     OrderSide,
     OrderType,
     PriceType,
@@ -104,11 +105,11 @@ from kanso.nautilus import actions, splits
 from kanso.nautilus.costs import (
     BookPolicy,
     carry,
+    fill_rate,
     fixed_half_spread,
     month_turned,
     quote_half_spread,
     reset,
-    side_rate,
 )
 from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
 from kanso.nautilus.hooks import (
@@ -304,6 +305,13 @@ def _charges(config: KansoConfig) -> Mapping[str, Any]:
     return costs if isinstance(costs, Mapping) else {}
 
 
+def _maker_bps(charges: Mapping[str, Any]) -> float | None:
+    """What a maker's fill pays, or `None` when the venue model charges it like any other —
+    kept apart from zero, which is a maker paying nothing."""
+    stated = charges.get("maker_bps")
+    return None if stated is None else float(stated)
+
+
 def _order_price(order: object) -> float | None:
     price = getattr(order, "price", None)
     return None if price is None else float(price)
@@ -399,7 +407,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The runner applies costs once, in its extraction, and never inside the simulated
         venue; this is the same number, used to leave room when sizing so a position is
-        not opened at exactly the limit and then pushed through it by its own costs.
+        not opened at exactly the limit and then pushed through it by its own costs. An order
+        does not know whether it will rest, so where the model states a maker's rate the
+        larger of the two is the one reserved; a rebate reserves nothing of its own.
         """
         costs = self._cfg.venue_model.get("costs")
         if not isinstance(costs, Mapping):
@@ -407,6 +417,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         bps = float(costs.get("commission_bps") or 0.0) + float(costs.get("slippage_bps") or 0.0)
         if costs.get("spread") == "fixed_bps":
             bps += float(costs.get("fixed_bps") or 0.0)
+        maker = _maker_bps(costs)
+        if maker is not None:
+            bps = max(bps, maker)
         return bps / BASIS_POINT
 
     @property
@@ -1585,15 +1598,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _paid(self, event: Any) -> float:
         """What one fill took out of cash: the value it bought, or gave back what it sold
-        for, and the commission, slippage and half-spread the runner charges it."""
+        for, and what the runner charges it — commission, slippage and half the spread, or a
+        maker's own rate where the venue model states one, which a rebate makes negative."""
         instrument = self.cache.instrument(event.instrument_id)
         multiplier = 1.0 if instrument is None else float(instrument.multiplier)
         qty, px = float(event.last_qty), float(event.last_px)
         signed = qty if event.order_side == OrderSide.BUY else -qty
-        rate = side_rate(
+        rate = fill_rate(
             float(self._charges.get("commission_bps") or 0.0),
             float(self._charges.get("slippage_bps") or 0.0),
             self._half_spread_at(event.instrument_id.value, int(event.ts_event)),
+            _maker_bps(self._charges),
+            maker=event.liquidity_side == LiquiditySide.MAKER,
         )
         return signed * px * multiplier + qty * px * multiplier * rate
 

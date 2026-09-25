@@ -1028,6 +1028,63 @@ def test_a_fill_after_the_last_period_end_changes_no_return() -> None:
     assert stressed(run, 5.0).returns == (10.0,)
 
 
+def test_a_stress_divides_a_rebate_rather_than_multiplying_it() -> None:
+    """A maker's rebate is a negative cost, and a stress that tripled it would pay the edge
+    more for the worse venue: under a multiple of three the rebate is a third of itself, the
+    charge beside it three times itself, and every series moves by the difference."""
+    rested, taken = fill(DAYS[0], cost=-3.0), fill(DAYS[1], cost=20.0)
+    round_trip = Trade(
+        opened_ns=rested.ts_ns,
+        closed_ns=taken.ts_ns,
+        instrument_id="DEMO",
+        qty=100.0,
+        avg_open=100.0,
+        avg_close=101.0,
+        pnl_net=83.0,
+        cost=17.0,
+        fills=(rested, taken),
+    )
+    run = build_run((103.0, -20.0), trades=(round_trip,), fills=(rested, taken))
+
+    tripled = stressed(run, 3.0)
+
+    assert [one.cost for one in tripled.fills] == pytest.approx([-1.0, 60.0])
+    assert tripled.returns == pytest.approx((101.0, -60.0)), (
+        "the rebate earns 2 less, the charge costs 40 more"
+    )
+    assert tripled.equity == pytest.approx((100_101.0, 100_041.0))
+    assert tripled.trades[0].cost == pytest.approx(59.0)
+    assert tripled.trades[0].pnl_net == pytest.approx(41.0)
+
+
+@pytest.mark.parametrize("multiplier", [1.0, 1.5, 2.0, 3.0, 10.0])
+def test_no_stress_of_one_or_more_makes_a_fill_cheaper(multiplier: float) -> None:
+    run = build_run(
+        (10.0, 10.0),
+        fills=(fill(DAYS[0], cost=-2.5), fill(DAYS[0], cost=0.0), fill(DAYS[1], cost=4.0)),
+    )
+
+    worse = stressed(run, multiplier)
+
+    for before, after in zip(run.fills, worse.fills, strict=True):
+        assert after.cost >= before.cost
+    assert all(a <= b for a, b in zip(worse.returns, run.returns, strict=True))
+
+
+def test_a_run_with_no_rebate_is_stressed_exactly_as_it_always_was() -> None:
+    """The arithmetic a charge-only run was stressed with, written out: bit for bit."""
+    fills = (fill(DAYS[0], cost=0.1), fill(DAYS[1], cost=0.7))
+    round_trip = trade(DAYS[0], pnl=12.3, cost=0.1)
+    run = build_run((1.1, 2.2), trades=(round_trip,), fills=fills)
+
+    tripled = stressed(run, 3.0)
+
+    assert [one.cost for one in tripled.fills] == [0.1 * 3.0, 0.7 * 3.0]
+    assert tripled.returns == (1.1 - 0.1 * (3.0 - 1.0), 2.2 - 0.7 * (3.0 - 1.0))
+    assert tripled.trades[0].cost == 0.1 * 3.0
+    assert tripled.trades[0].pnl_net == 12.3 - 0.1 * (3.0 - 1.0)
+
+
 def test_cost_stress_recomputes_the_metric_at_two_multiples() -> None:
     run = trading_run(100.0, 100.0, 100.0, 100.0, cost=50.0)
     result = cost_stress.evaluate(context(run, params={"mult_a": 2.0, "mult_b": 3.0}))

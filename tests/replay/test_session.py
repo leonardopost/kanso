@@ -215,12 +215,14 @@ class Strategy(KansoStrategy):
 """The saw-tooth's lowest print is 9.75, reached on the fourth session and never passed."""
 
 
-def rested(limit: float, rule: str) -> tuple[backtest.RunResult, backtest.RunResult]:
-    """A buy resting at `limit` under a venue model whose `limit_fill` is `rule`, on both
-    paths."""
+def rested(
+    limit: float, rule: str, **costs: object
+) -> tuple[backtest.RunResult, backtest.RunResult]:
+    """A buy resting at `limit` under a venue model whose `limit_fill` is `rule`, and whose
+    costs are otherwise the replay suite's with `costs` stated over them, on both paths."""
     request = request_for(source=RESTING_BUY)
     model = dict(request.venue_model)
-    model["costs"] = {**dict(model["costs"]), "limit_fill": rule}  # type: ignore[arg-type]
+    model["costs"] = {**dict(model["costs"]), "limit_fill": rule, **costs}  # type: ignore[arg-type]
     subject = replace(request, venue_model=model, overrides={"limit": limit})
     return both(subject, [instrument()], [tuple(bars(FORWARD))])
 
@@ -246,6 +248,18 @@ def test_a_limit_the_market_trades_through_fills_at_its_price_either_way(rule: s
 
     assert node.run.fills == engine.run.fills
     assert [(fill.side, fill.qty, fill.px) for fill in engine.run.fills] == [("BUY", 100.0, 9.8)]
+
+
+def test_the_two_paths_charge_a_resting_fill_the_maker_rate_alike() -> None:
+    """The node's venue reports the fill as a maker's exactly as the research engine does,
+    so one extraction charges it one rate: here a rebate of a fifth of a basis point."""
+    node, engine = rested(9.8, "touch", maker_bps=-0.2)
+
+    assert node.run.fills == engine.run.fills
+    (fill,) = engine.run.fills
+    assert fill.maker is True
+    assert fill.cost == pytest.approx(-100 * 9.8 * 0.2 / 10_000)
+    assert node.run.equity == engine.run.equity
 
 
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:
