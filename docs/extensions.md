@@ -356,9 +356,10 @@ remedy: require one of those, or install the extension that registers the type
 
 A hypothesis that requires the type is handed it. The runner loads the type's points for
 the universe over the window, the harness subscribes the sleeve to the class, and each point
-reaches the author's `on_data` as an instance of it, at the instant it became public — a
-card, a replay and a stage alike. The author subscribes nothing and imports nothing, which
-is as well: `strategy_integrity` refuses a `strategy.py` that imports `kanso.data` or an
+reaches the author's `on_data` as an instance of it, at the instant it became public — on a
+card, on either replay path and on a stage replaying the catalog. A stage fed by a broker's
+live feed is handed what that feed publishes, and no feed kanso ships publishes a custom
+type. The author subscribes nothing and imports nothing, which is as well: `strategy_integrity` refuses a `strategy.py` that imports `kanso.data` or an
 extension's module, so the class a subscription needs is out of its reach.
 
 `research begin` pins the type like any series: each instrument of the universe needs a
