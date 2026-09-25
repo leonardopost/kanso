@@ -824,9 +824,11 @@ def resolve_universe(
             ResolveError(wanted, f"{reason}, and {absent}") for wanted, reason in unresolved.items()
         )
     else:
-        answered = _reconstructed(file, provider.resolve(sorted(unresolved), as_of))
+        asked = {wanted: _vendor_key(file, wanted, provider.id) for wanted in unresolved}
+        answers = provider.resolve(sorted(set(asked.values())), as_of)
+        answered = _reconstructed(file, _as_asked(answers, asked, provider.id))
         _collect(answered, resolved, failures)
-        updates = _cache_updates(file, answered, provider, as_of)
+        updates = _cache_updates(file, answered, provider, as_of, asked)
 
     if failures:
         raise ValidationError(
@@ -838,6 +840,44 @@ def resolve_universe(
         write_store(ws, resolved.values(), replace=refresh)
         _write_cache(ws.path(CACHE_NAME), file, updates)
     return resolved
+
+
+def _vendor_key(file: InstrumentsFile, wanted: str, adapter: str) -> str:
+    """What a reference adapter is asked for: the vendor's own key, when the entry records one.
+
+    The id a universe names — a qualified id, or the key an entry is filed under — and the
+    key a vendor answers to are different strings, and only the entry holds both. Asked for
+    the id instead, a vendor whose keys carry no venue refuses it: measured, a client error on
+    every refresh of an entry filed as `TQQQ.XNAS`, and on every validation that named
+    `AIG.XNYS` once the entry's cache went stale. An id with no entry, or an entry that
+    records no key for this adapter, is asked for as it was given.
+    """
+    found = _lookup(file, wanted)
+    if isinstance(found, ResolveError):
+        return wanted
+    return found.sources.get(adapter, wanted)
+
+
+def _as_asked(
+    answers: Mapping[str, object], asked: Mapping[str, str], adapter: str
+) -> dict[str, object]:
+    """The adapter's answers, filed again under the id each was asked for.
+
+    A refusal names the id the caller asked about and, when the vendor was asked for another
+    key, that key too, because that is the one to look up at the vendor.
+    """
+    out: dict[str, object] = {}
+    for wanted, key in asked.items():
+        outcome = answers[key]
+        if isinstance(outcome, ResolveError):
+            said = (
+                outcome.reason
+                if key == wanted
+                else f"{outcome.reason} (asked of {adapter} as {key!r})"
+            )
+            outcome = ResolveError(wanted, said)
+        out[wanted] = outcome
+    return out
 
 
 def _reconstructed(file: InstrumentsFile, answered: Mapping[str, object]) -> dict[str, object]:
@@ -941,8 +981,12 @@ def _cache_updates(
     answered: Mapping[str, object],
     provider: InstrumentProvider,
     as_of: date,
+    asked: Mapping[str, str],
 ) -> dict[str, InstrumentEntry]:
-    """The entries a resolution rewrites, keyed by the id they are filed under."""
+    """The entries a resolution rewrites, keyed by the id they are filed under.
+
+    The vendor's key is read back for the key the adapter was actually asked for.
+    """
     at = datetime.now(UTC)
     updates: dict[str, InstrumentEntry] = {}
     for wanted, outcome in answered.items():
@@ -957,7 +1001,7 @@ def _cache_updates(
                     at=at,
                     checksum=definition_checksum(outcome),
                 ),
-                "sources": {**entry.sources, **provider.sources(wanted)},
+                "sources": {**entry.sources, **provider.sources(asked[wanted])},
             }
         )
     return updates

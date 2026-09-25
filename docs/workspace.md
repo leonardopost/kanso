@@ -570,7 +570,10 @@ field-level split down the middle.
 constructed — a correction, not a note), `attributes` (free-form facts strategies and gates
 may read), `corporate_actions`, and `manual`. **kanso's:** `nautilus_id`, `asset_class`,
 `resolved` and `sources`, rewritten by `kanso data instruments resolve` and only when a
-resolution actually changed them.
+resolution actually changed them. `sources` is the vendor's own key, by reference adapter,
+and it is what that adapter is asked for: an entry may be filed under any key and a
+hypothesis may name it by its qualified id, and the vendor is still asked for its own
+spelling. An entry with no key for the configured adapter is asked for as it was named.
 
 An edit to `override` reaches the store at the next `kanso data instruments resolve` and
 never before: `hyp validate`, `hyp add` and every card build the definition in memory to
