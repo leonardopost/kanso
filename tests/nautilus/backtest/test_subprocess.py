@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from kanso.nautilus.backtest import (
     run,
     run_subprocess,
 )
+from tests.processes import ends, running
 
 from .conftest import (
     RAISING_SLEEVE,
@@ -260,3 +262,104 @@ def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
 
     assert "the run resumes" in str(failure.value.remedy)
     assert not runner._INTERRUPT.is_set()
+
+
+def test_a_process_told_to_stop_reads_no_window_and_starts_no_card(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane that was told to stop while a model answered it goes no further."""
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    monkeypatch.setattr(runner, "window_data", lambda *_: pytest.fail("the window was read"))
+    runner.interrupt()
+    try:
+        with pytest.raises(PreconditionError, match="the card was interrupted"):
+            run_subprocess(request_for(), store, lane)
+    finally:
+        runner.resume()
+
+
+def test_a_stop_that_lands_while_the_window_is_read_starts_no_card(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    read = runner.window_data
+
+    def reading(*args: object) -> object:
+        runner.interrupt()
+        return read(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner, "window_data", reading)
+    monkeypatch.setattr(
+        runner.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a card was started")
+    )
+    try:
+        with pytest.raises(PreconditionError, match="the card was interrupted"):
+            run_subprocess(request_for(), store, lane)
+    finally:
+        runner.resume()
+
+
+def test_a_card_ends_itself_once_its_parent_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The watch a card keeps on the lane that started it, driven in this process."""
+    from kanso.nautilus import backtest as runner
+
+    parents = iter([4242, 4242, 1])
+    ended: list[int] = []
+    monkeypatch.setattr(runner.os, "getppid", lambda: next(parents))
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner.os, "_exit", ended.append)
+
+    runner._end_with(4242)
+
+    assert ended == [runner.ORPHANED]
+
+
+def test_a_card_whose_lane_is_killed_does_not_outlive_it(
+    store: Path, lane: Path, request_for, tmp_path: Path
+) -> None:
+    """Measured with real processes: a lane killed outright takes its card with it.
+
+    The card leads its own session, so the kill never reaches it; left to itself this one
+    would spend far longer than the wait below in `on_start` alone.
+    """
+    import pickle
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    from kanso.nautilus.backtest import _BOOTSTRAP, window_data
+
+    request = request_for(source=SLOW_SLEEVE)
+    instruments, groups = window_data(request, store)
+    handed = tmp_path / "request.pkl"
+    handed.write_bytes(
+        pickle.dumps(
+            {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)}
+        )
+    )
+    starts_a_card = (
+        "import os, subprocess, sys, time\n"
+        f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r}, {str(handed)!r},"
+        f" {str(tmp_path / 'result.pkl')!r}, str(os.getpid())], start_new_session=True,"
+        f" cwd={str(lane)!r})\n"
+        "print(card.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    fake_lane = subprocess.Popen([sys.executable, "-c", starts_a_card], stdout=subprocess.PIPE)
+    assert fake_lane.stdout is not None
+    card = int(fake_lane.stdout.readline())
+    try:
+        time.sleep(1.0)
+        assert running(card), "the card was running while its lane was"
+        fake_lane.send_signal(signal.SIGKILL)
+        fake_lane.wait(timeout=10)
+
+        assert ends(card, within_s=8.0), "the card outlived the lane that started it"
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(card, signal.SIGKILL)

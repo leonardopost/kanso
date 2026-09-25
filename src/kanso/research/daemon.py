@@ -15,13 +15,21 @@ resumes active runs before taking new work". A hypothesis being worked in the in
 lane is neither of those things, so an operator at a keyboard never costs a daemon lane
 its turn.
 
-**Stopping keeps everything.** `stop` sends one signal. The supervisor passes it on and
-exits; a worker looks up between cards, leaves the run open and the lane directory where
-it is, and exits too. A worker still inside a card when its grace runs out is killed, and
-that costs the card and nothing else: the run, its blobs and its `best` are all in state.
-Nothing is ended and nothing is cleaned up, so the next `start` picks the runs up where
-they were left — which is why stopping the daemon is a cheap act an operator can perform
-without thinking about what it costs.
+**Stopping keeps everything.** `stop` sends one signal. The supervisor passes it on to
+every child at once and exits; a worker kills the card it is watching, begins no further
+proposal or card, leaves the run open and the lane directory where it is, and exits too. A
+worker still busy when the one grace the supervisor gives them all runs out — waiting on a
+model, say — is killed, and that costs the call and nothing else: the run, its blobs and
+its `best` are all in state. Nothing is ended and nothing is cleaned up, so the next
+`start` picks the runs up where they were left — which is why stopping the daemon is a
+cheap act an operator can perform without thinking about what it costs.
+
+**Nothing the daemon starts outlives it.** The lanes and the monitor run in the supervisor's
+process group, and a supervisor that does not answer `stop` is killed with that whole
+group. A card leads a session of its own, so no kill aimed at its lane reaches it; it
+watches its parent instead and ends itself once the lane that started it is gone. A lane
+and the monitor watch theirs the same way, and stop as though told to once the supervisor
+is gone however it went.
 
 On macOS the supervisor runs under `caffeinate -i`, so a research host does not idle-sleep
 mid-run. The monitor is a fourth kind of child beside the lanes: one pass of the paper and
@@ -109,7 +117,8 @@ BACKOFF_S: Final = 30.0
 """How long a lane waits after a hypothesis it took could not be researched at all."""
 
 GRACE_S: Final = 5.0
-"""How long a child is given to finish what it is on before the supervisor kills it."""
+"""How long the children, all together, are given to finish what they are on before the
+supervisor kills whichever are left."""
 
 CARDS_PER_TURN: Final = 1
 """How many cards a lane asks the driver for before it looks up. One, so that stopping
@@ -137,6 +146,11 @@ MONITOR_FAILED: Final = "monitor_failed"
 _STOPPING = False
 """Set by the signal handler; every loop in this process reads it between iterations."""
 
+_SUPERVISOR: int | None = None
+"""The supervisor a lane or the monitor answers to, once it has taken it on (`_answer_to`).
+`None` in the supervisor itself, whose own parent is whatever started it — the `start`
+command, which exits at once — and is nothing to answer to."""
+
 
 def request_stop(*_: object) -> None:
     """Ask this process's loops to finish what they are doing and return.
@@ -151,15 +165,30 @@ def request_stop(*_: object) -> None:
 
 
 def clear_stop() -> None:
-    """Forget a stop request. For a test that runs a loop more than once."""
-    global _STOPPING
+    """Forget a stop request, and the supervisor. For a test that runs a loop more than once."""
+    global _STOPPING, _SUPERVISOR
     _STOPPING = False
+    _SUPERVISOR = None
     backtest.resume()
 
 
 def stopping() -> bool:
-    """Whether this process has been asked to stop."""
+    """Whether this process has been asked to stop.
+
+    In a lane or the monitor, a supervisor that is no longer this process's parent is the
+    same request, taken the moment it is noticed, card interrupt and all: the supervisor
+    was killed, crashed or went without it, and a child nobody supervises would go on
+    working runs the next `start` hands to a lane of the same name.
+    """
+    if not _STOPPING and _SUPERVISOR is not None and os.getppid() != _SUPERVISOR:
+        request_stop()
     return _STOPPING
+
+
+def _answer_to(supervisor: int) -> None:
+    """Take `supervisor` on as the process this one stops without (`stopping`)."""
+    global _SUPERVISOR
+    _SUPERVISOR = supervisor
 
 
 @dataclass(frozen=True)
@@ -272,7 +301,14 @@ def start(ws: Workspace) -> int:
 
 
 def stop(ws: Workspace) -> int:
-    """Signal the daemon and wait for it to go. Runs and lane directories stay."""
+    """Signal the daemon and wait for it to go. Runs and lane directories stay.
+
+    The supervisor signals its children together and kills what is left after one shared
+    grace, so a supervisor still here after `STOP_TIMEOUT_S` has not answered at all, and
+    nothing it holds is worth waiting longer for. It is then killed with its process group,
+    which holds every lane and the monitor, so a stop that has to insist still leaves no
+    child of the daemon running (`_kill_group`).
+    """
     pid = pid_of(ws)
     if pid is None:
         raise PreconditionError(
@@ -281,9 +317,7 @@ def stop(ws: Workspace) -> int:
         )
     _signal(pid, signal.SIGTERM)
     if not _gone(pid, STOP_TIMEOUT_S):
-        # The supervisor kills its own children after their grace, so one that is still
-        # here has not answered at all; nothing it holds is worth waiting longer for.
-        _signal(pid, signal.SIGKILL)
+        _kill_group(pid)
         _gone(pid, GRACE_S)
     pid_path(ws).unlink(missing_ok=True)
     return pid
@@ -333,8 +367,7 @@ def serve(ws: Workspace) -> int:
         while not stopping():
             _wait(POLL_S)
     finally:
-        for child in children:
-            _terminate(child)
+        _terminate(children)
         pid_path(ws).unlink(missing_ok=True)
         lock.close()
     return 0
@@ -380,9 +413,14 @@ def worker(ws: Workspace, lane: str) -> int:
     the parent is not held while a model writes a new hypothesis. What that exploration
     does, failure included, is its own events (`research/explore.py`) and never a
     `lane_failed`.
+
+    A lane told to stop starts nothing more: the driver asks before every proposal and
+    every card, and an exploration is not begun either. The same holds once the supervisor
+    that started the lane is gone, however it went (`stopping`).
     """
     lane = lanes.check_lane(lane)
     _listen()
+    _answer_to(os.getppid())
     with StateStore(ws.path("state.db")) as store:
         usable(store, ws.path("state.db"))
         while not stopping():
@@ -391,7 +429,9 @@ def worker(ws: Workspace, lane: str) -> int:
                 _wait(POLL_S)
                 continue
             try:
-                outcome = research_driver.run(ws, store, subject, cards=CARDS_PER_TURN, lane=lane)
+                outcome = research_driver.run(
+                    ws, store, subject, cards=CARDS_PER_TURN, lane=lane, stop=stopping
+                )
             except KansoError as exc:
                 if stopping():
                     break  # the card was interrupted, not failed; the run resumes next start
@@ -403,7 +443,7 @@ def worker(ws: Workspace, lane: str) -> int:
                 scheduler.put_back(store, subject)
                 _wait(BACKOFF_S)
             else:
-                if outcome.ended:
+                if outcome.ended and not stopping():
                     explore.after_stall(ws, store, subject, lane)
     return 0
 
@@ -417,12 +457,14 @@ def monitor(ws: Workspace) -> int:
     thing that should stop when one version of it cannot be judged.
 
     A workspace with nothing deployed is the ordinary case here: the pass finds no version
-    and the loop simply keeps its cadence until deployment gives it one.
+    and the loop simply keeps its cadence until deployment gives it one. Like a lane, the
+    monitor stops once the supervisor that started it is gone (`stopping`).
     """
     from kanso.monitor import run_once
 
     interval = parse_duration(ws.config.monitor.interval, "monitor.interval").total_seconds()
     _listen()
+    _answer_to(os.getppid())
     with StateStore(ws.path("state.db")) as store:
         usable(store, ws.path("state.db"))
         while not stopping():
@@ -494,22 +536,30 @@ def _spawn(ws: Workspace, command: str, *rest: str) -> subprocess.Popen[bytes]:
         )
 
 
-def _terminate(child: subprocess.Popen[bytes]) -> None:
-    """Ask a child to stop, and insist when its grace runs out.
+def _terminate(children: Sequence[subprocess.Popen[bytes]]) -> None:
+    """Ask every child to stop at once, and kill whichever is left after one shared grace.
 
-    A lane inside a card cannot answer until the card ends, and a card may be allowed
-    minutes; a shutdown that waited for one would not be a shutdown. So the grace is
-    short and the card is what a stop costs — the lane kills it on the way out, since the
-    child leads its own session and would otherwise outlive the lane, unbudgeted.
+    A lane inside a card answers at its watcher's next poll, but a lane waiting on a model
+    answers only when the call returns, which may be minutes; a shutdown that waited for one
+    would not be a shutdown. So every child is signalled before any is waited on, and they
+    share one `GRACE_S`: the supervisor is gone within about that however many lanes it
+    runs, well inside what `stop` gives it. Signalled one at a time, each with a grace of its
+    own, seven busy children took seven graces — longer than `stop` waits — and the
+    supervisor was killed with the last of them never signalled at all, measured on a live
+    workspace on 2026-09-25: three children orphaned, still starting cards minutes later.
+    A lane killed here cannot kill the card it was watching, which leads its own session;
+    the card ends itself once its lane is gone (`kanso.nautilus.backtest`).
     """
-    if child.poll() is not None:
-        return
-    child.terminate()
-    try:
-        child.wait(timeout=GRACE_S)
-    except subprocess.TimeoutExpired:
-        child.kill()
-        child.wait()
+    running = [child for child in children if child.poll() is None]
+    for child in running:
+        child.terminate()
+    deadline = time.monotonic() + GRACE_S
+    for child in running:
+        try:
+            child.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
 
 
 def _acquire(ws: Workspace) -> IO[bytes]:
@@ -572,6 +622,26 @@ def _signal(pid: int, number: int) -> None:
     """Send one signal, tolerating a process that went away between the check and the send."""
     with contextlib.suppress(OSError):
         os.kill(pid, number)
+
+
+def _kill_group(pid: int) -> None:
+    """Kill a supervisor and every process in the group it leads.
+
+    `start` runs the supervisor in a session of its own, and a service manager starts it
+    as a group leader too, so its group is the daemon: the supervisor, its lanes and its
+    monitor, which it spawns without a group of their own. A supervisor that leads no group
+    shares one with whatever started it, and that group is not the daemon's to kill, so it
+    is killed alone and its lanes stop on their own once it is gone (`worker`).
+    """
+    try:
+        leads = os.getpgid(pid) == pid
+    except OSError:
+        return
+    if leads:
+        with contextlib.suppress(OSError):
+            os.killpg(pid, signal.SIGKILL)
+    else:
+        _signal(pid, signal.SIGKILL)
 
 
 def _gone(pid: int, seconds: float) -> bool:

@@ -147,11 +147,12 @@ loginctl enable-linger "$USER"        # so it keeps running when you log out
 ```
 
 `KillMode=mixed` sends `SIGTERM` to the supervisor alone, which is what lets it terminate
-its own children with the grace it gives them — a worker looks up between cards, leaves its
-run open and exits — and kills whatever is left. The default `control-group` also works,
-because a worker treats a `SIGTERM` of its own the same way, but it takes the ordering away
-for nothing. `TimeoutStopSec` must stay above that grace so a lane still inside a card is
-killed by the supervisor rather than by systemd.
+its own children with the one grace it gives them all — a worker kills the card it is
+watching, starts nothing more, leaves its run open and exits — and kills whatever is left.
+The default `control-group` also works, because a worker treats a `SIGTERM` of its own the
+same way, but it takes the ordering away for nothing. `TimeoutStopSec` must stay above that
+grace so a lane still waiting on a model is killed by the supervisor rather than by
+systemd.
 
 `Restart=on-failure` does not restart after `kanso research stop`, because a clean stop
 exits `0`. It does restart a crash, and that is safe: the lock is released when the kernel

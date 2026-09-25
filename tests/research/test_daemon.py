@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from hashlib import sha256
 from pathlib import Path
@@ -28,6 +29,7 @@ from kanso.research import daemon, explore, lanes, records, scheduler
 from kanso.research import driver as research_driver
 from kanso.state import StateStore
 from kanso.workspace import Workspace
+from tests.processes import ends
 
 from .conftest import DOCUMENT, classify, document
 from .test_scheduler import open_run
@@ -331,6 +333,170 @@ def test_a_child_still_working_when_its_grace_runs_out_is_killed(
     assert (child.terminated, child.killed) == (True, True)
 
 
+class Deaf(FakeChild):
+    """A child that answers no signal and takes the whole timeout it is given to say so."""
+
+    def __init__(self, log: list[tuple[object, ...]], name: str) -> None:
+        super().__init__(stubborn=True)
+        self.log = log
+        self.name = name
+
+    def terminate(self) -> None:
+        self.log.append(("terminate", self.name))
+        super().terminate()
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.log.append(("wait", self.name, timeout))
+        if timeout is not None:
+            time.sleep(timeout)
+        return super().wait(timeout)
+
+    def kill(self) -> None:
+        self.log.append(("kill", self.name))
+        super().kill()
+
+
+def test_every_child_is_signalled_before_any_is_waited_on_and_they_share_one_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seven lanes busy in cards cost one grace, not seven: signalled one at a time, each
+    waited on in turn, they outlasted `stop`'s patience and the last were never signalled."""
+    monkeypatch.setattr(daemon, "GRACE_S", 0.2)
+    log: list[tuple[object, ...]] = []
+    children = [Deaf(log, f"l{number}") for number in range(1, 8)]
+
+    daemon._terminate(children)  # type: ignore[arg-type]
+
+    assert log[:7] == [("terminate", child.name) for child in children]
+    waits = [entry for entry in log if entry[0] == "wait" and entry[2] is not None]
+    assert [entry[1] for entry in waits] == [child.name for child in children]
+    first, *rest = (float(str(entry[2])) for entry in waits)
+    assert 0.0 < first <= 0.2
+    assert rest == [0.0] * 6, "the grace is spent once, by the first child waited on"
+    assert all(child.killed for child in children)
+
+
+def test_a_supervisor_goes_within_one_grace_however_many_children_will_not_answer(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured on real processes that ignore the signal, as a lane stuck in a call does."""
+    code = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
+        "time.sleep(60)\n"
+    )
+    spawned: list[subprocess.Popen[bytes]] = []
+    ready: list[float] = []
+
+    def deaf_child(*_: object) -> subprocess.Popen[bytes]:
+        child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE)
+        assert child.stdout is not None and child.stdout.readline() == b"ready\n"
+        spawned.append(child)
+        ready.append(time.monotonic())
+        return child
+
+    monkeypatch.setattr(daemon, "_spawn", deaf_child)
+    monkeypatch.setattr(daemon, "GRACE_S", 1.0)
+    daemon.request_stop()
+
+    assert daemon.serve(ws) == 0
+    took = time.monotonic() - ready[-1]
+
+    assert len(spawned) == 3, "two lanes and the monitor"
+    assert all(child.poll() is not None for child in spawned)
+    assert took < 2.0, f"shutting three children down took {took:.2f}s: a grace each"
+
+
+def test_a_daemon_that_will_not_answer_is_killed_with_every_process_in_its_group(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lanes and the monitor run in the supervisor's group: none survives its kill."""
+    code = (
+        "import signal, subprocess, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "lane = subprocess.Popen([sys.executable, '-c', "
+        "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'])\n"
+        "sys.stdout.write(f'{lane.pid}\\n'); sys.stdout.flush()\n"
+        "time.sleep(60)\n"
+    )
+    supervisor = subprocess.Popen(
+        [sys.executable, "-c", code], stdout=subprocess.PIPE, start_new_session=True
+    )
+    assert supervisor.stdout is not None
+    lane = int(supervisor.stdout.readline())
+    path = daemon.pid_path(ws)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{supervisor.pid}\n", encoding="utf-8")
+    monkeypatch.setattr(daemon, "STOP_TIMEOUT_S", 0.2)
+    try:
+        assert daemon.stop(ws) == supervisor.pid
+
+        assert supervisor.wait(timeout=10) != 0
+        assert ends(lane, within_s=10.0), "the lane outlived the supervisor it belonged to"
+    finally:
+        with contextlib.suppress(OSError):
+            os.killpg(supervisor.pid, signal.SIGKILL)
+
+
+def test_a_lane_whose_supervisor_is_gone_stops_as_though_told_to(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whatever took the supervisor, a lane nobody supervises takes nothing more."""
+    parents = iter([4242])
+    monkeypatch.setattr(daemon.os, "getppid", lambda: next(parents, 1))
+    monkeypatch.setattr(daemon, "claim", lambda *_: pytest.fail("the lane claimed work"))
+
+    assert daemon.worker(ws, "l1") == 0
+    assert daemon.stopping()
+    from kanso.nautilus import backtest as runner
+
+    assert runner._INTERRUPT.is_set(), "a card in flight is killed as on a stop"
+
+
+def test_a_monitor_whose_supervisor_is_gone_stops_after_the_pass_it_is_on(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parents = iter([4242, 4242])
+    passes: list[int] = []
+    monkeypatch.setattr(daemon.os, "getppid", lambda: next(parents, 1))
+    monkeypatch.setattr("kanso.monitor.run_once", lambda *_: passes.append(1) or [])
+
+    assert daemon.monitor(ws) == 0
+    assert passes == [1]
+    assert daemon.stopping()
+
+
+def test_a_supervisor_answers_to_nothing_above_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its own parent is the `start` command, which exits at once: that is no stop."""
+    monkeypatch.setattr(daemon.os, "getppid", lambda: 1)
+
+    assert daemon.stopping() is False
+
+
+def test_a_lane_hands_its_stop_request_to_the_driver_and_explores_nothing_once_stopped(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    asked: list[bool] = []
+
+    def stalled_then_stopped(
+        _ws: Workspace, _store: StateStore, subject: str, **kwargs: Any
+    ) -> Any:
+        stop = kwargs["stop"]
+        asked.append(stop())
+        daemon.request_stop()
+        asked.append(stop())
+        return SimpleNamespace(ended=True)
+
+    monkeypatch.setattr(research_driver, "run", stalled_then_stopped)
+    monkeypatch.setattr(explore, "after_stall", lambda *_: pytest.fail("explored after a stop"))
+
+    assert daemon.worker(ws, "l1") == 0
+    assert asked == [False, True]
+
+
 def test_two_supervisors_cannot_hold_one_workspace(ws: Workspace) -> None:
     """The pid file is the lock, so the holder and the pid inside it cannot disagree."""
     held = daemon._acquire(ws)
@@ -412,8 +578,10 @@ def test_a_pid_file_left_by_a_dead_process_is_not_a_daemon(ws: Workspace) -> Non
     gone.wait()
     path.write_text(f"{gone.pid}\n", encoding="utf-8")
     assert daemon.pid_of(ws) is None
-    # Signalling a process that went away between the look and the send is not an error.
+    # Signalling a process that went away between the look and the send is not an error,
+    # and nor is killing the group of one that went.
     daemon._signal(gone.pid, signal.SIGTERM)
+    daemon._kill_group(gone.pid)
 
 
 def test_a_daemon_that_exits_at_once_is_reported_rather_than_waited_for(

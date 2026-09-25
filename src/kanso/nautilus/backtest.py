@@ -30,6 +30,9 @@ outside its window even if its code looked for one. The parent supervises wall t
 resident memory and kills the process group on breach; resident memory is bounded by
 supervision rather than by `setrlimit`, which does not bound RSS on Linux and is rejected
 for address space on macOS. The peak comes from the reaped child's own resource usage.
+The child watches back: it ends itself when the process that started it is gone, so a lane
+killed outright never leaves a card running with nobody supervising it, and a process told
+to stop starts no card at all.
 What comes back from a failed child is the tail of its traceback and, when the failure was
 one kanso itself raised, that refusal's remedy — so a caller reporting a card that did not
 run can name the fault that occurred rather than assume every one of them is the code's.
@@ -183,12 +186,22 @@ _INTERRUPT = threading.Event()
 
 A card child leads its own session, so nothing outside this process can kill it with the
 lane that started it; the watcher reads this flag between polls and kills the child itself,
-so a stop costs the card in flight and never leaves it running unbudgeted.
+so a stop costs the card in flight and never leaves it running unbudgeted. Once it is set
+no card is started at all: `run_subprocess` refuses before it reads the window and again
+before it spawns.
 """
+
+PARENT_POLL_S: Final = 0.5
+"""How often a card asks whether the process that started it is still its parent."""
+
+ORPHANED: Final = 3
+"""The status a card exits with when it ended itself because the lane that started it was
+gone; nothing reads it, since whatever would have read it is what went."""
 
 
 def interrupt() -> None:
-    """Have every card this process is watching killed at its next poll."""
+    """Have every card this process is watching killed at its next poll, and start no
+    other."""
     _INTERRUPT.set()
 
 
@@ -1444,6 +1457,7 @@ def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> Ru
             remedy=f"run the research window {request.hyp.windows.research.start}.."
             f"{request.hyp.windows.research.end}",
         )
+    _refuse_if_interrupted()
     instruments, groups = window_data(request, catalog_path)
     # In the parent, where a refusal is a refusal: the child is a card, and an exception
     # inside one is a crash the run records rather than a message the operator reads.
@@ -1476,8 +1490,14 @@ def child_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
-    """Start the child, watch its clock and its memory, and read back what it produced."""
+    """Start the child, watch its clock and its memory, and read back what it produced.
+
+    The child is told which process started it, and ends itself when that process is no
+    longer its parent (`_end_with`): it leads its own session, so a lane killed outright
+    cannot take it down, and without that it would run on with nobody watching its budget.
+    """
     result_path = room / "result.pkl"
+    _refuse_if_interrupted()
     started = time.monotonic()
     with (room / "stderr.txt").open("wb") as errors:
         child = subprocess.Popen(
@@ -1487,6 +1507,7 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
                 _BOOTSTRAP,
                 str(room / "request.pkl"),
                 str(result_path),
+                str(os.getpid()),
             ],
             cwd=str(workdir),
             env=child_env(),
@@ -1499,13 +1520,30 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
     wall_s = time.monotonic() - started
     tail = _tail((room / "stderr.txt").read_text(encoding="utf-8", errors="replace"))
     if breach == INTERRUPTED:
-        raise PreconditionError(
-            "the card was interrupted: the lane running it was told to stop",
-            remedy="start the daemon again; the run resumes from its last card",
-        )
+        raise _interrupted()
     if breach is not None:
         return _crashed(request, wall_s, peak_gb, breach, tail)
     return _reported(request, result_path, wall_s, peak_gb, tail)
+
+
+def _interrupted() -> PreconditionError:
+    """Why a card did not run to its end: the process running it was told to stop."""
+    return PreconditionError(
+        "the card was interrupted: the lane running it was told to stop",
+        remedy="start the daemon again; the run resumes from its last card",
+    )
+
+
+def _refuse_if_interrupted() -> None:
+    """Start no card in a process that has been told to stop.
+
+    Asked before the window is read and again before the child is spawned, because a stop
+    that lands while a lane is reading a window, or waiting on a model, is still a stop: a
+    lane that went on to start the card would only have it killed at the watcher's first
+    poll, or — killed itself in the meantime — leave it running.
+    """
+    if _INTERRUPT.is_set():
+        raise _interrupted()
 
 
 def _watch(
@@ -1542,6 +1580,23 @@ def _kill(pid: int) -> None:
     """Kill the child's whole process group; it leads one of its own."""
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pid, signal.SIGKILL)
+
+
+def _end_with(parent: int) -> None:
+    """In a card: end the process the moment `parent` is no longer the one it answers to.
+
+    A card leads its own session so that its watcher can kill it without killing the lane,
+    which also means the lane cannot take it down by dying: a lane killed outright — by the
+    daemon after its grace, by `research stop`'s last resort, by the kernel — leaves the
+    card running, unbudgeted, with its result going nowhere. The kernel hands an orphan to
+    another parent, so the card asks every `PARENT_POLL_S` whose child it is, and exits the
+    moment the answer is not the lane that started it — including at once, when the lane
+    was gone before the card began. It exits without cleaning up, because nothing is left
+    to read what it would have written.
+    """
+    while os.getppid() == parent:
+        time.sleep(PARENT_POLL_S)
+    os._exit(ORPHANED)
 
 
 def _resident_gb(pid: int) -> float:
@@ -1642,8 +1697,14 @@ def main(argv: Sequence[str]) -> int:
     rather than as a line of a traceback: the parent decides what to tell the operator to
     do about a card that did not run, and it can only choose the right thing if the cause
     is what names it.
+
+    The third argument is the pid of the process that started the card, which it outlives
+    by at most `PARENT_POLL_S` (`_end_with`).
     """
     request_path, result_path = Path(argv[0]), Path(argv[1])
+    threading.Thread(
+        target=_end_with, args=(int(argv[2]),), name="kanso-card-parent", daemon=True
+    ).start()
     payload = pickle.loads(request_path.read_bytes())
     try:
         result = execute(payload["request"], payload["instruments"], payload["groups"])
