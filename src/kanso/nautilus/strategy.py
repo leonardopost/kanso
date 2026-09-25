@@ -77,7 +77,14 @@ from typing import Any, ClassVar, Final, NoReturn
 
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.config import ActorConfig, StrategyConfig
-from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick, TradeTick
+from nautilus_trader.model.data import (
+    Bar,
+    BarSpecification,
+    BarType,
+    DataType,
+    QuoteTick,
+    TradeTick,
+)
 from nautilus_trader.model.enums import (
     AggregationSource,
     BarAggregation,
@@ -602,9 +609,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Subscribe every instrument of the universe to every data requirement.
 
         Called before `on_start`, so an author's `on_start` need not call anything. `bar`,
-        `quote` and `trade` are subscribed here; a requirement naming a registered custom
-        type is left to the author, who knows the class, and is logged as unsubscribed.
+        `quote` and `trade` are subscribed per instrument. A requirement naming a registered
+        custom type is subscribed once, by its class, and its points — every instrument's
+        and the market-wide ones the runner loaded — reach the author's `on_data` as that
+        type, at the instant each became public: a `corporate_action` arrives as a
+        `CorporateAction`, with `kind`, `ratio`, `cash`, `currency` and `ex_date_ns`. The
+        harness subscribes because the author cannot: a researched `strategy.py` may not
+        import `kanso.data`, and the class is the one thing a subscription needs.
         """
+        from nautilus_trader.model.identifiers import ClientId
+
+        from kanso.data.types import resolve_type
+        from kanso.nautilus.backtest import CLIENT_ID
+
         for instrument_id in self.universe:
             for requirement in self._cfg.data_requirements:
                 if requirement == BAR:
@@ -616,16 +633,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     self.subscribe_quote_ticks(instrument_id)
                 elif requirement == TRADE:
                     self.subscribe_trade_ticks(instrument_id)
-                else:
-                    self.log.warning(
-                        f"data requirement {requirement!r} is a custom type; "
-                        "subscribe to it from on_start with its registered class"
-                    )
+        for requirement in dict.fromkeys(self._cfg.data_requirements):
+            if requirement not in (BAR, QUOTE, TRADE):
+                custom = DataType(resolve_type(requirement))
+                self.subscribe_data(custom, client_id=ClientId(CLIENT_ID))
         if self._hold_until_cross_section:
-            from nautilus_trader.model.identifiers import ClientId
-
-            from kanso.nautilus.backtest import CLIENT_ID
-
             self.subscribe_data(MARKER_TYPE, client_id=ClientId(CLIENT_ID))
 
     # --- data handlers: the clock, the last observations, the exit rules -----

@@ -251,7 +251,11 @@ and that has three visible consequences here.
   effective date to work from, which is not an announcement, so that dataset declares
   `publication: unknown` — loadable, usable for price adjustment, and refused by
   `research begin`. If a hypothesis requires `corporate_action` data, write
-  `kinds: [dividend]`.
+  `kinds: [dividend]`; the sleeve is handed each declaration in `on_data` the moment it
+  was made. Such a hypothesis cannot yet be *pinned* over a real universe: a dataset is
+  covered from its first declaration to its last, and an issuer that declared none over
+  the range is refused as empty — measured, AAPL asked for 2006-07-03..2026-09-05 is
+  covered 2012-10-25..2026-07-30, and AMZN is refused. `docs/backlog.md` row 92.
 - **Financials** are `delayed` under the `fundamental` publication rule, stamped from the
   source's own acceptance instant or from the filings index joined on the accession
   number — the rule derives no lag of its own and requires the source to state the instant.
