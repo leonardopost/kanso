@@ -101,6 +101,38 @@ def source_file(ws: Workspace, hyp_id: str, strategy_sha: str) -> Path:
     return certificates_dir(ws, hyp_id) / f"{strategy_sha[:7]}.py"
 
 
+def judged(
+    ws: Workspace,
+    store: StateStore,
+    hyp_id: str,
+    *,
+    strategy_sha: str,
+    plan_version: int | None,
+    nautilus_version: str,
+) -> bool:
+    """Whether these bytes already have a certificate under this plan and this engine.
+
+    Certifying them again is refused (`refuse_repeat`), so whoever decides whether to
+    certify asks this first: a certificate the store records or one on disk, the same two
+    places the refusal reads. `plan_version` is the plan a certification would run; with none
+    pinned it would mint one, and a certificate of these bytes under any plan and this engine
+    counts, because what a fresh plan would change is an operator's question to ask with
+    `kanso cert plan --replan`, not one a stall answers by spending a planner call.
+    """
+    query = (
+        "SELECT 1 FROM certificates WHERE hyp_id = ? AND strategy_sha = ? AND nautilus_version = ?"
+    )
+    params: tuple[object, ...] = (hyp_id, strategy_sha, nautilus_version)
+    if plan_version is not None:
+        query += " AND plan_version = ?"
+        params = (*params, plan_version)
+    if store.connection.execute(query, params).fetchone() is not None:
+        return True
+    plan = "*" if plan_version is None else str(plan_version)
+    pattern = f"{strategy_sha[:7]}-*-p{plan}-e{nautilus_version}.yaml"
+    return any(path.is_file() for path in certificates_dir(ws, hyp_id).glob(pattern))
+
+
 def refuse_repeat(
     ws: Workspace,
     store: StateStore,

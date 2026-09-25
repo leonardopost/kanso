@@ -118,7 +118,10 @@ snapshot holding a dataset of unknown publication, or a vendor-adjusted one, is 
 fail for the same reason — it reaches the operator the way every other failure does.
 
 A run that stalls with a keep nothing has certified certifies it there and then, so the
-autonomous loop reaches a certificate without an operator. Either verdict returns the
+autonomous loop reaches a certificate without an operator. "Certified" means a certificate of
+those bytes under the pinned plan and the installed engine, whatever came after it: a best
+certified before other bytes were is not certified again, because a certificate is immutable
+and the repeat would be refused. Either verdict returns the
 hypothesis to the queue at priority −1; only a hypothesis the operator has retired leaves
 it, and `kanso hyp resume` brings that one back.
 

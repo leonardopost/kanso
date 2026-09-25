@@ -347,11 +347,13 @@ def dequeue(store: StateStore, lane: str = DEFAULT_LANE) -> str | None:
 def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_LANE) -> Stall:
     """What happens when a run ends on `stall_k` consecutive non-keeps.
 
-    A `best` this hypothesis has not certified makes it a candidate, and certification is
-    what happens next — here, on those bytes, before anything else takes a lane. The
-    verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
-    fail returns it to research, and either way it is requeued at −1, because the queue is
-    left only when an operator retires something.
+    A `best` with no certificate under the pinned plan and the installed engine makes it a
+    candidate, and certification is what happens next — here, on those bytes, before
+    anything else takes a lane. A best certified before other bytes were is not certified
+    again: the repeat would be refused, and the lane with it. The verdict says where the
+    hypothesis stands and ends nothing: a pass certifies it and a fail returns it to
+    research, and either way it is requeued at −1, because the queue is left only when an
+    operator retires something.
 
     The retire is checked twice, before the certification and after it, because a run ends
     before this is called and an operator is free to retire in the seconds a certification
@@ -375,14 +377,25 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     """
     # Certification reads research; research schedules certification. The import is
     # deferred so the cycle exists only while this function runs.
+    from kanso.certify.certificate import judged
+    from kanso.certify.plan import read_plan
     from kanso.certify.run import certify
+    from kanso.env.envelope import engine_version
 
     if _status(store, hyp_id) in DEAD:
         drop(store, hyp_id)
         _release(store, hyp_id, "retired")
         return Stall(hyp_id, None, False, None, None)
     best, _ = records.best_of(store, hyp_id)
-    certifiable = best is not None and best != _certified_sha(store, hyp_id)
+    pinned = read_plan(ws, hyp_id)
+    certifiable = best is not None and not judged(
+        ws,
+        store,
+        hyp_id,
+        strategy_sha=best,
+        plan_version=None if pinned is None else pinned.plan_version,
+        nautilus_version=engine_version(),
+    )
     verdict: str | None = None
     if certifiable:
         set_status(store, hyp_id, "candidate")
@@ -542,12 +555,3 @@ def _alive(store: StateStore, hyp_id: str) -> None:
             f"{hyp_id} is retired, and research resumes it only when you say so",
             remedy=f"run `kanso hyp resume {hyp_id}`",
         )
-
-
-def _certified_sha(store: StateStore, hyp_id: str) -> str | None:
-    """The subject of this hypothesis's newest certificate, whatever its verdict."""
-    row = store.connection.execute(
-        "SELECT strategy_sha FROM certificates WHERE hyp_id = ? ORDER BY created_at DESC LIMIT 1",
-        (hyp_id,),
-    ).fetchone()
-    return None if row is None else str(row["strategy_sha"])
