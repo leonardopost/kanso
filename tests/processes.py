@@ -20,6 +20,19 @@ def running(pid: int) -> bool:
     return bool(state) and not state.startswith("Z")
 
 
+def children(pid: int) -> list[tuple[int, str]]:
+    """Every process whose parent is `pid`, with its command line, zombies included."""
+    listing = subprocess.run(
+        ["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=False
+    ).stdout
+    found: list[tuple[int, str]] = []
+    for line in listing.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1] == str(pid):
+            found.append((int(fields[0]), fields[2]))
+    return found
+
+
 def ends(pid: int, within_s: float) -> bool:
     """Wait up to `within_s` for `pid` to stop running, and say whether it did."""
     deadline = time.monotonic() + within_s

@@ -132,6 +132,16 @@ A **lane** is one concurrent research worker with a directory of its own,
 never blocks the daemon's. Lanes share no files, which is the whole of the concurrency
 design.
 
+The daemon keeps every lane of its plan running. A lane that ends while nobody stopped the
+daemon — taken by the kernel's OOM killer on a large card, or crashed — is recorded as a
+`lane_died` event and started again under its own name, and the lane in its place resumes
+the run the dead one left, because a lane finishes its own run before it takes anything
+new; what the dead lane held with no run yet goes back in the queue. The monitor is kept
+the same way (`monitor_died`). A child that dies again soon after it came back waits longer
+each time, up to five minutes, so one that cannot stay up costs a start every five minutes
+rather than a start a second, and `kanso research status` lists every child the running
+daemon had to start again.
+
 `N` is not configured by hand. `kanso env detect` measures the host and derives the lane
 plan into `envelope.yaml`: two cores and 4 GB per lane, less a reservation of one core and
 4 GB — two and 8 GB when a live stage is colocated — and at least one lane whatever the

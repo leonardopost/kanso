@@ -101,7 +101,10 @@ and say so, but do not document the version you would have preferred.
 `kanso research start` detaches a supervisor and returns. The supervisor takes an exclusive
 lock on `runs/daemon.pid`, writes its pid there, and starts one worker process per lane the
 envelope allows plus the monitor; `kanso research stop` signals it and everything is left
-exactly where it was, so the next start resumes the open runs before it takes new work.
+exactly where it was, so the next start resumes the open runs before it takes new work. A
+lane or the monitor that dies while the daemon runs is the supervisor's to start again, with
+a backoff of its own and a `lane_died` or `monitor_died` event for each death, so the
+restart policies below are for the supervisor alone.
 
 A service manager already provides detachment, restart and log capture, and it can only
 supervise a process it owns. So a unit does **not** run `kanso research start`: it runs the

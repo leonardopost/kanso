@@ -12,7 +12,8 @@ stalls. `--cards` counts what this invocation proposes, so a baseline and everyt
 previous invocation left behind are not in it.
 
 `start`, `stop` and `status` are the daemon around that: one worker per lane the envelope
-allows, taking hypotheses off the queue `queue add` fills. Stopping keeps everything —
+allows, taking hypotheses off the queue `queue add` fills, each started again if it dies
+while the daemon runs — `status` lists every one that was. Stopping keeps everything —
 active runs and their lane directories stay exactly where they are, and the next `start`
 picks them up before it takes anything new — so stopping is a cheap act rather than a
 decision.
@@ -296,11 +297,14 @@ def _status(ws: Workspace) -> Report:
         found = daemon.status(ws, opened)
     data: dict[str, Any] = found.payload()
     running = f"running · pid {found.pid}" if found.running else "stopped"
+    deaths = sum(item.deaths for item in found.restarts)
     lines = [
         field("daemon", running),
         field("lanes", ", ".join(found.lanes) or "none (run `kanso env detect`)"),
-        field("runs", f"{len(found.runs)} active"),
+        field("restarts", f"{deaths} since the daemon started" if deaths else "none"),
     ]
+    lines += [indent(_restart_line(item)) for item in found.restarts]
+    lines.append(field("runs", f"{len(found.runs)} active"))
     lines += [indent(_run_line(item)) for item in found.runs]
     lines.append(field("queue", f"{len(found.queue)} waiting"))
     lines += [
@@ -308,6 +312,20 @@ def _status(ws: Workspace) -> Report:
         for item in found.queue
     ]
     return Report(data=data, lines=tuple(lines))
+
+
+def _restart_line(item: daemon.Restart) -> str:
+    """One child the daemon started again: how often, and how the newest death went."""
+    how = f"exit {item.exit}" if item.signal is None else f"killed by {item.signal}"
+    back = (
+        "started again at once"
+        if item.restart_in_s == 0.0
+        else f"started again after {item.restart_in_s:.0f}s"
+    )
+    return (
+        f"{item.child:<9}{item.deaths} death(s) · last {item.at} · "
+        f"{how} after {item.lived_s:.0f}s · {back}"
+    )
 
 
 def _run_line(item: daemon.LaneRun) -> str:

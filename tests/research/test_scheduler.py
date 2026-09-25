@@ -664,6 +664,28 @@ def test_remove_reaches_a_hypothesis_a_lane_holds_and_its_failure_leaves_it_out(
     assert ids(store) == []
 
 
+def test_recover_for_one_lane_puts_back_only_what_that_lane_held(
+    ws: Workspace, store: StateStore
+) -> None:
+    """What the supervisor does when one lane dies under a running daemon: every other lane
+    is alive and still holds what it claimed, and a claim put back would be taken twice."""
+    dead = classify(ws, store, DOCUMENT)
+    alive = register(ws, store, "demo_two")
+    held = register(ws, store, "demo_three")
+    for hyp_id in (dead, alive, held):
+        scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == dead
+    assert scheduler.dequeue(store, "l2") == alive
+    assert scheduler.dequeue(store, "l1") == held
+    scheduler.hold(store, held, "l1")
+
+    assert scheduler.recover(store, "l1") == [dead, held]
+
+    assert ids(store) == [dead, held]
+    assert scheduler.claimed(store, alive), "the living lane's claim is its own"
+    assert scheduler.recover(store, "l1") == []
+
+
 def test_recover_returns_each_at_the_priority_it_held_in_claim_order(
     ws: Workspace, store: StateStore
 ) -> None:

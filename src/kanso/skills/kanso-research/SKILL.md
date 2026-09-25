@@ -9,7 +9,7 @@ metadata:
 # kanso-research
 
 ## Choose the path
-- **Daemon (default, 24/7):** `kanso research queue add <id> [--priority P]` then `kanso research start`. Lanes (`l1..lN`, each with its own lane directory `runs/<lane>/<hyp>/`) come from `envelope.yaml`. `kanso research status` / `kanso status` to inspect; `kanso research stop` halts the daemon (runs stay resumable).
+- **Daemon (default, 24/7):** `kanso research queue add <id> [--priority P]` then `kanso research start`. Lanes (`l1..lN`, each with its own lane directory `runs/<lane>/<hyp>/`) come from `envelope.yaml`. `kanso research status` / `kanso status` to inspect; `kanso research stop` halts the daemon (runs stay resumable). A lane or the monitor that dies while the daemon runs (the kernel's OOM killer, a crash) is started again under its name and resumes its run; `kanso research status` lists every restart under `restarts`, and one that keeps dying waits longer each time, up to five minutes. A lane that crashed left its traceback in `runs/daemon.log`; one taken by a signal (`SIGKILL` is usually the kernel reclaiming memory) left nothing there.
 - **Foreground driver:** `kanso research run <id> [--cards N]` — same loop, lane `op`, this terminal. Omit `--cards` for infinite.
 - **Interactive (you are the proposer):** `kanso research begin <id> --tag <yyyymmdd-n>` prints the lane directory path (`runs/op/<id>/`); then follow `hypotheses/<id>/program.md` exactly, working only inside that lane directory. Each iteration: edit `strategy.py` → `kanso research card <id> --desc "<≤120 chars>"` → read the one-line result → continue. Never stop to ask whether to continue. `kanso research end <id>` ends the run (cards, snapshots and `best` remain in state; the lane directory is removed).
 

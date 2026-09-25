@@ -852,9 +852,12 @@ runs/daemon.log            whatever the daemon and its children write to a strea
 `.card/` is how a card's points reach the child that runs it: the lane writes the window's
 points there, the card writes back what it measured, and the lane removes the directory once
 it has read it. A lane killed in the middle of a card leaves that one payload behind — it can
-be hundreds of megabytes for a window of minute bars — and the lane's next card empties the
-directory before it writes, so a lane never holds more than one. The scope check a card
-passes ignores it, as it ignores every dot-file.
+be hundreds of megabytes for a window of minute bars — and the run's next card empties the
+directory before it writes, so a lane never holds more than one. Under a running daemon that
+next card comes at once: the supervisor starts a dead lane again under its name, and the lane
+in its place resumes the run. A lane killed in its baseline has no run yet; the supervisor
+puts the hypothesis back in the queue and removes the directory, payload and all. The scope
+check a card passes ignores `.card/`, as it ignores every dot-file.
 
 A lane writes no log of its own, and no file under `runs/` records what a run did. The
 record of a run is in `state.db` — the run row, every card with its metric and verdict, and
