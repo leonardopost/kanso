@@ -387,15 +387,17 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         _release(store, hyp_id, "retired")
         return Stall(hyp_id, None, False, None, None)
     best, _ = records.best_of(store, hyp_id)
-    pinned = read_plan(ws, hyp_id)
-    certifiable = best is not None and not judged(
-        ws,
-        store,
-        hyp_id,
-        strategy_sha=best,
-        plan_version=None if pinned is None else pinned.plan_version,
-        nautilus_version=engine_version(),
-    )
+    certifiable = False
+    if best is not None:
+        pinned = read_plan(ws, hyp_id)
+        certifiable = not judged(
+            ws,
+            store,
+            hyp_id,
+            strategy_sha=best,
+            plan_version=None if pinned is None else pinned.plan_version,
+            nautilus_version=engine_version(),
+        )
     verdict: str | None = None
     if certifiable:
         set_status(store, hyp_id, "candidate")
