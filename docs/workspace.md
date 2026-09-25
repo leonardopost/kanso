@@ -456,6 +456,31 @@ commission and no spread, so under the defaults a bar-only hypothesis is refused
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason.
 
+`costs.limit_fill` is the one key of the block that is not a charge: it is how the simulated
+venue fills a limit order resting on the book.
+
+```yaml
+costs:
+  limit_fill: through              # touch (default) | through
+```
+
+Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
+price — a bar whose low is the limit, or a print at it. Under `through` the market has to go
+beyond it: a low one tick under the buy, a high one tick over the sell, or a print past
+either, and the order then fills at its own price. It is deterministic either way — the
+venue's fill model is asked with a probability of exactly one or exactly zero and draws
+nothing — and it reaches every run of the hypothesis alike: a card, a certificate, a replay
+on either code path and a stage, whose simulated exchange is built from the same venue
+configuration a card's is. On quotes it withholds less than its name suggests: the engine asks
+it only when the order's own side of the book is at the price, so an ask that falls exactly
+to a resting buy fills it under either rule, and only a market locked at the limit is left
+to it (`kanso doctor` re-checks both behaviours as engine facts). A broker fills as it
+fills: the key moves kanso's simulated venues and nothing a broker does. Like every cost it
+is inherited — a broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and
+two versions certified under different rules cannot share a stage venue, which is one
+exchange: the stage's node refuses to build it (exit 2), naming
+`venues.<MIC>.costs.limit_fill`.
+
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 
 ```

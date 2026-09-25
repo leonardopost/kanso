@@ -103,6 +103,7 @@ def costs(draw: st.DrawFn) -> Costs:
         slippage_bps=draw(NON_NEGATIVE),
         spread=spread,
         fixed_bps=draw(NON_NEGATIVE) if spread == "fixed_bps" else None,
+        limit_fill=draw(st.sampled_from(["touch", "through"])),
     )
 
 

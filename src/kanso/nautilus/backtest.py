@@ -741,6 +741,7 @@ def execute(
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
+        get_fill_model,
         get_oms_type,
         get_starting_balances,
     )
@@ -770,6 +771,9 @@ def execute(
                 # than the binary float that happens to be nearest to it.
                 default_leverage=Decimal(str(venue.default_leverage)),
                 bar_execution=venue.bar_execution,
+                # Whether a resting limit the market only touched fills: the venue model's
+                # `limit_fill`, built from the configuration the node's venue is built from.
+                fill_model=get_fill_model(venue),
                 # The venue applies a corporate action one call before it matches the point
                 # that carried the market past it; see `kanso.nautilus.actions`.
                 modules=modules(venue.name),

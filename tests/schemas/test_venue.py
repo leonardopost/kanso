@@ -75,6 +75,33 @@ def test_a_hypothesis_overrides_only_the_costs() -> None:
     assert model.currency == "EUR"
 
 
+def test_the_limit_fill_rule_is_inherited_and_overridden_like_any_cost() -> None:
+    assert resolve_venue_model("XNAS").costs.limit_fill == "touch"
+    declared = VenueDeclaration(costs=CostsOverride(limit_fill="through"))
+
+    inherited = resolve_venue_model("XNAS", declaration=declared)
+    restated = resolve_venue_model(
+        "XNAS",
+        declaration=declared,
+        override=VenueOverride(costs=CostsOverride(slippage_bps=2.0)),
+        hypothesis_costs=CostsOverride(limit_fill="touch"),
+    )
+
+    assert (inherited.costs.limit_fill, inherited.origins.costs) == ("through", "broker")
+    assert (restated.costs.limit_fill, restated.origins.costs) == ("touch", "hypothesis")
+    assert restated.costs.slippage_bps == 2.0
+    with pytest.raises(ValidationError, match="limit_fill"):
+        CostsOverride.model_validate({"limit_fill": "sometimes"})
+
+
+def test_a_venue_model_recorded_before_the_limit_fill_rule_reads_as_touch() -> None:
+    """Every card, certificate and version pinned before the key fills a touched limit."""
+    recorded = resolve_venue_model("XNAS").model_dump()
+    del recorded["costs"]["limit_fill"]
+
+    assert VenueModel.model_validate(recorded).costs.limit_fill == "touch"
+
+
 def test_a_cash_account_cannot_borrow() -> None:
     with pytest.raises(ValidationError, match="default_leverage"):
         VenueModel(

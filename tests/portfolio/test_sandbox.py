@@ -300,6 +300,20 @@ def test_the_exchange_is_built_the_way_the_research_path_builds_one(kernel: Any)
     assert client.exchange.book_type == BookType.L1_MBP
 
 
+@pytest.mark.parametrize(("rule", "probability"), [("touch", 1.0), ("through", 0.0)])
+def test_the_exchange_fills_a_touched_limit_as_the_venue_model_says(
+    kernel: Any, rule: str, probability: float
+) -> None:
+    """The fill model is read off the configuration both paths are built from."""
+    model = venue_model()
+    stated = model.model_copy(update={"costs": model.costs.model_copy(update={"limit_fill": rule})})
+
+    client = sandbox.SimulatedVenue(kernel, venue_configs(hypothesis(), stated, CAPITAL)[0])
+
+    assert client.exchange.fill_model.prob_fill_on_limit == probability
+    assert client.exchange.fill_model.prob_slippage == 0.0
+
+
 def test_the_exchange_matches_in_the_call_that_submits(kernel: Any) -> None:
     """Turning the queue on moves the match to the next point, which is a second bug.
 

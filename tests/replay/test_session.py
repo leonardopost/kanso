@@ -189,6 +189,65 @@ def test_a_custom_requirement_reaches_the_sleeve_without_a_subscription_of_its_o
     assert [(order[2], order[3]) for order in engine.intents] == [("BUY", 24.0), ("BUY", 26.0)]
 
 
+RESTING_BUY = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    limit: float = 9.75
+
+
+class Strategy(KansoStrategy):
+    """Rests one buy under the market on the first session and waits for the market."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.placed = False
+
+    def on_bar(self, bar) -> None:
+        if not self.placed:
+            self.placed = True
+            self.submit_entry(
+                bar.bar_type.instrument_id, "BUY", qty=100, price=self.kanso_config.limit
+            )
+'''
+"""The saw-tooth's lowest print is 9.75, reached on the fourth session and never passed."""
+
+
+def rested(limit: float, rule: str) -> tuple[backtest.RunResult, backtest.RunResult]:
+    """A buy resting at `limit` under a venue model whose `limit_fill` is `rule`, on both
+    paths."""
+    request = request_for(source=RESTING_BUY)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), "limit_fill": rule}  # type: ignore[arg-type]
+    subject = replace(request, venue_model=model, overrides={"limit": limit})
+    return both(subject, [instrument()], [tuple(bars(FORWARD))])
+
+
+def test_a_limit_the_market_only_touches_fills_on_a_touch_on_both_paths() -> None:
+    node, engine = rested(9.75, "touch")
+
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty, fill.px) for fill in engine.run.fills] == [("BUY", 100.0, 9.75)]
+
+
+def test_a_limit_the_market_only_touches_never_fills_through_on_both_paths() -> None:
+    node, engine = rested(9.75, "through")
+
+    assert node.intents == engine.intents
+    assert node.intents, "the order was placed, and it rested"
+    assert node.run.fills == engine.run.fills == ()
+
+
+@pytest.mark.parametrize("rule", ["touch", "through"])
+def test_a_limit_the_market_trades_through_fills_at_its_price_either_way(rule: str) -> None:
+    node, engine = rested(9.8, rule)
+
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty, fill.px) for fill in engine.run.fills] == [("BUY", 100.0, 9.8)]
+
+
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:
     """Every data requirement a hypothesis can declare reaches both exchanges alike."""
     hyp = hypothesis(data_requirements=["bar", "quote", "trade"])

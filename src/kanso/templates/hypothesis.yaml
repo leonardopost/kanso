@@ -15,6 +15,8 @@ data_requirements: [bar]           # bar|quote|trade|<any registered custom type
 #   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
+#   limit_fill: touch              # touch | through: a resting limit fills when the market reaches its price (the engine's
+                                   # rule), or only once a bar's low/high or a print goes beyond it. kanso's simulated venues only
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
 # sizing:                          # yours: classification never touches it. Scope: changing it clears `best`
 #   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / price) whole lots with the

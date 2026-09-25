@@ -220,6 +220,22 @@ volume at the close and the remainder one price increment worse — so a quantit
 sized to a budget at the close lands one increment over it unless the increment
 is reserved.
 
+**A resting limit the market only reaches is the fill model's to fill.** The
+matching engine marks a limit that rests on the book `MAKER`, and when the market
+next reaches it, `fill_limit_order` asks `FillModel.is_limit_filled()` —
+`prob_fill_on_limit` — only if the order's own side of the book is exactly at its
+price: for a print, the print itself; for a bar, each of the open, high, low and
+close in turn, which the engine replays as prints that move both sides of an L1
+book; for a quote, the bid of a buy and the ask of a sell. A price beyond the limit
+fills it at the limit whatever the model says. Measured, a buy at 9.50 resting against
+a market at 10.00: a bar whose low is 9.50, or a print at 9.50, fills it at
+probability one and not at zero; a low of 9.49, or a print at 9.49, fills it at 9.50
+under either; a sell at 10.50 behaves the same against a bar's high. A quote is the
+exception worth knowing: an ask falling to exactly 9.50 while the bid is 9.48 fills
+the buy under either probability, because the buy's own side is not at its price —
+only a market locked at 9.50 leaves it to the model. At zero or one the model draws
+no random number, so `limit_fill` is deterministic either way.
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -602,6 +618,206 @@ def _check_market_order_walks_one_increment_past_a_quarter_of_volume() -> tuple[
     return holds, (
         f"300 shares against a 1,000-share bar filled as {fills}: a quarter of the volume at "
         "the close, the remainder one price increment worse"
+    )
+
+
+_MINUTE_NS = 60_000_000_000
+
+
+def _minute_type() -> Any:
+    """The one-minute external bar type of the sample equity."""
+    from nautilus_trader.model.data import BarSpecification, BarType
+    from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
+
+    return BarType(
+        _sample_equity().id,  # type: ignore[attr-defined]
+        BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+
+
+def _limit_points(kind: str, *prices: float) -> list[object]:
+    """A market at 10.00 for an order to rest against, then one point per price.
+
+    A bar is flat at 10.00 but for its low, or its high when the price is above ten; a
+    print is at the price; a quote takes the prices two at a time, as a bid and an ask.
+    """
+    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    instrument_id = _sample_equity().id  # type: ignore[attr-defined]
+    if kind == "quote":
+        pairs = [(9.99, 10.01), *zip(prices[::2], prices[1::2], strict=True)]
+        return [
+            QuoteTick(
+                instrument_id,
+                Price(bid, 2),
+                Price(ask, 2),
+                Quantity.from_int(100),
+                Quantity.from_int(100),
+                (index + 1) * _MINUTE_NS,
+                (index + 1) * _MINUTE_NS,
+            )
+            for index, (bid, ask) in enumerate(pairs)
+        ]
+    made: list[object] = []
+    for index, price in enumerate((10.0, *prices)):
+        ts = (index + 1) * _MINUTE_NS
+        if kind == "trade":
+            aggressor = AggressorSide.SELLER if price < 10.0 else AggressorSide.BUYER
+            made.append(
+                TradeTick(
+                    instrument_id,
+                    Price(price, 2),
+                    Quantity.from_int(100),
+                    aggressor,
+                    TradeId(f"P-{index}"),
+                    ts,
+                    ts,
+                )
+            )
+        else:
+            made.append(
+                Bar(
+                    _minute_type(),
+                    Price(10.0, 2),
+                    Price(max(price, 10.0), 2),
+                    Price(min(price, 10.0), 2),
+                    Price(10.0, 2),
+                    Quantity.from_int(1_000),
+                    ts_event=ts,
+                    ts_init=ts,
+                )
+            )
+    return made
+
+
+def _probe_resting_limit(prob: float, points: list[object], side: str) -> list[tuple[object, ...]]:
+    """The fills of one limit order resting from the first point's handler.
+
+    A buy at 9.50 or a sell at 10.50 against a market at 10.00, so the order rests on the
+    book as a maker; the venue's fill model fills a limit the market reaches with
+    probability `prob`. Each fill is its quantity, its price and its liquidity side.
+    """
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import FillModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, liquidity_side_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    selling = side == "SELL"
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.fills: list[tuple[object, ...]] = []
+            self.sent = False
+
+        def on_start(self) -> None:
+            self.subscribe_bars(_minute_type())
+            self.subscribe_trade_ticks(equity.id)
+            self.subscribe_quote_ticks(equity.id)
+
+        def _rest(self) -> None:
+            if not self.sent:
+                self.sent = True
+                self.submit_order(
+                    self.order_factory.limit(
+                        equity.id,
+                        OrderSide.SELL if selling else OrderSide.BUY,
+                        Quantity.from_int(10),
+                        Price(10.5 if selling else 9.5, 2),
+                    )
+                )
+
+        def on_bar(self, bar_: object) -> None:
+            self._rest()
+
+        def on_trade_tick(self, tick: object) -> None:
+            self._rest()
+
+        def on_quote_tick(self, tick: object) -> None:
+            self._rest()
+
+        def on_order_filled(self, event: Any) -> None:
+            self.fills.append(
+                (
+                    float(event.last_qty),
+                    float(event.last_px),
+                    liquidity_side_to_str(event.liquidity_side),
+                )
+            )
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            fill_model=FillModel(prob_fill_on_limit=prob),
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return probe.fills
+    finally:
+        engine.dispose()
+
+
+def _both_ways(kind: str, prices: tuple[float, ...], side: str) -> dict[float, list[Any]]:
+    """The fills of one resting limit at `prob_fill_on_limit` zero and one."""
+    return {
+        prob: _probe_resting_limit(prob, _limit_points(kind, *prices), side) for prob in (0.0, 1.0)
+    }
+
+
+def _check_a_touched_limit_is_the_fill_models_to_fill() -> tuple[bool, str]:
+    """`limit_fill`'s premise: a market that reaches a resting limit leaves the fill to the
+    fill model, and a market that goes beyond it does not."""
+    cases = (
+        ("a bar's low at a buy's 9.50", "bar", (9.5,), "BUY", False),
+        ("a bar's low of 9.49", "bar", (9.49,), "BUY", True),
+        ("a bar's high at a sell's 10.50", "bar", (10.5,), "SELL", False),
+        ("a bar's high of 10.51", "bar", (10.51,), "SELL", True),
+        ("a print at a buy's 9.50", "trade", (9.5,), "BUY", False),
+        ("a print at 9.49", "trade", (9.49,), "BUY", True),
+    )
+    seen: list[str] = []
+    holds = True
+    for name, kind, prices, side, through in cases:
+        fills = _both_ways(kind, prices, side)
+        filled = [(10.0, 10.5 if side == "SELL" else 9.5, "MAKER")]
+        holds = holds and fills[1.0] == filled and fills[0.0] == (filled if through else [])
+        seen.append(f"{name}: {fills[0.0]} at 0, {fills[1.0]} at 1")
+    return holds, (
+        "fills of a resting limit as (qty, price, liquidity) at prob_fill_on_limit 0 and 1 — "
+        + "; ".join(seen)
+        + ". A limit the market only reaches is the fill model's to fill, and one it goes "
+        "beyond fills at its own price as a maker whatever the model says"
+    )
+
+
+def _check_a_quote_reaching_a_limit_from_the_far_side_fills_it() -> tuple[bool, str]:
+    """What `limit_fill: through` cannot withhold: on quotes the model is asked only when
+    the order's own side of the book is at its price."""
+    far = _both_ways("quote", (9.48, 9.5), "BUY")
+    locked = _both_ways("quote", (9.5, 9.5), "BUY")
+    holds = len(far[0.0]) == len(far[1.0]) == len(locked[1.0]) == 1 and not locked[0.0]
+    return holds, (
+        f"a buy at 9.50 resting against 9.99/10.01: a quote of 9.48/9.50 filled it {far[0.0]} at "
+        f"prob_fill_on_limit 0 and {far[1.0]} at 1; a quote locked at 9.50/9.50 filled it "
+        f"{locked[0.0]} at 0 and {locked[1.0]} at 1. The fill model is asked only when the order's "
+        "own side of the book — the bid of a buy — is at its price"
     )
 
 
@@ -2019,6 +2235,16 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "a market order past a quarter of the bar's volume walks one increment for the rest",
         _check_market_order_walks_one_increment_past_a_quarter_of_volume,
+    ),
+    (
+        "a resting limit a bar or a print only reaches fills by prob_fill_on_limit, and one "
+        "it goes beyond fills at its price whatever that is",
+        _check_a_touched_limit_is_the_fill_models_to_fill,
+    ),
+    (
+        "a quote reaching a resting limit from the far side of the book fills it whatever "
+        "prob_fill_on_limit is",
+        _check_a_quote_reaching_a_limit_from_the_far_side_fills_it,
     ),
     (
         "closing a position costs the same whatever was closed before it",

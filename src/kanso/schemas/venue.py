@@ -5,7 +5,15 @@ execution client declares it for the venues it serves; a per-venue entry in the 
 overrides any field; a hypothesis's own `costs` overrides the cost model for that
 hypothesis alone. Where nothing is declared the shipped defaults apply: a margin account
 whose leverage is the hypothesis's `max_leverage`, USD, zero commission and one basis
-point of slippage, with the spread taken from quotes when quotes are available.
+point of slippage, with the spread taken from quotes when quotes are available, and a
+resting limit order filled when the market reaches its price.
+
+The cost model carries one key that is not a charge. `limit_fill` is the matching rule the
+simulated venue is built with: `touch` fills a resting limit the market only reached, and
+`through` fills it only once the market trades beyond its price. It decides which fills a
+run has rather than what they cost, so it cannot be re-applied to recorded fills the way the
+charges can; it lives beside them because it is the same kind of statement — how
+pessimistic the simulation is about execution — and is stated at the same three layers.
 
 The resolved model records the origin of every field, so a number on a card, a certificate
 or a strategy version is always traceable to the venue that produced it.
@@ -26,6 +34,7 @@ from kanso.schemas.base import KansoModel, NonEmpty
 
 Account = Literal["margin", "cash"]
 Spread = Literal["quotes", "fixed_bps"]
+LimitFill = Literal["touch", "through"]
 Origin = Literal["default", "broker", "venue_override", "hypothesis"]
 Funding = Literal["simulated", "broker_paper", "real"]
 Clock = Literal["replay", "wall"]
@@ -37,6 +46,9 @@ DEFAULT_ACCOUNT: Account = "margin"
 DEFAULT_CURRENCY = "USD"
 DEFAULT_COMMISSION_BPS = 0.0
 DEFAULT_SLIPPAGE_BPS = 1.0
+DEFAULT_LIMIT_FILL: LimitFill = "touch"
+"""A resting limit fills when the market reaches its price: the engine's own default, and
+what every venue model resolved before the key existed was measured under."""
 REPLAY_DATA_CLIENT = "replay"
 """The catalog replay data client; every other data client id belongs to an adapter."""
 
@@ -48,15 +60,18 @@ class CostsOverride(KansoModel):
     slippage_bps: float | None = Field(default=None, ge=0)
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
+    limit_fill: LimitFill | None = None
 
 
 class Costs(KansoModel):
-    """A complete cost model: what the runner applies, once, to every fill."""
+    """A complete cost model: what the runner charges, once, to every fill, and whether the
+    venue fills a resting limit the market only touched (`limit_fill`)."""
 
     commission_bps: float = Field(ge=0)
     slippage_bps: float = Field(ge=0)
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
+    limit_fill: LimitFill = DEFAULT_LIMIT_FILL
 
     @model_validator(mode="after")
     def _fixed_bps_present(self) -> Costs:
@@ -125,6 +140,7 @@ def _merge_costs(
         "slippage_bps": DEFAULT_SLIPPAGE_BPS,
         "spread": "quotes" if quotes_available else "fixed_bps",
         "fixed_bps": None,
+        "limit_fill": DEFAULT_LIMIT_FILL,
     }
     origin: Origin = "default"
     for layer_origin, override in layers:

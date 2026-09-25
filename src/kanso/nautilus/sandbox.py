@@ -62,13 +62,20 @@ extraction. One application means one number across a card, a certificate, a rep
 stage — and it holds here only for as long as that zero-fee invariant does. The two paths
 cannot drift apart over it, since they are handed the same model.
 
+**The fill model is the venue model's, on both paths.** It is built from the configuration's
+own `fill_model` with the engine's converter, as the research path's is, so a resting limit
+the market only touched fills here exactly when it fills in a card — every time under
+`limit_fill: touch`, never under `through` (`kanso.nautilus.venue`).
+
 Engine facts this module relies on (nautilus_trader 1.231.0):
 
 * `BacktestEngine.add_venue` builds a `SimulatedExchange` and a `BacktestExecClient` over the
   kernel's portfolio, message bus, cache and clock, substituting `LeveragedMarginModel()`,
   `FillModel()` and `MakerTakerFeeModel()` for the `None`s it is given, leaving
   `latency_model` unset, and taking `use_message_queue=True` and `BookType.L1_MBP`. It then
-  registers the client with the exchange and with the execution engine.
+  registers the client with the exchange and with the execution engine. kanso hands it a
+  fill model, so of the three only the margin and fee substitutions happen, and this module
+  makes the same two. `SimulatedExchange` refuses a `None` fill model outright.
 * `SimulatedExchange.send` matches a command in the same call when `use_message_queue` is
   false, and otherwise holds it until the next `process(ts_now)`; `process` sets the
   exchange's `TestClock` to that instant, so the venue's clock follows the data's `ts_init`
@@ -107,10 +114,11 @@ from typing import Any, Final
 from nautilus_trader.accounting.margin_models import LeveragedMarginModel
 from nautilus_trader.backtest.engine import SimulatedExchange
 from nautilus_trader.backtest.execution_client import BacktestExecClient
-from nautilus_trader.backtest.models import FillModel, MakerTakerFeeModel
+from nautilus_trader.backtest.models import MakerTakerFeeModel
 from nautilus_trader.backtest.node import (
     get_account_type,
     get_base_currency,
+    get_fill_model,
     get_oms_type,
     get_starting_balances,
 )
@@ -286,7 +294,9 @@ class SimulatedVenue(LiveExecutionClient):
             msgbus=self.relay,
             cache=kernel.cache,
             clock=self.test_clock,
-            fill_model=FillModel(),
+            # The venue model's `limit_fill`, built by the converter the research path's
+            # engine uses, from the configuration both paths are given.
+            fill_model=get_fill_model(venue),
             fee_model=MakerTakerFeeModel(),
             bar_execution=venue.bar_execution,
             # Matched in the call that submits it, which is where the research path's

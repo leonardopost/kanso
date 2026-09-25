@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
+from nautilus_trader.backtest.node import get_fill_model
 
 from kanso.errors import ValidationError
-from kanso.nautilus.venue import NETTING, starting_balance, venue_configs, venues_of
-from kanso.schemas import Hypothesis
+from kanso.nautilus.venue import (
+    LIMIT_FILL,
+    NETTING,
+    fill_model,
+    starting_balance,
+    venue_configs,
+    venues_of,
+)
+from kanso.schemas import Hypothesis, LimitFill
 
 from .conftest import CAPITAL, INSTRUMENT, hypothesis, venue_model
 
@@ -27,11 +37,29 @@ def test_the_venue_is_netting_with_bar_execution(hyp: Hypothesis) -> None:
 
 
 def test_the_venue_charges_nothing_because_the_runner_charges_once(hyp: Hypothesis) -> None:
-    # The whole point: a fee, fill or latency model here would be a second application of
-    # a cost the extraction already applies.
+    # The whole point: a fee or latency model here, or a fill model that slipped, would be a
+    # second application of a cost the extraction already applies.
     (config,) = venue_configs(hyp, venue_model(hyp), CAPITAL)
 
-    assert (config.fee_model, config.fill_model, config.latency_model) == (None, None, None)
+    assert (config.fee_model, config.latency_model) == (None, None)
+    assert config.fill_model is not None
+    assert config.fill_model.config["prob_slippage"] == 0.0
+
+
+def test_a_touched_limit_fills_unless_the_venue_model_says_through() -> None:
+    touching = hypothesis()
+    through = hypothesis(
+        costs={"spread": "fixed_bps", "fixed_bps": 4.0, "limit_fill": "through"},
+    )
+
+    (default,) = venue_configs(touching, venue_model(touching), CAPITAL)
+    (stated,) = venue_configs(through, venue_model(through), CAPITAL)
+
+    assert default.fill_model == fill_model("touch")
+    assert get_fill_model(default).prob_fill_on_limit == 1.0
+    assert stated.fill_model == fill_model("through")
+    assert get_fill_model(stated).prob_fill_on_limit == 0.0
+    assert set(LIMIT_FILL) == set(get_args(LimitFill))
 
 
 def test_a_margin_account_carries_the_hypothesis_leverage() -> None:

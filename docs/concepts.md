@@ -719,6 +719,19 @@ A live data client that polls several series independently must emit the same
 per-`(ts_init, kind)` markers. A single marker at the end of a poll that covered more
 than one instant would flush the first instant after later books had already moved.
 
+**A limit that rests is filled by the venue's rule.** A limit order that was not marketable
+when it was placed waits on the book, and a later point that reaches its price fills it at
+that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`
+(`docs/workspace.md`): under `touch`, the default and the engine's own rule, a bar whose low
+is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
+a print past it. On a bar the venue walks the open, the high, the low and the close as prints
+in turn, so a bar that only touched the level at its low fills a resting buy at the limit
+under `touch` and leaves it resting under `through`; on a quote the engine asks the rule only
+when the order's own side of the book is at the price, so an ask falling to a resting buy
+fills it under either. Both code paths build their venue from the same configuration, so a
+card and a stage fill the same resting orders, and the rule draws no random number, so they
+fill them the same way every time.
+
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the
 overlay. Every grain loaded reaches the venue whether or not the sleeve subscribes it, and
