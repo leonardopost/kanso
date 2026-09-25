@@ -335,6 +335,59 @@ def test_a_bar_stamped_at_the_ex_date_s_midnight_is_matched_in_the_old_count(bac
     assert int(held(run).adjustments[0].ts_event) == new_york_ns(date(2024, 1, 18), 0)
 
 
+# --- what a sleeve may know of a split ----------------------------------------
+
+
+class Watcher(Holder):
+    """A holder that, at every bar, writes down every split anything it holds names."""
+
+    def on_bar(self, bar: object) -> None:
+        from kanso.nautilus.splits import Split
+
+        found: list[int] = []
+        stack: list[object] = list(vars(self).values())
+        while stack:
+            item = stack.pop()
+            if isinstance(item, Split):
+                found.append(item.effective_ns)
+            elif isinstance(item, dict):
+                stack.extend(item.values())
+            elif isinstance(item, list | tuple | set | frozenset):
+                stack.extend(item)
+        self.named.append((int(bar.ts_event), found))  # type: ignore[attr-defined]
+        super().on_bar(bar)
+
+
+def test_a_sleeve_never_holds_a_split_that_has_not_happened(backtest) -> None:
+    """Anything the strategy base holds a researched `strategy.py` can read, so a schedule
+    cached there would hand it every split of the instrument's life, the certification
+    window's among them. The venue announces a split as it applies it, and that is all a
+    sleeve ever holds."""
+    watcher = Watcher(config(), exit_on=6)
+    watcher.named = []  # type: ignore[attr-defined]
+    run = backtest(watcher, instruments=[equity(DEMO, info=SCHEDULE)], data=series())
+
+    assert run.strategy.named
+    assert all(instant <= at for at, found in run.strategy.named for instant in found)
+    assert any(found for _at, found in run.strategy.named)
+
+
+def test_the_sleeve_books_the_payment_the_venue_announces(backtest) -> None:
+    """The announcement carries the adjustment, and the sleeve folds its payment into cash
+    once: 1,005 bought at ten, 100 kept and fifty paid, so the balance holds the fifty."""
+    run = backtest(Holder(config()), instruments=[equity(DEMO, info=SCHEDULE)], data=series())
+    strategy = run.strategy
+
+    assert strategy._cash == pytest.approx(100_000.0 - 10_050.0 - strategy_costs(run) + 50.0)
+
+
+def strategy_costs(run: object) -> float:
+    """What the runner's cost arithmetic charged the one fill, as the harness booked it."""
+    booked = run.strategy  # type: ignore[attr-defined]
+    event = held(run).events[0]
+    return booked._paid(event) - float(event.last_qty) * float(event.last_px)
+
+
 # --- the order that must not survive the action -------------------------------
 
 

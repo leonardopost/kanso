@@ -657,7 +657,10 @@ The schedule is applied by the simulated venue rather than by a strategy, and no
 `strategy.py` can read it: it names every split of the instrument's life, including ones
 after the window a card is judged on, so `.cache` — the one route to an instrument — is
 denied by `strategy_integrity`, along with everything the engine computes against a
-position's opening basis (see `docs/concepts.md`).
+position's opening basis (see `docs/concepts.md`). The strategy base holds none of it either:
+the venue announces each split on the bus as it applies it, which is how the harness restates
+a price printed before the split and books a payment in lieu, so all a sleeve ever holds is
+a split that has already happened.
 
 ## `catalog/`
 

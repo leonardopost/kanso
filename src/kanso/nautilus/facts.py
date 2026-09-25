@@ -294,6 +294,9 @@ to zero leaves the position `FLAT`, so `is_closed`, with `ts_closed` still zero 
 cache still listing it open; `Cache.update_position` re-indexes it by its own state, and
 kanso dates the trade by the adjustment.
 
+`MessageBus.publish` calls every handler subscribed to its topic before it returns, which
+is what lets the venue announce a split to every sleeve inside the call that applies it.
+
 `Portfolio.initialize_positions()` resyncs the net-position index behind such an
 adjustment. It is declared on the kernel's `Portfolio` and **not** on the
 read-only `PortfolioFacade` that a component's `portfolio` attribute is typed
@@ -1738,6 +1741,22 @@ def _check_adjustment_to_flat() -> tuple[bool, str]:
     )
 
 
+def _check_publish_is_synchronous() -> tuple[bool, str]:
+    """A split announced on the bus is taken in before the point that applied it moves on."""
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.model.identifiers import TraderId
+
+    msgbus = MessageBus(trader_id=TraderId("KANSO-001"), clock=TestClock())
+    heard: list[object] = []
+    msgbus.subscribe(topic="kanso.restated", handler=heard.append)
+    msgbus.publish(topic="kanso.restated", msg="split")
+    before_return = list(heard)
+    return before_return == ["split"], (
+        f"a handler subscribed to a topic had heard {before_return} when publish returned, "
+        f"so a venue's announcement is taken in inside the call that applies the split"
+    )
+
+
 def _check_portfolio_resync() -> tuple[bool, str]:
     """The portfolio's net-position index has to be told a position changed outside a fill."""
     from nautilus_trader.portfolio.base import PortfolioFacade
@@ -1976,6 +1995,10 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a position adjustment to zero leaves the position flat and undated until the cache "
         "re-indexes it, and its pnl_change reaches only the position's own realized P&L",
         _check_adjustment_to_flat,
+    ),
+    (
+        "MessageBus.publish calls every handler subscribed to the topic before it returns",
+        _check_publish_is_synchronous,
     ),
     (
         "Portfolio.initialize_positions resyncs the net-position index the facade does not declare",

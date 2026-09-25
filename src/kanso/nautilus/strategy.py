@@ -72,7 +72,7 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
-from math import fsum
+from math import fsum, prod
 from typing import Any, ClassVar, Final, NoReturn
 
 from nautilus_trader.common.actor import Actor
@@ -93,7 +93,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
 from kanso.errors import ValidationError
-from kanso.nautilus import splits
+from kanso.nautilus import actions, splits
 from kanso.nautilus.costs import (
     BookPolicy,
     carry,
@@ -343,9 +343,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._booked: set[object] = set()
         self._print_ns: dict[str, int] = {}
         self._price_ns: dict[str, int] = {}
-        self._seen_ns = 0
-        self._schedules: dict[str, tuple[splits.Split, ...]] = {}
-        self._split_instants: list[int] = []
+        self._restated: dict[str, list[splits.Split]] = {}
         self._quoted: dict[str, tuple[list[int], list[float]]] = {}
         self._policy: BookPolicy | None = None
         self._anchor_ns = 0
@@ -488,8 +486,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         own fills, so at every period end it is the equity the card records, and between
         period ends it moves with every fill and every print. It is kept from the fills,
         from the share counts the venue restated at a split and from the cash the split paid
-        in lieu of the fraction it left, never from the engine's account, whose balance a
-        corporate action leaves quoted in shares no position holds.
+        in lieu of the fraction it left (`_on_restated`), never from the engine's account,
+        whose balance a corporate action leaves quoted in shares no position holds.
         Two differences are deliberate: a price printed before a split the venue has since
         applied is restated by the split's ratio, where the card marks it as printed until
         the name prints again; and a position the sleeve has seen no price for is marked at
@@ -526,38 +524,30 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         after its end are the ones the venue just matched against this point. Periods are
         cut as the runner cuts them — from `_anchor_ns`, `_period_ns` long, ending at the
         last point inside — and nothing turns over a warmup prefix, which the runner
-        measures in no period. Then what a split just paid in lieu is booked (`_book_splits`),
-        after the period it did not fall in has been settled.
+        measures in no period.
         """
-        if self._policy is not None and ts_ns >= self._anchor_ns and ts_ns >= self._trading_from_ns:
-            index = (ts_ns - self._anchor_ns) // self._period_ns
-            if self._period_index is not None and index != self._period_index:
-                self._close_period(self._policy, self._period_last_ns)
-            self._period_index = index
-            self._period_last_ns = ts_ns
-        self._book_splits(ts_ns)
-
-    def _book_splits(self, ts_ns: int) -> None:
-        """Fold what a split paid in lieu of the fraction it left into cash, once per event.
-
-        The venue applies a split before the point that triggered it is handed to this
-        sleeve, so the adjustment is on the live position when that point's handler starts,
-        and is booked here before the sleeve can send an order whose fill would move a
-        position the payout left flat into the cache's snapshots. It is asked only while a
-        scheduled split's instant has passed and no later point has been seen: the venue
-        applies a split by a point's reference time, and this is handed its availability.
-        """
-        pending = self._split_instants
-        if not pending or pending[0] > ts_ns:
+        if self._policy is None or ts_ns < self._anchor_ns or ts_ns < self._trading_from_ns:
             return
-        for position in self.cache.positions(strategy_id=self.id):
-            for event in position.adjustments:
-                if event.pnl_change is None or event.id in self._booked:
-                    continue
-                self._booked.add(event.id)
+        index = (ts_ns - self._anchor_ns) // self._period_ns
+        if self._period_index is not None and index != self._period_index:
+            self._close_period(self._policy, self._period_last_ns)
+        self._period_index = index
+        self._period_last_ns = ts_ns
+
+    def _on_restated(self, restated: Any) -> None:
+        """Take in a split the venue has just applied, as `kanso.nautilus.actions` announces it.
+
+        The split is kept for restating prices printed before it, and what it paid in lieu
+        of the fraction it left each of this sleeve's positions is folded into cash, as the
+        runner's extraction books it. The venue announces each split once, while it applies
+        it and before the point that carried the market past it reaches any sleeve, so the
+        payment is in cash before this sleeve can act on that point. Only a split that has
+        happened is ever held here: a schedule would name the certification window's too.
+        """
+        self._restated.setdefault(restated.instrument_id, []).append(restated.split)
+        for event in restated.adjustments:
+            if event.strategy_id == self.id and event.pnl_change is not None:
                 self._cash += event.pnl_change.as_double()
-        while pending and pending[0] <= self._seen_ns:
-            pending.pop(0)
 
     def _close_period(self, policy: BookPolicy, end: int) -> None:
         """Charge the carry and move the reset's transfer, as the runner does at `end`."""
@@ -605,11 +595,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _start(self) -> None:
         self.subscribe_universe()
         self._ledger.extend([order, 0] for order in self.cache.orders(strategy_id=self.id))
-        self._split_instants = sorted(
-            split.effective_ns
-            for instrument_id in self.universe
-            for split in self._schedule(str(instrument_id))
-        )
+        self.msgbus.subscribe(topic=actions.TOPIC, handler=self._on_restated)
         super()._start()
 
     def subscribe_universe(self) -> None:
@@ -806,7 +792,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Keep the last price an instrument printed at, and when, for marking what it holds."""
         self._last_print[key] = price
         self._print_ns[key] = ts_event
-        self._seen_ns = max(self._seen_ns, ts_event)
 
     def _observe_price(self, key: str | None, price: float | None, ts_event: int) -> None:
         if key is not None and price is not None:
@@ -1467,7 +1452,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 price = (
                     0.0
                     if position is None
-                    else splits.ledger(splits.moves_of(position, self._schedule(name))).basis
+                    else splits.ledger(
+                        splits.moves_of(position, tuple(self._restated.get(name, ())))
+                    ).basis
                 )
             total += abs(quantity) * price
         return total
@@ -1480,19 +1467,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the held leg's restated share count beside a price still quoted in the old one —
         read as it stands, a one-for-ten reverse split is a ninety per cent loss, and room
         for ten times the exposure. The factor is the product of the ratios of the name's
-        splits effective after the print and no later than the latest event seen, which the
-        venue processed, and so applied every split up to, before this sleeve saw it.
+        splits effective after the print, among the ones the venue has announced applying
+        (`_on_restated`) — which are all this sleeve ever holds.
         """
-        return splits.restating(self._schedule(key), printed_ns, self._seen_ns)
-
-    def _schedule(self, key: str) -> tuple[splits.Split, ...]:
-        """The splits a name's definition schedules, read once from the cache."""
-        schedule = self._schedules.get(key)
-        if schedule is None:
-            instrument = self.cache.instrument(InstrumentId.from_str(key))
-            schedule = () if instrument is None else splits.schedule_of(instrument)
-            self._schedules[key] = schedule
-        return schedule
+        return prod(
+            split.ratio for split in self._restated.get(key, ()) if split.effective_ns > printed_ns
+        )
 
     def _price_now(self, key: str) -> float | None:
         """The last price seen for a name, quoted in the share count the venue holds now."""
@@ -1625,8 +1605,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         multiplier = 1.0 if instrument is None else float(instrument.multiplier)
         price = self._print_now(position.instrument_id.value)
         if price is None:
-            key = position.instrument_id.value
-            price = splits.ledger(splits.moves_of(position, self._schedule(key))).basis
+            applied = tuple(self._restated.get(position.instrument_id.value, ()))
+            price = splits.ledger(splits.moves_of(position, applied)).basis
         return float(position.signed_qty) * price * multiplier
 
     def _opening(

@@ -50,7 +50,7 @@ worth of cash. The venue values those at the instrument's last price in the old 
 close before the ex-date, and writes the amount on the split's own adjustment event as its
 `pnl_change`. The venue moves no money with it. The runner's extraction books it — into the
 equity curve at the split, and into the trade the position closes as — and the harness
-books the same amount into `balance` when it sees the adjustment, so a card, its
+books the same amount into `balance` when the venue announces the split, so a card, its
 certificate and a sleeve's own balance read one number. A position smaller than one new lot
 is paid out whole and left flat, which is what an issuer does with it.
 

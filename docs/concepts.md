@@ -770,7 +770,7 @@ itself produces no profit or loss. The shares a split leaves short of a whole lo
 out in cash, as an issuer pays them, at the last price in the old count — the close before
 the ex-date: the venue writes the amount on the split's own adjustment, the extraction
 books it into cash at the split and into the trade the position closes as, and the harness
-books the same amount into `balance` when it sees the adjustment, so the three read one
+books the same amount into `balance` when the venue announces the split, so the three read one
 number. A position under one new lot is paid out whole and closes at the split.
 
 **A window holding a split you have not declared is refused.** When the run's data carries a

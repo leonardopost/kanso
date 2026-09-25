@@ -54,6 +54,9 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   raised it reaches the matching engine.
 * `SimulatedExchange.instruments` is the venue's own instrument map, populated by
   `add_instrument` before any point moves the market on both paths.
+* `MessageBus.publish(topic, msg)` calls every handler subscribed to `topic` before it
+  returns, so a sleeve subscribed to `TOPIC` has taken in a split — restated what it holds
+  and booked the payment in lieu — before the point that applied the split reaches it.
 * `SimulatedExchange.get_matching_engine(instrument_id)` returns the instrument's
   `OrderMatchingEngine` on both venues. Its `get_book()` is the L1 book both of kanso's
   venues declare, and `process_quote_tick` sets that book's top level from a quote, skipping
@@ -62,6 +65,7 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Final
 
@@ -76,10 +80,29 @@ from nautilus_trader.model.identifiers import InstrumentId, StrategyId
 from kanso.nautilus import splits
 from kanso.nautilus.splits import Split
 
-__all__ = ["NAME", "CorporateActions", "last_price", "modules"]
+__all__ = ["NAME", "TOPIC", "CorporateActions", "Restated", "last_price", "modules"]
 
 NAME: Final = "CorporateActions"
 """What the venue's log calls this module, suffixed with the venue it was loaded into."""
+
+TOPIC: Final = "kanso.restated"
+"""The bus topic a venue announces a split on, the moment it applies it and never before."""
+
+
+@dataclass(frozen=True, slots=True)
+class Restated:
+    """One split, announced as the venue applies it: the instrument, the split, and the
+    adjustment it made to each position it found open, carrying what it paid in lieu.
+
+    It is how a sleeve learns of a split without holding a schedule: a schedule names every
+    split of the instrument's life, the certification window's among them, and anything the
+    strategy base holds a researched `strategy.py` can read. An announcement names only a
+    split that has happened.
+    """
+
+    instrument_id: str
+    split: Split
+    adjustments: tuple[Any, ...]
 
 
 class CorporateActions(SimulationModule):  # type: ignore[misc]
@@ -147,8 +170,8 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
     def _apply(
         self, instrument_id: InstrumentId, split: Split, ts_event: int, ts_init: int
     ) -> None:
-        """Cancel, then adjust, then resync, then restate the book — in that order, and each
-        part earns its place.
+        """Cancel, then adjust, then resync, then restate the book, then announce — in that
+        order, and each part earns its place.
 
         **Cancel**, because a resting order is priced and sized in shares that no longer
         exist and the exchange is about to match it against restated prices. **Adjust**
@@ -158,27 +181,31 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         payout leaves flat is re-indexed as closed. **Resync**, because `Portfolio` caches a
         net position per instrument and would otherwise keep the pre-split count, so the
         next exit would be sized against shares nobody holds — measured, 1,005 sold against
-        100 held.
-        **Restate the book**, because the matching engine quotes the instrument at its last
-        print until it prints again, and the point that applied the split may be another
-        instrument's: an order that name's handler sends into this one would fill at the
-        pre-split price — measured, 50 restated shares sold at 20.00 against 200.00, a
-        9,005.50 loss on a card whose baseline lost the cost alone.
+        100 held. **Restate the book**, because the matching engine quotes the instrument at
+        its last print until it prints again, and the point that applied the split may be
+        another instrument's: an order that name's handler sends into this one would fill at
+        the pre-split price — measured, 50 restated shares sold at 20.00 against 200.00, a
+        9,005.50 loss on a card whose baseline lost the cost alone. Last, **announce** it on
+        `TOPIC`: that is how a sleeve learns of the split, without holding a schedule, and
+        books the payment in lieu.
         """
         self._cancel(instrument_id, ts_init)
         instrument = self.exchange.instruments[instrument_id]
         lot = float(instrument.lot_size or instrument.size_increment)
         multiplier = float(instrument.multiplier)
         book = self.exchange.get_matching_engine(instrument_id).get_book()
+        made: list[Any] = []
         for position in sorted(
             self.cache.positions_open(instrument_id=instrument_id),
             key=lambda held: str(held.id),
         ):
-            splits.apply_to(position, split, lot, ts_event, last_price(book, position), multiplier)
+            price = last_price(book, position)
+            made.append(splits.apply_to(position, split, lot, ts_event, price, multiplier))
             self.cache.update_position(position)
         self.portfolio.initialize_positions()
         self._applied.add((str(instrument_id), split.ex_date))
         self._restate_book(instrument_id, split, ts_event, ts_init)
+        self.msgbus.publish(topic=TOPIC, msg=Restated(str(instrument_id), split, tuple(made)))
 
     def _restate_book(
         self, instrument_id: InstrumentId, split: Split, ts_event: int, ts_init: int
