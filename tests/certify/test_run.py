@@ -531,6 +531,53 @@ def test_a_certificate_on_disk_refuses_a_repeat_when_state_has_no_record(
     assert {path.name for path in directory.glob("*.yaml")} == {committed.name, "plan.yaml"}
 
 
+def test_whether_bytes_were_judged_reads_what_a_repeat_would_contradict(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The question a stall asks before it certifies: the subject, the plan and the engine."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+    made = certify(ws, store, HYP_ID)
+
+    def judged(plan_version: int | None, engine: str = run.engine_version(), sha: str = "") -> bool:
+        return certificate.judged(
+            ws,
+            store,
+            HYP_ID,
+            strategy_sha=sha or made.strategy_sha,
+            plan_version=plan_version,
+            nautilus_version=engine,
+        )
+
+    assert judged(1) is True
+    assert judged(None) is True, "with no plan pinned, a certificate under any plan counts"
+    assert judged(2) is False, "a replanned hypothesis certifies the same bytes again"
+    assert judged(1, engine="0.0.0") is False, "and so does an upgraded engine"
+    assert judged(1, sha="f" * 64) is False
+
+
+def test_a_certificate_on_disk_is_judged_when_state_has_no_record(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A clone's committed certificate is a judgement too, as the refusal already reads it."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING)
+    directory = certificate.certificates_dir(ws, HYP_ID)
+    directory.mkdir(parents=True, exist_ok=True)
+    engine = run.engine_version()
+    (directory / certificate.filename(sha, 4, 1, engine)).write_text("verdict: pass\n", "utf-8")
+
+    def judged(plan_version: int | None) -> bool:
+        return certificate.judged(
+            ws, store, HYP_ID, strategy_sha=sha, plan_version=plan_version, nautilus_version=engine
+        )
+
+    assert judged(1) is True
+    assert judged(None) is True
+    assert judged(2) is False
+
+
 # --- what the pinned data has to support --------------------------------------
 
 

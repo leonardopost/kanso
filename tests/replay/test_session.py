@@ -14,9 +14,11 @@ from datetime import date
 from typing import Any
 
 import pytest
-from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.data import CustomData, DataType
+from nautilus_trader.model.identifiers import ClientId, InstrumentId
 
 from kanso.criteria.run import midnight_ns
+from kanso.data.types import CorporateAction
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
 from kanso.nautilus.cross_section import is_marker
@@ -31,6 +33,7 @@ from tests.replay.conftest import (
     RESTING,
     REVERTING,
     SPAN,
+    SPLIT_EX,
     SPLIT_SCHEDULE,
     bars,
     hypothesis,
@@ -97,6 +100,93 @@ def test_the_two_paths_cancel_across_a_corporate_action_identically() -> None:
     assert [(order[2], order[3]) for order in node.intents] == [("BUY", 1_005.0), ("SELL", 1_005.0)]
     assert [(fill.side, fill.qty) for fill in node.run.fills] == [("BUY", 1_005.0)]
     assert node.run.equity == engine.run.equity
+
+
+def test_the_sleeve_is_told_of_a_corporate_action_on_both_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The venue announces a split as it applies it, and the sleeve hears it on either path.
+
+    The node's exchange sends on a relay rather than on the node's own bus, and the
+    announcement used to stop there: the sleeve on a stage held no split and booked no
+    payment in lieu, so a strategy that restates its own history at a split, or sizes its
+    next order by its balance, traded differently in a stage than in its card — measured,
+    a stock sleeve whose certification warmup held a ten-for-one split entered its first
+    three names in another order. Both sleeves now hold the one split and the same cash.
+    """
+    made: list[Any] = []
+    original = backtest._sleeve
+
+    def recording(request: backtest.RunRequest) -> tuple[Any, Any]:
+        cls, config = original(request)
+
+        class Recorded(cls):  # type: ignore[misc, valid-type]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                made.append(self)
+
+        return Recorded, config
+
+    monkeypatch.setattr(backtest, "_sleeve", recording)
+    both(request_for(source=HOLDING), [instrument(info=SPLIT_SCHEDULE)], [tuple(restated(FORWARD))])
+
+    engine, node = made
+    assert [split.ex_date for split in node._restated[INSTRUMENT]] == [SPLIT_EX]
+    assert node._restated == engine._restated
+    assert node._cash == engine._cash
+
+
+DIVIDEND_TAKER = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys a share for every cent of dividend declared, the moment it is declared.\"\"\"
+
+    config_cls = KansoConfig
+
+    def on_bar(self, bar) -> None:
+        return
+
+    def on_data(self, data) -> None:
+        if data.kind == "dividend":
+            self.submit_entry(data.instrument_id, "BUY", qty=round(data.cash * 100))
+"""
+
+
+def declared(cents: int, day: int) -> CustomData:
+    """A dividend of `cents` declared at the close of the window's `day`-th day."""
+    at = midnight_ns(FORWARD[0]) + day * 86_400 * 1_000_000_000 + 16 * 3_600 * 1_000_000_000
+    return CustomData(
+        DataType(CorporateAction),
+        CorporateAction(
+            ts_event=at,
+            ts_init=at + 1_000_000_000,
+            instrument_id=InstrumentId.from_str(INSTRUMENT),
+            kind="dividend",
+            ratio=1.0,
+            cash=cents / 100,
+            currency="USD",
+            ex_date_ns=at + 14 * 86_400 * 1_000_000_000,
+        ),
+    )
+
+
+def test_a_custom_requirement_reaches_the_sleeve_without_a_subscription_of_its_own() -> None:
+    """The harness subscribes every data requirement, a registered custom type included.
+
+    A researched `strategy.py` may not import `kanso.data`, so the class a subscription
+    needs is out of its reach: a hypothesis that required `corporate_action` used to be
+    loaded its points and never shown one. Both paths now hand each declaration to
+    `on_data` as the type itself, at the instant it became public.
+    """
+    hyp = hypothesis(data_requirements=["bar", "corporate_action"])
+    groups = [tuple(bars(FORWARD)), (declared(24, 3), declared(26, 10))]
+
+    node, engine = both(request_for(source=DIVIDEND_TAKER, hyp=hyp), [instrument()], groups)
+
+    assert node.intents == engine.intents
+    assert [(order[2], order[3]) for order in engine.intents] == [("BUY", 24.0), ("BUY", 26.0)]
 
 
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:

@@ -354,6 +354,19 @@ error: data_requirements: house_signal is not a data type this workspace knows; 
 remedy: require one of those, or install the extension that registers the type
 ```
 
+A hypothesis that requires the type is handed it. The runner loads the type's points for
+the universe over the window, the harness subscribes the sleeve to the class, and each point
+reaches the author's `on_data` as an instance of it, at the instant it became public — on a
+card, on either replay path and on a stage replaying the catalog. A stage fed by a broker's
+live feed is handed what that feed publishes, and no feed kanso ships publishes a custom
+type. The author subscribes nothing and imports nothing, which is as well: `strategy_integrity` refuses a `strategy.py` that imports `kanso.data` or an
+extension's module, so the class a subscription needs is out of its reach.
+
+`research begin` pins the type like any series: each instrument of the universe needs a
+dataset of it whose served span covers both windows and the warmup. A daily series does. A
+sparse series of announcements does not yet — its span runs from its first point to its
+last, and an empty one is refused (`docs/backlog.md` row 92).
+
 ### A construct
 
 A construct is two things: the **catalogue item** classification reads, and the

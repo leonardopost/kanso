@@ -146,4 +146,5 @@ class Probe:
         }
 
     def sources(self, instrument_id: str) -> dict[str, str]:
-        return {"probe": instrument_id.lower()}
+        """The key it was asked for, as a vendor reports its own spelling: the key it answers."""
+        return {"probe": instrument_id}

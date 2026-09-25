@@ -194,8 +194,54 @@ def test_what_the_adapter_answers_is_cached_with_its_provenance(
     assert entry.resolved.adapter == "probe"
     assert entry.resolved.as_of == AS_OF
     assert entry.resolved.checksum == definition_checksum(resolved["MSFT"])
-    assert entry.sources == {"probe": "msft"}
+    assert entry.sources == {"probe": "MSFT"}
     assert entry.nautilus_id == "MSFT.XNAS"
+
+
+def test_the_adapter_is_asked_for_the_vendor_s_own_key_when_the_entry_names_one(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry filed under its qualified id still records the vendor's key in `sources`.
+
+    The id a universe names and the key a vendor answers to are different strings, and only
+    the entry knows both: asked for `TQQQ.XNAS`, a vendor whose keys carry no venue refused
+    the request on every refresh of such an entry.
+    """
+    write(ws, **{"MSFT.XNAS": {**MSFT, "manual": False, "sources": {"probe": "MSFT"}}})
+    probe = Probe(answers={"MSFT": equity("MSFT.XNAS")})
+
+    resolved = resolve_universe(probing(ws, probe, monkeypatch), ["MSFT.XNAS"], AS_OF, refresh=True)
+
+    assert probe.asked == [("MSFT",)]
+    assert resolved["MSFT.XNAS"].id.value == "MSFT.XNAS"
+    assert cache(ws)["MSFT.XNAS"].sources == {"probe": "MSFT"}, "read back for the key asked"
+
+
+def test_a_universe_id_reaches_the_adapter_as_its_entry_s_vendor_key(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hypothesis names `MSFT.XNAS`; the entry is filed as `MSFT` and records its key."""
+    write(ws, MSFT={**MSFT, "manual": False, "sources": {"probe": "MSFT", "other": "MS"}})
+    probe = Probe(answers={"MSFT": equity("MSFT.XNAS")})
+
+    resolved = resolve_universe(probing(ws, probe, monkeypatch), ["MSFT.XNAS"], AS_OF, record=False)
+
+    assert probe.asked == [("MSFT",)], "the key recorded for this adapter, not another's"
+    assert list(resolved) == ["MSFT.XNAS"]
+
+
+def test_a_refusal_names_the_id_asked_and_the_key_the_vendor_was_asked_for(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(ws, **{"MSFT.XNAS": {**MSFT, "manual": False, "sources": {"probe": "MSFTX"}}})
+
+    with pytest.raises(ValidationError) as caught:
+        resolve_universe(probing(ws, Probe(), monkeypatch), ["MSFT.XNAS"], AS_OF)
+
+    assert (
+        "MSFT.XNAS: unknown: the probe knows none (asked of probe as 'MSFTX')"
+        in caught.value.message
+    )
 
 
 def test_an_id_the_adapter_does_not_know_fails_with_its_own_reason(
@@ -241,7 +287,7 @@ def test_a_resolution_leaves_the_operators_own_fields_alone(
     assert after["MSFT"].corporate_actions == "none"
     assert after["MSFT"].attributes == {"sector": "tech"}
     assert after["MSFT"].override == {"currency": "USD"}
-    assert after["MSFT"].sources == {"other": "MSFT.US", "probe": "msft"}
+    assert after["MSFT"].sources == {"other": "MSFT.US", "probe": "MSFT"}
     assert after["AAPL"] == cache(ws)["AAPL"]
     assert list(after.root) == ["MSFT", "AAPL"]
 

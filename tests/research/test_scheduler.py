@@ -390,6 +390,32 @@ def test_a_stall_on_bytes_already_certified_is_not_worth_certifying_again(
     assert ids(store) == [hyp_id]
 
 
+def test_a_stall_on_bytes_certified_before_other_bytes_is_not_certified_again(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The best that stalled was certified long ago, and other bytes were certified since.
+
+    A certificate is immutable and certification refuses the repeat, so asking only whether
+    the best was the newest certificate's subject sent it back to be refused at every stall,
+    and the lane failed each time — measured on a live workspace, five times in two hours on
+    one hypothesis. The stall asks whether these bytes were judged under the plan it would
+    run and the engine installed.
+    """
+    hyp_id = classify(ws, store, DOCUMENT)
+    write_plan(ws)
+    run = open_run(store, hyp_id)
+    kept = store.put_blob(b"kept")
+    certificate(store, hyp_id, kept, verdict="fail")
+    certificate(store, hyp_id, store.put_blob(b"certified since"), verdict="fail")
+    records.set_best(store, run, kept, 1.25)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.certifiable is False
+    assert stall.best_sha == kept
+    assert ids(store) == [hyp_id], "back to research, not a failed lane"
+
+
 def stall_twice(ws: Workspace, store: StateStore, hyp_id: str) -> list[scheduler.Stall]:
     """Two stalls on a best already certified, so nothing is certified in between."""
     return [scheduler.on_stall(ws, store, hyp_id) for _ in range(2)]
