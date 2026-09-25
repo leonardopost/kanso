@@ -21,9 +21,17 @@ def running(pid: int) -> bool:
 
 
 def children(pid: int) -> list[tuple[int, str]]:
-    """Every process whose parent is `pid`, with its command line, zombies included."""
+    """Every process whose parent is `pid`, with its whole command line, zombies included.
+
+    `-ww` because the two `ps` differ when their output is a pipe: BSD's prints every column
+    of the command, procps's cuts the line at 80 unless asked twice for width, and a lane's
+    name is the last word of a command well over 80 characters long.
+    """
     listing = subprocess.run(
-        ["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=False
+        ["ps", "-A", "-ww", "-o", "pid=,ppid=,command="],
+        capture_output=True,
+        text=True,
+        check=False,
     ).stdout
     found: list[tuple[int, str]] = []
     for line in listing.splitlines():
