@@ -362,6 +362,36 @@ def test_a_retired_hypothesis_is_the_one_thing_a_stall_leaves_out(
     assert ids(store) == []
 
 
+@pytest.mark.parametrize("metric", [0.0, -1.54])
+def test_a_stall_on_a_best_that_proved_no_edge_is_not_certified(
+    ws: Workspace, store: StateStore, metric: float
+) -> None:
+    """A best at or below zero on its own objective showed no edge in research.
+
+    Every objective in the library measures an edge whose zero is none, so a certificate
+    cannot find what research did not: the plan's model call and the certification window's
+    backtests would be spent on a verdict already known. Measured on a live workspace, a
+    stall on a five-second ladder whose best was its seed at -1.54 held a lane for over
+    ninety minutes certifying it, while another hypothesis waited in the queue.
+    """
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING, metric=metric)
+    write_plan(ws)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.certifiable is False
+    assert stall.verdict is None
+    assert stall.best_sha is not None
+    assert stall.priority == scheduler.STALL_PRIORITY
+    assert show(ws, store, hyp_id).status not in ("candidate", "certified")  # type: ignore[union-attr]
+    assert store.events(kind=scheduler.CERTIFIABLE) == []
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+    assert ids(store) == [hyp_id], "back to research, as any stall"
+    (stalled,) = store.events(kind=scheduler.STALLED)
+    assert stalled.detail["best_metric"] == metric, "the event says what the best scored"
+
+
 def test_a_stall_with_no_keep_only_requeues(ws: Workspace, store: StateStore) -> None:
     hyp_id = classify(ws, store, DOCUMENT)
     open_run(store, hyp_id)

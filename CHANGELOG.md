@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A stall certifies its best only when the best scored above zero.** Every objective in the library measures an edge whose zero is none, so a best at or below zero showed no edge in research and no certificate can show one; the stall now requeues it without the planner's model call or the certification window's backtests, and its `stalled` event records what the best scored (`best_metric`). Measured on a live workspace: a five-second ladder's stall on its seed at −1.54 held a lane for over ninety minutes certifying it while another hypothesis waited in the queue.
+
 ## v0.10.0 — 2026-09-26
 
 - **`costs.limit_fill`: a resting limit fills on a touch, or only once the market goes through it.** `touch`, the default and what every venue model resolved before the key existed was measured under, is the engine's own rule; `through` leaves a limit the market only reached on the book and fills it at its own price once a bar's low goes under a buy, a bar's high over a sell, or a print past either. It is stated like any cost — a broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and reaches both code paths from the one venue configuration they are built from: the research engine and the node's simulated exchange are each handed a fill model whose `prob_fill_on_limit` is exactly 1 or 0, so it draws nothing and a card, a replay and a stage fill the same resting orders. Measured on the replay suite's saw-tooth, a buy resting at 9.75 against a low of exactly 9.75 fills on both paths under `touch` and on neither under `through`, and one at 9.80 fills at 9.80 on both paths under either. On quotes the engine asks the rule only when the order's own side of the book is at its price, so an ask falling exactly to a resting buy fills it under either rule. Two versions certified under different rules cannot share a stage venue, which is one exchange (exit 2, naming `venues.<MIC>.costs.limit_fill`).

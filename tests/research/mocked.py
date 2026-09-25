@@ -12,8 +12,9 @@ assignment is the last one executed and therefore the one that wins, and a scrip
 `revert`, `boom` and `weak` produces a keep, a crash and a discard in that order and then
 goes round again.
 
-A stalled run certifies the keep it leaves behind, so the frontier model is scripted with
-a certification plan as well: a driver test that reaches a stall reaches the planner.
+A stalled run certifies the keep it leaves behind when that keep scored above zero, so the
+frontier model is scripted with a certification plan as well: a driver test that stalls on
+a `revert` keep reaches the planner, and one that stalls on the flat seed does not.
 
 Every model here is the `mock` protocol, so nothing in this directory opens a socket and
 every test is green with every provider credential unset.
