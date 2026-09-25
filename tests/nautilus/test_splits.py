@@ -21,6 +21,7 @@ from kanso.nautilus.splits import (
     Split,
     ledger,
     quantity_after,
+    restating,
     schedule,
     schedule_of,
     unscheduled,
@@ -68,8 +69,43 @@ def test_a_schedule_is_read_in_ex_date_order_whatever_order_it_was_written_in() 
     ]
 
 
-def test_a_split_takes_effect_at_the_midnight_that_opens_its_ex_date() -> None:
-    assert Split(ex_date=date(1970, 1, 2), ratio=0.5).effective_ns == 86_400_000_000_000
+@pytest.mark.parametrize(
+    ("ex_date", "stamped_s"),
+    [(date(2021, 3, 2), 1_614_661_200), (date(2026, 7, 15), 1_784_088_000)],
+    ids=["winter", "summer"],
+)
+def test_a_split_takes_effect_at_the_midnight_that_opens_its_ex_date_in_new_york(
+    ex_date: date, stamped_s: int
+) -> None:
+    """05:00Z under EST and 04:00Z under EDT, never the UTC midnight that is 19:00 or 20:00
+    New York the evening before. Each instant is where the vendor stamps the last pre-split
+    session's daily bar, measured for SOXL's split of 2021-03-02 and SOXS's of 2026-07-15."""
+    assert Split(ex_date=ex_date, ratio=0.5).effective_ns == stamped_s * 1_000_000_000
+
+
+def test_only_a_point_stamped_after_the_instant_is_in_the_new_shares() -> None:
+    """A point is stamped at the end of what it describes, so one stamped at the instant is
+    the day before — the last pre-split daily bar — and has none of the ex-date in it."""
+    split = Split(ex_date=EX, ratio=0.1)
+
+    assert not split.precedes(split.effective_ns)
+    assert split.precedes(split.effective_ns + 1)
+
+
+@pytest.mark.parametrize(
+    ("printed", "through", "factor"),
+    [(0, 0, 1.0), (0, 1, 0.1), (1, 2, 1.0), (-1, 0, 1.0)],
+    ids=["neither-past", "printed-before-read-after", "both-past", "both-before"],
+)
+def test_a_price_is_restated_only_across_the_instant_that_separates_it_from_now(
+    printed: int, through: int, factor: float
+) -> None:
+    """The harness divides a price by the ratio only when the venue has applied the split
+    since that price was printed: the print is not past the instant and the reading is."""
+    split = Split(ex_date=EX, ratio=0.1)
+    at = split.effective_ns
+
+    assert restating([split], at + printed, at + through) == factor
 
 
 def test_a_schedule_that_is_not_a_list_is_refused() -> None:

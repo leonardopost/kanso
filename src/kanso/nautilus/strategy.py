@@ -1446,8 +1446,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the held leg's restated share count beside a price still quoted in the old one —
         read as it stands, a one-for-ten reverse split is a ninety per cent loss, and room
         for ten times the exposure. The factor is the product of the ratios of the name's
-        splits effective after the print and no later than the latest event seen, which the
-        venue processed, and so applied every split up to, before this sleeve saw it.
+        splits that the latest event seen is past and the print is not (`Split.precedes`):
+        the venue processed that event, and so applied every split it is past, before this
+        sleeve saw it.
         """
         schedule = self._schedules.get(key)
         if schedule is None:

@@ -293,7 +293,9 @@ read-only `PortfolioFacade` that a component's `portfolio` attribute is typed
 as; in every environment kanso runs, that attribute is the kernel's own
 `Portfolio`.
 
-A `SimulationModule` is handed every market point through `pre_process(data)`
+A `SimulationModule` is handed every market point through `pre_process(data)` —
+the point itself, so its `ts_event` is the one the loader wrote, which is what
+`kanso.nautilus.splits` compares with the instant a split takes effect —
 *before* the venue's matching engine sees it — `SimulatedExchange.process_bar`,
 `process_quote_tick`, `process_trade_tick`, the three order-book variants,
 `process_instrument_status` and `process_instrument_close` each loop the modules
@@ -1721,10 +1723,12 @@ def _check_simulation_module_precedes_matching() -> tuple[bool, str]:
     from nautilus_trader.portfolio.portfolio import Portfolio
 
     seen: list[object] = []
+    handed: list[object] = []
 
     class _Probe(SimulationModule):  # type: ignore[misc]
         def pre_process(self, data: object) -> None:
             seen.append(exchange.best_bid_price(instrument.id))
+            handed.append(data)
 
         def process(self, ts_now: int) -> None:
             pass
@@ -1759,20 +1763,28 @@ def _check_simulation_module_precedes_matching() -> tuple[bool, str]:
         bar_execution=True,
     )
     exchange.add_instrument(instrument)
-    exchange.process_bar(_sample_bar(ts_event=1_000, ts_init=1_000, close=10.0))
-    exchange.process_bar(_sample_bar(ts_event=2_000, ts_init=2_000, close=100.0))
+    bars = (
+        _sample_bar(ts_event=1_000, ts_init=1_000, close=10.0),
+        _sample_bar(ts_event=2_000, ts_init=2_500, close=100.0),
+    )
+    for bar in bars:
+        exchange.process_bar(bar)
     # The other three of a module's four calls, so this check fails if any of them stops
     # being reachable: the clock tick the venue makes after it settles, and the two the
     # engine's own reset and diagnostics paths make.
-    exchange.process(2_000)
+    exchange.process(2_500)
     probe.log_diagnostics(None)
     probe.reset()
     marks = [None if price is None else float(price) for price in seen]  # type: ignore[arg-type]
-    holds = marks == [None, 10.0]
+    itself = len(handed) == len(bars) and all(a is b for a, b in zip(handed, bars, strict=True))
+    stamps = [int(point.ts_event) for point in handed]  # type: ignore[attr-defined]
+    holds = marks == [None, 10.0] and itself
     return holds, (
         f"a module's pre_process saw the venue's best bid at {marks} while processing bars "
         f"priced 10.00 then 100.00: the second call reached it before the matching engine "
-        f"had moved the book, so a module acts on a point before the venue matches against it"
+        f"had moved the book, so a module acts on a point before the venue matches against it; "
+        f"each call was handed the bar itself: {itself}, ts_event {stamps}, which is the "
+        f"stamp `kanso.nautilus.splits` compares with a split's instant"
     )
 
 
@@ -1928,7 +1940,8 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_portfolio_resync,
     ),
     (
-        "a simulation module is handed every market point before the venue matches against it",
+        "a simulation module is handed every market point, as loaded, before the venue "
+        "matches against it",
         _check_simulation_module_precedes_matching,
     ),
     (

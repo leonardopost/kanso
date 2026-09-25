@@ -7,7 +7,53 @@ reverse-split ten times since 2010 — it teaches a research loop to buy an inve
 week before one. So kanso applies the action instead of trading through it, and this module
 holds the two halves of that: **when** a split happens, and **what** it changes. *Where* it
 is applied is `kanso.nautilus.actions`: inside the simulated venue, one call before the
-ex-date's first point is matched against anything.
+first point of the ex-date's session is matched against anything.
+
+**When: after the midnight that opens the ex-date in New York.** An `ex_date` is the first
+session that trades at the new price — the day a vendor's split listing gives as the
+execution date, and the day a `corporate_action` point carries as `ex_date_ns`, which is
+what `unscheduled` compares a schedule with. A split takes effect at the instant that day
+opens in `ZONE`, and the venue applies it before the first point stamped *after* that
+instant (`Split.precedes`). Both halves were measured against the vendor's unadjusted bars,
+and each replaced a rule that failed one of the two grains:
+
+* **The day is New York's**, because the tape's is. A US equity's minute bars run from 04:00
+  to 20:00 New York, so the UTC midnight this rule used to take — 19:00 New York from
+  November to March — falls inside the post-market of the session before, where a position
+  still open was multiplied by the ratio against prices still quoted in the old shares.
+  Measured: SOXS's last bar before its one-for-twenty reverse split closed at 19:51 New York
+  on 2026-03-04 at 1.8999, and its first after it closed at 09:01 on 2026-03-05, having
+  opened at 38.61. The vendor's minute bars hold nothing from 20:00 to 04:00 on that night
+  or on either other night measured here, so New York's midnight falls in the gap between
+  two sessions; a feed carrying an overnight session dated to the next trading day would
+  put prints at the new price before it.
+* **The comparison is strict**, because a point is stamped at the end of the period it
+  describes and a daily bar describes a New York calendar day: the vendor opens its window
+  at New York midnight — 05:00Z in winter, 04:00Z in summer — so the last pre-split
+  session's daily bar is stamped at exactly the instant that opens the ex-date. Measured:
+  SOXL's 2021-03-01 bar closed at 638.37 and is stamped 2021-03-02 05:00Z, and the first
+  session of its fifteen-for-one split closed at 38.55 and is stamped 2021-03-03 05:00Z. A
+  point stamped at the instant is the day before it; every point of the ex-date's own
+  session is stamped after it — its first minute bar at 04:01 at the earliest, its daily bar
+  at the next midnight.
+
+So one declaration serves a daily catalog and an intraday one alike. Under the UTC rule no
+one date did: the ex-date applied the split before the last pre-split daily bar, and the day
+after — what a daily catalog needed — applied it at 19:00 New York on the first post-split
+session, whose prints had been restated since its open. The other rule a reader would reach
+for, the first point of the first post-split session, needs the same zone to say which
+session a point is in, and for a point stamped at its close it *is* this rule; stated as an
+instant, it is one comparison that the venue applying a split and the harness restating a
+price both make, so the two cannot disagree about which side of a split a print is on. That
+side is read off a point's `ts_event`, the period it describes, and not its `ts_init`: a bar
+published late is still quoted in the shares of the period it closed.
+
+The zone is New York's whichever venue lists the instrument. Only an equity carries a
+schedule — `info` is an equity's field — and every equity kanso holds a convention for is a
+US one: the single equity entry in `kanso.data.conventions` is Regulation NMS's, for any
+venue. So `SOXL.ARCA`, `SOXS.ARCX` and a synthetic `DEMO.SIM` are dated alike; an equity
+market that dates its sessions elsewhere needs a tick convention of its own first, and its
+zone beside it.
 
 **The schedule lives on the instrument definition, not in the data.** That is not the
 design anyone would pick first — a split beside the bars, as an ordinary
@@ -31,6 +77,13 @@ a schedule entry is therefore refused by name rather than ignored.
 
 **What the engine permits, measured against nautilus_trader 1.231.0.**
 
+* The venue asks `Split.precedes` about the point itself. `BacktestEngine._run` — and, on
+  the node path, `kanso.nautilus.sandbox`'s routes — pass each loaded point unchanged to
+  the exchange's `process_*` call, which hands it to every module's `pre_process` before
+  its matching engine sees it, and nothing in the engine re-stamps a bar loaded from
+  outside it: the `ts_event` compared is the one the loader wrote. The stream is ordered by
+  `ts_init` alone, so the first point past the instant to *arrive* is the one that applies
+  the split.
 * `Position.apply_adjustment(PositionAdjusted(...))` is the mechanism: a public `cpdef`
   that adds `quantity_change` to `signed_qty`, recomputes `quantity` and the side, and
   appends the event to the position's own adjustment ledger. It places no order, charges
@@ -71,16 +124,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import ROUND_FLOOR, Decimal
+from functools import cache
 from typing import Any, Final
+from zoneinfo import ZoneInfo
 
 from kanso.criteria.run import day_of, midnight_ns
+from kanso.data.loader import to_ns
 from kanso.errors import PreconditionError, ValidationError
 
 __all__ = [
     "FIELDS",
     "KEY",
+    "ZONE",
     "Ledger",
     "Move",
     "Split",
@@ -102,10 +159,15 @@ FIELDS: Final = ("ex_date", "ratio")
 REASON: Final = "split"
 """What a `PositionAdjusted` this module raises says it is for."""
 
+ZONE: Final = "America/New_York"
+"""The time zone an ex-date is a day in: the US equity market's, whichever venue lists the
+instrument. The module note says why it is this one and why it is the only one."""
+
 
 @dataclass(frozen=True, slots=True, order=True)
 class Split:
-    """One split: the day it takes effect, and the shares it leaves per share held.
+    """One split: the first session that trades at the new price, and the shares it leaves
+    per share held.
 
     `ratio` follows `CorporateAction.ratio` — shares held after per share held before, so
     4.0 is a four-for-one split and 0.1 a one-for-ten reverse split. A ratio of one is not
@@ -118,8 +180,22 @@ class Split:
 
     @property
     def effective_ns(self) -> int:
-        """The instant the split takes effect: the UTC midnight opening its ex-date."""
-        return midnight_ns(self.ex_date)
+        """The instant the split takes effect: the midnight that opens its ex-date in `ZONE`."""
+        return _opening_ns(self.ex_date)
+
+    def precedes(self, ts_ns: int) -> bool:
+        """Whether a point stamped at `ts_ns` is quoted in the shares this split leaves.
+
+        Only a point stamped after the instant is: one stamped at it closed a period of the
+        day before, as the last pre-split session's daily bar does.
+        """
+        return self.effective_ns < ts_ns
+
+
+@cache
+def _opening_ns(day: date) -> int:
+    """The instant `day` opens in `ZONE`, kept because the harness asks on every restatement."""
+    return to_ns(datetime.combine(day, time(), tzinfo=ZoneInfo(ZONE)))
 
 
 def schedule(info: Mapping[str, Any] | None, who: str) -> tuple[Split, ...]:
@@ -284,12 +360,12 @@ def apply_to(position: Any, split: Split, lot: float, ts_ns: int) -> Any:
 
 def restating(schedule: Sequence[Split], printed_ns: int, through_ns: int) -> float:
     """What a price printed at `printed_ns` is divided by to be quoted in the shares held at
-    `through_ns`: the product of the ratios of every split effective after the one and at or
-    before the other. A one-for-ten reverse split between them makes it 0.1, so a price of
-    twenty reads as the two hundred the restated share count trades at."""
+    `through_ns`: the product of the ratios of every split that precedes the one and not the
+    other. A one-for-ten reverse split between them makes it 0.1, so a price of twenty reads
+    as the two hundred the restated share count trades at."""
     factor = 1.0
     for split in schedule:
-        if printed_ns < split.effective_ns <= through_ns:
+        if split.precedes(through_ns) and not split.precedes(printed_ns):
             factor *= split.ratio
     return factor
 

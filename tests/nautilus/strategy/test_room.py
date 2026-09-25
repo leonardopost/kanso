@@ -190,9 +190,10 @@ def test_the_balance_is_cash_less_costs_plus_the_position_at_its_last_print(back
 
 
 EX_DATE = {"splits": [{"ex_date": "1970-01-02", "ratio": 0.1}]}
-"""HEDGE reverse-splits one for ten at the midnight opening the second day of the series."""
-NEXT_DAY = 1_440
-"""The minute index of the first bar on that day."""
+"""HEDGE reverse-splits one for ten on 1970-01-02, which opens in New York at 05:00Z."""
+NEXT_DAY = 1_440 + 9 * 60
+"""The minute index of the first bar on that day, stamped 04:01 New York: the close of the
+pre-market's first minute."""
 
 
 def stamped(instrument_id: object, close: float, ts_event: int, ts_init: int) -> Bar:

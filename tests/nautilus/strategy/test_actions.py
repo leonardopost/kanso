@@ -7,18 +7,21 @@ the ex-date's bar is matched rather than after, that the portfolio index follows
 would agree with any of those.
 
 The series is four sessions either side of the ex-date, priced ten before and a hundred
-after: a one-for-ten reverse split as the tape carries it.
+after: a one-for-ten reverse split as the tape carries it, each session's bar stamped at
+10:00 New York.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
 from kanso.criteria.run import midnight_ns
+from kanso.data.loader import to_ns
 from kanso.errors import PreconditionError
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
@@ -26,15 +29,20 @@ from .conftest import DEMO, HEDGE, VENUE, bar, equity
 
 EX = date(2024, 1, 6)
 DAY_NS = 86_400_000_000_000
+HOUR_NS = 3_600_000_000_000
 SCHEDULE = {"splits": [{"ex_date": EX.isoformat(), "ratio": 0.1}]}
 FORWARD = {"splits": [{"ex_date": EX.isoformat(), "ratio": 4.0}]}
 
 
 def series(before: float = 10.0, after: float = 100.0, n: int = 8) -> list[object]:
-    """Four sessions either side of the ex-date, priced as a one-for-ten reverse split."""
+    """Four sessions either side of the ex-date, priced as a one-for-ten reverse split.
+
+    Each bar is stamped at 15:00Z, 10:00 New York in January: inside the session it belongs
+    to, where a US equity's bar is, rather than in the evening before it.
+    """
     made: list[object] = []
     for index in range(n):
-        day = midnight_ns(EX) + (index - n // 2) * DAY_NS + 3_600_000_000_000
+        day = midnight_ns(EX) + (index - n // 2) * DAY_NS + 15 * HOUR_NS
         close = before if index < n // 2 else after
         made.append(_dated(bar(DEMO, 0, close), day))
     return made
@@ -210,6 +218,41 @@ def test_the_adjustment_is_stamped_at_the_reference_time_that_triggered_it(backt
 
     assert int(held(run).adjustments[0].ts_event) == run.strategy.seen[4][0]
     assert held(run).adjustments[0].reason == "split"
+
+
+EST_EX = date(2024, 1, 17)
+FIFTEEN = {"splits": [{"ex_date": EST_EX.isoformat(), "ratio": 15.0}]}
+
+
+def overnight() -> list[object]:
+    """The eve of an EST ex-date into its post-market, then the ex-date's first prints, as
+    minute bars stamped at their close on New York's clock: 603.00 to the eve's last print at
+    19:51, 40.20 from the first at 04:21 — a fifteen-for-one split as the tape carries it."""
+    new_york = ZoneInfo("America/New_York")
+    eve = EST_EX - timedelta(days=1)
+    stamps = ((eve, 15, 0), (eve, 19, 30), (eve, 19, 51), (EST_EX, 4, 21), (EST_EX, 9, 31))
+    return [
+        _dated(
+            bar(DEMO, 0, 603.0 if day < EST_EX else 40.2),
+            to_ns(datetime(day.year, day.month, day.day, hour, minute, tzinfo=new_york)),
+        )
+        for day, hour, minute in stamps
+    ]
+
+
+def test_a_position_held_overnight_is_adjusted_once_at_the_ex_date_s_first_point(
+    backtest,
+) -> None:
+    """Bought at 15:00 New York on the eve. The sleeve still holds the old count at 19:30 and
+    19:51, past the UTC midnight — 19:00 New York in January — that the venue used to apply
+    a split at, and the new count from the ex-date's first print at 04:21: the one point the
+    one adjustment is stamped at, applied before that print was matched."""
+    run = backtest(Holder(config()), instruments=[equity(DEMO, info=FIFTEEN)], data=overnight())
+    position = held(run)
+
+    assert [count for _ts, count in run.strategy.seen] == [0.0, 16.0, 16.0, 240.0, 240.0]
+    assert [float(event.quantity_change) for event in position.adjustments] == [224.0]
+    assert int(position.adjustments[0].ts_event) == run.strategy.seen[3][0]
 
 
 def test_a_split_costs_the_position_nothing(backtest) -> None:

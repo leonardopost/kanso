@@ -610,8 +610,21 @@ SOXS:
     info:
       splits:
         - {ex_date: 2026-07-15, ratio: 0.1}     # a one-for-ten reverse split
-        - {ex_date: 2021-03-02, ratio: 4.0}     # a four-for-one split
+        - {ex_date: 2026-03-05, ratio: 0.05}    # a one-for-twenty reverse split
 ```
+
+`ex_date` is the **first session that trades at the new price**: the day a vendor's split
+listing gives as the execution date, and the day a `corporate_action` point carries — not
+the calendar day after it. Both entries above are SOXS's own, and each is the first session
+whose bars print at the restated price. The split takes effect at the midnight that opens
+that day in New York, whichever venue lists the equity, and the venue applies it before the
+first point stamped after that midnight. So the eve's post-market, which prints until 20:00
+New York, is traded in the old shares, and the ex-date's first print, pre-market or open, in
+the new ones. A daily bar is stamped at its close — the vendor's at the next New York
+midnight — so the eve's daily bar lands exactly on the instant and belongs to the day
+before, and the ex-date's own bar is the first in the new shares: one date serves a daily
+catalog and an intraday one alike. An entry dated a day late applies the split a session late — the first post-split
+session is then traded in the old share count from its first print to its last.
 
 `ratio` is shares held **after** per share held **before**, the same convention the
 `corporate_action` data type uses: `0.1` for one-for-ten reverse, `4.0` for four-for-one.

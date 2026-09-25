@@ -667,10 +667,26 @@ before one.
 
 You declare the splits an equity has been through in its own definition, as
 `override.info.splits` in `instruments.yaml` (`docs/workspace.md`). The **venue** applies
-them: on the first market point whose reference time reaches an ex-date, and one call
-before that point is matched against anything, the simulated exchange cancels every resting
-order in that instrument, rescales every open position, and resyncs the portfolio index
-behind the change.
+them: on the first market point stamped after the midnight that opens an ex-date in New
+York, and one call before that point is matched against anything, the simulated exchange
+cancels every resting order in that instrument, rescales every open position, and resyncs
+the portfolio index behind the change.
+
+**When, exactly.** An ex-date is the first session that trades at the new price, and the
+split belongs between the last point of the session before it and the first point of that
+one, whatever the grain. The day is New York's because the tape's is: a US equity prints
+from 04:00 to 20:00 New York and the vendor's minute bars are empty overnight, so New
+York's midnight falls between two sessions, while the UTC midnight — 19:00 New York from
+November to March — falls in the previous session's post-market, where applying a split
+multiplies a position the tape still prices in the old shares. Measured on the vendor's bars, SOXS printed at
+1.8999 in the bar closing 19:51 New York on 2026-03-04 and first printed at the new price in
+the bar closing 09:01 on 2026-03-05, its one-for-twenty ex-date. The point has to be stamped
+*after* the midnight, not at it, because a daily bar is stamped at its close and the
+vendor's daily bar is New York's calendar day: the eve's bar closes at exactly that midnight
+(SOXL's of 2021-03-01, at 638.37, is stamped 2021-03-02 05:00Z) and is the old shares' last
+word. The rule has one instant, and the harness uses the same comparison when it restates a
+price printed before a split, so the venue and the sleeve cannot disagree about which side
+of a split a print is on.
 
 It is the venue and not the strategy because a strategy is too late. A sleeve handles a
 point only after the exchange has already matched against it, so a take-profit resting

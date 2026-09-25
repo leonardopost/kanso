@@ -3,7 +3,8 @@
 A split is a bookkeeping change: a thousand shares at four dollars become a hundred at
 forty, and nothing is bought, sold or earned. `kanso.nautilus.splits` holds *when* one
 happens and *what* it changes; this module holds *where* — inside the simulated exchange,
-one call before the ex-date's first point is matched.
+one call before the first point stamped after the midnight that opens the ex-date in New
+York is matched.
 
 **It is not in the strategy, and the reason is measured.** A sleeve handles a data event
 only after the exchange has already matched against it: `BacktestEngine._run` sends every
@@ -86,9 +87,9 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
     """The corporate actions one venue's instruments declare, applied as they fall due.
 
     Held as a list of `(effective_ns, instrument, split)` in ex-date order and popped as
-    the market's reference time reaches each one, so a split takes effect at the open of
-    its ex-date whether or not that instrument printed first — a venue sees one stream in
-    one order, and every point in it moves the clock.
+    the market's reference time passes each one, so a split takes effect at the first point
+    of its ex-date's session whether or not that instrument printed it — a venue sees one
+    stream in one order, and every point in it moves the clock.
     """
 
     def __init__(self, config: Any = None) -> None:
@@ -100,7 +101,7 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
     # --- what the exchange calls ---------------------------------------------
 
     def pre_process(self, data: Any) -> None:
-        """Apply everything this point's reference time has reached, before it is matched."""
+        """Apply everything this point's reference time has passed, before it is matched."""
         self.apply_through(int(data.ts_event), int(data.ts_init))
 
     def process(self, ts_now: int) -> None:
@@ -120,9 +121,10 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
     # --- the action ----------------------------------------------------------
 
     def apply_through(self, ts_event: int, ts_init: int) -> None:
-        """Apply every scheduled action effective at or before `ts_event`, in ex-date order."""
+        """Apply every scheduled action a point stamped at `ts_event` is past, in ex-date
+        order: `Split.precedes`, so a point stamped at the instant itself applies nothing."""
         self._refresh()
-        while self._due and self._due[0][0] <= ts_event:
+        while self._due and self._due[0][2].precedes(ts_event):
             _effective, name, split = self._due.pop(0)
             self._apply(InstrumentId.from_str(name), split, ts_event, ts_init)
 
