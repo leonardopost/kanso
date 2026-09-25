@@ -48,7 +48,7 @@ from nautilus_trader.model.identifiers import (
 from nautilus_trader.model.objects import Quantity
 
 from kanso.data.types.corporate_action import CorporateAction
-from kanso.nautilus import backtest, sandbox, session
+from kanso.nautilus import actions, backtest, sandbox, session
 from kanso.nautilus.venue import venue_configs
 from tests.replay.conftest import (
     CAPITAL,
@@ -334,6 +334,20 @@ def test_the_relay_carries_every_endpoint_the_node_carries(kernel: Any) -> None:
     assert set(bus.endpoints()) == set(kernel.msgbus.endpoints())
     bus.send("Probe.take", "a message for the node's own bus")
     assert taken == ["a message for the node's own bus"]
+
+
+def test_the_relay_carries_the_venue_s_announcement_to_the_node_s_bus(kernel: Any) -> None:
+    """The one topic the venue publishes on is republished where the sleeve subscribes.
+
+    The exchange's corporate-action module announces each split on the bus it was built
+    with, and on a node that is the relay; a sleeve subscribes on the node's own bus.
+    """
+    heard: list[object] = []
+    kernel.msgbus.subscribe(topic=actions.TOPIC, handler=heard.append)
+
+    sandbox.relay(kernel).publish(actions.TOPIC, "a split, applied")
+
+    assert heard == ["a split, applied"]
 
 
 def test_an_execution_event_is_applied_rather_than_queued(kernel: Any) -> None:

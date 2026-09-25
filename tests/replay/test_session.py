@@ -31,6 +31,7 @@ from tests.replay.conftest import (
     RESTING,
     REVERTING,
     SPAN,
+    SPLIT_EX,
     SPLIT_SCHEDULE,
     bars,
     hypothesis,
@@ -97,6 +98,40 @@ def test_the_two_paths_cancel_across_a_corporate_action_identically() -> None:
     assert [(order[2], order[3]) for order in node.intents] == [("BUY", 1_005.0), ("SELL", 1_005.0)]
     assert [(fill.side, fill.qty) for fill in node.run.fills] == [("BUY", 1_005.0)]
     assert node.run.equity == engine.run.equity
+
+
+def test_the_sleeve_is_told_of_a_corporate_action_on_both_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The venue announces a split as it applies it, and the sleeve hears it on either path.
+
+    The node's exchange sends on a relay rather than on the node's own bus, and the
+    announcement used to stop there: the sleeve on a stage held no split and booked no
+    payment in lieu, so a strategy that restates its own history at a split, or sizes its
+    next order by its balance, traded differently in a stage than in its card — measured,
+    a stock sleeve whose certification warmup held a ten-for-one split entered its first
+    three names in another order. Both sleeves now hold the one split and the same cash.
+    """
+    made: list[Any] = []
+    original = backtest._sleeve
+
+    def recording(request: backtest.RunRequest) -> tuple[Any, Any]:
+        cls, config = original(request)
+
+        class Recorded(cls):  # type: ignore[misc, valid-type]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                made.append(self)
+
+        return Recorded, config
+
+    monkeypatch.setattr(backtest, "_sleeve", recording)
+    both(request_for(source=HOLDING), [instrument(info=SPLIT_SCHEDULE)], [tuple(restated(FORWARD))])
+
+    engine, node = made
+    assert [split.ex_date for split in node._restated[INSTRUMENT]] == [SPLIT_EX]
+    assert node._restated == engine._restated
+    assert node._cash == engine._cash
 
 
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:

@@ -42,7 +42,9 @@ its `BacktestExecClient` their own message bus, which forwards every endpoint to
 bus unchanged except the execution engine's event endpoint, which it delivers straight to the
 synchronous implementation the live engine overrides in order to enqueue. Nothing else in the
 node changes: every other component, and any broker client beside this one, still reaches the
-live engine's queue.
+live engine's queue. The one message that has to leave the relay by topic rather than by
+endpoint is kanso's own: the split its corporate-action module announces, which the relay
+republishes on the node's bus, where the sleeve listens.
 
 **Turning the exchange's own command queue on is not the repair, and would be a second bug.**
 It was measured: with the queue on, a command waits for the next `process`, so the order is
@@ -75,7 +77,10 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   event to the `ExecEngine.process` endpoint, and registering one endpoint for spread quotes.
   `ExecutionClient` sends its account state to `Portfolio.update_account` and its order
   events to `ExecEngine.process`. Neither publishes to a topic, so a bus that carries the
-  endpoints carries everything they do.
+  endpoints carries everything they do — except what kanso's own simulation module publishes,
+  which is the one topic the relay republishes.
+* `MessageBus.publish` calls every subscribed handler before it returns, so a handler that
+  publishes again delivers to the second bus's subscribers inside the first call.
 * `MessageBus.send` to an endpoint nothing is registered at logs an error and drops the
   message, so the relay registers a forwarder for every endpoint the node's bus holds rather
   than for the two that are used today.
@@ -214,12 +219,20 @@ def relay(kernel: Any) -> MessageBus:
     have. The one exception is the execution engine's event endpoint, which is handed to the
     engine's synchronous implementation instead of its queueing override: a fill has to be
     applied to its order before the venue decides whether the rest of the order still stands.
+
+    One topic crosses too. The exchange's corporate-action module announces each split it
+    applies on `actions.TOPIC`, on the bus it was built with — this one — while a sleeve
+    subscribes on the node's; so that topic is republished there, in the same call, which is
+    still before the point that carried the market past the ex-date reaches the sleeve.
+    Without it a stage's sleeve never heard of a split: it held none, booked no payment in
+    lieu and restated no price, where the same sleeve in its card did all three.
     """
     bus = MessageBus(trader_id=kernel.msgbus.trader_id, clock=kernel.clock)
     for endpoint in kernel.msgbus.endpoints():
         if endpoint != EXEC_EVENTS:
             bus.register(endpoint=endpoint, handler=partial(kernel.msgbus.send, endpoint))
     bus.register(endpoint=EXEC_EVENTS, handler=partial(ExecutionEngine.process, kernel.exec_engine))
+    bus.subscribe(topic=actions.TOPIC, handler=partial(kernel.msgbus.publish, actions.TOPIC))
     return bus
 
 
