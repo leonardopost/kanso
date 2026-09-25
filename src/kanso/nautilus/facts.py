@@ -96,6 +96,13 @@ namespace**: registration is keyed by the bare class name across the process,
 and a second class of the same name raises `KeyError` from the serializable-type
 registry, whatever module it came from.
 
+A `CustomData` point pickles through `__reduce_cython__`, and its payload goes by
+reference: the pickle names the payload class's module and qualified name, and an
+unpickler imports that module to find the class. So a process handed pickled points of a
+type a workspace extension defines has to import that extension first, under the module
+name the extension was imported by where the points were pickled — which is what a card
+child is handed its parent's extensions for (`kanso.ext.reimport`).
+
 Instruments
 -----------
 The five classes kanso resolves are `Equity`, `OptionContract`,
@@ -1196,6 +1203,42 @@ def _check_custom_data_names_are_global() -> tuple[bool, str]:
     )
 
 
+def _check_custom_data_pickles_its_payload_by_reference() -> tuple[bool, str]:
+    """What a card child needs to unpickle the points it is handed: the payload's class,
+    importable under the module and the name it was pickled by."""
+    import pickle
+    import pickletools
+
+    from nautilus_trader.model.data import CustomData, DataType
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    from kanso.data.types import CorporateAction
+
+    point = CustomData(
+        DataType(CorporateAction),
+        CorporateAction(
+            instrument_id=InstrumentId.from_str("AAPL.XNAS"),
+            kind="split",
+            ratio=4.0,
+            cash=0.0,
+            currency="USD",
+            ex_date_ns=3,
+            ts_event=1,
+            ts_init=2,
+        ),
+    )
+    blob = pickle.dumps(point, protocol=pickle.HIGHEST_PROTOCOL)
+    named = {arg for _, arg, _ in pickletools.genops(blob) if isinstance(arg, str)}
+    module, name = CorporateAction.__module__, CorporateAction.__qualname__
+    back = pickle.loads(blob)
+    holds = {module, name} <= named and type(back.data) is CorporateAction
+    return holds, (
+        f"a pickled CustomData names {module!r} and {name!r} for its payload and read back "
+        f"as {type(back.data).__name__}: the payload travels by reference to its class, so a "
+        "process unpickling it must import the class's module under that name first"
+    )
+
+
 # --- instruments -------------------------------------------------------------
 
 
@@ -2144,6 +2187,10 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "a custom data type name may be registered once per process",
         _check_custom_data_names_are_global,
+    ),
+    (
+        "a CustomData point pickles its payload by the module and name of the payload's class",
+        _check_custom_data_pickles_its_payload_by_reference,
     ),
     (
         "the five instrument classes construct from the fields kanso must supply",

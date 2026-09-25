@@ -80,6 +80,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
+from kanso import ext
 from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, criteria_version, gates, objectives
@@ -237,6 +238,10 @@ class Setup:
     warmup. The run pins its snapshot, not this span: a `kanso data load` that adds a
     printed day inside the lookback between two cards moves the prefix by that day, and
     the certificate records the count it was warmed on, not the days."""
+    extensions: tuple[tuple[str, str], ...] = ()
+    """The workspace extensions imported while the setup was built, each by its directory
+    and module name: what a card child imports before it unpickles the points it is handed,
+    so a custom type an extension registers is one it can read (`kanso.ext.imported`)."""
 
     @property
     def window(self) -> tuple[date, date]:
@@ -292,7 +297,8 @@ class Setup:
         fails on a field that is neither. `hyp`, `harness`, `impl`, `host_source` and
         `host_modifiers` are pinned already — the hypothesis file by its sha, this package
         by the criteria version, the host's bytes by its version; `max_lines` is the keep
-        rule's line budget and no term of a metric; `catalog` is a path. What this cannot
+        rule's line budget and no term of a metric; `catalog` is a path, and so are the
+        `extensions` a card imports its data's classes from. What this cannot
         carry is data. It fixes the *span* a card warms on and never the bars the catalog
         holds inside it: those are the snapshot's business, a run pins one at `begin` and
         holds it for its life, and a load that rewrites a day inside a span whose ends do
@@ -415,6 +421,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
             f"{hyp.id} is not classified, so there is no construct to research it as",
             remedy=f"run `kanso classify {hyp.id}`",
         )
+    extensions = ext.imported(ws)
     impl = construct_for(ref.id, ws)
     harness = impl.harness(hyp, _host(ws, hyp), version=version)
     instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
@@ -442,6 +449,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
         grains=grains,
         sleeve_budget=_sleeve_budget(ws, store, hyp, harness.host),
         prefix=backtest.warmup_prefix(hyp, window, catalog, grains),
+        extensions=extensions,
     )
 
 
@@ -541,7 +549,7 @@ def _host_run(
             mem_cap_gb=None,
             host_only=True,
         )
-        result = backtest.run_subprocess(request, setup.catalog, directory)
+        result = backtest.run_subprocess(request, setup.catalog, directory, setup.extensions)
         if result.refused is not None:
             raise PreconditionError(
                 f"host: {ref.strategy_id} version {ref.version} did not run over the research "
@@ -1184,6 +1192,7 @@ def _baseline(
         ),
         setup.catalog,
         directory,
+        setup.extensions,
     )
     if result.refused is not None:
         _refuse_baseline(
@@ -1292,6 +1301,7 @@ def card(
         ),
         setup.catalog,
         directory,
+        setup.extensions,
     )
     return _judge(
         ws,

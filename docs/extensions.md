@@ -362,6 +362,18 @@ live feed is handed what that feed publishes, and no feed kanso ships publishes 
 type. The author subscribes nothing and imports nothing, which is as well: `strategy_integrity` refuses a `strategy.py` that imports `kanso.data` or an
 extension's module, so the class a subscription needs is out of its reach.
 
+Research, cards, certification, composition, replays and stages all see an extension's type,
+because every process that reads a hypothesis's data imports the workspace's extensions
+before it does: a daemon lane and every `kanso research` command as they set a card up,
+`kanso cert run`, `kanso strat compose`, `kanso replay run` and `parity` on a card or a
+version, and `kanso portfolio deploy` as it resolves the versions a stage runs. A card is a
+child process with no workspace — started in the lane directory, on an environment
+allow-list — so it is handed each extension's directory and module name beside its points
+and imports them before it unpickles one: a point names its class by the module it was
+pickled under, and the card imports the extension under that same name. It is handed no
+catalog path and no credential, so an extension whose import needs either fails there; one
+that registers types, loaders and constructs imports in a card as it does anywhere else.
+
 `research begin` pins the type like any series: each instrument of the universe needs a
 dataset of it whose served span covers both windows and the warmup. A daily series does. A
 sparse series of announcements does not yet — its span runs from its first point to its

@@ -8,7 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from kanso.ext import KINDS, REFUSAL, REFUSED, Extension, discover, shadows
+from kanso.ext import (
+    KINDS,
+    REFUSAL,
+    REFUSED,
+    Extension,
+    discover,
+    imported,
+    reimport,
+    shadows,
+    sources,
+)
+from kanso.workspace import init
 
 
 @pytest.fixture(autouse=True)
@@ -227,3 +238,45 @@ def test_nothing_shadows_when_the_registries_are_empty(tmp_path: Path) -> None:
 def test_a_broken_extension_shadows_nothing() -> None:
     broken = Extension(name="ext_broken", path=Path("nowhere"), error="ImportError: boom")
     assert shadows([broken], {"loaders": ["g"]}) == []
+
+
+# --- handing extensions to another process -----------------------------------
+
+
+def test_where_each_loaded_extension_came_from_is_its_directory_and_name(tmp_path: Path) -> None:
+    root = tmp_path / "kanso_ext"
+    package(root, "ext_whole", "X = 1\n")
+    module(root, "ext_single", "Y = 2\n")
+    module(root, "ext_failing", "raise RuntimeError('boom')\n")
+
+    found = discover(tmp_path, ["kanso_ext"])
+
+    assert [one.name for one in found] == ["ext_failing", "ext_single", "ext_whole"]
+    assert sources(found) == ((str(root), "ext_single"), (str(root), "ext_whole"))
+
+
+def test_a_workspace_imports_its_extensions_and_says_where_they_live(tmp_path: Path) -> None:
+    ws = init(tmp_path / "ws")
+    module(ws.root / "kanso_ext", "ext_housed", "Z = 3\n")
+
+    assert imported(ws) == ((str(ws.root / "kanso_ext"), "ext_housed"),)
+    assert "ext_housed" in sys.modules
+
+
+def test_another_process_imports_them_under_the_names_they_were_imported_by(
+    tmp_path: Path,
+) -> None:
+    """What a card child does with what its parent imported: the same module, by name."""
+    root = tmp_path / "kanso_ext"
+    path = module(root, "ext_handed", "HANDED = True\n")
+    handed = sources(discover(tmp_path, ["kanso_ext"]))
+    del sys.modules["ext_handed"]
+
+    (again,) = reimport(handed)
+    missing = reimport([(str(tmp_path / "nowhere"), "ext_absent")])
+
+    assert again.ok and getattr(again.module, "HANDED", False) is True
+    assert Path(str(getattr(again.module, "__file__", ""))) == path
+    assert sys.modules["ext_handed"] is again.module
+    assert [(one.name, one.ok) for one in missing] == [("ext_absent", False)]
+    assert "ModuleNotFoundError" in str(missing[0].error)

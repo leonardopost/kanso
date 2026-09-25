@@ -1440,13 +1440,25 @@ def run(request: RunRequest, catalog_path: Path) -> RunResult:
     return execute(request, instruments, groups)
 
 
-def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> RunResult:
+def run_subprocess(
+    request: RunRequest,
+    catalog_path: Path,
+    workdir: Path,
+    extensions: Sequence[tuple[str, str]] = (),
+) -> RunResult:
     """Run a card in a child of its own, supervised, with no path to any catalog.
 
     The window must be the research window: this is the embargo, and it is a refusal in
     code rather than a rule anyone has to remember. The parent reads that window from the
     catalog and hands the points to the child, which starts in a new session with an
     environment allow-list, so nothing in the card can reach data the run was not given.
+
+    `extensions` are the workspace extensions this process imported, as `kanso.ext.imported`
+    answered — each one's directory and module name. The child imports them before it
+    unpickles a point, so a custom type an extension defines is registered there and its
+    class found under the name it was pickled by (`main`). They travel in the payload, not
+    the environment: the child is handed where an extension lives, never the catalog, and
+    still inherits no credential.
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -1463,7 +1475,17 @@ def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> Ru
     # inside one is a crash the run records rather than a message the operator reads.
     splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
     payload = pickle.dumps(
-        {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)},
+        {
+            "extensions": [list(source) for source in extensions],
+            "run": pickle.dumps(
+                {
+                    "request": request.plain(),
+                    "instruments": list(instruments),
+                    "groups": list(groups),
+                },
+                protocol=pickle.HIGHEST_PROTOCOL,
+            ),
+        },
         protocol=pickle.HIGHEST_PROTOCOL,
     )
     with tempfile.TemporaryDirectory(prefix="kanso-card-") as transfer:
@@ -1700,12 +1722,22 @@ def main(argv: Sequence[str]) -> int:
 
     The third argument is the pid of the process that started the card, which it outlives
     by at most `PARENT_POLL_S` (`_end_with`).
+
+    The payload is read in two layers. The outer one names the workspace extensions the
+    parent imported, and they are imported here before the inner one — the request and its
+    points — is unpickled, because a point of an extension's custom type is an instance of a
+    class that exists only once its module has been imported, under the name it was pickled
+    by.
     """
+    from kanso.ext import reimport
+
     request_path, result_path = Path(argv[0]), Path(argv[1])
     threading.Thread(
         target=_end_with, args=(int(argv[2]),), name="kanso-card-parent", daemon=True
     ).start()
-    payload = pickle.loads(request_path.read_bytes())
+    handed = pickle.loads(request_path.read_bytes())
+    reimport((str(directory), str(name)) for directory, name in handed["extensions"])
+    payload = pickle.loads(handed["run"])
     try:
         result = execute(payload["request"], payload["instruments"], payload["groups"])
     except SizingError as refused:

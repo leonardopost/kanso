@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from kanso import strategy
+from kanso import ext, strategy
 from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.data.manifest import catalog_path
@@ -101,12 +101,19 @@ def resolve(
     hyp: str | None = None,
     sha: str | None = None,
 ) -> Target:
-    """The target a replay was asked for: one of a strategy version and a hypothesis."""
+    """The target a replay was asked for: one of a strategy version and a hypothesis.
+
+    The workspace's extensions are imported first, because the target is resolved in order
+    to load its data, and a custom type an extension registers is readable only once the
+    extension has been imported in this process: a replay, and a stage deployed through
+    this same resolution, reads exactly the types research read.
+    """
     if (strategy is None) == (hyp is None):
         raise ValidationError(
             "target: name exactly one of a strategy and a hypothesis to replay",
             remedy="pass --strategy STRATEGY[@V] or --hyp ID",
         )
+    ext.imported(ws)
     if strategy is not None:
         if sha is not None:
             raise ValidationError(

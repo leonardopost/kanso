@@ -337,11 +337,8 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     request = request_for(source=SLOW_SLEEVE)
     instruments, groups = window_data(request, store)
     handed = tmp_path / "request.pkl"
-    handed.write_bytes(
-        pickle.dumps(
-            {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)}
-        )
-    )
+    run = {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)}
+    handed.write_bytes(pickle.dumps({"extensions": [], "run": pickle.dumps(run)}))
     starts_a_card = (
         "import os, subprocess, sys, time\n"
         f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r}, {str(handed)!r},"
