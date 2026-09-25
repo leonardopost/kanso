@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from nautilus_trader.model.enums import AggressorSide
 
 from kanso.data.loader import get_loader
 from kanso.data.loaders.csv_parquet import CsvParquetLoader, columns_for
@@ -163,6 +164,29 @@ def test_trades_take_a_side_and_an_id_when_mapped(tmp_path: Path) -> None:
     ref = LOADER.discover(spec(entry))[0]
     trades = list(LOADER.load(ref, ref.span))
     assert [str(trade.trade_id) for trade in trades] == ["T1", "T2"]
+
+
+def test_a_trade_file_that_maps_no_side_carries_prints_with_no_aggressor(tmp_path: Path) -> None:
+    """A side nobody recorded is not a buyer's: a guessed one would flow into every
+    statistic that reads it, and into matching, where a buyer's print never reaches a
+    resting buy beneath it."""
+    path = write_csv(
+        tmp_path / "trades.csv",
+        ["t", "p", "q"],
+        [["2024-03-04T16:00:00", "100.01", "10"], ["2024-03-04T16:00:01", "99.95", "20"]],
+    )
+    entry = {
+        "path": str(path),
+        "instrument": "DEMO",
+        "venue": "XNAS",
+        "type": "trade",
+        "columns": {"ts_event": "t", "price": "p", "size": "q"},
+    }
+    ref = LOADER.discover(spec(entry))[0]
+
+    trades = list(LOADER.load(ref, ref.span))
+
+    assert [trade.aggressor_side for trade in trades] == [AggressorSide.NO_AGGRESSOR] * 2
 
 
 def test_an_unreadable_side_is_refused(tmp_path: Path) -> None:

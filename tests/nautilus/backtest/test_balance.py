@@ -151,3 +151,88 @@ def test_an_emulated_order_s_fill_is_booked_from_the_order_the_emulator_released
 
     assert [fill.side for fill in card.fills] == ["BUY"]
     assert_the_same(card, record, at_least=25)
+
+
+RESTING = b"""
+from pathlib import Path
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    record: str = ""
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys and sells twice on the saw-tooth, first with limits that rest on the book, then
+    at market, and writes down the balance it read before acting.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        self.seen += 1
+        acting = self.seen in (7, 13, 19, 25)
+        with Path(self.kanso_config.record).open("a") as out:
+            out.write(f"{bar.ts_init} {self.balance!r} {int(acting)}\\n")
+        name = bar.bar_type.instrument_id
+        close = float(bar.close)
+        if self.seen == 7:
+            self.submit_entry(name, "BUY", notional=1_000.0, price=round(close - 0.1, 2))
+        elif self.seen == 13:
+            self.submit_exit(name, price=round(close + 0.1, 2))
+        elif self.seen == 19:
+            self.submit_entry(name, "BUY", notional=1_000.0)
+        elif self.seen == 25:
+            self.submit_exit(name)
+"""
+"""The saw-tooth peaks at the seventh session and bottoms at the thirteenth, so the buy
+resting a dime under the peak and the sell a dime over the trough each fill on the next
+session, as makers, at their own prices; the two market orders fill as takers."""
+
+TAKER = (1.0 + 2.0) / 10_000 + 4.0 / 2.0 / 10_000
+"""What `FIXED` charges a fill: one bp of commission, two of slippage, half a four-bp width."""
+
+
+def resting_card(tmp_path: Path, request_for, costs: dict[str, object]):
+    """The resting probe's run under these costs, and the record of what it read."""
+    record = tmp_path / "balance.txt"
+    request = request_for(
+        RESEARCH,
+        source=RESTING,
+        hypothesis_=hypothesis(costs=costs),
+        overrides={"record": str(record)},
+    )
+    return execute(request, [instrument()], [tuple(bars(RESEARCH))]).run, record
+
+
+@pytest.mark.parametrize("maker_bps", [-0.3, 0.0, 0.5], ids=["rebate", "free", "charge"])
+def test_a_fill_that_rested_pays_the_maker_rate_and_the_balance_is_still_the_equity(
+    tmp_path: Path, request_for, maker_bps: float
+) -> None:
+    card, record = resting_card(tmp_path, request_for, {**FIXED, "maker_bps": maker_bps})
+
+    makers = [fill for fill in card.fills if fill.maker]
+    takers = [fill for fill in card.fills if not fill.maker]
+    assert [(fill.side, fill.px) for fill in makers] == [("BUY", 12.9), ("SELL", 10.1)]
+    assert [fill.side for fill in takers] == ["BUY", "SELL"]
+    for fill in makers:
+        assert fill.cost == pytest.approx(fill.qty * fill.px * maker_bps / 10_000, abs=1e-12)
+    for fill in takers:
+        assert fill.cost == pytest.approx(fill.qty * fill.px * TAKER, rel=1e-12)
+    assert_the_same(card, record, at_least=15)
+
+
+def test_without_a_maker_rate_a_fill_that_rested_is_charged_as_every_fill_always_was(
+    tmp_path: Path, request_for
+) -> None:
+    """A hypothesis that states no `maker_bps` moves no number: every fill, the two that
+    rested among them, costs exactly the arithmetic every fill was charged before the key."""
+    card, record = resting_card(tmp_path, request_for, FIXED)
+
+    assert [fill.maker for fill in card.fills] == [True, True, False, False]
+    for fill in card.fills:
+        assert fill.cost == fill.qty * fill.px * 1.0 * TAKER
+    assert_the_same(card, record, at_least=15)

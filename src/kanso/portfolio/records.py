@@ -392,10 +392,13 @@ def _encode_fill(fill: Fill) -> dict[str, Any]:
         "qty": fill.qty,
         "px": fill.px,
         "cost": fill.cost,
+        "maker": fill.maker,
     }
 
 
 def _decode_fill(payload: Mapping[str, Any]) -> Fill:
+    """A recorded fill; one recorded before fills said whether they rested reads as a
+    taker's, which is what it was charged as."""
     return Fill(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
@@ -403,6 +406,7 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
         qty=float(payload["qty"]),
         px=float(payload["px"]),
         cost=float(payload["cost"]),
+        maker=bool(payload.get("maker", False)),
     )
 
 

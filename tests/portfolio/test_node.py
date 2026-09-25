@@ -10,6 +10,7 @@ import pytest
 from kanso.errors import Exit, KansoError
 from kanso.nautilus import node
 from kanso.nautilus.node import Placement, StageNode
+from kanso.nautilus.venue import fill_model
 from kanso.portfolio import deploy
 from kanso.schemas import Limits, StrategyFile
 from kanso.state import StateStore
@@ -88,8 +89,44 @@ def test_a_venue_is_funded_once_with_the_whole_stage_capital(placement: Placemen
     assert [venue.name for venue in venues] == [VENUE]
     assert venues[0].starting_balances == ["100000.00 USD"]
     assert venues[0].fee_model is None, "the runner applies costs once, not the venue"
-    assert venues[0].fill_model is None
+    assert venues[0].fill_model == fill_model("touch"), "the one the version was certified on"
     assert venues[0].latency_model is None
+
+
+def test_a_stage_venue_fills_a_touched_limit_the_way_its_versions_were_measured(
+    placement: Placement,
+) -> None:
+    """The stage's exchange is the venue model's, as a card's was: `through` stays through."""
+    through = _limit_fill(placement, "through")
+
+    (venue,) = node.venues_for((through,), 100_000.0)
+
+    assert venue.fill_model == fill_model("through")
+
+
+def test_two_versions_disagreeing_about_a_touched_limit_are_refused(
+    ws: Workspace, store: StateStore, placement: Placement
+) -> None:
+    """One venue is one exchange, and an exchange has one fill model."""
+    deployable(ws, store, "strict", doc=document(id="strict"))
+    other = _limit_fill(a_placement(ws, "strict"), "through")
+
+    with pytest.raises(KansoError) as raised:
+        node.venues_for((placement, other), 100_000.0)
+
+    assert raised.value.code == Exit.PRECONDITION
+    assert f"venues.{VENUE}.costs.limit_fill" in raised.value.message
+    assert "'touch'" in raised.value.message and "'through'" in raised.value.message
+    assert "limit_fill" in str(raised.value.remedy)
+
+
+def _limit_fill(placed: Placement, rule: str) -> Placement:
+    """The same placement, certified under another limit-fill rule."""
+    from dataclasses import replace
+
+    model = placed.venue_model
+    costs = model.costs.model_copy(update={"limit_fill": rule})
+    return replace(placed, venue_model=model.model_copy(update={"costs": costs}))
 
 
 def test_a_stage_with_no_capital_cannot_fund_a_venue(placement: Placement) -> None:

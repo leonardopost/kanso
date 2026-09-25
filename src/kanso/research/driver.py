@@ -84,7 +84,7 @@ import ast
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -166,7 +166,9 @@ showed the proposer almost none of what it had already spent a backtest learning
 
 CARDS: Final = "cards"
 STALLED: Final = "stalled"
-"""Why a driver stopped: it reached the count it was given, or the run stalled."""
+STOPPED: Final = "stopped"
+"""Why a driver stopped: it reached the count it was given, the run stalled, or the process
+driving it was told to stop."""
 
 REPEATED: Final = "repeated"
 """The event a miss appends, under the hypothesis id: the ladder ran out having judged an
@@ -240,6 +242,11 @@ class Outcome:
         }
 
 
+def _never() -> bool:
+    """A stop request nothing makes: what a driver run from the command line is given."""
+    return False
+
+
 def run(
     ws: Workspace,
     store: StateStore,
@@ -247,6 +254,7 @@ def run(
     *,
     cards: int | None = None,
     lane: str = lanes.DEFAULT_LANE,
+    stop: Callable[[], bool] = _never,
 ) -> Outcome:
     """Research a hypothesis: begin a run if it has none, then propose cards.
 
@@ -254,6 +262,13 @@ def run(
     exhausted proposer cannot keep a bounded call running; the baseline and everything a
     previous call left behind do not count. `None` researches until the run stalls, which
     is what a daemon lane asks for.
+
+    `stop` is asked before every proposal, again before the card a proposal produced, and
+    before an alignment check falls due. A daemon lane passes its own stop request, so a
+    lane told to stop while a model was answering starts neither the card nor another
+    call: the answer in hand is dropped, the lane directory is left as it was, and the run
+    resumes at its next turn. The baseline is a card too, and the runner itself refuses to
+    start one in a process told to stop (`kanso.nautilus.backtest.run_subprocess`).
     """
     lane = lanes.check_lane(lane)
     if records.active(store, hyp_id) is None:
@@ -269,6 +284,9 @@ def run(
     reason = CARDS
 
     while cards is None or proposed < cards:
+        if stop():
+            reason = STOPPED
+            break
         source = align.lane_strategy(store, active, directory)
         try:
             desc, patch, candidate, tags = _propose(
@@ -287,6 +305,9 @@ def run(
                 reason = STALLED
                 break
             continue
+        if stop():
+            reason = STOPPED
+            break
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
         made: Card | None
         try:
@@ -302,7 +323,7 @@ def run(
         else:
             tally[made.status] += 1
             misses = 0 if made.status == "keep" else misses + 1
-        if waiting >= settings.align_every:
+        if waiting >= settings.align_every and not stop():
             aligned, _ = align.check(ws, store, hyp_id, lane)
             checks += 1
             drifts += 0 if aligned else 1

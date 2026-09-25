@@ -101,7 +101,10 @@ and say so, but do not document the version you would have preferred.
 `kanso research start` detaches a supervisor and returns. The supervisor takes an exclusive
 lock on `runs/daemon.pid`, writes its pid there, and starts one worker process per lane the
 envelope allows plus the monitor; `kanso research stop` signals it and everything is left
-exactly where it was, so the next start resumes the open runs before it takes new work.
+exactly where it was, so the next start resumes the open runs before it takes new work. A
+lane or the monitor that dies while the daemon runs is the supervisor's to start again, with
+a backoff of its own and a `lane_died` or `monitor_died` event for each death, so the
+restart policies below are for the supervisor alone.
 
 A service manager already provides detachment, restart and log capture, and it can only
 supervise a process it owns. So a unit does **not** run `kanso research start`: it runs the
@@ -147,11 +150,12 @@ loginctl enable-linger "$USER"        # so it keeps running when you log out
 ```
 
 `KillMode=mixed` sends `SIGTERM` to the supervisor alone, which is what lets it terminate
-its own children with the grace it gives them — a worker looks up between cards, leaves its
-run open and exits — and kills whatever is left. The default `control-group` also works,
-because a worker treats a `SIGTERM` of its own the same way, but it takes the ordering away
-for nothing. `TimeoutStopSec` must stay above that grace so a lane still inside a card is
-killed by the supervisor rather than by systemd.
+its own children with the one grace it gives them all — a worker kills the card it is
+watching, starts nothing more, leaves its run open and exits — and kills whatever is left.
+The default `control-group` also works, because a worker treats a `SIGTERM` of its own the
+same way, but it takes the ordering away for nothing. `TimeoutStopSec` must stay above that
+grace so a lane still waiting on a model is killed by the supervisor rather than by
+systemd.
 
 `Restart=on-failure` does not restart after `kanso research stop`, because a clean stop
 exits `0`. It does restart a crash, and that is safe: the lock is released when the kernel

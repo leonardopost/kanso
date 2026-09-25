@@ -1,4 +1,5 @@
-"""The book arithmetic: a reset, a carry and a maintenance ratio, each a function of numbers.
+"""The cost arithmetic: what a fill costs, and a reset, a carry and a maintenance ratio, each
+a function of numbers.
 
 Every expected value here is arithmetic a reader can check by eye, because these functions
 are called from both the runner's extraction and the harness, and a test that derived its
@@ -16,10 +17,12 @@ from kanso.nautilus.costs import (
     NS_PER_YEAR,
     BookPolicy,
     carry,
+    fill_rate,
     maintenance_ratio,
     month_turned,
     policy_of,
     reset,
+    side_rate,
 )
 from kanso.schemas import Book
 
@@ -121,3 +124,31 @@ def test_the_policy_carries_the_three_rules_and_says_which_apply() -> None:
     assert policy is not None and policy.resets and policy.charges
     idle = policy_of(Book())
     assert idle is not None and not idle.resets and not idle.charges
+
+
+# --- one fill -------------------------------------------------------------------
+
+
+def test_a_taker_pays_commission_slippage_and_half_the_spread() -> None:
+    """One bp of commission, two of slippage and half a four-bp spread: five bps."""
+    assert fill_rate(1.0, 2.0, 0.0002, None, maker=False) == pytest.approx(0.0005)
+    assert fill_rate(1.0, 2.0, 0.0002, -0.25, maker=False) == pytest.approx(0.0005)
+    assert side_rate(1.0, 2.0, 0.0002) == pytest.approx(0.0005)
+
+
+def test_a_maker_pays_its_own_rate_and_nothing_else_where_the_model_states_one() -> None:
+    """No slippage and no half-spread: a resting limit filled at its own price."""
+    assert fill_rate(1.0, 2.0, 0.0002, 0.5, maker=True) == 0.5 / 10_000
+    assert fill_rate(1.0, 2.0, 0.0002, 0.0, maker=True) == 0.0
+
+
+def test_a_negative_maker_rate_is_a_rebate() -> None:
+    assert fill_rate(0.3, 0.5, 0.0001, -0.2, maker=True) == -0.2 / 10_000
+
+
+def test_a_maker_under_a_model_that_states_no_maker_rate_pays_what_any_fill_pays() -> None:
+    """Every fill was charged this way before the key existed, and still is without it."""
+    assert fill_rate(1.0, 2.0, 0.0002, None, maker=True) == pytest.approx(0.0005)
+    assert fill_rate(1.0, 2.0, 0.0002, None, maker=True) == fill_rate(
+        1.0, 2.0, 0.0002, None, maker=False
+    )

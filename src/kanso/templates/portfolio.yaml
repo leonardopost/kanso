@@ -27,3 +27,4 @@ limits:
 #     account: margin              # margin | cash
 #     currency: USD                # account currency; a universe spanning venues with different ones is refused
 #     costs: {commission_bps: 0, slippage_bps: 1.0, spread: quotes}   # spread: quotes needs `quote` in data_requirements; a bar-only hypothesis needs `spread: fixed_bps, fixed_bps: <width>` here or on the hypothesis
+#                                  # maker_bps: what a fill that rested pays instead (negative is a rebate); limit_fill: touch | through — whether a resting limit fills when the market only reaches its price

@@ -88,7 +88,7 @@ from kanso.nautilus.backtest import RunRequest
 from kanso.nautilus.cross_section import arm, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered
-from kanso.nautilus.venue import NETTING, starting_balance, venues_of
+from kanso.nautilus.venue import NETTING, fill_model, starting_balance, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -344,11 +344,12 @@ def max_notional_per_order(
 def venues_for(placements: Sequence[Placement], capital: float) -> list[BacktestVenueConfig]:
     """One cost-neutral venue configuration per venue these versions trade.
 
-    Two versions trading one venue trade one account, so they must agree about it: an
-    account has a single type and a single currency, and a stage whose versions were
-    certified against different ones is refused rather than funded in whichever came first.
-    The leverage ceiling is the highest any version on that venue was certified with, which
-    is the only value that lets each of them size as it was measured.
+    Two versions trading one venue trade one account on one exchange, so they must agree
+    about both: an account has a single type and a single currency, an exchange a single
+    fill model, and a stage whose versions were certified against different ones is refused
+    rather than built from whichever came first. The leverage ceiling is the highest any
+    version on that venue was certified with, which is the only value that lets each of
+    them size as it was measured.
     """
     if capital <= 0:
         raise ValidationError(f"capital: {capital} is not an amount to fund a stage with")
@@ -371,7 +372,7 @@ def venues_for(placements: Sequence[Placement], capital: float) -> list[Backtest
             base_currency=model.currency,
             default_leverage=1.0 if model.account == "cash" else leverage,
             bar_execution=True,
-            fill_model=None,
+            fill_model=fill_model(model.costs.limit_fill),
             fee_model=None,
             latency_model=None,
         )
@@ -380,7 +381,8 @@ def venues_for(placements: Sequence[Placement], capital: float) -> list[Backtest
 
 
 def _agree(venue: str, held: tuple[str, VenueModel, float], placed: Placement) -> None:
-    """Refuse two versions that would fund one venue's account two different ways."""
+    """Refuse two versions that would fund one venue's account, or fill its orders, two
+    different ways."""
     first, model, _ = held
     mine = placed.venue_model
     for field, theirs, ours in (
@@ -393,6 +395,14 @@ def _agree(venue: str, held: tuple[str, VenueModel, float], placed: Placement) -
                 f"{placed.label} against {ours!r}; one venue is one account",
                 remedy=f"set venues.{venue}.{field} in portfolio.yaml and re-certify",
             )
+    if model.costs.limit_fill != mine.costs.limit_fill:
+        raise PreconditionError(
+            f"venues.{venue}.costs.limit_fill: {first} was certified against "
+            f"{model.costs.limit_fill!r} and {placed.label} against {mine.costs.limit_fill!r}; "
+            "one venue is one exchange, and it fills a touched limit one way",
+            remedy=f"state one limit_fill for both — in each hypothesis's costs, or under "
+            f"venues.{venue}.costs in portfolio.yaml — and re-certify",
+        )
 
 
 # --- running the stage --------------------------------------------------------

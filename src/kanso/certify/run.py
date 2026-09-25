@@ -62,6 +62,7 @@ from datetime import UTC, date, datetime
 from math import inf
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from kanso import ext
 from kanso.certify import certificate
 from kanso.certify.plan import plan as plan_for
 from kanso.classify.construct import Harness, HostRef
@@ -301,7 +302,12 @@ def _certifiable(registration: Registration) -> None:
 
 
 def _subject(ws: Workspace, store: StateStore, hyp_id: str, sha: str | None) -> Subject:
-    """The card to certify, and the run record that says what it was measured against."""
+    """The card to certify, and the run record that says what it was measured against.
+
+    The workspace's extensions are imported first: every run certification makes is made
+    in this process, over data that may be of a custom type an extension registers.
+    """
+    ext.imported(ws)
     chosen = _chosen_sha(store, hyp_id, sha)
     cards = [card for card in records.cards_of(store, hyp_id) if card.strategy_sha == chosen]
     card = cards[-1]

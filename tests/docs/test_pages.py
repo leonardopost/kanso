@@ -65,6 +65,21 @@ def test_the_cli_page_says_start_reads_the_envelope_as_last_detected() -> None:
     assert "does not re-detect" in row
 
 
+def test_the_cli_page_says_the_daemon_starts_a_child_that_died_again() -> None:
+    """A lane the kernel takes mid-card used to stay gone until the next `start`, its run
+    worked by no one; an operator reading the page has to learn it now comes back, and
+    where to see that it did."""
+    rows = page("cli.md").splitlines()
+    start = next(line for line in rows if line.startswith("| `kanso research start`"))
+    assert "started again under the same name" in start
+    assert "`lane_died`" in start and "`monitor_died`" in start
+    assert "doubling" in start and "five minutes" in start
+    stop = next(line for line in rows if line.startswith("| `kanso research stop`"))
+    assert "is not started again" in stop
+    status = next(line for line in rows if line.startswith("| `kanso research status`"))
+    assert "started again" in status
+
+
 def test_the_cli_page_says_the_transport_is_the_loader_the_spec_names() -> None:
     row = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso data backfill")

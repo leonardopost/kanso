@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
@@ -214,6 +215,25 @@ def test_a_record_written_before_the_book_series_still_decodes() -> None:
     decoded = records.decode_run(payload)
 
     assert (decoded.cushion, decoded.carry, decoded.worst_ratio) == ((), (), ())
+
+
+def test_whether_a_fill_rested_survives_the_round_trip() -> None:
+    """A realised window re-costed under a maker's rate has to know which fills rested."""
+    rested = replace(a_fill(1), maker=True, cost=-0.05)
+    run = a_run(fills=(rested, a_fill(2)))
+
+    decoded = records.decode_run(records.encode_run(run))
+
+    assert [fill.maker for fill in decoded.fills] == [True, False]
+    assert decoded == run
+
+
+def test_a_fill_recorded_before_fills_said_whether_they_rested_reads_as_a_taker_s() -> None:
+    payload = records.encode_run(a_run())
+    for recorded in payload["fills"]:
+        del recorded["maker"]
+
+    assert [fill.maker for fill in records.decode_run(payload).fills] == [False, False]
 
 
 def test_a_record_written_before_holdings_were_kept_still_decodes() -> None:

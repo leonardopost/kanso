@@ -332,6 +332,28 @@ def test_a_fixed_spread_counts_towards_the_reserve(backtest) -> None:
     assert run.strategy.intents[0].qty == 1814.0
 
 
+def test_a_maker_rate_above_the_rest_is_the_one_reserved(backtest) -> None:
+    """An order does not know whether it will rest, so the dearer rate is the reserve."""
+    costly = {
+        "costs": {"commission_bps": 2.0, "slippage_bps": 3.0, "spread": "quotes", "maker_bps": 10}
+    }
+    run = backtest(Trader(config(venue_model=costly)))
+
+    # 20_000 / (1 + 2 x 10bps) / 11.00, as though every fill paid the maker's 10 bps.
+    assert run.strategy.cost_rate == pytest.approx(0.001)
+    assert run.strategy.intents[0].qty == 1814.0
+
+
+def test_a_maker_rebate_reserves_nothing_of_its_own(backtest) -> None:
+    rebated = {
+        "costs": {"commission_bps": 5.0, "slippage_bps": 5.0, "spread": "quotes", "maker_bps": -2}
+    }
+    run = backtest(Trader(config(venue_model=rebated)))
+
+    assert run.strategy.cost_rate == pytest.approx(0.001)
+    assert run.strategy.intents[0].qty == 1814.0
+
+
 def test_a_venue_model_without_costs_reserves_nothing(backtest) -> None:
     run = backtest(Trader(config(venue_model={})))
 

@@ -132,6 +132,16 @@ A **lane** is one concurrent research worker with a directory of its own,
 never blocks the daemon's. Lanes share no files, which is the whole of the concurrency
 design.
 
+The daemon keeps every lane of its plan running. A lane that ends while nobody stopped the
+daemon — taken by the kernel's OOM killer on a large card, or crashed — is recorded as a
+`lane_died` event and started again under its own name, and the lane in its place resumes
+the run the dead one left, because a lane finishes its own run before it takes anything
+new; what the dead lane held with no run yet goes back in the queue. The monitor is kept
+the same way (`monitor_died`). A child that dies again soon after it came back waits longer
+each time, up to five minutes, so one that cannot stay up costs a start every five minutes
+rather than a start a second, and `kanso research status` lists every child the running
+daemon had to start again.
+
 `N` is not configured by hand. `kanso env detect` measures the host and derives the lane
 plan into `envelope.yaml`: two cores and 4 GB per lane, less a reservation of one core and
 4 GB — two and 8 GB when a live stage is colocated — and at least one lane whatever the
@@ -148,7 +158,10 @@ otherwise.
 
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
-before every card, and the first two are compared against the blobs the run pinned.
+before every card, and the first two are compared against the blobs the run pinned. The one
+thing kanso writes beside them is `.card/`, the directory a card's points travel to its
+child through, which exists while the card runs and is emptied by the next card when a
+killed lane left it behind.
 
 A lane writes no log of its own. What a run did — every card, its metric, its verdict and
 each change of status — is recorded in `state.db`, as the card rows and the `events` table
@@ -468,7 +481,8 @@ it fell in: `max_drawdown` judges each end on the equity struck before its trans
 peak so far, then starts the peak again at each month's first end from the higher of the
 capital and the book after it — so a surplus swept into the cushion is no loss, a loss the
 cushion restored ends with its month, and one it could not restore carries into the next as a
-drawdown from the capital. And `cost_stress` multiplies fill costs and leaves the carry alone,
+drawdown from the capital. And `cost_stress` multiplies fill costs — dividing a maker's
+rebate instead, so no multiple makes a fill pay better — and leaves the carry alone,
 because a rate on borrowed notional is not an execution cost; the transfers stand as struck,
 so a stressed reset book carries its extra cost across months rather than having a turn
 absorb it, and its drawdown is the more conservative for that. The engine enforces no margin
@@ -718,6 +732,36 @@ the silent leg still trades at the last price that was public, which is not look
 A live data client that polls several series independently must emit the same
 per-`(ts_init, kind)` markers. A single marker at the end of a poll that covered more
 than one instant would flush the first instant after later books had already moved.
+
+**A limit that rests is filled by the venue's rule.** A limit order that was not marketable
+when it was placed waits on the book, and a later point that reaches its price fills it at
+that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`
+(`docs/workspace.md`): under `touch`, the default and the engine's own rule, a bar whose low
+is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
+a print past it. On a bar the venue walks the open, the high, the low and the close as prints
+in turn, so a bar that only touched the level at its low fills a resting buy at the limit
+under `touch` and leaves it resting under `through`; on a quote the engine asks the rule only
+when the order's own side of the book is at the price, so an ask falling to a resting buy
+fills it under either. Both code paths build their venue from the same configuration, so a
+card and a stage fill the same resting orders, and the rule draws no random number, so they
+fill them the same way every time.
+
+A trade print reaches a resting order only from the side that can trade with it: the engine
+moves only the ask down for a seller's print and only the bid up for a buyer's, so a
+buyer's print below a resting buy never fills it, while a seller's print or one with no
+aggressor does. What side a print carries is therefore a fact about the data, and a trade
+file that records none is loaded with no aggressor rather than a guessed one
+(`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
+unfilled.
+
+**A fill that rested can be charged as one.** Every fill pays commission, slippage and half
+the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
+the venue reported the fill as a maker's, in which case it pays exactly that and nothing
+else, since a resting limit fills at its own price and the spread is what it earns. A
+negative rate is a rebate. Each recorded fill says whether it was a maker's, so the charge
+can be struck again from the record, and the harness books the same rate into
+`self.balance` as it goes, which keeps the balance a sleeve sizes against equal to the
+equity the runner strikes.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the

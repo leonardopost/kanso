@@ -71,6 +71,13 @@ def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:
     assert "first session that traded at the new price" in text
 
 
+def test_the_data_skill_says_an_unmapped_side_is_no_aggressor() -> None:
+    """The loader called every print of a file without the column a buyer's, and an agent
+    writing a spec had nowhere to learn that the column decides which resting orders fill."""
+    text = skill(PACKAGED, "kanso-data")
+    assert "left unmapped, every print is loaded with no aggressor, never a guessed one" in text
+
+
 def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
     """This file ships into every workspace on `kanso init` and `kanso skills sync`, so a
     status it omits is one an operator meets in `results.tsv` with nothing to read. It

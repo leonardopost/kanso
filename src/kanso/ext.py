@@ -19,6 +19,15 @@ A kind a registry cannot read is refused here rather than collected, so that a d
 which could never take effect is a message at the declaration instead of a silence at the
 command that wanted it. Gates and objectives are the two: certification plans from, and
 judges by, the library in the package, and no workspace path reaches it.
+
+**Every process that touches a hypothesis's data imports the extensions first.** A custom
+data type exists in a process only once the extension that registers it has been imported
+there: until then the catalog read cannot name its class and an unpickler cannot find it.
+So research, certification, composition, a replay and a stage call `imported` before they
+load anything, and a card — a child process with no workspace and no path to one — is
+handed what `imported` answered and calls `reimport` before it unpickles its points: each
+extension's directory and module name, so it is imported under the very name the parent
+pickled its classes by.
 """
 
 from __future__ import annotations
@@ -97,6 +106,36 @@ def discover(workspace: Path, paths: list[str]) -> list[Extension]:
             if name is not None:
                 found.append(_load(name, child, directory))
     return found
+
+
+Source = tuple[str, str]
+"""Where an extension was imported from: its extensions directory and its module name."""
+
+
+def imported(ws: Workspace) -> tuple[Source, ...]:
+    """Import this workspace's extensions, and say where each one that loaded came from.
+
+    What a process calls before it loads, unpickles or delivers a hypothesis's data, so an
+    extension's `register_custom_type(...)` has run in it. An extension that did not load
+    is left out: another process importing it would fail the same way, and the refusal
+    that matters is the one naming the type it did not register.
+    """
+    return sources(discover(ws.root, ws.config.extensions_paths))
+
+
+def sources(extensions: Iterable[Extension]) -> tuple[Source, ...]:
+    """Each loaded extension's directory and module name, in discovery order."""
+    return tuple((str(found.path.parent), found.name) for found in extensions if found.ok)
+
+
+def reimport(found: Iterable[Source]) -> list[Extension]:
+    """Import extensions another process discovered, by the directory and name it used.
+
+    A module is imported under the name its classes were pickled by, which is its bare name
+    with its directory briefly on `sys.path` — exactly as `discover` imported it. A failure
+    is recorded rather than raised, as there.
+    """
+    return [_load(name, Path(directory) / name, Path(directory)) for directory, name in found]
 
 
 def shipped(ws: Workspace) -> dict[str, frozenset[str]]:

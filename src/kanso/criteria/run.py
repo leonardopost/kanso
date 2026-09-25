@@ -65,7 +65,14 @@ class Held:
 
 @dataclass(frozen=True)
 class Fill:
-    """One execution, with the cost the runner applied to it once, in the extraction."""
+    """One execution, with the cost the runner applied to it once, in the extraction.
+
+    `maker` is whether the venue reported it as a maker's — a limit that rested on the book
+    and was filled at its own price — which is what a venue model's `maker_bps` charges, and
+    what a model re-applied to recorded fills needs to know. It is recorded whatever the
+    model charged: a maker's fill under a model without `maker_bps` paid what any fill pays,
+    and is still a maker's. A fill the venue reported no liquidity side for is not one.
+    """
 
     ts_ns: int
     instrument_id: str
@@ -73,6 +80,7 @@ class Fill:
     qty: float
     px: float
     cost: float
+    maker: bool = False
 
     @property
     def notional(self) -> float:

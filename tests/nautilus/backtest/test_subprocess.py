@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from kanso.nautilus.backtest import (
     run,
     run_subprocess,
 )
+from tests.processes import ends, running
 
 from .conftest import (
     RAISING_SLEEVE,
@@ -56,6 +58,65 @@ def test_a_card_leaves_the_lane_directory_exactly_as_it_found_it(
     run_subprocess(request_for(), store, lane)
 
     assert {path.name: path.read_bytes() for path in lane.iterdir()} == before
+
+
+def test_a_payload_a_killed_lane_left_is_reclaimed_by_its_next_card(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane killed mid-card leaves its payload in its own transfer directory — never in a
+    temporary directory of its own that nothing would ever find again — so the next card
+    empties it before writing, and removes it once it has read what came back."""
+    from kanso.nautilus import backtest as runner
+
+    left = lane / runner.CARD_ROOM
+    left.mkdir()
+    (left / "request.pkl").write_bytes(b"a window of points nobody will read" * 1_000)
+    (left / "result.pkl").write_bytes(b"a report nobody collected")
+    seen: list[list[str]] = []
+    supervised = runner._supervised
+
+    def watching(request: object, room: Path, workdir: Path) -> object:
+        seen.append(sorted(path.name for path in room.iterdir()))
+        assert room == left and workdir == lane
+        return supervised(request, room, workdir)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner, "_supervised", watching)
+
+    carded = run_subprocess(request_for(), store, lane)
+
+    assert not carded.crashed, carded.traceback_tail
+    assert seen == [["request.pkl"]], "the stale report went, and this card's payload is fresh"
+    assert not left.exists()
+
+
+def test_the_payload_is_two_pickles_in_sequence_on_one_file(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The points are streamed to the file once: no copy of them is held as bytes beside
+    the objects, which for a window of five-second bars is a gigabyte."""
+    import pickle
+
+    from kanso.nautilus import backtest as runner
+
+    read: list[tuple[object, object, bytes]] = []
+
+    def reading(request: object, room: Path, workdir: Path) -> object:
+        with (room / runner.REQUEST_FILE).open("rb") as handle:
+            read.append((pickle.load(handle), pickle.load(handle), handle.read()))
+        raise RuntimeError("read, and not run")
+
+    monkeypatch.setattr(runner, "_supervised", reading)
+    request = request_for()
+
+    with pytest.raises(RuntimeError, match="read, and not run"):
+        run_subprocess(request, store, lane, (("/elsewhere", "an_extension"),))
+
+    ((header, body, rest),) = read
+    assert header == {"extensions": [["/elsewhere", "an_extension"]]}
+    assert isinstance(body, dict) and set(body) == {"request", "instruments", "groups"}
+    assert body["request"] == request.plain()
+    assert rest == b"", "two pickles and nothing after them"
+    assert not (lane / runner.CARD_ROOM).exists(), "removed even when the card never ran"
 
 
 def test_the_child_is_given_an_allow_list_and_no_catalog(
@@ -260,3 +321,104 @@ def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
 
     assert "the run resumes" in str(failure.value.remedy)
     assert not runner._INTERRUPT.is_set()
+
+
+def test_a_process_told_to_stop_reads_no_window_and_starts_no_card(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane that was told to stop while a model answered it goes no further."""
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    monkeypatch.setattr(runner, "window_data", lambda *_: pytest.fail("the window was read"))
+    runner.interrupt()
+    try:
+        with pytest.raises(PreconditionError, match="the card was interrupted"):
+            run_subprocess(request_for(), store, lane)
+    finally:
+        runner.resume()
+
+
+def test_a_stop_that_lands_while_the_window_is_read_starts_no_card(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    read = runner.window_data
+
+    def reading(*args: object) -> object:
+        runner.interrupt()
+        return read(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner, "window_data", reading)
+    monkeypatch.setattr(
+        runner.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a card was started")
+    )
+    try:
+        with pytest.raises(PreconditionError, match="the card was interrupted"):
+            run_subprocess(request_for(), store, lane)
+    finally:
+        runner.resume()
+
+
+def test_a_card_ends_itself_once_its_parent_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The watch a card keeps on the lane that started it, driven in this process."""
+    from kanso.nautilus import backtest as runner
+
+    parents = iter([4242, 4242, 1])
+    ended: list[int] = []
+    monkeypatch.setattr(runner.os, "getppid", lambda: next(parents))
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner.os, "_exit", ended.append)
+
+    runner._end_with(4242)
+
+    assert ended == [runner.ORPHANED]
+
+
+def test_a_card_whose_lane_is_killed_does_not_outlive_it(
+    store: Path, lane: Path, request_for, tmp_path: Path
+) -> None:
+    """Measured with real processes: a lane killed outright takes its card with it.
+
+    The card leads its own session, so the kill never reaches it; left to itself this one
+    would spend far longer than the wait below in `on_start` alone.
+    """
+    import pickle
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    from kanso.nautilus.backtest import _BOOTSTRAP, window_data
+
+    request = request_for(source=SLOW_SLEEVE)
+    instruments, groups = window_data(request, store)
+    handed = tmp_path / "request.pkl"
+    with handed.open("wb") as handle:
+        pickle.dump({"extensions": []}, handle)
+        pickle.dump(
+            {"request": request.plain(), "instruments": instruments, "groups": groups}, handle
+        )
+    starts_a_card = (
+        "import os, subprocess, sys, time\n"
+        f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r}, {str(handed)!r},"
+        f" {str(tmp_path / 'result.pkl')!r}, str(os.getpid())], start_new_session=True,"
+        f" cwd={str(lane)!r})\n"
+        "print(card.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    fake_lane = subprocess.Popen([sys.executable, "-c", starts_a_card], stdout=subprocess.PIPE)
+    assert fake_lane.stdout is not None
+    card = int(fake_lane.stdout.readline())
+    try:
+        time.sleep(1.0)
+        assert running(card), "the card was running while its lane was"
+        fake_lane.send_signal(signal.SIGKILL)
+        fake_lane.wait(timeout=10)
+
+        assert ends(card, within_s=8.0), "the card outlived the lane that started it"
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(card, signal.SIGKILL)

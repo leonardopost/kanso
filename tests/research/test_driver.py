@@ -728,6 +728,54 @@ def test_cards_counts_proposals_and_a_second_call_resumes_the_same_run(
     assert len(records.runs_of(store, prepared_hyp)) == 1
 
 
+def test_a_driver_told_to_stop_asks_the_model_nothing(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """A lane that was told to stop between two turns begins no proposal."""
+    scripted(ws, propose=[proposal("revert")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1, stop=lambda: True)
+
+    assert (outcome.reason, outcome.proposed, outcome.ended) == ("stopped", 0, False)
+    assert spend(store, lane="op").calls == 0
+    assert statuses(store, prepared_hyp) == ["keep"], "the baseline, and no card"
+    assert records.active(store, prepared_hyp) is not None
+
+
+def test_a_stop_that_lands_during_a_proposal_drops_it_before_its_card(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """The answer in hand is not carded and not written: the lane is left as it was."""
+    scripted(ws, propose=[proposal("revert")])
+    asked = iter([False, True])
+    driver.run(ws, store, prepared_hyp, cards=0)
+    run = records.active(store, prepared_hyp)
+    assert run is not None
+    held = (ws.root / run.dir / STRATEGY_FILE).read_bytes()
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1, stop=lambda: next(asked))
+
+    assert (outcome.reason, outcome.proposed) == ("stopped", 0)
+    assert spend(store, lane="op").calls == 1, "the proposal was asked for, and then dropped"
+    assert statuses(store, prepared_hyp) == ["keep"]
+    assert (ws.root / run.dir / STRATEGY_FILE).read_bytes() == held
+
+
+def test_a_stop_that_lands_during_a_card_skips_the_alignment_check_it_made_due(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """The check is owed to the run, which is asked again at its next turn."""
+    workspace = tuned(ws, align_every=1)
+    scripted(workspace, propose=[proposal("revert")])
+    asked = iter([False, False, True])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=1, stop=lambda: next(asked))
+
+    assert (outcome.proposed, outcome.checks) == (1, 0)
+    assert statuses(store, prepared_hyp) == ["keep", "keep"]
+    assert spend(store, lane="op").calls == 1, "no alignment call was made"
+
+
 def test_a_stall_ends_the_run_and_requeues_the_hypothesis(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:

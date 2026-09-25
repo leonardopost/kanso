@@ -604,11 +604,13 @@ def composed(
     *,
     sleeve: bytes = REVERTING,
     attached: tuple[tuple[str, str, bytes, dict[str, Any]], ...] = (),
+    doc: dict[str, Any] | None = None,
 ) -> StrategyFile:
     """A composed strategy file, as `strat compose` would leave one.
 
     Composition belongs to another module; what replay needs of a version is the sleeve, the
-    constructs attached to it and the pins, so this writes exactly those.
+    constructs attached to it and the pins, so this writes exactly those. `doc` is the
+    sleeve's hypothesis document when it is not the demo's own.
     """
     frozen = snapshot.snapshots(ws)[-1]
     pins = {
@@ -657,7 +659,7 @@ def composed(
         store,
         hyp_id,
         file.latest(),
-        hypothesis(id=hyp_id),
+        Hypothesis.model_validate({**(doc or DOCUMENT), "id": hyp_id}),
         CAPITAL,
         created_at=datetime(2024, 3, 1, tzinfo=UTC),
     )

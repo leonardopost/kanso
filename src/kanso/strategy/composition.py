@@ -41,7 +41,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from kanso import __version__
+from kanso import __version__, ext
 from kanso.certify import certificate
 from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
@@ -450,7 +450,11 @@ def _measure(
     capital: float,
 ) -> tuple[CardRun, CardRun | None]:
     """One run of the implementation over the sleeve's certification window, and the
-    benchmark's run over it when the sleeve's objective is measured against one."""
+    benchmark's run over it when the sleeve's objective is measured against one.
+
+    The workspace's extensions are imported first, so data of a custom type one of them
+    registers is readable here as it was in the certification the version came from."""
+    ext.imported(ws)
     sleeve, attached = impl.sources(ws, manifest)
     catalog = catalog_path(ws)
     grains = _grains(manifest.sleeve.config)

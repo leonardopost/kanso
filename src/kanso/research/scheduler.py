@@ -33,8 +33,9 @@ Between the queue and a run there is a gap: a lane that took a hypothesis holds 
 row to show for it, until its baseline has run and the run row exists — and again between
 a stall, which ends the run, and this module's decision on where the hypothesis goes. The
 queue records the passage — `queued`, `claimed`, `removed`, and the run's own `run_begun` —
-so both gaps can be read back: what a dead lane was holding is put back at the next start,
-at the priority it held; what an operator took out while a lane held it stays out when that
+so both gaps can be read back: what a dead lane was holding is put back at the priority it
+held, at the next start or as soon as a running daemon's supervisor finds that lane dead;
+what an operator took out while a lane held it stays out when that
 lane fails, and the lane does not begin the run it was about to; and a hypothesis retired
 in a lane's hands has its claim closed, so resuming it later does not revive the claim.
 """
@@ -222,7 +223,7 @@ def queued(store: StateStore) -> list[QueueItem]:
     return [QueueItem(str(r["hyp_id"]), int(r["priority"]), str(r["enqueued_at"])) for r in rows]
 
 
-def recover(store: StateStore) -> list[str]:
+def recover(store: StateStore, lane: str | None = None) -> list[str]:
     """Re-queue every hypothesis a lane claimed and never began, or held after a stall.
 
     That is what a lane leaves behind when it dies between taking a hypothesis and
@@ -233,6 +234,10 @@ def recover(store: StateStore) -> list[str]:
     hypothesis whose run the operator ended looks the same from the tables and is left
     alone, and so is one the operator took out of the queue. A reseed the dead lane was
     handed and never consumed — no run began — rides on to the new passage.
+
+    With `lane`, only what that lane held: what the supervisor puts back when one lane
+    dies under a running daemon, where every other lane is alive and working what it
+    claimed, and a claim of theirs put back would be taken a second time.
     """
     rows = store.connection.execute(
         "SELECT subject, MAX(event_id) AS last FROM events WHERE kind = ?"
@@ -244,6 +249,8 @@ def recover(store: StateStore) -> list[str]:
         hyp_id = str(row["subject"])
         passage = last_passage(store, hyp_id)
         if passage is None or not claimed(store, hyp_id) or _row(store, hyp_id) is not None:
+            continue
+        if lane is not None and passage[1].get("lane") != lane:
             continue
         requeue(store, hyp_id, _priority_of(passage), reseed_from=reseed_of(store, hyp_id))
         found.append(hyp_id)

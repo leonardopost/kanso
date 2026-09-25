@@ -9,10 +9,12 @@ attached modifiers.
 
 **Costs are applied here and nowhere else.** The simulated venue is cost-neutral
 (`kanso.nautilus.venue`), and commission, slippage and half the spread on each side are
-deducted per fill in this extraction. One application means one number: a card, a
-certification gate, a composition expectation and a realised paper objective all read the
-same arithmetic, and a cost model can be re-applied to recorded fills without re-running
-anything.
+deducted per fill in this extraction — or, for a fill the venue reports as a maker's under a
+venue model that states `maker_bps`, that rate alone (`kanso.nautilus.costs.fill_rate`). One
+application means one number: a card, a certification gate, a composition expectation and a
+realised paper objective all read the same arithmetic, and a cost model can be re-applied to
+recorded fills without re-running anything, because each fill records whether it was a
+maker's.
 
 **The window is a refusal, not a parameter.** A request may name only a window the
 hypothesis declares, and the card path — `run_subprocess` — accepts only the research
@@ -28,6 +30,9 @@ outside its window even if its code looked for one. The parent supervises wall t
 resident memory and kills the process group on breach; resident memory is bounded by
 supervision rather than by `setrlimit`, which does not bound RSS on Linux and is rejected
 for address space on macOS. The peak comes from the reaped child's own resource usage.
+The child watches back: it ends itself when the process that started it is gone, so a lane
+killed outright never leaves a card running with nobody supervising it, and a process told
+to stop starts no card at all.
 What comes back from a failed child is the tail of its traceback and, when the failure was
 one kanso itself raised, that refusal's remedy — so a caller reporting a card that did not
 run can name the fault that occurred rather than assume every one of them is the code's.
@@ -60,8 +65,10 @@ raised in a strategy handler is logged and re-raised, so a failing card fails th
 rather than passing quietly; the engine's simulated exchange processes an order on the
 next data instant, so every fill is stamped at a data instant; `Position` carries
 `ts_opened`, `ts_closed`, the `OrderFilled` events that made it and the `PositionAdjusted`
-events applied to it, which together are the whole trade record; with `use_random_ids`
-left off the exchange generates deterministic trade ids.
+events applied to it, which together are the whole trade record; an `OrderFilled` carries
+the `liquidity_side` the matching engine gave its order — `MAKER` for a limit that rested
+on the book until the market reached it, `TAKER` for an order marketable when it arrived;
+with `use_random_ids` left off the exchange generates deterministic trade ids.
 """
 
 from __future__ import annotations
@@ -73,10 +80,10 @@ import os
 import pickle
 import random
 import resource
+import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
@@ -97,13 +104,13 @@ from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
 from kanso.nautilus.costs import (
     carry,
+    fill_rate,
     fixed_half_spread,
     maintenance_ratio,
     month_turned,
     policy_of,
     quote_half_spread,
     reset,
-    side_rate,
 )
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
@@ -179,12 +186,29 @@ _INTERRUPT = threading.Event()
 
 A card child leads its own session, so nothing outside this process can kill it with the
 lane that started it; the watcher reads this flag between polls and kills the child itself,
-so a stop costs the card in flight and never leaves it running unbudgeted.
+so a stop costs the card in flight and never leaves it running unbudgeted. Once it is set
+no card is started at all: `run_subprocess` refuses before it reads the window and again
+before it spawns.
 """
+
+CARD_ROOM: Final = ".card"
+"""The directory inside a lane a card's payload, report and stream travel through. A dot
+directory, so the scope check a card passes before it runs ignores it."""
+
+REQUEST_FILE: Final = "request.pkl"
+RESULT_FILE: Final = "result.pkl"
+
+PARENT_POLL_S: Final = 0.5
+"""How often a card asks whether the process that started it is still its parent."""
+
+ORPHANED: Final = 3
+"""The status a card exits with when it ended itself because the lane that started it was
+gone; nothing reads it, since whatever would have read it is what went."""
 
 
 def interrupt() -> None:
-    """Have every card this process is watching killed at its next poll."""
+    """Have every card this process is watching killed at its next poll, and start no
+    other."""
     _INTERRUPT.set()
 
 
@@ -741,6 +765,7 @@ def execute(
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
+        get_fill_model,
         get_oms_type,
         get_starting_balances,
     )
@@ -770,6 +795,9 @@ def execute(
                 # than the binary float that happens to be nearest to it.
                 default_leverage=Decimal(str(venue.default_leverage)),
                 bar_execution=venue.bar_execution,
+                # Whether a resting limit the market only touched fills: the venue model's
+                # `limit_fill`, built from the configuration the node's venue is built from.
+                fill_model=get_fill_model(venue),
                 # The venue applies a corporate action one call before it matches the point
                 # that carried the market past it; see `kanso.nautilus.actions`.
                 modules=modules(venue.name),
@@ -1147,21 +1175,29 @@ def _fill(
     spreads: Mapping[str, tuple[tuple[int, ...], tuple[float, ...]]],
     model: VenueModel,
 ) -> Fill:
-    """One execution, with the cost this venue model charges it, applied once."""
-    from nautilus_trader.model.enums import order_side_to_str
+    """One execution, with the cost this venue model charges it, applied once.
+
+    A fill the venue reports as a maker's pays the model's `maker_bps` when it states one;
+    every other fill pays commission, slippage and half the spread (`costs.fill_rate`).
+    """
+    from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
     instrument_id = str(event.instrument_id)
     qty = float(event.last_qty)
     px = float(event.last_px)
     notional = qty * px * multipliers.get(instrument_id, 1.0)
     half = _half_spread(instrument_id, int(event.ts_event), spreads, model)
+    maker = event.liquidity_side == LiquiditySide.MAKER
+    costs = model.costs
+    rate = fill_rate(costs.commission_bps, costs.slippage_bps, half, costs.maker_bps, maker=maker)
     return Fill(
         ts_ns=int(event.ts_event),
         instrument_id=instrument_id,
         side=order_side_to_str(event.order_side),
         qty=qty,
         px=px,
-        cost=notional * side_rate(model.costs.commission_bps, model.costs.slippage_bps, half),
+        cost=notional * rate,
+        maker=maker,
     )
 
 
@@ -1411,13 +1447,32 @@ def run(request: RunRequest, catalog_path: Path) -> RunResult:
     return execute(request, instruments, groups)
 
 
-def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> RunResult:
+def run_subprocess(
+    request: RunRequest,
+    catalog_path: Path,
+    workdir: Path,
+    extensions: Sequence[tuple[str, str]] = (),
+) -> RunResult:
     """Run a card in a child of its own, supervised, with no path to any catalog.
 
     The window must be the research window: this is the embargo, and it is a refusal in
     code rather than a rule anyone has to remember. The parent reads that window from the
     catalog and hands the points to the child, which starts in a new session with an
     environment allow-list, so nothing in the card can reach data the run was not given.
+
+    `extensions` are the workspace extensions this process imported, as `kanso.ext.imported`
+    answered — each one's directory and module name. The child imports them before it
+    unpickles a point, so a custom type an extension defines is registered there and its
+    class found under the name it was pickled by (`main`). They travel in the payload, not
+    the environment: the child is handed where an extension lives, never the catalog, and
+    still inherits no credential.
+
+    The payload is written to `<workdir>/.card/`, the lane's own transfer directory, as two
+    pickles in sequence on one file — the extensions, then the request and its points — so
+    the points are streamed to disk once rather than held a second time as bytes. The
+    directory is emptied before the card and removed after it, so a lane killed mid-card
+    leaves at most one payload behind, and its next card reclaims it: a payload is the whole
+    window's points, hundreds of megabytes for a window of minute bars.
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -1428,18 +1483,36 @@ def run_subprocess(request: RunRequest, catalog_path: Path, workdir: Path) -> Ru
             remedy=f"run the research window {request.hyp.windows.research.start}.."
             f"{request.hyp.windows.research.end}",
         )
+    _refuse_if_interrupted()
     instruments, groups = window_data(request, catalog_path)
     # In the parent, where a refusal is a refusal: the child is a card, and an exception
     # inside one is a crash the run records rather than a message the operator reads.
     splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
-    payload = pickle.dumps(
-        {"request": request.plain(), "instruments": list(instruments), "groups": list(groups)},
-        protocol=pickle.HIGHEST_PROTOCOL,
-    )
-    with tempfile.TemporaryDirectory(prefix="kanso-card-") as transfer:
-        room = Path(transfer)
-        (room / "request.pkl").write_bytes(payload)
+    room = _card_room(workdir)
+    try:
+        with (room / REQUEST_FILE).open("wb") as handle:
+            pickle.dump(
+                {"extensions": [list(source) for source in extensions]},
+                handle,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+            pickle.dump(
+                {"request": request.plain(), "instruments": instruments, "groups": groups},
+                handle,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
         return _supervised(request, room, workdir)
+    finally:
+        shutil.rmtree(room, ignore_errors=True)
+
+
+def _card_room(workdir: Path) -> Path:
+    """The lane's one transfer directory, emptied for the card about to use it: whatever a
+    card killed with its lane left there is reclaimed here, and nothing accumulates."""
+    room = workdir / CARD_ROOM
+    shutil.rmtree(room, ignore_errors=True)
+    room.mkdir()
+    return room
 
 
 def child_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -1460,8 +1533,14 @@ def child_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
-    """Start the child, watch its clock and its memory, and read back what it produced."""
-    result_path = room / "result.pkl"
+    """Start the child, watch its clock and its memory, and read back what it produced.
+
+    The child is told which process started it, and ends itself when that process is no
+    longer its parent (`_end_with`): it leads its own session, so a lane killed outright
+    cannot take it down, and without that it would run on with nobody watching its budget.
+    """
+    result_path = room / RESULT_FILE
+    _refuse_if_interrupted()
     started = time.monotonic()
     with (room / "stderr.txt").open("wb") as errors:
         child = subprocess.Popen(
@@ -1469,8 +1548,9 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
                 sys.executable,
                 "-c",
                 _BOOTSTRAP,
-                str(room / "request.pkl"),
+                str(room / REQUEST_FILE),
                 str(result_path),
+                str(os.getpid()),
             ],
             cwd=str(workdir),
             env=child_env(),
@@ -1483,13 +1563,30 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
     wall_s = time.monotonic() - started
     tail = _tail((room / "stderr.txt").read_text(encoding="utf-8", errors="replace"))
     if breach == INTERRUPTED:
-        raise PreconditionError(
-            "the card was interrupted: the lane running it was told to stop",
-            remedy="start the daemon again; the run resumes from its last card",
-        )
+        raise _interrupted()
     if breach is not None:
         return _crashed(request, wall_s, peak_gb, breach, tail)
     return _reported(request, result_path, wall_s, peak_gb, tail)
+
+
+def _interrupted() -> PreconditionError:
+    """Why a card did not run to its end: the process running it was told to stop."""
+    return PreconditionError(
+        "the card was interrupted: the lane running it was told to stop",
+        remedy="start the daemon again; the run resumes from its last card",
+    )
+
+
+def _refuse_if_interrupted() -> None:
+    """Start no card in a process that has been told to stop.
+
+    Asked before the window is read and again before the child is spawned, because a stop
+    that lands while a lane is reading a window, or waiting on a model, is still a stop: a
+    lane that went on to start the card would only have it killed at the watcher's first
+    poll, or — killed itself in the meantime — leave it running.
+    """
+    if _INTERRUPT.is_set():
+        raise _interrupted()
 
 
 def _watch(
@@ -1526,6 +1623,23 @@ def _kill(pid: int) -> None:
     """Kill the child's whole process group; it leads one of its own."""
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pid, signal.SIGKILL)
+
+
+def _end_with(parent: int) -> None:
+    """In a card: end the process the moment `parent` is no longer the one it answers to.
+
+    A card leads its own session so that its watcher can kill it without killing the lane,
+    which also means the lane cannot take it down by dying: a lane killed outright — by the
+    daemon after its grace, by `research stop`'s last resort, by the kernel — leaves the
+    card running, unbudgeted, with its result going nowhere. The kernel hands an orphan to
+    another parent, so the card asks every `PARENT_POLL_S` whose child it is, and exits the
+    moment the answer is not the lane that started it — including at once, when the lane
+    was gone before the card began. It exits without cleaning up, because nothing is left
+    to read what it would have written.
+    """
+    while os.getppid() == parent:
+        time.sleep(PARENT_POLL_S)
+    os._exit(ORPHANED)
 
 
 def _resident_gb(pid: int) -> float:
@@ -1626,9 +1740,26 @@ def main(argv: Sequence[str]) -> int:
     rather than as a line of a traceback: the parent decides what to tell the operator to
     do about a card that did not run, and it can only choose the right thing if the cause
     is what names it.
+
+    The third argument is the pid of the process that started the card, which it outlives
+    by at most `PARENT_POLL_S` (`_end_with`).
+
+    The payload is two pickles in sequence on one file. The first names the workspace
+    extensions the parent imported, and they are imported here before the second — the
+    request and its points — is unpickled, because a point of an extension's custom type is
+    an instance of a class that exists only once its module has been imported, under the name
+    it was pickled by.
     """
+    from kanso.ext import reimport
+
     request_path, result_path = Path(argv[0]), Path(argv[1])
-    payload = pickle.loads(request_path.read_bytes())
+    threading.Thread(
+        target=_end_with, args=(int(argv[2]),), name="kanso-card-parent", daemon=True
+    ).start()
+    with request_path.open("rb") as handle:
+        handed = pickle.load(handle)
+        reimport((str(directory), str(name)) for directory, name in handed["extensions"])
+        payload = pickle.load(handle)
     try:
         result = execute(payload["request"], payload["instruments"], payload["groups"])
     except SizingError as refused:

@@ -10,6 +10,8 @@ that the queue is served by priority and then by arrival.
 from __future__ import annotations
 
 import contextlib
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -84,6 +86,43 @@ def test_status_with_nothing_running_still_reports_the_lanes(
     assert found["pid"] is None
     assert found["runs"] == []
     assert found["queue"] == []
+    assert found["restarts"] == []
+    assert "restarts   none" in at(runner, mocked_ws, "research", "status").stdout
+
+
+def test_status_lists_every_child_the_running_daemon_started_again(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """What an operator reads after the kernel took a lane: which child, how often, how the
+    newest death went and how long it waited to come back."""
+    from kanso.state import StateStore
+    from kanso.workspace import find
+
+    ws = find(mocked_ws)
+    running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    daemon.pid_path(ws).parent.mkdir(parents=True, exist_ok=True)
+    daemon.pid_path(ws).write_text(f"{running.pid}\n", encoding="utf-8")
+    killed = {"pid": 7, "exit": None, "signal": "SIGKILL", "lived_s": 412.3, "restart_in_s": 0.0}
+    exited = {"pid": 8, "exit": 1, "signal": None, "lived_s": 3.0, "restart_in_s": 2.0}
+    try:
+        with StateStore(ws.path("state.db")) as store:
+            lane = {"lane": "l1", **killed, "daemon": running.pid, "run": HYP_ID, "put_back": []}
+            store.event(daemon.LANE_DIED, "l1", lane)
+            store.event(daemon.MONITOR_DIED, daemon.MONITOR, {**exited, "daemon": running.pid})
+        found = payload(at(runner, mocked_ws, "research", "status", "--json"))
+        human = at(runner, mocked_ws, "research", "status").stdout
+    finally:
+        daemon.pid_path(ws).unlink()
+        running.kill()
+        running.wait()
+
+    assert [
+        (entry["child"], entry["deaths"], entry["exit"], entry["signal"])
+        for entry in found["restarts"]
+    ] == [("l1", 1, None, "SIGKILL"), ("monitor", 1, 1, None)]
+    assert "restarts   2 since the daemon started" in human
+    assert "killed by SIGKILL after 412s · started again at once" in human
+    assert "exit 1 after 3s · started again after 2s" in human
 
 
 def test_status_reports_a_run_with_its_three_shas(runner: CliRunner, mocked_ws: Path) -> None:

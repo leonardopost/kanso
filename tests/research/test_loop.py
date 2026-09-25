@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from dataclasses import fields, replace
 from datetime import date
 from hashlib import sha256
@@ -1096,7 +1097,7 @@ def test_every_field_of_a_setup_is_a_reading_or_is_not(ws: Workspace, store: Sta
     read = {"capital", "folds", "period", "venue_model", "harness", "sleeve_budget", "grains"}
     read |= {"prefix"}
     pinned = {"hyp", "impl", "host_source", "host_modifiers"}
-    no_number = {"max_lines", "catalog"}
+    no_number = {"max_lines", "catalog", "extensions"}
 
     assert not read & (pinned | no_number)
     assert read | pinned | no_number == {field.name for field in fields(loop.Setup)}
@@ -1111,8 +1112,27 @@ def test_every_field_of_a_setup_is_a_reading_or_is_not(ws: Workspace, store: Sta
         ("prefix", (date(2023, 12, 29), date(2023, 12, 31))),
     ):
         assert replace(setup, **{name: moved}).measured_under != setup.measured_under, name
-    for name, same in (("max_lines", 999), ("catalog", ws.path("nowhere"))):
+    for name, same in (
+        ("max_lines", 999),
+        ("catalog", ws.path("nowhere")),
+        ("extensions", ((str(ws.path("kanso_ext")), "elsewhere"),)),
+    ):
         assert replace(setup, **{name: same}).measured_under == setup.measured_under, name
+
+
+def test_a_setup_imports_the_workspace_s_extensions_and_hands_them_to_its_cards(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Built once per card in the lane, so the lane has imported them before it reads a
+    window, and a card is told what to import before it unpickles one."""
+    directory = ws.path("kanso_ext")
+    directory.mkdir()
+    (directory / "kanso_setup_probe.py").write_text("PROBED = True\n", encoding="utf-8")
+
+    setup = loop._setup(ws, store, Hypothesis.model_validate(DOCUMENT))
+
+    assert setup.extensions == ((str(directory), "kanso_setup_probe"),)
+    assert "kanso_setup_probe" in sys.modules
 
 
 def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore) -> None:

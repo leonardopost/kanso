@@ -456,6 +456,59 @@ commission and no spread, so under the defaults a bar-only hypothesis is refused
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason.
 
+`costs.maker_bps` charges a fill that rested on the book apart from the rest:
+
+```yaml
+costs:
+  commission_bps: 0.35             # every fill that took liquidity pays these three
+  slippage_bps: 0.5
+  spread: fixed_bps
+  fixed_bps: 1.0
+  maker_bps: -0.2                  # a fill that rested pays this alone; negative is a rebate
+```
+
+A fill the venue reports as a maker's — a limit that waited on the book until the market
+reached it (`docs/concepts.md`, Delivery) — pays exactly `maker_bps` of its notional and
+nothing else: no slippage, because it filled at its own price, and no half-spread, because
+the spread is what a resting order earns rather than pays. Negative is a net rebate, the way
+a per-share-priced account that pays for displayed liquidity can come out ahead on a fill
+that rested. Every other fill — a market order, a limit that was marketable when it arrived
+— is charged commission, slippage and half the spread exactly as before, and so is a maker's
+fill under a model that states no `maker_bps`: leave the key out and no number moves. It is
+applied where every cost is, once, in the runner's extraction, and `self.balance` books the
+same rate. `cost_stress` multiplies a charge and divides a rebate, so a stress of one or more
+never lets a fill earn more. What a sleeve reserves when it sizes is the larger of the maker
+rate and the others, since an order cannot know whether it will rest. A fill a broker reports
+with no liquidity side is charged as a taker's. The key is inherited like the rest of the
+block, and a layer can restate it but not remove it.
+
+`costs.limit_fill` is the one key of the block that is not a charge: it is how the simulated
+venue fills a limit order resting on the book.
+
+```yaml
+costs:
+  limit_fill: through              # touch (default) | through
+```
+
+Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
+price — a bar whose low is the limit, or a print at it. Under `through` the market has to go
+beyond it: a low one tick under the buy, a high one tick over the sell, or a print past
+either, and the order then fills at its own price. A print counts only from the side that
+can trade with the order — a seller's print or one with no aggressor for a buy, never a
+buyer's (`docs/concepts.md`, Delivery). It is deterministic either way — the
+venue's fill model is asked with a probability of exactly one or exactly zero and draws
+nothing — and it reaches every run of the hypothesis alike: a card, a certificate, a replay
+on either code path and a stage, whose simulated exchange is built from the same venue
+configuration a card's is. On quotes it withholds less than its name suggests: the engine asks
+it only when the order's own side of the book is at the price, so an ask that falls exactly
+to a resting buy fills it under either rule, and only a market locked at the limit is left
+to it (`kanso doctor` re-checks both behaviours as engine facts). A broker fills as it
+fills: the key moves kanso's simulated venues and nothing a broker does. Like every cost it
+is inherited — a broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and
+two versions certified under different rules cannot share a stage venue, which is one
+exchange: the stage's node refuses to build it (exit 2), naming
+`venues.<MIC>.costs.limit_fill`.
+
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 
 ```
@@ -790,10 +843,21 @@ prune.
 The lane directories, and the only place research edits anything.
 
 ```
-runs/<lane>/<hyp>/   hypothesis.yaml, program.md, strategy.py — and nothing else
-runs/daemon.pid      the supervisor's pid, and its lock
-runs/daemon.log      whatever the daemon and its children write to a stream
+runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
+runs/<lane>/<hyp>/.card/   a card's payload, report and output, only while the card runs
+runs/daemon.pid            the supervisor's pid, and its lock
+runs/daemon.log            whatever the daemon and its children write to a stream
 ```
+
+`.card/` is how a card's points reach the child that runs it: the lane writes the window's
+points there, the card writes back what it measured, and the lane removes the directory once
+it has read it. A lane killed in the middle of a card leaves that one payload behind — it can
+be hundreds of megabytes for a window of minute bars — and the run's next card empties the
+directory before it writes, so a lane never holds more than one. Under a running daemon that
+next card comes at once: the supervisor starts a dead lane again under its name, and the lane
+in its place resumes the run. A lane killed in its baseline has no run yet; the supervisor
+puts the hypothesis back in the queue and removes the directory, payload and all. The scope
+check a card passes ignores `.card/`, as it ignores every dot-file.
 
 A lane writes no log of its own, and no file under `runs/` records what a run did. The
 record of a run is in `state.db` — the run row, every card with its metric and verdict, and
@@ -804,8 +868,9 @@ supervisor and every lane it spawns share, for whatever they print; it is not st
 not per lane.
 
 `kanso research begin` prints the lane directory, copies the three scoped files into it and
-pins them. Exactly those three files are there; a card runs in a subprocess with its cwd set
-to that directory, and lanes never share files. **One active run per hypothesis:**
+pins them. Exactly those three files are there, and `.card/` beside them while a card runs;
+a card runs in a subprocess with its cwd set to that directory, and lanes never share files.
+**One active run per hypothesis:**
 
 ```
 error: demo_mr already has an active run (d7220ee4…)
