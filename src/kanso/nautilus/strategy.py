@@ -105,7 +105,7 @@ from kanso.nautilus import actions, splits
 from kanso.nautilus.costs import (
     BookPolicy,
     carry,
-    fill_rate,
+    fill_cost,
     fixed_half_spread,
     month_turned,
     quote_half_spread,
@@ -421,6 +421,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if maker is not None:
             bps = max(bps, maker)
         return bps / BASIS_POINT
+
+    def cost_rate_at(self, price: float) -> float:
+        """`cost_rate` at a price: the per-share commission, where the model states one, is
+        a fraction of notional only once the price is known, and a dearer share pays less."""
+        per_share = float(self._charges.get("commission_per_share") or 0.0)
+        if per_share <= 0.0 or price <= 0.0:
+            return self.cost_rate
+        return self.cost_rate + per_share / price
 
     @property
     def max_notional(self) -> float:
@@ -1122,7 +1130,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if price is None or price <= 0:
                 return None
             raw = full_book_quantity(
-                budget, price, float(instrument.price_increment), self.cost_rate
+                budget, price, float(instrument.price_increment), self.cost_rate_at(price)
             )
             quantity = self._quantise(instrument, raw)
             if quantity is None:
@@ -1356,7 +1364,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self.budget,
             reference,
             float(instrument.price_increment),  # type: ignore[attr-defined]
-            self.cost_rate,
+            self.cost_rate_at(reference),
         )
         ctx = self._context(instrument_id, side, raw, None, "MARKET")
         self._entry_answers = self._ask_overlays(ctx)
@@ -1515,8 +1523,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _reserve(self, key: str) -> float:
         """What a notional is divided by to leave room for its own round trip: commission,
-        slippage and the whole spread each way — the stated width, or the last quoted one."""
-        rate = self.cost_rate
+        per share included at the last price, slippage and the whole spread each way — the
+        stated width, or the last quoted one."""
+        price = self._last_print.get(key)
+        rate = self.cost_rate_at(price) if price else self.cost_rate
         if self._charges.get("spread") == "quotes":
             _, values = self._quoted.get(key, ([], []))
             if values:
@@ -1598,20 +1608,24 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _paid(self, event: Any) -> float:
         """What one fill took out of cash: the value it bought, or gave back what it sold
-        for, and what the runner charges it — commission, slippage and half the spread, or a
-        maker's own rate where the venue model states one, which a rebate makes negative."""
+        for, and what the runner charges it — commission, per share included where the model
+        states one, slippage and half the spread, or a maker's own rate where the venue model
+        states one, which a rebate makes negative."""
         instrument = self.cache.instrument(event.instrument_id)
         multiplier = 1.0 if instrument is None else float(instrument.multiplier)
         qty, px = float(event.last_qty), float(event.last_px)
         signed = qty if event.order_side == OrderSide.BUY else -qty
-        rate = fill_rate(
+        cost = fill_cost(
+            qty * px * multiplier,
+            qty,
             float(self._charges.get("commission_bps") or 0.0),
             float(self._charges.get("slippage_bps") or 0.0),
             self._half_spread_at(event.instrument_id.value, int(event.ts_event)),
             _maker_bps(self._charges),
+            float(self._charges.get("commission_per_share") or 0.0),
             maker=event.liquidity_side == LiquiditySide.MAKER,
         )
-        return signed * px * multiplier + qty * px * multiplier * rate
+        return signed * px * multiplier + cost
 
     def _half_spread_at(self, key: str, ts_ns: int) -> float:
         """Half the spread one fill pays: the stated width, or the last quote before it."""

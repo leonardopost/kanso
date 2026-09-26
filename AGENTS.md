@@ -43,10 +43,10 @@ ts_event` always, and the engine orders by `ts_init`. Never derive `ts_init` fro
 `ts_event` or from ingest time. A delayed dataset whose `ts_init` does not come from a
 declared publication rule is refused at write (`data/publication.py`).
 
-**Costs are applied once, by the runner, in the extraction.** Commission, slippage and half
-the spread each side — or, on a fill that rested on the book under a venue model that states
-`maker_bps`, that rate alone — are deducted per fill in `nautilus/backtest.py` and nowhere
-else. One application means one number: a card, a certification gate, a composition
+**Costs are applied once, by the runner, in the extraction.** Commission — in basis points
+and, where the model states it, per share — slippage and half the spread each side — or, on a
+fill that rested on the book under a venue model that states `maker_bps`, that rate alone —
+are deducted per fill in `nautilus/backtest.py` and nowhere else. One application means one number: a card, a certification gate, a composition
 expectation and a realised paper objective all read the same arithmetic, and a cost model
 can be re-applied to recorded fills without re-running anything. The per-fill arithmetic
 lives in `nautilus/costs.py`, and the harness calls it to keep its balance equal to the

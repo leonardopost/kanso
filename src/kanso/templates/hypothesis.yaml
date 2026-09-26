@@ -11,6 +11,8 @@ resolution:                        # bar duration <n>(s|m|h|d|w), or tick|quote|
 data_requirements: [bar]           # bar|quote|trade|<any registered custom type id>
 # costs:                           # optional. Costs are inherited from the venue, which the configured broker defines
 #   commission_bps: 0.5            # (kanso.toml research.broker, portfolio.yaml venues.<MIC>). Set any subset here only to
+#   commission_per_share: 0.0055   # charged on every share of a fill that pays commission, on top of the rates; a maker's fill
+#                                  # under a stated maker_bps pays that rate alone
 #   slippage_bps: 1.0              # override them for this hypothesis — the way to test an idea against costs worse than
 #   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,

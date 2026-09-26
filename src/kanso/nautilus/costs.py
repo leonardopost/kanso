@@ -1,7 +1,8 @@
 """What a trade and a book cost: the arithmetic the runner charges and the harness reads.
 
-Commission, slippage and half the spread are charged on every fill, once, by the runner's
-extraction (`kanso.nautilus.backtest`); the simulated venue charges nothing. A fill that
+Commission — in basis points and, where the model states it, per share — slippage and half
+the spread are charged on every fill, once, by the runner's extraction
+(`kanso.nautilus.backtest`); the simulated venue charges nothing. A fill that
 rested on the book — one the venue reports as a maker's — pays the venue model's
 `maker_bps` instead of all three when the model states one: it filled at its own price, so
 it slipped nothing, and the spread is what it earns rather than pays. A negative rate is a
@@ -43,6 +44,7 @@ __all__ = [
     "NS_PER_YEAR",
     "BookPolicy",
     "carry",
+    "fill_cost",
     "fill_rate",
     "fixed_half_spread",
     "maintenance_ratio",
@@ -99,6 +101,34 @@ def fill_rate(
     if maker and maker_bps is not None:
         return maker_bps / BPS
     return side_rate(commission_bps, slippage_bps, half_spread)
+
+
+def fill_cost(
+    notional: float,
+    qty: float,
+    commission_bps: float,
+    slippage_bps: float,
+    half_spread: float,
+    maker_bps: float | None,
+    commission_per_share: float,
+    *,
+    maker: bool,
+) -> float:
+    """What one fill costs in the account currency: `fill_rate` of its notional, plus the
+    per-share commission on each share whenever the fill pays commission at all.
+
+    A maker's fill under a stated maker rate pays that rate alone, per share included: the
+    rate is the whole charge on that fill by contract, and a per-share-priced account states
+    its maker net there — commission less the rebate. Every other fill pays the per-share
+    commission on top of the three rates, so a cheap share pays more of its price than a
+    dear one, exactly as the account would charge it.
+    """
+    charged = notional * fill_rate(
+        commission_bps, slippage_bps, half_spread, maker_bps, maker=maker
+    )
+    if maker and maker_bps is not None:
+        return charged
+    return charged + qty * commission_per_share
 
 
 @dataclass(frozen=True)

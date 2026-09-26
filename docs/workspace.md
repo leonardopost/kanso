@@ -482,6 +482,30 @@ rate and the others, since an order cannot know whether it will rest. A fill a b
 with no liquidity side is charged as a taker's. The key is inherited like the rest of the
 block, and a layer can restate it but not remove it.
 
+`costs.commission_per_share` states a commission per share beside the one in basis points:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.0055     # $0.0055 a share on every share that pays commission
+  slippage_bps: 0.5
+  spread: fixed_bps
+  fixed_bps: 2.0
+  maker_bps: 0.0                   # a fill that rested pays this alone, per share included
+```
+
+A per-share-priced account charges a cheap share more of its price than a dear one — $0.0055
+is 5.5 bp of a $10 share and 0.2 bp of a $300 one — and a flat rate in basis points cannot say
+so over a universe that spans both. The per-share commission is charged on every share of a
+fill that pays commission at all: a taker's, and a maker's under a model that states no
+`maker_bps`. A maker's fill under a stated `maker_bps` still pays that rate alone, because the
+rate is by contract the whole charge on that fill; a per-share-priced account states its maker
+net there, commission less the rebate. It is applied where every cost is, once, in the
+runner's extraction; `self.balance` books the same; what a sleeve reserves when it sizes
+includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
+is part of the recorded cost of the fill. Zero unless stated, so no number moves for a model
+that does not name it.
+
 `costs.limit_fill` is the one key of the block that is not a charge: it is how the simulated
 venue fills a limit order resting on the book.
 
