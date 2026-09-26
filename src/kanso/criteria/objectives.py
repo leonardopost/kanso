@@ -21,6 +21,14 @@ statistic is a Sharpe of returns, below it the mean edge per trade, since a sub-
 holding period produces too few return periods for a Sharpe to mean anything and enough
 trades for a per-trade edge to.
 
+Two objectives are chosen by name and never by default. The contribution — the mean net
+return per return period in basis points of the capital — applies at every horizon at a
+priority below every default, so the grid's winner is unchanged wherever it is not named,
+and a hypothesis whose target is a return on capital states `objective.id:
+wf_contribution_bps` (or its marginal form) in its own file. It is the one objective that
+counts a period in cash as a zero: a Sharpe cannot say how much of the capital was put to
+work, and a per-trade edge rewards trading less.
+
 A resolution that names an unaggregated grain rather than a bar size is treated as the
 finest grain there is — zero length — so a predicate written in durations orders it below
 every bar size.
@@ -32,7 +40,7 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import ClassVar, Final, Protocol
 
-from kanso.criteria.quantities import edge_bps, mean, sharpe, standard_error
+from kanso.criteria.quantities import contribution_bps, edge_bps, mean, sharpe, standard_error
 from kanso.criteria.run import CardRun
 from kanso.errors import PreconditionError
 from kanso.schemas import (
@@ -89,7 +97,7 @@ class Objective(Protocol):
 
 
 STATISTICS: Final[Mapping[str, Callable[[CardRun], float]]] = MappingProxyType(
-    {"sharpe": sharpe, "edge_bps": edge_bps}
+    {"sharpe": sharpe, "edge_bps": edge_bps, "contribution_bps": contribution_bps}
 )
 """The per-fold quantities an objective is built from, named so a class can select one."""
 
@@ -203,11 +211,29 @@ class _WfSharpeVsHold(_FoldObjective):
     statistic = "sharpe"
 
 
+class _WfContributionBps(_FoldObjective):
+    """Fold-wise mean net return per return period, in basis points of the capital."""
+
+    id = "wf_contribution_bps"
+    mode = ABSOLUTE
+    statistic = "contribution_bps"
+
+
+class _MarginalWfContributionBps(_FoldObjective):
+    """The combined run's fold-wise contribution minus the host's, fold by fold."""
+
+    id = "marginal_wf_contribution_bps"
+    mode = RELATIVE
+    statistic = "contribution_bps"
+
+
 wf_sharpe_net: Final[Objective] = _WfSharpeNet()
 net_edge_bps: Final[Objective] = _NetEdgeBps()
 marginal_wf_sharpe: Final[Objective] = _MarginalWfSharpe()
 marginal_net_edge_bps: Final[Objective] = _MarginalNetEdgeBps()
 wf_sharpe_vs_hold: Final[Objective] = _WfSharpeVsHold()
+wf_contribution_bps: Final[Objective] = _WfContributionBps()
+marginal_wf_contribution_bps: Final[Objective] = _MarginalWfContributionBps()
 
 REGISTRY: Final[Mapping[str, Objective]] = MappingProxyType(
     {
@@ -218,6 +244,8 @@ REGISTRY: Final[Mapping[str, Objective]] = MappingProxyType(
             marginal_wf_sharpe,
             marginal_net_edge_bps,
             wf_sharpe_vs_hold,
+            wf_contribution_bps,
+            marginal_wf_contribution_bps,
         )
     }
 )
