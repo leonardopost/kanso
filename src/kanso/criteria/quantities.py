@@ -92,6 +92,18 @@ def edge_bps(run: CardRun) -> float:
     return mean([t.pnl_net / t.notional * BPS for t in run.trades if t.notional > 0])
 
 
+def contribution_bps(run: CardRun) -> float:
+    """Mean net return per return period, in basis points of the capital: what the book
+    earned per period on the capital it was given, the unit a P&L target is stated in.
+
+    A period in cash contributes zero, so a strategy that trades less contributes less; a
+    per-trade edge cannot say that, and a Sharpe cannot say how much of the capital was
+    put to work. Not annualised: the period is the workspace's own return period. A run's
+    capital is positive by construction (`CardRun`), so the quotient always exists.
+    """
+    return mean(run.returns) / run.capital * BPS
+
+
 def drawdown_pct(run: CardRun) -> float:
     """Peak-to-trough equity over the window, as a percentage of starting capital.
 

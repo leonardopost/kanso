@@ -1,0 +1,9 @@
+id: marginal_wf_contribution_bps
+kind: objective
+applies:
+  objective_mode: relative
+priority: 30
+meaningful_when: "What an attached construct adds to its host's return per period on the capital, differenced fold by fold at any horizon. Chosen by name, never by default."
+params: {min_delta: float, k_se: float}
+ranges: {min_delta: [0.0, .inf], k_se: [0.5, 3.0]}
+impl: kanso.criteria.objectives.marginal_wf_contribution_bps

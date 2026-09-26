@@ -196,3 +196,17 @@ def test_a_wall_clock_client_needs_a_live_feed_at_real_time() -> None:
 def test_costs_refuse_a_fixed_spread_without_a_width() -> None:
     with pytest.raises(ValidationError, match="fixed_bps"):
         Costs(commission_bps=0, slippage_bps=1, spread="fixed_bps")
+
+
+def test_a_per_share_commission_is_zero_unless_stated_and_layers_like_the_rest() -> None:
+    assert resolve_venue_model("XNAS").costs.commission_per_share == 0.0
+    stated = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(commission_per_share=0.004)),
+        hypothesis_costs=CostsOverride(commission_per_share=0.0055, commission_bps=0.0),
+    )
+    assert stated.costs.commission_per_share == 0.0055
+    assert stated.costs.commission_bps == 0.0
+    assert stated.origins.costs == "hypothesis"
+    with pytest.raises(ValidationError):
+        CostsOverride(commission_per_share=-0.01)

@@ -10,7 +10,8 @@ attached modifiers.
 **Costs are applied here and nowhere else.** The simulated venue is cost-neutral
 (`kanso.nautilus.venue`), and commission, slippage and half the spread on each side are
 deducted per fill in this extraction — or, for a fill the venue reports as a maker's under a
-venue model that states `maker_bps`, that rate alone (`kanso.nautilus.costs.fill_rate`). One
+venue model that states `maker_bps`, that rate alone, and a per-share commission on every share
+of a fill that pays commission (`kanso.nautilus.costs.fill_cost`). One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
@@ -104,7 +105,7 @@ from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
 from kanso.nautilus.costs import (
     carry,
-    fill_rate,
+    fill_cost,
     fixed_half_spread,
     maintenance_ratio,
     month_turned,
@@ -1178,7 +1179,8 @@ def _fill(
     """One execution, with the cost this venue model charges it, applied once.
 
     A fill the venue reports as a maker's pays the model's `maker_bps` when it states one;
-    every other fill pays commission, slippage and half the spread (`costs.fill_rate`).
+    every other fill pays commission, slippage and half the spread, and the per-share
+    commission on each share when the model states one (`costs.fill_cost`).
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -1189,14 +1191,23 @@ def _fill(
     half = _half_spread(instrument_id, int(event.ts_event), spreads, model)
     maker = event.liquidity_side == LiquiditySide.MAKER
     costs = model.costs
-    rate = fill_rate(costs.commission_bps, costs.slippage_bps, half, costs.maker_bps, maker=maker)
+    cost = fill_cost(
+        notional,
+        qty,
+        costs.commission_bps,
+        costs.slippage_bps,
+        half,
+        costs.maker_bps,
+        costs.commission_per_share,
+        maker=maker,
+    )
     return Fill(
         ts_ns=int(event.ts_event),
         instrument_id=instrument_id,
         side=order_side_to_str(event.order_side),
         qty=qty,
         px=px,
-        cost=notional * rate,
+        cost=cost,
         maker=maker,
     )
 

@@ -780,18 +780,36 @@ def test_a_stall_ends_the_run_and_requeues_the_hypothesis(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
     workspace = tuned(ws, stall_k=2)
+    scripted(workspace, propose=[proposal("revert"), proposal("boom"), proposal("boom")])
+
+    outcome = driver.run(workspace, store, prepared_hyp)
+
+    assert outcome.reason == "stalled"
+    assert (outcome.proposed, outcome.keeps, outcome.crashes, outcome.ended) == (3, 1, 2, True)
+    assert records.active(store, prepared_hyp) is None
+    assert not lanes.lane_dir(workspace, "op", prepared_hyp).exists()
+    assert [item.hyp_id for item in scheduler.queued(store)] == [prepared_hyp]
+    assert scheduler.queued(store)[0].priority == scheduler.STALL_PRIORITY
+    # The reverting keep scored above zero, so the stall certified it on the way out.
+    assert outcome.best_metric is not None and outcome.best_metric > 0
+    assert certificate.latest(store, prepared_hyp) is not None
+
+
+def test_a_stall_on_a_baseline_that_earned_nothing_certifies_nothing(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """The flat seed keeps at zero, and a stall on it has nothing to prove out of sample."""
+    workspace = tuned(ws, stall_k=2)
     scripted(workspace, propose=[proposal("boom")])
 
     outcome = driver.run(workspace, store, prepared_hyp)
 
     assert outcome.reason == "stalled"
     assert (outcome.proposed, outcome.crashes, outcome.ended) == (2, 2, True)
-    assert records.active(store, prepared_hyp) is None
-    assert not lanes.lane_dir(workspace, "op", prepared_hyp).exists()
+    assert outcome.best_metric is not None and outcome.best_metric <= 0
+    assert certificate.latest(store, prepared_hyp) is None
     assert [item.hyp_id for item in scheduler.queued(store)] == [prepared_hyp]
-    assert scheduler.queued(store)[0].priority == scheduler.STALL_PRIORITY
-    # The baseline kept, so the stall had a subject and certified it on the way out.
-    assert certificate.latest(store, prepared_hyp) is not None
+    assert spend(store, lane="op").calls == 2, "two proposals and no certification plan"
 
 
 def test_a_stall_whose_certification_cannot_run_leaves_the_hypothesis_owed_to_the_queue(
@@ -799,7 +817,11 @@ def test_a_stall_whose_certification_cannot_run_leaves_the_hypothesis_owed_to_th
 ) -> None:
     """The planner's tier answers nothing usable, so on_stall raises; the lane still holds it."""
     workspace = tuned(ws, stall_k=2)
-    scripted(workspace, propose=[proposal("boom")], certify_plan=[{}])
+    scripted(
+        workspace,
+        propose=[proposal("revert"), proposal("boom"), proposal("boom")],
+        certify_plan=[{}],
+    )
 
     with pytest.raises(PreconditionError, match="certify_plan"):
         driver.run(workspace, store, prepared_hyp, lane="l1")

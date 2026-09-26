@@ -353,7 +353,10 @@ def test_the_objective_table_names_what_wins_in_each_mode(ws: Workspace) -> None
     table = objectives(hypothesis(), ws.config.research.folds)
     assert table["absolute"]["selected"] == "net_edge_bps"
     assert table["relative"]["selected"] == "marginal_net_edge_bps"
-    assert [one["id"] for one in table["absolute"]["applicable"]] == ["net_edge_bps"]
+    assert [one["id"] for one in table["absolute"]["applicable"]] == [
+        "net_edge_bps",
+        "wf_contribution_bps",
+    ]
     assert table["absolute"]["applicable"][0]["priority"] == 10
 
 

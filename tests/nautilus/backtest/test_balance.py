@@ -236,3 +236,22 @@ def test_without_a_maker_rate_a_fill_that_rested_is_charged_as_every_fill_always
     for fill in card.fills:
         assert fill.cost == fill.qty * fill.px * 1.0 * TAKER
     assert_the_same(card, record, at_least=15)
+
+
+def test_a_taker_pays_the_per_share_commission_on_top_and_a_maker_under_a_rate_does_not(
+    tmp_path: Path, request_for
+) -> None:
+    """Every share of a taker's fill pays $0.01 on top of the rates; a maker's fill under a
+    zero maker rate pays nothing at all; the balance the sleeve read is still the equity."""
+    card, record = resting_card(
+        tmp_path, request_for, {**FIXED, "maker_bps": 0.0, "commission_per_share": 0.01}
+    )
+
+    makers = [fill for fill in card.fills if fill.maker]
+    takers = [fill for fill in card.fills if not fill.maker]
+    assert makers and takers
+    for fill in makers:
+        assert fill.cost == 0.0
+    for fill in takers:
+        assert fill.cost == pytest.approx(fill.qty * fill.px * TAKER + fill.qty * 0.01, rel=1e-12)
+    assert_the_same(card, record, at_least=1)

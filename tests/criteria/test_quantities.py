@@ -8,6 +8,7 @@ import pytest
 
 from kanso.criteria.quantities import (
     DAYS_PER_YEAR,
+    contribution_bps,
     correlation,
     drawdown_pct,
     edge_bps,
@@ -150,3 +151,9 @@ def test_a_symmetric_sample_has_no_skew() -> None:
 
 def test_a_sample_that_cannot_vary_has_no_moments() -> None:
     assert moments([3.0, 3.0, 3.0]) is None
+
+
+def test_the_contribution_is_the_mean_return_per_period_in_basis_points_of_the_capital() -> None:
+    """Ten, twenty and thirty dollars a day on $100,000: two basis points a day on average."""
+    run = build_run((10.0, 20.0, 30.0), capital=100_000.0)
+    assert contribution_bps(run) == pytest.approx(2.0)

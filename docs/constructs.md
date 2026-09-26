@@ -295,8 +295,9 @@ remedy: certify and compose the host sleeve first, or name another host
 
 Which objective a construct is scored on is the one deterministic domain rule in kanso: it
 follows from the construct's `objective_mode` and the hypothesis's horizon, and no model
-chooses it. The five are total over that grid and over whether the hypothesis declares a
-`benchmark`.
+chooses it. The five default objectives are total over that grid and over whether the
+hypothesis declares a `benchmark`; two more apply at every horizon and are chosen only by
+name.
 
 | objective | mode | horizon | measures |
 |---|---|---|---|
@@ -305,11 +306,24 @@ chooses it. The five are total over that grid and over whether the hypothesis de
 | `marginal_net_edge_bps` | relative | under 1d | what the construct adds to its host's edge per trade, differenced fold by fold |
 | `marginal_wf_sharpe` | relative | 1d or more | the same difference, on the walk-forward Sharpe |
 | `wf_sharpe_vs_hold` | absolute, with a `benchmark` | 1d or more | the fold-wise Sharpe minus that of holding the universe's first leg, differenced fold by fold |
+| `wf_contribution_bps` | absolute, by name | any | fold-wise mean net return per return period, in basis points of the capital |
+| `marginal_wf_contribution_bps` | relative, by name | any | what the construct adds to its host's return per period on the capital, differenced fold by fold |
 
 A sub-daily holding period gives few return periods and many trades, so the edge per trade
 is the estimate with a sample behind it; a day or longer gives enough return periods for a
 Sharpe to mean something. Naming an objective the grid does not reach is refused at
 registration, with the applicable ones listed:
+
+The contribution is the return target itself: what the book earned per return period on the
+capital it was given, in the unit a P&L target is stated in, and the one objective that
+counts a period in cash as a zero — a Sharpe cannot say how much of the capital was put to
+work, and a per-trade edge rewards trading less. It sits below every default in priority, so
+it never displaces the grid's winner: a hypothesis whose target is a return on capital states
+`objective.id: wf_contribution_bps` (an attached construct, the marginal form) in its own
+file, with `min_delta` in basis points per period, and `kanso hyp add` accepts it at any
+horizon. The `deflated_sharpe` gate skips a run scored on it, as it does the per-trade edge,
+since no card computed a Sharpe to deflate; the bootstrap, cost-stress, walk-forward and
+plateau gates read it as they read any objective.
 
 ```
 $ kanso hyp add hypotheses/demo_alloc/hypothesis.yaml

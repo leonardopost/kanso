@@ -17,6 +17,7 @@ from kanso.nautilus.costs import (
     NS_PER_YEAR,
     BookPolicy,
     carry,
+    fill_cost,
     fill_rate,
     maintenance_ratio,
     month_turned,
@@ -151,4 +152,34 @@ def test_a_maker_under_a_model_that_states_no_maker_rate_pays_what_any_fill_pays
     assert fill_rate(1.0, 2.0, 0.0002, None, maker=True) == pytest.approx(0.0005)
     assert fill_rate(1.0, 2.0, 0.0002, None, maker=True) == fill_rate(
         1.0, 2.0, 0.0002, None, maker=False
+    )
+
+
+def test_a_per_share_commission_is_paid_on_every_share_of_a_fill_that_pays_commission() -> None:
+    """A hundred shares at $50 under one bp of commission, two of slippage, half a four-bp
+    width and $0.0055 a share: $2.50 of rates and $0.55 of per-share commission."""
+    assert fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0055, maker=False) == pytest.approx(
+        3.05
+    )
+    assert fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, 0.0, 0.0055, maker=False) == pytest.approx(
+        3.05
+    )
+
+
+def test_a_maker_under_a_stated_rate_pays_that_rate_alone_per_share_included() -> None:
+    assert fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, 0.0, 0.0055, maker=True) == 0.0
+    assert fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, 0.5, 0.0055, maker=True) == pytest.approx(
+        0.25
+    )
+
+
+def test_a_maker_under_no_maker_rate_pays_the_per_share_commission_like_any_fill() -> None:
+    assert fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0055, maker=True) == pytest.approx(
+        3.05
+    )
+
+
+def test_without_a_per_share_commission_the_cost_is_the_rate_of_the_notional() -> None:
+    assert fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0, maker=False) == pytest.approx(
+        5_000.0 * fill_rate(1.0, 2.0, 0.0002, None, maker=False)
     )

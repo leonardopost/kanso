@@ -14,6 +14,13 @@ limit fills at its own price, and no half-spread, since the spread is what it ea
 than what it pays — and it may be negative, a rebate. Unstated, a maker's fill is charged
 like any other, which is how every fill was charged before the key existed.
 
+A commission may be stated per share as well as in basis points. `commission_per_share` is
+charged on every share of a fill that pays commission at all — a taker's, and a maker's
+under a model that states no maker rate — on top of the three rates, so a cheap share pays
+more of its price than a dear one, the way a per-share-priced account does; a maker's fill
+under a stated `maker_bps` still pays that rate alone, per share included, because the
+rate is the whole charge on that fill by contract. Zero unless stated.
+
 The cost model carries one key that is not a charge. `limit_fill` is the matching rule the
 simulated venue is built with: `touch` fills a resting limit the market only reached, and
 `through` fills it only once the market trades beyond its price. It decides which fills a
@@ -63,6 +70,7 @@ class CostsOverride(KansoModel):
     """Any subset of a cost model, as a hypothesis or a venue entry may state it."""
 
     commission_bps: float | None = Field(default=None, ge=0)
+    commission_per_share: float | None = Field(default=None, ge=0)
     slippage_bps: float | None = Field(default=None, ge=0)
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
@@ -76,9 +84,11 @@ class Costs(KansoModel):
 
     `maker_bps` is the charge on a fill the venue reports as a maker's, in place of all three
     of the others; negative is a rebate, and `None` charges a maker's fill like any other.
+    `commission_per_share` is charged per share on every fill that pays commission, on top.
     """
 
     commission_bps: float = Field(ge=0)
+    commission_per_share: float = Field(default=0.0, ge=0)
     slippage_bps: float = Field(ge=0)
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
@@ -149,6 +159,7 @@ def _merge_costs(
 ) -> tuple[Costs, Origin]:
     values: dict[str, float | str | None] = {
         "commission_bps": DEFAULT_COMMISSION_BPS,
+        "commission_per_share": 0.0,
         "slippage_bps": DEFAULT_SLIPPAGE_BPS,
         "spread": "quotes" if quotes_available else "fixed_bps",
         "fixed_bps": None,

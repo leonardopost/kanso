@@ -354,13 +354,17 @@ def dequeue(store: StateStore, lane: str = DEFAULT_LANE) -> str | None:
 def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_LANE) -> Stall:
     """What happens when a run ends on `stall_k` consecutive non-keeps.
 
-    A `best` with no certificate under the pinned plan and the installed engine makes it a
-    candidate, and certification is what happens next — here, on those bytes, before
-    anything else takes a lane. A best certified before other bytes were is not certified
-    again: the repeat would be refused, and the lane with it. The verdict says where the
-    hypothesis stands and ends nothing: a pass certifies it and a fail returns it to
-    research, and either way it is requeued at −1, because the queue is left only when an
-    operator retires something.
+    A `best` that scored above zero on its objective and has no certificate under the pinned
+    plan and the installed engine makes it a candidate, and certification is what happens
+    next — here, on those bytes, before anything else takes a lane. A best certified before
+    other bytes were is not certified again: the repeat would be refused, and the lane with
+    it. Nor is a best at or below zero: every objective in the library measures an edge whose
+    zero is none, so research showed no edge and no certificate can show one, and the plan's
+    model call and the certification window's backtests would buy a verdict already known.
+    The `stalled` event records what the best scored, so the reason is on the record. The
+    verdict says where the hypothesis stands and ends nothing: a pass certifies it and a fail
+    returns it to research, and either way it is requeued at −1, because the queue is left
+    only when an operator retires something.
 
     The retire is checked twice, before the certification and after it, because a run ends
     before this is called and an operator is free to retire in the seconds a certification
@@ -393,9 +397,9 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         drop(store, hyp_id)
         _release(store, hyp_id, "retired")
         return Stall(hyp_id, None, False, None, None)
-    best, _ = records.best_of(store, hyp_id)
+    best, scored = records.best_of(store, hyp_id)
     certifiable = False
-    if best is not None:
+    if best is not None and scored is not None and scored > 0:
         pinned = read_plan(ws, hyp_id)
         certifiable = not judged(
             ws,
@@ -410,7 +414,11 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         set_status(store, hyp_id, "candidate")
         store.event(CERTIFIABLE, hyp_id, {"strategy_sha": best})
         verdict = certify(ws, store, hyp_id, sha=best, lane=lane).verdict
-    store.event(STALLED, hyp_id, {"best_sha": best, "certifiable": certifiable, "verdict": verdict})
+    store.event(
+        STALLED,
+        hyp_id,
+        {"best_sha": best, "best_metric": scored, "certifiable": certifiable, "verdict": verdict},
+    )
     if _status(store, hyp_id) in DEAD:
         drop(store, hyp_id)
         _release(store, hyp_id, "retired")

@@ -18,10 +18,12 @@ from kanso.criteria.objectives import (
     benchmark_level,
     history_days,
     marginal_net_edge_bps,
+    marginal_wf_contribution_bps,
     marginal_wf_sharpe,
     measures_benchmark,
     net_edge_bps,
     resolution_seconds,
+    wf_contribution_bps,
     wf_sharpe_net,
     wf_sharpe_vs_hold,
 )
@@ -147,6 +149,47 @@ def test_the_sharpe_objectives_read_the_return_series() -> None:
 def test_the_shipped_objectives_declare_their_mode() -> None:
     assert (wf_sharpe_net.mode, net_edge_bps.mode) == (ABSOLUTE, ABSOLUTE)
     assert (marginal_wf_sharpe.mode, marginal_net_edge_bps.mode) == (RELATIVE, RELATIVE)
+    assert (wf_contribution_bps.mode, marginal_wf_contribution_bps.mode) == (ABSOLUTE, RELATIVE)
+
+
+NAMED = {ABSOLUTE: "wf_contribution_bps", RELATIVE: "marginal_wf_contribution_bps"}
+"""The objectives chosen by name: applicable everywhere, and never the default."""
+
+
+def test_the_contribution_is_the_return_per_period_on_the_capital_fold_by_fold() -> None:
+    """$100k of capital earning $10, $20, $30 and $40 on four days: 1, 2, 3 and 4 bp."""
+    run = build_run((10.0, 20.0, 30.0, 40.0), capital=100_000.0)
+    assert wf_contribution_bps.fold_values(run, 4) == pytest.approx((1.0, 2.0, 3.0, 4.0))
+    metric, error = wf_contribution_bps.compute(run, 4)
+    assert (metric, error) == pytest.approx((2.5, (5 / 3) ** 0.5 / 2))
+
+
+def test_a_period_in_cash_contributes_zero_and_pulls_the_mean_down() -> None:
+    """The same $100 over four days, made on two of them or spread over all: the per-trade
+    edge is indifferent to it; the contribution is what the capital earned either way."""
+    idle = build_run((50.0, 0.0, 50.0, 0.0), capital=100_000.0)
+    busy = build_run((25.0, 25.0, 25.0, 25.0), capital=100_000.0)
+    assert wf_contribution_bps.compute(idle, 4)[0] == pytest.approx(
+        wf_contribution_bps.compute(busy, 4)[0]
+    )
+    assert wf_contribution_bps.compute(idle, 4)[1] > wf_contribution_bps.compute(busy, 4)[1]
+
+
+def test_the_marginal_contribution_differences_the_folds_against_the_host() -> None:
+    combined = build_run((30.0, 40.0, 50.0, 60.0), capital=100_000.0)
+    host = build_run((10.0, 20.0, 30.0, 40.0), capital=100_000.0)
+    assert marginal_wf_contribution_bps.fold_values(combined, 4, host=host) == pytest.approx(
+        (2.0, 2.0, 2.0, 2.0)
+    )
+    with pytest.raises(PreconditionError):
+        marginal_wf_contribution_bps.fold_values(combined, 4)
+
+
+def test_a_named_objective_applies_at_every_horizon_below_every_default() -> None:
+    for mode, horizon in product((ABSOLUTE, RELATIVE), ("30m", "23h", "1d", "5d")):
+        found = applicable_objectives(make_hyp(horizon=horizon), mode)
+        assert found[-1] == (catalogue()[NAMED[mode]].priority, NAMED[mode]), (mode, horizon, found)
+        assert found[0][0] < found[-1][0], (mode, horizon, found)
 
 
 def test_every_catalogued_objective_resolves_to_its_implementation() -> None:
@@ -157,6 +200,8 @@ def test_every_catalogued_objective_resolves_to_its_implementation() -> None:
         "marginal_wf_sharpe",
         "marginal_net_edge_bps",
         "wf_sharpe_vs_hold",
+        "wf_contribution_bps",
+        "marginal_wf_contribution_bps",
     }
     assert all(objective.id == name for name, objective in found.items())
 
@@ -169,7 +214,9 @@ def test_the_objective_set_is_total_over_mechanism_mode_horizon_and_benchmark() 
         case = f"{mechanism} / {mode} / {horizon} / {benchmark}"
         found = applicable_objectives(hyp, mode)
         assert found, f"no objective applies to {case}"
-        assert len(found) == 1, f"{case} is ambiguous: {found}"
+        defaults = [name for priority, name in found if priority == found[0][0]]
+        assert len(defaults) == 1, f"{case} is ambiguous: {found}"
+        assert [name for _, name in found[1:]] == [NAMED[mode]], f"{case}: {found}"
 
 
 @pytest.mark.parametrize(
@@ -187,7 +234,7 @@ def test_a_day_is_the_boundary_min_inclusive_and_max_exclusive(
     mode: str, horizon: str, expected: str
 ) -> None:
     hyp = make_hyp(horizon=horizon)
-    assert applicable_objectives(hyp, mode) == [(catalogue()[expected].priority, expected)]
+    assert applicable_objectives(hyp, mode)[0] == (catalogue()[expected].priority, expected)
 
 
 @pytest.mark.parametrize(
@@ -203,7 +250,7 @@ def test_a_declared_benchmark_displaces_only_the_absolute_sharpe(
     mode: str, horizon: str, expected: str
 ) -> None:
     hyp = make_hyp(horizon=horizon, benchmark={"hold": "first_leg"})
-    assert applicable_objectives(hyp, mode) == [(catalogue()[expected].priority, expected)]
+    assert applicable_objectives(hyp, mode)[0] == (catalogue()[expected].priority, expected)
 
 
 def test_the_lowest_priority_wins_among_the_applicable() -> None:
