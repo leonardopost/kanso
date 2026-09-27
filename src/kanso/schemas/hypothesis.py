@@ -239,6 +239,29 @@ class ConstraintRef(KansoModel):
     params: Params = Field(default_factory=dict)
 
 
+class SessionScope(KansoModel):
+    """Which sessions each instrument's market data is delivered on, read off a required series.
+
+    `series` names a custom type the hypothesis requires, filed per instrument with one point
+    per session and stamped before the session's first market point; `flag` is an integer
+    field of it. An instrument's bars, quotes and trades of a session are delivered only when
+    its point of that session carries the flag above zero, and an instrument named in
+    `always` is delivered every session whatever its point says. So a pool of a thousand
+    names can be researched with only the few in play each session in memory, chosen by a
+    rule written down before the session opened. The runner loads nothing outside the scope,
+    and the strategy base drops any point outside it that a node delivers, so a card, a
+    certificate, a replay and a stage see the same market. Scope, like `warmup`: changing it
+    clears `best`.
+    """
+
+    series: CatalogueId
+    flag: NonEmpty
+    always: list[NonEmpty] = Field(default_factory=list)
+
+
+MARKET_TYPES: Final = ("bar", "quote", "trade")
+
+
 class Hypothesis(Versioned):
     """A falsifiable idea, its data requirements, its windows and its classification."""
 
@@ -250,6 +273,7 @@ class Hypothesis(Versioned):
     horizon: Duration
     resolution: Resolution
     data_requirements: list[CatalogueId] = Field(min_length=1)
+    session_scope: SessionScope | None = None
     costs: CostsOverride | None = None
     capital: float | None = Field(default=None, gt=0)
     sizing: Sizing | None = None
@@ -298,10 +322,27 @@ class Hypothesis(Versioned):
             raise ValueError("horizon: must be longer than zero")
         self.windows.check_embargo(self.horizon)
         self._check_resolution()
+        self._check_scope()
         self._check_costs()
         self._check_book()
         self._check_constraints()
         return self
+
+    def _check_scope(self) -> None:
+        """A scope reads a series the hypothesis requires, and exempts names it holds."""
+        scope = self.session_scope
+        if scope is None:
+            return
+        if scope.series in MARKET_TYPES or scope.series not in self.data_requirements:
+            raise ValueError(
+                f"session_scope.series: {scope.series!r} must be a custom type named in "
+                "data_requirements, so its points are loaded and delivered"
+            )
+        if len(set(scope.always)) != len(scope.always):
+            raise ValueError("session_scope.always: repeats an id")
+        outside = [name for name in scope.always if name not in self.universe]
+        if outside:
+            raise ValueError(f"session_scope.always: {', '.join(outside)} is not in the universe")
 
     def _check_book(self) -> None:
         """A maintenance floor the leverage ceiling can stand on.

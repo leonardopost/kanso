@@ -581,6 +581,7 @@ def window_data(
     groups: list[tuple[object, ...]] = []
     grains = _bar_grains(request)
     loaded: dict[str, int] = {grain: 0 for grain in grains}
+    scope = _scope_days(catalog, hyp, start, end)
     for requirement in sorted(hyp.data_requirements):
         if requirement not in BUILTIN_TYPES:
             custom = _custom_points(catalog, resolve_type(requirement), hyp.universe, start, end)
@@ -591,12 +592,14 @@ def window_data(
             for resolution in grains:
                 for name in sorted(hyp.universe):
                     found = _market_points(catalog, requirement, held[name], resolution, start, end)
+                    found = _in_scope(found, name, scope)
                     if found:
                         loaded[resolution] += len(found)
                         groups.append(found)
             continue
         for name in sorted(hyp.universe):
             found = _market_points(catalog, requirement, held[name], hyp.resolution, start, end)
+            found = _in_scope(found, name, scope)
             if found:
                 groups.append(found)
     if len(grains) > 1:
@@ -631,6 +634,47 @@ def _market_points(
     data_cls = QuoteTick if requirement == QUOTE else TradeTick
     identifier = str(instrument.id)
     return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
+
+
+Scope = tuple[frozenset[str], dict[str, set[date]]]
+"""A session scope resolved over a span: the names delivered every session, and for the
+rest, the sessions their flag admits them on."""
+
+
+def _scope_days(catalog: Any, hyp: Hypothesis, start: int, end: int) -> Scope | None:
+    """The sessions each name is in scope on, read off the hypothesis's scope series.
+
+    `None` when the hypothesis declares no scope. A name's session is admitted when its
+    point of that session carries the flag above zero; a name in `always` needs no point.
+    The series is read once here and again as a requirement, so a strategy is handed the
+    same points the runner scoped on and can see why a name was delivered.
+    """
+    from kanso.data.types import resolve_type
+
+    scope = hyp.session_scope
+    if scope is None:
+        return None
+    days: dict[str, set[date]] = {}
+    for point in _custom_points(catalog, resolve_type(scope.series), hyp.universe, start, end):
+        name = _instrument_of(point)
+        inner = getattr(
+            point, "data", point
+        )  # the catalog wraps a custom point; the flag is on the point
+        flag = getattr(inner, scope.flag, None)
+        if name is None or flag is None or float(flag) <= 0:
+            continue
+        days.setdefault(name, set()).add(day_of(int(point.ts_init)))  # type: ignore[attr-defined]
+    return frozenset(scope.always), days
+
+
+def _in_scope(points: tuple[object, ...], name: str, scope: Scope | None) -> tuple[object, ...]:
+    """The points of `name` a scope admits: all of them under no scope or an `always` name."""
+    if scope is None or name in scope[0]:
+        return points
+    admitted = scope[1].get(name)
+    if not admitted:
+        return ()
+    return tuple(point for point in points if day_of(int(point.ts_init)) in admitted)  # type: ignore[attr-defined]
 
 
 def _custom_points(
@@ -696,12 +740,14 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     extra: tuple[str, ...] = ()
     if any(construct == OVERLAY for construct, _, _ in request.modifiers):
         extra = grains[1:]
+    scope = hyp.session_scope
     config = cls.config_cls(
         hyp_id=hyp.id,
         universe=tuple(hyp.universe),
         resolution=grains[0],
         extra_resolutions=extra,
         data_requirements=tuple(hyp.data_requirements),
+        session_scope=None if scope is None else (scope.series, scope.flag, tuple(scope.always)),
         capital=request.capital,
         sizing_budget=request.sleeve_budget,
         max_position_pct=hyp.risk_limits.max_position_pct,
