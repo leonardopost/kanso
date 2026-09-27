@@ -932,6 +932,18 @@ the embargo has no exception for feedback.
 The certified bytes are written beside the certificate as `<sha7>.py`, so a certified
 subject travels with the files even where `state.db` does not.
 
+Three gates read what the others cannot. `deflated_contribution` is the multiple-testing
+control for a run scored on a contribution, where `deflated_sharpe` skips: the research
+estimate in basis points per period, against the expected maximum of the search's trials in
+the same units, over the estimate's own standard error, reported as a probability and held
+to `min_probability`. `min_event_days` is a card gate counting the distinct sessions any
+fill fell on, for a rule that fires on a regime or an event and could put its whole sample
+into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
+recorded fills under another cost model stated key for key as `costs:` is — a per-share
+commission, a flat rate, a maker rate, a fixed width — through the runner's own per-fill
+arithmetic, recomputes the objective on the re-priced run and holds it to `min_metric`: the
+same fills under the schedule of another account, without a second backtest.
+
 ## The strategy version
 
 What a passing certificate composes: a **sleeve** becomes version 1 of a new strategy, or
