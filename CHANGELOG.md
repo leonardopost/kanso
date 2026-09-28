@@ -3,6 +3,10 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## v0.12.1 — 2026-09-28
+
+- **A lane releases the window before it supervises the card.** The parent reads the research window, writes it to the card's payload and, until now, kept the points alive in its own frame for as long as the child ran — a second copy of the whole window beside the card's own. Measured on an eighteen-month five-second window: 1.4 GB held per lane beside a 2.7 GB card, and six such lanes put a 16 GB host into swap, where the largest baseline could not finish inside its budget. The points are now dropped once the payload is on disk, so a lane's footprint during a card is the card's; `mem_per_lane_gb` describes the card alone.
+
 ## v0.12.0 — 2026-09-27
 
 - **`session_scope`: a universe's market data delivered only on the sessions a series admits each name.** The hypothesis names a required custom type filed per name and session, stamped before the session's first market point, and an integer field of it; the runner reads that series first and loads a name's bars, quotes and trades of a session only when its point carries the flag above zero, with `always` names loaded every session. A pool of a thousand names can then be researched at an intraday grain with only the names in play each session in memory — chosen by a rule written before the session opened, from what was public then — where loading the pool whole was refused by the lane's memory cap. The strategy base drops any market point a node delivers outside the scope, so a card, a replay and a stage see the same market and parity holds. Scope, like `warmup`: changing it clears `best`; `hyp validate` refuses a scope whose series is not a required custom type or whose `always` names leave the universe (exit 3).
