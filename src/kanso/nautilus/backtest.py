@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import bisect
 import contextlib
+import gc
 import hashlib
 import os
 import pickle
@@ -1527,9 +1528,11 @@ def run_subprocess(
     The payload is written to `<workdir>/.card/`, the lane's own transfer directory, as two
     pickles in sequence on one file — the extensions, then the request and its points — so
     the points are streamed to disk once rather than held a second time as bytes. The
-    directory is emptied before the card and removed after it, so a lane killed mid-card
-    leaves at most one payload behind, and its next card reclaims it: a payload is the whole
-    window's points, hundreds of megabytes for a window of minute bars.
+    parent then releases the points before it supervises the child, which holds its own
+    copy for the whole card: a lane's footprint during a card is the card's, not the card's
+    and the window's. The directory is emptied before the card and removed after it, so a
+    lane killed mid-card leaves at most one payload behind, and its next card reclaims it: a
+    payload is the whole window's points, hundreds of megabytes for a window of minute bars.
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -1541,26 +1544,42 @@ def run_subprocess(
             f"{request.hyp.windows.research.end}",
         )
     _refuse_if_interrupted()
+    room = _card_room(workdir)
+    try:
+        _stage(request, catalog_path, room, extensions)
+        gc.collect()
+        return _supervised(request, room, workdir)
+    finally:
+        shutil.rmtree(room, ignore_errors=True)
+
+
+def _stage(
+    request: RunRequest, catalog_path: Path, room: Path, extensions: Sequence[tuple[str, str]]
+) -> None:
+    """Read the window and write the payload, holding the points only until they are on disk.
+
+    Returns nothing on purpose. The points are the parent's largest allocation by a wide
+    margin — a year of five-second bars is gigabytes — and the child holds its own copy for
+    the whole card, so the parent lets go of them here, before it starts supervising, rather
+    than keeping a second copy of the window alive for as long as the card runs. Measured
+    before this: a lane held 1.4 GB of an eighteen-month five-second window beside a 2.7 GB
+    card, and six such lanes put a 16 GB machine into swap.
+    """
     instruments, groups = window_data(request, catalog_path)
     # In the parent, where a refusal is a refusal: the child is a card, and an exception
     # inside one is a crash the run records rather than a message the operator reads.
     splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
-    room = _card_room(workdir)
-    try:
-        with (room / REQUEST_FILE).open("wb") as handle:
-            pickle.dump(
-                {"extensions": [list(source) for source in extensions]},
-                handle,
-                protocol=pickle.HIGHEST_PROTOCOL,
-            )
-            pickle.dump(
-                {"request": request.plain(), "instruments": instruments, "groups": groups},
-                handle,
-                protocol=pickle.HIGHEST_PROTOCOL,
-            )
-        return _supervised(request, room, workdir)
-    finally:
-        shutil.rmtree(room, ignore_errors=True)
+    with (room / REQUEST_FILE).open("wb") as handle:
+        pickle.dump(
+            {"extensions": [list(source) for source in extensions]},
+            handle,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        pickle.dump(
+            {"request": request.plain(), "instruments": instruments, "groups": groups},
+            handle,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
 
 
 def _card_room(workdir: Path) -> Path:
