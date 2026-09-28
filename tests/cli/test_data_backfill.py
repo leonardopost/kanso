@@ -115,11 +115,14 @@ def test_a_repeated_backfill_fetches_nothing(runner: CliRunner, held: Path) -> N
 def test_a_chunk_the_source_serves_nothing_for_is_asked_once(
     runner: CliRunner, workspace: Path
 ) -> None:
-    """A weekend is a legitimate empty answer, and paying for it twice is waste."""
+    """An empty answer is a legitimate one, and paying for it twice is waste.
+
+    The store defines no instrument here, so no calendar reads the weekend between the two
+    loads as closed: it is a gap like any other, and the source's answer for it is empty.
+    Where a calendar does read it closed it is no gap, and it is never asked for at all.
+    """
     from kanso.state import StateStore
 
-    write_instruments(workspace)
-    assert at(runner, workspace, "data", "instruments", "resolve").exit_code == Exit.OK
     for name, span in (
         ("early.yaml", {"start": "2024-01-02", "end": "2024-01-05"}),
         ("late.yaml", {"start": "2024-01-08", "end": "2024-01-12"}),
@@ -147,6 +150,34 @@ def test_a_chunk_the_source_serves_nothing_for_is_asked_once(
     assert any("nothing missing" in str(note) for note in again["notes"])
     with StateStore(workspace / "state.db") as store:
         assert len(store.events(kind="data_chunk_empty")) == 1
+
+
+def test_a_weekend_between_two_loads_of_an_equity_is_never_asked_for(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """The same two loads of an instrument the store defines as an equity: nothing is missing."""
+    from kanso.state import StateStore
+
+    write_instruments(workspace)
+    assert at(runner, workspace, "data", "instruments", "resolve").exit_code == Exit.OK
+    for name, span in (
+        ("early.yaml", {"start": "2024-01-02", "end": "2024-01-05"}),
+        ("late.yaml", {"start": "2024-01-08", "end": "2024-01-12"}),
+    ):
+        spec = write_spec(workspace, name, **span)
+        assert (
+            at(runner, workspace, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code
+            == Exit.OK
+        )
+    write_spec(workspace, "full.yaml", start="2024-01-02", end="2024-01-12")
+    [series] = payload(at(runner, workspace, "data", "show", "--json"))["series"]
+    assert (series["spans"], series["gaps"]) == ([["2024-01-02", "2024-01-12"]], [])
+
+    document = backfill(runner, workspace)
+
+    assert document["chunks"] == []
+    with StateStore(workspace / "state.db") as store:
+        assert store.events(kind="data_chunk_empty") == []
 
 
 def test_a_start_before_the_history_floor_is_clamped_and_reported(
@@ -266,55 +297,70 @@ def test_backfill_is_recorded_in_the_event_log(runner: CliRunner, held: Path) ->
         assert store.events(kind="data_backfilled")
 
 
-# -- the days a source answers empty -------------------------------------------------
+# -- chunk edges, closed days, and the days a source answers empty ------------------
 
 
-def test_a_weekend_at_a_chunk_edge_is_a_gap_until_the_source_answers_it_empty(
+def test_a_weekend_at_a_chunk_edge_of_an_equity_is_no_gap_and_is_never_asked_for(
     runner: CliRunner, chunked: Path
 ) -> None:
-    """The spans either side of a weekend are a weekend apart, and no session is missing."""
+    """The chunks' spans are a weekend apart where their edges met one; no session is missing."""
     [before] = shown(runner, chunked)
-    assert before["gaps"] == CHUNK_EDGES
-    assert before["empty"] == []
+    assert before["spans"] == [["2024-01-02", "2024-06-28"]]
+    assert (before["empty"], before["gaps"]) == ([], [])
 
     again = backfill(runner, chunked, spec="data.yaml")
 
+    assert again["chunks"] == []
+    assert any("nothing missing" in str(note) for note in again["notes"])
+
+
+def test_an_answer_names_a_gap_and_closes_nothing(
+    runner: CliRunner, chunked_undefined: Path
+) -> None:
+    """With no calendar the weekends are gaps: asked once, answered empty, and still gaps."""
+    [before] = shown(runner, chunked_undefined)
+    assert (before["empty"], before["gaps"]) == ([], CHUNK_EDGES)
+
+    again = backfill(runner, chunked_undefined, spec="data.yaml")
+
     assert outcomes(again) == [(start, end, "empty") for start, end in CHUNK_EDGES]
-    [after] = shown(runner, chunked)
+    [after] = shown(runner, chunked_undefined)
     assert after["spans"] == before["spans"]
     assert after["empty"] == CHUNK_EDGES
-    assert after["gaps"] == []
+    assert after["gaps"] == CHUNK_EDGES
 
 
-def test_a_day_answered_empty_is_never_planned_again(runner: CliRunner, chunked: Path) -> None:
+def test_a_day_answered_empty_is_never_planned_again(
+    runner: CliRunner, chunked_undefined: Path
+) -> None:
     """Neither as a gap nor inside a window an explicit end reaches past, dry run or not."""
-    backfill(runner, chunked, spec="data.yaml")
+    backfill(runner, chunked_undefined, spec="data.yaml")
 
     for args in ((), ("--dry-run",), ("--to", "2024-04-15", "--dry-run")):
-        document = backfill(runner, chunked, *args, spec="data.yaml")
+        document = backfill(runner, chunked_undefined, *args, spec="data.yaml")
         assert document["chunks"] == [], args
         assert any("nothing missing" in str(note) for note in document["notes"]), args
 
 
 def test_the_days_of_a_gap_nobody_answered_are_still_planned(
-    runner: CliRunner, chunked: Path
+    runner: CliRunner, chunked_undefined: Path
 ) -> None:
-    """An answer for the Sunday alone closes the Sunday, and the Saturday is still asked for."""
+    """An answer for the Sunday alone: the Saturday is still asked for, and both are the gap."""
     from kanso.data.manifest import EMPTY_CHUNK, series_subject
     from kanso.state import StateStore
 
-    with StateStore(chunked / "state.db") as store:
+    with StateStore(chunked_undefined / "state.db") as store:
         store.event(
             EMPTY_CHUNK,
             series_subject((INSTRUMENT, "bar", "1h")),
             {"start": "2024-03-03", "end": "2024-03-03"},
         )
 
-    [series] = shown(runner, chunked)
+    [series] = shown(runner, chunked_undefined)
     assert series["empty"] == [["2024-03-03", "2024-03-03"]]
-    assert series["gaps"] == [["2024-03-02", "2024-03-02"], ["2024-03-30", "2024-03-31"]]
+    assert series["gaps"] == CHUNK_EDGES
     for args in (("--dry-run",), ("--to", "2024-04-15", "--dry-run")):
-        planned = backfill(runner, chunked, *args, spec="data.yaml")
+        planned = backfill(runner, chunked_undefined, *args, spec="data.yaml")
         assert outcomes(planned) == [
             ("2024-03-02", "2024-03-02", "planned"),
             ("2024-03-30", "2024-03-31", "planned"),
@@ -386,19 +432,22 @@ def resolved(runner: CliRunner, workspace: Path) -> Path:
 
 
 @pytest.mark.usefixtures("_leave_the_interpreter_as_found")
-def test_a_holiday_at_a_chunk_edge_is_answered_like_a_weekend(
+def test_a_holiday_at_a_chunk_edge_is_closed_like_a_weekend(
     runner: CliRunner, resolved: Path
 ) -> None:
-    """Memorial Day opens the third chunk, so the series breaks from Saturday to Monday."""
+    """Memorial Day opens the third chunk, so what it served breaks from Saturday to Tuesday.
+
+    The equity's calendar closes the weekend and the holiday alike, so the first backfill
+    leaves one series and a window across both edges is covered, with nothing asked twice.
+    """
     from kanso.data import snapshot
+    from kanso.data.manifest import manifests
     from kanso.schemas.hypothesis import Windows
-    from kanso.state import StateStore
     from kanso.workspace import find
 
     loader = a_source(
         resolved, "holidays", closed=("2024-05-27",), start="2024-03-28", end="2024-06-25"
     )
-    edges = [["2024-04-27", "2024-04-28"], ["2024-05-25", "2024-05-27"]]
     windows = Windows.model_validate(
         {
             "research": {"start": "2024-03-28", "end": "2024-04-30"},
@@ -407,27 +456,22 @@ def test_a_holiday_at_a_chunk_edge_is_answered_like_a_weekend(
         }
     )
 
-    def covered() -> bool:
-        with StateStore(resolved / "state.db") as store:
-            found = snapshot.covering(
-                find(resolved), [INSTRUMENT], ["bar"], "1h", windows, store=store
-            )
-        return found is not None
-
     first = backfill(runner, resolved, loader=loader)
 
     assert [outcome for *_, outcome in outcomes(first)] == ["written"] * 3
+    served = sorted(manifest.span for manifest in manifests(find(resolved)).values())
+    assert [
+        (str(end), str(start)) for (_, end), (start, _) in zip(served, served[1:], strict=False)
+    ] == [
+        ("2024-04-26", "2024-04-29"),
+        ("2024-05-24", "2024-05-28"),
+    ]
     [series] = shown(runner, resolved)
-    assert (series["empty"], series["gaps"]) == ([], edges)
+    assert series["spans"] == [["2024-03-28", "2024-06-25"]]
+    assert (series["empty"], series["gaps"]) == ([], [])
     assert at(runner, resolved, "data", "snapshot").exit_code == Exit.OK
-    assert not covered()
-
-    again = backfill(runner, resolved, loader=loader)
-
-    assert outcomes(again) == [(start, end, "empty") for start, end in edges]
-    [series] = shown(runner, resolved)
-    assert (series["empty"], series["gaps"]) == (edges, [])
-    assert covered()
+    assert snapshot.covering(find(resolved), [INSTRUMENT], ["bar"], "1h", windows) is not None
+    assert backfill(runner, resolved, loader=loader)["chunks"] == []
 
 
 @pytest.mark.usefixtures("_leave_the_interpreter_as_found")
@@ -436,8 +480,8 @@ def test_a_truncated_chunk_leaves_its_missing_days_a_hole_until_they_are_asked(
 ) -> None:
     """A month asked and fifteen sessions served: the days asked and not served are no one's.
 
-    Asked again, the source serves them — up to the weekend the second answer stopped short
-    of, which is a hole in its turn until it is asked alone and answered empty.
+    Asked again, the source serves them, up to a Friday a weekend away from what the next
+    chunk served, which the equity's calendar joins: the series is whole after two passes.
     """
     loader = a_source(resolved, "paged", page=15, **FULL)
 
@@ -459,14 +503,9 @@ def test_a_truncated_chunk_leaves_its_missing_days_a_hole_until_they_are_asked(
         ("2024-02-22", "2024-03-03", "written"),
     ]
     [series] = shown(runner, resolved)
-    assert series["spans"] == [["2024-01-02", "2024-03-01"], ["2024-03-04", "2024-03-22"]]
-    assert (series["empty"], series["gaps"]) == ([], [["2024-03-02", "2024-03-03"]])
-
-    third = backfill(runner, resolved, loader=loader)
-
-    assert outcomes(third) == [("2024-03-02", "2024-03-03", "empty")]
-    [series] = shown(runner, resolved)
-    assert (series["empty"], series["gaps"]) == ([["2024-03-02", "2024-03-03"]], [])
+    assert series["spans"] == [["2024-01-02", "2024-03-22"]]
+    assert (series["empty"], series["gaps"]) == ([], [])
+    assert backfill(runner, resolved, loader=loader)["chunks"] == []
 
 
 @pytest.mark.usefixtures("_leave_the_interpreter_as_found")
@@ -481,6 +520,6 @@ def test_a_month_answered_empty_before_the_first_served_day_is_not_coverage(
 
     assert [outcome for *_, outcome in outcomes(document)] == ["empty", "written", "written"]
     [series] = shown(runner, resolved)
-    assert series["spans"] == [["2024-04-29", "2024-05-24"], ["2024-05-27", "2024-06-25"]]
+    assert series["spans"] == [["2024-04-29", "2024-06-25"]]
     assert series["empty"] == []
-    assert series["gaps"] == [["2024-05-25", "2024-05-26"]]
+    assert series["gaps"] == []

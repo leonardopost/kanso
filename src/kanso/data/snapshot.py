@@ -26,22 +26,20 @@ researched against; certification refuses it.
 Coverage is the question `covering` answers: for every instrument in the universe and
 every required data type at the hypothesis's resolution, does the union of the snapshot's
 dataset spans — whole UTC days, so a span that ends mid-day still covers that day —
-contain the research window and the certification window end to end. A snapshot missing
-one instrument's quotes for one day of certification does not cover, because a run pinned
-to it would silently research a different universe than the one it names.
+contain every day of the research window and the certification window on which the
+instrument's market opened. A snapshot missing one instrument's quotes for one day of
+certification does not cover, because a run pinned to it would silently research a
+different universe than the one it names.
 
-The spans are joined across one thing more than what was served: the days between two
-served spans of a series that its source was asked for and answered with nothing, which
-the state store's event log records. That is how a weekend or a holiday at the edge of a
-chunked fetch stops splitting a series although no session is missing, and
-`manifest.answered` is the rule, the same one `data show` reports by. It is read from the
-store where `covering` is asked, not from the snapshot: an answer is a fact about the
-source, pinned to no bytes, so a snapshot taken before a gap was asked covers once the
-source has answered it empty. With no store there is no answer, and coverage is what was
-served alone. An answer never reaches before a series' first served day or past its last,
-and a day of a gap nobody answered stays a hole. The one day this cannot tell from a
-closed one is a trading day the source holds nothing for, asked alone; kanso keeps no
-calendar, so it is counted, and `data show` lists every such range.
+A day the market was closed is missing from every source alike, so it is no such day: the
+calendar is the one `kanso.data.closures` files under the asset class and venue of the
+definition the store holds, spans join across its closed days and a window may begin or
+end on one. That is how a weekend or a holiday at the edge of a chunked fetch stops
+splitting a series no session is missing from, and it is the same reading `data show`
+reports by. Nothing else joins spans: a range the source answered empty on days the market
+opened is a hole, because a source that lost a trading day and a market that shut look
+alike in its answer. An instrument the store does not define, and a market with no calendar
+on file, are read with every day open.
 """
 
 from __future__ import annotations
@@ -52,17 +50,16 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import Field, model_validator
 
+from kanso.data import closures
+from kanso.data.closures import Closed
 from kanso.data.manifest import (
     Manifest,
-    answered_empty,
     contains,
-    covered,
     manifests,
-    series_subject,
     snapshots_path,
 )
 from kanso.errors import PreconditionError, ValidationError
@@ -71,7 +68,6 @@ from kanso.schemas.hypothesis import Windows
 from kanso.schemas.yamlio import load_yaml, write_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - kept out of the runtime import graph
-    from kanso.state import StateStore
     from kanso.workspace import Workspace
 
 UNKNOWN_PUBLICATION: Final = "unknown"
@@ -154,7 +150,7 @@ def freeze(
         )
     picked = [held[name] for name in chosen]
     named = sorted({manifest.instrument for manifest in picked})
-    if named and not _defined(ws, named):
+    if named and not _definitions(ws, named):
         raise PreconditionError(
             f"the instrument store holds no definition, and the datasets to be pinned name "
             f"{', '.join(named)}; a run reads its definitions from the store, so this snapshot "
@@ -186,22 +182,18 @@ def covering(
     resolution: str | None,
     windows: Windows,
     prefixes: Sequence[tuple[date, date]] = (),
-    *,
-    store: StateStore | None,
 ) -> Snapshot | None:
     """The newest snapshot covering the universe, pinning the instruments the store holds.
 
     Newest is the latest `created_at`. A snapshot covers when, for every instrument and
-    every required type at `resolution`, the union of the spans it pins — each series'
-    served spans joined across the days between them its source answered empty, read
-    from `store` — contains both windows; the forward window is never loaded, so it is
-    never required. `store` is asked for, not defaulted, because a caller without one has
-    to say so: `None` is a place no answer was ever recorded, and coverage there is what
-    was served alone. `prefixes` are the warmup spans a warmed hypothesis is fed before
-    its windows, and they are required on the same terms, because a card loads them from
-    the pinned data. A snapshot whose covering datasets include one with an unknown
-    publication does not qualify: research may not be pinned to data whose availability
-    nobody declared. `None` when no snapshot covers.
+    every required type at `resolution`, the union of the spans it pins contains every day
+    of both windows on which the instrument's market opened, read on the calendar the
+    store's definition of the instrument is filed under; the forward window is never
+    loaded, so it is never required. `prefixes` are the warmup spans a warmed hypothesis is
+    fed before its windows, and they are required on the same terms, because a card loads
+    them from the pinned data. A snapshot whose covering datasets include one with an
+    unknown publication does not qualify: research may not be pinned to data whose
+    availability nobody declared. `None` when no snapshot covers.
 
     A run reproduces the instruments its snapshot pins only if the store still holds
     them, so among the covering snapshots the newest whose instrument checksum is the
@@ -211,22 +203,25 @@ def covering(
     definitions it will not run against. A universe id the store holds no definition for
     is refused first, since no snapshot can pin what does not exist.
     """
+    taken = sorted(snapshots(ws), key=lambda s: s.created_at, reverse=True)
+    if not taken:
+        return None
     held = manifests(ws)
-    answers = {} if store is None else answered_empty(store)
+    defined = _definitions(ws, universe)
+    closed = closures.by_instrument(defined.values())
     required = (
         *((window.start, window.end) for window in (windows.research, windows.certification)),
         *prefixes,
     )
     candidates: list[Snapshot] = []
-    for snapshot in sorted(snapshots(ws), key=lambda s: s.created_at, reverse=True):
+    for snapshot in taken:
         picked = [held[name] for name in snapshot.datasets if name in held]
         if len(picked) != len(snapshot.datasets):
             continue
-        if _covers(picked, universe, types, resolution, required, answers):
+        if _covers(picked, universe, types, resolution, required, closed):
             candidates.append(snapshot)
     if not candidates:
         return None
-    defined = _defined(ws, universe)
     undefined = [name for name in universe if name not in defined]
     if undefined:
         raise PreconditionError(
@@ -284,12 +279,12 @@ def newest(ws: Workspace) -> Snapshot | None:
     return max(taken, key=lambda s: s.created_at)
 
 
-def _defined(ws: Workspace, universe: Sequence[str]) -> frozenset[str]:
-    """Which of these instruments the store holds a definition for."""
+def _definitions(ws: Workspace, universe: Sequence[str]) -> dict[str, Any]:
+    """The store's definition of each of these instruments it holds one for, by id."""
     from kanso.data.catalog import open_catalog
 
     held = open_catalog(ws).instruments(instrument_ids=list(universe))
-    return frozenset(str(item.id) for item in held)
+    return {str(item.id): item for item in held}
 
 
 def _covers(
@@ -298,14 +293,15 @@ def _covers(
     types: Sequence[str],
     resolution: str | None,
     windows: Sequence[tuple[date, date]],
-    answers: Mapping[str, Sequence[tuple[date, date]]],
+    closed: Mapping[str, Closed],
 ) -> bool:
     """True when these manifests cover every instrument and type over every window.
 
-    An empty answer joins two served spans of the series it was recorded for and no
-    other, so the spans are covered series by series before they are pooled.
+    Each instrument is read on its own market's closures, so a day it could not have
+    printed is never the day that refuses it.
     """
     for instrument in universe:
+        shut = closed.get(instrument, closures.never)
         for required in types:
             relied = [
                 manifest
@@ -316,15 +312,8 @@ def _covers(
             ]
             if any(manifest.publication == UNKNOWN_PUBLICATION for manifest in relied):
                 return False
-            served: dict[tuple[str, str, str | None], list[tuple[date, date]]] = {}
-            for manifest in relied:
-                served.setdefault(manifest.filed_under, []).append(manifest.span)
-            spans = [
-                span
-                for key, found in served.items()
-                for span in covered(found, answers.get(series_subject(key), ()))
-            ]
-            if not all(contains(spans, window) for window in windows):
+            spans = [manifest.span for manifest in relied]
+            if not all(contains(spans, window, shut) for window in windows):
                 return False
     return True
 

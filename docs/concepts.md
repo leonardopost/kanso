@@ -201,20 +201,22 @@ is refused while the store holds no definition, since the checksum of nothing pi
 run could use.
 
 **Covers** is counted in whole UTC days, from the spans the datasets **served** — never from
-what was asked of the source — and from one thing more: the days between two served spans
-of a series that its source was asked for and answered with nothing. A chunked backfill
-whose chunk edge falls on a weekend or a holiday is served up to the session before the edge
-and from the session after it, so the series comes back in pieces although no session is
-missing. kanso keeps no trading calendar to call those days closed, so it counts the
-source's own answer: `data backfill` asks for every gap again, and a gap answered empty is
-closed by the answer. An answer never reaches before a series' first served day or past its
-last — a month asked before an instrument listed is not coverage — and a day of a gap nobody
-answered stays a hole, so a chunk that served data and stopped short leaves the rest a gap
-until it is asked for again. What this cannot tell apart is a weekday the source holds
-nothing for and a holiday: asked alone, both come back empty, and both are counted.
-`kanso data show` lists every range answered empty, so the difference can be read against
-the venue's calendar. The answers live in `state.db` rather than in the snapshot, so a
-snapshot taken before a gap was asked for covers once the source has answered it.
+what was asked of the source — on the days the instrument's market opened. A chunked
+backfill whose chunk edge falls on a weekend or a holiday is served up to the session before
+the edge and from the session after it, so the chunks' spans break although no session is
+missing. A day the market was closed is not a hole: the spans either side of it join, and a
+window may begin or end on one. The closures are dated facts in `kanso.data.closures`, filed
+by asset class and venue as the tick conventions are and read off the definition the store
+holds, so the venue's spelling in an instrument id does not matter. One calendar is on file,
+US equities: weekends, and every weekday from 2003-09-10 to 2027-09-06 on which no US equity
+venue opened — measured to 2026-09-25, and the exchanges' published closures after it. A day
+the market opened that no dataset holds is a hole wherever it falls, and nothing a source
+says closes one: an empty answer reads the same whether the market shut or the source lost
+the day, and only the calendar tells which. A chunk answered empty on days the market opened
+stays a gap, which `kanso data show` also lists under `empty` so that why it persists can be
+read, and which `data backfill` does not ask for twice. An instrument the store does not
+define, a market with no calendar on file and a day outside the span on file are read with
+every day open, so what the calendar cannot state costs a refusal and never pins a hole.
 
 ## Card
 

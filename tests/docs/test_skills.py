@@ -90,11 +90,11 @@ def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
     assert "so it is a trial, a `results.tsv` row and a coverage entry like any other" in text
 
 
-def test_the_data_skill_says_what_answered_empty_means() -> None:
-    """An agent reading `data show` for an operator meets `empty` beside `gaps`, and told
-    nothing would either ask for those days again or call a trading day a holiday."""
+def test_the_data_skill_says_what_a_gap_and_an_answer_mean() -> None:
+    """An agent reading `data show` for an operator meets `empty` inside `gaps`, and told
+    nothing would either ask for those days again or call a lost trading day a holiday."""
     text = skill(PACKAGED, "kanso-data")
     step = next(line for line in text.splitlines() if "`kanso data show` →" in line)
-    assert "(`empty`, counted as coverage)" in step
-    assert "A gap is what `kanso data backfill` asks for again" in step
-    assert "a weekday under `empty` that the venue traded" in step
+    assert "A gap always holds a day the instrument's market opened" in step
+    assert "never something to explain away as a holiday" in step
+    assert "which a backfill will not ask for again and which no snapshot covers" in step

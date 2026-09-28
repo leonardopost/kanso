@@ -119,27 +119,18 @@ def test_a_run_needs_a_snapshot_covering_its_windows(runner: CliRunner, loaded: 
     assert "kanso data snapshot" in payload(result)["remedy"]
 
 
-def test_a_run_begins_across_a_weekend_its_source_answered_empty(
+def test_a_run_begins_across_the_weekends_at_its_chunk_edges(
     runner: CliRunner, chunked: Path
 ) -> None:
-    """A chunk edge on a weekend splits the research window until the source is asked.
+    """A chunk edge on a weekend splits what the chunks served, and no session.
 
-    The answer is a fact about the source rather than about any bytes, so the snapshot
-    taken before it covers once it is recorded.
+    The store defines the instrument as an equity, so it is read on the US equity calendar:
+    the snapshot taken straight after the backfill covers, with nothing asked twice.
     """
     taken = payload(at(runner, chunked, "data", "snapshot", "--json"))
     path = write_hypothesis(chunked)
     assert at(runner, chunked, "hyp", "add", path).exit_code == Exit.OK
     classify(chunked)
-
-    refused = at(runner, chunked, "research", "begin", HYP_ID, "--json")
-
-    assert refused.exit_code == Exit.PRECONDITION
-    assert payload(refused)["error"].startswith(f"no snapshot covers {INSTRUMENT}")
-
-    spec = chunked / "data.yaml"
-    again = at(runner, chunked, "data", "backfill", "--loader", "synthetic", "--spec", spec)
-    assert again.exit_code == Exit.OK, again.stdout
 
     assert begin(runner, chunked)["snapshot_id"] == taken["snapshot_id"]
 

@@ -521,24 +521,15 @@ def loaded(_prepared: Path, tmp_path: Path) -> Path:
 
 
 CHUNK_EDGES: list[list[str]] = [["2024-03-02", "2024-03-03"], ["2024-03-30", "2024-03-31"]]
-"""Where thirty-day chunks of the whole spec break the series apart.
+"""Where thirty-day chunks of the whole spec break what they served apart.
 
 The third chunk opens on Saturday the 2nd of March and serves from the Monday, and the
 fourth opens on Monday the 1st of April after a third that asked to Sunday the 31st and was
 served to the Friday: two weekends, and no session missing from either."""
 
 
-@pytest.fixture
-def chunked(runner: CliRunner, workspace: Path) -> Path:
-    """A workspace holding the whole spec as a chunked backfill left it, as `data.yaml`.
-
-    Nothing has been asked twice, so the weekends at two chunk edges are still gaps.
-    """
-    write_instruments(workspace)
-    assert (
-        at(runner, workspace, "data", "instruments", "resolve", "--as-of", str(FIRST)).exit_code
-        == 0
-    )
+def backfill_whole_spec(runner: CliRunner, workspace: Path) -> Path:
+    """The whole spec, backfilled in chunks as `data.yaml`, and nothing asked twice."""
     spec = write_spec(workspace)
     result = at(
         runner, workspace, "data", "backfill", "--loader", "synthetic", "--spec", spec, "--json"
@@ -546,6 +537,31 @@ def chunked(runner: CliRunner, workspace: Path) -> Path:
     assert result.exit_code == 0, result.stdout
     assert [chunk["outcome"] for chunk in payload(result)["chunks"]] == ["written"] * 6
     return workspace
+
+
+@pytest.fixture
+def chunked(runner: CliRunner, workspace: Path) -> Path:
+    """A workspace holding the whole spec as a chunked backfill left it, its equity defined.
+
+    The store defines the instrument as an equity, so it is read on the US equity calendar
+    and the two weekends at the chunk edges, `CHUNK_EDGES`, are no gaps.
+    """
+    write_instruments(workspace)
+    assert (
+        at(runner, workspace, "data", "instruments", "resolve", "--as-of", str(FIRST)).exit_code
+        == 0
+    )
+    return backfill_whole_spec(runner, workspace)
+
+
+@pytest.fixture
+def chunked_undefined(runner: CliRunner, workspace: Path) -> Path:
+    """The same backfill of an instrument the store does not define.
+
+    No calendar reads it, so every day is open and the weekends at the chunk edges,
+    `CHUNK_EDGES`, are gaps: what the answers a source gives for a gap are read against.
+    """
+    return backfill_whole_spec(runner, workspace)
 
 
 @pytest.fixture
