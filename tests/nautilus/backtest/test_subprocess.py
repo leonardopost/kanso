@@ -422,3 +422,46 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     finally:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(card, signal.SIGKILL)
+
+
+def test_the_window_is_released_before_the_card_is_supervised(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child holds its own copy of the points for the whole card; the parent, which read
+    them only to write the payload, holds none of them while it waits. Measured before this:
+    a lane kept 1.4 GB of an eighteen-month five-second window alive beside a 2.7 GB card."""
+    import sys
+
+    from kanso.nautilus import backtest as runner
+
+    read = runner.window_data
+    window: list[object] = []
+
+    def reading(*args: object) -> object:
+        instruments, groups = read(*args)  # type: ignore[arg-type]
+        window.extend((instruments, groups))
+        return instruments, groups
+
+    supervised = runner._supervised
+
+    def checking(request: object, room: Path, workdir: Path) -> object:
+        holding: list[str] = []
+        frame = sys._getframe(1)
+        while frame is not None:
+            if frame.f_code.co_filename == runner.__file__:
+                holding += [
+                    f"{frame.f_code.co_name}.{name}"
+                    for name, value in frame.f_locals.items()
+                    if any(value is held for held in window)
+                ]
+            frame = frame.f_back
+        assert holding == [], f"the parent still holds the window while the card runs: {holding}"
+        return supervised(request, room, workdir)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner, "window_data", reading)
+    monkeypatch.setattr(runner, "_supervised", checking)
+
+    carded = run_subprocess(request_for(), store, lane)
+
+    assert not carded.crashed, carded.traceback_tail
+    assert len(window) == 2, "the window was read once"
