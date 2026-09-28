@@ -369,6 +369,37 @@ are unchanged: the upper bound of every window is what it was, and only the data
 before it widens. An attached construct declares the same `warmup` as its host, or
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
+**`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
+fed to a strategy whole at an intraday grain: the runner reads every name's bars over the
+window into memory, and a card over that many is refused by the lane's memory cap long
+before it trades. A scope delivers each name's market data only on the sessions a series
+you built says it is in play:
+
+```yaml
+data_requirements: [bar, open_context]
+session_scope:                     # scope: adding or changing it clears `best`
+  series: open_context             # a custom type the hypothesis requires, one point per name per session
+  flag: candidate                  # its integer field; above zero, the name's bars of that session are delivered
+  always: [SPY.ARCX]               # names delivered every session, whatever their point says
+```
+
+The series is a custom type of your own (`kanso_ext/`, `docs/extensions.md`), filed under
+every name of the universe with one point per session and stamped before the session's
+first market point — at 09:29 New York for a regular session, say — so the rule that
+admits a name is written down before the session it admits opens, from what was public
+then: the previous close, the pre-market tape, a filing, a calendar. The runner reads the
+series first and then loads a name's bars, quotes and trades of a session only when its
+point of that session carries the flag above zero; a name in `always` is loaded every
+session. What is not loaded is not in memory, so a card's memory is the names in play
+rather than the pool. The series itself is delivered in full, as any requirement is, so a
+strategy reads the same points the runner scoped on. A replay and a stage node subscribe
+to every name and would be handed everything: the strategy base drops any bar, quote or
+trade of a name on a session its flag did not admit, so the two code paths see the same
+market and `kanso replay parity` holds. `series` must be one of the custom types in
+`data_requirements` and `always` a subset of the universe, or `kanso hyp validate`
+refuses the file (exit 3). A position held into a session its name is not admitted on is
+not marked that session, exactly as an instrument that stopped printing is not.
+
 **`benchmark` is yours, and it is scope.** A strategy trading one instrument can show a
 healthy Sharpe by holding that instrument through a rising market. Declaring a benchmark
 makes the objective the strategy's Sharpe *over* a hold of the universe's first leg:

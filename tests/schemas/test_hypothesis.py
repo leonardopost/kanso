@@ -279,6 +279,44 @@ def test_sizing_is_optional_and_carries_its_budget() -> None:
     assert (sized.sizing.mode, sized.sizing.budget) == ("full_book", 30_000.0)
 
 
+def test_a_scope_reads_a_custom_series_the_hypothesis_requires() -> None:
+    hyp = build(
+        universe=["DEMO.SIM", "OTHER.SIM"],
+        data_requirements=["bar", "kanso_scope_tape"],
+        session_scope={"series": "kanso_scope_tape", "flag": "in_play", "always": ["DEMO.SIM"]},
+    )
+
+    assert hyp.session_scope is not None
+    assert hyp.session_scope.always == ["DEMO.SIM"]
+
+
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        ({"series": "bar", "flag": "volume"}, "session_scope.series"),
+        ({"series": "kanso_scope_tape", "flag": "in_play"}, "session_scope.series"),
+        (
+            {"series": "kanso_scope_tape", "flag": "in_play", "always": ["ELSE.SIM"]},
+            "session_scope.always",
+        ),
+        (
+            {"series": "kanso_scope_tape", "flag": "in_play", "always": ["DEMO.SIM", "DEMO.SIM"]},
+            "session_scope.always",
+        ),
+    ],
+)
+def test_a_scope_must_name_a_required_series_and_only_the_universe(
+    scope: dict[str, Any], message: str
+) -> None:
+    required = (
+        ["bar", "kanso_scope_tape"]
+        if scope["series"] != "kanso_scope_tape" or "always" in scope
+        else ["bar"]
+    )
+    with pytest.raises(ValidationError, match=message):
+        build(universe=["DEMO.SIM"], data_requirements=required, session_scope=scope)
+
+
 def test_a_warmup_must_ask_for_at_least_one_session() -> None:
     with pytest.raises(ValidationError, match="warmup.sessions"):
         build(warmup={"sessions": 0})

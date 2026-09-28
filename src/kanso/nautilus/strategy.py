@@ -71,6 +71,7 @@ from bisect import bisect_right
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from decimal import ROUND_FLOOR, Decimal
 from math import fsum, prod
 from typing import Any, ClassVar, Final, NoReturn
@@ -100,6 +101,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
+from kanso.criteria.run import day_of
 from kanso.errors import ValidationError
 from kanso.nautilus import actions, splits
 from kanso.nautilus.costs import (
@@ -214,6 +216,7 @@ class KansoConfig(StrategyConfig, frozen=True):
     clock without the host's `on_bar` running on that grain."""
 
     data_requirements: tuple[str, ...] = (BAR,)
+    session_scope: tuple[str, str, tuple[str, ...]] | None = None
     capital: float = 0.0
     max_position_pct: float = PERCENT
     max_drawdown_pct: float = PERCENT
@@ -357,6 +360,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._ledger: list[list[Any]] = []
         self._booked: set[object] = set()
         self._print_ns: dict[str, int] = {}
+        self._scope_days: dict[str, set[date]] = {}
+        self._scope_cls: type | None = None
         self._price_ns: dict[str, int] = {}
         self._restated: dict[str, list[splits.Split]] = {}
         self._quoted: dict[str, tuple[list[int], list[float]]] = {}
@@ -663,11 +668,44 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     # --- data handlers: the clock, the last observations, the exit rules -----
 
+    def _out_of_scope(self, key: str, ts_init: int) -> bool:
+        """Whether a market point of `key` falls on a session its scope does not admit.
+
+        Under a `session_scope`, a name outside `always` is admitted on a session only by a
+        point of the scope series carrying the flag above zero, delivered before the
+        session's market points; `_note_scope` records those. The runner loads nothing
+        outside the scope, so in a backtest this drops nothing; a node delivers every
+        subscription, so here it drops what the backtest never saw, and the two paths agree.
+        """
+        scope = self._cfg.session_scope
+        if scope is None or key in scope[2]:
+            return False
+        return day_of(int(ts_init)) not in self._scope_days.get(key, ())
+
+    def _note_scope(self, data: object) -> None:
+        """Record a scope point: the session it stamps is admitted for its instrument."""
+        scope = self._cfg.session_scope
+        if scope is None:
+            return
+        if self._scope_cls is None:
+            from kanso.data.types import resolve_type
+
+            self._scope_cls = resolve_type(scope[0])
+        if not isinstance(data, self._scope_cls):
+            return
+        instrument_id = getattr(data, "instrument_id", None)
+        flag = getattr(data, scope[1], None)
+        if instrument_id is None or flag is None or float(flag) <= 0:
+            return
+        self._scope_days.setdefault(str(instrument_id), set()).add(day_of(int(data.ts_init)))  # type: ignore[attr-defined]
+
     def handle_bar(self, bar: Bar, historical: bool = False) -> None:
         if historical:
             super().handle_bar(bar, historical)
             return
-        if self._undelivered(bar.ts_init):
+        if self._undelivered(bar.ts_init) or self._out_of_scope(
+            bar.bar_type.instrument_id.value, bar.ts_init
+        ):
             return
         self._turn(int(bar.ts_init))
         self._delivered_ns = int(bar.ts_init)
@@ -686,7 +724,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_quote_tick(tick, historical)
             return
-        if self._undelivered(tick.ts_init):
+        if self._undelivered(tick.ts_init) or self._out_of_scope(
+            tick.instrument_id.value, tick.ts_init
+        ):
             return
         self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
@@ -710,7 +750,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_trade_tick(tick, historical)
             return
-        if self._undelivered(tick.ts_init):
+        if self._undelivered(tick.ts_init) or self._out_of_scope(
+            tick.instrument_id.value, tick.ts_init
+        ):
             return
         self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
@@ -737,6 +779,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 return
             self._turn(ts_init)
             self._delivered_ns = ts_init
+        self._note_scope(data)
         if self._held():
             self._pending.append(data)
             return

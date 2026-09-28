@@ -320,6 +320,7 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
     assert set(gates) == {
         "strategy_integrity",
         "min_trades",
+        "min_event_days",
         "max_hold",
         "max_drawdown",
         "maintenance_margin",

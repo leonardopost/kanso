@@ -776,11 +776,219 @@ class _DeflatedSharpe:
     @staticmethod
     def _expected_maximum(trial_variance: float, n_trials: int) -> float:
         """The Sharpe a search of this width is expected to produce from pure noise."""
-        trials = max(n_trials, 2)
-        normal = NormalDist()
-        return sqrt(trial_variance) * (
-            (1 - EULER_MASCHERONI) * normal.inv_cdf(1 - 1 / trials)
-            + EULER_MASCHERONI * normal.inv_cdf(1 - 1 / (trials * e))
+        return expected_maximum(trial_variance, n_trials)
+
+
+def expected_maximum(trial_variance: float, n_trials: int) -> float:
+    """The statistic a search of this width is expected to produce from pure noise: the
+    expected maximum of `n_trials` draws from a normal of this variance (Bailey and Lopez de
+    Prado's approximation), in the units the variance is in."""
+    trials = max(n_trials, 2)
+    normal = NormalDist()
+    return sqrt(trial_variance) * (
+        (1 - EULER_MASCHERONI) * normal.inv_cdf(1 - 1 / trials)
+        + EULER_MASCHERONI * normal.inv_cdf(1 - 1 / (trials * e))
+    )
+
+
+CONTRIBUTION_FAMILY: Final = frozenset({"wf_contribution_bps", "marginal_wf_contribution_bps"})
+"""The objectives that read a mean net return per period in basis points of the capital."""
+
+
+class _DeflatedContribution:
+    """The research contribution, deflated by how many trials went into selecting it.
+
+    The contribution's sampling error is the standard error of the per-period net returns in
+    basis points of the capital over the research window — of the differences against the
+    host's for the marginal form — and the expected maximum it is measured against is built
+    from the trials' own metrics, in the same units: their count is how many candidates the
+    selection took the maximum over and their spread is the distribution it took it from
+    (`trial_metrics`, the same set `deflated_sharpe` reads). The probability reported is
+    that of the estimate exceeding that maximum by its own error, and the gate passes when
+    it clears the floor chosen for it. A t-statistic on the contribution deflated for the
+    search, in short — the multiple-testing control a per-period objective has where a
+    Sharpe has its deflated ratio.
+    """
+
+    id: ClassVar[str] = "deflated_contribution"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        floor = number(ctx, "min_probability")
+        if floor is None:
+            return skipped(self.id, "no minimum was chosen, so no deflation was required")
+        objective = _objective(ctx)
+        if objective is None:
+            return skipped(self.id, NO_OBJECTIVE)
+        if objective.id not in CONTRIBUTION_FAMILY:
+            return skipped(
+                self.id,
+                f"the objective {objective.id} is not a contribution, so no card computed one",
+            )
+        if ctx.research_run is None:
+            return skipped(self.id, NO_RESEARCH_RUN)
+        metrics = list(ctx.trial_metrics)
+        if len(metrics) < 2:
+            return skipped(self.id, "fewer than two trials, so the trial spread is unknown")
+        series = _contribution_series(objective, ctx.research_run, ctx.host_research_run)
+        if series is None or len(series) < 3:
+            return skipped(self.id, "the research return series is too short to give an error")
+        error = stdev(series) / sqrt(len(series))
+        if error <= 0:
+            return skipped(self.id, "the research return series does not vary")
+        estimate = _metric(
+            objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
+        )
+        expected = expected_maximum(variance(metrics), len(metrics))
+        probability = NormalDist().cdf((estimate - expected) / error)
+        return verdict(
+            self.id,
+            probability >= floor,
+            {
+                "probability": probability,
+                "min_probability": floor,
+                "contribution_bps": estimate,
+                "standard_error_bps": error,
+                "expected_maximum_bps": expected,
+                "trials": len(metrics),
+                "periods": len(series),
+            },
+        )
+
+
+def _contribution_series(
+    objective: Objective, run: CardRun, host: CardRun | None
+) -> tuple[float, ...] | None:
+    """The per-period net returns a contribution is the mean of, in basis points of the
+    capital: the run's own, or its differences against the host's for the marginal form."""
+    own = tuple(r / run.capital * BPS for r in run.returns)
+    if objective.id == "wf_contribution_bps":
+        return own
+    if host is None or len(host.returns) != len(run.returns):
+        return None
+    return tuple(r - h / host.capital * BPS for r, h in zip(own, host.returns, strict=True))
+
+
+class _MinEventDays:
+    """Enough distinct sessions with a fill: a floor on the days an edge was seen on.
+
+    A rule that fires on a regime or an event can put its whole sample into a handful of
+    sessions — many fills, few days — and a per-trade count cannot tell. The sessions are the
+    days any fill of the run falls on, so a rule active one day a month for two years has
+    twenty-four however much it traded on each.
+    """
+
+    id: ClassVar[str] = "min_event_days"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        minimum = count(ctx, "min")
+        if minimum is None:
+            return skipped(self.id, "no minimum was chosen, so no count was required")
+        days = {day_of(fill.ts_ns) for fill in ctx.run.fills}
+        return verdict(self.id, len(days) >= minimum, {"event_days": len(days), "min": minimum})
+
+
+SCENARIO_KEYS: Final = (
+    "commission_bps",
+    "commission_per_share",
+    "slippage_bps",
+    "fixed_bps",
+    "maker_bps",
+)
+"""The cost model a scenario states, key for key with `costs:` in `hypothesis.yaml`."""
+
+
+def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
+    """The same run with every recorded fill charged under another cost model.
+
+    Costs are applied once, by the runner, in the extraction that produced this run, so
+    re-pricing them is arithmetic on the recorded fills rather than another backtest: each
+    fill's notional, quantity and liquidity side are on record, and the scenario's rates are
+    put through the same per-fill arithmetic the runner used. The difference between what a
+    fill now costs and what it cost is charged to the return period it falls in, exactly as
+    a cost multiple is; the carry, the transfers and the cushion stand as recorded, for the
+    reasons `stressed` gives. A key the scenario leaves out is zero, and a scenario that
+    states no `maker_bps` charges a maker's fill what any fill pays.
+    """
+    from kanso.nautilus.costs import fill_cost
+
+    half_spread = (scenario.get("fixed_bps") or 0.0) / 2.0 / BPS  # a rate, as the runner hands it
+    maker_bps = scenario.get("maker_bps")
+
+    def recost(fill: Fill) -> float:
+        return fill_cost(
+            fill.qty * fill.px,
+            fill.qty,
+            scenario.get("commission_bps") or 0.0,
+            scenario.get("slippage_bps") or 0.0,
+            half_spread,
+            maker_bps,
+            scenario.get("commission_per_share") or 0.0,
+            maker=fill.maker,
+        )
+
+    ends = run.period_ends_ns
+    added = [0.0] * len(ends)
+    for fill in run.fills:
+        index = bisect_left(ends, fill.ts_ns)
+        if index < len(ends):
+            added[index] += recost(fill) - fill.cost
+    running = 0.0
+    equity: list[float] = []
+    for value, charge in zip(run.equity, added, strict=True):
+        running += charge
+        equity.append(value - running)
+    trades = []
+    for trade in run.trades:
+        fills = tuple(replace(f, cost=recost(f)) for f in trade.fills)
+        cost = fsum(f.cost for f in fills)
+        trades.append(
+            replace(trade, pnl_net=trade.pnl_net - (cost - trade.cost), cost=cost, fills=fills)
+        )
+    return replace(
+        run,
+        returns=tuple(r - charge for r, charge in zip(run.returns, added, strict=True)),
+        equity=tuple(equity),
+        trades=tuple(trades),
+        fills=tuple(replace(f, cost=recost(f)) for f in run.fills),
+    )
+
+
+class _CostScenario:
+    """The edge under another cost model, re-applied to the recorded fills.
+
+    A hypothesis is priced under one account's schedule; the same fills under another's —
+    a per-share commission against a flat rate, a maker rebate against none, a wider fixed
+    width — say whether the edge belongs to the idea or to the schedule it was measured on.
+    The scenario is stated key for key as `costs:` is, and the objective is recomputed on
+    the re-priced run; it passes when that clears `min_metric`, zero unless chosen. The host
+    and benchmark runs the objective may difference against are not re-priced.
+    """
+
+    id: ClassVar[str] = "cost_scenario"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        scenario = {key: number(ctx, key) for key in SCENARIO_KEYS}
+        if all(scenario[key] is None for key in SCENARIO_KEYS if key != "maker_bps"):
+            return skipped(self.id, "no cost model was chosen, so nothing was re-priced")
+        objective = _objective(ctx)
+        if objective is None:
+            return skipped(self.id, NO_OBJECTIVE)
+        floor = number(ctx, "min_metric") or 0.0
+        under = repriced(ctx.run, scenario)
+        recorded = _metric(objective, ctx.run, ctx, ctx.host_run, ctx.benchmark_run)
+        metric = _metric(objective, under, ctx, ctx.host_run, ctx.benchmark_run)
+        return verdict(
+            self.id,
+            metric >= floor,
+            {
+                "objective": objective.id,
+                "metric_recorded": recorded,
+                "metric_scenario": metric,
+                "min_metric": floor,
+                "cost_recorded": fsum(f.cost for f in ctx.run.fills),
+                "cost_scenario": fsum(f.cost for f in under.fills),
+                "scenario": {key: value for key, value in scenario.items() if value is not None},
+            },
         )
 
 
@@ -1070,7 +1278,10 @@ maintenance_margin: Final[Gate] = _MaintenanceMargin()
 embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()
 deflated_sharpe: Final[Gate] = _DeflatedSharpe()
+deflated_contribution: Final[Gate] = _DeflatedContribution()
+min_event_days: Final[Gate] = _MinEventDays()
 cost_stress: Final[Gate] = _CostStress()
+cost_scenario: Final[Gate] = _CostScenario()
 bootstrap: Final[Gate] = _Bootstrap()
 book_correlation: Final[Gate] = _BookCorrelation()
 publication_lag: Final[Gate] = _PublicationLag()

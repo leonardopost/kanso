@@ -322,8 +322,11 @@ it never displaces the grid's winner: a hypothesis whose target is a return on c
 `objective.id: wf_contribution_bps` (an attached construct, the marginal form) in its own
 file, with `min_delta` in basis points per period, and `kanso hyp add` accepts it at any
 horizon. The `deflated_sharpe` gate skips a run scored on it, as it does the per-trade edge,
-since no card computed a Sharpe to deflate; the bootstrap, cost-stress, walk-forward and
-plateau gates read it as they read any objective.
+since no card computed a Sharpe to deflate; `deflated_contribution` is its multiple-testing
+control instead — the research contribution against the expected maximum of the search's
+trials, over the standard error of the per-period returns it is the mean of, passed at
+`min_probability`; the bootstrap, cost-stress, cost-scenario, walk-forward and plateau gates
+read it as they read any objective.
 
 ```
 $ kanso hyp add hypotheses/demo_alloc/hypothesis.yaml

@@ -1,0 +1,8 @@
+id: min_event_days
+kind: gate
+stage: card
+required: false
+meaningful_when: "When an edge fires on a regime or an event and its sample could sit in a few sessions: the distinct days with a fill must reach a floor, however many fills each carried."
+params: {min: int}
+ranges: {min: [10, 500]}
+impl: kanso.criteria.gates.min_event_days
