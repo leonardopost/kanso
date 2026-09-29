@@ -166,10 +166,17 @@ class Stall:
 def enqueue(store: StateStore, hyp_id: str, priority: int = 0) -> QueueItem:
     """Put a hypothesis in the queue, or raise the priority of one already in it.
 
+    One a lane has claimed and not yet begun is refused rather than queued behind itself:
+    a second row would be claimed by a second lane in the minutes the baseline takes, and a
+    hypothesis has one run open at a time. One with a run open is queued and waits — the
+    lane that finishes the run finds its place, and a daemon lane passes over it until then,
+    which is how an interactive run's hypothesis is handed to the daemon.
+
     Idempotent by design: enqueueing twice keeps the first arrival's place, because a
     second request is an operator saying "this one matters", not "this one is new".
     """
     _alive(store, hyp_id)
+    _unheld(store, hyp_id)
     held = _row(store, hyp_id)
     if held is not None:
         if priority > held.priority:
@@ -326,8 +333,12 @@ def put_back(store: StateStore, hyp_id: str) -> QueueItem | None:
 def dequeue(store: StateStore, lane: str = DEFAULT_LANE) -> str | None:
     """The next hypothesis to research, removed from the queue, or `None`.
 
-    A dead hypothesis is dropped on sight and one already being researched is passed
-    over and left where it is, so the lane that finishes it finds its place unchanged.
+    A dead hypothesis is dropped on sight, and one already being researched — a run open,
+    or a claim a lane holds with its run still to begin — is passed over and left where it
+    is, so the lane that finishes it finds its place unchanged. Measured before the second
+    reading: a lane claimed a hypothesis, the operator queued it again in the minutes its
+    baseline card took, a second lane claimed it too, and the two runs collided on the
+    one row a hypothesis may have open.
 
     The removal is the claim, and it is recorded under the lane that made it, with the
     priority the row held, in the one transaction: a lane killed mid-claim leaves either
@@ -341,7 +352,7 @@ def dequeue(store: StateStore, lane: str = DEFAULT_LANE) -> str | None:
         if status in DEAD:
             drop(store, item.hyp_id)
             continue
-        if active_run(store, item.hyp_id) is not None:
+        if active_run(store, item.hyp_id) is not None or claimed(store, item.hyp_id):
             continue
         with store.transaction():
             if not drop(store, item.hyp_id):
@@ -557,6 +568,17 @@ def _status(store: StateStore, hyp_id: str) -> str:
         "SELECT status FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
     ).fetchone()
     return "" if row is None else str(row["status"])
+
+
+def _unheld(store: StateStore, hyp_id: str) -> None:
+    """Refuse to queue a hypothesis a lane has claimed and not yet begun."""
+    if claimed(store, hyp_id):
+        raise PreconditionError(
+            f"{hyp_id} is already held by a lane whose run is about to begin, so queueing it "
+            "would start a second run",
+            remedy=f"`kanso research status` shows the lane; wait for the run, or end it with "
+            f"`kanso research end {hyp_id}` once it has begun",
+        )
 
 
 def _alive(store: StateStore, hyp_id: str) -> None:
