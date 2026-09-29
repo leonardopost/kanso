@@ -210,3 +210,17 @@ def test_a_per_share_commission_is_zero_unless_stated_and_layers_like_the_rest()
     assert stated.origins.costs == "hypothesis"
     with pytest.raises(ValidationError):
         CostsOverride(commission_per_share=-0.01)
+
+
+def test_the_sell_side_fees_are_zero_unless_stated_and_layer_like_the_rest() -> None:
+    plain = resolve_venue_model("XNAS").costs
+    assert (plain.sell_fee_bps, plain.sell_fee_per_share) == (0.0, 0.0)
+    stated = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(sell_fee_bps=0.1)),
+        hypothesis_costs=CostsOverride(sell_fee_bps=0.206, sell_fee_per_share=0.000166),
+    )
+    assert stated.costs.sell_fee_bps == 0.206
+    assert stated.costs.sell_fee_per_share == 0.000166
+    with pytest.raises(ValidationError):
+        CostsOverride(sell_fee_bps=-0.1)

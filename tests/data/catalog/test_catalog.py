@@ -140,6 +140,58 @@ def test_a_pinned_dataset_cannot_be_overwritten(ws: FakeWorkspace) -> None:
     assert "supersedes" in raised.value.remedy
 
 
+def test_a_supersede_takes_the_place_of_the_pinned_dataset_it_names(ws: FakeWorkspace) -> None:
+    """The one way a pinned mistake is corrected: the successor overlaps what it names, the old
+    files and manifest go, and the successor records what it followed."""
+    first = write_bars(ws)
+    define(ws)
+    snap.freeze(ws)
+
+    later = cat.write(
+        ws,
+        bars(date(2024, 1, 3), 5),
+        ref=Ref(span=(date(2024, 1, 3), date(2024, 1, 7))),
+        source="synthetic",
+        supersedes=first.manifest.dataset_id,
+    )
+
+    assert later.replaced == (first.manifest.dataset_id,)
+    assert later.manifest.supersedes == first.manifest.dataset_id
+    assert first.manifest.dataset_id not in cat.manifests(ws)
+    assert later.manifest.dataset_id in cat.manifests(ws)
+
+
+def test_a_supersede_lifts_the_pin_of_the_dataset_it_names_and_no_other(
+    ws: FakeWorkspace,
+) -> None:
+    first = write_bars(ws)
+    other = write_bars(ws, start=date(2024, 1, 8))
+    define(ws)
+    snap.freeze(ws)
+
+    with pytest.raises(
+        PreconditionError, match=f"{other.manifest.dataset_id} is named by a snapshot"
+    ):
+        cat.write(
+            ws,
+            bars(date(2024, 1, 3), 8),
+            ref=Ref(span=(date(2024, 1, 3), date(2024, 1, 10))),
+            source="synthetic",
+            supersedes=first.manifest.dataset_id,
+        )
+    assert first.manifest.dataset_id in cat.manifests(ws)
+
+
+def test_the_pinned_refusal_names_the_supersede_that_would_lift_it(ws: FakeWorkspace) -> None:
+    first = write_bars(ws)
+    define(ws)
+    snap.freeze(ws)
+    with pytest.raises(PreconditionError) as raised:
+        write_bars(ws, start=date(2024, 1, 3))
+    assert raised.value.remedy is not None
+    assert f"--supersedes {first.manifest.dataset_id}" in raised.value.remedy
+
+
 def test_replace_does_not_lift_a_snapshot_pin(ws: FakeWorkspace) -> None:
     write_bars(ws)
     define(ws)

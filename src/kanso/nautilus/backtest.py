@@ -1090,11 +1090,6 @@ class Marks:
         if price is not None:
             target.mark(key, ts, price)
 
-    @property
-    def held_anything(self) -> bool:
-        """Whether any point fell inside the measured window."""
-        return bool(self._folds)
-
     def check(self) -> None:
         """The refusal for a window the catalog holds nothing for; a prefix alone is no run."""
         if not self._folds:
@@ -1377,7 +1372,8 @@ def _fill(
 
     A fill the venue reports as a maker's pays the model's `maker_bps` when it states one;
     every other fill pays commission, slippage and half the spread, and the per-share
-    commission on each share when the model states one (`costs.fill_cost`).
+    commission on each share when the model states one; a sale pays the sell-side fees the
+    model states on top, maker or taker (`costs.fill_cost`).
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -1386,6 +1382,7 @@ def _fill(
     px = float(event.last_px)
     notional = qty * px * multipliers.get(instrument_id, 1.0)
     maker = event.liquidity_side == LiquiditySide.MAKER
+    side = order_side_to_str(event.order_side)
     costs = model.costs
     cost = fill_cost(
         notional,
@@ -1396,11 +1393,14 @@ def _fill(
         costs.maker_bps,
         costs.commission_per_share,
         maker=maker,
+        sell=side == "SELL",
+        sell_fee_bps=costs.sell_fee_bps,
+        sell_fee_per_share=costs.sell_fee_per_share,
     )
     return Fill(
         ts_ns=int(event.ts_event),
         instrument_id=instrument_id,
-        side=order_side_to_str(event.order_side),
+        side=side,
         qty=qty,
         px=px,
         cost=cost,

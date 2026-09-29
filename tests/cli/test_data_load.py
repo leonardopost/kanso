@@ -113,6 +113,37 @@ def test_a_load_into_a_pinned_dataset_is_refused_even_with_replace(
     assert "snapshot" in payload(result)["error"]
 
 
+def test_a_supersede_puts_the_load_in_the_place_of_the_pinned_dataset_it_names(
+    runner: CliRunner, ready: Path
+) -> None:
+    """The one way a pinned mistake is corrected: named, recorded, and in the open."""
+    spec = write_spec(ready)
+    first = at(runner, ready, "data", "load", "--loader", "synthetic", "--spec", spec, "--json")
+    held = payload(first)["datasets"][0]["dataset_id"]
+    assert at(runner, ready, "data", "snapshot").exit_code == Exit.OK
+    refused = at(runner, ready, "data", "load", "--loader", "synthetic", "--spec", spec, "--json")
+    assert f"--supersedes {held}" in payload(refused)["remedy"]
+
+    result = at(
+        runner,
+        ready,
+        "data",
+        "load",
+        "--loader",
+        "synthetic",
+        "--spec",
+        spec,
+        "--supersedes",
+        held,
+        "--json",
+    )
+
+    assert result.exit_code == Exit.OK
+    written = payload(result)["datasets"][0]
+    assert written["replaced"] == [held]
+    assert written["supersedes"] == held
+
+
 def test_an_unknown_loader_names_the_ones_that_exist(runner: CliRunner, ready: Path) -> None:
     spec = write_spec(ready)
 

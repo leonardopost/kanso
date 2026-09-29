@@ -769,7 +769,7 @@ the top-of-book venue a hypothesis without `book` gets fills the same order at t
 third and fourth, credited with what stood ahead of it — which is why a posting thesis on
 that venue rests a level of its own. `kanso doctor` checks both engine facts.
 
-**A fill that rested can be charged as one.** Every fill pays commission, slippage and half
+**A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
 the venue reported the fill as a maker's, in which case it pays exactly that and nothing
 else, since a resting limit fills at its own price and the spread is what it earns. A

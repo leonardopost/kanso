@@ -71,10 +71,21 @@ def load_command(
     replace: Annotated[
         bool, typer.Option("--replace", help="Delete and rewrite an overlapped span.")
     ] = False,
+    supersedes: Annotated[
+        str | None,
+        typer.Option(
+            "--supersedes",
+            help="The pinned dataset this load takes the place of; snapshots naming it stop "
+            "supporting a certification.",
+        ),
+    ] = None,
     as_json: JsonOption = False,
 ) -> None:
     """Run a loader over the range its spec names and write what it serves."""
-    emit(as_json or global_json(ctx), lambda: _load(open_workspace(ctx), loader, spec, replace))
+    emit(
+        as_json or global_json(ctx),
+        lambda: _load(open_workspace(ctx), loader, spec, replace, supersedes),
+    )
 
 
 @app.command("show")
@@ -179,9 +190,11 @@ def instruments_show(
 # -- command bodies ---------------------------------------------------------------
 
 
-def _load(ws: Workspace, loader: str, spec: Path, replace: bool) -> Report:
+def _load(
+    ws: Workspace, loader: str, spec: Path, replace: bool, supersedes: str | None = None
+) -> Report:
     with store(ws) as opened:
-        result = commands.load(ws, opened, loader, spec, replace=replace)
+        result = commands.load(ws, opened, loader, spec, replace=replace, supersedes=supersedes)
     lines = [field("loader", f"{result.loader} · {result.spec}")]
     for written in result.written:
         manifest = written.manifest

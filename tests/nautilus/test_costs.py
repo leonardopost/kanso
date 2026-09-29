@@ -183,3 +183,52 @@ def test_without_a_per_share_commission_the_cost_is_the_rate_of_the_notional() -
     assert fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0, maker=False) == pytest.approx(
         5_000.0 * fill_rate(1.0, 2.0, 0.0002, None, maker=False)
     )
+
+
+def test_a_sale_pays_the_sell_side_fees_on_top_whoever_filled_it() -> None:
+    """One bp of 10,000 is 1.00 and a cent on 100 shares is 1.00: a taker's sale pays both on
+    top of its 5.00, a maker's sale under a zero rate pays exactly the two, a purchase neither."""
+    taker_buy = fill_cost(10_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0, maker=False)
+    taker_sell = fill_cost(
+        10_000.0,
+        100.0,
+        1.0,
+        2.0,
+        0.0002,
+        None,
+        0.0,
+        maker=False,
+        sell=True,
+        sell_fee_bps=1.0,
+        sell_fee_per_share=0.01,
+    )
+    maker_sell = fill_cost(
+        10_000.0,
+        100.0,
+        1.0,
+        2.0,
+        0.0002,
+        0.0,
+        0.0,
+        maker=True,
+        sell=True,
+        sell_fee_bps=1.0,
+        sell_fee_per_share=0.01,
+    )
+    maker_buy = fill_cost(
+        10_000.0,
+        100.0,
+        1.0,
+        2.0,
+        0.0002,
+        0.0,
+        0.0,
+        maker=True,
+        sell=False,
+        sell_fee_bps=1.0,
+        sell_fee_per_share=0.01,
+    )
+    assert taker_buy == pytest.approx(5.0)
+    assert taker_sell == pytest.approx(7.0)
+    assert maker_sell == pytest.approx(2.0)
+    assert maker_buy == 0.0
