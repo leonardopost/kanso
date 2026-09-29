@@ -485,12 +485,14 @@ set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
 `venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
-the block for exactly that reason.
+the block for exactly that reason. The block is scope: every metric is net of it, so a best selected under one schedule
+is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
+as it does for `sizing`; a row pinned before 0.13 reads as unchanged until it is re-pinned.
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 
 ```yaml
-costs:
+costs:                             # scope: changing any key clears `best`
   commission_bps: 0.35             # every fill that took liquidity pays these three
   slippage_bps: 0.5
   spread: fixed_bps
