@@ -62,6 +62,34 @@ def test_a_wider_or_noisier_search_deflates_a_contribution_further() -> None:
     assert loose.evidence["probability"] < tight.evidence["probability"]
 
 
+def test_a_few_ruinous_trials_do_not_widen_the_search() -> None:
+    """The spread the expected maximum is built from is the candidates', not the outliers'."""
+    steady = (2.0, 2.4, 2.2, 2.3, 2.1, 2.5)
+    calm = deflated_contribution.evaluate(contribution_context(trial_metrics=steady))
+    ruined = deflated_contribution.evaluate(
+        contribution_context(trial_metrics=(*steady, -400.0, -250.0))
+    )
+
+    assert ruined.evidence["trial_spread_bps"] == pytest.approx(
+        calm.evidence["trial_spread_bps"], rel=0.5
+    )
+    assert ruined.evidence["expected_maximum_bps"] < 5.0
+    assert abs(ruined.evidence["probability"] - calm.evidence["probability"]) < 0.1
+
+
+def test_the_robust_variance_is_the_plain_one_on_a_normal_sample_and_unmoved_by_an_outlier() -> (
+    None
+):
+    from statistics import variance
+
+    from kanso.criteria.gates import robust_variance
+
+    sample = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+    assert robust_variance(sample) == pytest.approx((1.4826 * 2.0) ** 2)
+    assert robust_variance((*sample, 1_000.0)) == pytest.approx((1.4826 * 2.5) ** 2)
+    assert robust_variance((3.0, 3.0, 3.0, 4.0)) == variance((3.0, 3.0, 3.0, 4.0))
+
+
 def test_deflated_contribution_fails_below_the_floor() -> None:
     result = deflated_contribution.evaluate(
         contribution_context(params={"min_probability": 0.999}, trial_metrics=(-40.0, 40.0))

@@ -91,6 +91,25 @@ def test_a_bare_kanso_config_has_nothing_to_perturb() -> None:
     assert tunable_fields(KansoConfig()) == ()
 
 
+def test_a_field_named_in_fixed_params_is_not_perturbable() -> None:
+    """A selector among rules or a clock constant is a number the strategy reads, not a knob."""
+
+    class Gated(Params):
+        gate: float = 5.0
+        start_minute: float = 575.0
+        fixed_params: tuple[str, ...] = ("gate", "start_minute")
+
+    assert tunable_fields(Gated(capital=1.0)) == ("lookback", "threshold")
+
+
+def test_fixed_params_must_name_numeric_fields_of_the_config() -> None:
+    class Mistyped(Params):
+        fixed_params: tuple[str, ...] = ("label", "lookbak")
+
+    with pytest.raises(ValueError, match="label, lookbak is not a numeric field of Mistyped"):
+        Mistyped(capital=1.0)
+
+
 def test_a_sleeve_refuses_a_config_that_is_not_a_kanso_config() -> None:
     class Bare(StrategyConfig, frozen=True):
         pass
