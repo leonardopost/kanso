@@ -69,7 +69,11 @@ next data instant, so every fill is stamped at a data instant; `Position` carrie
 events applied to it, which together are the whole trade record; an `OrderFilled` carries
 the `liquidity_side` the matching engine gave its order — `MAKER` for a limit that rested
 on the book until the market reached it, `TAKER` for an order marketable when it arrived;
-with `use_random_ids` left off the exchange generates deterministic trade ids.
+with `use_random_ids` left off the exchange generates deterministic trade ids; the risk
+engine denies the hundred-and-first order submitted inside one second of its clock unless
+`RiskEngineConfig.max_order_submit_rate` says otherwise, and modifies the same way, and a
+denied order is closed — so the research path runs at the same rate as the node paths, one
+no replay reaches, or the two would size the next entry from different rooms.
 """
 
 from __future__ import annotations
@@ -140,6 +144,9 @@ __all__ = [
     "warmup_prefix",
     "window_data",
 ]
+
+SUBMIT_RATE: Final = "1000000/00:00:01"
+"""An order rate no replay or backtest reaches, so no throttle binds on either path."""
 
 DEFAULT_PERIOD: Final = "1d"
 """The return period a request that names none is measured over."""
@@ -817,7 +824,7 @@ def execute(
         get_oms_type,
         get_starting_balances,
     )
-    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
     from nautilus_trader.model.identifiers import Venue
 
     from kanso.nautilus.actions import modules
@@ -828,6 +835,10 @@ def execute(
     engine = BacktestEngine(
         config=BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
+            risk_engine=RiskEngineConfig(
+                max_order_submit_rate=SUBMIT_RATE,
+                max_order_modify_rate=SUBMIT_RATE,
+            ),
             run_analysis=False,
         )
     )

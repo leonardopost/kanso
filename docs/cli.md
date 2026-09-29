@@ -134,7 +134,11 @@ of the two code paths over the certification window, so the runner replays the s
 the node path and on the engine path and hands the gate what the comparison found; the two
 sessions it wrote stay in `sessions/` to be read. A replay that cannot be set up at all
 leaves the gate without its evidence, and the certificate records that nothing compared the
-paths rather than claiming that they agreed.
+paths rather than claiming that they agreed. Neither path throttles what a strategy submits: the
+engine's risk engine would deny the hundred-and-first order inside one second of its clock,
+and a denied order is closed and leaves the room for the next, so a sleeve re-posting through
+a flickering quote would size its next entry from a fuller room on the engine path than on
+the node path. Both paths run at a rate no replay reaches.
 
 **A passing verdict composes and deploys by itself.** The construct's version is made and
 the paper stage is offered it, because both acts follow from the certificate with no

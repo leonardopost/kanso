@@ -68,7 +68,7 @@ from nautilus_trader.model.identifiers import TraderId
 
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, sandbox
-from kanso.nautilus.backtest import RunRequest, RunResult
+from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest, RunResult
 from kanso.nautilus.cross_section import arm, ordered, warm, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
@@ -101,9 +101,6 @@ it carries is the one the engine gave.
 
 START_TURNS: Final = 100_000
 """How many turns of the loop a node is given to come up before the session gives up."""
-
-SUBMIT_RATE: Final = "1000000/00:00:01"
-"""An order submission rate a replay cannot reach, so no wall-clock throttle binds."""
 
 POST_STOP_S: Final = 0.1
 CONNECT_S: Final = 10.0
