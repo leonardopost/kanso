@@ -744,7 +744,10 @@ under `touch` and leaves it resting under `through`; on a quote the engine asks 
 when the order's own side of the book is at the price, so an ask falling to a resting buy
 fills it under either. Both code paths build their venue from the same configuration, so a
 card and a stage fill the same resting orders, and the rule draws no random number, so they
-fill them the same way every time.
+fill them the same way every time. A print fills the order by its own size and no more, so
+the honesty of a fill is the honesty of the print: an exchange's own executions, one per
+print, fill a resting order as that exchange would; a consolidated or merged tape fills it
+with size the book never showed it (`docs/workspace.md`, `limit_fill`).
 
 A trade print reaches a resting order only from the side that can trade with it: the engine
 moves only the ask down for a seller's print and only the bid up for a buyer's, so a

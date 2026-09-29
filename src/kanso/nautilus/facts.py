@@ -712,7 +712,9 @@ def _limit_points(kind: str, *prices: float, side: Any = None) -> list[object]:
     return made
 
 
-def _probe_resting_limit(prob: float, points: list[object], side: str) -> list[tuple[object, ...]]:
+def _probe_resting_limit(
+    prob: float, points: list[object], side: str, *, quantity: int = 10
+) -> list[tuple[object, ...]]:
     """The fills of one limit order resting from the first point's handler.
 
     A buy at 9.50 or a sell at 10.50 against a market at 10.00, so the order rests on the
@@ -749,7 +751,7 @@ def _probe_resting_limit(prob: float, points: list[object], side: str) -> list[t
                     self.order_factory.limit(
                         equity.id,
                         OrderSide.SELL if selling else OrderSide.BUY,
-                        Quantity.from_int(10),
+                        Quantity.from_int(quantity),
                         Price(10.5 if selling else 9.5, 2),
                     )
                 )
@@ -857,6 +859,170 @@ def _check_a_quote_reaching_a_limit_from_the_far_side_fills_it() -> tuple[bool, 
         f"prob_fill_on_limit 0 and {far[1.0]} at 1; a quote locked at 9.50/9.50 filled it "
         f"{locked[0.0]} at 0 and {locked[1.0]} at 1. The fill model is asked only when the order's "
         "own side of the book — the bid of a buy — is at its price"
+    )
+
+
+def _probe_by_size(order_qty: int, print_sizes: tuple[int, ...]) -> list[float]:
+    """The fill quantities of a resting buy at 9.50 met by successive sellers' prints at 9.50,
+    each of the given size, under `prob_fill_on_limit` one."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    instrument_id = _sample_equity().id  # type: ignore[attr-defined]
+    points: list[object] = [
+        TradeTick(
+            instrument_id,
+            Price(10.0, 2),
+            Quantity.from_int(100),
+            AggressorSide.BUYER,
+            TradeId("P-0"),
+            _MINUTE_NS,
+            _MINUTE_NS,
+        )
+    ]
+    for index, size in enumerate(print_sizes, start=1):
+        ts = (index + 1) * _MINUTE_NS
+        points.append(
+            TradeTick(
+                instrument_id,
+                Price(9.5, 2),
+                Quantity.from_int(size),
+                AggressorSide.SELLER,
+                TradeId(f"P-{index}"),
+                ts,
+                ts,
+            )
+        )
+    fills = _probe_resting_limit(1.0, points, "BUY", quantity=order_qty)
+    return [float(qty) for qty, _, _ in fills]  # type: ignore[arg-type]
+
+
+def _check_a_print_fills_a_resting_limit_by_its_own_size() -> tuple[bool, str]:
+    """What a venue's own executions buy the simulation: a print at a resting limit's price
+    fills it by the print's size and no more, so a clip larger than the flow it meets fills
+    in parts, one per print, until it is done."""
+    parts = _probe_by_size(320, (100, 100, 100, 100))
+    whole = _probe_by_size(320, (1_000,))
+    holds = parts == [100.0, 100.0, 100.0, 20.0] and whole == [320.0]
+    return holds, (
+        f"a buy of 320 at 9.50 met by four sellers' prints of 100 at 9.50 filled {parts}; met by "
+        f"one print of 1,000 it filled {whole}. A print fills a resting limit by its own size, so "
+        "the fills a run reports are only as honest as the print sizes it is fed: a venue's own "
+        "executions, unmerged, fill in parts; consolidated or merged prints fill whole"
+    )
+
+
+def _probe_queue(ahead: int, print_sizes: tuple[int, ...], *, queue_position: bool) -> list[int]:
+    """The fill instants (in seconds) of a buy of 300 at 10.00 joining a level that already
+    shows `ahead` on a level-two book, then met by sellers' prints of the given sizes."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import FillModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import BookOrder, OrderBookDelta, TradeTick
+    from nautilus_trader.model.enums import (
+        AccountType,
+        AggressorSide,
+        BookAction,
+        BookType,
+        OmsType,
+        OrderSide,
+    )
+    from nautilus_trader.model.identifiers import TradeId, Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    second = 1_000_000_000
+
+    def delta(ts: int, side: Any, px: float, size: int, order_id: int) -> object:
+        order = BookOrder(side, Price(px, 2), Quantity.from_int(size), order_id)
+        return OrderBookDelta(equity.id, BookAction.ADD, order, 0, 0, ts, ts)
+
+    points: list[object] = [
+        delta(second, OrderSide.BUY, 10.0, ahead, 1),
+        delta(second, OrderSide.SELL, 10.05, 500, 2),
+    ]
+    for index, size in enumerate(print_sizes):
+        ts = (2 + index) * second
+        points.append(
+            TradeTick(
+                equity.id,
+                Price(10.0, 2),
+                Quantity.from_int(size),
+                AggressorSide.SELLER,
+                TradeId(f"T-{index}"),
+                ts,
+                ts,
+            )
+        )
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.filled_at: list[int] = []
+            self.sent = False
+
+        def on_start(self) -> None:
+            self.subscribe_order_book_deltas(equity.id)
+            self.subscribe_trade_ticks(equity.id)
+
+        def _join(self) -> None:
+            if not self.sent:
+                self.sent = True
+                self.submit_order(
+                    self.order_factory.limit(
+                        equity.id, OrderSide.BUY, Quantity.from_int(300), Price(10.0, 2)
+                    )
+                )
+
+        def on_order_book_deltas(self, deltas: object) -> None:
+            self._join()
+
+        def on_trade_tick(self, tick: object) -> None:
+            self._join()
+
+        def on_order_filled(self, event: Any) -> None:
+            self.filled_at.append(int(event.ts_event) // second)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            fill_model=FillModel(prob_fill_on_limit=1.0),
+            book_type=BookType.L2_MBP,
+            trade_execution=True,
+            queue_position=queue_position,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return probe.filled_at
+    finally:
+        engine.dispose()
+
+
+def _check_queue_position_waits_for_the_size_ahead() -> tuple[bool, str]:
+    """What `queue_position` buys on a level-two book: a limit joining a level fills only once
+    the size shown ahead of it at placement has traded through, and without it fills from
+    the first print at its price."""
+    prints = (100,) * 8
+    waited = _probe_queue(500, prints, queue_position=True)
+    jumped = _probe_queue(500, prints, queue_position=False)
+    holds = waited == [7, 8, 9] and jumped == [2, 3, 4]
+    return holds, (
+        f"a buy of 300 joining a bid level of 500 on a level-two book, then eight sellers' "
+        f"prints of 100 one second apart from t=2: filled at seconds {waited} with queue_position "
+        f"and at {jumped} without. With it the order waits until the 500 ahead has traded "
+        "through, then fills by print size; without it every print at the price fills it"
     )
 
 
@@ -2329,6 +2495,14 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a buyer's print never reaches a resting buy beneath it, where a seller's print or one "
         "with no aggressor does",
         _check_a_buyer_s_print_never_reaches_a_resting_buy,
+    ),
+    (
+        "a print fills a resting limit by its own size, so a larger clip fills in parts",
+        _check_a_print_fills_a_resting_limit_by_its_own_size,
+    ),
+    (
+        "queue_position on a level-two book makes a joining limit wait for the size ahead",
+        _check_queue_position_waits_for_the_size_ahead,
     ),
     (
         "closing a position costs the same whatever was closed before it",
