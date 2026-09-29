@@ -19,7 +19,11 @@ dataset lacks, and snapshots are pinned by coverage.
 **A dataset a snapshot names is immutable.** A snapshot is a promise that a run can be
 reproduced, so the moment one names a dataset that dataset stops being writable: an
 overlapping write is refused, `--replace` does not lift the refusal, and the way forward
-is a successor dataset that records what it follows in `supersedes`. Data no snapshot has
+is a successor dataset that records what it follows in `supersedes`. A successor written
+over the span of the one pinned dataset it names takes its place — the files and the
+manifest go, as a replace's do — and every snapshot naming the old dataset stops
+supporting a certification, since the workspace no longer describes what it pinned; that
+is the one way a pinned mistake is corrected, and it says so in the refusal. Data no snapshot has
 named yet is still refused an overlapping write, but that refusal is lifted by an explicit
 replace, because a destructive default on a command that reads like an import is the
 wrong default.
@@ -199,7 +203,7 @@ def write(
             f"supersedes: {supersedes!r} is not a dataset this workspace holds",
             remedy="name the dataset this one follows, or omit supersedes",
         )
-    replaced = _clear(ws, held, dataset, ref, served, replace, data_cls, identifier)
+    replaced = _clear(ws, held, dataset, ref, served, replace, data_cls, identifier, supersedes)
 
     catalog = open_catalog(ws)
     before = _tree(data_path(ws))
@@ -321,14 +325,16 @@ def _clear(
     replace: bool,
     data_cls: type,
     identifier: str | None,
+    supersedes: str | None = None,
 ) -> tuple[str, ...]:
-    """Enforce immutability, and make room when an explicit replace allows it.
+    """Enforce immutability, and make room when an explicit replace or supersede allows it.
 
-    Returns the datasets a replace removed. A replaced dataset goes whole: a manifest
-    describes a dataset, and one left holding part of its span would claim coverage it no
-    longer has. What clashes is what the store files in the same place, so an unadjusted
-    load over the span of an adjusted one clashes with it even though the two are
-    different datasets to kanso.
+    Returns the datasets a replace or a supersede removed. A removed dataset goes whole: a
+    manifest describes a dataset, and one left holding part of its span would claim
+    coverage it no longer has. What clashes is what the store files in the same place, so
+    an unadjusted load over the span of an adjusted one clashes with it even though the
+    two are different datasets to kanso. A pinned dataset goes only when it is the one the
+    successor names in `supersedes`; any other pinned clash is refused as it always was.
     """
     filed_under = (ref.instrument, ref.type, ref.resolution)
     clashing = [
@@ -340,15 +346,19 @@ def _clear(
     if not clashing:
         return ()
     pinned = pinned_datasets(ws)
-    frozen = sorted(m.dataset_id for m in clashing if m.dataset_id in pinned)
+    frozen = sorted(
+        m.dataset_id for m in clashing if m.dataset_id in pinned and m.dataset_id != supersedes
+    )
     if frozen:
         raise PreconditionError(
             f"{', '.join(frozen)} {'is' if len(frozen) == 1 else 'are'} named by a snapshot and "
             "cannot be rewritten",
-            remedy="write a successor dataset recording supersedes=<dataset_id>",
+            remedy=f"load it again with --supersedes {frozen[0]} to put this dataset in its "
+            "place; every snapshot naming the old one then stops supporting a certification",
         )
-    if not replace:
-        names = ", ".join(sorted(m.dataset_id for m in clashing))
+    others = [m for m in clashing if m.dataset_id != supersedes]
+    if others and not replace:
+        names = ", ".join(sorted(m.dataset_id for m in others))
         raise PreconditionError(
             f"{served[0]}..{served[1]} overlaps the held dataset(s) {names}",
             remedy="pass --replace to delete and rewrite the overlapped span",

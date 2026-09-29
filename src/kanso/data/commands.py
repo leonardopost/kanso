@@ -279,12 +279,23 @@ class Load:
         }
 
 
-def load(ws: Workspace, store: StateStore, loader_id: str, spec: Path, *, replace: bool) -> Load:
+def load(
+    ws: Workspace,
+    store: StateStore,
+    loader_id: str,
+    spec: Path,
+    *,
+    replace: bool,
+    supersedes: str | None = None,
+) -> Load:
     """Run a loader over the range its spec names and write what it serves.
 
     Writes exactly the datasets the spec discovers, over exactly their spans. An
     overlapping write into unpinned data needs `replace`, and one into a dataset a
-    snapshot pins is refused outright.
+    snapshot pins is refused outright unless `supersedes` names that dataset: the new one
+    then takes its place, recorded as its successor, and every snapshot naming the old one
+    stops supporting a certification. A spec that discovers several datasets may supersede
+    only the one named; the rest are written as any load writes them.
     """
     document = read_spec(spec)
     _declared(document, loader_id, spec)
@@ -292,7 +303,11 @@ def load(ws: Workspace, store: StateStore, loader_id: str, spec: Path, *, replac
     written: list[catalog.Written] = []
     for ref in loader.discover(document):
         points = list(loader.load(ref, ref.span))
-        written.append(catalog.write(ws, points, ref=ref, source=loader_id, replace=replace))
+        written.append(
+            catalog.write(
+                ws, points, ref=ref, source=loader_id, replace=replace, supersedes=supersedes
+            )
+        )
     result = Load(loader=loader_id, spec=spec, written=tuple(written))
     store.event(
         LOADED,

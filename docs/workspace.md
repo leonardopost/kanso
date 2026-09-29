@@ -914,7 +914,8 @@ snapshot pinning none is a promise no run can keep.
 ```
 $ kanso data load --loader synthetic --spec demo.yaml
 error: DEMO.SIM-bar-1m-raw-20250901 is named by a snapshot and cannot be rewritten
-remedy: write a successor dataset recording supersedes=<dataset_id>
+remedy: load it again with --supersedes DEMO.SIM-bar-1m-raw-20250901 to put this dataset in its
+        place; every snapshot naming the old one then stops supporting a certification
 ```
 
 (exit 2 — and `--replace` gives the identical refusal, which is the point: the flag lifts the
@@ -922,7 +923,12 @@ overlap check, not the pin). A run, a card, a certificate and a deployed version
 a snapshot; rewriting the bytes underneath one would make every result that cites it
 unreproducible while leaving the citation looking fine. The successor path — a new dataset
 recording `supersedes` — is what `kanso data sync` walks, so extending a series never mutates
-one.
+one. A pinned mistake is corrected the same way, in the open: `--supersedes D` lets the load
+take the place of the one pinned dataset `D` it names — its files and its manifest go, as a
+replace's do, and the new dataset records `supersedes: D` — and every snapshot naming `D`
+stops supporting a certification, because the workspace no longer describes what it pinned
+(`cert run` says so by name). Any other pinned dataset the load would overlap is still
+refused: the flag names one dataset, never a span.
 
 An overlapping write into data **no snapshot pins** is a different question and gets a
 different answer:
