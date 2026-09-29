@@ -564,6 +564,21 @@ two versions certified under different rules cannot share a stage venue, which i
 exchange: the stage's node refuses to build it (exit 2), naming
 `venues.<MIC>.costs.limit_fill`.
 
+**A print fills a resting limit by its own size**, and no more: a buy of 320 met by four
+sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per print, and met
+by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine fact). So the
+fills a run reports are exactly as honest as the print sizes it is fed. A resting order sits
+on one exchange's book and is filled only by the executions that reach that book, so the
+trade stream that stands in for that exchange has to be its own executions, one print per
+execution: a consolidated tape fills the order with prints from venues it never rested on,
+and a file that merges a run of same-price prints into one hands it their sum in one fill.
+Measured on a posting strategy over one month of two Nasdaq names, the consolidated tape's
+fills were an order of magnitude larger than the exchange's own executions at the same
+prices and instants allowed. On a level-two book (`OrderBookDelta` data) the venue can also
+track queue position — `queue_position` in the engine's venue configuration — so a limit
+that joins a level showing 500 ahead fills only after those 500 have traded through; an
+order posted inside the spread creates its own level and has nothing ahead of it either way.
+
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 
 ```
