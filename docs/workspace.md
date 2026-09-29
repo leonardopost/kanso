@@ -537,6 +537,30 @@ includes it at the price it sizes at; and `cost_stress` multiplies it with the r
 is part of the recorded cost of the fill. Zero unless stated, so no number moves for a model
 that does not name it.
 
+`costs.sell_fee_bps` and `costs.sell_fee_per_share` charge every sale on top of the rest,
+whoever the venue reports the fill as:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.0025
+  slippage_bps: 0.5
+  spread: quotes
+  maker_bps: -0.2                  # a fill that rested earns this alone …
+  sell_fee_bps: 0.206              # … but a sale still pays $20.60 per million of notional
+  sell_fee_per_share: 0.000166     # and $0.000166 a share, as the account passes them through
+```
+
+A regulatory transaction fee is charged on sells alone, per notional, and a trading activity
+fee per share sold, and an account passes both through whatever the fill's liquidity side:
+a maker's sale under a stated `maker_bps` pays that rate and these on top, where the
+per-share commission does not. Before the keys existed the only way to state them was a
+larger `maker_bps` on both sides, which charges a purchase for a fee it never pays. They
+are applied where every cost is, once, in the runner's extraction; `self.balance` books the
+same; what a sleeve reserves when it sizes includes half of each, since a round trip pays
+them once and the reserve is struck per side; `cost_stress` multiplies them with the rest,
+and `cost_scenario` states them key for key like any other. Zero unless stated.
+
 `costs.limit_fill` is the one key of the block that is not a charge: it is how the simulated
 venue fills a limit order resting on the book.
 

@@ -46,6 +46,7 @@ declared publication rule is refused at write (`data/publication.py`).
 **Costs are applied once, by the runner, in the extraction.** Commission — in basis points
 and, where the model states it, per share — slippage and half the spread each side — or, on a
 fill that rested on the book under a venue model that states `maker_bps`, that rate alone —
+plus, on a sale, the sell-side fees the model states, maker or taker —
 are deducted per fill in `nautilus/backtest.py` and nowhere else. One application means one number: a card, a certification gate, a composition
 expectation and a realised paper objective all read the same arithmetic, and a cost model
 can be re-applied to recorded fills without re-running anything. The per-fill arithmetic

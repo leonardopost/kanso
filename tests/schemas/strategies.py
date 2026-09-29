@@ -104,6 +104,8 @@ def costs(draw: st.DrawFn) -> Costs:
         spread=spread,
         fixed_bps=draw(NON_NEGATIVE) if spread == "fixed_bps" else None,
         maker_bps=draw(st.none() | st.floats(min_value=-5, max_value=5, allow_nan=False)),
+        sell_fee_bps=draw(NON_NEGATIVE),
+        sell_fee_per_share=draw(NON_NEGATIVE),
         limit_fill=draw(st.sampled_from(["touch", "through"])),
     )
 

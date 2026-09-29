@@ -155,6 +155,28 @@ def test_repriced_recharges_every_fill_under_the_scenario_and_moves_the_series()
     assert fsum(f.cost for f in under.fills) == pytest.approx(8.0)
 
 
+def test_repriced_charges_the_sell_side_fees_on_sales_alone() -> None:
+    """A scenario of one bp and a cent a share on sells alone: a sale of 100 at 100 pays 2.00
+    and a purchase nothing, whoever filled it."""
+    fills = tuple(
+        Fill(
+            ts_ns=at(START),
+            instrument_id="DEMO",
+            side=side,
+            qty=100.0,
+            px=100.0,
+            cost=1.0,
+            maker=maker,
+        )
+        for side, maker in (("BUY", False), ("SELL", False), ("BUY", True), ("SELL", True))
+    )
+    run = build_run((19.0, 19.0, 19.0, 19.0), fills=fills)
+
+    under = repriced(run, {"sell_fee_bps": 1.0, "sell_fee_per_share": 0.01})
+
+    assert [f.cost for f in under.fills] == pytest.approx([0.0, 2.0, 0.0, 2.0])
+
+
 def test_repriced_charges_a_maker_the_stated_rate_alone_and_a_taker_the_rest() -> None:
     maker = Fill(
         ts_ns=at(START), instrument_id="DEMO", side="BUY", qty=100.0, px=100.0, cost=1.0, maker=True

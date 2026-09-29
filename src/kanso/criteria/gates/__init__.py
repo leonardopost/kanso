@@ -924,6 +924,9 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             maker_bps,
             scenario.get("commission_per_share") or 0.0,
             maker=fill.maker,
+            sell=fill.side == "SELL",
+            sell_fee_bps=scenario.get("sell_fee_bps") or 0.0,
+            sell_fee_per_share=scenario.get("sell_fee_per_share") or 0.0,
         )
 
     ends = run.period_ends_ns
