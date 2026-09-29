@@ -370,9 +370,9 @@ before it widens. An attached construct declares the same `warmup` as its host, 
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
-fed to a strategy whole at an intraday grain: the runner reads every name's bars over the
-window into memory, and a card over that many is refused by the lane's memory cap long
-before it trades. A scope delivers each name's market data only on the sessions a series
+fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
+at a time, the card holds a session of them beside what it has folded, and a session over
+that many names is refused by the lane's memory cap long before it trades. A scope delivers each name's market data only on the sessions a series
 you built says it is in play:
 
 ```yaml

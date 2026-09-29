@@ -19,6 +19,7 @@ from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus.backtest import (
     _equity,
     execute,
+    folded,
     run,
     warmup_prefix,
     window_data,
@@ -263,10 +264,13 @@ def test_the_parent_refuses_a_split_inside_the_prefix_before_any_child_runs(
         ts_event=ex,
         ts_init=ex,
     )
-    loaded = window_data(request_for(RESEARCH, prefix=PREFIX), deep)
-    monkeypatch.setattr(
-        backtest, "window_data", lambda request, catalog: (loaded[0], [*loaded[1], (split,)])
-    )
+    read = backtest._window_points
+
+    def with_split(*args: object) -> object:
+        groups, loaded = read(*args)  # type: ignore[arg-type]
+        return (*groups, (split,)), loaded
+
+    monkeypatch.setattr(backtest, "_window_points", with_split)
     lane = tmp_path / "lane"
     lane.mkdir()
 
@@ -334,7 +338,12 @@ def test_a_fill_before_the_open_is_refused_by_the_extraction(request_for) -> Non
     )
 
     with pytest.raises(ValidationError, match="precedes the window opening"):
-        _equity(request, [(midnight_ns(RESEARCH[0]), INSTRUMENT, 10.0, 9.0, 11.0)], [early], {})
+        _equity(
+            request,
+            folded(request, [(midnight_ns(RESEARCH[0]), INSTRUMENT, 10.0, 9.0, 11.0)]),
+            [early],
+            {},
+        )
 
 
 def test_a_warmed_card_runs_in_its_child_on_the_span_it_was_handed(

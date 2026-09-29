@@ -162,7 +162,7 @@ def run_node(
     clock a stage resumes from, are the window's own points, so a prefix is never claimed
     and never resumed into.
     """
-    stream = backtest.checked(request, instruments, groups)
+    marks = backtest.checked(request, instruments, groups)
     points = ordered(groups)
     opens, _ = request.bounds
     backtest._seed_globals(request.snapshot_id)
@@ -197,7 +197,7 @@ def run_node(
             warm(strategy, opens)
         backtest.booked(strategy, request)
         loop.run_until_complete(_drive(node, client, strategy, halt))
-        card = backtest._extract(request, kernel, stream, groups)
+        card = backtest._extract(request, kernel, marks)
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
