@@ -972,7 +972,7 @@ the log.
 
 ```
 certificates/<hyp>/plan.yaml
-certificates/<hyp>/<sha7>-<n_trials>-p<plan>-e<engine>.yaml
+certificates/<hyp>/<sha7>-h<pin7>-<n_trials>-p<plan>-e<engine>.yaml
 certificates/<hyp>/<sha7>.py
 ```
 
@@ -988,8 +988,9 @@ f729a538831e3ea8f80c46b68c5993ed4662c168bd9c56541cdf570619b6f6e9
 ```
 
 **A certificate is immutable**, and the filename says what it is a certificate *of*: these
-bytes, under that plan version, on that engine — with the trial count that stood when it was
-minted.
+bytes, under the hypothesis file as the card's run pinned it (`h<pin7>`, the first seven of
+that file's sha), under that plan version, on that engine — with the trial count that stood
+when it was minted.
 
 ```
 $ kanso cert run demo_mr
@@ -998,9 +999,12 @@ error: demo_mr already certified f729a53 under plan version 1 and nautilus_trade
 remedy: research a better strategy, replan, or upgrade the engine
 ```
 
-(exit 2). Change the bytes, the plan version or the engine and it is a different certificate
-under a different name, so re-certifying an unchanged commit after an engine upgrade is a
-plain `cert run` and produces a second file rather than overwriting the first.
+(exit 2). Change the bytes, the pinned file, the plan version or the engine and it is a
+different certificate under a different name, so re-certifying an unchanged commit after an
+engine upgrade is a plain `cert run` and produces a second file rather than overwriting the
+first, and so is certifying the same seed again after `hyp add` re-pinned its file. A
+certificate written before pins were recorded carries no `h<pin7>` in its name and no
+`hypothesis_sha` in its document, and refuses a repeat under any pin.
 
 Editing a certificate file changes nothing kanso will ever act on: the certificate of record
 is in `state.db` and the YAML is a rendering of it. Change `verdict: pass` to

@@ -345,6 +345,7 @@ def certificates(draw: st.DrawFn) -> Certificate:
     return Certificate(
         hyp_id=draw(HYP_IDS),
         strategy_sha=draw(SHAS),
+        hypothesis_sha=draw(st.one_of(st.none(), SHAS)),
         nautilus_version=draw(VERSION_STRINGS),
         venue_model=draw(venue_models()),
         snapshot_id=draw(IDENTIFIERS),
