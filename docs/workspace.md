@@ -348,9 +348,9 @@ they are:
 
 ```python
 class Config(KansoConfig):
-    gate: float = 5.0                  # which of ten state rules admits a post
-    g1: float = 1.75                   # that rule's threshold: a knob
-    start_minute: float = 575.0        # a clock constant
+    gate: float = 5.0  # which of ten state rules admits a post
+    g1: float = 1.75  # that rule's threshold: a knob
+    start_minute: float = 575.0  # a clock constant
     fixed_params: tuple[str, ...] = ("gate", "start_minute")
 ```
 
