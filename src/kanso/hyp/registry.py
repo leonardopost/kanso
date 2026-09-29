@@ -67,6 +67,7 @@ SCOPE: Final = (
     "warmup",
     "benchmark",
     "book",
+    "costs",
 )
 """What a `best` is comparable under; a change to any of them clears it."""
 
@@ -78,6 +79,8 @@ OBJECTIVE: Final = "objective"
 WARMUP: Final = "warmup"
 BENCHMARK: Final = "benchmark"
 BOOK: Final = "book"
+COSTS: Final = "costs"
+"""The scope field that joined in 0.13; a row pinned before it reads as unchanged."""
 """`sizing` joined the scope in 0.4.0, and `warmup`, `benchmark` and `book` in 0.8.0;
 `objective` in 0.5.0, answering from its own column. A row pinned before `sizing`,
 `warmup`, `benchmark` or `book` holds no key for it, which reads as `None` — the same
@@ -195,6 +198,8 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     sha = store.put_blob(source)
     scope = scope_of(hyp)
     before = {} if held is None else _scope_of(held)
+    if held is not None and COSTS not in _pins(held):
+        before[COSTS] = scope[COSTS]  # pinned before costs joined the scope: no move to report
     cleared = held is not None and held["best_sha"] is not None and before != scope
     status: Status
     if hyp.construct is None:
@@ -406,7 +411,7 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def scope_of(hyp: Hypothesis) -> dict[str, Any]:
-    """The nine fields a metric is only comparable within, in a stable order.
+    """The ten fields a metric is only comparable within, in a stable order.
 
     The objective is one of them because a metric is a number in that objective's units:
     a best of 69 bps per trade compared against a Sharpe of 2 would keep nothing forever.
@@ -416,7 +421,11 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
     held: the universe is compared as a set, but which of its names is first is the
     benchmark, so reordering a universe under a benchmark moves the scope. The book policy
     is one as a whole, because a reset, a carry and a maintenance floor each change the
-    equity path a metric is read from.
+    equity path a metric is read from. The cost model is one because every metric is net
+    of it: a best selected under one schedule is gross of what another charges, so the
+    stall would report it, reseed from it and certify it under costs it was never scored
+    on — measured on a posting hypothesis re-pinned with a maker fee, whose best stayed the
+    fee-free number for the rest of its run.
 
     `hyp add` clears a best when they move, and composition refuses a certificate whose
     run pinned a hypothesis of another scope than the one registered now: one definition
@@ -434,6 +443,7 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
             {**hyp.benchmark.model_dump(), "leg": hyp.universe[0]} if hyp.benchmark else None
         ),
         BOOK: hyp.book.model_dump() if hyp.book else None,
+        COSTS: hyp.costs.model_dump(exclude_none=True) if hyp.costs else None,
     }
 
 
@@ -444,7 +454,8 @@ def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
     the pins, and the columns are written with the pins, so a row from before then answers
     from its column rather than reporting a move that never happened. `sizing`, `warmup`,
     `benchmark` and `book` joined later still and have no column: a pin without the key
-    answers `None`.
+    answers `None`. `costs` joined last, and a pin without it is read by `register` as the
+    scope it is compared against, since nearly every hypothesis states one.
     """
     pins = _pins(held)
     scope = {name: pins.get(name) for name in SCOPE}
