@@ -182,21 +182,37 @@ def test_book_points_map_an_action_a_side_a_price_and_a_size(tmp_path: Path) -> 
     assert ref.type == "book" and ref.resolution is None
 
 
-def test_a_book_point_with_an_action_or_a_side_nobody_spells_is_refused(tmp_path: Path) -> None:
-    path = write_csv(
-        tmp_path / "book.csv",
-        ["t", "act", "sd", "px", "sz"],
-        [["2024-03-04T09:35:00", "nudge", "B", "99.98", "300"]],
-    )
+@pytest.mark.parametrize(
+    ("row", "refusal"),
+    [
+        (["2024-03-04T09:35:00", "nudge", "B", "99.98", "300", "1"], "not a book action"),
+        (["2024-03-04T09:35:00", "A", "left", "99.98", "300", "1"], "not a side of the book"),
+        (["2024-03-04T09:35:00", "A", "B", "99.98", "300", "1.5x"], "not a whole number"),
+    ],
+    ids=["action", "side", "sequence"],
+)
+def test_a_book_point_with_a_cell_nobody_spells_is_refused(
+    tmp_path: Path, row: list[str], refusal: str
+) -> None:
+    """An action or a side outside the accepted spellings, or a sequence that is not a whole
+    number, refuses the load by name rather than loading a point that means something else."""
+    path = write_csv(tmp_path / "book.csv", ["t", "act", "sd", "px", "sz", "seq"], [row])
     entry = {
         "path": str(path),
         "instrument": "DEMO",
         "venue": "XNAS",
         "type": "book",
-        "columns": {"ts_event": "t", "action": "act", "side": "sd", "price": "px", "size": "sz"},
+        "columns": {
+            "ts_event": "t",
+            "action": "act",
+            "side": "sd",
+            "price": "px",
+            "size": "sz",
+            "sequence": "seq",
+        },
     }
     ref = LOADER.discover(spec(entry))[0]
-    with pytest.raises(ValidationError, match="not a book action"):
+    with pytest.raises(ValidationError, match=refusal):
         list(LOADER.load(ref, ref.span))
 
 
