@@ -137,6 +137,11 @@ def snapshot_id(ws: Workspace) -> str:
     return max(snapshots.snapshots(ws), key=lambda s: s.created_at).snapshot_id
 
 
+def pin_of(document: dict[str, Any] | None = None) -> str:
+    """The sha `a_card` pins its run to: the hypothesis file as it stood, byte for byte."""
+    return sha256(yaml.safe_dump(document or DOCUMENT, sort_keys=False).encode("utf-8")).hexdigest()
+
+
 def a_card(
     ws: Workspace,
     store: StateStore,
@@ -269,7 +274,7 @@ def test_a_passing_plan_certifies_the_hypothesis_and_writes_its_bytes_beside_it(
     assert made.objective.value > 0, "the saw-tooth pays in the certification window too"
     path = certificate.certificate_file(ws, made)
     assert path.is_file()
-    assert path.name == f"{sha[:7]}-1-p1-e{made.nautilus_version}.yaml"
+    assert path.name == f"{sha[:7]}-h{pin_of()[:7]}-1-p1-e{made.nautilus_version}.yaml"
     beside = certificate.source_file(ws, HYP_ID, sha)
     assert beside.read_bytes() == REVERTING
     assert beside.name == f"{sha[:7]}.py"
@@ -329,7 +334,11 @@ def test_the_name_the_refusal_checks_is_the_certificate_own(
 
     assert (
         certificate.filename(
-            made.strategy_sha, made.n_trials, made.plan_version, made.nautilus_version
+            made.strategy_sha,
+            made.hypothesis_sha,
+            made.n_trials,
+            made.plan_version,
+            made.nautilus_version,
         )
         == made.filename()
     )
@@ -482,13 +491,71 @@ def test_a_target_file_that_already_exists_is_never_overwritten(
     sha = a_card(ws, store, REVERTING)
     write_plan(ws)
     target = certificate.certificates_dir(ws, HYP_ID) / certificate.filename(
-        sha, 1, 1, run.engine_version()
+        sha, pin_of(), 1, 1, run.engine_version()
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("not a certificate\n", encoding="utf-8")
 
     with pytest.raises(PreconditionError, match="already exists"):
         certify(ws, store, HYP_ID)
+
+
+def test_re_pinning_the_hypothesis_makes_the_same_bytes_a_fresh_certification(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A certificate is of the hypothesis as pinned: the same bytes under a moved file are
+    a new claim, not a repeat, and the two certificates sit side by side under two names."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+    first = certify(ws, store, HYP_ID)
+
+    moved = {**DOCUMENT, "costs": {**DOCUMENT["costs"], "commission_bps": 2.0}}
+    classify(ws, store, moved, REVERTING)
+    a_card(ws, store, REVERTING, document=moved, seq=2)
+    second = certify(ws, store, HYP_ID)
+
+    assert second.strategy_sha == first.strategy_sha
+    assert (first.hypothesis_sha, second.hypothesis_sha) == (pin_of(), pin_of(moved))
+    assert certificate.certificate_file(ws, second) != certificate.certificate_file(ws, first)
+    assert certificate.certificate_file(ws, first).is_file()
+    assert certificate.certificate_file(ws, second).is_file()
+    assert [held.hypothesis_sha for held in certificate.of(store, HYP_ID)] == [
+        pin_of(moved),
+        pin_of(),
+    ]
+
+
+def test_the_same_bytes_under_the_same_pin_are_still_a_repeat(
+    ws: Workspace, store: StateStore
+) -> None:
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+    certify(ws, store, HYP_ID)
+    a_card(ws, store, REVERTING, seq=2)
+
+    with pytest.raises(PreconditionError, match="immutable"):
+        certify(ws, store, HYP_ID)
+
+
+def test_a_certificate_that_names_no_pin_refuses_a_repeat_under_any_pin(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A certificate written before the pin was recorded keeps its immutability whole:
+    with no pin to compare, the same bytes under the same plan and engine are a repeat."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING)
+    write_plan(ws)
+    directory = certificate.certificates_dir(ws, HYP_ID)
+    directory.mkdir(parents=True, exist_ok=True)
+    legacy = directory / f"{sha[:7]}-4-p1-e{run.engine_version()}.yaml"
+    legacy.write_text("verdict: pass\n", encoding="utf-8")
+
+    with pytest.raises(PreconditionError, match="immutable") as refused:
+        certify(ws, store, HYP_ID)
+
+    assert legacy.name in refused.value.message
 
 
 def test_certified_bytes_are_never_written_over_another_subject_bytes(
@@ -520,14 +587,14 @@ def test_a_certificate_on_disk_refuses_a_repeat_when_state_has_no_record(
     write_plan(ws)
     directory = certificate.certificates_dir(ws, HYP_ID)
     directory.mkdir(parents=True, exist_ok=True)
-    committed = directory / certificate.filename(sha, 4, 1, run.engine_version())
+    committed = directory / certificate.filename(sha, pin_of(), 4, 1, run.engine_version())
     committed.write_text("verdict: pass\n", encoding="utf-8")
 
     with pytest.raises(PreconditionError, match="immutable") as refused:
         certify(ws, store, HYP_ID)
 
     assert committed.name in refused.value.message
-    assert certificate.filename(sha, 1, 1, run.engine_version()) != committed.name
+    assert certificate.filename(sha, pin_of(), 1, 1, run.engine_version()) != committed.name
     assert {path.name for path in directory.glob("*.yaml")} == {committed.name, "plan.yaml"}
 
 
@@ -546,6 +613,7 @@ def test_whether_bytes_were_judged_reads_what_a_repeat_would_contradict(
             store,
             HYP_ID,
             strategy_sha=sha or made.strategy_sha,
+            hypothesis_sha=pin_of(),
             plan_version=plan_version,
             nautilus_version=engine,
         )
@@ -557,6 +625,30 @@ def test_whether_bytes_were_judged_reads_what_a_repeat_would_contradict(
     assert judged(1, sha="f" * 64) is False
 
 
+def test_bytes_judged_under_another_pin_are_not_judged_under_this_one(
+    ws: Workspace, store: StateStore
+) -> None:
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+    made = certify(ws, store, HYP_ID)
+    moved = {**DOCUMENT, "costs": {**DOCUMENT["costs"], "commission_bps": 2.0}}
+
+    def judged(pin: str) -> bool:
+        return certificate.judged(
+            ws,
+            store,
+            HYP_ID,
+            strategy_sha=made.strategy_sha,
+            hypothesis_sha=pin,
+            plan_version=1,
+            nautilus_version=run.engine_version(),
+        )
+
+    assert judged(pin_of()) is True
+    assert judged(pin_of(moved)) is False, "the same bytes under a re-pinned file are unjudged"
+
+
 def test_a_certificate_on_disk_is_judged_when_state_has_no_record(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -566,11 +658,19 @@ def test_a_certificate_on_disk_is_judged_when_state_has_no_record(
     directory = certificate.certificates_dir(ws, HYP_ID)
     directory.mkdir(parents=True, exist_ok=True)
     engine = run.engine_version()
-    (directory / certificate.filename(sha, 4, 1, engine)).write_text("verdict: pass\n", "utf-8")
+    (directory / certificate.filename(sha, pin_of(), 4, 1, engine)).write_text(
+        "verdict: pass\n", "utf-8"
+    )
 
     def judged(plan_version: int | None) -> bool:
         return certificate.judged(
-            ws, store, HYP_ID, strategy_sha=sha, plan_version=plan_version, nautilus_version=engine
+            ws,
+            store,
+            HYP_ID,
+            strategy_sha=sha,
+            hypothesis_sha=pin_of(),
+            plan_version=plan_version,
+            nautilus_version=engine,
         )
 
     assert judged(1) is True

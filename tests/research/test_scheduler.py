@@ -629,6 +629,48 @@ def test_a_claim_is_recorded_under_the_lane_that_made_it(ws: Workspace, store: S
     assert scheduler.claimed(store, hyp_id)
 
 
+def test_a_claimed_hypothesis_is_not_claimed_again_before_its_run_begins(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Between the claim and the run there is no run to see, and the claim has to be enough."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    # A row beside an open claim: what an older kanso's `queue add` left, and what a lane
+    # killed between its claim and its run leaves for `recover` to put right.
+    store.connection.execute(
+        "INSERT INTO queue (hyp_id, priority, enqueued_at) VALUES (?, ?, ?)",
+        (hyp_id, 0, "2024-03-01T00:00:00+00:00"),
+    )
+
+    assert scheduler.dequeue(store, "l2") is None
+    assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]
+    assert [e.detail["lane"] for e in store.events(kind=scheduler.CLAIMED, subject=hyp_id)] == [
+        "l1"
+    ]
+
+
+def test_queueing_a_hypothesis_a_lane_has_claimed_and_not_begun_is_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The claim is the window a second row would be claimed in; a run open is not, since
+    the queue is how an interactive run's hypothesis is handed to the daemon."""
+    claimed = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, claimed)
+    assert scheduler.dequeue(store, "l1") == claimed
+    running = register(ws, store, "demo_two")
+    scheduler.enqueue(store, running)
+    assert scheduler.dequeue(store, "l2") == running
+    open_run(store, running, lane="l2")
+
+    with pytest.raises(PreconditionError, match="already held"):
+        scheduler.enqueue(store, claimed)
+    scheduler.enqueue(store, running)
+
+    assert [item.hyp_id for item in scheduler.queued(store)] == [running]
+    assert scheduler.dequeue(store, "l3") is None
+
+
 def test_a_hypothesis_dropped_between_claim_and_run_is_put_back(
     ws: Workspace, store: StateStore
 ) -> None:

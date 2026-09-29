@@ -892,7 +892,7 @@ gates      5 judged · 5 pass · 0 fail · 0 skipped
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.38450757237500577, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204389, 12.394500908889786]
 objective  net_edge_bps 10.149871 ± 0.603055
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
-written    /…/certificates/demo_mr/f729a53-4-p1-e1.231.0.yaml
+written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
 next       kanso cert show demo_mr
 ```
@@ -939,7 +939,10 @@ Three gates read what the others cannot. `deflated_contribution` is the multiple
 control for a run scored on a contribution, where `deflated_sharpe` skips: the research
 estimate in basis points per period, against the expected maximum of the search's trials in
 the same units, over the estimate's own standard error, reported as a probability and held
-to `min_probability`. `min_event_days` is a card gate counting the distinct sessions any
+to `min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
+deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
+seed that fired once — do not widen the search past any candidate the selection weighed; the
+spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a card gate counting the distinct sessions any
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share

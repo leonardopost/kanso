@@ -225,6 +225,23 @@ class KansoConfig(StrategyConfig, frozen=True):
     sizing_budget: float = 0.0
     """The budget every order is sized to when the hypothesis declares `sizing`; zero
     is free sizing, where the author chooses a size within the risk limits."""
+    fixed_params: tuple[str, ...] = ()
+    """The numeric fields of an author's own configuration that are not knobs — a selector
+    among rules, a clock constant, a size the hypothesis sets — so the `param_plateau` gate
+    leaves them where they are. Each must name a numeric field of the subclass."""
+
+    def __post_init__(self) -> None:
+        own = {
+            name
+            for name in type(self).__struct_fields__
+            if name not in KansoConfig.__struct_fields__ and _is_number(getattr(self, name, None))
+        }
+        unknown = [name for name in self.fixed_params if name not in own]
+        if unknown:
+            raise ValueError(
+                f"fixed_params: {', '.join(unknown)} is not a numeric field of "
+                f"{type(self).__name__}, so there is nothing to hold fixed"
+            )
 
 
 class KansoModifierConfig(ActorConfig, frozen=True):
@@ -250,18 +267,26 @@ def tunable_fields(config: StrategyConfig) -> tuple[str, ...]:
 
     A perturbation gate needs the author's parameters and must not touch the capital, the
     risk limits or anything else the framework injected, so the base's field set is
-    subtracted. Booleans are not parameters.
+    subtracted, and so are the fields the author named in `fixed_params`: a selector among
+    rules or a clock constant is a number the strategy reads, not a knob it was tuned on,
+    and moving one tests a different strategy rather than the same one nearby. Booleans are
+    not parameters.
     """
     injected = set(KansoConfig.__struct_fields__)
+    fixed = set(getattr(config, "fixed_params", ()))
     names: list[str] = []
     for name in type(config).__struct_fields__:
-        if name in injected:
+        if name in injected or name in fixed:
             continue
-        value = getattr(config, name, None)
-        if isinstance(value, bool) or not isinstance(value, int | float):
+        if not _is_number(getattr(config, name, None)):
             continue
         names.append(name)
     return tuple(names)
+
+
+def _is_number(value: object) -> bool:
+    """A parameter a perturbation can move: an int or a float, and not a bool."""
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def _bar_type(instrument_id: InstrumentId, resolution: str) -> BarType:

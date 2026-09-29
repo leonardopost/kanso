@@ -173,6 +173,9 @@ class Certificate(Versioned):
 
     hyp_id: HypId
     strategy_sha: Sha256
+    hypothesis_sha: Sha256 | None = None
+    """The hypothesis file the card's run was pinned to; `None` on a certificate written
+    before pins were recorded, which refuses a repeat under any pin."""
     nautilus_version: NonEmpty
     venue_model: VenueModel
     snapshot_id: NonEmpty
@@ -195,9 +198,18 @@ class Certificate(Versioned):
         """The strategy prefix the certificate and its source file are named by."""
         return self.strategy_sha[:7]
 
+    @property
+    def hyp7(self) -> str:
+        """The pinned hypothesis file's prefix the certificate is named by; empty with no pin."""
+        return "" if self.hypothesis_sha is None else self.hypothesis_sha[:7]
+
     def filename(self) -> str:
-        """`<sha7>-<n_trials>-p<plan_version>-e<nautilus_version>.yaml`."""
-        return f"{self.sha7}-{self.n_trials}-p{self.plan_version}-e{self.nautilus_version}.yaml"
+        """`<sha7>-h<pin7>-<n_trials>-p<plan_version>-e<nautilus_version>.yaml`, the pin left
+        out by a certificate written before pins were recorded."""
+        pin = "" if self.hypothesis_sha is None else f"h{self.hyp7}-"
+        return (
+            f"{self.sha7}-{pin}{self.n_trials}-p{self.plan_version}-e{self.nautilus_version}.yaml"
+        )
 
     def source_filename(self) -> str:
         """`<sha7>.py`: the certified bytes that travel beside the certificate."""

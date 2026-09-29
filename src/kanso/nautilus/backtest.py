@@ -768,21 +768,26 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     if any(construct == OVERLAY for construct, _, _ in request.modifiers):
         extra = grains[1:]
     scope = hyp.session_scope
-    config = cls.config_cls(
-        hyp_id=hyp.id,
-        universe=tuple(hyp.universe),
-        resolution=grains[0],
-        extra_resolutions=extra,
-        data_requirements=tuple(hyp.data_requirements),
-        session_scope=None if scope is None else (scope.series, scope.flag, tuple(scope.always)),
-        capital=request.capital,
-        sizing_budget=request.sleeve_budget,
-        max_position_pct=hyp.risk_limits.max_position_pct,
-        max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
-        max_leverage=hyp.risk_limits.max_leverage,
-        venue_model=dict(request.venue_model),
-        **dict(request.overrides),
-    )
+    try:
+        config = cls.config_cls(
+            hyp_id=hyp.id,
+            universe=tuple(hyp.universe),
+            resolution=grains[0],
+            extra_resolutions=extra,
+            data_requirements=tuple(hyp.data_requirements),
+            session_scope=None
+            if scope is None
+            else (scope.series, scope.flag, tuple(scope.always)),
+            capital=request.capital,
+            sizing_budget=request.sleeve_budget,
+            max_position_pct=hyp.risk_limits.max_position_pct,
+            max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
+            max_leverage=hyp.risk_limits.max_leverage,
+            venue_model=dict(request.venue_model),
+            **dict(request.overrides),
+        )
+    except ValueError as exc:
+        raise ValidationError(f"strategy.py: {cls.config_cls.__name__}: {exc}") from None
     return cls, config
 
 
