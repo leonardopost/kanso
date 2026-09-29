@@ -75,6 +75,8 @@ class CostsOverride(KansoModel):
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    sell_fee_bps: float | None = Field(default=None, ge=0)
+    sell_fee_per_share: float | None = Field(default=None, ge=0)
     limit_fill: LimitFill | None = None
 
 
@@ -85,6 +87,8 @@ class Costs(KansoModel):
     `maker_bps` is the charge on a fill the venue reports as a maker's, in place of all three
     of the others; negative is a rebate, and `None` charges a maker's fill like any other.
     `commission_per_share` is charged per share on every fill that pays commission, on top.
+    `sell_fee_bps` and `sell_fee_per_share` are charged on every sale, maker or taker, on top
+    of everything else: the regulatory fees an account passes through on sells alone.
     """
 
     commission_bps: float = Field(ge=0)
@@ -93,6 +97,8 @@ class Costs(KansoModel):
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    sell_fee_bps: float = Field(default=0.0, ge=0)
+    sell_fee_per_share: float = Field(default=0.0, ge=0)
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
 
     @model_validator(mode="after")

@@ -757,7 +757,7 @@ file that records none is loaded with no aggressor rather than a guessed one
 (`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
 unfilled.
 
-**A fill that rested can be charged as one.** Every fill pays commission, slippage and half
+**A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
 the venue reported the fill as a maker's, in which case it pays exactly that and nothing
 else, since a resting limit fills at its own price and the spread is what it earns. A

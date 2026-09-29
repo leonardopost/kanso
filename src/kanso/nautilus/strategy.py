@@ -439,7 +439,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         venue; this is the same number, used to leave room when sizing so a position is
         not opened at exactly the limit and then pushed through it by its own costs. An order
         does not know whether it will rest, so where the model states a maker's rate the
-        larger of the two is the one reserved; a rebate reserves nothing of its own.
+        larger of the two is the one reserved; a rebate reserves nothing of its own. Half of
+        the sell-side fee in basis points is reserved on top, because a round trip pays it
+        once and the reserve is struck per side.
         """
         costs = self._cfg.venue_model.get("costs")
         if not isinstance(costs, Mapping):
@@ -450,12 +452,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         maker = _maker_bps(costs)
         if maker is not None:
             bps = max(bps, maker)
+        bps += float(costs.get("sell_fee_bps") or 0.0) / 2.0
         return bps / BASIS_POINT
 
     def cost_rate_at(self, price: float) -> float:
-        """`cost_rate` at a price: the per-share commission, where the model states one, is
-        a fraction of notional only once the price is known, and a dearer share pays less."""
+        """`cost_rate` at a price: the per-share commission, where the model states one, and
+        half the per-share sell fee are fractions of notional only once the price is known,
+        and a dearer share pays less."""
         per_share = float(self._charges.get("commission_per_share") or 0.0)
+        per_share += float(self._charges.get("sell_fee_per_share") or 0.0) / 2.0
         if per_share <= 0.0 or price <= 0.0:
             return self.cost_rate
         return self.cost_rate + per_share / price
@@ -1692,6 +1697,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             _maker_bps(self._charges),
             float(self._charges.get("commission_per_share") or 0.0),
             maker=event.liquidity_side == LiquiditySide.MAKER,
+            sell=event.order_side == OrderSide.SELL,
+            sell_fee_bps=float(self._charges.get("sell_fee_bps") or 0.0),
+            sell_fee_per_share=float(self._charges.get("sell_fee_per_share") or 0.0),
         )
         return signed * px * multiplier + cost
 
