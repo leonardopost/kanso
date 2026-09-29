@@ -339,6 +339,25 @@ own position ceiling, and a filter or exit rule whose `resolution` is not its ho
 overlay's `capital` is the whole book its cards run on — host budget and its own — and its
 clips are sized to its own budget (`docs/constructs.md`).
 
+**`fixed_params` names the numbers that are not knobs.** Every numeric field an author adds
+to the strategy's `Config` is a parameter the `param_plateau` gate moves a little each way
+and re-scores; a selector among rules, a clock constant or a size the hypothesis sets is a
+number the strategy reads, not one it was tuned on, and moving it tests a different strategy
+rather than the same one nearby. Name those in `fixed_params` and the gate leaves them where
+they are:
+
+```python
+class Config(KansoConfig):
+    gate: float = 5.0  # which of ten state rules admits a post
+    g1: float = 1.75  # that rule's threshold: a knob
+    start_minute: float = 575.0  # a clock constant
+    fixed_params: tuple[str, ...] = ("gate", "start_minute")
+```
+
+A name that is not a numeric field of the class is refused when the strategy is built
+(`strategy.py: Config: fixed_params: … is not a numeric field`), so a typo cannot quietly
+fix nothing.
+
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;
 with it the runner feeds the strategy the sessions before the window and drops every order
@@ -370,9 +389,9 @@ before it widens. An attached construct declares the same `warmup` as its host, 
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
-fed to a strategy whole at an intraday grain: the runner reads every name's bars over the
-window into memory, and a card over that many is refused by the lane's memory cap long
-before it trades. A scope delivers each name's market data only on the sessions a series
+fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
+at a time, the card holds a session of them beside what it has folded, and a session over
+that many names is refused by the lane's memory cap long before it trades. A scope delivers each name's market data only on the sessions a series
 you built says it is in play:
 
 ```yaml
@@ -485,12 +504,14 @@ set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
 `venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
-the block for exactly that reason.
+the block for exactly that reason. The block is scope: every metric is net of it, so a best selected under one schedule
+is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
+as it does for `sizing`; a row pinned before 0.13 reads as unchanged until it is re-pinned.
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 
 ```yaml
-costs:
+costs:                             # scope: changing any key clears `best`
   commission_bps: 0.35             # every fill that took liquidity pays these three
   slippage_bps: 0.5
   spread: fixed_bps

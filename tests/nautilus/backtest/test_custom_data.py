@@ -204,7 +204,9 @@ def test_a_card_imports_the_extension_whose_type_it_is_handed(
 def test_a_card_not_handed_the_extension_cannot_read_its_type(
     tmp_path: Path, request_for, taped: Taped
 ) -> None:
-    """The control: the same card, told nothing, dies unpickling the first print."""
+    """The control: the same card, told nothing, does not know the type it was asked to
+    subscribe to — a crash the run records with its traceback and the type's name, since the
+    points are read as the run consumes them and the subscription comes first."""
     held, _ = taped
     request = request_for(
         source=TAPE_TAKER,
@@ -213,5 +215,6 @@ def test_a_card_not_handed_the_extension_cannot_read_its_type(
 
     carded = run_subprocess(request, held, tmp_path)
 
-    assert carded.crashed and carded.reason == "died"
-    assert "No module named 'kanso_card_tape'" in (carded.traceback_tail or "")
+    assert carded.crashed and carded.reason == "exception"
+    assert "kanso_card_tape" in (carded.traceback_tail or "")
+    assert "not a known data type" in (carded.traceback_tail or "")

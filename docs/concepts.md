@@ -951,7 +951,10 @@ Three gates read what the others cannot. `deflated_contribution` is the multiple
 control for a run scored on a contribution, where `deflated_sharpe` skips: the research
 estimate in basis points per period, against the expected maximum of the search's trials in
 the same units, over the estimate's own standard error, reported as a probability and held
-to `min_probability`. `min_event_days` is a card gate counting the distinct sessions any
+to `min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
+deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
+seed that fired once — do not widen the search past any candidate the selection weighed; the
+spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a card gate counting the distinct sessions any
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share

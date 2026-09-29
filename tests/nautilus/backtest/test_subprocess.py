@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from kanso.criteria.run import day_of
 from kanso.nautilus.backtest import (
     ALLOWED_ENV,
     child_env,
@@ -89,20 +90,27 @@ def test_a_payload_a_killed_lane_left_is_reclaimed_by_its_next_card(
     assert not left.exists()
 
 
-def test_the_payload_is_two_pickles_in_sequence_on_one_file(
+def test_the_payload_is_a_header_the_request_and_one_pickle_per_session(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The points are streamed to the file once: no copy of them is held as bytes beside
-    the objects, which for a window of five-second bars is a gigabyte."""
+    """The points reach the file a session at a time: no process holds the window, and no
+    copy of it is held as bytes beside the objects, which for a window of ticks is gigabytes."""
     import pickle
 
     from kanso.nautilus import backtest as runner
 
-    read: list[tuple[object, object, bytes]] = []
+    read: list[tuple[object, object, list[object]]] = []
 
     def reading(request: object, room: Path, workdir: Path) -> object:
         with (room / runner.REQUEST_FILE).open("rb") as handle:
-            read.append((pickle.load(handle), pickle.load(handle), handle.read()))
+            header, body = pickle.load(handle), pickle.load(handle)
+            chunks: list[object] = []
+            while True:
+                try:
+                    chunks.append(pickle.load(handle))
+                except EOFError:
+                    break
+            read.append((header, body, chunks))
         raise RuntimeError("read, and not run")
 
     monkeypatch.setattr(runner, "_supervised", reading)
@@ -111,11 +119,16 @@ def test_the_payload_is_two_pickles_in_sequence_on_one_file(
     with pytest.raises(RuntimeError, match="read, and not run"):
         run_subprocess(request, store, lane, (("/elsewhere", "an_extension"),))
 
-    ((header, body, rest),) = read
+    ((header, body, chunks),) = read
     assert header == {"extensions": [["/elsewhere", "an_extension"]]}
-    assert isinstance(body, dict) and set(body) == {"request", "instruments", "groups"}
+    assert isinstance(body, dict) and set(body) == {"request", "instruments"}
     assert body["request"] == request.plain()
-    assert rest == b"", "two pickles and nothing after them"
+    _, groups = runner.window_data(request, store)
+    whole = sorted(int(p.ts_init) for g in groups for p in g)
+    assert all(set(chunk) == {"groups"} for chunk in chunks)
+    sessions = {day_of(ts) for ts in whole}
+    assert len(chunks) == len(sessions), "one pickle per session that held a point"
+    assert sorted(int(p.ts_init) for c in chunks for g in c["groups"] for p in g) == whole
     assert not (lane / runner.CARD_ROOM).exists(), "removed even when the card never ran"
 
 
@@ -345,13 +358,13 @@ def test_a_stop_that_lands_while_the_window_is_read_starts_no_card(
     from kanso.errors import PreconditionError
     from kanso.nautilus import backtest as runner
 
-    read = runner.window_data
+    read = runner._window_points
 
     def reading(*args: object) -> object:
         runner.interrupt()
         return read(*args)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(runner, "window_data", reading)
+    monkeypatch.setattr(runner, "_window_points", reading)
     monkeypatch.setattr(
         runner.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a card was started")
     )
@@ -434,13 +447,13 @@ def test_the_window_is_released_before_the_card_is_supervised(
 
     from kanso.nautilus import backtest as runner
 
-    read = runner.window_data
+    read = runner._window_points
     window: list[object] = []
 
     def reading(*args: object) -> object:
-        instruments, groups = read(*args)  # type: ignore[arg-type]
-        window.extend((instruments, groups))
-        return instruments, groups
+        groups, loaded = read(*args)  # type: ignore[arg-type]
+        window.extend(groups)
+        return groups, loaded
 
     supervised = runner._supervised
 
@@ -458,10 +471,14 @@ def test_the_window_is_released_before_the_card_is_supervised(
         assert holding == [], f"the parent still holds the window while the card runs: {holding}"
         return supervised(request, room, workdir)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(runner, "window_data", reading)
+    monkeypatch.setattr(runner, "_window_points", reading)
     monkeypatch.setattr(runner, "_supervised", checking)
 
-    carded = run_subprocess(request_for(), store, lane)
+    request = request_for()
+    carded = run_subprocess(request, store, lane)
 
     assert not carded.crashed, carded.traceback_tail
-    assert len(window) == 2, "the window was read once"
+    reads = len(window)
+    _, groups = runner.window_data(request, store)
+    sessions = {day_of(int(p.ts_init)) for g in groups for p in g}
+    assert reads == len(sessions), "the window was read once, a session at a time"
