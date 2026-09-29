@@ -55,6 +55,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Currency, Money
 
 from kanso.errors import ValidationError
+from kanso.nautilus.strategy import BOOK
 from kanso.schemas import Hypothesis, LimitFill, VenueModel
 
 __all__ = [
@@ -130,7 +131,10 @@ def venue_configs(
     The account type, the currency and the limit-fill rule come from the resolved venue
     model, the leverage ceiling from the hypothesis's risk limits, and the starting
     balance from the run's capital. The model's charges are deliberately not translated
-    into a fee model: the runner applies them once, to the fills, after the backtest.
+    into a fee model: the runner applies them once, to the fills, after the backtest. A
+    hypothesis that requires `book` gets a level-two book kept from the deltas it loads,
+    with `queue_position` on, so a resting order that joins a level waits for the size the
+    book showed ahead of it; every other hypothesis gets the top-of-book venue it always had.
     """
     model = (
         venue_model
@@ -150,6 +154,9 @@ def venue_configs(
             base_currency=model.currency,
             default_leverage=leverage,
             bar_execution=True,
+            book_type="L2_MBP" if BOOK in hyp.data_requirements else "L1_MBP",
+            trade_execution=True,
+            queue_position=BOOK in hyp.data_requirements,
             fill_model=fill_model(model.costs.limit_fill),
             fee_model=None,
             latency_model=None,

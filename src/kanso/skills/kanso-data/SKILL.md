@@ -25,12 +25,13 @@ A hypothesis's `universe` is a list of plain ids. kanso turns each into a Nautil
      - path: data/<file>.parquet
        instrument: <SYMBOL>     # with venue below, this is the id in instruments.yaml
        venue: <MIC>
-       type: bar                # bar | quote | trade | corporate_action | <registered custom type id>
+       type: bar                # bar | quote | trade | book | corporate_action | <registered custom type id>
        resolution: 1m           # bars only
        columns: {ts_event: timestamp, open: o, high: h, low: l, close: c, volume: v}
        adjusted: false
    ```
    A trade file maps `ts_event`, `price` and `size`, and `aggressor_side` (`buyer|seller|none`) and `trade_id` where the file records them. Map `aggressor_side` only to a column that holds the side: left unmapped, every print is loaded with no aggressor, never a guessed one, because the simulated venue lets a print reach a resting order only from the side that can trade with it (a buyer's print never fills a resting buy beneath it).
+   A book file maps `ts_event`, `action` (`add|update|delete|clear`, or the market-by-order letters `A|U|M|D|C|R`), `side` (`bid|ask`, `B|A`, `none` for a clear), `price` and `size` — the size a level shows after the change — and `order_id`, `flags` and `sequence` where the file records them. One row is one change to one level of the exchange's displayed book, and a hypothesis that requires `book` beside `trade` is run on a level-two venue with queue position: an order that joins a level waits for the size shown ahead of it.
    Synthetic data for tests/demos: `loader: synthetic`, `model: ou|gbm`, `seed`, `start`, `end`, `resolution`, `instruments`, `venue`.
 2. `kanso data load --loader csv_parquet --spec <file>` → writes the dataset to the catalog and its manifest under `catalog/manifests/`. A load overlapping data already held is refused (exit 2); `--replace` deletes and rewrites the overlapped span, and is refused outright where a snapshot pins it.
 3. `kanso data backfill --loader <id> --spec <file>` → fills history back to the source's earliest servable date and closes any gaps. Run `--dry-run` first and report the chunk count and estimated bytes to the operator before a large pull. It is resumable and idempotent, so an interrupt is safe and a re-run costs nothing; never restart one by hand from the beginning. Reaching the source's history floor ends it normally, and the reported floor is the answer to "why does my data start there".

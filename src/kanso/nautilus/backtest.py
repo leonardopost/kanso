@@ -632,14 +632,14 @@ def _market_points(
     module itself, so the runner loads exactly the grain the strategy will receive rather
     than every grain the catalog happens to hold for that instrument.
     """
-    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
-    from kanso.nautilus.strategy import BAR, QUOTE, _bar_type
+    from kanso.nautilus.strategy import BAR, BOOK, QUOTE, _bar_type
 
     if requirement == BAR:
         identifier = str(_bar_type(instrument.id, resolution))
         return tuple(catalog.query(Bar, identifiers=[identifier], start=start, end=end))
-    data_cls = QuoteTick if requirement == QUOTE else TradeTick
+    data_cls = {QUOTE: QuoteTick, BOOK: OrderBookDelta}.get(requirement, TradeTick)
     identifier = str(instrument.id)
     return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
 
@@ -820,6 +820,7 @@ def execute(
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
+        get_book_type,
         get_fill_model,
         get_oms_type,
         get_starting_balances,
@@ -854,6 +855,11 @@ def execute(
                 # than the binary float that happens to be nearest to it.
                 default_leverage=Decimal(str(venue.default_leverage)),
                 bar_execution=venue.bar_execution,
+                # A level-two book with queue position when the hypothesis holds one; see
+                # `kanso.nautilus.venue`.
+                book_type=get_book_type(venue),
+                trade_execution=venue.trade_execution,
+                queue_position=venue.queue_position,
                 # Whether a resting limit the market only touched fills: the venue model's
                 # `limit_fill`, built from the configuration the node's venue is built from.
                 fill_model=get_fill_model(venue),
@@ -1068,7 +1074,9 @@ def _add_run(
 ) -> None:
     """One homogeneous `add_data` call, unsorted."""
     first = run[0]
-    plain = type(first) in (bar_cls, quote_cls, trade_cls)
+    from nautilus_trader.model.data import OrderBookDelta
+
+    plain = type(first) in (bar_cls, quote_cls, trade_cls, OrderBookDelta)
     engine.add_data(
         list(run),
         client_id=None if plain else client_id_cls(CLIENT_ID),

@@ -118,6 +118,7 @@ from nautilus_trader.backtest.models import MakerTakerFeeModel
 from nautilus_trader.backtest.node import (
     get_account_type,
     get_base_currency,
+    get_book_type,
     get_fill_model,
     get_oms_type,
     get_starting_balances,
@@ -299,6 +300,11 @@ class SimulatedVenue(LiveExecutionClient):
             fill_model=get_fill_model(venue),
             fee_model=MakerTakerFeeModel(),
             bar_execution=venue.bar_execution,
+            # A level-two book with queue position when the hypothesis holds one, built from
+            # the same configuration the research path's engine is built from.
+            book_type=get_book_type(venue),
+            trade_execution=venue.trade_execution,
+            queue_position=venue.queue_position,
             # Matched in the call that submits it, which is where the research path's
             # settle step matches it and what lets a node flatten after its last point.
             use_message_queue=False,

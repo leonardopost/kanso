@@ -89,6 +89,7 @@ from nautilus_trader.model.data import (
 from nautilus_trader.model.enums import (
     AggregationSource,
     BarAggregation,
+    BookType,
     LiquiditySide,
     OrderSide,
     OrderType,
@@ -148,6 +149,7 @@ from kanso.schemas.duration import is_duration
 
 __all__ = [
     "BAR",
+    "BOOK",
     "ENTRY",
     "EXIT_ORDER",
     "QUOTE",
@@ -167,6 +169,7 @@ __all__ = [
 BAR: Final = "bar"
 QUOTE: Final = "quote"
 TRADE: Final = "trade"
+BOOK: Final = "book"
 
 ENTRY: Final = "entry"
 """An order that opens or grows the net position."""
@@ -635,7 +638,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Subscribe every instrument of the universe to every data requirement.
 
         Called before `on_start`, so an author's `on_start` need not call anything. `bar`,
-        `quote` and `trade` are subscribed per instrument. A requirement naming a registered
+        `quote`, `trade` and `book` are subscribed per instrument — the book as level-two
+        deltas, which the venue keeps a book from and the author need not handle. A
+        requirement naming a registered
         custom type is subscribed once, by its class, and its points — every instrument's
         and the market-wide ones the runner loaded — reach the author's `on_data` as that
         type, at the instant each became public: a `corporate_action` arrives as a
@@ -659,8 +664,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     self.subscribe_quote_ticks(instrument_id)
                 elif requirement == TRADE:
                     self.subscribe_trade_ticks(instrument_id)
+                elif requirement == BOOK:
+                    self.subscribe_order_book_deltas(instrument_id, book_type=BookType.L2_MBP)
         for requirement in dict.fromkeys(self._cfg.data_requirements):
-            if requirement not in (BAR, QUOTE, TRADE):
+            if requirement not in (BAR, QUOTE, TRADE, BOOK):
                 custom = DataType(resolve_type(requirement))
                 self.subscribe_data(custom, client_id=ClientId(CLIENT_ID))
         if self._hold_until_cross_section:

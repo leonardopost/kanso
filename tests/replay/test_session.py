@@ -33,6 +33,7 @@ from tests.replay.conftest import (
     RAISING,
     RESTING,
     REVERTING,
+    SECOND_NS,
     SPAN,
     SPLIT_EX,
     SPLIT_SCHEDULE,
@@ -90,6 +91,26 @@ def test_the_two_paths_agree_through_a_flicker_of_more_than_a_hundred_orders_a_s
 
     assert node.intents == engine.intents
     assert len(node.intents) == 150
+
+
+def test_the_two_paths_fill_an_order_that_joins_a_level_behind_the_same_size() -> None:
+    """The book a hypothesis holds is kept by both venues, and a resting order that joins a
+    level waits for the size shown ahead of it on both paths: 500 shown, then three prints."""
+    from tests.nautilus.backtest.test_order_book import JOINING, deltas, prints
+
+    hyp = hypothesis(resolution="tick", horizon="1d", data_requirements=["book", "trade"])
+    day = FORWARD[0]
+    node, engine = both(
+        request_for(source=JOINING, hyp=hyp),
+        [instrument()],
+        [tuple(deltas(day)), tuple(prints(day))],
+    )
+
+    base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
+    seconds = [(fill.ts_ns - base) // SECOND_NS for fill in engine.run.fills]
+    assert seconds == [7, 8, 9]
+    assert [(fill.ts_ns - base) // SECOND_NS for fill in node.run.fills] == seconds
+    assert node.intents == engine.intents
 
 
 def test_the_two_paths_apply_a_corporate_action_identically() -> None:
