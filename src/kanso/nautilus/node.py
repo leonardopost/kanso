@@ -768,13 +768,13 @@ def _realised(
             run=backtest._empty(request),
             positions=(),
         )
-    stream = backtest.checked(request, instruments, groups)
+    marks = backtest.checked(request, instruments, groups)
     view = _StrategyView(kernel.cache, placed.identity)
     return Realised(
         strategy_id=placed.strategy_id,
         version=placed.version,
         capital=placed.capital,
-        run=backtest._extract(request, _Engine(view), stream, groups),
+        run=backtest._extract(request, _Engine(view), marks),
         positions=tuple(
             book for (holder, _), book in sorted(books.items()) if holder == placed.identity
         ),
