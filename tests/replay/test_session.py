@@ -29,6 +29,7 @@ from tests.replay.conftest import (
     FORWARD,
     HOLDING,
     INSTRUMENT,
+    POSTING,
     RAISING,
     RESTING,
     REVERTING,
@@ -36,6 +37,7 @@ from tests.replay.conftest import (
     SPLIT_EX,
     SPLIT_SCHEDULE,
     bars,
+    flickering,
     hypothesis,
     instrument,
     quotes,
@@ -67,6 +69,27 @@ def test_the_live_path_submits_what_the_research_path_submits() -> None:
 
     assert node.intents == engine.intents
     assert node.intents
+
+
+def test_the_two_paths_agree_through_a_flicker_of_more_than_a_hundred_orders_a_second() -> None:
+    """Neither path throttles submissions, so neither denies an order the other accepts.
+
+    The engine's risk engine denies the hundred-and-first order inside one second unless it
+    is configured otherwise, and a denied order is closed, so it leaves the room for the
+    next. A bid flickering every two milliseconds has a re-posting sleeve send a hundred and
+    fifty orders in a third of a second.
+    """
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},
+    )
+    quotes_ = flickering(FORWARD[0], 150, 2_000_000)
+    node, engine = both(request_for(source=POSTING, hyp=hyp), [instrument()], [tuple(quotes_)])
+
+    assert node.intents == engine.intents
+    assert len(node.intents) == 150
 
 
 def test_the_two_paths_apply_a_corporate_action_identically() -> None:

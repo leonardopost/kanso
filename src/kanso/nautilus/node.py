@@ -84,7 +84,7 @@ from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits
-from kanso.nautilus.backtest import RunRequest
+from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered
@@ -111,9 +111,6 @@ __all__ = [
 
 ACCOUNT_TYPES: Final[dict[str, str]] = {"margin": "MARGIN", "cash": "CASH"}
 """How a resolved venue model's account type is spelled to the engine."""
-
-SUBMIT_RATE: Final = "1000000/00:00:01"
-"""An order rate a replayed stage cannot reach, so no wall-clock throttle binds."""
 
 START_TURNS: Final = 100_000
 """How many turns of the loop a node is given to come up before the stage gives up."""
