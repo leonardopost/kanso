@@ -32,7 +32,7 @@ import re
 from typing import Final
 
 from nautilus_trader.core.data import Data
-from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
 from kanso.data.types.corporate_action import KINDS, TYPE_ID, CorporateAction
 from kanso.errors import ValidationError
@@ -56,8 +56,10 @@ BUILTIN_TYPES: Final[dict[str, type]] = {
     "bar": Bar,
     "quote": QuoteTick,
     "trade": TradeTick,
+    "book": OrderBookDelta,
 }
-"""The three market-data types every workspace has without registering anything."""
+"""The four market-data types every workspace has without registering anything: a `book`
+point is one change to one level of an exchange's displayed book."""
 
 _CUSTOM: dict[str, type] = {}
 

@@ -757,6 +757,18 @@ file that records none is loaded with no aggressor rather than a guessed one
 (`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
 unfilled.
 
+**An order that joins a level waits behind what the level showed.** A hypothesis that
+requires `book` loads the exchange's level-two changes beside its prints — one `book` point
+per change to one level, as a market-by-order or market-by-price file spells it — and both
+venues keep a book from them with the engine's queue position on: a resting order that
+joins a displayed level is filled only after the size shown ahead of it has traded through,
+print by print, so joining the touch is as honest as improving it. Measured through the
+runner and on both code paths: 500 shown on the bid, an order of 300 joining it, and eight
+sellers' prints of 100 a second apart fill the order at the seventh, eighth and ninth prints;
+the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
+third and fourth, credited with what stood ahead of it — which is why a posting thesis on
+that venue rests a level of its own. `kanso doctor` checks both engine facts.
+
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
 the venue reported the fill as a maker's, in which case it pays exactly that and nothing
