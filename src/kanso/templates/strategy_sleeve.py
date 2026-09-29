@@ -13,9 +13,12 @@ from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 
 class Config(KansoConfig):
-    """Numeric fields here are the parameters the param_plateau gate perturbs."""
+    """Numeric fields here are the parameters the param_plateau gate perturbs, except the
+    ones `fixed_params` names: a selector among rules, a clock constant, a size the
+    hypothesis sets — numbers the strategy reads, not knobs it was tuned on."""
 
     lookback: int = 20
+    fixed_params: tuple[str, ...] = ()
 
 
 class Strategy(KansoStrategy):
