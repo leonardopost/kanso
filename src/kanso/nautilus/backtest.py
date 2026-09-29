@@ -1084,11 +1084,6 @@ class Marks:
         if price is not None:
             target.mark(key, ts, price)
 
-    @property
-    def held_anything(self) -> bool:
-        """Whether any point fell inside the measured window."""
-        return bool(self._folds)
-
     def check(self) -> None:
         """The refusal for a window the catalog holds nothing for; a prefix alone is no run."""
         if not self._folds:
