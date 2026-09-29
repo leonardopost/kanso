@@ -892,7 +892,7 @@ gates      5 judged · 5 pass · 0 fail · 0 skipped
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.38450757237500577, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204389, 12.394500908889786]
 objective  net_edge_bps 10.149871 ± 0.603055
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
-written    /…/certificates/demo_mr/f729a53-4-p1-e1.231.0.yaml
+written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
 next       kanso cert show demo_mr
 ```

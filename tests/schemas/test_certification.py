@@ -11,6 +11,7 @@ from kanso.errors import ValidationError
 from kanso.schemas import Certificate, CertificationPlan, resolve_venue_model
 
 SHA = "b" * 64
+PIN = "c" * 64
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 PLAN: dict[str, Any] = {
@@ -42,6 +43,7 @@ CERT: dict[str, Any] = {
     "schema": 1,
     "hyp_id": "demo_mr",
     "strategy_sha": SHA,
+    "hypothesis_sha": PIN,
     "nautilus_version": "1.231.0",
     "venue_model": resolve_venue_model("XNAS", max_leverage=1.0),
     "snapshot_id": "s1",
@@ -123,7 +125,7 @@ def test_a_skipped_gate_does_not_decide_the_verdict() -> None:
 
 def test_the_file_name_carries_the_plan_and_the_engine() -> None:
     cert = Certificate.model_validate(CERT)
-    assert cert.filename() == "bbbbbbb-30-p2-e1.231.0.yaml"
+    assert cert.filename() == "bbbbbbb-hccccccc-30-p2-e1.231.0.yaml"
     assert cert.source_filename() == "bbbbbbb.py"
 
 
@@ -152,3 +154,17 @@ def test_a_skipped_gate_may_not_be_recorded_as_failing() -> None:
 
 def test_the_certified_construct_is_exposed_under_its_own_name() -> None:
     assert Certificate.model_validate(CERT).construct.id == "sleeve"
+
+
+def test_a_certificate_names_the_hypothesis_pin_in_its_file_name() -> None:
+    made = Certificate.model_validate(CERT)
+    assert made.hypothesis_sha == PIN
+    assert made.filename() == f"{SHA[:7]}-h{PIN[:7]}-30-p2-e1.231.0.yaml"
+
+
+def test_a_certificate_without_a_pin_keeps_the_older_file_name() -> None:
+    """A certificate written before the pin was recorded reads back with none, under its
+    own name, so a workspace's older files stay legible and stay immutable."""
+    made = Certificate.model_validate({k: v for k, v in CERT.items() if k != "hypothesis_sha"})
+    assert made.hypothesis_sha is None
+    assert made.filename() == f"{SHA[:7]}-30-p2-e1.231.0.yaml"

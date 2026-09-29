@@ -390,7 +390,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     # deferred so the cycle exists only while this function runs.
     from kanso.certify.certificate import judged
     from kanso.certify.plan import read_plan
-    from kanso.certify.run import certify
+    from kanso.certify.run import certify, pinned_sha
     from kanso.env.envelope import engine_version
 
     if _status(store, hyp_id) in DEAD:
@@ -401,11 +401,15 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     certifiable = False
     if best is not None and scored is not None and scored > 0:
         pinned = read_plan(ws, hyp_id)
+        open_id = active_run(store, hyp_id)
+        stalled = next((r for r in records.runs_of(store, hyp_id) if r.run_id == open_id), None)
+        pin = pinned_sha(store, hyp_id, best) if stalled is None else stalled.hypothesis_sha
         certifiable = not judged(
             ws,
             store,
             hyp_id,
             strategy_sha=best,
+            hypothesis_sha=pin,
             plan_version=None if pinned is None else pinned.plan_version,
             nautilus_version=engine_version(),
         )
