@@ -28,11 +28,21 @@ from __future__ import annotations
 from typing import Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick, TradeTick
+from nautilus_trader.model.data import (
+    Bar,
+    BarSpecification,
+    BarType,
+    BookOrder,
+    OrderBookDelta,
+    QuoteTick,
+    TradeTick,
+)
 from nautilus_trader.model.enums import (
     AggregationSource,
     AggressorSide,
     BarAggregation,
+    BookAction,
+    OrderSide,
     PriceType,
 )
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId, Venue
@@ -207,3 +217,79 @@ def _decimal(value: int, precision: int) -> str:
     unit = 10**precision
     whole, part = divmod(abs(value), unit)
     return f"{sign}{whole}.{part:0{precision}d}"
+
+
+ACTIONS: Final[dict[str, BookAction]] = {
+    "add": BookAction.ADD,
+    "a": BookAction.ADD,
+    "update": BookAction.UPDATE,
+    "u": BookAction.UPDATE,
+    "modify": BookAction.UPDATE,
+    "m": BookAction.UPDATE,
+    "delete": BookAction.DELETE,
+    "d": BookAction.DELETE,
+    "cancel": BookAction.DELETE,
+    "c": BookAction.DELETE,
+    "clear": BookAction.CLEAR,
+    "r": BookAction.CLEAR,
+}
+"""A file's spellings of what a book point does to its level, the market-by-order letters
+among them: `R` clears the book, the rest add, update or delete a level."""
+
+BOOK_SIDES: Final[dict[str, OrderSide]] = {
+    "bid": OrderSide.BUY,
+    "buy": OrderSide.BUY,
+    "b": OrderSide.BUY,
+    "ask": OrderSide.SELL,
+    "sell": OrderSide.SELL,
+    "a": OrderSide.SELL,
+    "none": OrderSide.NO_ORDER_SIDE,
+    "n": OrderSide.NO_ORDER_SIDE,
+    "": OrderSide.NO_ORDER_SIDE,
+}
+"""A file's spellings of the side of the book a point changes; none, for a clear."""
+
+
+def make_delta(
+    instrument: InstrumentId,
+    action: BookAction,
+    side: OrderSide,
+    price: int,
+    size: int,
+    order_id: int,
+    precision: int,
+    size_precision: int,
+    ts_event: int,
+    ts_init: int,
+    flags: int = 0,
+    sequence: int = 0,
+) -> OrderBookDelta:
+    """One change to one level of a displayed book, from a price and a size in ticks and
+    increments. Under a level-two book the order id is the level's, and zero will do; the
+    size is what the level shows after the change."""
+    order = BookOrder(
+        side, ticks_to_price(price, precision), units_to_quantity(size, size_precision), order_id
+    )
+    return OrderBookDelta(instrument, action, order, flags, sequence, ts_event, ts_init)
+
+
+def book_action(text: str) -> BookAction:
+    """A file's spelling of a book point's action, or a refusal naming the ones accepted."""
+    action = ACTIONS.get(text.strip().lower())
+    if action is None:
+        raise ValidationError(
+            f"action: {text!r} is not a book action; accepted spellings are "
+            f"{', '.join(sorted(ACTIONS))}"
+        )
+    return action
+
+
+def book_side(text: str) -> OrderSide:
+    """A file's spelling of the side a book point changes, or a refusal naming the ones accepted."""
+    side = BOOK_SIDES.get(text.strip().lower())
+    if side is None:
+        raise ValidationError(
+            f"side: {text!r} is not a side of the book; accepted spellings are "
+            f"{', '.join(sorted(s for s in BOOK_SIDES if s))}"
+        )
+    return side

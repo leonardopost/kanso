@@ -259,7 +259,7 @@ class SessionScope(KansoModel):
     always: list[NonEmpty] = Field(default_factory=list)
 
 
-MARKET_TYPES: Final = ("bar", "quote", "trade")
+MARKET_TYPES: Final = ("bar", "quote", "trade", "book")
 
 
 class Hypothesis(Versioned):
@@ -372,9 +372,10 @@ class Hypothesis(Versioned):
                     "must be required"
                 )
         elif self.resolution == "tick":
-            if not ({"trade", "quote"} & set(required)):
+            if not ({"trade", "quote", "book"} & set(required)):
                 raise ValueError(
-                    "data_requirements: resolution 'tick' needs 'trade' or 'quote' to be required"
+                    "data_requirements: resolution 'tick' needs 'trade', 'quote' or 'book' to "
+                    "be required"
                 )
         elif self.resolution not in required:
             raise ValueError(

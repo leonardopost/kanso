@@ -139,6 +139,83 @@ def test_quotes_map_four_sides(tmp_path: Path) -> None:
     assert ref.resolution is None
 
 
+def test_book_points_map_an_action_a_side_a_price_and_a_size(tmp_path: Path) -> None:
+    """One change to one level of a displayed book, spelled as market-by-order files spell it."""
+    path = write_csv(
+        tmp_path / "book.csv",
+        ["t", "act", "sd", "px", "sz", "oid", "seq"],
+        [
+            ["2024-03-04T09:35:00", "A", "B", "99.98", "300", "7", "1"],
+            ["2024-03-04T09:35:01", "update", "ask", "100.02", "250", "0", "2"],
+            ["2024-03-04T09:35:02", "D", "bid", "99.98", "0", "7", "3"],
+        ],
+    )
+    entry = {
+        "path": str(path),
+        "instrument": "DEMO",
+        "venue": "XNAS",
+        "type": "book",
+        "columns": {
+            "ts_event": "t",
+            "action": "act",
+            "side": "sd",
+            "price": "px",
+            "size": "sz",
+            "order_id": "oid",
+            "sequence": "seq",
+        },
+    }
+    ref = LOADER.discover(spec(entry))[0]
+    added, updated, deleted = list(LOADER.load(ref, ref.span))
+    assert (added.action.name, added.order.side.name, str(added.order.price)) == (
+        "ADD",
+        "BUY",
+        "99.98",
+    )
+    assert (str(added.order.size), added.order.order_id, added.sequence) == ("300", 7, 1)
+    assert (updated.action.name, updated.order.side.name, str(updated.order.size)) == (
+        "UPDATE",
+        "SELL",
+        "250",
+    )
+    assert (deleted.action.name, deleted.sequence) == ("DELETE", 3)
+    assert ref.type == "book" and ref.resolution is None
+
+
+@pytest.mark.parametrize(
+    ("row", "refusal"),
+    [
+        (["2024-03-04T09:35:00", "nudge", "B", "99.98", "300", "1"], "not a book action"),
+        (["2024-03-04T09:35:00", "A", "left", "99.98", "300", "1"], "not a side of the book"),
+        (["2024-03-04T09:35:00", "A", "B", "99.98", "300", "1.5x"], "not a whole number"),
+    ],
+    ids=["action", "side", "sequence"],
+)
+def test_a_book_point_with_a_cell_nobody_spells_is_refused(
+    tmp_path: Path, row: list[str], refusal: str
+) -> None:
+    """An action or a side outside the accepted spellings, or a sequence that is not a whole
+    number, refuses the load by name rather than loading a point that means something else."""
+    path = write_csv(tmp_path / "book.csv", ["t", "act", "sd", "px", "sz", "seq"], [row])
+    entry = {
+        "path": str(path),
+        "instrument": "DEMO",
+        "venue": "XNAS",
+        "type": "book",
+        "columns": {
+            "ts_event": "t",
+            "action": "act",
+            "side": "sd",
+            "price": "px",
+            "size": "sz",
+            "sequence": "seq",
+        },
+    }
+    ref = LOADER.discover(spec(entry))[0]
+    with pytest.raises(ValidationError, match=refusal):
+        list(LOADER.load(ref, ref.span))
+
+
 def test_trades_take_a_side_and_an_id_when_mapped(tmp_path: Path) -> None:
     path = write_csv(
         tmp_path / "trades.csv",

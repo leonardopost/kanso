@@ -153,7 +153,7 @@ def test_a_tick_resolution_without_ticks_is_refused(ws: Workspace) -> None:
     failure = refused(ws, document(resolution="tick", data_requirements=["bar"]))
 
     assert "data_requirements" in failure.message
-    assert "'trade' or 'quote'" in failure.message
+    assert "'trade', 'quote' or 'book'" in failure.message
 
 
 def test_a_grain_resolution_absent_from_the_requirements_is_refused(ws: Workspace) -> None:

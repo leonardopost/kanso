@@ -8,7 +8,7 @@ mechanism:                         # mean_reversion|momentum|microstructure|stat
 universe: []                       # ids from instruments.yaml; venues derive from their nautilus_id
 horizon:                           # holding period: <n>(s|m|h|d|w)
 resolution:                        # bar duration <n>(s|m|h|d|w), or tick|quote|trade
-data_requirements: [bar]           # bar|quote|trade|<any registered custom type id>
+data_requirements: [bar]           # bar|quote|trade|book|<any registered custom type id>; book = the exchange's level-two changes, run on a venue with queue position
 # costs:                           # optional. Costs are inherited from the venue, which the configured broker defines
 #   commission_bps: 0.5            # (kanso.toml research.broker, portfolio.yaml venues.<MIC>). Set any subset here only to
 #   commission_per_share: 0.0055   # charged on every share of a fill that pays commission, on top of the rates; a maker's fill
