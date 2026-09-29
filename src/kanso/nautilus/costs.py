@@ -6,7 +6,10 @@ the spread are charged on every fill, once, by the runner's extraction
 rested on the book — one the venue reports as a maker's — pays the venue model's
 `maker_bps` instead of all three when the model states one: it filled at its own price, so
 it slipped nothing, and the spread is what it earns rather than pays. A negative rate is a
-rebate. A sleeve's harness needs the same number while it runs, to know what its account
+rebate. A sale pays the regulatory fee the model states on top, whoever the venue reports
+the fill as: `sell_fee_bps` of its notional and `sell_fee_per_share` on each share, the
+transaction fee and the trading activity fee an account passes through on sells alone.
+A sleeve's harness needs the same number while it runs, to know what its account
 holds, so the arithmetic lives here and both call it: the balance a strategy sizes against
 is the equity the runner strikes.
 
@@ -113,19 +116,27 @@ def fill_cost(
     commission_per_share: float,
     *,
     maker: bool,
+    sell: bool = False,
+    sell_fee_bps: float = 0.0,
+    sell_fee_per_share: float = 0.0,
 ) -> float:
     """What one fill costs in the account currency: `fill_rate` of its notional, plus the
-    per-share commission on each share whenever the fill pays commission at all.
+    per-share commission on each share whenever the fill pays commission at all, plus the
+    sell-side fees on a sale.
 
     A maker's fill under a stated maker rate pays that rate alone, per share included: the
     rate is the whole charge on that fill by contract, and a per-share-priced account states
     its maker net there — commission less the rebate. Every other fill pays the per-share
     commission on top of the three rates, so a cheap share pays more of its price than a
-    dear one, exactly as the account would charge it.
+    dear one, exactly as the account would charge it. A sale pays `sell_fee_bps` of its
+    notional and `sell_fee_per_share` on each share on top of all of that, maker or taker:
+    a regulatory fee is passed through on every sell, and no venue's maker rate covers it.
     """
     charged = notional * fill_rate(
         commission_bps, slippage_bps, half_spread, maker_bps, maker=maker
     )
+    if sell:
+        charged += notional * sell_fee_bps / BPS + qty * sell_fee_per_share
     if maker and maker_bps is not None:
         return charged
     return charged + qty * commission_per_share

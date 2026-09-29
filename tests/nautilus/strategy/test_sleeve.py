@@ -598,3 +598,20 @@ def test_a_sleeve_answers_to_its_id_and_to_its_class_name(backtest) -> None:
     run = backtest(Trader(config()))
 
     assert run.strategy.host_names == ("Trader-000", "Trader")
+
+
+def test_half_the_sell_side_fee_is_reserved_per_side(backtest) -> None:
+    """A round trip pays the fee once, and the reserve is struck per side: 5 bps of costs and
+    a 2-bp sell fee reserve 6 bps a side, and half the per-share fee at the price."""
+    fee = {
+        "costs": {
+            "commission_bps": 2.0,
+            "slippage_bps": 3.0,
+            "spread": "quotes",
+            "sell_fee_bps": 2.0,
+            "sell_fee_per_share": 0.011,
+        }
+    }
+    run = backtest(Trader(config(venue_model=fee)))
+    assert run.strategy.cost_rate == pytest.approx(0.0006)
+    assert run.strategy.cost_rate_at(11.0) == pytest.approx(0.0006 + 0.0055 / 11.0)
