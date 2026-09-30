@@ -510,8 +510,10 @@ data adapters --check` and `kanso doctor --check-adapters` pass it by as unconfi
 one naming `okx` as its reference with no `region` is refused before anything is sent. The
 host is the one the engine maps the region to; every regional host answered the listing on
 2026-09-30, and the recordings the suite replays were made on `us.okx.com`. With the table
-present, `--check` makes one request, the unnarrowed swap listing, and reports how many live
-linear swaps it lists.
+present and a `region` stated, `--check` makes one request, the unnarrowed swap listing, and
+reports how many live linear swaps it lists. A table that states no `region` — valid for the
+broker, which refuses it only when a client opens — gives the reference no host, so it counts
+as unconfigured: both probes pass it by without a request and go on to every other adapter.
 
 What the listing's row becomes, measured on `BTC-USDT-SWAP` and `ETH-USDT-SWAP`:
 

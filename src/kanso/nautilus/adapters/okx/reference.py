@@ -337,10 +337,13 @@ def _fields(row: Mapping[str, Any]) -> dict[str, object] | str:
 
 
 def _day(millis: object) -> date | None:
-    """A listing time — milliseconds since the epoch, as text — as a UTC day."""
+    """A listing time — milliseconds since the epoch, as text — as a UTC day.
+
+    One that is not a number, or that no calendar holds, is no listing time at all.
+    """
     try:
         return datetime.fromtimestamp(int(str(millis)) / 1000, tz=UTC).date()
-    except ValueError:
+    except (ValueError, OverflowError, OSError):
         return None
 
 
@@ -434,8 +437,14 @@ class ReferenceAdapter:
         )
 
     def configured(self, ws: Workspace) -> bool:
-        """Whether `[adapters.okx]` is present: the listing needs no key, only a host."""
-        return self.id in ws.config.adapters
+        """Whether `[adapters.okx]` is present and names a host: the listing needs no key.
+
+        The broker's model accepts the table with no region, so a table can be present and
+        still give this adapter nowhere to send a request; a probe passes it by as
+        unconfigured rather than stopping on it, and a resolution through `[data] reference`
+        still refuses it by name in `client`.
+        """
+        return self.id in ws.config.adapters and table(ws).region is not None
 
     def credential_origins(self, ws: Workspace) -> dict[str, str | None]:
         """None to report: nothing this adapter sends is a credential."""

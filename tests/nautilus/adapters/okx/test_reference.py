@@ -126,6 +126,14 @@ def test_a_workspace_that_never_named_the_exchange_has_it_unconfigured(
     assert ADAPTER.configured(ws)
 
 
+def test_a_table_that_names_no_host_leaves_it_unconfigured(fresh: Workspace) -> None:
+    """The broker accepts a table with no region; the reference has nowhere to send a
+    request with one, so a probe passes it by rather than stopping on it."""
+    unnamed = reopened(fresh, "\n[adapters.okx]\nrate_per_second = 5\n")
+
+    assert not ADAPTER.configured(unnamed)
+
+
 def test_the_quota_is_the_table_s(fresh: Workspace) -> None:
     assert ADAPTER.quota(fresh) == "5/s"
     assert ADAPTER.quota(reopened(fresh, "\n[adapters.okx]\nrate_per_second = 8\n")) == "8/s"
@@ -314,6 +322,14 @@ def test_a_row_that_states_too_little_is_refused_naming_the_field(
 
     assert isinstance(found, str)
     assert reason in found
+
+
+@pytest.mark.parametrize("stamp", ["99999999999999999999", "-99999999999999999999", "soon"])
+def test_a_listing_time_no_calendar_holds_is_read_as_no_listing_time(stamp: str) -> None:
+    """The recorded row with its `listTime` replaced; the exchange served none of these."""
+    found: Any = definition({**row("BTC-USDT-SWAP"), "listTime": stamp}, AS_OF)
+
+    assert type(found).__name__ == "CryptoPerpetual"
 
 
 def test_a_row_with_no_listing_time_or_minimum_still_resolves() -> None:

@@ -228,3 +228,22 @@ def test_doctor_checks_the_listing_only_when_asked(
     assert adapters["status"] == "ok"
     assert "1/1 datasets included · 1 request(s)" in str(adapters["detail"])
     assert any("okx perpetuals reference → ok" in str(item) for item in adapters["items"])
+
+
+def test_a_table_that_names_no_host_is_passed_by_and_every_other_adapter_still_probed(
+    runner: CliRunner, workspace: Path, replay: Replay
+) -> None:
+    """The broker's model accepts `[adapters.okx]` with no region; the reference cannot
+    send a request without one, so both probes list it unconfigured and carry on."""
+    root = with_table(workspace, "rate_per_second = 5\n")
+
+    listed = at(runner, root, "data", "adapters", "--check", "--json")
+    doctor = at(runner, root, "doctor", "--check-adapters", "--json")
+
+    assert listed.exit_code == Exit.OK, listed.stdout
+    assert "okx: not configured, so no request was made for it" in payload(listed)["notes"]
+    assert {one["id"] for one in payload(listed)["adapters"]} >= {"okx", "massive"}
+    adapters = next(one for one in payload(doctor)["checks"] if one["name"] == "adapters")
+    assert adapters["status"] == "ok"
+    assert "2 registered · 0 configured" in str(adapters["detail"])
+    assert replay.asked == []
