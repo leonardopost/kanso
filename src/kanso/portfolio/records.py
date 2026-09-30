@@ -309,7 +309,7 @@ def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
 
 def _result(detail: Mapping[str, Any]) -> StageResult:
     """One recorded window back out of its event; a position recorded before the multiplier
-    was kept reads as one, which every instrument a stage had held until then carried."""
+    was kept reads as one, a share's."""
     return StageResult(
         stage=str(detail["stage"]),
         session_id=str(detail["session_id"]),

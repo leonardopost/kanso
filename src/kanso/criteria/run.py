@@ -75,8 +75,9 @@ class Fill:
 
     `multiplier` is the instrument's contract multiplier at the fill — one for a share, the
     contract size for a future or an option — and is what turns a quantity at a price into
-    the currency it moved. A fill recorded before it was kept reads as one, which is what
-    every instrument the runner had charged until then was.
+    the currency it moved. A fill recorded before it was kept reads as one, a share's; a
+    run struck on a multiplied instrument before then is re-run before a cost model is
+    re-applied to its record.
     """
 
     ts_ns: int

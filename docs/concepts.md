@@ -447,8 +447,9 @@ fill's, a trade's, a holding's, the room a sleeve sizes an entry to, the budget 
 rule fills and the book a stage reports — is `qty x price x multiplier`, the instrument's
 contract multiplier being one for a share and the contract size for a future or an option.
 Each recorded fill and trade carries the multiplier it was struck with, so a cost model
-re-applied to the record charges the notional the runner charged, and a record written before
-the multiplier was kept reads as one, which every instrument it held had.
+re-applied to the record charges the notional the runner charged. A record written before the
+multiplier was kept reads as one, a share's; a run struck on a multiplied instrument before then
+is re-run before a cost model is re-applied to it.
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is

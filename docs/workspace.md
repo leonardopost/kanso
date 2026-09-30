@@ -554,10 +554,11 @@ is 5.5 bp of a $10 share and 0.2 bp of a $300 one — and a flat rate in basis p
 so over a universe that spans both. The per-share commission is charged on every share of a
 fill that pays commission at all: a taker's, and a maker's under a model that states no
 `maker_bps`. Per share means per contract on a multiplied instrument, whose notional is the
-price times the contract multiplier, and so does `sell_fee_per_share` below. A maker's fill under a stated `maker_bps` still pays that rate alone, because the
-rate is by contract the whole charge on that fill; a per-share-priced account states its maker
-net there, commission less the rebate. It is applied where every cost is, once, in the
-runner's extraction; `self.balance` books the same; what a sleeve reserves when it sizes
+price times the contract multiplier, and so does `sell_fee_per_share` below. A maker's fill
+under a stated `maker_bps` still pays that rate alone, because the rate is by contract the
+whole charge on that fill; a per-share-priced account states its maker net there, commission
+less the rebate. It is applied where every cost is, once, in the runner's extraction;
+`self.balance` books the same; what a sleeve reserves when it sizes
 includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
 is part of the recorded cost of the fill. Zero unless stated, so no number moves for a model
 that does not name it.
