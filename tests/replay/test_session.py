@@ -137,6 +137,35 @@ def test_the_two_paths_see_an_order_late_by_the_same_latency() -> None:
     assert node.intents == engine.intents
 
 
+def test_the_two_paths_size_an_exit_that_chases_the_ask_alike_under_a_latency() -> None:
+    """An exit that replaces one whose cancel is still in flight is sized to what the old one
+    cannot also take on both paths, so the two agree order for order and fill for fill, and
+    neither sells a share it did not buy."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CHASING,
+        chasing_costs,
+        never_short,
+        points,
+    )
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(20.0),
+    )
+    request = request_for(source=CHASING, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(20.0)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    bought, sold, lowest = never_short(engine.run.fills)
+    assert (bought, sold, lowest) == (100.0, 100.0, 0.0)
+
+
 def test_the_two_paths_hold_cancels_in_flight_alike_through_a_flicker() -> None:
     """A re-posting sleeve under latency has cancels and inserts in flight at once; both
     paths land each at the first point after its delay, so neither path fills or denies an

@@ -195,6 +195,14 @@ def test_the_workspace_page_states_the_fixed_spread_a_bar_only_hypothesis_needs(
     assert "`fixed_bps`" in section(text, "What the workspace refuses")
 
 
+def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> None:
+    """`submit_exit` sizes against what the working exits leave, a cancel in flight among
+    them under a latency (`tests/nautilus/backtest/test_exit_flat.py`)."""
+    text = prose(page("workspace.md"))
+    assert "An exit never goes past flat, counting the exits still working." in text
+    assert "Under a stated latency a cancel is not instant" in text
+
+
 def test_the_workspace_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:
     assert "it paces nothing" in prose(section(page("workspace.md"), "`portfolio.yaml`"))
 

@@ -336,6 +336,15 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+**An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
+smaller of what was asked and what is left to close: the position less the unfilled quantity
+of every order of the sleeve's own on the closing side that the venue has not closed —
+resting, in flight to it, or waiting on a cancel that has not landed — and returns `None`
+when those already close it. `self.held(id)` applies the sleeve's market orders in flight
+and no limit or stop order, so a sleeve whose exit rests at the ask reads the whole position
+there until the exit fills; an exit sized from it is cut to what the working ones leave.
+An attached exit rule that closes cancels the sleeve's own resting orders on the closing
+side first, so a take-profit left above the market cannot fill after the rule has closed.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
 equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
@@ -643,7 +652,17 @@ is measured there, on real orders, rather than assumed. State the whole round tr
 that reaches the strategy late and an order that reaches the book late add up, and a rule
 that reacts to a point and posts lands the same instant either way, so one number carries
 both. Availability (`ts_init`, `docs/concepts.md`) is a property of the data, when it became
-public, never of the route that carries it to you. Zero, the
+public, never of the route that carries it to you. **Under a stated latency a cancel is not
+instant**: it is a command like the rest, and the order it cancels can still fill until it
+lands. So `submit_exit` counts an order waiting on its cancel as an exit still working, and
+an exit that replaces one whose cancel is in flight is sized to what the old one cannot also
+take — often nothing, in which case it returns `None` and a rule that re-posts on the next
+point sends the whole exit once the cancel has landed. Measured on 0.13.0, before exits
+counted the ones still working: a rule that followed the ask with its exit on every change of
+the book bought 50 shares in one session at 20 ms, sold 92, and was left short 42 to the
+session's end, and every card of its lane at 20 ms held a position for close to a day. With
+no latency stated a cancel lands before anything further is matched, so an order waiting on
+one is not counted. Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the

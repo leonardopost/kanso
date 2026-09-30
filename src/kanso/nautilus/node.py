@@ -54,6 +54,14 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   through the strategy's own `submit_order`, which kanso classifies as an exit; the simulated
   exchange runs with no message queue and zero latency, so the closing order is matched
   against the last point's book in the same call rather than on a point that never comes.
+  The flatten cannot race an exit still working the way a replacement exit can
+  (`KansoStrategy.submit_exit`): it is sent after the last point, so no point is matched
+  before its cancels land, and under a latency an exit the sleeve sent at the last point
+  lands in the same call as the flatten and may fill there — but the close is sized to the
+  position when it was sent and carries `reduce_only`, `close_position`'s default, which the
+  simulated venue honours: it refuses the close once the position is closed
+  (`kanso.nautilus.facts` measures it) and its matching engine trims a reduce-only fill to
+  the quantity still open.
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.
