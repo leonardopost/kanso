@@ -190,6 +190,7 @@ def test_the_concepts_page_says_what_a_perpetual_is_not_yet() -> None:
     assert "**A perpetual is a linear contract" in concepts
     assert "is delivered and not booked" in concepts
     assert "the runner books funding in a later release" in concepts
+    assert "no source feeds funding yet, so a deployed sleeve is handed none" in concepts
 
 
 def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> None:
@@ -211,6 +212,8 @@ def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> Non
         workspace
     )
     assert "**The runner does not book funding yet**" in workspace
+    assert "`funding` is required of a hypothesis and asked of its perpetuals alone" in workspace
+    assert "does not span the research and certification windows" in workspace
     refusals = section(page("workspace.md"), "What the workspace refuses")
     assert "does not list `funding`" in refusals
     backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 104 |"))

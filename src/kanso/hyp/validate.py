@@ -276,7 +276,9 @@ def _check_funding(hyp: Hypothesis, instruments: Mapping[str, Any]) -> None:
     """A universe holding a perpetual requires the `funding` data type.
 
     A perpetual is recognised by its resolved definition, a `CryptoPerpetual`, never by the
-    spelling of its id. Every perpetual missing its funding is named together.
+    spelling of its id. Every perpetual missing its funding is named together. The
+    requirement is the hypothesis's, and coverage asks it of the perpetuals alone
+    (`kanso.data.snapshot`), so a spot leg beside one needs no funding history.
     """
     from nautilus_trader.model.instruments import CryptoPerpetual
 

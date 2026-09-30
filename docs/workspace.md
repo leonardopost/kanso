@@ -923,9 +923,14 @@ files:
     columns: {instrument_id: instrument_id, rate: rate, ts_event: ts}
 ```
 
-A card is handed each point of its window in `on_data`, at the settlement instant, as a
-`Funding`; `research begin` pins the dataset like any series, so its settlements run from
-before the research window opens to after the certification window closes. **The runner
+`funding` is required of a hypothesis and asked of its perpetuals alone. A spot leg settles
+no funding, so a basis universe — `[BTCUSDT.SIM, BTCUSDT-PERP.SIM]` with `data_requirements:
+[bar, funding]` — is covered by bars for both and a funding history for the perpetual only;
+which instruments are asked is read from the stored definitions, as `hyp validate` reads
+them. `research begin` refuses a snapshot whose funding dataset for a perpetual does not
+span the research and certification windows, whole UTC days as for every series, and a
+card is handed each point of its window in `on_data`, at the settlement instant, as a
+`Funding`. **The runner
 does not book funding yet**: a card today measures a held perpetual as if it paid and
 earned none, and a later release books each settlement in the runner's extraction, where
 every other cost is applied (`docs/backlog.md` row 104).

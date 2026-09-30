@@ -26,6 +26,7 @@ from kanso.schemas.hypothesis import Windows
 from tests.data.catalog.conftest import FakeWorkspace, Ref, bars
 
 PERP = "BTCUSDT-PERP.SIM"
+SPOT = "BTCUSDT.SIM"
 JAN1 = date(2024, 1, 1)
 DAYS = 25
 EIGHT_HOURS_NS = 8 * 3_600 * NANOS_PER_SECOND
@@ -48,6 +49,26 @@ def perpetual() -> Any:
                 "price_increment": "0.1",
                 "size_increment": "1",
                 "lot_size": "1",
+            },
+        }
+    )
+    return build(entry, conventions_for(entry, JAN1))
+
+
+def spot() -> Any:
+    """A manual BTCUSDT spot pair on the same venue: the other leg of a basis trade."""
+    entry = InstrumentEntry.model_validate(
+        {
+            "nautilus_id": SPOT,
+            "asset_class": "CRYPTOCURRENCY",
+            "manual": True,
+            "corporate_actions": "none",
+            "override": {
+                "base_currency": "BTC",
+                "quote_currency": "USDT",
+                "price_increment": "0.1",
+                "size_increment": "0.001",
+                "lot_size": "0.001",
             },
         }
     )
@@ -97,26 +118,66 @@ def test_funding_public_before_it_settled_is_refused_at_write(ws: FakeWorkspace)
     assert cat.manifests(ws) == {}
 
 
+WINDOWS = Windows.model_validate(
+    {
+        "research": {"start": JAN1, "end": date(2024, 1, 10)},
+        "certification": {"start": date(2024, 1, 15), "end": date(2024, 1, 20)},
+        "forward": {"start": date(2024, 2, 1)},
+    }
+)
+
+
+def load_bars(ws: FakeWorkspace, *instruments: str) -> None:
+    for instrument in instruments:
+        cat.write(
+            ws,
+            bars(JAN1, DAYS, instrument=instrument),
+            ref=Ref(instrument=instrument, span=span()),
+            source="synthetic",
+        )
+
+
 def test_a_snapshot_pins_a_funding_dataset_and_covers_with_it(ws: FakeWorkspace) -> None:
     cat.open_catalog(ws).write_data([perpetual()])
-    cat.write(
-        ws,
-        bars(JAN1, DAYS, instrument=PERP),
-        ref=Ref(instrument=PERP, span=span()),
-        source="synthetic",
-    )
+    load_bars(ws, PERP)
     funding = cat.write(ws, settlements(), ref=funding_ref(), source="csv_parquet")
 
     taken = snap.freeze(ws)
 
     assert funding.manifest.dataset_id in taken.datasets
     assert snap.pinned_datasets(ws) >= {funding.manifest.dataset_id}
-    windows = Windows.model_validate(
-        {
-            "research": {"start": JAN1, "end": date(2024, 1, 10)},
-            "certification": {"start": date(2024, 1, 15), "end": date(2024, 1, 20)},
-            "forward": {"start": date(2024, 2, 1)},
-        }
-    )
-    found = snap.covering(ws, [PERP], ["bar", "funding"], "1d", windows, store=None)
+    found = snap.covering(ws, [PERP], ["bar", "funding"], "1d", WINDOWS, store=None)
     assert found is not None and found.snapshot_id == taken.snapshot_id
+
+
+def test_a_perpetual_without_its_funding_is_not_covered(ws: FakeWorkspace) -> None:
+    cat.open_catalog(ws).write_data([perpetual()])
+    load_bars(ws, PERP)
+    snap.freeze(ws)
+
+    assert snap.covering(ws, [PERP], ["bar", "funding"], "1d", WINDOWS, store=None) is None
+
+
+def test_funding_is_asked_of_the_perpetuals_alone(ws: FakeWorkspace) -> None:
+    """A spot leg has no funding to load, so a basis universe is covered without inventing it.
+
+    Which instrument is a perpetual is read from its stored definition, the class
+    `hyp validate` reads, and never from the spelling of its id.
+    """
+    cat.open_catalog(ws).write_data([spot(), perpetual()])
+    load_bars(ws, SPOT, PERP)
+    cat.write(ws, settlements(), ref=funding_ref(), source="csv_parquet")
+
+    taken = snap.freeze(ws)
+
+    found = snap.covering(ws, [SPOT, PERP], ["bar", "funding"], "1d", WINDOWS, store=None)
+    assert found is not None and found.snapshot_id == taken.snapshot_id
+
+
+def test_a_spot_leg_is_still_asked_for_every_other_type(ws: FakeWorkspace) -> None:
+    cat.open_catalog(ws).write_data([spot(), perpetual()])
+    load_bars(ws, PERP)
+    cat.write(ws, settlements(), ref=funding_ref(), source="csv_parquet")
+    snap.freeze(ws)
+
+    assert snap.covering(ws, [SPOT, PERP], ["bar", "funding"], "1d", WINDOWS, store=None) is None
