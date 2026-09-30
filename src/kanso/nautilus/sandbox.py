@@ -265,8 +265,10 @@ def relay(kernel: Any) -> MessageBus:
 
 
 def _restamped(command: Any, ts_init: int) -> Any:
-    """The same command stamped `ts_init`: the order objects and every id are kept, so the
-    events the exchange generates land on the orders the node's cache holds."""
+    """The same command stamped `ts_init`, every other field copied: the order objects, every
+    id — the correlation id included — and the params are the original's, so the events the
+    exchange generates land on the orders the node's cache holds. NautilusTrader 1.231: each
+    of these five classes takes `params` and `correlation_id` beside its own fields."""
     if isinstance(command, SubmitOrder):
         return SubmitOrder(
             trader_id=command.trader_id,
@@ -276,6 +278,8 @@ def _restamped(command: Any, ts_init: int) -> Any:
             ts_init=ts_init,
             position_id=command.position_id,
             client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
         )
     if isinstance(command, SubmitOrderList):
         return SubmitOrderList(
@@ -286,6 +290,8 @@ def _restamped(command: Any, ts_init: int) -> Any:
             ts_init=ts_init,
             position_id=command.position_id,
             client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
         )
     if isinstance(command, ModifyOrder):
         return ModifyOrder(
@@ -300,6 +306,8 @@ def _restamped(command: Any, ts_init: int) -> Any:
             command_id=command.id,
             ts_init=ts_init,
             client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
         )
     if isinstance(command, CancelOrder):
         return CancelOrder(
@@ -311,6 +319,8 @@ def _restamped(command: Any, ts_init: int) -> Any:
             command_id=command.id,
             ts_init=ts_init,
             client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
         )
     if isinstance(command, CancelAllOrders):
         return CancelAllOrders(
@@ -321,6 +331,8 @@ def _restamped(command: Any, ts_init: int) -> Any:
             command_id=command.id,
             ts_init=ts_init,
             client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
         )
     if isinstance(command, BatchCancelOrders):
         return BatchCancelOrders(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -315,23 +316,35 @@ def test_a_refusal_stops_the_run_at_the_first_refused_order(
 
 
 def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
-    store: Path, lane: Path, request_for
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The child leads its own session; only the watcher can kill it with the lane."""
-    import threading
+    """The child leads its own session; only the watcher can kill it with the lane.
+
+    The stop lands once the child is running, as the watcher starts, rather than on a
+    timer: a timer that fired while the window was still being read was the refusal to
+    start a card, which the tests below measure, and left the watcher's kill unmeasured.
+    """
+    import signal
 
     from kanso.errors import PreconditionError
     from kanso.nautilus import backtest as runner
 
-    timer = threading.Timer(0.3, runner.interrupt)
-    timer.start()
+    watch = runner._watch
+    watched: list[Any] = []
+
+    def stopped_once_running(child: Any, budget_s: Any, mem_cap_gb: Any) -> Any:
+        watched.append(child)
+        runner.interrupt()
+        return watch(child, budget_s, mem_cap_gb)
+
+    monkeypatch.setattr(runner, "_watch", stopped_once_running)
     try:
         with pytest.raises(PreconditionError, match="the card was interrupted") as failure:
             run_subprocess(request_for(source=SLOW_SLEEVE), store, lane)
     finally:
-        timer.cancel()
         runner.resume()
 
+    assert [child.returncode for child in watched] == [-signal.SIGKILL]
     assert "the run resumes" in str(failure.value.remedy)
     assert not runner._INTERRUPT.is_set()
 
