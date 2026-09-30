@@ -414,6 +414,47 @@ def test_the_two_paths_cancel_an_order_the_emulator_holds_alike(
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("source", ["MODIFIED_OPEN", "bracket:plain", "bracket:emulated"])
+def test_the_two_paths_size_an_exit_at_market_beside_orders_not_yet_live_alike(
+    source: str, latency_ms: float
+) -> None:
+    """An exit at market beside an order the venue holds whose modify is still in flight, or
+    beside the exits of a bracket whose entry has not filled. The first is not cancelled —
+    on a node the cancel would overtake the modify, which the backtest lands first — and
+    counts until the modify lands; the second do not count, since they can fill only after
+    the entry. So the two paths agree order for order and fill for fill, and neither holds
+    the position to the end of the window or goes past flat. Measured on the round before
+    this test: with the modified order cancelled and counted spent, at 0 ms the backtest
+    went short 100 and the node did not, and at 20 ms the node sent an owed exit the
+    backtest never did; with the bracket's exits counted, both paths sold 80 of 100 and held
+    the rest to the end of the window."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    if source.startswith("bracket:"):
+        body = test_exit_flat.BRACKETS[source.split(":")[1]]
+        code = test_exit_flat.BRACKET_UNFILLED.replace(b"EMULATION", body)
+    else:
+        code = getattr(test_exit_flat, source)
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    request = request_for(source=code, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model), [instrument()], test_exit_flat.points(sessions)
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 @pytest.mark.parametrize("price", ["round(float(tick.ask_price) + 0.03, 2)", "99.0"])
 @pytest.mark.parametrize(
     "cancel",

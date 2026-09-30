@@ -391,6 +391,59 @@ class Strategy(KansoStrategy):
 '''
 )
 
+BRACKET_UNFILLED = (
+    HEAD
+    + b'''
+from nautilus_trader.model.enums import OrderSide, OrderType, TriggerType
+from nautilus_trader.model.objects import Price, Quantity
+
+
+class Strategy(KansoStrategy):
+    """Buys once; on its fifth quote sends a bracket to buy ten more with its entry far below
+    the market, so its stop-loss and take-profit, on the closing side, never become live; on
+    its thirtieth exits at market once, and never asks again."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 5:
+            bid = float(tick.bid_price)
+            self.submit_order_list(
+                self.order_factory.bracket(
+                    instrument_id,
+                    OrderSide.BUY,
+                    Quantity.from_int(10),
+                    entry_order_type=OrderType.LIMIT,
+                    entry_price=Price(round(bid * 0.5, 2), 2),
+                    sl_trigger_price=Price(round(bid * 0.4, 2), 2),
+                    tp_price=Price(round(bid * 2.0, 2), 2),
+                    EMULATION
+                )
+            )
+        elif self.seen == 30:
+            self.submit_exit(instrument_id)
+'''
+)
+
+BRACKETS = {"plain": b"", "emulated": b"emulation_trigger=TriggerType.BID_ASK,"}
+"""A bracket the venue holds, whose children it keeps back until the entry fills, and one
+the engine's order emulator holds, whose children it keeps unsent."""
+
+MODIFIED_OPEN = CANCELLED_OPEN.replace(b"PRICE", b"round(float(tick.ask_price) + 1.0, 2)").replace(
+    b"CANCEL",
+    b"from nautilus_trader.model.objects import Price; "
+    b"self.modify_order(order, price=Price(round(float(tick.bid_price) - 0.05, 2), 2))",
+)
+"""CANCELLED_OPEN with the exit the venue holds open modified to a marketable price, rather
+than cancelled, in the handler that then exits at market."""
+
 BOOK_OPEN_NS = 14 * 3_600 * 1_000_000_000
 """Where the book below opens, from midnight UTC of its session."""
 
@@ -709,6 +762,37 @@ def test_an_exit_at_market_cancels_a_stop_the_order_emulator_holds(
     cancelled, so it cut the exit to nothing on every point and the 100 shares were held to
     the end of the window."""
     run = _run(request_for, latency_ms, EMULATED_STOP)
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_exit_at_market_leaves_an_order_whose_modify_is_in_flight_to_it(
+    request_for, latency_ms: float
+) -> None:
+    """An exit the venue holds open, modified to a marketable price in the handler that then
+    exits at market, is pending update until the venue answers the modify; the exit at market
+    must not cancel it, which on a node would overtake the modify, nor count it spent. It
+    counts, the market exit is cut to nothing and owed, the modify fills it, and the sleeve is
+    flat. Measured on the round before this test: at 0 ms the exit at market cancelled the
+    order it read as held open and counted it spent, went whole, and the modify filled as
+    well, leaving the backtest short 100."""
+    run = _run(request_for, latency_ms, MODIFIED_OPEN)
+    assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("bracket", sorted(BRACKETS))
+def test_an_exit_at_market_does_not_count_the_exits_of_a_bracket_whose_entry_has_not_filled(
+    request_for, bracket: str, latency_ms: float
+) -> None:
+    """The stop-loss and take-profit of a bracket can fill only once its entry has, and then
+    close what the entry opened, so while the entry has filled nothing they leave the position
+    as it is and do not count. The exit at market takes the whole position. Measured on the
+    round before this test: both legs counted and were never cancelled, since neither the
+    venue nor the emulator had them open, so the exit sold 80 of 100 and the 20 it owed were
+    held to the end of the window."""
+    source = BRACKET_UNFILLED.replace(b"EMULATION", BRACKETS[bracket])
+    run = _run(request_for, latency_ms, source)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
 
 

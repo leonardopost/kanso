@@ -355,7 +355,10 @@ of every order of the sleeve's own on the closing side that the venue has not cl
 resting, in flight to it, or, under a stated latency, waiting on a cancel that has not
 landed — and returns `None` when those already close it. Every such order counts in full,
 an exit or not, so a stop that would reverse the position, or both legs of a bracket only one
-of which can fill, leave that much less to close. With no latency stated, an exit at market
+of which can fill, leave that much less to close. The stop-loss and take-profit of a bracket
+whose entry has filled nothing do not count: they can fill only after the entry and close
+what it opens, and neither the venue nor the order emulator has them open to cancel; once the
+entry has filled any of it they count in full. With no latency stated, an exit at market
 is never held back by a resting one: when the sleeve's own limit or stop orders resting at
 the venue on the closing side would leave it less than asked, it cancels them first, so a
 stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
@@ -363,8 +366,11 @@ after the stop has closed. Under a latency the cancelled orders can still fill u
 cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
 below); an order of the sleeve's still in flight to the venue, modified or not, is not
 cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
-paid once the venue holds that order open and the owed exit has cancelled it. A resting
-order whose cancel the venue refused is cancelled again. **An order the engine's order
+paid once the venue holds that order open and the owed exit has cancelled it. So is an order
+the venue holds whose modify has not been answered yet, one sent in the same handler among
+them: an exit at market does not cancel it — on a node that cancel would overtake the modify,
+which the backtest lands first — and it counts until the modify lands, filling at once if it
+made the order marketable. A resting order whose cancel the venue refused is cancelled again. **An order the engine's order
 emulator holds** (one sent with an `emulation_trigger`) has not reached the venue: it counts
 until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
 takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
@@ -714,7 +720,10 @@ order counts as working until the cancel lands. A node may not yet have handed t
 the venue when the strategy's handler cancels it, and would send the cancel ahead of it,
 where it is lost and the order rests; kanso holds such a cancel back and sends it the moment
 the node reports the order submitted, before the venue has matched it, so a node and a
-backtest fill alike (`kanso replay parity`). Zero, the
+backtest fill alike (`kanso replay parity`). A cancel the sleeve itself sends right behind a
+modify of an order the venue already holds is not held back: on a node it overtakes the
+modify, where the backtest lands the modify first and fills it if it is marketable, so the
+two paths can differ there (`docs/backlog.md`). Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the

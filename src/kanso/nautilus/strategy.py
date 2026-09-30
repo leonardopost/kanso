@@ -367,9 +367,13 @@ def _leaves(orders: Sequence[Any]) -> Decimal:
     return sum((order.leaves_qty.as_decimal() for order in orders), Decimal(0))
 
 
+_SETTLED = frozenset((OrderStatus.ACCEPTED, OrderStatus.TRIGGERED, OrderStatus.PARTIALLY_FILLED))
+"""The statuses of an order the venue holds open with nothing of the sleeve's to answer."""
+
+
 def _held_open(order: Any) -> bool:
-    """Whether the venue holds an order open, with no cancel pending for it: it has taken
-    the order and not closed it.
+    """Whether the venue holds an order open and settled: it has taken the order, not closed
+    it, and has no cancel or modify of it still to answer.
 
     In nautilus_trader 1.231.0 `Order.is_open` does not say so. It counts `PENDING_UPDATE`
     and `PENDING_CANCEL`, which a modify or a cancel applies to an order the venue has not
@@ -377,10 +381,17 @@ def _held_open(order: Any) -> bool:
     an emulation trigger (`Order.is_open_c` in `model/orders/base.pyx`). So kanso reads
     whether the venue has taken it from `venue_order_id`, which `Order.apply` sets only from
     the venue's own acceptance or a fill (an update only replaces one already set), and never
-    on submission, a modify or a cancel, on both paths. Measured on both paths by the exit and
-    replay tests, an order modified while still in flight, cancelled or not, among them.
+    on submission, a modify or a cancel, on both paths; and whether it is settled from its
+    status, `ACCEPTED`, `TRIGGERED` or `PARTIALLY_FILLED`. An order the venue took whose
+    modify is still in flight (`PENDING_UPDATE`) is not held open: on a node
+    `Strategy.modify_order` goes through the live risk engine's queue and `cancel_order`
+    straight to the live execution engine's (`trading/strategy.pyx`), so a cancel sent
+    behind the modify would overtake it, where the backtest engine lands the modify first
+    and fills it if it is marketable. Measured on both paths by the exit and replay tests,
+    an order modified in flight, cancelled or not, and an order the venue holds modified in
+    the handler that exits at market, among them.
     """
-    return bool(order.venue_order_id is not None and order.is_open and not order.is_pending_cancel)
+    return bool(order.venue_order_id is not None and order.status in _SETTLED)
 
 
 def _order_price(order: object) -> float | None:
@@ -1440,7 +1451,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         replaces one whose cancel is still in flight is sized to what the old one cannot also
         take, and the two cannot both fill past flat. Every such order counts in full, an
         exit or not: a stop that would reverse the position, or both legs of a bracket only
-        one of which can fill, leave that much less to close.
+        one of which can fill, leave that much less to close. The stop-loss and take-profit
+        of a bracket whose entry has filled nothing do not count, since they can fill only
+        after it and close what it opens; once it has filled any of it they count in full
+        (`_not_yet_live`).
 
         An exit at market cancels this sleeve's own limit or stop orders resting at the
         venue on the closing side when they would leave it less than asked. With no latency
@@ -1451,10 +1465,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         cuts from an exit at market is owed as well; once the venue holds it open, the owed
         exit cancels it like any other. So is an order the sleeve itself cancelled while it
         was still on its way to the venue: the venue takes it before the cancel, on both
-        paths (`_hold_cancel`). A resting order whose cancel the venue refused is cancelled
-        again. An order the engine's order emulator holds has not reached the venue: it
-        counts until it is cancelled, an exit at market cancels it with the resting ones, and
-        its cancel takes it out at once, at any latency (`_working`).
+        paths (`_hold_cancel`). So is an order the venue holds whose modify it has not
+        answered yet: on a node a cancel would overtake the modify, so it is not cancelled
+        and counts until the modify lands (`_held_open`). A resting order whose cancel the
+        venue refused is cancelled again. An order the engine's order emulator holds has not
+        reached the venue: it counts until it is cancelled, an exit at market cancels it with
+        the resting ones, and its cancel takes it out at once, at any latency (`_working`).
 
         What is owed is not dropped. When a cancel still in flight leaves less than asked,
         and whenever an exit at market is left less than asked, the exit is asked for again,
@@ -1899,10 +1915,25 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     and self._cancels.get(order.client_order_id, False)
                 )
                 or (not clips and self._is_clip(entry[0]))
+                or self._not_yet_live(order)
             ):
                 continue
             working.append(order)
         return working
+
+    def _not_yet_live(self, order: Any) -> bool:
+        """Whether an order is a contingent child, such as a bracket's stop-loss or
+        take-profit, whose parent has filled nothing: it can fill only once the parent has,
+        and then closes what the parent opened, so until then it leaves the position as it
+        is. In nautilus_trader 1.231.0 the venue keeps such a child `SUBMITTED` with no venue
+        order id, and the order emulator keeps it `INITIALIZED`, until the parent fills, so
+        neither an exit at market nor anything else has a child to cancel. Measured on both
+        paths by the exit and replay tests, a bracket held by the venue and one held by the
+        emulator."""
+        if order.parent_order_id is None:
+            return False
+        parent = self.cache.order(order.parent_order_id)
+        return parent is not None and parent.filled_qty.as_decimal() == 0
 
     def _submitted(self, order: object) -> object | None:
         placed = len(self._intents)
