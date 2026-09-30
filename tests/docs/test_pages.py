@@ -170,6 +170,27 @@ def test_the_workspace_page_states_the_currency_check_as_the_account_currency() 
     assert "different account currencies" in refusals
 
 
+def test_the_pages_state_the_settlement_check_and_the_fee_rate_refusal() -> None:
+    """Both refusals landed with the perpetual; the backlog row that asked for the first
+    is closed, and the pages that stated its absence say what it refuses now."""
+    workspace = prose(page("workspace.md"))
+    assert "An instrument's own quote currency is not compared" not in workspace
+    assert "settles in a currency other than its venue's account currency" in workspace
+    assert "a non-zero `maker_fee` or `taker_fee`" in workspace
+    doctor = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso doctor")
+    )
+    assert "non-zero maker or taker rate" in doctor
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 46 |"))
+    assert backlog.split("|")[3].strip().startswith("~~")
+
+
+def test_the_concepts_page_says_what_a_perpetual_is_not_yet() -> None:
+    concepts = prose(page("concepts.md"))
+    assert "**A perpetual is a linear contract" in concepts
+    assert "Funding" in concepts and "arrives in a later release" in concepts
+
+
 def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:
     """`[research]` is a layer between the defaults and the broker, a restated default is
     not one, and the code must be one the engine registers."""

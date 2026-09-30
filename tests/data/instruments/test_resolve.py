@@ -24,7 +24,7 @@ from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
 from kanso.schemas import InstrumentEntry, InstrumentsFile, load_yaml
 from kanso.workspace import Workspace, init
 
-from .conftest import AS_OF, EQUITY, FUTURE, Probe, reading, write
+from .conftest import AS_OF, EQUITY, FUTURE, INDEX, PERPETUAL, Probe, reading, write
 
 MSFT: dict[str, Any] = {**EQUITY, "nautilus_id": "MSFT.XNAS"}
 
@@ -556,3 +556,130 @@ def test_the_demo_workspace_resolves_its_instrument(tmp_path: Path) -> None:
     assert resolved["DEMO"].id.value == "DEMO.SIM"
     assert str(resolved["DEMO"].price_increment) == "0.01"
     assert definition_checksum(resolved["DEMO"]) in read_store(demo)
+
+
+# --- a resolved perpetual -----------------------------------------------------
+
+
+def kit_perpetual(**rates: str) -> Any:
+    """The engine's own test-kit BTCUSDT perpetual, its maker and taker rates replaced.
+
+    It is the engine's definition of a real venue's linear contract, with a minimum
+    notional in money and margin rates of its own — what a reference adapter would answer.
+    Its raw symbol is set to its id's, since an entry's identity supplies the raw symbol
+    on every rebuild (`_RESERVED`), whatever the class.
+    """
+    from nautilus_trader.model.instruments import CryptoPerpetual
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    fields = CryptoPerpetual.to_dict(TestInstrumentProvider.btcusdt_perp_binance())
+    return CryptoPerpetual.from_dict({**fields, "raw_symbol": "BTCUSDT-PERP", **rates})
+
+
+def test_a_resolved_perpetual_is_written_as_a_swap_and_rebuilds_equal(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`CryptoPerpetual.to_dict` carries no asset class, so the entry reads it off the
+    instrument: measured, the old reading wrote EQUITY, which rebuilds an `Equity`."""
+    contract = kit_perpetual(maker_fee="0", taker_fee="0")
+    probe = Probe(answers={"BTCUSDT-PERP": contract})
+
+    resolved = resolve_universe(probing(ws, probe, monkeypatch), ["BTCUSDT-PERP"], AS_OF)
+
+    entry = cache(ws)["BTCUSDT-PERP"]
+    assert entry.asset_class == "CRYPTOCURRENCY"
+    assert entry.override == {"instrument_class": "swap"}
+    assert type(resolved["BTCUSDT-PERP"]).__name__ == "CryptoPerpetual"
+    assert definition_checksum(resolved["BTCUSDT-PERP"]) == definition_checksum(contract)
+    assert entry.resolved is not None
+    assert entry.resolved.checksum == definition_checksum(contract)
+    rebuilt = build(entry, instruments._resolved_fields(contract))
+    assert definition_checksum(rebuilt) == definition_checksum(contract)
+
+
+@pytest.mark.parametrize(
+    ("stated", "hit"),
+    [("10", True), ("10.00 USDT", True), ("10 USDC", False), ("ten", False), ("11", False)],
+)
+def test_a_notional_bound_in_the_override_compares_as_money(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch, stated: str, hit: bool
+) -> None:
+    """The store renders the bound `10.00000000 USDT`; an operator writes `10`. Compared as
+    written, the two never agreed and every resolution asked the provider again."""
+    contract = kit_perpetual(maker_fee="0", taker_fee="0")
+    probe = Probe(answers={"BTCUSDT-PERP": contract})
+    resolve_universe(probing(ws, probe, monkeypatch), ["BTCUSDT-PERP"], AS_OF)
+    entry = cache(ws)["BTCUSDT-PERP"].model_copy(
+        update={"override": {"instrument_class": "swap", "min_notional": stated}}
+    )
+    assert entry.resolved is not None
+
+    held = instruments._from_cache(entry, {entry.resolved.checksum: contract}, AS_OF)
+
+    assert (held is contract) is hit
+
+
+def test_a_resolved_perpetual_carrying_a_fee_rate_is_refused_and_nothing_is_written(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = Probe(answers={"BTCUSDT-PERP": kit_perpetual(taker_fee="0")})
+    before = ws.path("instruments.yaml").read_bytes()
+
+    with pytest.raises(ValidationError) as caught:
+        resolve_universe(probing(ws, probe, monkeypatch), ["BTCUSDT-PERP"], AS_OF)
+
+    assert caught.value.message == (
+        "BTCUSDT-PERP.BINANCE: maker_fee 0.000200 in the resolved definition; a kanso "
+        "definition charges no fee of its own"
+    )
+    assert read_store(ws) == {}
+    assert ws.path("instruments.yaml").read_bytes() == before
+
+
+def test_a_resolution_the_entry_would_build_as_another_class_is_refused(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A perpetual filed under a bare CRYPTOCURRENCY entry would come back a spot pair."""
+    contract = kit_perpetual(maker_fee="0", taker_fee="0")
+    write(
+        ws,
+        BTC={
+            "nautilus_id": "BTCUSDT-PERP.BINANCE",
+            "asset_class": "CRYPTOCURRENCY",
+            "corporate_actions": "none",
+        },
+    )
+    probe = Probe(answers={"BTC": contract})
+
+    with pytest.raises(ValidationError) as caught:
+        resolve_universe(probing(ws, probe, monkeypatch), ["BTC"], AS_OF)
+
+    assert caught.value.message == (
+        "BTC: the reference adapter answered a definition of class CryptoPerpetual, and its "
+        "entry in instruments.yaml builds it as CurrencyPair"
+    )
+    assert caught.value.remedy == "name `instrument_class: swap` in this entry's `override`"
+
+
+def test_a_resolved_class_with_no_instrument_class_to_name_says_to_correct_the_asset_class(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index = InstrumentEntry.model_validate(INDEX)
+    write(ws, SPX={**INDEX, "manual": False, "asset_class": "EQUITY", "override": {"lot_size": 1}})
+    probe = Probe(answers={"SPX": build(index, conventions_for(index, AS_OF))})
+
+    with pytest.raises(ValidationError) as caught:
+        resolve_universe(probing(ws, probe, monkeypatch), ["SPX"], AS_OF)
+
+    assert caught.value.message == (
+        "SPX: the reference adapter answered a definition of class IndexInstrument, and its "
+        "entry in instruments.yaml builds it as Equity"
+    )
+    assert caught.value.remedy == "correct asset_class in this entry of instruments.yaml"
+
+
+def test_a_manual_perpetual_resolves_into_the_store(ws: Workspace) -> None:
+    write(ws, **{"BTCUSDT-PERP": PERPETUAL})
+    resolved = resolve_universe(ws, ["BTCUSDT-PERP.SIM"], AS_OF)
+    assert type(resolved["BTCUSDT-PERP.SIM"]).__name__ == "CryptoPerpetual"
+    assert definition_checksum(resolved["BTCUSDT-PERP.SIM"]) in read_store(ws)

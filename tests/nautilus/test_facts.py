@@ -114,3 +114,52 @@ def test_raises_helper_reports_the_exception() -> None:
 
     assert facts._raises(boom) == "ValueError: nope"
     assert facts._raises(lambda: 1) is None
+
+
+# -- the perpetual ------------------------------------------------------------------
+
+
+def test_the_perpetual_builds_from_exactly_the_fields_the_engine_requires() -> None:
+    """Each required field omitted raises, and the two kanso requires on top default to one.
+
+    The builder's own list is the engine's plus `multiplier` and `lot_size`: the engine
+    would carry a contract value of one, which kanso reads as a claim about the contract.
+    """
+    from nautilus_trader.model.instruments import CryptoPerpetual
+
+    from kanso.data.instruments import _REQUIRED
+
+    assert set(_REQUIRED["CryptoPerpetual"]) == {
+        *facts.PERPETUAL_REQUIRED,
+        "multiplier",
+        "lot_size",
+    }
+    bare = facts._sample_perpetual()
+    fields = facts._perpetual_fields(bare)
+    assert set(fields) == set(facts.PERPETUAL_REQUIRED)
+    for field in facts.PERPETUAL_REQUIRED:
+        refused = facts._without(CryptoPerpetual, fields, field)
+        assert refused is not None and refused.startswith("TypeError"), field
+    assert facts._without(CryptoPerpetual, fields, "multiplier") is None
+    assert (str(bare.multiplier), str(bare.lot_size)) == ("1", "1")
+
+
+def test_the_instrument_claim_counts_the_six_classes(verified: list[Fact]) -> None:
+    [fact] = [fact for fact in verified if fact.claim.startswith("the six instrument classes")]
+    assert fact.holds
+    assert "CryptoPerpetual" in fact.evidence
+
+
+def test_the_fee_and_settlement_claims_hold(verified: list[Fact]) -> None:
+    held = {fact.claim: fact.holds for fact in verified}
+    assert held[
+        "MakerTakerFeeModel charges a fill the instrument's maker or taker rate on its notional"
+    ]
+    [settlement] = [fact for fact in verified if fact.claim.startswith("get_settlement_")]
+    assert settlement.claim == (
+        "get_settlement_currency answers a perpetual's settlement currency and every other "
+        "class's quote currency; get_cost_currency, which the account manager books and "
+        "converts from, answers the quote currency of every class"
+    )
+    assert settlement.holds
+    assert "settles in USDC and is booked in USDT" in settlement.evidence

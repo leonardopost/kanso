@@ -1,9 +1,11 @@
 """Tick and lot conventions: dated facts about a market, keyed by asset class, venue and price.
 
 A minimum price increment and a minimum tradable lot are set by a regulator or by the
-venue's own rulebook. **No vendor publishes them**, which is why they are held here rather
-than read from a reference feed: a vendor that returned one would be reporting its own
-rounding convention, and a run that priced against it would be pricing against a guess.
+venue's own rulebook. A definition takes them from this table or from the reference
+provider's measured definition — a venue that publishes its own contract specification,
+as a crypto derivatives venue does per instrument, is measured rather than tabled — and
+never from a guess: a vendor that reported only its own rounding convention would be
+reporting a guess, and a run that priced against it would be pricing against one.
 
 They are also *dated*. A tick size is reassigned — by rule change, by pilot programme, by
 a security moving across a price band — and a reassignment must never rewrite the past: a
@@ -28,8 +30,9 @@ file is a refusal, not a default: the instrument's entry must then declare its o
 inventing one.
 
 These values feed the `price_increment` and `lot_size` constructor arguments of the
-NautilusTrader instrument classes (nautilus_trader 1.231.0), which have no engine defaults
-of their own.
+NautilusTrader instrument class an entry builds (nautilus_trader 1.231.0). `Equity` requires
+both with no default, as do `FuturesContract` and `OptionContract`; `price_increment` has no
+default on any class.
 """
 
 from __future__ import annotations

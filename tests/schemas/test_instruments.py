@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
+from kanso.data import instruments
 from kanso.errors import ValidationError
-from kanso.schemas import InstrumentsFile, parse_yaml
+from kanso.schemas import InstrumentsFile, dump_yaml, parse_yaml
 
 ENTRY: dict[str, Any] = {
     "nautilus_id": "AAPL.XNAS",
@@ -123,3 +128,54 @@ def test_the_file_carries_no_schema_key() -> None:
 def test_a_file_that_is_not_a_map_is_refused() -> None:
     with pytest.raises(ValidationError, match="valid dictionary"):
         InstrumentsFile.model_validate([{"AAPL": ENTRY}])
+
+
+INCREMENTS = st.sampled_from(["1", "0.5", "0.1", "0.01", "0.001", "0.0001"])
+"""Increments a venue publishes for a perpetual's price and size, from whole units down."""
+
+
+@given(
+    multiplier=st.sampled_from(["0.0001", "0.001", "0.01", "0.1", "1", "10", "100"]),
+    price_increment=INCREMENTS,
+    size_increment=INCREMENTS,
+    settlement=st.sampled_from(["USDT", "USDC", "USD"]),
+)
+def test_a_swap_entry_round_trips_and_builds_the_contract_it_states(
+    multiplier: str, price_increment: str, size_increment: str, settlement: str
+) -> None:
+    """Whatever contract a perpetual entry states, the file keeps it and the builder builds
+    exactly it: linear, at zero fee rates, with the precisions its increments imply."""
+    file = InstrumentsFile.model_validate(
+        {
+            "PERP": {
+                "nautilus_id": "BTC-PERP.SIM",
+                "asset_class": "CRYPTOCURRENCY",
+                "manual": True,
+                "corporate_actions": "none",
+                "override": {
+                    "instrument_class": "swap",
+                    "base_currency": "BTC",
+                    "quote_currency": "USDT",
+                    "settlement_currency": settlement,
+                    "multiplier": multiplier,
+                    "price_increment": price_increment,
+                    "size_increment": size_increment,
+                    "lot_size": size_increment,
+                },
+            }
+        }
+    )
+    again = parse_yaml(InstrumentsFile, dump_yaml(file))
+    assert again == file
+
+    entry = again["PERP"]
+    contract: Any = instruments.build(entry, instruments.conventions_for(entry, date(2024, 6, 3)))
+
+    assert type(contract).__name__ == "CryptoPerpetual"
+    assert contract.multiplier.as_decimal() == Decimal(multiplier)
+    assert contract.price_increment.as_decimal() == Decimal(price_increment)
+    assert contract.size_increment.as_decimal() == Decimal(size_increment)
+    assert contract.price_precision == max(0, -Decimal(price_increment).as_tuple().exponent)
+    assert contract.settlement_currency.code == settlement
+    assert contract.is_inverse is False
+    assert (contract.maker_fee, contract.taker_fee) == (Decimal(0), Decimal(0))
