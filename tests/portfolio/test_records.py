@@ -236,6 +236,37 @@ def test_a_fill_recorded_before_fills_said_whether_they_rested_reads_as_a_taker_
     assert [fill.maker for fill in records.decode_run(payload).fills] == [False, False]
 
 
+def test_the_contract_multiplier_survives_the_round_trip() -> None:
+    """A cost model re-applied to a stored window charges the notional the runner charged."""
+    contract = replace(a_fill(1), multiplier=50.0)
+    opened = replace(a_run().trades[0], multiplier=50.0, fills=(contract, a_fill(2)))
+    run = a_run(fills=(contract, a_fill(2)), trades=(opened,))
+
+    decoded = records.decode_run(records.encode_run(run))
+
+    assert [fill.multiplier for fill in decoded.fills] == [50.0, 1.0]
+    assert decoded.trades[0].multiplier == 50.0
+    assert decoded.fills[0].notional == 10.0 * 10.5 * 50.0
+    assert decoded == run
+
+
+def test_a_record_written_before_the_multiplier_was_kept_reads_as_one() -> None:
+    """A fill or trade recorded without the key reads as a share's, whose multiplier is one."""
+    payload = records.encode_run(a_run())
+    for recorded in payload["fills"]:
+        del recorded["multiplier"]
+    for recorded in payload["trades"]:
+        del recorded["multiplier"]
+        for made in recorded["fills"]:
+            del made["multiplier"]
+
+    decoded = records.decode_run(payload)
+
+    assert [fill.multiplier for fill in decoded.fills] == [1.0, 1.0]
+    assert [trade.multiplier for trade in decoded.trades] == [1.0]
+    assert decoded == a_run()
+
+
 def test_a_record_written_before_holdings_were_kept_still_decodes() -> None:
     """Every stage record already in a store predates the key and must still read back."""
     payload = records.encode_run(a_run())
@@ -278,6 +309,50 @@ def test_a_stage_run_is_recorded_as_an_event_and_read_back(store: StateStore) ->
     assert read[0].pnl == pytest.approx(sum(a_run().returns))
     assert read[0].gross == pytest.approx(50.0)
     assert read[0].net == pytest.approx(-50.0)
+
+
+def test_a_stage_book_is_recorded_at_its_contract_multiplier(store: StateStore) -> None:
+    """Five contracts of a 50-times future at 10 are 2,500 of exposure, and the record says so."""
+    from kanso.nautilus.node import Book, Realised
+
+    realised = Realised(
+        strategy_id="alpha",
+        version=1,
+        capital=1_000.0,
+        run=a_run(),
+        positions=(Book(instrument_id="ESZ4.XCME", qty=-5.0, price=10.0, multiplier=50.0),),
+    )
+
+    records.record_stage_run(store, "paper", "sess-1", (realised,))
+
+    read = records.stage_results(store, strategy_id="alpha", version=1)
+    assert read[0].positions == (("ESZ4.XCME", -5.0, 10.0, 50.0),)
+    assert read[0].gross == pytest.approx(2_500.0)
+    assert read[0].net == pytest.approx(-2_500.0)
+
+
+def test_a_stage_book_recorded_before_the_multiplier_was_kept_reads_as_one(
+    store: StateStore,
+) -> None:
+    """A book recorded without the key reads as a share's, valued at quantity times price."""
+    store.event(
+        records.STAGE_RUN,
+        records.subject_of("alpha", 1),
+        {
+            "stage": "paper",
+            "session_id": "sess-0",
+            "strategy": "alpha",
+            "version": 1,
+            "capital": 1_000.0,
+            "run": records.encode_run(a_run()),
+            "positions": [{"instrument": "DEMO.XNAS", "qty": -5.0, "price": 10.0}],
+        },
+    )
+
+    read = records.stage_results(store, strategy_id="alpha", version=1)
+
+    assert read[0].positions == (("DEMO.XNAS", -5.0, 10.0, 1.0),)
+    assert read[0].gross == pytest.approx(50.0)
 
 
 def test_stage_runs_can_be_narrowed_to_a_stage_or_a_strategy(store: StateStore) -> None:

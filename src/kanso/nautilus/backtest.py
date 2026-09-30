@@ -1384,7 +1384,8 @@ def _fill(
     instrument_id = str(event.instrument_id)
     qty = float(event.last_qty)
     px = float(event.last_px)
-    notional = qty * px * multipliers.get(instrument_id, 1.0)
+    multiplier = multipliers.get(instrument_id, 1.0)
+    notional = qty * px * multiplier
     maker = event.liquidity_side == LiquiditySide.MAKER
     side = order_side_to_str(event.order_side)
     costs = model.costs
@@ -1409,6 +1410,7 @@ def _fill(
         px=px,
         cost=cost,
         maker=maker,
+        multiplier=multiplier,
     )
 
 
@@ -1435,6 +1437,9 @@ def _trades(
     What a split paid out in lieu is in the profit, realised at the split. A position the
     payout left flat closed there, and the engine dated no close, so it is dated by the
     adjustment that closed it.
+
+    The trade carries the instrument's multiplier, as its fills do, so its opening value is
+    in the currency its profit is.
     """
     trades: list[Trade] = []
     for index, position in enumerate(positions):
@@ -1444,7 +1449,8 @@ def _trades(
         cost = fsum(fill.cost for fill in fills)
         name = str(position.instrument_id)
         schedule = () if schedules is None else schedules.get(name, ())
-        book = splits.ledger(splits.moves_of(position, schedule), multipliers.get(name, 1.0))
+        multiplier = multipliers.get(name, 1.0)
+        book = splits.ledger(splits.moves_of(position, schedule), multiplier)
         opened = min(fills, key=lambda fill: fill.ts_ns) if fills else None
         closed = int(position.ts_closed) or max(
             (int(event.ts_event) for event in position.adjustments), default=0
@@ -1460,6 +1466,7 @@ def _trades(
                 pnl_net=book.realized - cost,
                 cost=cost,
                 fills=fills,
+                multiplier=multiplier,
             )
         )
     return tuple(trades)
@@ -1572,8 +1579,7 @@ def _equity(
         while fill < len(fills) and fills[fill].ts_ns <= end:
             made = fills[fill]
             signed = made.qty if made.side == "BUY" else -made.qty
-            multiplier = multipliers.get(made.instrument_id, 1.0)
-            cash -= signed * made.px * multiplier + made.cost
+            cash -= signed * made.px * made.multiplier + made.cost
             held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
             fill += 1
         while split < len(adjustments) and adjustments[split][0] <= end:

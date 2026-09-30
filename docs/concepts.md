@@ -246,6 +246,25 @@ session under an environment allow-list. A card therefore has no route to data o
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.
 
+**Return periods are cut on the UTC clock.** The window opens at 00:00Z of its first day,
+and from there the runner cuts one `[research] return_period` after another — a day by
+default — for as long as the window lasts; a period exists only when a point landed in it,
+and a point lands in the period its `ts_init` falls in. A bar is stamped at its close, so a
+daily bar lands in the period after the day it summarises: on a 24-hour venue the day's bar
+closes at 00:00Z and lands in the following UTC period, the same rule under which an equity
+daily bar a vendor stamps at 05:00Z is counted in the UTC day of that stamp. On such a
+venue trading days are calendar days, so a series that printed every day is annualised at
+what `periods_per_year` observes — about 365 periods a year, the count the window held
+over its own length in years, with no constant assumed; the warmup sessions the runner
+resolves are the calendar days that printed, seven a week; and a `session_scope` point
+admitting a name for a session must be stamped in `[00:00Z, first market point)` of that
+session, because the session opens at midnight there — where the first market point is
+the bar that closes at exactly 00:00Z, which summarises the previous day's last period,
+that bar is ordered ahead of a scope point stamped at the same instant and is judged
+under the previous session's scope while its return folds into the new period
+(`docs/backlog.md` row 100). kanso keeps no calendar of its own:
+the sessions are the days the catalog holds prints on, whichever venue printed them.
+
 A card proposed by a model carries the proposer's own account of what it was: `tags`, one
 or more of the twenty-one strings `kanso.schemas.TAGS` fixes — `signal_*` for what the
 change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*`, and
@@ -442,7 +461,14 @@ A fill's is traded value struck at one price, so a strategy that tops up in thre
 like three small positions; a trade's is `peak_qty x avg_open`, an opening cost basis, which
 is biased upward by the strategy that rebalances toward a target as the price falls and blind
 to the drift of one entered once and left alone. A gate built on either would refuse the
-compliant strategy and pass the drifting one.
+compliant strategy and pass the drifting one. Every notional a run records or sizes — a
+fill's, a trade's, a holding's, the room a sleeve sizes an entry to, the budget a `full_book`
+rule fills and the book a stage reports — is `qty x price x multiplier`, the instrument's
+contract multiplier being one for a share and the contract size for a future or an option.
+Each recorded fill and trade carries the multiplier it was struck with, so a cost model
+re-applied to the record charges the notional the runner charged. A record written before the
+multiplier was kept reads as one, a share's; a run struck on a multiplied instrument before then
+is re-run before a cost model is re-applied to it.
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
@@ -959,8 +985,10 @@ fill fell on, for a rule that fires on a regime or an event and could put its wh
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
 commission, a flat rate, a maker rate, a fixed width — through the runner's own per-fill
-arithmetic, recomputes the objective on the re-priced run and holds it to `min_metric`: the
-same fills under the schedule of another account, without a second backtest.
+arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
+objective on the re-priced run and holds it to `min_metric`: the same fills under the
+schedule of another account, without a second backtest, and the card's own schedule
+reproduces the card's own costs on any instrument.
 
 ## The strategy version
 
@@ -1022,6 +1050,19 @@ live       down · exec sandbox (simulated) · data replay · speed 1 · capital
            clock never run · catalog to nothing · allocated 0 · pnl +0.00
 limits     gross 100% · net 100% · per strategy 40% · daily loss 3%
 ```
+
+**The stage venue is the card's venue.** A simulated stage builds its exchange from the
+same configuration a card built its own from, by the same function, from the venue model
+each version was certified under: the same latency (`costs.latency_ms`), the same book type
+and queue position (a level-two book for a hypothesis that requires `book`, the top of the
+book for every other) and the same fill model (`limit_fill`), with the fee model left
+unset as on a card, so the exchange charges the instruments' zero rates and the runner
+charges once. A version certified under a 20 ms round trip on a level-two book therefore
+trades the stage under 20 ms on a level-two book, and two versions on one venue that were
+certified under different latencies, or one on a book and one without, are refused at
+`deploy` (exit 2) before the stage is written, and at `promote` before an approval is
+recorded when the live stage could not hold the version, rather than run on whichever
+venue came first.
 
 The stage file carries only the **id** of an execution client. What matters is the pair of
 declarations behind that id: `capital` is `simulated`, `broker_paper` or `real`, and `clock`

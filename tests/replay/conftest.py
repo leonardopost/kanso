@@ -400,12 +400,12 @@ def dataset(instrument_id: str = INSTRUMENT, span: tuple[date, date] = SPAN) -> 
     )
 
 
-def venue_model() -> Any:
-    """The resolved model every card here is costed with."""
+def venue_model(doc: dict[str, Any] | None = None) -> Any:
+    """The resolved model a card here is costed with: the demo's, or `doc`'s own costs."""
     return resolve_venue_model(
         VENUE,
         broker="synthetic",
-        hypothesis_costs=CostsOverride.model_validate(DOCUMENT["costs"]),
+        hypothesis_costs=CostsOverride.model_validate((doc or DOCUMENT)["costs"]),
         max_leverage=1.0,
         quotes_available=False,
     )
@@ -640,7 +640,7 @@ def carded(
             peak_mem_gb=1.0,
             status="keep",
             desc="the card replay replays",
-            venue_model=venue_model(),
+            venue_model=venue_model(document_),
             created_at=datetime(2024, 3, 1, tzinfo=UTC),
         ),
     )
@@ -671,7 +671,7 @@ def composed(
         "criteria_version": criteria_version(),
         "plan_version": 1,
         "snapshot_id": frozen.snapshot_id,
-        "venue_model": venue_model().model_dump(),
+        "venue_model": venue_model(doc).model_dump(),
     }
     expectation = {
         "objective_id": "wf_sharpe_net",

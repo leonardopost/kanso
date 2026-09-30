@@ -51,18 +51,22 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   a node is wall time. A replayed stage compresses months of decisions into seconds, so the
   rate is lifted and the same strategy is throttled the same amount — none — on both paths.
 * `Strategy.close_all_positions` and `cancel_all_orders` take an instrument id and submit
-  through the strategy's own `submit_order`, which kanso classifies as an exit; the simulated
-  exchange runs with no message queue and zero latency, so the closing order is matched
-  against the last point's book in the same call rather than on a point that never comes.
+  through the strategy's own `submit_order`, which kanso classifies as an exit. With no
+  stated latency the simulated exchange runs with its message queue off and zero latency,
+  so the closing order is matched against the last point's book in the same call rather
+  than on a point that never comes. Under a venue model that states `costs.latency_ms` the
+  queue is on and the closing order waits in flight, so `_drive` lands it with
+  `SimulatedVenue.advance_past_latency()` after the window's last point, exactly as the
+  research path's settle does (`kanso.nautilus.sandbox`).
   The flatten cannot race an exit still working the way a replacement exit can
   (`KansoStrategy.submit_exit`): it is sent after the last point, so no point is matched
-  before its cancels land, and under a latency an exit the sleeve sent at the last point
-  lands in the same call as the flatten and may fill there — but the close is sized to the
-  position when it was sent and carries `reduce_only`, `close_position`'s default, which the
-  simulated venue honours: it refuses the close once the position is closed, and its
-  matching engine trims the close to the quantity still open when the exit has closed part
-  of it (`kanso.nautilus.facts` measures both, in the claim that `close_position` sends a
-  reduce-only order the simulated venue trims and refuses).
+  before its cancels land. Under a stated latency the flatten and any exit the sleeve sent
+  at the last point wait in flight together and land in `advance_past_latency()` with no
+  point matched in between. The close is sized to the position when it was sent and
+  carries `reduce_only`, `close_position`'s default, which the simulated venue honours: it
+  refuses the close once the position is closed, and trims it to the quantity still open
+  when the exit has closed part of it (`kanso.nautilus.facts` measures both, in the claim
+  that `close_position` sends a reduce-only order the simulated venue trims and refuses).
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.
@@ -72,7 +76,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final
@@ -97,7 +101,8 @@ from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered
-from kanso.nautilus.venue import NETTING, fill_model, starting_balance, venues_of
+from kanso.nautilus.strategy import BOOK
+from kanso.nautilus.venue import venue_config, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -106,20 +111,17 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.strategy import Loaded
 
 __all__ = [
-    "ACCOUNT_TYPES",
     "Book",
     "Placement",
     "Realised",
     "StageNode",
     "StageRun",
+    "agree",
     "max_notional_per_order",
     "run",
     "trader_id",
     "venues_for",
 ]
-
-ACCOUNT_TYPES: Final[dict[str, str]] = {"margin": "MARGIN", "cash": "CASH"}
-"""How a resolved venue model's account type is spelled to the engine."""
 
 START_TURNS: Final = 100_000
 """How many turns of the loop a node is given to come up before the stage gives up."""
@@ -206,16 +208,18 @@ class Placement:
 
 @dataclass(frozen=True)
 class Book:
-    """One instrument's net position at the end of a stage's window, and its mark."""
+    """One instrument's net position at the end of a stage's window, its mark and its
+    contract multiplier, read from the cached instrument — one for a share."""
 
     instrument_id: str
     qty: float
     price: float
+    multiplier: float = 1.0
 
     @property
     def notional(self) -> float:
         """The signed exposure this position carries, in the account currency."""
-        return self.qty * self.price
+        return self.qty * self.price * self.multiplier
 
 
 @dataclass(frozen=True)
@@ -348,49 +352,63 @@ def max_notional_per_order(
 
 
 def venues_for(placements: Sequence[Placement], capital: float) -> list[BacktestVenueConfig]:
-    """One cost-neutral venue configuration per venue these versions trade.
+    """One venue configuration per venue these versions trade: the card's, funded with the
+    stage capital.
 
-    Two versions trading one venue trade one account on one exchange, so they must agree
-    about both: an account has a single type and a single currency, an exchange a single
-    fill model, and a stage whose versions were certified against different ones is refused
-    rather than built from whichever came first. The leverage ceiling is the highest any
-    version on that venue was certified with, which is the only value that lets each of
-    them size as it was measured.
+    Each is built by the function a card's venue is built by, from the venue model the
+    versions were certified under and the book their hypotheses require, so a version
+    trades on the stage exactly the venue it was measured on — the same latency, book type,
+    queue position and fill model, with the fee model left unset as on a card. The leverage
+    ceiling is the highest any version on that venue was certified with, which is the only
+    value that lets each of them size as it was measured. What the versions must agree
+    about is `agree`'s, which refuses before anything is built.
     """
     if capital <= 0:
         raise ValidationError(f"capital: {capital} is not an amount to fund a stage with")
-    models: dict[str, tuple[str, VenueModel, float]] = {}
-    for placed in placements:
-        for venue in venues_of(placed.hyp.universe):
-            leverage = placed.hyp.risk_limits.max_leverage
-            held = models.get(venue)
-            if held is None:
-                models[venue] = (placed.label, placed.venue_model, leverage)
-                continue
-            _agree(venue, held, placed)
-            models[venue] = (held[0], held[1], max(held[2], leverage))
+    agreed = agree((placed.label, placed.hyp, placed.venue_model) for placed in placements)
     return [
-        BacktestVenueConfig(
-            name=venue,
-            oms_type=NETTING,
-            account_type=ACCOUNT_TYPES[model.account],
-            starting_balances=[starting_balance(capital, model.currency)],
-            base_currency=model.currency,
-            default_leverage=1.0 if model.account == "cash" else leverage,
-            bar_execution=True,
-            fill_model=fill_model(model.costs.limit_fill),
-            fee_model=None,
-            latency_model=None,
-        )
-        for venue, (_, model, leverage) in sorted(models.items())
+        venue_config(venue, model, capital, leverage, book=book)
+        for venue, (model, leverage, book) in sorted(agreed.items())
     ]
 
 
-def _agree(venue: str, held: tuple[str, VenueModel, float], placed: Placement) -> None:
-    """Refuse two versions that would fund one venue's account, or fill its orders, two
-    different ways."""
-    first, model, _ = held
-    mine = placed.venue_model
+def agree(
+    versions: Iterable[tuple[str, Hypothesis, VenueModel]],
+) -> dict[str, tuple[VenueModel, float, bool]]:
+    """The venue model, leverage ceiling and book each venue these versions trade is built
+    from, refusing two versions that would share a venue two different ways.
+
+    Each version is its label, its pinned hypothesis and the venue model it was certified
+    under. Two versions trading one venue trade one account on one exchange, so they must
+    agree about both: an account has a single type and a single currency, an exchange a
+    single fill model, a single round trip and a single book, and a stage whose versions were
+    certified against different ones is refused rather than built from whichever came
+    first. Nothing is built here, so `deploy` asks it before it writes a stage.
+    """
+    held: dict[str, tuple[str, VenueModel, float, bool]] = {}
+    for label, hyp, model in versions:
+        book = BOOK in hyp.data_requirements
+        leverage = hyp.risk_limits.max_leverage
+        for venue in venues_of(hyp.universe):
+            first = held.get(venue)
+            if first is None:
+                held[venue] = (label, model, leverage, book)
+                continue
+            _agree(venue, first, (label, model, leverage, book))
+            held[venue] = (first[0], first[1], max(first[2], leverage), first[3])
+    return {venue: (model, leverage, book) for venue, (_, model, leverage, book) in held.items()}
+
+
+def _agree(
+    venue: str,
+    held: tuple[str, VenueModel, float, bool],
+    placed: tuple[str, VenueModel, float, bool],
+) -> None:
+    """Refuse two versions that would fund one venue's account, fill its orders, reach its
+    book or keep that book two different ways."""
+    first, model, _, book = held
+    label, mine, _, mine_book = placed
+    retire = f"`kanso strat retire {label}` or `kanso strat retire {first}`"
     for field, theirs, ours in (
         ("account", model.account, mine.account),
         ("currency", model.currency, mine.currency),
@@ -398,16 +416,33 @@ def _agree(venue: str, held: tuple[str, VenueModel, float], placed: Placement) -
         if theirs != ours:
             raise PreconditionError(
                 f"venues.{venue}.{field}: {first} was certified against {theirs!r} and "
-                f"{placed.label} against {ours!r}; one venue is one account",
+                f"{label} against {ours!r}; one venue is one account",
                 remedy=f"set venues.{venue}.{field} in portfolio.yaml and re-certify",
             )
     if model.costs.limit_fill != mine.costs.limit_fill:
         raise PreconditionError(
             f"venues.{venue}.costs.limit_fill: {first} was certified against "
-            f"{model.costs.limit_fill!r} and {placed.label} against {mine.costs.limit_fill!r}; "
+            f"{model.costs.limit_fill!r} and {label} against {mine.costs.limit_fill!r}; "
             "one venue is one exchange, and it fills a touched limit one way",
             remedy=f"state one limit_fill for both — in each hypothesis's costs, or under "
             f"venues.{venue}.costs in portfolio.yaml — and re-certify",
+        )
+    if model.costs.latency_ms != mine.costs.latency_ms:
+        raise PreconditionError(
+            f"venues.{venue}.costs.latency_ms: {first} was certified under "
+            f"{model.costs.latency_ms!r} and {label} under {mine.costs.latency_ms!r}; "
+            "one venue is one round trip",
+            remedy=f"{retire}, or state one latency_ms for both — in each hypothesis's "
+            f"costs, or under venues.{venue}.costs in portfolio.yaml — and re-certify",
+        )
+    if book != mine_book:
+        with_book, without = (first, label) if book else (label, first)
+        raise PreconditionError(
+            f"venues.{venue}: {with_book} was certified on a level-two book, which its "
+            f"hypothesis requires as {BOOK!r}, and {without} on the top of the book; one "
+            "venue keeps one book",
+            remedy=f"{retire}, or require the same book in both hypotheses' "
+            "data_requirements and re-certify",
         )
 
 
@@ -751,6 +786,7 @@ def _books(
             # split-aware basis rather than `avg_px_open`, which a corporate action leaves
             # quoted in shares the position no longer holds.
             price=marks.get(name, splits.ledger(splits.moves_of(position, schedule)).basis),
+            multiplier=1.0 if held is None else float(held.multiplier),
         )
     return found
 

@@ -157,3 +157,30 @@ def test_the_contribution_is_the_mean_return_per_period_in_basis_points_of_the_c
     """Ten, twenty and thirty dollars a day on $100,000: two basis points a day on average."""
     run = build_run((10.0, 20.0, 30.0), capital=100_000.0)
     assert contribution_bps(run) == pytest.approx(2.0)
+
+
+def test_a_continuous_series_annualises_at_its_own_calendar() -> None:
+    """A round-the-clock venue has a return period every calendar day, so a week of daily
+    bars is seven periods over seven days: observed, `periods_per_year` is the year's own
+    length in days, with no constant assumed."""
+    from kanso.data.loaders.synthetic import SyntheticLoader
+
+    loader = SyntheticLoader()
+    ref = loader.discover(
+        {
+            "loader": "synthetic",
+            "seed": 7,
+            "instruments": ["DEMO"],
+            "resolution": "1d",
+            "calendar": "continuous",
+            "start": "2024-03-04",
+            "end": "2024-03-10",
+        }
+    )[0]
+    ends = tuple(bar.ts_init for bar in loader.load(ref, ref.span))
+    assert len(ends) == 7
+    run = build_run(tuple(1.0 for _ in ends), start=ref.span[0], days=7, ends=ends)
+    assert run.window == ref.span
+    assert all(run.bounds[0] <= ts < run.bounds[1] for ts in ends)
+    assert periods_per_year(run) == pytest.approx(DAYS_PER_YEAR, abs=1e-9)
+    assert abs(periods_per_year(run) - 365) < 0.5

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
@@ -26,6 +27,18 @@ def test_a_run_reports_its_window_as_a_half_open_span() -> None:
 def test_a_fill_and_a_trade_report_their_notional() -> None:
     assert fill(date(2024, 1, 1), qty=-100.0, px=12.5).notional == 1250.0
     assert trade(date(2024, 1, 1), pnl=10.0, notional=5_000.0).notional == 5_000.0
+
+
+def test_a_notional_is_quantity_times_price_times_the_contract_multiplier() -> None:
+    """A future of 50 times the index: two contracts at 4,000 move 400,000, not 8,000."""
+    made = replace(fill(date(2024, 1, 1), qty=-2.0, px=4_000.0), multiplier=50.0)
+    assert made.notional == 2.0 * 4_000.0 * 50.0
+    opened = replace(trade(date(2024, 1, 1), pnl=10.0, notional=5_000.0), multiplier=50.0)
+    assert opened.notional == 5_000.0 * 50.0
+    assert (fill(date(2024, 1, 1)).multiplier, trade(date(2024, 1, 1), 1.0).multiplier) == (
+        1.0,
+        1.0,
+    )
 
 
 def test_a_run_refuses_series_of_different_lengths() -> None:

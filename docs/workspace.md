@@ -329,7 +329,10 @@ sizing:                            # scope: adding or changing it clears `best`
 
 Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty` or
 `price`; `self.held(id)` is the position reader; a flip is `submit_exit(old)` then
-`submit_entry(new, side)` in one handler. Without the key, `submit_entry(id, side,
+`submit_entry(new, side)` in one handler. The budget is filled in whole lots of the
+instrument, and on a multiplied instrument — a future, an option — the price and the tick it
+is divided by are one contract's, `price x multiplier`, as is every notional the harness
+sizes, reserves or reads back on either path. Without the key, `submit_entry(id, side,
 notional=…)` sizes to the smaller of what was asked and what the risk limits leave — read on the smaller
 of the capital and the balance the sleeve has left, so an account that has lost money cannot
 borrow to keep its size, and one that has made money does not grow past its capital — and on
@@ -583,10 +586,12 @@ A per-share-priced account charges a cheap share more of its price than a dear o
 is 5.5 bp of a $10 share and 0.2 bp of a $300 one — and a flat rate in basis points cannot say
 so over a universe that spans both. The per-share commission is charged on every share of a
 fill that pays commission at all: a taker's, and a maker's under a model that states no
-`maker_bps`. A maker's fill under a stated `maker_bps` still pays that rate alone, because the
-rate is by contract the whole charge on that fill; a per-share-priced account states its maker
-net there, commission less the rebate. It is applied where every cost is, once, in the
-runner's extraction; `self.balance` books the same; what a sleeve reserves when it sizes
+`maker_bps`. Per share means per contract on a multiplied instrument, whose notional is the
+price times the contract multiplier, and so does `sell_fee_per_share` below. A maker's fill
+under a stated `maker_bps` still pays that rate alone, because the rate is by contract the
+whole charge on that fill; a per-share-priced account states its maker net there, commission
+less the rebate. It is applied where every cost is, once, in the runner's extraction;
+`self.balance` books the same; what a sleeve reserves when it sizes
 includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
 is part of the recorded cost of the fill. Zero unless stated, so no number moves for a model
 that does not name it.
@@ -639,7 +644,7 @@ to it (`kanso doctor` re-checks both behaviours as engine facts). A broker fills
 fills: the key moves kanso's simulated venues and nothing a broker does. Like every cost it
 is inherited — a broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and
 two versions certified under different rules cannot share a stage venue, which is one
-exchange: the stage's node refuses to build it (exit 2), naming
+exchange: `deploy` refuses the pair before it writes the stage (exit 2), naming
 `venues.<MIC>.costs.limit_fill`.
 
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
@@ -690,7 +695,11 @@ fills there. Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the
-hypothesis's scope, so a re-pin that changes it starts the search again.
+hypothesis's scope, so a re-pin that changes it starts the search again. A stage venue
+carries the latency its versions were certified under, so two versions certified under
+different values cannot share one, which is one round trip: `deploy` refuses the pair
+before it writes the stage (exit 2), naming `venues.<MIC>.costs.latency_ms` and both
+versions.
 
 **A print fills a resting limit by its own size**, and no more: a buy of 320 met by four
 sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per print, and met
@@ -935,6 +944,26 @@ that extends the end and a `backfill` that reaches further back both mint fresh 
 the dataset they follow in `supersedes`. The manifest records the span that was **served**,
 never the span that was asked for, because a source may answer a five-year request with two
 years, HTTP 200 and no warning.
+
+The synthetic loader, as `demo.yaml` drives it, generates the weekday sessions of a US equity
+venue, 09:30 to 16:00 in `America/New_York`; a spec that sets `calendar: continuous`
+generates every calendar day from `start` to `end` instead, in UTC, 00:00 to 24:00 — what a
+round-the-clock venue looks like to the runner. Bars are stamped at their close on either
+calendar, so at a resolution that divides the day the last bar of a continuous day closes
+at 00:00Z of the next, and a daily bar
+lands in the day after the one it summarises (`docs/concepts.md`, the card's return
+periods). A continuous calendar fixes its zone and its session, so a spec that also states
+`timezone`, `session_start` or `session_end` is refused (exit 3) naming the field:
+
+```
+$ kanso data load --loader synthetic --spec round_the_clock.yaml
+error: timezone: 'America/New_York' conflicts with calendar 'continuous', whose every session is a UTC calendar day, 00:00 to 24:00; drop the field
+```
+
+`calendar: weekdays` is the default and is recorded in no manifest, so a dataset generated
+before the field existed carries the request parameters it always did and its snapshot id
+is unchanged; a continuous dataset records its calendar with the zone and session it fixed.
+The loader emits bars, quotes and trades on either calendar, and nothing else.
 
 **Coverage counts one fact the manifests do not hold**: the days between two served spans of
 a series that its source was asked for and answered with nothing, which `state.db` records
