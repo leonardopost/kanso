@@ -437,15 +437,16 @@ def test_a_stored_number_is_measured_under_a_reading_the_four_pins_do_not_carry(
 def test_the_settings_the_digest_leaves_out_move_no_number(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
-    """`annualisation`, `account` and `currency` look like a reading and are not.
+    """`annualisation` looks like a reading and is not; `account` and `currency` are one
+    only through the venue model.
 
-    All three are `[research]` keys of the rendered template, two of them commented there
-    as changing what a card is measured with, and this package reads none of them: a
-    venue's account type and currency come from the broker's declaration, the operator's
-    `venues.<MIC>` override and the shipped defaults, and no objective is passed an
-    annualisation. So the same bytes over the same data score the same number under all
-    three changed, and the digest does not name what changes nothing. Wiring any of them
-    is what makes this fail, and the digest has to take it on the same day.
+    All three are `[research]` keys of the rendered template. No objective is passed an
+    annualisation. `account` and `currency` are the lowest layer of a venue's model,
+    beneath the broker's declaration and the operator's `venues.<MIC>` override, so they
+    reach a number only through the venue model the digest carries whole — and this
+    workspace's broker declares both. So the same bytes over the same data score the same
+    number under all three changed, and the digest names none of them on its own. Wiring
+    `annualisation` is what makes this fail, and the digest has to take it on the same day.
     """
     run = loop.begin(ws, store, registered)
     edit(ws, run, REVERTING)

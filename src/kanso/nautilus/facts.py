@@ -105,10 +105,10 @@ child is handed its parent's extensions for (`kanso.ext.reimport`).
 
 Instruments
 -----------
-The five classes kanso resolves are `Equity`, `OptionContract`,
-`FuturesContract`, `CurrencyPair` and `IndexInstrument`. Their constructors are
-Cython and positional-or-keyword with no introspectable signature; the required
-fields, established by construction, are:
+The six classes kanso resolves are `Equity`, `OptionContract`,
+`FuturesContract`, `CurrencyPair`, `IndexInstrument` and `CryptoPerpetual`.
+Their constructors are Cython and positional-or-keyword with no introspectable
+signature; the required fields, established by construction, are:
 
 * `Equity`: `instrument_id`, `raw_symbol`, `currency`, `price_precision`,
   `price_increment`, `lot_size`, `ts_event`, `ts_init`.
@@ -125,12 +125,44 @@ fields, established by construction, are:
 * `IndexInstrument`: `instrument_id`, `raw_symbol`, `currency`,
   `price_precision`, `size_precision`, `price_increment`, `size_increment`,
   `ts_event`, `ts_init`.
+* `CryptoPerpetual`: `instrument_id`, `raw_symbol`, `base_currency`,
+  `quote_currency`, `settlement_currency`, `is_inverse`, `price_precision`,
+  `size_precision`, `price_increment`, `size_increment`, `ts_event`, `ts_init`.
 
-Omitting a required field raises `TypeError`. Tick size, lot size and
-multiplier are constructor inputs with no engine defaults, which is why they
-must come from a convention table rather than from a vendor. `Equity` takes no
-multiplier and carries `Quantity(1)`, so a share's notional is its quantity at
-its price; every other class carries the one it was built with.
+Omitting a required field raises `TypeError`. Tick size is a constructor input
+with no engine default. Lot size and multiplier have none on `Equity`,
+`FuturesContract` and `OptionContract`; `CurrencyPair` defaults `multiplier` to
+`Quantity(1)` and `lot_size` to `None`, `IndexInstrument` fixes `multiplier` at
+1, and `CryptoPerpetual` defaults both to `Quantity(1)`. kanso requires the
+perpetual's anyway, because a contract value of one is a claim about the
+contract. So they come from the convention table or the reference provider's
+measured definition, never guessed. `Equity`
+takes no multiplier and carries `Quantity(1)`, so a share's notional is its
+quantity at its price; every other class carries the one it was built with.
+`CryptoPerpetual` fixes its asset class to `CRYPTOCURRENCY` and its instrument
+class to `SWAP`, and its `to_dict` carries no `asset_class` key.
+
+Every class carries `maker_fee` and `taker_fee`, zero unless given, and
+`MakerTakerFeeModel.get_commission` charges a fill its notional times the
+instrument's maker or taker rate, in the quote currency: measured on a
+perpetual of multiplier 0.01, ten contracts at 60,000 pay 3 USDT at a taker
+rate of 0.0005 and nothing at zero. That model is the one `BacktestEngine`
+substitutes for a venue given none, so kanso's definitions keep both rates at
+zero and the runner's cost model is the only charge. `margin_init` and
+`margin_maint` stay overridable; the engine's liquidation path computes from
+them.
+
+`Instrument.get_settlement_currency()` answers the currency a trade settles
+in: a `CryptoPerpetual`'s stated `settlement_currency`, and the quote currency
+of every other class kanso builds (none of them inverse).
+`Instrument.get_cost_currency()` answers the currency positions, PnL and margin
+are booked in — the quote currency of every linear class, a perpetual's
+included — and the account manager converts from it to the account's base
+currency, deferring the balance update (logged at debug only) when the cache
+holds no rate between them. A USDC-settled perpetual quoted in USDT answers
+USDC to the first and USDT to the second, and is not quanto, because the engine
+treats the two as USD equivalents: it settles in one currency and is booked in
+the other, so `hyp validate` requires both to be the account's.
 
 `nautilus_trader.common.providers.InstrumentProvider` is not the interface
 kanso needs: `load(instrument_id, filters)` takes an already fully qualified
@@ -1450,10 +1482,53 @@ def _check_custom_data_pickles_its_payload_by_reference() -> tuple[bool, str]:
 # --- instruments -------------------------------------------------------------
 
 
+def _sample_perpetual(**fields: Any) -> Any:
+    """A linear BTC perpetual quoted and settled in USDT, built from exactly the fields
+    the engine requires plus whatever `fields` adds or replaces."""
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol
+    from nautilus_trader.model.instruments import CryptoPerpetual
+    from nautilus_trader.model.objects import Currency, Price, Quantity
+
+    usdt = Currency.from_str("USDT")
+    required: dict[str, Any] = {
+        "instrument_id": InstrumentId.from_str("BTCUSDT-PERP.SIM"),
+        "raw_symbol": Symbol("BTCUSDT-PERP"),
+        "base_currency": Currency.from_str("BTC"),
+        "quote_currency": usdt,
+        "settlement_currency": usdt,
+        "is_inverse": False,
+        "price_precision": 1,
+        "size_precision": 0,
+        "price_increment": Price.from_str("0.1"),
+        "size_increment": Quantity.from_int(1),
+        "ts_event": 0,
+        "ts_init": 0,
+    }
+    return CryptoPerpetual(**{**required, **fields})
+
+
+PERPETUAL_REQUIRED = (
+    "instrument_id",
+    "raw_symbol",
+    "base_currency",
+    "quote_currency",
+    "settlement_currency",
+    "is_inverse",
+    "price_precision",
+    "size_precision",
+    "price_increment",
+    "size_increment",
+    "ts_event",
+    "ts_init",
+)
+"""What `CryptoPerpetual` refuses to construct without, measured one omission at a time."""
+
+
 def _check_instrument_classes() -> tuple[bool, str]:
     from nautilus_trader.model.enums import AssetClass, OptionKind
     from nautilus_trader.model.identifiers import InstrumentId, Symbol
     from nautilus_trader.model.instruments import (
+        CryptoPerpetual,
         CurrencyPair,
         Equity,
         FuturesContract,
@@ -1521,6 +1596,7 @@ def _check_instrument_classes() -> tuple[bool, str]:
             ts_event=0,
             ts_init=0,
         ),
+        _sample_perpetual(multiplier=Quantity.from_str("0.01"), lot_size=Quantity.from_int(1)),
     ]
     missing_field = _raises(
         lambda: Equity(
@@ -1534,10 +1610,153 @@ def _check_instrument_classes() -> tuple[bool, str]:
         )
     )
     share = built[0].multiplier
-    holds = len(built) == 5 and missing_field is not None and share == Quantity.from_int(1)
+    bare: Any = _sample_perpetual()
+    fields = _perpetual_fields(bare)
+    unbuilt = {field: _without(CryptoPerpetual, fields, field) for field in PERPETUAL_REQUIRED}
+    defaulted = (str(bare.multiplier), str(bare.lot_size))
+    perpetual = CryptoPerpetual.to_dict(bare)
+    holds = (
+        len(built) == 6
+        and missing_field is not None
+        and share == Quantity.from_int(1)
+        and all(unbuilt.values())
+        and defaulted == ("1", "1")
+        and "asset_class" not in perpetual
+        and bare.asset_class == AssetClass.CRYPTOCURRENCY
+        and bare.instrument_class.name == "SWAP"
+    )
     return holds, (
         f"constructed {[type(i).__name__ for i in built]}; "
-        f"Equity.multiplier = {share}; Equity without lot_size -> {missing_field}"
+        f"Equity.multiplier = {share}; Equity without lot_size -> {missing_field}; "
+        f"CryptoPerpetual refuses to construct without each of {sorted(unbuilt)} "
+        f"({sum(1 for refused in unbuilt.values() if refused)} of {len(unbuilt)} refused); "
+        f"built without multiplier and lot_size it carries {defaulted[0]} and {defaulted[1]}; "
+        f"its asset class is {bare.asset_class.name}, its instrument class "
+        f"{bare.instrument_class.name}, and to_dict carries "
+        f"{'no' if 'asset_class' not in perpetual else 'an'} asset_class key"
+    )
+
+
+def _without(cls: Any, fields: dict[str, Any], omitted: str) -> str | None:
+    """What constructing `cls` from `fields` less one of them raises, or `None`."""
+    return _raises(lambda: cls(**{name: v for name, v in fields.items() if name != omitted}))
+
+
+def _perpetual_fields(perpetual: Any) -> dict[str, Any]:
+    """The required constructor fields of a built perpetual, read back off its attributes."""
+    return {
+        "instrument_id": perpetual.id,
+        "raw_symbol": perpetual.raw_symbol,
+        "base_currency": perpetual.base_currency,
+        "quote_currency": perpetual.quote_currency,
+        "settlement_currency": perpetual.settlement_currency,
+        "is_inverse": perpetual.is_inverse,
+        "price_precision": perpetual.price_precision,
+        "size_precision": perpetual.size_precision,
+        "price_increment": perpetual.price_increment,
+        "size_increment": perpetual.size_increment,
+        "ts_event": perpetual.ts_event,
+        "ts_init": perpetual.ts_init,
+    }
+
+
+def _check_fee_model_charges_the_instrument_rates() -> tuple[bool, str]:
+    """What a non-zero maker or taker rate on a definition would cost every fill."""
+    from decimal import Decimal
+
+    from nautilus_trader.backtest.models import MakerTakerFeeModel
+    from nautilus_trader.common.component import TestClock
+    from nautilus_trader.common.factories import OrderFactory
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.enums import LiquiditySide, OrderSide, OrderType
+    from nautilus_trader.model.events import OrderAccepted, OrderFilled, OrderSubmitted
+    from nautilus_trader.model.identifiers import (
+        AccountId,
+        StrategyId,
+        TradeId,
+        TraderId,
+        VenueOrderId,
+    )
+    from nautilus_trader.model.objects import Money, Price, Quantity
+
+    factory = OrderFactory(
+        trader_id=TraderId("T-1"), strategy_id=StrategyId("S-1"), clock=TestClock()
+    )
+    account = AccountId("SIM-001")
+    price, quantity = Price.from_str("60000.0"), Quantity.from_int(10)
+
+    def charge(instrument: Any, side: LiquiditySide) -> Money:
+        order = factory.market(instrument.id, OrderSide.BUY, quantity)
+        ids = {
+            "trader_id": order.trader_id,
+            "strategy_id": order.strategy_id,
+            "instrument_id": order.instrument_id,
+            "client_order_id": order.client_order_id,
+            "account_id": account,
+            "event_id": UUID4(),
+            "ts_event": 0,
+            "ts_init": 0,
+        }
+        order.apply(OrderSubmitted(**ids))
+        order.apply(OrderAccepted(venue_order_id=VenueOrderId("V-1"), **ids))
+        order.apply(
+            OrderFilled(
+                **{**ids, "event_id": UUID4()},
+                venue_order_id=VenueOrderId("V-1"),
+                trade_id=TradeId("F-1"),
+                position_id=None,
+                order_side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                last_qty=quantity,
+                last_px=price,
+                currency=instrument.quote_currency,
+                commission=Money(0, instrument.quote_currency),
+                liquidity_side=side,
+            )
+        )
+        charged: Money = MakerTakerFeeModel().get_commission(order, quantity, price, instrument)
+        return charged
+
+    contract = Quantity.from_str("0.01")
+    taker = charge(
+        _sample_perpetual(multiplier=contract, taker_fee=Decimal("0.0005")), LiquiditySide.TAKER
+    )
+    maker = charge(
+        _sample_perpetual(multiplier=contract, maker_fee=Decimal("0.0002")), LiquiditySide.MAKER
+    )
+    free = charge(_sample_perpetual(multiplier=contract), LiquiditySide.TAKER)
+    holds = (taker.as_decimal(), maker.as_decimal(), free.as_decimal()) == (
+        Decimal(3),
+        Decimal("1.2"),
+        Decimal(0),
+    )
+    return holds, (
+        f"ten contracts of multiplier 0.01 at 60,000 were charged {taker} at a taker rate of "
+        f"0.0005, {maker} at a maker rate of 0.0002 and {free} at rates of zero: the fee "
+        "model charges the instrument's own rate on the notional, so a kanso definition "
+        "keeps both rates at zero"
+    )
+
+
+def _check_settlement_currency() -> tuple[bool, str]:
+    """The two currencies `hyp validate` compares with a venue's account currency."""
+    from nautilus_trader.model.objects import Currency
+
+    usdc = _sample_perpetual(settlement_currency=Currency.from_str("USDC"))
+    same = _sample_perpetual()
+    equity: Any = _sample_equity()
+    answered = tuple(
+        (held.get_settlement_currency().code, held.get_cost_currency().code)
+        for held in (usdc, same, equity)
+    )
+    holds = answered == (("USDC", "USDT"), ("USDT", "USDT"), ("USD", "USD")) and not (
+        usdc.is_quanto
+    )
+    return holds, (
+        f"a USDT-quoted perpetual settled in USDC settles in {answered[0][0]} and is booked "
+        f"in {answered[0][1]} (quanto: {usdc.is_quanto}), one settled in USDT settles and is "
+        f"booked in {answered[1][0]}/{answered[1][1]}, and a USD equity in "
+        f"{answered[2][0]}/{answered[2][1]}, its quote currency"
     )
 
 
@@ -2402,8 +2621,18 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_custom_data_pickles_its_payload_by_reference,
     ),
     (
-        "the five instrument classes construct from the fields kanso must supply",
+        "the six instrument classes construct from the fields kanso must supply",
         _check_instrument_classes,
+    ),
+    (
+        "MakerTakerFeeModel charges a fill the instrument's maker or taker rate on its notional",
+        _check_fee_model_charges_the_instrument_rates,
+    ),
+    (
+        "get_settlement_currency answers a perpetual's settlement currency and every other "
+        "class's quote currency; get_cost_currency, which the account manager books and "
+        "converts from, answers the quote currency of every class",
+        _check_settlement_currency,
     ),
     (
         "the engine's InstrumentProvider requires a fully qualified InstrumentId and is "

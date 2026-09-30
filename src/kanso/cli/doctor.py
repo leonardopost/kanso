@@ -38,16 +38,23 @@ import json
 import platform
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from kanso import __version__, creds, env, ext, skills_sync
 from kanso.certify.certificate import source_file
 from kanso.cli.context import STATE_DB
 from kanso.criteria.integrity import scope as lane_scope
 from kanso.data import registry
-from kanso.data.instruments import CACHE_NAME, ManualProvider, ResolveError, _lookup, read_store
+from kanso.data.instruments import (
+    CACHE_NAME,
+    ManualProvider,
+    ResolveError,
+    _lookup,
+    charged_rates,
+    read_store,
+)
 from kanso.data.manifest import catalog_path
 from kanso.data.snapshot import instrument_drift, newest
 from kanso.env import envelope as envelope_module
@@ -958,6 +965,11 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     `kanso.data.snapshot.instrument_drift`, the one `research begin` pins a run by, asked
     here rather than remade, so the two cannot disagree about whether the store moved.
 
+    A fourth: every definition the store holds is read for a maker or taker rate. The
+    simulated venue charges a fill its instrument's own rate on top of the commission the
+    runner deducts, so a stored definition carrying one — resolved before `build` refused
+    them — double-charges every fill of every run priced under it, and fails here.
+
     An id that cannot resolve at all fails, since registering, classifying and planning
     the hypothesis all stop on it; an id doctor could not verify, and a store the newest
     snapshot no longer describes, warn.
@@ -973,6 +985,8 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     remedies: list[str] = []
     universes = 0
     hypotheses = 0
+    charged = _charged(held.values())
+    items.extend(item for item, _ in charged)
 
     if unread is not None:
         items.append(f"universes not checked: {unread.reason}")
@@ -1022,11 +1036,22 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     else:
         detail += " · the store matches the newest snapshot"
 
-    if failed:
+    if charged:
+        remedies.insert(
+            0,
+            "remove the rate from the entry's `override` in instruments.yaml, or state it "
+            'there as "0" where the reference provider resolved it, then run '
+            + " and ".join(f"`{command}`" for _, command in charged),
+        )
+    if failed or charged:
+        reasons = [
+            *([f"{len(failed)} id(s) do not resolve"] if failed else []),
+            *([f"{len(charged)} stored definition(s) carry a fee rate"] if charged else []),
+        ]
         return Check(
             "instruments",
             "fail",
-            f"{detail}; {len(failed)} id(s) do not resolve",
+            f"{detail}; {' · '.join(reasons)}",
             items=tuple(items),
             remedy="; ".join(remedies),
         )
@@ -1045,6 +1070,31 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
             remedy=remedy or None,
         )
     return Check("instruments", "ok", detail, items=tuple(items))
+
+
+def _charged(held: Iterable[object]) -> list[tuple[str, str]]:
+    """Each stored definition carrying a non-zero maker or taker rate, with its re-resolve.
+
+    The item names the definition by id and the date it was resolved as of, since the
+    store keeps one per date and only a resolution as of that date replaces it.
+    """
+    found: list[tuple[str, str]] = []
+    for definition in held:
+        rates = charged_rates(definition)
+        if not rates:
+            continue
+        shown: Any = definition
+        name = str(shown.id)
+        day = datetime.fromtimestamp(int(shown.ts_init) / 1_000_000_000, tz=UTC).date()
+        stated = ", ".join(f"{field} {rate}" for field, rate in sorted(rates.items()))
+        found.append(
+            (
+                f"{name} as of {day}: the store holds it with {stated}, which the simulated "
+                "venue charges on every fill on top of the venue model's commission",
+                f"kanso data instruments resolve {name} --as-of {day} --refresh",
+            )
+        )
+    return sorted(found)
 
 
 def _entry_item(key: str, entry: InstrumentEntry) -> str:
