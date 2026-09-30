@@ -59,6 +59,156 @@ class Strategy(KansoStrategy):
 '''
 
 
+HEAD = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+"""
+
+MARKET_AFTER_CANCEL = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once, rests an exit far above the market on its fifth quote, and on its
+    thirtieth cancels it and exits at market once, never asking again."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 5:
+            self.submit_exit(instrument_id, price=round(float(tick.ask_price) * 1.5, 2))
+        elif self.seen == 30:
+            self.cancel_all_orders(instrument_id)
+            self.submit_exit(instrument_id)
+'''
+)
+
+STOP_OVER_TAKE_PROFIT = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once, rests a take-profit far above the market on its fifth quote, and from its
+    thirtieth to its thirty-fourth stops out at market without cancelling it."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 5:
+            self.submit_exit(instrument_id, price=round(float(tick.ask_price) * 1.5, 2))
+        elif 30 <= self.seen < 35:
+            self.submit_exit(instrument_id)
+'''
+)
+
+
+HOUSEKEEPING = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once, rests a take-profit far above the market on its fifth quote, and from its
+    thirtieth cancels every order it has on every quote, and never exits by itself."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 5:
+            self.submit_exit(instrument_id, price=round(float(tick.ask_price) * 1.5, 2))
+        elif self.seen >= 30:
+            self.cancel_all_orders(instrument_id)
+'''
+)
+
+
+def exit_once_from(ts_ns: int) -> bytes:
+    """An exit rule that says so exactly once, at the first point at or after `ts_ns`."""
+    return f"""
+from kanso.nautilus.strategy import Decision, KansoModifier, KansoModifierConfig
+
+
+class Config(KansoModifierConfig):
+    pass
+
+
+class Modifier(KansoModifier):
+    construct = "exit"
+    config_cls = Config
+
+    def evaluate(self, ctx):
+        said = getattr(self, "said", False)
+        self.said = said or ctx.ts_event >= {ts_ns}
+        return Decision(exit=self.said and not said)
+""".encode()
+
+
+CANCELLED_IN_FLIGHT = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once; on its thirtieth quote sends an exit below the bid, cancels it at once,
+    while it is still in flight to the venue, and exits at market; on its fortieth sells
+    short."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 30:
+            order = self.submit_exit(instrument_id, price=round(float(tick.bid_price) - 0.05, 2))
+            CANCEL
+            self.submit_exit(instrument_id)
+        elif self.seen == 40:
+            self.submit_entry(instrument_id, "SELL", qty=100)
+'''
+)
+
+
+def taken_back(cancel: str) -> bytes:
+    """MARKET_AFTER_CANCEL, which on its thirty-first quote cancels its exits again with
+    `cancel` — before the first cancel has landed under a latency."""
+    calls = {
+        "cancel_all_orders": "self.cancel_all_orders(instrument_id)",
+        "cancel_orders": "self.cancel_orders(self.cache.orders(strategy_id=self.id)[1:2])",
+        "cancel_order": "self.cancel_order(self.cache.orders(strategy_id=self.id)[1])",
+    }
+    return (
+        MARKET_AFTER_CANCEL
+        + ("\n        elif self.seen == 31:\n            " + calls[cancel] + "\n").encode()
+    )
+
+
 def points(sessions: tuple[date, date] = SESSIONS) -> list[tuple[object, ...]]:
     """Quotes and prints a second apart over ten minutes of each session, from the generator."""
     loader = SyntheticLoader()
@@ -102,16 +252,22 @@ def never_short(fills: list[object]) -> tuple[float, float, float]:
     return bought, sold, lowest
 
 
-def _run(request_for, latency_ms: float):
+def _run(request_for, latency_ms: float, source: bytes = CHASING, modifiers=()):
     document = hypothesis().model_dump(mode="json")
     document.update(resolution="tick", data_requirements=["quote", "trade"])
     document["costs"] = chasing_costs(latency_ms)
     hyp = Hypothesis.model_validate(document)
-    result = execute(
-        request_for(RESEARCH, source=CHASING, hypothesis_=hyp), [instrument()], points()
-    )
+    request = request_for(RESEARCH, source=source, hypothesis_=hyp, modifiers=modifiers)
+    result = execute(request, [instrument()], points())
     assert not result.crashed, result.traceback_tail
     return result.run
+
+
+def flat_within_the_session(run) -> None:
+    """Bought 100, sold exactly that, never short at any fill, and never held overnight."""
+    assert never_short(run.fills) == (100.0, 100.0, 0.0), never_short(run.fills)
+    held = max_hold.evaluate(context(run, params={"days": 1})).evidence
+    assert held["longest_days"] < 0.01, held
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
@@ -127,3 +283,75 @@ def test_an_exit_that_follows_the_ask_never_sells_what_it_did_not_buy(
     assert lowest >= 0.0, f"the position reached {lowest:g}"
     held = max_hold.evaluate(context(run, params={"days": 1})).evidence
     assert held["longest_days"] < 0.01, held
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_exit_sent_once_after_a_cancel_still_closes_the_position(
+    request_for, latency_ms: float
+) -> None:
+    """The exit that rested far above is cancelled and a market exit is asked for once.
+    Under a latency the cancel is still in flight when it is asked for, so the old exit
+    could still take the whole position and the market exit is sized to nothing; what it
+    held back is owed and goes at market once the cancel has landed. Measured before the
+    exit was owed: at 20 ms the sleeve never sold, and held the 100 shares overnight."""
+    flat_within_the_session(_run(request_for, latency_ms, MARKET_AFTER_CANCEL))
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_a_stop_at_market_cancels_the_take_profit_it_would_otherwise_wait_on(
+    request_for, latency_ms: float
+) -> None:
+    """A market exit the sleeve's own resting take-profit would cut is not held back by it:
+    the take-profit is cancelled and the stop takes the position. Measured before: with the
+    take-profit counted, at 0 ms the stop was sized to nothing and the sleeve held overnight;
+    before exits counted the ones working at all, at 20 ms each stop in flight was joined by
+    another and the sleeve sold 200 of the 100 it had bought."""
+    run = _run(request_for, latency_ms, STOP_OVER_TAKE_PROFIT)
+    flat_within_the_session(run)
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+@pytest.mark.parametrize("cancel", ["cancel_all_orders", "cancel_orders", "cancel_order"])
+def test_an_owed_exit_is_forgotten_once_the_sleeve_cancels_its_exits_again(
+    request_for, cancel: str
+) -> None:
+    """A sleeve that cancels on the closing side after asking for an exit has taken it back,
+    so the exit its cancel in flight held back is never sent and the position is kept."""
+    run = _run(request_for, 20.0, taken_back(cancel))
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0)]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_exit_rule_that_says_so_once_closes_whatever_its_host_cancels(
+    request_for, latency_ms: float
+) -> None:
+    """The rule says exit once, on the thirtieth quote, while the host's take-profit is
+    waiting on the cancel the host sent; the host goes on cancelling everything on every
+    quote. The exit the cancel in flight held back is the rule's, so the host's cancels do
+    not take it back, and it goes once the cancel has landed. Measured before the exit was
+    owed: at 20 ms the rule's exit was sized to nothing and the position held overnight."""
+    quotes = [point for point in points()[0] if type(point).__name__ == "QuoteTick"]
+    rule = (("exit", exit_once_from(quotes[29].ts_event), {}),)
+    flat_within_the_session(_run(request_for, latency_ms, HOUSEKEEPING, rule))
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize(
+    "cancel", ["self.cancel_order(order)", "self.cancel_all_orders(instrument_id)"]
+)
+def test_an_exit_cancelled_in_flight_still_counts_until_its_cancel_lands(
+    request_for, cancel: str, latency_ms: float
+) -> None:
+    """The venue takes an order before the cancel that follows it, so a marketable exit
+    cancelled while still in flight fills, whatever the latency. The market exit sent
+    beside it is held back and owed; the old exit's fill leaves the position flat, the owed
+    exit is dropped there, and the short the sleeve opens later is its own. Measured before:
+    at 0 ms, with the cancelled order read as spent, both exits filled and the sleeve was
+    short 100 before it ever asked to be."""
+    run = _run(request_for, latency_ms, CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancel.encode()))
+    assert [(fill.side, fill.qty) for fill in run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+        ("SELL", 100.0),
+    ]
+    assert never_short(run.fills[:2]) == (100.0, 100.0, 0.0)

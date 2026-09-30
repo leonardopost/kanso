@@ -201,6 +201,16 @@ def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> Non
     text = prose(page("workspace.md"))
     assert "An exit never goes past flat, counting the exits still working." in text
     assert "Under a stated latency a cancel is not instant" in text
+    assert "What the cancel in flight held back is owed, not dropped" in text
+    assert "An exit at market is never held back by a resting one" in text
+
+
+def test_the_research_template_says_an_exit_can_return_none_while_exits_are_working() -> None:
+    """The loop model writes `strategy.py` from `program.md`, so it is told what the docs say:
+    `submit_exit` returns `None` while working exits cover it, and a cancel is not instant."""
+    text = prose((ROOT / "src" / "kanso" / "templates" / "program.md").read_text())
+    assert "An exit never goes past flat, counting the exits still working" in text
+    assert "Under a latency a cancel is not instant" in text
 
 
 def test_the_workspace_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:

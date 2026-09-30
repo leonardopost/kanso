@@ -56,14 +56,17 @@ shrinks the absolute net position is an exit, anything else is an entry.
 
 Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor`
 methods are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`,
-`handle_trade_tick`, `handle_data`, `submit_order`, `submit_order_list`, `_start` and
-`_stop` all take precedence when the engine calls them; `Trader` starts actors before
+`handle_trade_tick`, `handle_data`, `submit_order`, `submit_order_list`, `cancel_order`,
+`cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all take precedence when the
+engine calls them; `Trader` starts actors before
 strategies, so a modifier is registered before its host runs; `close_position` and
 `close_all_positions` route through `submit_order`; `portfolio.net_position(instrument_id)`
-returns a signed `Decimal`; `cancel_order` and `cancel_all_orders` apply `OrderPendingCancel`
-to an order before the command leaves the strategy, and a pending-cancel order is not
-`is_closed` and can still fill until the cancel lands — under a latency model after the
-next point is matched, with none before it (`kanso.nautilus.facts` measures both);
+returns a signed `Decimal`; an order whose cancel was sent is not `is_closed` and can
+still fill until the cancel lands — under a latency model after the next point is matched,
+with none before it for an order the venue held open, and never before the venue has taken
+an order still in flight, which fills there if it is marketable (`kanso.nautilus.facts`
+measures all three); `cancel_all_orders` cancels the strategy's orders open at the venue
+and in flight to it, and not one still `INITIALIZED` (read in `trading/strategy.pyx`);
 `StrategyConfig` and `ActorConfig` are frozen msgspec structs
 whose subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls`
 here is kanso's own attribute, honoured by kanso's loader alone.
@@ -347,6 +350,11 @@ def _maker_bps(charges: Mapping[str, Any]) -> float | None:
     return None if stated is None else float(stated)
 
 
+def _leaves(orders: Sequence[Any]) -> Decimal:
+    """What a set of orders can still fill between them."""
+    return sum((order.leaves_qty.as_decimal() for order in orders), Decimal(0))
+
+
 def _order_price(order: object) -> float | None:
     price = getattr(order, "price", None)
     return None if price is None else float(price)
@@ -387,6 +395,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._clip_orders: dict[str, list[object]] = {}
         self._sizing_call = False
         self._built = False
+        self._owed: dict[tuple[str, OrderSide], tuple[float | None, float | None, bool]] = {}
+        self._cancels: dict[object, bool] = {}
         self._charges = _charges(resolved)
         self._cash = resolved.capital
         self._ledger: list[list[Any]] = []
@@ -882,6 +892,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._overlay_due = (instrument_id, bar, float(bar.close))
             return
         super().handle_bar(bar, False)
+        self._pay_owed()
         self._consult_exit(instrument_id)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
@@ -889,6 +900,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _dispatch_quote(self, tick: QuoteTick) -> None:
         self._data_time = int(tick.ts_event)
         super().handle_quote_tick(tick, False)
+        self._pay_owed()
         self._consult_exit(tick.instrument_id)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (tick.instrument_id, None, None)
@@ -896,6 +908,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _dispatch_trade(self, tick: TradeTick) -> None:
         self._data_time = int(tick.ts_event)
         super().handle_trade_tick(tick, False)
+        self._pay_owed()
         self._consult_exit(tick.instrument_id)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (tick.instrument_id, None, None)
@@ -905,6 +918,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         key = None if instrument_id is None else str(instrument_id)
         self._observe(key, int(getattr(data, "ts_event", self._data_time)), None)
         super().handle_data(data)
+        self._pay_owed()
         if instrument_id is not None:
             self._consult_exit(instrument_id)
             if not self._cfg.extra_resolutions:
@@ -1370,11 +1384,30 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The quantity is the smaller of what was asked for and what is left to close: the
         net position less the unfilled quantity of every order of this sleeve's on the
-        closing side that the venue has not closed — resting, in flight to it, or waiting
-        on a cancel that has not landed (`_working`). So an exit that replaces one whose
-        cancel is still in flight is sized to what the old one cannot also take, and the two
-        cannot both fill past flat; when nothing is left, nothing is submitted. Returns the
-        order, or `None` when flat or when the working exits already close the position.
+        closing side that the venue has not closed — resting, in flight to it, or, under a
+        stated latency, waiting on a cancel that has not landed (`_working`). So an exit that
+        replaces one whose cancel is still in flight is sized to what the old one cannot also
+        take, and the two cannot both fill past flat. Every such order counts in full, an
+        exit or not: a stop that would reverse the position, or both legs of a bracket only
+        one of which can fill, leave that much less to close.
+
+        An exit at market is never held back by a resting one: when this sleeve's own limit
+        or stop orders resting at the venue on the closing side would leave it less than
+        asked, it cancels them first. With no latency stated those cancels land before
+        anything further is matched and the whole of what was asked goes at market. An
+        order still in flight to the venue is not cancelled, and counts.
+
+        What an order waiting on its cancel holds back is owed, not dropped. When a cancel
+        still in flight leaves less than asked, the exit is asked for again, with what is
+        still owed at the price given, at every later point once the author's handler for
+        it has run — each time sized to what is left then — until nothing waiting on a
+        cancel holds any of it back. It is forgotten when the position is flat or has
+        changed sides, when this sleeve asks for another exit in the name, and when it
+        cancels an order on that side of it; an exit an attached exit rule asked for is
+        forgotten only when the position is flat, whatever its host sends or cancels.
+
+        Returns the order, or `None` when flat or when the orders still working already
+        close what was asked, including when what is left is owed.
 
         Exits are neither filtered nor scaled: a construct that shrinks an exit would leave
         exposure behind that nothing in the hypothesis accounts for.
@@ -1389,16 +1422,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self.sized:
             return self._sized_exit(instrument, resolved_id, qty, price)
         net = Decimal(self.portfolio.net_position(resolved_id))
-        if net == 0:
-            return None
-        side = OrderSide.SELL if net > 0 else OrderSide.BUY
-        left = float(abs(net) - self._working(resolved_id.value, side, clips=True))
-        target = left if qty is None else min(abs(qty), left)
-        quantity = self._quantise(instrument, target)
-        if quantity is None:
-            return None
-        order = self._order(instrument, side, quantity, price)
-        return self._submitted(order)
+        return self._close(instrument, resolved_id, net, qty, price, clips=True)
 
     def _sized_entry(
         self,
@@ -1518,45 +1542,179 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         if self._own_intended(key) == 0:
             return None
-        filled = self._own_filled(key)
-        side = OrderSide.SELL if filled > 0 else OrderSide.BUY
-        left = Decimal(repr(abs(filled))) - self._working(key, side, clips=False)
-        quantity = self._quantise(instrument, float(left))
-        if quantity is None:
-            return None
-        order = self._order(instrument, side, quantity, None)
+        filled = Decimal(repr(self._own_filled(key)))
         self._sizing_call = True
         try:
-            return self._submitted(order)
+            return self._close(instrument, instrument_id, filled, None, None, clips=False)
         finally:
             self._sizing_call = False
 
-    def _working(self, key: str, side: OrderSide, *, clips: bool) -> Decimal:
-        """What this sleeve's own orders on one side of a name can still fill: the unfilled
-        quantity of every one the venue has not closed, resting or in flight to it.
+    def _close(
+        self,
+        instrument: object,
+        instrument_id: InstrumentId,
+        net: Decimal,
+        qty: float | None,
+        price: float | None,
+        *,
+        clips: bool,
+    ) -> object | None:
+        """Close up to `qty` of a signed position of `net`, less what this sleeve's orders
+        still working on the closing side will close (`submit_exit` states the rule)."""
+        key = instrument_id.value
+        self._forget(key, OrderSide.NO_ORDER_SIDE, ruled=self._exiting)
+        if net == 0:
+            return None
+        side = OrderSide.SELL if net > 0 else OrderSide.BUY
+        asked = float(abs(net)) if qty is None else min(abs(qty), float(abs(net)))
+        working = self._working(key, side, clips=clips)
+        if price is None and float(abs(net) - _leaves(working)) < asked:
+            resting = [
+                order
+                for order in working
+                if order.order_type != OrderType.MARKET
+                and order.is_open
+                and order.client_order_id not in self._cancels
+            ]
+            for order in resting:
+                self.cancel_order(order)
+            working = self._working(key, side, clips=clips)
+        quantity = self._quantise(instrument, min(asked, float(abs(net) - _leaves(working))))
+        sent = 0.0 if quantity is None else float(quantity)
+        if sent < asked and any(order.client_order_id in self._cancels for order in working):
+            owed = (None if qty is None else asked - sent, price, self._exiting)
+            self._owed.setdefault((key, side), owed)
+        if quantity is None:
+            return None
+        return self._submitted(self._order(instrument, side, quantity, price))
+
+    def _pay_owed(self) -> None:
+        """Ask again for every exit still owed, on the side of the position it was owed on.
+
+        Run after the author's handler for a point and before the exit rules, so a sleeve
+        that asks again on that point replaces what it was owed rather than adding to it,
+        and an exit rule's own exit is asked for as the rule's, which its host cannot take
+        back.
+        """
+        for (key, side), (qty, price, ruled) in list(self._owed.items()):
+            net = (
+                self._own_filled(key)
+                if self.sized
+                else float(self.portfolio.net_position(InstrumentId.from_str(key)))
+            )
+            if net == 0 or (OrderSide.SELL if net > 0 else OrderSide.BUY) != side:
+                del self._owed[(key, side)]
+                continue
+            exiting, self._exiting = self._exiting, ruled
+            try:
+                self.submit_exit(key, qty=qty, price=price)
+            finally:
+                self._exiting = exiting
+
+    def _forget(self, key: str, side: OrderSide, *, ruled: bool = False) -> None:
+        """Drop the exit owed on one side of a name, or on both for `NO_ORDER_SIDE`; one an
+        exit rule is owed only when `ruled`."""
+        for owed in (OrderSide.BUY, OrderSide.SELL):
+            held = self._owed.get((key, owed))
+            if (
+                side in (OrderSide.NO_ORDER_SIDE, owed)
+                and held is not None
+                and (ruled or not held[2])
+            ):
+                del self._owed[(key, owed)]
+
+    def cancel_order(
+        self,
+        order: Any,
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """Cancel an order, and forget the exit owed on its side of the name: a sleeve
+        that cancels an order on the closing side has taken back the exit it asked for."""
+        self._cancelling(order)
+        self._forget(order.instrument_id.value, order.side)
+        super().cancel_order(order, client_id, params)
+
+    def cancel_orders(
+        self,
+        orders: list[Any],
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """Cancel orders, forgetting the exits owed on their sides as `cancel_order` does."""
+        for order in orders:
+            self._cancelling(order)
+            self._forget(order.instrument_id.value, order.side)
+        super().cancel_orders(orders, client_id, params)
+
+    def cancel_all_orders(
+        self,
+        instrument_id: InstrumentId,
+        order_side: OrderSide = OrderSide.NO_ORDER_SIDE,
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """Cancel this sleeve's orders in a name, forgetting the exits owed on those sides.
+
+        The engine cancels the orders open at the venue and those in flight to it, and
+        leaves one it has not yet sent; those are the ones noted as cancelled.
+        """
+        for entry in self._ledger:
+            order = self._current(entry[0])
+            if (
+                order.instrument_id == instrument_id
+                and order_side in (OrderSide.NO_ORDER_SIDE, order.side)
+                and (order.is_open or order.is_inflight)
+            ):
+                self._cancelling(order)
+        self._forget(instrument_id.value, order_side)
+        super().cancel_all_orders(instrument_id, order_side, client_id, params)
+
+    def _cancelling(self, order: Any) -> None:
+        """Note that a cancel was sent for an order, and whether the venue held it open then.
+
+        An order stays working until its cancel lands (`_working`). With no latency stated
+        one the venue held open is spent the moment its cancel is sent, since the cancel
+        lands before anything further is matched; one still in flight is not, because the
+        venue takes the order before the cancel that follows it and a marketable one fills
+        there.
+        """
+        current = self._current(order)
+        key = current.client_order_id
+        self._cancels[key] = self._cancels.get(key, False) or bool(current.is_open)
+
+    def _working(self, key: str, side: OrderSide, *, clips: bool) -> list[Any]:
+        """This sleeve's own orders on one side of a name that can still fill: every one the
+        venue has not closed, resting or in flight to it.
 
         An order whose cancel has been sent is still working until the cancel lands. Under a
         stated `latency_ms` the cancel reaches the book after the next point has been
         matched, so the order can fill in between and is counted. With no latency stated the
         venue lands a cancel sent in a handler before it matches anything further, on both
-        code paths, so an order already waiting on its cancel is spent and is not. `clips`
+        code paths, so an order it held open when the cancel was sent, and that still waits
+        on it, is spent and is not counted; one still in flight to it when the cancel was
+        sent is, since the venue takes the order first and a marketable one fills. `clips`
         counts the attached overlays' clips as well, for a reading of the whole net position
         rather than the sleeve's own share of it.
         """
         instant = float(self._charges.get("latency_ms") or 0.0) <= 0.0
-        total = Decimal(0)
+        working = []
         for entry in self._ledger:
             order = self._current(entry[0])
             if (
                 order.is_closed
                 or order.side != side
                 or order.instrument_id.value != key
-                or (instant and order.is_pending_cancel)
+                or (
+                    instant
+                    and order.is_pending_cancel
+                    and self._cancels.get(order.client_order_id, False)
+                )
                 or (not clips and self._is_clip(entry[0]))
             ):
                 continue
-            total += order.leaves_qty.as_decimal()
-        return total
+            working.append(order)
+        return working
 
     def _submitted(self, order: object) -> object | None:
         placed = len(self._intents)
@@ -1980,8 +2138,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         that is a network round trip. Without this the rule would place a second exit on
         the next tick, and a third on the one after, until the first filled, and the
         position would flip to the other side. A resting limit order is deliberately not
-        counted — a take-profit at an unreachable price must not be able to block a stop; the
-        exit rule cancels it instead, and closes what it cannot take (`_consult_exit`).
+        counted — a take-profit at an unreachable price must not be able to block a stop; an
+        exit at market cancels it instead (`submit_exit`).
         """
         return any(
             order.instrument_id == instrument_id and order.side == side  # type: ignore[attr-defined]
@@ -1991,13 +2149,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _consult_exit(self, instrument_id: InstrumentId) -> None:
         """Ask the attached exit rules whether to close the position, and close it if one does.
 
-        A rule that closes cancels the sleeve's own orders still working on the closing side
-        of the name first — a take-profit resting above the market, an exit following the
-        ask — and then closes what they cannot take: with no latency stated the cancels land
-        before anything further is matched and the whole position goes at market; under a
-        stated latency the cancelled orders can still fill until their cancels land, so the
-        close is only what they leave, and a rule that still says so on a later point closes
-        the rest.
+        A rule that closes sends the whole position at market through `submit_exit`, which
+        cancels the sleeve's own resting orders on the closing side first — a take-profit
+        above the market, an exit following the ask. With no latency stated the cancels land
+        before anything further is matched and the whole position goes; under a stated
+        latency the cancelled orders can still fill until their cancels land, so the close
+        is what they leave, and the rest is owed and sent once they have landed, whether or
+        not the rule says so again.
         """
         # The warming guard is unreachable on a flat start — no position exists in the
         # prefix — and stands for a run that carries or restores a book across the open.
@@ -2013,25 +2171,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._exiting = True
         try:
             if self.before_exit(ctx):
-                self._cancel_resting(instrument_id, side)
                 self.submit_exit(instrument_id)
         finally:
             self._exiting = False
-
-    def _cancel_resting(self, instrument_id: InstrumentId, side: OrderSide) -> None:
-        """Cancel this sleeve's own limit and stop orders on one side of a name that the venue
-        has not closed and that no cancel is already on its way to. A clip is never one: an
-        overlay's clips are market orders."""
-        resting = [
-            order
-            for order in (self._current(entry[0]) for entry in self._ledger)
-            if not (order.is_closed or order.is_pending_cancel)
-            and order.order_type != OrderType.MARKET
-            and order.side == side
-            and order.instrument_id == instrument_id
-        ]
-        for order in resting:
-            self.cancel_order(order)
 
     def _consult_overlay(
         self,
