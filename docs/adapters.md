@@ -30,7 +30,7 @@ and where each resolves from, and reaches nothing to say so.
 |---|---|
 | `kanso data adapters` | what is registered: id, kind, capabilities, quota, loader ids, and per credential the name and where it resolves from — never a value. No network I/O |
 | `kanso data adapters --check` | what your key *actually reaches*: one authenticated lookup first, then one entitlement probe per dataset and one history-floor measurement per entitled price series. It reports the number of requests it made, and exits 2 if a configured key does not authenticate |
-| `kanso doctor` | the same registration facts, graded. Green whether or not an adapter is configured |
+| `kanso doctor` | the same registration facts, graded. Green whether or not an adapter is configured; each broker's `[adapters.<id>]` table is read through that broker's own model, and one it refuses fails the `execution` check |
 | `kanso doctor --check-adapters` | the same probe, graded. A dataset your plan excludes is reported and never graded down — it is a subscription, not a fault in the workspace; a credential that does not authenticate is the one failure |
 | `kanso portfolio clients` | the execution half: every client a stage may name, what each declares, which adapter provides it, which stages it may be configured on, and where each credential resolves from. Then what `deploy` would refuse each stage for. No network I/O |
 
@@ -280,7 +280,7 @@ layout, and a wrong one is a mis-signed request rather than a redirect.
 
 ## The Alpaca adapter
 
-The broker this package ships, for US equities, in two accounts: a paper one and a real one.
+A broker this package ships, for US equities, in two accounts: a paper one and a real one.
 It provides both halves of a live stage — the execution client that places the orders and
 the live market data client that feeds the strategy placing them — and declares the venue
 model kanso costs a backtest with, so a card is measured the way the account that would
@@ -335,7 +335,9 @@ declaration with the last: that check belongs to the long-running stage node tha
 ### Configuration
 
 `[adapters.alpaca]` in `kanso.toml` is validated by the adapter's own model, which accepts
-these keys and no others. It holds no credential.
+these keys and no others, and `kanso doctor` reads it through that model whether or not
+the table is there — an unknown key or a value outside its range fails the `execution`
+check. It holds no credential.
 
 | key | default | what it does |
 |---|---|---|
@@ -393,6 +395,116 @@ execution client (exit 2) rather than fill its orders in simulation and record t
 broker's. `docs/backlog.md` tracks the long-running node, and the fills reach the engine by
 polling rather than by an order stream, which is recorded there too.
 
+## The OKX adapter
+
+A crypto exchange, for perpetual swaps, in two accounts: a demo-trading one and a real one.
+In this version the package is **declarations only** — the two execution clients, the data
+client id, the six credential names, `[adapters.okx]` and the venue model — and holds no
+network code: nothing it ships can open a socket, and `kanso doctor` with its table set
+makes no request of it. The clients, the instrument provider and the public-history loaders
+arrive in later versions on top of what is declared here.
+
+### Credentials
+
+Six names under the standard scheme, three per account — the exchange signs every private
+request with a key, a secret and a passphrase — resolved independently at the moment of use:
+
+| variable | what it opens |
+|---|---|
+| `KANSO_OKX_DEMO_API_KEY` · `KANSO_OKX_DEMO_API_SECRET` · `KANSO_OKX_DEMO_PASSPHRASE` | the demo-trading account |
+| `KANSO_OKX_API_KEY` · `KANSO_OKX_API_SECRET` · `KANSO_OKX_PASSPHRASE` | the real account |
+
+An account counts as configured only when all three of its names resolve. The package knows
+these six spellings and no others. That matters more here than for any other broker,
+because **the engine falls back on its own names**: measured on `nautilus_trader 1.231.0`,
+its OKX HTTP client and its credentialed stream read `OKX_API_KEY`, `OKX_API_SECRET` and
+`OKX_API_PASSPHRASE` from the process environment for any credential they are handed as
+`None`. So the rule the client factory will follow is fixed now: resolve all three of the
+client's own `KANSO_OKX_*` names, refuse if one is unset, hand every one to the engine
+explicitly, and never call a `from_env` constructor. `kanso doctor` re-checks the fallback
+among its engine facts, in a child process whose environment holds the engine's three
+variables set to a marker and none of yours, so the check neither reads nor changes an
+`OKX_*` key you export for another tool; setting those variables configures nothing.
+
+The engine does not choose a stream's url for kanso either: its credentialed stream handed
+no url connects to `wss://ws.okx.com:8443/ws/v5/public`, the global host's public stream,
+whatever the account's region. The client factory will pass the private url for the
+account's environment and declared region, as the engine's own execution client does, and
+`kanso doctor` re-checks that default too.
+
+### The two execution clients
+
+| client | `capital` | `clock` | may be configured on |
+|---|---|---|---|
+| `okx_demo` | `broker_paper` | `wall` | `paper`, `live` |
+| `okx` | `real` | `wall` | `live` only, and only behind `promote --live --as NAME` |
+
+The live data client id is `okx`: the exchange's market data is public, so one feed serves
+both accounts. Both execution clients are refused at deploy for the same reason as every
+wall-clock client in this version — a stage node is a bounded replay of the catalog into
+kanso's own simulated venue — and `kanso portfolio clients` and `kanso doctor` report the
+refusal before an operator runs into it. They await the long-running stage node, entry 15
+in `docs/backlog.md`.
+
+### The region is declared, never defaulted
+
+The exchange serves accounts from regional hosts, and **a key is accepted by one host
+only**. Measured on 2026-09-30 with a signed `GET /api/v5/account/config`: an Australian
+retail account's key was accepted by `us.okx.com` alone, and `www.okx.com`, `my.okx.com`
+and `eea.okx.com` each answered "API key doesn't exist" — a refusal that reads like a
+revoked key. The engine's regions and the hosts it maps them to:
+
+| `region` | REST host |
+|---|---|
+| `global` | `https://www.okx.com` — also the engine's default when none is stated |
+| `eea` | `https://eea.okx.com` |
+| `us` | `https://us.okx.com` |
+
+So **an Australian account states `region = "us"`**. Because the engine's default is the
+global host, kanso gives `region` no default: the client will refuse to open until the
+table states one. No engine region maps to `my.okx.com` or `app.okx.com`; an account served
+only by one of those has no region to state (`docs/backlog.md` entry 101).
+
+### Configuration
+
+`[adapters.okx]` in `kanso.toml` is validated by the adapter's own model, which accepts
+these keys and no others, and `kanso doctor` reads it through that model whether or not
+the table is there — an unknown key or region fails the `execution` check. It holds no
+credential.
+
+| key | default | what it does |
+|---|---|---|
+| `region` | *none* | `global`, `eea` or `us`, in any case; the regional host that accepts the account's key |
+| `rate_per_second` | `5` | the flat quota the public-history loaders will share; `1` to `1000` |
+
+`rate_per_second` governs kanso's own loaders only. The engine's own clients meter
+themselves — its compiled client carries a global rate-limit bucket and one per endpoint —
+and take no quota from their caller. Five a second is a conservative default, not a
+measured ceiling.
+
+### The venue it declares
+
+Instruments trade on the venue `OKX`, the exchange's own, and an instrument id is the
+exchange's `instId` with it appended: `BTC-USDT-SWAP.OKX`. The declaration is a margin
+account settled in `USDT`, `commission_bps: 5.0` on a fill that takes liquidity and
+`maker_bps: 2.0` on one that rested — and nothing else. Slippage and the spread fall to
+kanso's shipped defaults, so a hypothesis on bars alone still states `spread: fixed_bps`
+and its width; with neither quotes nor a width the venue model is refused rather than
+costed at a spread of zero. The rates are charged once, by the runner, like every venue's:
+the instrument provider will hand kanso instruments whose own maker and taker rates are
+zero, so the simulated venue charges nothing on top.
+
+The rates are the exchange's published Regular (Lv1) perpetual schedule, and were measured
+on the operator's account on 2026-09-30 with `GET /api/v5/account/trade-fee?instType=SWAP`:
+level `Lv1`, maker `-0.0002`, taker `-0.0005` (the exchange signs a fee the account pays
+as negative). The same call for `SPOT` answered 0.70 %, the Australian retail spot
+schedule, which is not declared because the package declares perpetuals. **The tier is
+declared, not fetched:** a card is costed before any account is opened, and a tier is a
+fact about one account on one day. An account on another tier states its own rates under
+`venues.OKX.costs` in `portfolio.yaml`, and the origin is recorded as `venue_override`. The
+same account read `posMode` as `net_mode`; the client will require net mode when it
+connects.
+
 ## Writing your own
 
 A **data adapter** is a package exposing a module-level `ADAPTER` with `id`, `kind`,
@@ -405,8 +517,11 @@ mapping, exactly as it declares loaders.
 A **broker adapter** is a package under `nautilus/adapters/` exposing a module-level `BROKER`
 with `id`, `kind`, `exec_clients` (each an `ExecutionClientSpec` declaring `capital` and
 `clock`), `data_clients`, and the methods the registry calls: `credentials(client_id)`,
-`credential_origins(ws, client_id)`, `configured(ws, client_id)` and
-`venue_declaration(venue)`. Those four declarations are the whole of what the core is allowed
+`credential_origins(ws, client_id)`, `configured(ws, client_id)`,
+`venue_declaration(venue)` and `config(ws)` — its `[adapters.<id>]` table read through its own
+model, which `kanso doctor` calls — plus `engine_facts`, the claims about the engine's own
+adapter its package rests on, each a `(claim, check)` pair that `kanso doctor` re-checks
+among the engine facts. Those declarations are the whole of what the core is allowed
 to know about a broker, and they are what the refusals are decided from — before anything
 connects, which is the point of their being declarations. A workspace extension declares its
 clients in an `EXEC_CLIENTS` table instead, exactly as it declares gates, and names the ids
