@@ -19,7 +19,7 @@ def result(
     run_returns: tuple[float, ...],
     *,
     start: date = START,
-    positions: tuple[tuple[str, float, float], ...] = (),
+    positions: tuple[tuple[str, float, float, float], ...] = (),
     **run_kwargs: object,
 ) -> StageResult:
     """One closed window, as the event that recorded it hands it back."""
@@ -107,15 +107,24 @@ def test_a_tenure_without_a_session_clock_ends_at_its_last_window() -> None:
 
 def test_the_book_is_the_last_windows_and_not_every_windows() -> None:
     """Each window's positions were recorded before its flatten; only the last still stands."""
-    first = result((10.0,), positions=(("AAA.XNAS", 100.0, 10.0),))
-    second = result((10.0,), start=SECOND_DAY, positions=(("BBB.XNAS", -50.0, 10.0),))
+    first = result((10.0,), positions=(("AAA.XNAS", 100.0, 10.0, 1.0),))
+    second = result((10.0,), start=SECOND_DAY, positions=(("BBB.XNAS", -50.0, 10.0, 1.0),))
 
     held = tenure("paper", [first, second], None)
 
     assert held is not None
-    assert held.positions == (("BBB.XNAS", -50.0, 10.0),)
+    assert held.positions == (("BBB.XNAS", -50.0, 10.0, 1.0),)
     assert held.gross == 500.0
     assert held.net == -500.0
+
+
+def test_the_book_is_valued_at_the_contract_multiplier() -> None:
+    """Three contracts of a 50-times future at 100 are 15,000 of exposure, not 300."""
+    held = tenure("paper", [result((10.0,), positions=(("ESZ4.XCME", 3.0, 100.0, 50.0),))], None)
+
+    assert held is not None
+    assert held.gross == 15_000.0
+    assert held.net == 15_000.0
 
 
 def test_a_days_profit_is_the_periods_that_ended_on_it() -> None:

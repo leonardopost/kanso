@@ -442,7 +442,14 @@ A fill's is traded value struck at one price, so a strategy that tops up in thre
 like three small positions; a trade's is `peak_qty x avg_open`, an opening cost basis, which
 is biased upward by the strategy that rebalances toward a target as the price falls and blind
 to the drift of one entered once and left alone. A gate built on either would refuse the
-compliant strategy and pass the drifting one.
+compliant strategy and pass the drifting one. Every notional a run records or sizes — a
+fill's, a trade's, a holding's, the room a sleeve sizes an entry to, the budget a `full_book`
+rule fills and the book a stage reports — is `qty x price x multiplier`, the instrument's
+contract multiplier being one for a share and the contract size for a future or an option.
+Each recorded fill and trade carries the multiplier it was struck with, so a cost model
+re-applied to the record charges the notional the runner charged. A record written before the
+multiplier was kept reads as one, a share's; a run struck on a multiplied instrument before then
+is re-run before a cost model is re-applied to it.
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
@@ -959,8 +966,10 @@ fill fell on, for a rule that fires on a regime or an event and could put its wh
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
 commission, a flat rate, a maker rate, a fixed width — through the runner's own per-fill
-arithmetic, recomputes the objective on the re-priced run and holds it to `min_metric`: the
-same fills under the schedule of another account, without a second backtest.
+arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
+objective on the re-priced run and holds it to `min_metric`: the same fills under the
+schedule of another account, without a second backtest, and the card's own schedule
+reproduces the card's own costs on any instrument.
 
 ## The strategy version
 

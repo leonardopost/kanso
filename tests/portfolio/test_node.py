@@ -293,6 +293,8 @@ def test_a_book_carries_its_signed_exposure() -> None:
     from kanso.nautilus.node import Book
 
     assert Book(instrument_id="DEMO.XNAS", qty=-3.0, price=10.0).notional == pytest.approx(-30.0)
+    contracts = Book(instrument_id="ESZ4.XCME", qty=-3.0, price=10.0, multiplier=50.0)
+    assert contracts.notional == pytest.approx(-1_500.0)
 
 
 def test_a_stage_run_says_whether_the_node_stopped_itself() -> None:

@@ -75,7 +75,8 @@ def test_the_book_is_measured_before_the_flatten_and_realised_by_it(
     made = deploy(ws, store, "paper")
 
     realised = made.results[0]
-    assert [name for name, _, _ in realised.positions] == ["DEMO.XNAS"]
+    assert [name for name, _, _, _ in realised.positions] == ["DEMO.XNAS"]
+    assert realised.positions[0][3] == 1.0, "a share's contract multiplier"
     assert realised.positions[0][1] > 0, "the window closed holding a long"
     assert realised.gross == pytest.approx(abs(realised.net))
     assert len(realised.run.trades) == 1, "the flatten closed the position it was holding"

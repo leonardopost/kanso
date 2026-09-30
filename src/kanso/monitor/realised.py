@@ -50,7 +50,8 @@ class Tenure:
     strategy_id: str
     version: int
     run: CardRun
-    positions: tuple[tuple[str, float, float], ...]
+    positions: tuple[tuple[str, float, float, float], ...]
+    """The last window's book: `(instrument_id, qty, price, multiplier)` per instrument."""
     joined_ns: int
     clock_ns: int
     windows: int
@@ -59,12 +60,12 @@ class Tenure:
     @property
     def gross(self) -> float:
         """The absolute value of what this version holds, however it is netted."""
-        return sum(abs(qty * price) for _, qty, price in self.positions)
+        return sum(abs(qty * price * multiplier) for _, qty, price, multiplier in self.positions)
 
     @property
     def net(self) -> float:
         """The signed value of what this version holds."""
-        return sum(qty * price for _, qty, price in self.positions)
+        return sum(qty * price * multiplier for _, qty, price, multiplier in self.positions)
 
     def day_pnl(self, day: date) -> float:
         """What this version made over the return periods that ended on one calendar day."""

@@ -227,6 +227,26 @@ def test_repriced_charges_a_maker_the_stated_rate_alone_and_a_taker_the_rest() -
     )
 
 
+def test_repriced_charges_a_contract_on_its_multiplied_notional() -> None:
+    """Two contracts of a 50-times future at 100: 10,000 of notional, so a fixed width of 2 bp
+    is 1.00 a fill and a cent a contract 0.02 — not the 20 of a two-share notional."""
+    contract = Fill(
+        ts_ns=at(START),
+        instrument_id="ESZ4.XCME",
+        side="BUY",
+        qty=2.0,
+        px=100.0,
+        cost=0.0,
+        multiplier=50.0,
+    )
+    run = build_run((10.0,), fills=(contract,))
+
+    under = repriced(run, {"commission_per_share": 0.01, "fixed_bps": 2.0})
+
+    assert under.fills[0].cost == pytest.approx(1.0 + 0.02)
+    assert under.fills[0].multiplier == 50.0
+
+
 def test_cost_scenario_recomputes_the_objective_under_the_scenario() -> None:
     run = priced_run()
     ctx = context(

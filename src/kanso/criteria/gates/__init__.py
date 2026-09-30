@@ -372,7 +372,7 @@ def _orders(fills: Sequence[Fill]) -> list[tuple[int, str, str, float, float]]:
         key = (fill.ts_ns, fill.instrument_id, fill.side)
         qty, notional = gathered.get(key, (0.0, 0.0))
         signed = -fill.qty if fill.side == "SELL" else fill.qty
-        gathered[key] = (qty + signed, notional + abs(fill.qty) * fill.px)
+        gathered[key] = (qty + signed, notional + fill.notional)
     return [
         (ts, instrument_id, side, round(qty, 9), round(notional, 6))
         for (ts, instrument_id, side), (qty, notional) in sorted(gathered.items())
@@ -930,8 +930,10 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
 
     Costs are applied once, by the runner, in the extraction that produced this run, so
     re-pricing them is arithmetic on the recorded fills rather than another backtest: each
-    fill's notional, quantity and liquidity side are on record, and the scenario's rates are
-    put through the same per-fill arithmetic the runner used. The difference between what a
+    fill's notional — quantity, price and contract multiplier — its quantity and its
+    liquidity side are on record, and the scenario's rates are put through the same per-fill
+    arithmetic the runner used, so the runner's own scenario reproduces the runner's own
+    cost on any instrument. The difference between what a
     fill now costs and what it cost is charged to the return period it falls in, exactly as
     a cost multiple is; the carry, the transfers and the cushion stand as recorded, for the
     reasons `stressed` gives. A key the scenario leaves out is zero, and a scenario that
@@ -944,7 +946,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
 
     def recost(fill: Fill) -> float:
         return fill_cost(
-            fill.qty * fill.px,
+            fill.notional,
             fill.qty,
             scenario.get("commission_bps") or 0.0,
             scenario.get("slippage_bps") or 0.0,
