@@ -1962,9 +1962,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the exit and replay tests.
         """
         order = self.cache.order(client_order_id)
-        if order is None:
-            self._awaiting.discard(client_order_id)
-            return
         name = (order.instrument_id.value, order.side)
         if order.is_closed:
             self._awaiting.discard(client_order_id)
