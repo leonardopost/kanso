@@ -128,7 +128,9 @@ fields, established by construction, are:
 
 Omitting a required field raises `TypeError`. Tick size, lot size and
 multiplier are constructor inputs with no engine defaults, which is why they
-must come from a convention table rather than from a vendor.
+must come from a convention table rather than from a vendor. `Equity` takes no
+multiplier and carries `Quantity(1)`, so a share's notional is its quantity at
+its price; every other class carries the one it was built with.
 
 `nautilus_trader.common.providers.InstrumentProvider` is not the interface
 kanso needs: `load(instrument_id, filters)` takes an already fully qualified
@@ -1523,10 +1525,11 @@ def _check_instrument_classes() -> tuple[bool, str]:
             ts_init=0,
         )
     )
-    holds = len(built) == 5 and missing_field is not None
+    share = built[0].multiplier
+    holds = len(built) == 5 and missing_field is not None and share == Quantity.from_int(1)
     return holds, (
         f"constructed {[type(i).__name__ for i in built]}; "
-        f"Equity without lot_size -> {missing_field}"
+        f"Equity.multiplier = {share}; Equity without lot_size -> {missing_field}"
     )
 
 
