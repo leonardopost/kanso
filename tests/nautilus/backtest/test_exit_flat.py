@@ -483,6 +483,52 @@ class Strategy(KansoStrategy):
 """A sleeve whose own modify of its resting exit is in flight at every point after its
 handler, so an exit at market owed behind that exit never finds it settled."""
 
+IN_FLIGHT_BESIDE_MARKET = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once, and on its thirtieth quote sends an exit a dollar above the ask and then,
+    in the same handler, an exit at market, which the first, still on its way to the venue,
+    cuts to nothing."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 30:
+            self.submit_exit(instrument_id, price=round(float(tick.ask_price) + 1.0, 2))
+            self.submit_exit(instrument_id)
+'''
+)
+"""A sleeve whose exit at market is owed behind an exit of its own still in flight."""
+
+UNSETTLED = {"modified": MODIFIED_EVERY_QUOTE, "in_flight": IN_FLIGHT_BESIDE_MARKET}
+"""The two sleeves whose exit at market waits on an order the venue has not settled."""
+
+
+def exiting_on(source: bytes, quote: int) -> bytes:
+    """One of UNSETTLED, exiting at market on its `quote`-th quote rather than its thirtieth."""
+    return source.replace(b"self.seen == 30", f"self.seen == {quote}".encode())
+
+
+def last_quotes(sessions: tuple[date, date] = SESSIONS) -> dict[str, tuple[int, int]]:
+    """The count of the first session's last quote and of the window's last, each with the
+    instant it became available."""
+    quotes = quotes_only(points(sessions))[0]
+    first = sum(1 for quote in quotes if int(quote.ts_init) < midnight_ns(sessions[1]))
+    return {
+        "session": (first, int(quotes[first - 1].ts_init)),
+        "window": (len(quotes), int(quotes[-1].ts_init)),
+    }
+
+
 BOOK_OPEN_NS = 14 * 3_600 * 1_000_000_000
 """Where the book below opens, from midnight UTC of its session."""
 
@@ -839,14 +885,32 @@ def test_an_exit_at_market_is_paid_behind_a_modify_the_sleeve_sends_on_every_poi
 ) -> None:
     """A sleeve that modifies its resting exit on every quote leaves it pending update at the
     end of every handler, and the owed exit is asked for again only then. The exit at market
-    holds its cancel back until the venue answers the modify and sends it then, so it lands
-    behind the modify; the order is cancelled, the owed exit is paid on the next quote, and
-    the sleeve is flat within the session. Measured on the round before this test: the exit
-    at market neither cancelled the order nor counted it spent, so it was cut to nothing and
-    owed at every quote, never paid, and the position was held to the end of the window."""
+    holds its cancel back until the venue has answered the modify — at 0 ms as the answer
+    lands, at 20 ms on the next quote, before the handler — so it lands behind the modify; the
+    order is cancelled, the owed exit is paid, and the sleeve is flat within the session.
+    Measured on the round before this test: the exit at market neither cancelled the order
+    nor counted it spent, so it was cut to nothing and owed at every quote, never paid, and
+    the position was held to the end of the window."""
     run = _run(request_for, latency_ms, MODIFIED_EVERY_QUOTE, quotes=True)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
     flat_within_the_session(run)
+
+
+@pytest.mark.parametrize("last", ["session", "window"])
+@pytest.mark.parametrize("unsettled", sorted(UNSETTLED))
+def test_an_exit_at_market_asked_for_on_a_last_point_is_paid_on_it(
+    request_for, unsettled: str, last: str
+) -> None:
+    """With no latency stated, an exit at market cut by an order the venue has not settled —
+    one whose modify it has not answered, or one still on its way to it — is paid as the
+    venue answers that order, in the instant it was asked for. Asked for on a session's last
+    quote the sleeve is not carried overnight, and on the window's last it is not held to
+    the end. Measured on the round before this test: the owed exit was paid on the next
+    point, the next session's first quote, and at the window's last quote never."""
+    quote, instant = last_quotes()[last]
+    run = _run(request_for, 0.0, exiting_on(UNSETTLED[unsettled], quote), quotes=True)
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    assert run.fills[1].ts_ns == instant
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])

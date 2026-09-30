@@ -387,8 +387,9 @@ def _held_open(order: Any) -> bool:
     `Strategy.modify_order` goes through the live risk engine's queue and `cancel_order`
     straight to the live execution engine's (`trading/strategy.pyx`), so a cancel sent
     behind the modify would overtake it, where the backtest engine lands the modify first
-    and fills it if it is marketable; an exit at market cancels it on the next point
-    instead (`_modifying`, `KansoStrategy._cancel_behind_modify`). Measured on both paths by
+    and fills it if it is marketable; an exit at market cancels it once the venue has
+    answered the modify instead (`_modifying`, `KansoStrategy._cancel_behind_modify`,
+    `KansoStrategy._answered`). Measured on both paths by
     the exit and replay tests, an order modified in flight, cancelled or not, and an order
     the venue holds modified in the handler that exits at market, among them.
     """
@@ -446,6 +447,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._cancels: dict[object, bool] = {}
         self._unsent: dict[object, tuple[Any, Any, dict[str, object] | None]] = {}
         self._behind_modify: dict[object, Any] = {}
+        self._awaiting: set[object] = set()
         self._charges = _charges(resolved)
         self._cash = resolved.capital
         self._ledger: list[list[Any]] = []
@@ -1482,9 +1484,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit cancels it like any other. So is an order the sleeve itself cancelled while it
         was still on its way to the venue: the venue takes it before the cancel, on both
         paths (`_hold_cancel`). An order the venue holds whose modify it has not answered
-        yet counts too, and is cancelled on the next point, before the author's handler for
-        it: on a node a cancel sent in the handler that sent the modify would overtake it
-        (`_cancel_behind_modify`). What it cut is owed and paid as for any cancelled order.
+        yet counts too, and is cancelled once the venue has: on a node a cancel sent in the
+        handler that sent the modify would overtake it (`_cancel_behind_modify`). What it
+        cut is owed and paid as for any cancelled order. With no latency stated the venue
+        answers an order in flight, and a modify, before the next point, and an exit at
+        market owed behind either is paid in the instant it was asked for (`_answered`), so
+        one asked for on a session's last point or the window's is not carried past it.
         A resting order whose cancel the venue refused is cancelled again. An order the
         engine's order emulator holds has not reached the venue: it counts until it is
         cancelled, an exit at market cancels it with the resting ones, and its cancel takes
@@ -1684,13 +1689,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         ):
             owed = (None if qty is None else short, price, self._exiting)
             self._owed.setdefault((key, side), owed)
+            if price is None and self._instant():
+                self._awaiting.update(
+                    order.client_order_id
+                    for order in working
+                    if order.order_type != OrderType.MARKET
+                )
         if quantity is None:
             return None
         return self._submitted(self._order(instrument, side, quantity, price))
 
     def _cancel_behind_modify(self, order: Any) -> None:
         """Hold back an exit at market's cancel of an order the venue holds whose modify is
-        still in flight, until the next point (`_send_behind_modify`).
+        still in flight, until the venue answers the modify with no latency stated
+        (`_answered`), and until the next point under one (`_send_behind_modify`).
 
         On a node `Strategy.modify_order` goes through the live risk engine's queue and
         `cancel_order` straight to the live execution engine's (`trading/strategy.pyx` of
@@ -1707,11 +1719,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Send the cancels `_cancel_behind_modify` held back, before the author's handler
         for this point, which could put the order back in flight with a modify of its own.
 
-        Sent before the handler, not when the venue answers the modify: under a stated
-        latency the backtest engine answers it in the drain after one point's handlers and
+        Under a stated latency it is sent before the handler, not when the venue answers the
+        modify: the backtest engine answers it in the drain after one point's handlers and
         the node in the drain before the next point's (`SimulatedVenue.on_data`), so a
-        cancel sent on the answer is stamped a point later on the node. Measured on both
-        paths by the exit and replay tests, a sleeve that modifies its exit on every quote.
+        cancel sent on the answer is stamped a point later on the node. With no latency
+        stated both answer it in the drain after the point's handlers, and `_answered` sends
+        it then; one it has not sent by the next point is sent here. Measured on both paths
+        by the exit and replay tests, a sleeve that modifies its exit on every quote.
         """
         held, self._behind_modify = self._behind_modify, {}
         for order in held.values():
@@ -1720,8 +1734,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 self._cancelling(current)
                 super().cancel_order(current)
 
-    def _pay_owed(self) -> None:
-        """Ask again for every exit still owed, on the side of the position it was owed on.
+    def _pay_owed(self, only: tuple[str, OrderSide] | None = None) -> None:
+        """Ask again for every exit still owed, on the side of the position it was owed on,
+        or with `only` for the one owed on that side of that name.
 
         Run after the author's handler for a point and before the exit rules, so a sleeve
         that asks again on that point replaces what it was owed rather than adding to it,
@@ -1729,6 +1744,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         back.
         """
         for (key, side), (qty, price, ruled) in list(self._owed.items()):
+            if only is not None and (key, side) != only:
+                continue
             net = (
                 self._own_filled(key)
                 if self.sized
@@ -1894,14 +1911,67 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         both paths by the replay tests.
         """
         super().handle_event(event)
-        held = self._unsent.get(getattr(event, "client_order_id", None))
-        if held is None or self._current(held[0]).status == OrderStatus.INITIALIZED:
+        client_order_id = getattr(event, "client_order_id", None)
+        held = self._unsent.get(client_order_id)
+        if held is not None and self._current(held[0]).status != OrderStatus.INITIALIZED:
+            order, client_id, params = held
+            current = self._current(order)
+            del self._unsent[current.client_order_id]
+            if not current.is_closed:
+                super().cancel_order(current, client_id, params)
+        if client_order_id in self._awaiting:
+            self._answered(client_order_id)
+
+    def _answered(self, client_order_id: object) -> None:
+        """With no latency stated, move an exit at market owed behind an order on along as
+        the venue answers that order, so the exit is paid in the instant it was asked for.
+
+        An exit at market is cut by what an order the venue has not settled can still close:
+        one still in flight to it, one it holds whose modify it has not answered yet, one the
+        sleeve cancelled while it was in flight (`_close` notes each in `_awaiting`). With no
+        latency stated the venue answers such an order before the next point, on both paths —
+        the backtest engine in the drain after the point's handlers, which takes the commands
+        sent from inside it too (`SimulatedExchange._drain_commands` in `backtest/engine.pyx`
+        of nautilus_trader 1.231.0), and the node in the drain the replay feed waits on before
+        it releases the next point (`kanso.nautilus.replay_client`). So each answer is acted on
+        where it lands: once the venue has taken the order, or answered its modify, it is
+        cancelled, the cancel sent behind the modify; once it is closed — cancelled, filled,
+        or refused — the owed exit is asked for again, sized to what is left then. The exit is
+        never paid on the answer itself, as the venue matches an order it has just taken, or
+        just modified, right after it says so, and one it fills there closes what it fills.
+        What the next point would pay instead is paid at the instant of the point it was
+        asked on, so an exit asked for on a session's last point, or the window's, is not
+        carried to the next one. Under a stated latency the answers land at later instants
+        and the owed exit is paid on the next point, as before. Measured on both paths by
+        the exit and replay tests.
+        """
+        order = self.cache.order(client_order_id)
+        if order is None:
+            self._awaiting.discard(client_order_id)
             return
-        order, client_id, params = held
-        current = self._current(order)
-        del self._unsent[current.client_order_id]
-        if not current.is_closed:
-            super().cancel_order(current, client_id, params)
+        name = (order.instrument_id.value, order.side)
+        if order.is_closed:
+            self._awaiting.discard(client_order_id)
+            self._behind_modify.pop(client_order_id, None)
+            self._pay_owed(name)
+            return
+        if client_order_id in self._behind_modify:
+            if not _modifying(order):
+                del self._behind_modify[client_order_id]
+                if not order.is_pending_cancel:
+                    self._cancelling(order)
+                    super().cancel_order(order)
+            return
+        owed = self._owed.get(name)
+        if owed is None or owed[1] is not None:
+            self._awaiting.discard(client_order_id)
+        elif _held_open(order) and client_order_id not in self._cancels:
+            self.cancel_order(order)
+
+    def _instant(self) -> bool:
+        """Whether no latency is stated, so the venue answers a command before it matches
+        anything further."""
+        return float(self._charges.get("latency_ms") or 0.0) <= 0.0
 
     def _cancelling(self, order: Any) -> None:
         """Note that a cancel was sent or held back for an order, and whether the venue held
@@ -1950,7 +2020,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         `clips` counts the attached overlays' clips as well, for a reading of the whole net
         position rather than the sleeve's own share of it.
         """
-        instant = float(self._charges.get("latency_ms") or 0.0) <= 0.0
+        instant = self._instant()
         working = []
         for entry in self._ledger:
             order = self._current(entry[0])

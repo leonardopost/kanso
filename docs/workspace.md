@@ -368,12 +368,19 @@ below); an order of the sleeve's still in flight to the venue, modified or not, 
 cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
 paid once the venue holds that order open and the owed exit has cancelled it. An order the
 venue holds whose modify has not been answered yet, one sent in the same handler among them,
-counts too, and an exit at market cancels it on the next point, before the sleeve's handler
-for that point, rather than at once: on a node a cancel sent in the handler that sent the
-modify would overtake it, where the backtest lands the modify first. So on both paths the
-modify lands first, filling the order at once if it made it marketable, and then the cancel;
-what the order cut from the exit is owed and paid as for any cancelled order, a sleeve that
-modifies that order on every point included. A resting order whose cancel the venue refused is cancelled again. **An order the engine's order
+counts too, and an exit at market does not cancel it at once: on a node a cancel sent in the
+handler that sent the modify would overtake it, where the backtest lands the modify first.
+It cancels it once the venue has answered the modify, so on both paths the modify lands
+first, filling the order at once if it made it marketable, and then the cancel; what the
+order cut from the exit is owed and paid as for any cancelled order, a sleeve that modifies
+that order on every point included. With no latency stated the venue answers both before the
+next point, on both paths, so the order is cancelled as the venue takes it or answers its
+modify, and the owed exit goes out as soon as the order is closed — cancelled, filled or
+refused — in the instant it was asked for: an exit at market asked for on a session's last
+point, or on the window's, is not carried past it. Under a latency the cancel goes on the
+next point, before the sleeve's handler for it, and the owed exit is paid on a later point,
+which for one asked on a session's last point is in the next session, and on the window's
+last never. A resting order whose cancel the venue refused is cancelled again. **An order the engine's order
 emulator holds** (one sent with an `emulation_trigger`) has not reached the venue: it counts
 until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
 takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
@@ -698,7 +705,9 @@ take — often nothing, in which case it returns `None`. What the cancel in flig
 owed, not dropped: kanso asks for that exit again, at the price given and sized to what is
 left then, on every later point after the strategy's own handler has run, until it goes out
 whole — so a sleeve that cancels and exits once is closed once the cancel lands, and one that
-re-posts on every point replaces the owed exit with its own. An owed exit is forgotten when
+re-posts on every point replaces the owed exit with its own. An order sent on a session's
+last point under a latency reaches the book on the next session's first, and one sent on the
+window's last point reaches it after the window has ended and never fills, owed or not. An owed exit is forgotten when
 the position is flat or has changed sides and when the sleeve asks for another exit in the
 name. A cancel on that side takes back only an owed exit that has a price, as it would have
 taken back the limit order itself; an owed exit at market stands for an order the venue

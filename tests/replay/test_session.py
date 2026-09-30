@@ -460,9 +460,10 @@ def test_the_two_paths_pay_an_exit_behind_a_modify_sent_on_every_point_alike(
 ) -> None:
     """An exit at market beside a resting exit the sleeve modifies on every quote, with no
     print between quotes to pay the owed exit on. The cancel it holds back is sent once the
-    venue answers the modify, so it lands behind the modify on both paths — where a cancel
-    sent at once would overtake the modify on a node — and the owed exit is paid at the same
-    quote on both. So the two agree order for order and fill for fill and both are flat.
+    venue has answered the modify — at 0 ms as the answer lands, at 20 ms on the next quote —
+    so it lands behind the modify on both paths, where a cancel sent at once would overtake
+    the modify on a node, and the owed exit is paid at the same quote on both. So the two
+    agree order for order and fill for fill and both are flat.
     Measured on the round before this test: neither path cancelled the order, the market exit
     was owed at every quote and never paid, and both held the position to the end."""
     from tests.nautilus.backtest import test_exit_flat
@@ -489,6 +490,46 @@ def test_the_two_paths_pay_an_exit_behind_a_modify_sent_on_every_point_alike(
         ("BUY", 100.0),
         ("SELL", 100.0),
     ]
+
+
+@pytest.mark.parametrize("last", ["session", "window"])
+@pytest.mark.parametrize("unsettled", ["modified", "in_flight"])
+def test_the_two_paths_pay_an_exit_asked_for_on_a_last_point_on_it_alike(
+    unsettled: str, last: str
+) -> None:
+    """With no latency stated, an exit at market cut by an order the venue has not settled —
+    one whose modify it has not answered, or one still on its way to it — is paid as the
+    venue answers that order, which both paths do before the next point. Asked for on a
+    session's last quote or the window's, both paths sell the 100 at that quote and agree
+    order for order and fill for fill. Measured on the round before this test: both paid it
+    on the next session's first quote, and at the window's last quote never."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    quote, instant = test_exit_flat.last_quotes(sessions)[last]
+    source = test_exit_flat.exiting_on(test_exit_flat.UNSETTLED[unsettled], quote)
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote"],
+        costs=test_exit_flat.chasing_costs(0.0),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(0.0)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        test_exit_flat.quotes_only(test_exit_flat.points(sessions)),
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+    ]
+    assert engine.run.fills[1].ts_ns == instant
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
