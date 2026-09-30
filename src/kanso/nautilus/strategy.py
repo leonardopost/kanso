@@ -387,11 +387,19 @@ def _held_open(order: Any) -> bool:
     `Strategy.modify_order` goes through the live risk engine's queue and `cancel_order`
     straight to the live execution engine's (`trading/strategy.pyx`), so a cancel sent
     behind the modify would overtake it, where the backtest engine lands the modify first
-    and fills it if it is marketable. Measured on both paths by the exit and replay tests,
-    an order modified in flight, cancelled or not, and an order the venue holds modified in
-    the handler that exits at market, among them.
+    and fills it if it is marketable; an exit at market cancels it on the next point
+    instead (`_modifying`, `KansoStrategy._cancel_behind_modify`). Measured on both paths by
+    the exit and replay tests, an order modified in flight, cancelled or not, and an order
+    the venue holds modified in the handler that exits at market, among them.
     """
     return bool(order.venue_order_id is not None and order.status in _SETTLED)
+
+
+def _modifying(order: Any) -> bool:
+    """Whether the venue holds an order whose modify it has not answered yet: it has taken
+    the order (`venue_order_id`, as `_held_open` reads it) and the order is
+    `PENDING_UPDATE`."""
+    return bool(order.venue_order_id is not None and order.status == OrderStatus.PENDING_UPDATE)
 
 
 def _order_price(order: object) -> float | None:
@@ -437,6 +445,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._owed: dict[tuple[str, OrderSide], tuple[float | None, float | None, bool]] = {}
         self._cancels: dict[object, bool] = {}
         self._unsent: dict[object, tuple[Any, Any, dict[str, object] | None]] = {}
+        self._behind_modify: dict[object, Any] = {}
         self._charges = _charges(resolved)
         self._cash = resolved.capital
         self._ledger: list[list[Any]] = []
@@ -875,8 +884,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         replay tests measure the owed exit it pays on both paths, the backtest engine and
         the node).
         """
+        live = not historical and self.is_running and not self._warming()
+        if live:
+            self._send_behind_modify()
         super().handle_order_book_deltas(deltas, historical)
-        if not historical and self.is_running and not self._warming():
+        if live:
             self._pay_owed()
 
     def handle_data(self, data: object) -> None:
@@ -948,6 +960,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self._is_extra_bar(bar):
             self._overlay_due = (instrument_id, bar, float(bar.close))
             return
+        self._send_behind_modify()
         super().handle_bar(bar, False)
         self._pay_owed()
         self._consult_exit(instrument_id)
@@ -956,6 +969,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _dispatch_quote(self, tick: QuoteTick) -> None:
         self._data_time = int(tick.ts_event)
+        self._send_behind_modify()
         super().handle_quote_tick(tick, False)
         self._pay_owed()
         self._consult_exit(tick.instrument_id)
@@ -964,6 +978,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _dispatch_trade(self, tick: TradeTick) -> None:
         self._data_time = int(tick.ts_event)
+        self._send_behind_modify()
         super().handle_trade_tick(tick, False)
         self._pay_owed()
         self._consult_exit(tick.instrument_id)
@@ -974,6 +989,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instrument_id = getattr(data, "instrument_id", None)
         key = None if instrument_id is None else str(instrument_id)
         self._observe(key, int(getattr(data, "ts_event", self._data_time)), None)
+        self._send_behind_modify()
         super().handle_data(data)
         self._pay_owed()
         if instrument_id is not None:
@@ -1465,12 +1481,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         cuts from an exit at market is owed as well; once the venue holds it open, the owed
         exit cancels it like any other. So is an order the sleeve itself cancelled while it
         was still on its way to the venue: the venue takes it before the cancel, on both
-        paths (`_hold_cancel`). So is an order the venue holds whose modify it has not
-        answered yet: on a node a cancel would overtake the modify, so it is not cancelled
-        and counts until the modify lands (`_held_open`). A resting order whose cancel the
-        venue refused is cancelled again. An order the engine's order emulator holds has not
-        reached the venue: it counts until it is cancelled, an exit at market cancels it with
-        the resting ones, and its cancel takes it out at once, at any latency (`_working`).
+        paths (`_hold_cancel`). An order the venue holds whose modify it has not answered
+        yet counts too, and is cancelled on the next point, before the author's handler for
+        it: on a node a cancel sent in the handler that sent the modify would overtake it
+        (`_cancel_behind_modify`). What it cut is owed and paid as for any cancelled order.
+        A resting order whose cancel the venue refused is cancelled again. An order the
+        engine's order emulator holds has not reached the venue: it counts until it is
+        cancelled, an exit at market cancels it with the resting ones, and its cancel takes
+        it out at once, at any latency (`_working`).
 
         What is owed is not dropped. When a cancel still in flight leaves less than asked,
         and whenever an exit at market is left less than asked, the exit is asked for again,
@@ -1649,13 +1667,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         asked = float(abs(net)) if qty is None else min(abs(qty), float(abs(net)))
         working = self._working(key, side, clips=clips)
         if price is None and float(abs(net) - _leaves(working)) < asked:
-            resting = [
-                order
-                for order in working
-                if order.order_type != OrderType.MARKET and (_held_open(order) or order.is_emulated)
-            ]
-            for order in resting:
-                self.cancel_order(order)
+            for order in working:
+                if order.order_type == OrderType.MARKET:
+                    continue
+                if _modifying(order):
+                    self._cancel_behind_modify(order)
+                elif _held_open(order) or order.is_emulated:
+                    self.cancel_order(order)
             working = self._working(key, side, clips=clips)
         quantity = self._quantise(instrument, min(asked, float(abs(net) - _leaves(working))))
         sent = 0.0 if quantity is None else float(quantity)
@@ -1669,6 +1687,38 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if quantity is None:
             return None
         return self._submitted(self._order(instrument, side, quantity, price))
+
+    def _cancel_behind_modify(self, order: Any) -> None:
+        """Hold back an exit at market's cancel of an order the venue holds whose modify is
+        still in flight, until the next point (`_send_behind_modify`).
+
+        On a node `Strategy.modify_order` goes through the live risk engine's queue and
+        `cancel_order` straight to the live execution engine's (`trading/strategy.pyx` of
+        nautilus_trader 1.231.0), so a cancel sent in the handler that sent the modify
+        overtakes it, where the backtest engine lands the modify first. Both queues drain
+        before the node's next point is released, so a cancel sent then reaches the venue
+        behind the modify on both paths; under a latency it is stamped with that point's
+        instant, after the modify's, and lands behind it there too.
+        The order counts as working until the cancel lands (`_cancelling`, read then).
+        """
+        self._behind_modify[order.client_order_id] = order
+
+    def _send_behind_modify(self) -> None:
+        """Send the cancels `_cancel_behind_modify` held back, before the author's handler
+        for this point, which could put the order back in flight with a modify of its own.
+
+        Sent before the handler, not when the venue answers the modify: under a stated
+        latency the backtest engine answers it in the drain after one point's handlers and
+        the node in the drain before the next point's (`SimulatedVenue.on_data`), so a
+        cancel sent on the answer is stamped a point later on the node. Measured on both
+        paths by the exit and replay tests, a sleeve that modifies its exit on every quote.
+        """
+        held, self._behind_modify = self._behind_modify, {}
+        for order in held.values():
+            current = self._current(order)
+            if not current.is_closed and not current.is_pending_cancel:
+                self._cancelling(current)
+                super().cancel_order(current)
 
     def _pay_owed(self) -> None:
         """Ask again for every exit still owed, on the side of the position it was owed on.

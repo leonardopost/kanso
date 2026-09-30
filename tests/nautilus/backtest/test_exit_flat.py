@@ -444,6 +444,45 @@ MODIFIED_OPEN = CANCELLED_OPEN.replace(b"PRICE", b"round(float(tick.ask_price) +
 """CANCELLED_OPEN with the exit the venue holds open modified to a marketable price, rather
 than cancelled, in the handler that then exits at market."""
 
+MODIFIED_EVERY_QUOTE = (
+    HEAD
+    + b'''
+from nautilus_trader.model.objects import Price
+
+
+class Strategy(KansoStrategy):
+    """Buys once, rests an exit a dollar above the ask on its fifth quote, and from then on
+    modifies it on every quote, a cent up or down, so it never becomes marketable and is
+    pending update whenever the handler ends; on its thirtieth, having modified it, exits at
+    market."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.resting = None
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 5:
+            self.resting = self.submit_exit(
+                instrument_id, price=round(float(tick.ask_price) + 1.0, 2)
+            )
+        elif self.seen > 5:
+            order = self.resting
+            if order is not None and order.is_open and not order.is_pending_cancel:
+                step = 0.01 if self.seen % 2 else -0.01
+                self.modify_order(order, price=Price(round(float(order.price) + step, 2), 2))
+            if self.seen == 30:
+                self.submit_exit(instrument_id)
+'''
+)
+"""A sleeve whose own modify of its resting exit is in flight at every point after its
+handler, so an exit at market owed behind that exit never finds it settled."""
+
 BOOK_OPEN_NS = 14 * 3_600 * 1_000_000_000
 """Where the book below opens, from midnight UTC of its session."""
 
@@ -532,13 +571,27 @@ def never_short(fills: list[object]) -> tuple[float, float, float]:
     return bought, sold, lowest
 
 
-def _run(request_for, latency_ms: float, source: bytes = CHASING, modifiers=()):
+def quotes_only(groups: list[tuple[object, ...]]) -> list[tuple[object, ...]]:
+    """The quote groups of `points`, without the prints."""
+    return [group for group in groups if type(group[0]).__name__ == "QuoteTick"]
+
+
+def _run(
+    request_for,
+    latency_ms: float,
+    source: bytes = CHASING,
+    modifiers=(),
+    *,
+    quotes: bool = False,
+):
     document = hypothesis().model_dump(mode="json")
-    document.update(resolution="tick", data_requirements=["quote", "trade"])
+    requirements = ["quote"] if quotes else ["quote", "trade"]
+    document.update(resolution="tick", data_requirements=requirements)
     document["costs"] = chasing_costs(latency_ms)
     hyp = Hypothesis.model_validate(document)
     request = request_for(RESEARCH, source=source, hypothesis_=hyp, modifiers=modifiers)
-    result = execute(request, [instrument()], points())
+    groups = quotes_only(points()) if quotes else points()
+    result = execute(request, [instrument()], groups)
     assert not result.crashed, result.traceback_tail
     return result.run
 
@@ -778,6 +831,22 @@ def test_an_exit_at_market_leaves_an_order_whose_modify_is_in_flight_to_it(
     well, leaving the backtest short 100."""
     run = _run(request_for, latency_ms, MODIFIED_OPEN)
     assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_exit_at_market_is_paid_behind_a_modify_the_sleeve_sends_on_every_point(
+    request_for, latency_ms: float
+) -> None:
+    """A sleeve that modifies its resting exit on every quote leaves it pending update at the
+    end of every handler, and the owed exit is asked for again only then. The exit at market
+    holds its cancel back until the venue answers the modify and sends it then, so it lands
+    behind the modify; the order is cancelled, the owed exit is paid on the next quote, and
+    the sleeve is flat within the session. Measured on the round before this test: the exit
+    at market neither cancelled the order nor counted it spent, so it was cut to nothing and
+    owed at every quote, never paid, and the position was held to the end of the window."""
+    run = _run(request_for, latency_ms, MODIFIED_EVERY_QUOTE, quotes=True)
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    flat_within_the_session(run)
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])

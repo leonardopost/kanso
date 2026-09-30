@@ -455,6 +455,43 @@ def test_the_two_paths_size_an_exit_at_market_beside_orders_not_yet_live_alike(
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_pay_an_exit_behind_a_modify_sent_on_every_point_alike(
+    latency_ms: float,
+) -> None:
+    """An exit at market beside a resting exit the sleeve modifies on every quote, with no
+    print between quotes to pay the owed exit on. The cancel it holds back is sent once the
+    venue answers the modify, so it lands behind the modify on both paths — where a cancel
+    sent at once would overtake the modify on a node — and the owed exit is paid at the same
+    quote on both. So the two agree order for order and fill for fill and both are flat.
+    Measured on the round before this test: neither path cancelled the order, the market exit
+    was owed at every quote and never paid, and both held the position to the end."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    request = request_for(source=test_exit_flat.MODIFIED_EVERY_QUOTE, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        test_exit_flat.quotes_only(test_exit_flat.points(sessions)),
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+    ]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 @pytest.mark.parametrize("price", ["round(float(tick.ask_price) + 0.03, 2)", "99.0"])
 @pytest.mark.parametrize(
     "cancel",
