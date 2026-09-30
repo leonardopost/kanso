@@ -14,7 +14,7 @@ import pytest
 from kanso.nautilus import facts
 from kanso.nautilus.facts import DESIGN_CONSTRAINTS, ENGINE_VERSION, Fact, verify
 
-CLAIMS = [claim for claim, _ in facts._CHECKS]
+CLAIMS = [claim for claim, _ in facts.claims()]
 
 
 @pytest.fixture(scope="module")
@@ -86,10 +86,20 @@ def test_a_raising_check_is_reported_rather_than_propagated(
     def explode() -> tuple[bool, str]:
         raise RuntimeError("engine gone")
 
-    monkeypatch.setattr(facts, "_CHECKS", (("a claim that cannot be checked", explode),))
+    monkeypatch.setattr(facts, "claims", lambda: (("a claim that cannot be checked", explode),))
     (fact,) = verify()
     assert fact.holds is False
     assert "RuntimeError: engine gone" in fact.evidence
+
+
+def test_a_broker_s_claims_are_checked_after_the_core_s_own() -> None:
+    """A broker's package may name its broker and this module may not, so each broker
+    states its own claims and they are collected through the registry."""
+    from kanso.nautilus import adapters
+
+    stated = [claim for claim, _ in adapters.engine_facts()]
+    assert stated, "a packaged broker states the engine facts its package rests on"
+    assert [claim for claim, _ in facts._CHECKS] + stated == CLAIMS
 
 
 def test_raises_helper_reports_the_exception() -> None:
