@@ -251,7 +251,7 @@ def test_the_contract_multiplier_survives_the_round_trip() -> None:
 
 
 def test_a_record_written_before_the_multiplier_was_kept_reads_as_one() -> None:
-    """Every fill and trade already in a store was struck on a share, whose multiplier is one."""
+    """A fill or trade recorded without the key reads as a share's, whose multiplier is one."""
     payload = records.encode_run(a_run())
     for recorded in payload["fills"]:
         del recorded["multiplier"]
@@ -334,7 +334,7 @@ def test_a_stage_book_is_recorded_at_its_contract_multiplier(store: StateStore) 
 def test_a_stage_book_recorded_before_the_multiplier_was_kept_reads_as_one(
     store: StateStore,
 ) -> None:
-    """Every book already in a store was a share's, valued at quantity times price."""
+    """A book recorded without the key reads as a share's, valued at quantity times price."""
     store.event(
         records.STAGE_RUN,
         records.subject_of("alpha", 1),

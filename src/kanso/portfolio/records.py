@@ -410,7 +410,8 @@ def _encode_fill(fill: Fill) -> dict[str, Any]:
 def _decode_fill(payload: Mapping[str, Any]) -> Fill:
     """A recorded fill; one recorded before fills said whether they rested reads as a
     taker's, which is what it was charged as, and one recorded before the multiplier was
-    kept reads as a multiplier of one, which is what every instrument then charged had."""
+    kept reads as a multiplier of one, a share's; a run struck on a multiplied instrument
+    before the multiplier was kept is re-run before a cost model is re-applied to it."""
     return Fill(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
