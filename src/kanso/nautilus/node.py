@@ -197,16 +197,18 @@ class Placement:
 
 @dataclass(frozen=True)
 class Book:
-    """One instrument's net position at the end of a stage's window, and its mark."""
+    """One instrument's net position at the end of a stage's window, its mark and its
+    contract multiplier, read from the cached instrument — one for a share."""
 
     instrument_id: str
     qty: float
     price: float
+    multiplier: float = 1.0
 
     @property
     def notional(self) -> float:
         """The signed exposure this position carries, in the account currency."""
-        return self.qty * self.price
+        return self.qty * self.price * self.multiplier
 
 
 @dataclass(frozen=True)
@@ -742,6 +744,7 @@ def _books(
             # split-aware basis rather than `avg_px_open`, which a corporate action leaves
             # quoted in shares the position no longer holds.
             price=marks.get(name, splits.ledger(splits.moves_of(position, schedule)).basis),
+            multiplier=1.0 if held is None else float(held.multiplier),
         )
     return found
 

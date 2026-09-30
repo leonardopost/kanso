@@ -72,6 +72,11 @@ class Fill:
     what a model re-applied to recorded fills needs to know. It is recorded whatever the
     model charged: a maker's fill under a model without `maker_bps` paid what any fill pays,
     and is still a maker's. A fill the venue reported no liquidity side for is not one.
+
+    `multiplier` is the instrument's contract multiplier at the fill — one for a share, the
+    contract size for a future or an option — and is what turns a quantity at a price into
+    the currency it moved. A fill recorded before it was kept reads as one, which is what
+    every instrument the runner had charged until then was.
     """
 
     ts_ns: int
@@ -81,16 +86,21 @@ class Fill:
     px: float
     cost: float
     maker: bool = False
+    multiplier: float = 1.0
 
     @property
     def notional(self) -> float:
-        """Absolute traded value, the base a participation limit is measured against."""
-        return abs(self.qty) * self.px
+        """Absolute traded value in the account currency — quantity, price and multiplier —
+        the base a cost rate is charged on and a participation limit is measured against."""
+        return abs(self.qty) * self.px * self.multiplier
 
 
 @dataclass(frozen=True)
 class Trade:
-    """A closed position: what was opened, what closed it, and what it netted after costs."""
+    """A closed position: what was opened, what closed it, and what it netted after costs.
+
+    `multiplier` is the instrument's contract multiplier, copied from the fills that made
+    the position, so the opening value is in the currency the profit is."""
 
     opened_ns: int
     closed_ns: int
@@ -101,11 +111,13 @@ class Trade:
     pnl_net: float
     cost: float
     fills: tuple[Fill, ...]
+    multiplier: float = 1.0
 
     @property
     def notional(self) -> float:
-        """The position's opening value, the base its edge is expressed in bps of."""
-        return abs(self.qty) * self.avg_open
+        """The position's opening value in the account currency — peak quantity, average
+        opening price and multiplier — the base its edge is expressed in bps of."""
+        return abs(self.qty) * self.avg_open * self.multiplier
 
 
 @dataclass(frozen=True)
