@@ -29,6 +29,10 @@ document is parsed. Everything else needs the workspace, and that is this module
   width; a universe spanning two account currencies would have a leg priced at a rate
   nothing in the workspace records, so it is refused — and so, for the same reason, is an
   instrument that settles in a currency other than its venue's account currency;
+* a universe holding a perpetual requires `funding`. A held perpetual pays or is paid its
+  funding at every settlement, so a card not handed the realised rates measures a P&L the
+  contract never had. What makes an instrument a perpetual is its resolved definition — the
+  same one the settlement check reads — never its id;
 * when classification has been written, its construct is in the catalogue, its host is
   present exactly when the construct needs one and names a certified strategy, its
   parameters are ones that construct declares with values inside the sets it declares
@@ -48,7 +52,10 @@ settles in — a `CryptoPerpetual`'s stated `settlement_currency`, and the quote
 every other class kanso builds, none of which is inverse; and `get_cost_currency()` answers
 the currency the engine books positions, PnL and margin in — the quote currency of every
 linear class, a perpetual's included — which its account manager converts to the account's
-base currency, deferring the balance update when it holds no rate between the two.
+base currency, deferring the balance update when it holds no rate between the two. A
+perpetual swap is built as `nautilus_trader.model.instruments.CryptoPerpetual`, the one
+class kanso builds for `instrument_class: swap`, whether a manual entry or a reference
+adapter supplied it.
 """
 
 from __future__ import annotations
@@ -108,6 +115,9 @@ CARD_STAGE: Final = "card"
 QUOTE_TYPE: Final = "quote"
 """The data requirement a spread read from quotes needs."""
 
+FUNDING: Final = "funding"
+"""The data requirement a perpetual in the universe needs: its realised funding rates."""
+
 STRATEGIES: Final = "strategies"
 STRATEGY_FILE: Final = "strategy.yaml"
 PORTFOLIO_FILE: Final = "portfolio.yaml"
@@ -141,6 +151,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_data_requirements(ws, hyp)
     instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
     models = venue_models(ws, hyp, instruments)
+    _check_funding(hyp, instruments)
     _check_required(ws, hyp)
     _check_sizing(ws, hyp)
     _check_benchmark(hyp)
@@ -258,6 +269,31 @@ def _check_settlement(instruments: Mapping[str, Any], models: Mapping[str, Venue
         f"universe: {named}; a hypothesis's fills settle and are booked in the account's "
         "own currency",
         remedy=remedy,
+    )
+
+
+def _check_funding(hyp: Hypothesis, instruments: Mapping[str, Any]) -> None:
+    """A universe holding a perpetual requires the `funding` data type.
+
+    A perpetual is recognised by its resolved definition, a `CryptoPerpetual`, never by the
+    spelling of its id. Every perpetual missing its funding is named together. The
+    requirement is the hypothesis's, and coverage asks it of the perpetuals alone
+    (`kanso.data.snapshot`), so a spot leg beside one needs no funding history.
+    """
+    from nautilus_trader.model.instruments import CryptoPerpetual
+
+    if FUNDING in hyp.data_requirements:
+        return
+    perpetuals = sorted(
+        str(held.id) for held in instruments.values() if isinstance(held, CryptoPerpetual)
+    )
+    if not perpetuals:
+        return
+    raise ValidationError(
+        f"data_requirements: {', '.join(perpetuals)} "
+        f"{'is a perpetual' if len(perpetuals) == 1 else 'are perpetuals'} and {FUNDING} is "
+        "not required; a perpetual's P&L is not honest without the funding it paid and was paid",
+        remedy=f"add {FUNDING} to data_requirements and load its realised funding history",
     )
 
 

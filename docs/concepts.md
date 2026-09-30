@@ -478,10 +478,13 @@ account currency of its venue — its `settlement_currency` and its quote curren
 that code, which `hyp validate` checks — and it is charged exactly what any other fill is:
 the venue model's costs, once, by the runner, with its own maker and taker rates held at
 zero. Two things a real perpetual carries are not modelled yet. Funding — the periodic
-payment between longs and shorts — arrives in a later release, so a held perpetual earns
-and pays none today. And neither margin nor liquidation is simulated: what bounds a
-perpetual book is the sleeve's room, `max_leverage` and the `maintenance_margin` gate
-(`docs/backlog.md`).
+payment between longs and shorts — is delivered and not booked: a hypothesis holding a
+perpetual must require the `funding` type, and in a card its sleeve is handed each realised
+settlement in `on_data`, but the runner books funding in a later release, so a held
+perpetual's card earns and pays none of it today. On the node — paper and live — no source
+feeds funding yet, so a deployed sleeve is handed none. And neither margin nor liquidation is
+simulated: what bounds a perpetual book is the sleeve's room, `max_leverage` and the
+`maintenance_margin` gate (`docs/backlog.md`).
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
