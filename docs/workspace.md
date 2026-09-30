@@ -879,11 +879,12 @@ the dataset they follow in `supersedes`. The manifest records the span that was 
 never the span that was asked for, because a source may answer a five-year request with two
 years, HTTP 200 and no warning.
 
-The synthetic loader `demo.yaml` drives generates the weekday sessions of a US equity
+The synthetic loader, as `demo.yaml` drives it, generates the weekday sessions of a US equity
 venue, 09:30 to 16:00 in `America/New_York`; a spec that sets `calendar: continuous`
 generates every calendar day from `start` to `end` instead, in UTC, 00:00 to 24:00 — what a
 round-the-clock venue looks like to the runner. Bars are stamped at their close on either
-calendar, so the last bar of a continuous day closes at 00:00Z of the next, and a daily bar
+calendar, so at a resolution that divides the day the last bar of a continuous day closes
+at 00:00Z of the next, and a daily bar
 lands in the day after the one it summarises (`docs/concepts.md`, the card's return
 periods). A continuous calendar fixes its zone and its session, so a spec that also states
 `timezone`, `session_start` or `session_end` is refused (exit 3) naming the field:

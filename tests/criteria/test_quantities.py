@@ -179,7 +179,8 @@ def test_a_continuous_series_annualises_at_its_own_calendar() -> None:
     )[0]
     ends = tuple(bar.ts_init for bar in loader.load(ref, ref.span))
     assert len(ends) == 7
-    run = build_run(tuple(1.0 for _ in ends), start=date(2024, 3, 4), days=7, ends=ends)
-    assert run.window == (date(2024, 3, 4), date(2024, 3, 10))
+    run = build_run(tuple(1.0 for _ in ends), start=ref.span[0], days=7, ends=ends)
+    assert run.window == ref.span
+    assert all(run.bounds[0] <= ts < run.bounds[1] for ts in ends)
     assert periods_per_year(run) == pytest.approx(DAYS_PER_YEAR, abs=1e-9)
     assert abs(periods_per_year(run) - 365) < 0.5

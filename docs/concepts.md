@@ -258,7 +258,11 @@ what `periods_per_year` observes — about 365 periods a year, the count the win
 over its own length in years, with no constant assumed; the warmup sessions the runner
 resolves are the calendar days that printed, seven a week; and a `session_scope` point
 admitting a name for a session must be stamped in `[00:00Z, first market point)` of that
-session, because the session opens at midnight there. kanso keeps no calendar of its own:
+session, because the session opens at midnight there — where the first market point is
+the bar that closes at exactly 00:00Z, which summarises the previous day's last period,
+that bar is ordered ahead of a scope point stamped at the same instant and is judged
+under the previous session's scope while its return folds into the new period
+(`docs/backlog.md` row 100). kanso keeps no calendar of its own:
 the sessions are the days the catalog holds prints on, whichever venue printed them.
 
 A card proposed by a model carries the proposer's own account of what it was: `tags`, one

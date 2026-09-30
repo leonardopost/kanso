@@ -39,10 +39,11 @@ regulator fact this loader has no business inventing. The timezone comes from th
 generates have been fixed by statute since 2007, so they are the same on both hosts. A
 spec whose `calendar` is `continuous` is a round-the-clock venue instead: every calendar
 day from `start` to `end` is a session, the zone is UTC and the session is 00:00 to 24:00,
-so the last bar of a day closes at 00:00Z of the next. A continuous calendar fixes the
-zone and the session, and a spec that states one of them differently is refused naming
-the field. The default calendar is recorded in no manifest, so every dataset generated
-before the field existed carries the request parameters it always did.
+so at a resolution that divides the day the last bar of a day closes at 00:00Z of the
+next. A continuous calendar fixes the zone and the session, and a spec that states one of
+them differently is refused naming the field. The default calendar is recorded in no
+manifest, so every dataset generated before the field existed carries the request
+parameters it always did.
 
 Points are `realtime`: a bar is available at its close and a quote or a trade at its
 instant, so `ts_init == ts_event`. Publication is declared by the adapter that produced
