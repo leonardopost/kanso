@@ -391,7 +391,9 @@ def test_it_validates_on_a_usdt_account(
 ) -> None:
     """`[research] currency = "USDT"`, or the broker whose venue declares a USDT account."""
     account = research(ws, key, value)
-    path = write_hypothesis(account, {**DOCUMENT, "universe": [BTC]})
+    path = write_hypothesis(
+        account, {**DOCUMENT, "universe": [BTC], "data_requirements": ["bar", "funding"]}
+    )
 
     assert hyp.validate(account, path).universe == [BTC]
 
