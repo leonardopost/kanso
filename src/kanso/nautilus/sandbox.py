@@ -268,7 +268,7 @@ def _restamped(command: Any, ts_init: int) -> Any:
     """The same command stamped `ts_init`, every other field copied: the order objects, every
     id — the correlation id included — and the params are the original's, so the events the
     exchange generates land on the orders the node's cache holds. NautilusTrader 1.231: each
-    of these five classes takes `params` and `correlation_id` beside its own fields."""
+    of these six classes takes `params` and `correlation_id` beside its own fields."""
     if isinstance(command, SubmitOrder):
         return SubmitOrder(
             trader_id=command.trader_id,
@@ -343,6 +343,8 @@ def _restamped(command: Any, ts_init: int) -> Any:
             command_id=command.id,
             ts_init=ts_init,
             client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
         )
     raise ValidationError(
         f"{type(command).__name__}: not a command a sleeve sends, so its flight cannot be timed"

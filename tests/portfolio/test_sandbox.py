@@ -36,6 +36,7 @@ from nautilus_trader.config import (
 )
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import (
+    BatchCancelOrders,
     CancelAllOrders,
     CancelOrder,
     ModifyOrder,
@@ -505,6 +506,9 @@ def commands() -> list[Any]:
         ),
         CancelOrder(**resting, **common),
         CancelAllOrders(instrument_id=instrument_id, order_side=OrderSide.SELL, **common),
+        BatchCancelOrders(
+            instrument_id=instrument_id, cancels=[CancelOrder(**resting, **common)], **common
+        ),
     ]
 
 
