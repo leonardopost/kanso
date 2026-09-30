@@ -81,6 +81,22 @@ def test_the_book_is_measured_before_the_flatten_and_realised_by_it(
     assert len(realised.run.trades) == 1, "the flatten closed the position it was holding"
 
 
+def test_the_flatten_lands_under_a_latency_too(ws: Workspace, store: StateStore) -> None:
+    """A node's flatten is sent after its last point; under a stated latency it waits in
+    flight for a point that never comes, and the venue advances past the delay so it lands
+    against the last point's book — the stage still ends flat."""
+    doc = document(id="slow")
+    doc["costs"] = {**doc.get("costs", {}), "latency_ms": 20}
+    deployable(ws, store, "slow", sleeve=BUYER, doc=doc)
+
+    made = deploy(ws, store, "paper")
+
+    realised = made.results[0]
+    assert realised.positions[0][1] > 0, "the window closed holding a long"
+    assert len(realised.run.trades) == 1, "the flatten closed it, latency and all"
+    assert deploy(ws, store, "paper").results[0].positions == ()
+
+
 def test_a_second_restart_finds_the_stage_flat(ws: Workspace, store: StateStore) -> None:
     deployable(ws, store, "holder", sleeve=BUYER, doc=document(id="holder"))
     deploy(ws, store, "paper")

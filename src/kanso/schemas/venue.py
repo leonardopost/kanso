@@ -21,7 +21,10 @@ more of its price than a dear one, the way a per-share-priced account does; a ma
 under a stated `maker_bps` still pays that rate alone, per share included, because the
 rate is the whole charge on that fill by contract. Zero unless stated.
 
-The cost model carries one key that is not a charge. `limit_fill` is the matching rule the
+The cost model carries two keys that are not charges. `latency_ms` is how long the venue
+takes to see an order — the delay between a sleeve's insert, update or cancel and the
+simulated book acting on it, zero unless stated, measured on the account and route the
+strategy will trade through. `limit_fill` is the matching rule the
 simulated venue is built with: `touch` fills a resting limit the market only reached, and
 `through` fills it only once the market trades beyond its price. It decides which fills a
 run has rather than what they cost, so it cannot be re-applied to recorded fills the way the
@@ -78,11 +81,13 @@ class CostsOverride(KansoModel):
     sell_fee_bps: float | None = Field(default=None, ge=0)
     sell_fee_per_share: float | None = Field(default=None, ge=0)
     limit_fill: LimitFill | None = None
+    latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class Costs(KansoModel):
-    """A complete cost model: what the runner charges, once, to every fill, and whether the
-    venue fills a resting limit the market only touched (`limit_fill`).
+    """A complete cost model: what the runner charges, once, to every fill, whether the
+    venue fills a resting limit the market only touched (`limit_fill`), and how long the
+    venue takes to see an order (`latency_ms`, zero unless stated).
 
     `maker_bps` is the charge on a fill the venue reports as a maker's, in place of all three
     of the others; negative is a rebate, and `None` charges a maker's fill like any other.
@@ -100,6 +105,7 @@ class Costs(KansoModel):
     sell_fee_bps: float = Field(default=0.0, ge=0)
     sell_fee_per_share: float = Field(default=0.0, ge=0)
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
+    latency_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _fixed_bps_present(self) -> Costs:
@@ -171,6 +177,7 @@ def _merge_costs(
         "fixed_bps": None,
         "maker_bps": None,
         "limit_fill": DEFAULT_LIMIT_FILL,
+        "latency_ms": 0.0,
     }
     origin: Origin = "default"
     for layer_origin, override in layers:

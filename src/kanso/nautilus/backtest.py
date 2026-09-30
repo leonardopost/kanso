@@ -870,6 +870,7 @@ def execute_chunked(
         get_base_currency,
         get_book_type,
         get_fill_model,
+        get_latency_model,
         get_oms_type,
         get_starting_balances,
     )
@@ -913,6 +914,9 @@ def execute_chunked(
                 # Whether a resting limit the market only touched fills: the venue model's
                 # `limit_fill`, built from the configuration the node's venue is built from.
                 fill_model=get_fill_model(venue),
+                # How long the venue takes to see an order: the venue model's `latency_ms`,
+                # none when it states none.
+                latency_model=get_latency_model(venue),
                 # The venue applies a corporate action one call before it matches the point
                 # that carried the market past it; see `kanso.nautilus.actions`.
                 modules=modules(venue.name),

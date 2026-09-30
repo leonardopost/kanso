@@ -44,11 +44,13 @@ def _id() -> InstrumentId:
     return InstrumentId(Symbol(SYMBOL), _venue())
 
 
-def deltas(day: date) -> list[OrderBookDelta]:
-    """A book at the open: 500 shown on the bid at 10.00 and 500 on the offer at 10.02."""
+def deltas(day: date, shown: int = 500) -> list[OrderBookDelta]:
+    """A book at the open: `shown` on the bid at 10.00 and 500 on the offer at 10.02; with
+    nothing shown at 10.00 the bid is 500 at 9.99, so an order at 10.00 has the level to itself."""
     base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
+    bid = (1_000, shown) if shown else (999, 500)
     return [
-        make_delta(_id(), BookAction.ADD, OrderSide.BUY, 1_000, 500, 1, 2, 0, base, base),
+        make_delta(_id(), BookAction.ADD, OrderSide.BUY, bid[0], bid[1], 1, 2, 0, base, base),
         make_delta(_id(), BookAction.ADD, OrderSide.SELL, 1_002, 500, 2, 2, 0, base, base),
     ]
 
@@ -83,19 +85,42 @@ def prints(day: date) -> list[TradeTick]:
     return made
 
 
-def _seconds_of_fills(data_requirements: tuple[str, ...], request_for) -> list[int]:
+def _seconds_of_fills(
+    data_requirements: tuple[str, ...],
+    request_for,
+    latency_ms: float = 0.0,
+    shown: int = 500,
+) -> list[int]:
     day = RESEARCH[0]
     document = hypothesis().model_dump(mode="json")
     document.update(resolution="tick", data_requirements=list(data_requirements))
+    document["costs"] = {**document["costs"], "latency_ms": latency_ms}
     hyp = Hypothesis.model_validate(document)
     request = request_for(RESEARCH, source=JOINING, hypothesis_=hyp)
     groups = [tuple(prints(day))]
     if "book" in data_requirements:
-        groups.insert(0, tuple(deltas(day)))
+        groups.insert(0, tuple(deltas(day, shown)))
     result = execute(request, [instrument()], groups)
     assert not result.crashed, result.traceback_tail
     base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
     return [(fill.ts_ns - base) // SECOND_NS for fill in result.run.fills]
+
+
+def test_a_venue_with_latency_sees_the_order_late_and_the_prints_in_between_miss_it(
+    request_for,
+) -> None:
+    """The order is sent on the print at second one to a level of its own, 10.00, between the
+    bid at 9.99 and the offer at 10.02; with no latency the sellers' prints at seconds two,
+    three and four fill it. With a second and a half of latency it is in flight until second
+    two and a half, and the venue acts on it at the first point after that — the print at
+    second three, which is matched before the order is placed — so the prints at seconds
+    two and three pass it and the next three fill it."""
+    assert _seconds_of_fills(("book", "trade"), request_for, shown=0) == [2, 3, 4]
+    assert _seconds_of_fills(("book", "trade"), request_for, shown=0, latency_ms=1_500) == [
+        4,
+        5,
+        6,
+    ]
 
 
 def test_an_order_that_joins_a_level_waits_for_the_size_the_book_showed_ahead_of_it(

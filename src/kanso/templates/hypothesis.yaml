@@ -19,6 +19,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
                                    # rebate. Unset, it pays what any fill pays
+#   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
+                                   # measured on the account and route the strategy will trade through. Zero unless stated
 #   limit_fill: touch              # touch | through: a resting limit fills when the market reaches its price (the engine's
                                    # rule), or only once a bar's low/high or a print goes beyond it. kanso's simulated venues only
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital

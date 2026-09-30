@@ -12,6 +12,7 @@ from kanso.nautilus.venue import (
     LIMIT_FILL,
     NETTING,
     fill_model,
+    latency_model,
     starting_balance,
     venue_configs,
     venues_of,
@@ -60,6 +61,29 @@ def test_a_touched_limit_fills_unless_the_venue_model_says_through() -> None:
     assert stated.fill_model == fill_model("through")
     assert get_fill_model(stated).prob_fill_on_limit == 0.0
     assert set(LIMIT_FILL) == set(get_args(LimitFill))
+
+
+def test_a_stated_latency_delays_every_command_by_that_much_and_none_is_no_model() -> None:
+    """A latency model only when the venue model states one: zero configures none at all."""
+    from nautilus_trader.backtest.node import get_latency_model
+
+    quiet = hypothesis()
+    slow = hypothesis(costs={"spread": "fixed_bps", "fixed_bps": 4.0, "latency_ms": 20})
+
+    (default,) = venue_configs(quiet, venue_model(quiet), CAPITAL)
+    (stated,) = venue_configs(slow, venue_model(slow), CAPITAL)
+
+    assert default.latency_model is None
+    assert stated.latency_model == latency_model(20)
+    built = get_latency_model(stated)
+    assert built.base_latency_nanos == 20_000_000
+    # the engine reads the base for every command kind left at zero
+    assert (
+        built.insert_latency_nanos,
+        built.update_latency_nanos,
+        built.cancel_latency_nanos,
+    ) == (20_000_000, 20_000_000, 20_000_000)
+    assert latency_model(0) is None
 
 
 def test_a_margin_account_carries_the_hypothesis_leverage() -> None:
