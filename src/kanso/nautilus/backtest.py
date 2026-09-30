@@ -34,9 +34,9 @@ for address space on macOS. The peak comes from the reaped child's own resource 
 The child watches back: it ends itself when the process that started it is gone, so a lane
 killed outright never leaves a card running with nobody supervising it, and a process told
 to stop starts no card at all. A caller can also say what the work is for (`wanted`): a
-check asked before every catalog read and every `WANTED_POLL_S` while a card runs, whose
-refusal ends the read and kills the card, so work nobody wants any more is dropped at the
-next read rather than after the window and the card have run to their end.
+check asked before every catalog query for points and every `WANTED_POLL_S` while a card
+runs, whose refusal ends the read and kills the card, so work nobody wants any more is
+dropped at the next query rather than after the window and the card have run to their end.
 What comes back from a failed child is the tail of its traceback and, when the failure was
 one kanso itself raised, that refusal's remedy — so a caller reporting a card that did not
 run can name the fault that occurred rather than assume every one of them is the code's.
@@ -243,10 +243,11 @@ def wanted(check: Callable[[], None]) -> Iterator[None]:
 
     `check` raises once the work is not wanted any more — a lane's claim on the hypothesis
     whose baseline it is preparing, taken back by `research queue remove`
-    (`kanso.research.loop.begin`) — and is asked before every catalog read this process
-    makes, before a card is spawned, and every `WANTED_POLL_S` while one runs, which is
-    killed before the refusal is raised. So a refusal costs at most the read in flight or a
-    poll of the card. Measured before this, on 0.13.1.dev1: four lanes whose claims were
+    (`kanso.research.loop.begin`) — and is asked before every catalog query for points this
+    process makes (the one lookup of the universe's definitions a read begins with is not
+    one), before a card is spawned, and every `WANTED_POLL_S` while one runs, which is
+    killed before the refusal is raised. So a refusal costs at most the query in flight or
+    a poll of the card. Measured before this, on 0.13.1.dev1: four lanes whose claims were
     taken back went on reading their windows for nineteen minutes, because the claim was
     asked about only once the window had been read and the baseline had run on it.
     """
@@ -681,7 +682,7 @@ def _market_points(
     Bars are asked for by the bar type the sleeve subscribes to, spelled by the strategy
     module itself, so the runner loads exactly the grain the strategy will receive rather
     than every grain the catalog happens to hold for that instrument. The `wanted` checks
-    are asked first, as before every catalog read.
+    are asked first, as before every catalog query for points.
     """
     from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
