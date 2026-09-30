@@ -4,7 +4,10 @@ A hypothesis names its universe as fully qualified instrument ids, so the venues
 trades are read off the universe rather than declared twice. Each of them becomes one
 engine venue configuration carrying the resolved venue model's account type and account
 currency, netting, bar execution, the hypothesis's leverage ceiling, the fill model its
-`limit_fill` names, and a starting balance of the run's capital.
+`limit_fill` names, and a starting balance of the run's capital. `venue_config` is the one
+place such a configuration is built: a card's venues come from it through `venue_configs`,
+and a stage's from it through `kanso.nautilus.node.venues_for`, so the two paths cannot
+disagree about a field a version was certified under.
 
 **The simulated venue is deliberately cost-neutral.** No fee model is configured, and the
 fill model slips nothing, because kanso deducts commission, slippage and the spread exactly
@@ -79,6 +82,7 @@ __all__ = [
     "known_currency",
     "latency_model",
     "starting_balance",
+    "venue_config",
     "venue_configs",
     "venues_of",
 ]
@@ -211,23 +215,43 @@ def venue_configs(
     )
     if capital <= 0:
         raise ValidationError(f"capital: {capital} is not an amount to fund a venue with")
-    balance = starting_balance(capital, model.currency)
-    leverage = CASH_LEVERAGE if model.account == "cash" else hyp.risk_limits.max_leverage
     return [
-        BacktestVenueConfig(
-            name=venue,
-            oms_type=NETTING,
-            account_type=_ACCOUNT_TYPES[model.account],
-            starting_balances=[balance],
-            base_currency=model.currency,
-            default_leverage=leverage,
-            bar_execution=True,
-            book_type="L2_MBP" if BOOK in hyp.data_requirements else "L1_MBP",
-            trade_execution=True,
-            queue_position=BOOK in hyp.data_requirements,
-            fill_model=fill_model(model.costs.limit_fill),
-            fee_model=None,
-            latency_model=latency_model(model.costs.latency_ms),
+        venue_config(
+            venue,
+            model,
+            capital,
+            hyp.risk_limits.max_leverage,
+            book=BOOK in hyp.data_requirements,
         )
         for venue in venues_of(hyp.universe)
     ]
+
+
+def venue_config(
+    venue: str, model: VenueModel, capital: float, leverage: float, *, book: bool
+) -> BacktestVenueConfig:
+    """The one venue configuration both code paths are built from.
+
+    A card's venue and a stage's are this function's answer and nothing else's, so the two
+    cannot disagree about a field: the account type and currency, the starting balance,
+    the leverage ceiling — `leverage` on a margin account, one on a cash account, which
+    cannot borrow — bar and trade execution, the book type and queue position `book` asks
+    for, the fill model the model's `limit_fill` names, the fee model left unset — so the
+    exchange charges the instruments' zero rates — and the latency model its `latency_ms`
+    states.
+    """
+    return BacktestVenueConfig(
+        name=venue,
+        oms_type=NETTING,
+        account_type=_ACCOUNT_TYPES[model.account],
+        starting_balances=[starting_balance(capital, model.currency)],
+        base_currency=model.currency,
+        default_leverage=CASH_LEVERAGE if model.account == "cash" else leverage,
+        bar_execution=True,
+        book_type="L2_MBP" if book else "L1_MBP",
+        trade_execution=True,
+        queue_position=book,
+        fill_model=fill_model(model.costs.limit_fill),
+        fee_model=None,
+        latency_model=latency_model(model.costs.latency_ms),
+    )

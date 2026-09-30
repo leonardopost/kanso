@@ -635,7 +635,7 @@ to it (`kanso doctor` re-checks both behaviours as engine facts). A broker fills
 fills: the key moves kanso's simulated venues and nothing a broker does. Like every cost it
 is inherited — a broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and
 two versions certified under different rules cannot share a stage venue, which is one
-exchange: the stage's node refuses to build it (exit 2), naming
+exchange: `deploy` refuses the pair before it writes the stage (exit 2), naming
 `venues.<MIC>.costs.limit_fill`.
 
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
@@ -662,7 +662,11 @@ public, never of the route that carries it to you. Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the
-hypothesis's scope, so a re-pin that changes it starts the search again.
+hypothesis's scope, so a re-pin that changes it starts the search again. A stage venue
+carries the latency its versions were certified under, so two versions certified under
+different values cannot share one, which is one round trip: `deploy` refuses the pair
+before it writes the stage (exit 2), naming `venues.<MIC>.costs.latency_ms` and both
+versions.
 
 **A print fills a resting limit by its own size**, and no more: a buy of 320 met by four
 sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per print, and met

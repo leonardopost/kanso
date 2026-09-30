@@ -15,10 +15,11 @@ from kanso.nautilus.venue import (
     known_currency,
     latency_model,
     starting_balance,
+    venue_config,
     venue_configs,
     venues_of,
 )
-from kanso.schemas import Hypothesis, LimitFill
+from kanso.schemas import Hypothesis, LimitFill, VenueModel
 
 from .conftest import CAPITAL, INSTRUMENT, hypothesis, venue_model
 
@@ -148,6 +149,33 @@ def test_a_resolved_model_object_is_accepted_as_readily_as_its_mapping(hyp: Hypo
     model = VenueModel.model_validate(mapping)
 
     assert venue_configs(hyp, model, CAPITAL) == venue_configs(hyp, mapping, CAPITAL)
+
+
+def test_one_function_builds_the_venue_both_paths_are_configured_from() -> None:
+    """`venue_config` sets every field a card's venue carries: the latency, the book, the
+    queue position, the fill model and the fee model. That a stage's venue equals a card's
+    is `tests/portfolio/test_node.py`'s to show."""
+    hyp = hypothesis(
+        max_leverage=3.0,
+        costs={"spread": "fixed_bps", "fixed_bps": 4.0, "latency_ms": 50, "limit_fill": "through"},
+    )
+    model = VenueModel.model_validate(venue_model(hyp))
+
+    built = venue_config("XNAS", model, CAPITAL, 3.0, book=False)
+
+    assert built.name == "XNAS"
+    assert (built.oms_type, built.account_type, built.base_currency) == (NETTING, "MARGIN", "USD")
+    assert (built.starting_balances, built.default_leverage) == (["100000.00 USD"], 3.0)
+    assert (built.bar_execution, built.trade_execution) == (True, True)
+    assert (built.book_type, built.queue_position) == ("L1_MBP", False)
+    assert built.fill_model == fill_model("through")
+    assert built.fee_model is None, "the runner charges once"
+    assert built.latency_model == latency_model(50)
+    deep = venue_config("XNAS", model, CAPITAL, 3.0, book=True)
+    assert (deep.book_type, deep.queue_position) == ("L2_MBP", True)
+    assert {k: v for k, v in deep.dict().items() if k not in ("book_type", "queue_position")} == {
+        k: v for k, v in built.dict().items() if k not in ("book_type", "queue_position")
+    }, "the book is the only thing `book` changes"
 
 
 def test_a_currency_the_engine_registers_funds_at_the_engine_s_own_precision() -> None:
