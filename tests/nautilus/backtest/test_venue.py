@@ -151,9 +151,9 @@ def test_a_resolved_model_object_is_accepted_as_readily_as_its_mapping(hyp: Hypo
 
 
 def test_one_function_builds_the_venue_both_paths_are_configured_from() -> None:
-    """`venue_config` sets every field a card's venue carries, and `venue_configs` is one
-    call to it per venue: a stage that builds its venue through it cannot differ from a
-    card in the latency, the book, the queue position, the fill model or the fee model."""
+    """`venue_config` sets every field a card's venue carries: the latency, the book, the
+    queue position, the fill model and the fee model. That a stage's venue equals a card's
+    is `tests/portfolio/test_node.py`'s to show."""
     hyp = hypothesis(
         max_leverage=3.0,
         costs={"spread": "fixed_bps", "fixed_bps": 4.0, "latency_ms": 50, "limit_fill": "through"},
@@ -162,7 +162,6 @@ def test_one_function_builds_the_venue_both_paths_are_configured_from() -> None:
 
     built = venue_config("XNAS", model, CAPITAL, 3.0, book=False)
 
-    assert built.dict() == venue_configs(hyp, model, CAPITAL)[0].dict()
     assert built.name == "XNAS"
     assert (built.oms_type, built.account_type, built.base_currency) == (NETTING, "MARGIN", "USD")
     assert (built.starting_balances, built.default_leverage) == (["100000.00 USD"], 3.0)
