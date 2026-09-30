@@ -26,8 +26,8 @@ nothing about the package. A clash is not resolved, it is reported: `kanso ext s
 the id `shadowed`, `kanso doctor` grades the workspace `warn` for it, and the packaged
 definition is what the workspace uses. Both read one table of what ships —
 `kanso.ext.shipped`, asked of the registries themselves — in every kind a declaration may
-carry: the framework's own `sandbox` client and the loaders a packaged *adapter* provides
-(`massive_bars` and its siblings) included. `ext show` is the one of the two that says why
+carry: the framework's own `sandbox` client, the data adapters a broker's package exposes,
+and the loaders a packaged *adapter* provides (`massive_bars` and its siblings) included. `ext show` is the one of the two that says why
 an id is `absent`.
 
 **An extension that fails to import degrades the workspace; it does not stop it.** Extension

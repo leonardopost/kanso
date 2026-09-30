@@ -531,18 +531,14 @@ def _adapter_item(ws: Workspace, adapter: registry.Adapter) -> str:
 
 
 def _unprovided(ws: Workspace, known: Mapping[str, registry.Adapter]) -> tuple[str, ...]:
-    """The `[adapters.<id>]` tables naming something nothing here registers.
+    """The `[adapters.<id>]` tables naming something nothing here registers, as lines.
 
-    A broker adapter is configured through the same table as a data adapter and lives in
-    its own registry, so both are consulted: a table for a broker that is installed is
-    configuration, not a mistake, and reporting it as one would send an operator to delete
-    the settings their stage depends on.
+    Which tables those are is the registry's one rule, the one `kanso data adapters` reads
+    too, and it consults the brokers: a broker's table is configuration, not a mistake.
     """
-    provided = set(known) | set(brokers.packaged())
     return tuple(
         f"{name}: configured in kanso.toml, and nothing registered here provides it"
-        for name in sorted(ws.config.adapters)
-        if name not in provided
+        for name in registry.unprovided(ws, known)
     )
 
 
