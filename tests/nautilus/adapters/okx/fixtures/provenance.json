@@ -54,6 +54,13 @@
       "body": "verbatim",
       "user_agent": "Python-urllib/3.9, the standard library's default: the exchange's edge refuses it before the API answers",
       "recorded_with": "the Python 3.9 standard library's urllib.request.urlopen, no header set"
+    },
+    "swap_USDC-USDT-SWAP.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=USDC-USDT-SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T16:24:15Z",
+      "body": "verbatim"
     }
   }
 }

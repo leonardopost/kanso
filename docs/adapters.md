@@ -400,10 +400,10 @@ polling rather than by an order stream, which is recorded there too.
 A crypto exchange, for perpetual swaps, in two accounts: a demo-trading one and a real one.
 In this version the package holds the broker's **declarations** — the two execution clients,
 the data client id, the six credential names, `[adapters.okx]` and the venue model — and the
-exchange's **public reference**, a data adapter with id `okx` that resolves a listed swap into
-an instrument with no credential at all. The execution clients and the public-history
-loaders arrive in later versions on top of what is declared here; nothing the package ships
-can place an order.
+exchange's **public data**, a data adapter with id `okx` that resolves a listed swap into an
+instrument and loads its bars, trade prints and realised funding into the catalog, with no
+credential at all. The execution clients arrive in a later version on top of what is
+declared here; nothing the package ships can place an order.
 
 ### Credentials
 
@@ -476,12 +476,13 @@ credential.
 | key | default | what it does |
 |---|---|---|
 | `region` | *none* | `global`, `eea` or `us`, in any case; the regional host that accepts the account's key |
-| `rate_per_second` | `5` | the flat quota kanso's own public requests share — the reference's today, the public-history loaders' when they land; `1` to `1000` |
+| `rate_per_second` | `5` | the flat quota kanso's own public requests share — the reference's and the public-history loaders'; `1` to `1000` |
 
 `rate_per_second` governs kanso's own requests only. The engine's own clients meter
 themselves — its compiled client carries a global rate-limit bucket and one per endpoint —
 and take no quota from their caller. Five a second is a conservative default, not a
-measured ceiling.
+measured ceiling. One endpoint is metered below it on a quota of its own: the trade-archive
+listing, at one request a second (below).
 
 ### The public reference
 
@@ -559,6 +560,132 @@ the day it was resolved as of. The entry kanso writes records `instrument_class:
 exchange lists. A perpetual settles and is booked in USDT, so it validates on a USDT account:
 `[research] currency = "USDT"`, or `[research] broker = "okx"`, whose venue `OKX` declares
 one.
+
+### The public history
+
+Three loaders read the exchange's public history into the catalog. They send no credential —
+the same client as the reference, a `User-Agent` and nothing else, on the table's host and
+quota — so, like the reference, they are enabled by `[adapters.okx]` with a `region`, and a
+workspace without the table makes no request. `kanso data adapters` lists their ids under
+`okx`; listing them builds none.
+
+| loader | type | reads | horizon, measured on 2026-09-30 |
+|---|---|---|---|
+| `okx_bars` | `bar` | `GET /api/v5/market/history-candles` | by bar size: `1m` reached back past 2021-01-01; `1s` reached 2026-03-14 and not 2026-03-01, a window that moves with the calendar |
+| `okx_trades` | `trade` | the daily trade archives `GET /api/v5/public/market-data-history?module=1` lists, fetched from the exchange's file host | `BTC-USDT-SWAP`'s reach through 2022 and none is listed for 2021; the newest UTC day served is two behind today |
+| `okx_funding` | `funding` | `GET /api/v5/public/funding-rate-history` | about three months: `BTC-USDT-SWAP`'s oldest settlement was 2026-06-29 08:00 UTC |
+
+A spec names the exchange's swaps and a range of UTC days of `ts_event`; the venue is the
+exchange's, so it states none, and an id on another venue is refused:
+
+```yaml
+loader: okx_bars
+instruments: [BTC-USDT-SWAP]     # the exchange's instId, or BTC-USDT-SWAP.OKX
+start: 2026-09-28
+end: 2026-09-28
+resolution: 1m                   # okx_bars only; okx_trades and okx_funding refuse one
+```
+
+```
+$ kanso data instruments resolve BTC-USDT-SWAP.OKX --as-of 2026-09-30
+$ kanso data load --loader okx_bars --spec bars.yaml
+```
+
+**Resolve first.** Prices and sizes are read at the precision of the `CryptoPerpetual` the
+catalog holds for the id, so an id not yet resolved is refused (exit 2) before any request,
+naming the `kanso data instruments resolve` that fixes it. The precisions are recorded in the
+dataset's request parameters — `inst_id`, `price_precision`, `size_precision` and the `host`
+it was read from — which is where `data sync` reads them. A served number the precision
+cannot hold exactly is refused (exit 3), never rounded: a contract's tick is re-set from
+time to time, and a price rounded onto today's tick is one the exchange never printed; state
+the precision it had in the entry's `override` and resolve again. **Sizes are in
+contracts** — the unit the definition's lot is stated in, and the one kanso's notional
+`qty x px x multiplier` reads.
+
+**A range is served in full or refused by name** (exit 3). A range reaching before an
+endpoint's horizon is refused naming the horizon and the `start` to write — it is never
+loaded as an empty market — and one reaching into a UTC day that has not ended is refused
+naming the last day that has. `data sync`, which extends a series to today, stops where the
+source stops, and the manifest records the span actually served. Every dataset is
+`realtime`: a bar is public at its close, a print when it prints and a funding payment when it
+settles, so `ts_init` equals `ts_event` and no publication rule is involved.
+
+**Throttles are waited out; nothing else is.** An answer of HTTP 429, code `50011`, is asked
+again after 2, 4, 6 and 8 seconds; a fifth stops the command (exit 1), as does any other
+answer that is not the API's success, with a remedy to re-run or lower `rate_per_second`.
+
+#### `okx_bars`
+
+A candle is `[ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]`, `ts` the millisecond
+instant it **opened**. The bar is stamped at its close, `ts + size`, as both `ts_event` and
+`ts_init`; its volume is `vol`, in contracts (on `BTC-USDT-SWAP`, `vol` 1439.97 beside
+`volCcy` 14.3997 BTC at a contract of 0.01 BTC); and the candle still forming — the newest
+row, `confirm` `"0"` — is dropped. Rows come newest first, 300 to a page whatever `limit`
+asks, and `after` and `before` are both exclusive (`after=X` answers the candles that opened
+before `X`); a day is walked back page by page to an empty page and yielded oldest first,
+one day in memory at a time.
+
+The sizes are the endpoint's, in the spelling whose candles open on UTC — its `6H`, `12H`,
+`1D` and `1W` open on Hong Kong time, `1D` at 16:00 UTC — and any other size is refused
+before a request (the endpoint itself answers code `51000`, "Parameter bar error", for `2s`,
+`10s`, `4m`, `3H`, `8H`, `2W` and `1h` in lower case):
+
+| `resolution` | `1s` `5s` `15s` `30s` | `1m` `2m` `3m` `5m` `15m` `30m` | `1h` `2h` `4h` | `6h` `12h` | `1d` | `1w` |
+|---|---|---|---|---|---|---|
+| asked as | the same | the same | `1H` `2H` `4H` | `6Hutc` `12Hutc` | `1Dutc` | `1Wutc` |
+
+The horizon is found with requests of one row: day `D` is served when a candle closing at or
+before `D` 00:00 is, and when a range's first day is not, the first day that is is found by
+bisection up to today — a handful of requests — and named in the refusal.
+
+#### `okx_trades`
+
+The REST endpoint for past prints answers 100 a request and about 80 days back, and a day of
+`BTC-USDT-SWAP` was 3.56 million prints on 2026-09-28, so this loader reads the **daily archives** the
+exchange publishes instead: one zip a day, listed with a URL on the exchange's file host.
+
+- **An archive's day is the exchange's, UTC+8.** The archive named `2023-01-01` holds the
+  prints from 2022-12-31 15:59:41 UTC to 2023-01-01 15:59:51 UTC, and consecutive archives
+  continue each other's trade ids. So a UTC day `D` is served by two archives, `D`'s and
+  `D+1`'s, and only when both are listed — a day with one of them would be a third short. A
+  range with a day that is not is refused naming the days and the archives they need. The
+  archive of a day is listed only once that day has ended in Hong Kong and some hours
+  after: at 16:01 UTC on 2026-09-30 the newest listed was 2026-09-29's, so the last UTC day
+  served was 2026-09-28.
+- **The file.** One CSV, oldest print first, read by column name: the header was
+  `instrument_name,trade_id,side,price,size,created_time` through 2023 and gained `source` by
+  2026. `size` is in contracts — on `USDC-USDT-SWAP`, a contract of 10 USDC, trade 3031605
+  reads `9.0` in the archive and `sz` 9 from the REST endpoint — `side` is the taker's, and
+  `created_time` the print's millisecond instant. A print becomes a `TradeTick` with the
+  exchange's trade id, the taker's side as its aggressor, and `ts_event` = `ts_init` = the
+  instant it printed. Every print is kept, whatever its `source`.
+- **The listing** answers at most ten days a request (HTTP 400, code `50076`, for eleven)
+  and throttles hard: it answered 429 to every second request sent half a second apart, to
+  three of eight sent a second apart, and to none of six sent two seconds apart. It is metered on its own quota of one request a second — the
+  slowest the engine's quota states — and a 429 it still draws is waited out.
+- **The archives are kept** in the catalog's adapter cache, `catalog/.cache/okx/trades/`,
+  because a day reads two of them and a backfill reads each twice; each is written only once
+  it has arrived whole and passes the zip's own CRC. They are public and re-fetchable, so
+  deleting the directory costs a download and nothing else. A `BTC-USDT-SWAP` archive was 6
+  to 18 MB a day in late September 2026 and about 1 MB in January 2023.
+
+A load holds one archive in memory at a time, but `kanso data load` gathers a dataset's
+points before it writes them: that one day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3
+MB, loaded in 82 seconds at a peak of 1.8 GB resident. A spec over many days of a liquid swap
+is therefore best loaded as `data backfill`, which writes chunk by chunk.
+
+#### `okx_funding`
+
+A row is `{fundingRate, realizedRate, fundingTime, method, formulaType, instId, instType}`.
+**`realizedRate` is the payment** — the rate the settlement at `fundingTime` actually paid —
+and it is what becomes `Funding.rate`; `fundingRate`, the rate published for the period, is
+never read, and a row with no finite `realizedRate` is refused rather than filled from it.
+The two agreed on all 281 rows of `BTC-USDT-SWAP` served on 2026-09-30. The point is stamped
+at the settlement, `ts_event` = `ts_init` = `fundingTime`; the endpoint lists settled
+periods only. Pages of 400, newest first, `after` and `before` exclusive; the horizon is
+measured by walking the history back to an empty page — two requests for a swap settling
+every eight hours — and the first whole UTC day served is the oldest settlement's day when
+it fell at midnight, the next day otherwise.
 
 ### The venue it declares
 

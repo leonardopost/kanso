@@ -4,8 +4,9 @@ This package is the whole of what kanso knows about this exchange: two execution
 one live data client id, six credential names, the `[adapters.okx]` table, the venue model
 of perpetual swaps on `OKX`, and — as `ADAPTER`, beside the `BROKER` — the exchange's public
 reference, which resolves a listed swap into an instrument with no credential at all
-(`reference.py`). It builds no execution client yet; those and the public-history loaders
-arrive in later changes and build on what is declared here. Nothing outside this package
+(`reference.py`), and loads its public history — bars, trade prints and realised funding —
+into the catalog the same way (`history.py`). It builds no execution client yet; those
+arrive in a later change and build on what is declared here. Nothing outside this package
 names the exchange, its venue code, its hosts or its instrument grammar, and every command
 works with all six variables unset — the broker is enabled by its credentials, never by
 installation, and the public reference by its table.

@@ -63,15 +63,16 @@ def test_the_loaders_the_manual_provider_and_the_adapter_are_what_is_registered(
 def test_the_exchange_s_public_reference_is_listed_needing_no_credential(
     runner: CliRunner, workspace: Path
 ) -> None:
-    """A broker's package ships its public reference: a data adapter with no key to set,
-    configured by its table, so a fresh workspace lists it unconfigured and says nothing."""
+    """A broker's package ships its public reference and history loaders: a data adapter
+    with no key to set, configured by its table, so a fresh workspace lists it unconfigured,
+    with its three loader ids, and says nothing."""
     document = payload(at(runner, workspace, "data", "adapters", "--json"))
 
     okx = next(item for item in document["adapters"] if item["id"] == "okx")
     assert (okx["kind"], okx["provider"]) == ("data", "builtin")
     assert (okx["credentials"], okx["credential_origins"]) == ([], {})
-    assert okx["capabilities"] == ["reference"]
-    assert (okx["quota"], okx["loaders"]) == ("5/s", [])
+    assert okx["capabilities"] == ["reference", "bars", "trades", "funding"]
+    assert (okx["quota"], okx["loaders"]) == ("5/s", ["okx_bars", "okx_funding", "okx_trades"])
     assert not [note for note in document["notes"] if "okx" in note]
 
 

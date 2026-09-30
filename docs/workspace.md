@@ -906,6 +906,39 @@ that entry is applied over what the exchange lists. An inverse contract (`BTC-US
 contract that is not live are refused by name (exit 3); `docs/adapters.md` lists the fields
 it reads and why the definition's fees are zero.
 
+Its history loads the same way, with no credential, once the swap is resolved — its prices
+and sizes are read at the definition's precision, sizes in contracts. One spec per loader:
+
+```yaml
+loader: okx_bars                 # candles, stamped at their close
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-28
+end: 2026-09-28
+resolution: 1m
+```
+
+```yaml
+loader: okx_trades               # every print, from the exchange's daily archives
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-28
+end: 2026-09-28
+```
+
+```yaml
+loader: okx_funding              # the realised rate at each settlement
+instruments: [BTC-USDT-SWAP]
+start: 2026-07-01
+end: 2026-09-28
+```
+
+```
+$ kanso data load --loader okx_funding --spec funding.yaml
+```
+
+A range reaching before what the exchange serves — about three months of funding, about
+six of `1s` bars — or into a UTC day that has not ended is refused naming the day to use
+(exit 3); `docs/adapters.md` gives each loader's source, horizon, units and rate limits.
+
 **A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
 every settlement, so a hypothesis whose universe holds one lists `funding` in
 `data_requirements`, or `kanso hyp validate` refuses it (exit 3) naming the instrument:

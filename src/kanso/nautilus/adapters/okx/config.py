@@ -20,14 +20,14 @@ engine region maps to `app.okx.com` or `my.okx.com`; an account served only ther
 region to state, and `docs/backlog.md` records it.
 
 **The quota is kanso's own requests', not the engine's clients'.** `rate_per_second` is the
-single flat rate kanso's own public requests share — the reference provider's today, and the
-public-history loaders' when they land. The engine's own HTTP client meters itself — its
+single flat rate kanso's own public requests share — the reference provider's and the
+public-history loaders'. The engine's own HTTP client meters itself — its
 compiled module carries a global bucket `okx:global` and one bucket per endpoint,
 `okx:/api/v5/market/history-candles` among them — and takes no quota from its caller, so
 this key governs nothing the engine sends. Five a second is a deliberately conservative
 default rather than a measured ceiling: the instruments endpoint is asked one id per
-request, and the history endpoints' own limits are measured when the loaders that call them
-land.
+request, and the one history endpoint measured to throttle below it, the archive listing,
+is metered on a quota of its own (`reference.KEYED_QUOTAS`).
 
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
