@@ -842,6 +842,30 @@ def test_an_ambiguous_prefix_is_refused_rather_than_resolved(
         certify(ws, store, HYP_ID, sha="a")
 
 
+def test_the_pin_of_bytes_is_the_one_their_newest_card_was_measured_under(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Carded again under a re-pinned hypothesis, the bytes carry the later pin."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    repinned = document(thesis="The series reverts within five sessions.")
+    a_card(ws, store, REVERTING, seq=1)
+    sha = a_card(ws, store, REVERTING, seq=2, document=repinned)
+
+    assert run.pinned_sha(store, HYP_ID, sha) == pin_of(repinned) != pin_of()
+
+
+def test_bytes_the_hypothesis_never_carded_have_no_pin(ws: Workspace, store: StateStore) -> None:
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    uncarded = sha256(FLAT).hexdigest()
+
+    with pytest.raises(
+        PreconditionError, match=f"{HYP_ID} has no card of {uncarded[:7]}"
+    ) as raised:
+        run.pinned_sha(store, HYP_ID, uncarded)
+    assert raised.value.remedy == "name a strategy this hypothesis has carded"
+
+
 def test_a_hypothesis_with_no_best_card_has_nothing_to_certify(
     ws: Workspace, store: StateStore
 ) -> None:

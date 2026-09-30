@@ -176,6 +176,36 @@ def test_two_lanes_reaching_for_the_same_head_at_once_do_not_both_get_it(
     assert ids(store) == []
 
 
+def test_a_lane_whose_take_removes_nothing_moves_on_without_claiming(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other lane takes the head after this lane found it unclaimed and before its
+    delete: the delete removes nothing, so this lane records no claim and takes the next."""
+    contested = classify(ws, store, DOCUMENT)
+    free = register(ws, store, "demo_two")
+    scheduler.enqueue(store, contested)
+    scheduler.enqueue(store, free)
+    looked = scheduler.claimed
+
+    def other_lane_takes_it_after_the_look(s: StateStore, hyp_id: str) -> bool:
+        held = looked(s, hyp_id)
+        monkeypatch.setattr(scheduler, "claimed", looked)
+        with StateStore(ws.path("state.db")) as other:
+            usable(other, ws.path("state.db"))
+            assert scheduler.dequeue(other, "l2") == contested
+        return held
+
+    monkeypatch.setattr(scheduler, "claimed", other_lane_takes_it_after_the_look)
+
+    assert scheduler.dequeue(store, "l1") == free
+    assert ids(store) == []
+    claims = store.events(kind=scheduler.CLAIMED)
+    assert [(event.subject, event.detail["lane"]) for event in claims] == [
+        (contested, "l2"),
+        (free, "l1"),
+    ]
+
+
 def test_a_host_that_composes_wakes_its_idle_attached_hypotheses(
     ws: Workspace, store: StateStore
 ) -> None:
