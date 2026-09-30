@@ -6,9 +6,15 @@ engine venue configuration carrying the resolved venue model's account type and 
 currency, netting, bar execution, the hypothesis's leverage ceiling, the fill model its
 `limit_fill` names, and a starting balance of the run's capital.
 
-**The simulated venue is deliberately cost-neutral.** No fee model and no latency model is
-configured, and the fill model slips nothing, because kanso deducts commission, slippage
-and the spread exactly once, in the runner's extraction. One application means one number:
+**The simulated venue is deliberately cost-neutral.** No fee model is configured, and the
+fill model slips nothing, because kanso deducts commission, slippage and the spread exactly
+once, in the runner's extraction. A latency model is configured only when the venue model
+states `latency_ms`, and it charges nothing: it delays every order command — insert,
+update and cancel alike — by that long before the simulated book acts on it, so a resting
+order that a print would have filled in the meantime is not there yet, and a cancel sent
+too late finds the order already filled. Zero, the default, configures no model at all, so
+a venue model that states no latency is built exactly as it was before the key existed. One
+application means one number:
 the same cost arithmetic produces the figure on a card, the figure a certification gate
 reads and the figure a replay or a broker-paper session is compared against, and a cost
 model's charges can be re-applied to recorded fills without re-running anything. A venue
@@ -36,9 +42,12 @@ into the other with `get_oms_type`, `get_account_type`, `get_base_currency`,
 `get_starting_balances` and `get_fill_model`, the last building a `FillModel` from an
 `ImportableFillModelConfig` through `FillModelFactory`; `starting_balances` entries are
 strings parsed by `Money.from_str`, which requires the amount to carry the currency's own
-precision; `fee_model` and `latency_model` left unset mean the exchange charges nothing
-beyond an instrument's own maker and taker rates, which kanso's resolved instruments leave
-at zero; `FillModel.is_limit_filled` and `is_slipped` answer a probability of exactly zero
+precision; `fee_model` left unset means the exchange charges nothing beyond an
+instrument's own maker and taker rates, which kanso's resolved instruments leave at zero;
+`latency_model` is an `ImportableLatencyModelConfig` that `get_latency_model` builds into
+a `LatencyModel`, whose `base_latency_nanos` is added to every command's timestamp before
+the exchange processes it from its in-flight queue, and left unset it means no delay;
+`FillModel.is_limit_filled` and `is_slipped` answer a probability of exactly zero
 or one without drawing, and the matching engine asks the first of them only for a MAKER
 order whose price the market reached exactly (`kanso.nautilus.facts` measures which
 market state counts as reaching it); `default_leverage` is a `Decimal` and is meaningless
@@ -50,6 +59,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from nautilus_trader.backtest.config import ImportableLatencyModelConfig
 from nautilus_trader.config import BacktestVenueConfig, ImportableFillModelConfig
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Currency, Money
@@ -62,6 +72,7 @@ __all__ = [
     "LIMIT_FILL",
     "NETTING",
     "fill_model",
+    "latency_model",
     "starting_balance",
     "venue_configs",
     "venues_of",
@@ -110,6 +121,28 @@ def fill_model(limit_fill: LimitFill) -> ImportableFillModelConfig:
     )
 
 
+LATENCY_MODEL: Final = "nautilus_trader.backtest.models:LatencyModel"
+LATENCY_MODEL_CONFIG: Final = "nautilus_trader.backtest.config:LatencyModelConfig"
+NS_PER_MS: Final = 1_000_000
+
+
+def latency_model(latency_ms: float) -> ImportableLatencyModelConfig | None:
+    """The latency model a venue is configured with: `latency_ms` on every order command,
+    and none at all — not a model of zero — when the venue model states no latency."""
+    if latency_ms <= 0:
+        return None
+    return ImportableLatencyModelConfig(
+        latency_model_path=LATENCY_MODEL,
+        config_path=LATENCY_MODEL_CONFIG,
+        config={
+            "base_latency_nanos": int(round(latency_ms * NS_PER_MS)),
+            "insert_latency_nanos": 0,
+            "update_latency_nanos": 0,
+            "cancel_latency_nanos": 0,
+        },
+    )
+
+
 def starting_balance(capital: float, currency: str) -> str:
     """The run's capital as the amount-and-currency string a venue is funded with."""
     try:
@@ -128,9 +161,9 @@ def venue_configs(
 ) -> list[BacktestVenueConfig]:
     """One cost-neutral engine venue per venue in the hypothesis's universe.
 
-    The account type, the currency and the limit-fill rule come from the resolved venue
-    model, the leverage ceiling from the hypothesis's risk limits, and the starting
-    balance from the run's capital. The model's charges are deliberately not translated
+    The account type, the currency, the limit-fill rule and the latency come from the
+    resolved venue model, the leverage ceiling from the hypothesis's risk limits, and the
+    starting balance from the run's capital. The model's charges are deliberately not translated
     into a fee model: the runner applies them once, to the fills, after the backtest. A
     hypothesis that requires `book` gets a level-two book kept from the deltas it loads,
     with `queue_position` on, so a resting order that joins a level waits for the size the
@@ -159,7 +192,7 @@ def venue_configs(
             queue_position=BOOK in hyp.data_requirements,
             fill_model=fill_model(model.costs.limit_fill),
             fee_model=None,
-            latency_model=None,
+            latency_model=latency_model(model.costs.latency_ms),
         )
         for venue in venues_of(hyp.universe)
     ]

@@ -113,6 +113,52 @@ def test_the_two_paths_fill_an_order_that_joins_a_level_behind_the_same_size() -
     assert node.intents == engine.intents
 
 
+def test_the_two_paths_see_an_order_late_by_the_same_latency() -> None:
+    """Both venues are built from the same configuration, so a stated latency delays the
+    order alike: sent on the print at second one to a level of its own, in flight for a
+    second and a half, it is placed after the print at second three and the next three
+    prints fill it on both paths."""
+    from tests.nautilus.backtest.test_order_book import JOINING, deltas, prints
+
+    hyp = hypothesis(resolution="tick", horizon="1d", data_requirements=["book", "trade"])
+    request = request_for(source=JOINING, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), "latency_ms": 1_500}  # type: ignore[arg-type]
+    day = FORWARD[0]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        [tuple(deltas(day, 0)), tuple(prints(day))],
+    )
+
+    base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
+    assert [(fill.ts_ns - base) // SECOND_NS for fill in engine.run.fills] == [4, 5, 6]
+    assert [(fill.ts_ns - base) // SECOND_NS for fill in node.run.fills] == [4, 5, 6]
+    assert node.intents == engine.intents
+
+
+def test_the_two_paths_hold_cancels_in_flight_alike_through_a_flicker() -> None:
+    """A re-posting sleeve under latency has cancels and inserts in flight at once; both
+    paths land each at the first point after its delay, so neither path fills or denies an
+    order the other does not."""
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},
+    )
+    request = request_for(source=POSTING, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), "latency_ms": 5}  # type: ignore[arg-type]
+    quotes_ = flickering(FORWARD[0], 150, 2_000_000)
+    node, engine = both(replace(request, venue_model=model), [instrument()], [tuple(quotes_)])
+
+    assert node.intents == engine.intents
+    assert len(node.intents) > 10, "the sleeve kept re-posting through the flicker"
+    assert len(node.intents) < 150, "and the delay cost it re-posts the zero-latency sleeve made"
+    assert node.run.fills == engine.run.fills
+
+
 def test_the_two_paths_apply_a_corporate_action_identically() -> None:
     """A split is applied by the venue, and both paths run the same simulated venue."""
     node, engine = both(
