@@ -22,10 +22,11 @@ behalf. Committing a workspace is the operator's business; versioning the file r
 mutates is kanso's own, content-addressed in the state store. `tests/workspace/test_no_git.py`
 and `tests/cli/test_no_git.py` spy on every process launch and fail the moment one is git.
 
-**The core knows no vendor and no broker.** Every outside party lives in exactly one
-package — `data/adapters/<vendor>/` for data and reference, `nautilus/adapters/<broker>/`
-for execution and live feeds — and nothing outside it names a vendor, an endpoint, a vendor
-field or a vendor symbology. Mapping to engine types and kanso schemas happens at the
+**The core knows no vendor and no broker.** One package per outside party:
+`data/adapters/<vendor>/` for a pure data vendor, `nautilus/adapters/<broker>/` for a broker,
+which may also carry that party's public-history loaders and reference provider, exposed as
+an `ADAPTER` the data registry discovers. Nothing outside that package names a vendor, an
+endpoint, a vendor field or a vendor symbology. Mapping to engine types and kanso schemas happens at the
 adapter boundary. Provider specifics stay inside `models/` the same way. The isolation
 tests (`tests/data/adapters/`, `tests/nautilus/adapters/`, `tests/models/`) are a source
 scan and an import-graph check, and they read the names from the adapter directories rather

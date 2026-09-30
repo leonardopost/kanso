@@ -5,12 +5,18 @@ names it needs, the loaders that fetch through it and the provider that resolves
 instruments. It is the registry's only entry point, and it is the same entry point for an
 adapter this package ships and one a workspace extension provides.
 
-**Adapters are discovered, never named.** The packaged adapters are the subpackages of
-`kanso.data.adapters`, each exposing a module-level `ADAPTER`; an extension declares its
-own ids in `PROVIDES["adapters"]` and exposes them in an `ADAPTERS` mapping, exactly as it
-declares loaders. Nothing in this module — and nothing anywhere outside a vendor's own
-package — spells a vendor's name, which is what makes the isolation property something a
-source scan can check rather than something a reviewer has to remember.
+**Adapters are discovered, never named.** There is one package per outside party: a pure
+data vendor's under `kanso.data.adapters`, a broker's under `kanso.nautilus.adapters`. The
+packaged adapters are the subpackages of `kanso.data.adapters`, each exposing a module-level
+`ADAPTER`. A broker's package may carry that party's public-history loaders and reference
+provider too, and exposes them the same way, as a module-level `ADAPTER` beside its
+`BROKER`; `adapters()` walks the broker packages for one after the packaged adapters, so
+`provider_for` and `adapter_loaders` reach it like any other, while `packaged()` stays the
+data adapter directory alone. An extension declares its own ids in `PROVIDES["adapters"]`
+and exposes them in an `ADAPTERS` mapping, exactly as it declares loaders. Nothing in this
+module — and nothing anywhere outside a party's own package — spells a vendor's or a
+broker's name, which is what makes the isolation property something a source scan can
+check rather than something a reviewer has to remember.
 
 **Discovery costs no credential and opens no socket.** An adapter is enabled by the
 presence of its credentials, never by installation, so a workspace with every vendor
@@ -36,6 +42,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from kanso.nautilus import adapters as brokers
+
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from datetime import date
 
@@ -48,6 +56,13 @@ PACKAGE = "kanso.data.adapters"
 """Where the packaged adapters live. A directory of subpackages is the whole declaration:
 this module names the directory, and no module in kanso names what is in it."""
 
+BROKERS = brokers.PACKAGE
+"""Where the broker packages live. One may expose a data adapter beside its broker; the
+package is imported by this dotted name and walked, and none of its subpackages is named."""
+
+ATTR = "ADAPTER"
+"""The module attribute an adapter exposes itself under, in either directory."""
+
 __all__ = [
     "Adapter",
     "Capabilities",
@@ -55,8 +70,10 @@ __all__ = [
     "Survey",
     "adapter_loaders",
     "adapters",
+    "brokered",
     "packaged",
     "provider_for",
+    "unprovided",
 ]
 
 
@@ -199,13 +216,15 @@ class Adapter(Protocol):
 
 
 def adapters(extensions: Sequence[Extension] = ()) -> dict[str, Adapter]:
-    """Every adapter available here: the packaged ones, then the extensions' own.
+    """Every adapter available here: the packaged ones, the brokers', then the extensions'.
 
-    A packaged id wins a clash, on the same rule the loader registry follows: the built-in
-    answer is the one the suite and the demo run against, so an extension may add to it
-    and may not replace it.
+    The earlier source wins a clash, on the same rule the loader registry follows: the
+    built-in answer is the one the suite and the demo run against, so an extension may add
+    to it and may not replace it, and a broker's package may not replace a vendor's.
     """
     found = packaged()
+    for adapter_id, adapter in brokered().items():
+        found.setdefault(adapter_id, adapter)
     for extension in extensions:
         for adapter_id, adapter in _extension_adapters(extension).items():
             found.setdefault(adapter_id, adapter)
@@ -235,6 +254,19 @@ def provider_for(
     return None if adapter is None else adapter.provider(ws)
 
 
+def unprovided(ws: Workspace, known: Mapping[str, Adapter]) -> tuple[str, ...]:
+    """The `[adapters.<id>]` tables in `kanso.toml` that nothing registered here provides.
+
+    A broker is configured through the same table as a data adapter and lives in its own
+    registry, so both are consulted: a table for a broker that ships is configuration, and
+    calling it an orphan would send an operator to delete the settings a stage depends on.
+    `known` is the data adapters the caller already discovered, extensions' included. One
+    rule, read by `kanso data adapters` and by `kanso doctor` alike.
+    """
+    provided = set(known) | set(brokers.packaged())
+    return tuple(sorted(name for name in ws.config.adapters if name not in provided))
+
+
 def packaged() -> dict[str, Adapter]:
     """Every packaged adapter, read from the adapter directory rather than from a list.
 
@@ -244,11 +276,28 @@ def packaged() -> dict[str, Adapter]:
     the adapters is not an error. Registering by the adapter's own id rather than by the
     directory's name means an id and its home cannot silently disagree.
     """
-    package = importlib.import_module(PACKAGE)
+    return _discover(PACKAGE)
+
+
+def brokered() -> dict[str, Adapter]:
+    """Every data adapter a broker's package exposes, read from the broker directory.
+
+    A broker's package is that party's one home, so its public-history loaders and its
+    reference provider live there too, exposed as an `ADAPTER` beside the `BROKER`. They
+    ship with kanso as the packaged adapters do, and are discovered the same way; they are
+    kept apart from `packaged()` only because that one answers "what is in the data adapter
+    directory", which the isolation scan holds equal to the directory.
+    """
+    return _discover(BROKERS)
+
+
+def _discover(dotted: str) -> dict[str, Adapter]:
+    """The adapters exposed directly under the package `dotted`, by each adapter's own id."""
+    package = importlib.import_module(dotted)
     found: dict[str, Adapter] = {}
     for info in sorted(pkgutil.iter_modules(package.__path__), key=lambda item: item.name):
-        module = importlib.import_module(f"{PACKAGE}.{info.name}")
-        adapter = getattr(module, "ADAPTER", None)
+        module = importlib.import_module(f"{dotted}.{info.name}")
+        adapter = getattr(module, ATTR, None)
         if isinstance(adapter, Adapter):
             found[adapter.id] = adapter
     return found
