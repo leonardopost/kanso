@@ -33,9 +33,11 @@ than from a list, so a new adapter is scanned without anyone remembering to add 
 
 **An adapter is enabled by its credentials, never by installation.** There are no extras.
 The full suite, `kanso doctor` and the demo are green with every vendor and broker
-credential unset, and CI has no credential at all, which is what proves it. A test that
-genuinely needs a real key carries the `live` marker, is deselected by default and never
-runs in CI.
+credential unset, and CI has no credential at all, which is what proves it. The suite is
+offline in its entirety: there is no `live` marker and no credentialed test, because a test
+CI never runs is a promise nobody keeps. Credentialed acceptance is a maintainer-driven CLI
+run against the live vendor or the paper account, recorded in the pull request body
+(`docs/maintainers.md` §2).
 
 **Availability, not observation.** Every catalog point's `ts_init` is the instant its
 information became public and `ts_event` is its economic reference time; `ts_init >=
