@@ -560,7 +560,7 @@ def worker(ws: Workspace, lane: str) -> int:
                     subject,
                     {"lane": lane, "error": exc.message, "because": exc.remedy},
                 )
-                scheduler.put_back(store, subject)
+                scheduler.put_back(store, subject, lane)
                 _wait(BACKOFF_S)
             else:
                 if outcome.ended and not stopping():
