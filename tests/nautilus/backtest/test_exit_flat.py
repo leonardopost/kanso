@@ -574,12 +574,15 @@ def taken_back(cancel: str, *, priced: bool = False) -> bytes:
     )
 
 
-def points(sessions: tuple[date, date] = SESSIONS) -> list[tuple[object, ...]]:
-    """Quotes and prints a second apart over ten minutes of each session, from the generator."""
+def points(
+    sessions: tuple[date, date] = SESSIONS, names: tuple[str, ...] = (SYMBOL,)
+) -> list[tuple[object, ...]]:
+    """Quotes and prints a second apart over ten minutes of each session, from the generator,
+    for each of `names`."""
     loader = SyntheticLoader()
     spec = {
         "seed": 7,
-        "instruments": [SYMBOL],
+        "instruments": list(names),
         "venue": VENUE,
         "resolution": "1s",
         "types": ["quote", "trade"],
@@ -629,15 +632,19 @@ def _run(
     modifiers=(),
     *,
     quotes: bool = False,
+    names: tuple[str, ...] = (SYMBOL,),
 ):
     document = hypothesis().model_dump(mode="json")
     requirements = ["quote"] if quotes else ["quote", "trade"]
     document.update(resolution="tick", data_requirements=requirements)
+    document["universe"] = [f"{name}.{VENUE}" for name in names]
     document["costs"] = chasing_costs(latency_ms)
     hyp = Hypothesis.model_validate(document)
     request = request_for(RESEARCH, source=source, hypothesis_=hyp, modifiers=modifiers)
-    groups = quotes_only(points()) if quotes else points()
-    result = execute(request, [instrument()], groups)
+    groups = points(names=names)
+    if quotes:
+        groups = quotes_only(groups)
+    result = execute(request, [instrument(name) for name in names], groups)
     assert not result.crashed, result.traceback_tail
     return result.run
 
@@ -1013,4 +1020,142 @@ def test_an_order_cancelled_in_the_handler_that_sent_it_never_rests(
     each one-share exit rested through a quote, and the sleeve sold all 100 shares in 100
     fills that no venue would have given it."""
     run = _run(request_for, 0.0, SENT_AND_CANCELLED.replace(b"CANCEL", cancel.encode()))
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0)]
+
+
+OTHER = "OTHR"
+"""A second name, for a sleeve owed an exit on each of two."""
+
+TWO_NAMES_IN_FLIGHT = (
+    HEAD
+    + b'''
+from nautilus_trader.model.enums import OrderType
+
+
+class Strategy(KansoStrategy):
+    """Buys each of its two names once, on that name's first quote; on the first name's
+    thirtieth quote sends, for each name in turn, an exit a dollar above the ask and then an
+    exit at market, which the first, still on its way to the venue, cuts to nothing. It
+    notes, for every exit asked for again as the venue answers an order, whether that name's
+    own orders on the closing side had all closed by then, and fails the run at the end
+    unless each name's was asked for once, and only once they had."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.bought = set()
+        self.answering = None
+        self.paid = []
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        if instrument_id not in self.bought:
+            self.bought.add(instrument_id)
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        if instrument_id != self.universe[0]:
+            return
+        self.seen += 1
+        if self.seen == 30:
+            for name in self.universe:
+                ask = float(self.cache.quote_tick(name).ask_price)
+                self.submit_exit(name, price=round(ask + 1.0, 2))
+                self.submit_exit(name)
+
+    def _pay_owed(self, only=None):
+        answering, self.answering = self.answering, only
+        try:
+            super()._pay_owed(only)
+        finally:
+            self.answering = answering
+
+    def submit_exit(self, instrument_id, **kwargs):
+        if self.answering is not None:
+            waiting = [
+                order
+                for order in self.cache.orders(strategy_id=self.id)
+                if str(order.instrument_id) == str(instrument_id)
+                and order.order_type != OrderType.MARKET
+                and not order.is_closed
+            ]
+            self.paid.append((str(instrument_id), not waiting))
+        return super().submit_exit(instrument_id, **kwargs)
+
+    def on_stop(self):
+        names = sorted(str(name) for name in self.universe)
+        assert sorted(self.paid) == [(name, True) for name in names], self.paid
+'''
+)
+"""A sleeve owed an exit at market on each of two names at once, each behind an exit of its
+own still in flight."""
+
+
+def test_an_exit_owed_on_one_name_waits_for_that_name_s_own_answer(request_for) -> None:
+    """With no latency stated, an exit at market owed behind an order is asked for again as
+    the venue answers that order. Owed on two names at once, the answer that closes the
+    first name's order asks for the first name's exit alone: the second's still waits on an
+    order the venue has taken but not yet cancelled, and is asked for as that order closes.
+    Both are paid in the instant they were asked for, and the sleeve is flat in each name."""
+    quotes = quotes_only(points(names=(SYMBOL, OTHER)))[0]
+    asked = int(quotes[29].ts_init)
+    run = _run(request_for, 0.0, TWO_NAMES_IN_FLIGHT, quotes=True, names=(SYMBOL, OTHER))
+    sells = sorted(
+        (fill.instrument_id, fill.qty, fill.ts_ns) for fill in run.fills if fill.side == "SELL"
+    )
+    assert sells == [(f"{name}.{VENUE}", 100.0, asked) for name in sorted((SYMBOL, OTHER))]
+    assert sorted((fill.instrument_id, fill.qty) for fill in run.fills if fill.side == "BUY") == [
+        (f"{name}.{VENUE}", 100.0) for name in sorted((SYMBOL, OTHER))
+    ]
+
+
+TAKEN_BACK_AT_A_PRICE = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once; on its thirtieth quote sends an exit a dollar above the ask, then an exit at
+    market, which the first, still on its way to the venue, cuts to nothing, and then takes
+    that back with an exit two dollars above the ask, which the first cuts to nothing too.
+    On its thirty-first it fails the run unless the first still rests, uncancelled, and
+    nothing waits on the venue's answer to it."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.resting = None
+        self.checked = False
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 30:
+            ask = float(tick.ask_price)
+            self.resting = self.submit_exit(instrument_id, price=round(ask + 1.0, 2))
+            self.submit_exit(instrument_id)
+            self.submit_exit(instrument_id, price=round(ask + 2.0, 2))
+        elif self.seen == 31:
+            order = self.cache.order(self.resting.client_order_id)
+            assert order.status_string() == "ACCEPTED", order
+            assert not self._awaiting, self._awaiting
+            self.checked = True
+
+    def on_stop(self):
+        assert self.checked, "the thirty-first quote never came"
+'''
+)
+"""A sleeve that takes back an exit at market owed behind its own exit in flight, with an
+exit at a price, before the venue answers."""
+
+
+def test_an_order_is_not_cancelled_for_an_exit_at_market_taken_back_before_its_answer(
+    request_for,
+) -> None:
+    """An exit at market owed behind an order in flight cancels that order once the venue
+    has taken it. When the sleeve has taken the exit at market back by the time the venue
+    answers — here with an exit at a price, which owes nothing — the answer leaves the order
+    resting where the sleeve put it, stops waiting on it, and nothing is sold."""
+    run = _run(request_for, 0.0, TAKEN_BACK_AT_A_PRICE, quotes=True)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0)]
