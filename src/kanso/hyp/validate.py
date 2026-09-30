@@ -45,6 +45,12 @@ document is parsed. Everything else needs the workspace, and that is this module
 A validation failure names the field and the reason, and where several are independent
 they are reported together rather than one per attempt.
 
+`check_strategy` is the one question asked of the `strategy.py` beside the file, and only
+`kanso hyp validate` asks it: whether the strategy binds a name its base class owns, which
+`strategy_integrity` refuses at a run's baseline card and at every card that carries it.
+It is not part of `validate`, because `add` and `classify` validate the file they pin and
+the strategy is the research loop's to change.
+
 NautilusTrader facts this module relies on (nautilus_trader 1.231.0): an `Instrument`
 carries its venue on `id.venue`, whose `value` is the venue code a venue model is
 resolved for; `Instrument.get_settlement_currency()` answers the currency a trade in it
@@ -69,12 +75,14 @@ from kanso.classify.construct import PORTFOLIO
 from kanso.classify.construct import catalogue as construct_catalogue
 from kanso.criteria import applicable_objectives, check_params
 from kanso.criteria import catalogue as criteria_catalogue
+from kanso.criteria.integrity import clashes
 from kanso.criteria.objectives import measures_a_hold_over, measures_benchmark
 from kanso.data import registry
 from kanso.data.instruments import resolve_universe
 from kanso.data.types import data_types
 from kanso.errors import ValidationError
-from kanso.hyp.scaffold import HYPOTHESES, hypothesis_file
+from kanso.hyp.scaffold import HYPOTHESES, HYPOTHESIS_FILE, hypothesis_dir, hypothesis_file
+from kanso.hyp.scaffold import STRATEGY_FILE as STRATEGY_SOURCE
 from kanso.nautilus import adapters
 from kanso.nautilus.venue import known_currency
 from kanso.schemas import (
@@ -158,6 +166,28 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_book(hyp, models)
     _check_classification(ws, hyp)
     return hyp
+
+
+def check_strategy(ws: Workspace, hyp_id: str) -> None:
+    """The workspace `strategy.py` of a hypothesis, refused when it binds a name its base owns.
+
+    Each binding is named with its line, as the research loop would name it to a proposer.
+    A file that is not there, or does not parse, binds nothing this can find.
+    """
+    directory = hypothesis_dir(ws, hyp_id)
+    strategy = directory / STRATEGY_SOURCE
+    source = strategy.read_bytes().decode("utf-8", "replace") if strategy.is_file() else ""
+    found = clashes(source)
+    if not found:
+        return
+    where = strategy.relative_to(ws.root)
+    names = ", ".join(sorted({f"'{clash.name}'" for clash in found}))
+    raise ValidationError(
+        f"{where}: binds what its base class owns, which `strategy_integrity` refuses before "
+        "any card runs: " + "; ".join(clash.problem for clash in found),
+        remedy=f"rename {names} in {where} to a name {found[0].base} does not own, then "
+        f"`kanso hyp validate {directory.relative_to(ws.root) / HYPOTHESIS_FILE}`",
+    )
 
 
 def _check_benchmark(hyp: Hypothesis) -> None:

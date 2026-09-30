@@ -45,6 +45,7 @@ from typing import Any, Literal
 from kanso import __version__, creds, env, ext, skills_sync
 from kanso.certify.certificate import source_file
 from kanso.cli.context import STATE_DB
+from kanso.criteria.integrity import clashes
 from kanso.criteria.integrity import scope as lane_scope
 from kanso.data import registry
 from kanso.data.instruments import (
@@ -60,7 +61,7 @@ from kanso.data.snapshot import instrument_drift, newest
 from kanso.env import envelope as envelope_module
 from kanso.env import host
 from kanso.errors import KansoError, ValidationError
-from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE, hypothesis_dir
+from kanso.hyp import HYPOTHESES, HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE, hypothesis_dir
 from kanso.nautilus import adapters as brokers
 from kanso.nautilus import facts
 from kanso.portfolio import Declared, exec_client_declarations, stage_refusals
@@ -118,6 +119,7 @@ def run(ws: Workspace, check_adapters: bool = False) -> list[Check]:
             ("repository", lambda: _repository(ws)),
             ("gitignore", lambda: _gitignore(ws)),
             ("best", lambda: _best(ws, unread)),
+            ("base names", lambda: _base_names(ws)),
             ("certificates", lambda: _certificates(ws, unread)),
             ("record", lambda: _record(ws, unread)),
             ("skills", lambda: _skills(ws)),
@@ -798,6 +800,38 @@ def _best(ws: Workspace, unread: Unread | None) -> Check:
             f"{STRATEGY_FILE}` to restore the best"
             for hyp_id in edited
         ),
+    )
+
+
+def _base_names(ws: Workspace) -> Check:
+    """Every `hypotheses/<id>/strategy.py` against the names its base class owns.
+
+    A strategy that binds one — `self._close = 3`, `def _fund(...)` — puts its own value
+    where the harness keeps its own, and `strategy_integrity` refuses it at the baseline card
+    of a run begun from it and at every card that carries it. Read from the files alone, so a
+    draft is named before it is registered and nothing here needs the state store. A warning,
+    never a failure: the workspace is sound, and a proposer that writes one is told the same
+    at its next card.
+    """
+    paths = sorted(ws.path(HYPOTHESES).glob(f"*/{STRATEGY_FILE}"))
+    items: list[str] = []
+    for path in paths:
+        found = clashes(path.read_bytes().decode("utf-8", "replace"))
+        if found:
+            named = ", ".join(f"'{clash.name}' at line {clash.line}" for clash in found)
+            items.append(f"{path.parent.name}: {found[0].base}'s {named}")
+    detail = f"{len(paths)} {STRATEGY_FILE} file(s) · {len(items)} bind a name its base owns"
+    if not items:
+        return Check("base names", "ok", detail)
+    return Check(
+        "base names",
+        "warn",
+        f"{detail}: {', '.join(item.partition(':')[0] for item in items)}",
+        items=tuple(items),
+        remedy=f"rename each in hypotheses/<id>/{STRATEGY_FILE} to a name its base does not "
+        f"own; `kanso hyp validate hypotheses/<id>/{HYPOTHESIS_FILE}` names every line, and "
+        "a run whose best still binds one begins again with "
+        "`kanso research begin <id> --from-workspace`",
     )
 
 
