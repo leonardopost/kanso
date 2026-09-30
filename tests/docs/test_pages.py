@@ -188,14 +188,31 @@ def test_the_pages_state_the_settlement_check_and_the_fee_rate_refusal() -> None
 def test_the_concepts_page_says_what_a_perpetual_is_not_yet() -> None:
     concepts = prose(page("concepts.md"))
     assert "**A perpetual is a linear contract" in concepts
-    assert "is delivered and not booked" in concepts
-    assert "the runner books funding in a later release" in concepts
-    assert "no source feeds funding yet, so a deployed sleeve is handed none" in concepts
+    assert "neither margin nor liquidation is simulated" in concepts
+
+
+def test_the_concepts_page_states_how_funding_is_booked() -> None:
+    """What is booked, when, the sign, the tie, where it lands, what the cost gates ignore
+    and what the node lacks: each is a claim the funding suite checks."""
+    concepts = prose(page("concepts.md"))
+    assert "**A perpetual's funding is booked once, by the runner, beside every other cost.**" in (
+        concepts
+    )
+    assert "`qty x mark x multiplier x rate` out of cash" in concepts
+    assert "A long pays a positive rate and a short receives it" in concepts
+    assert "of several prints at the instant, the greatest" in concepts
+    assert "every fill stamped before the instant and no fill stamped at it" in concepts
+    assert "deliberately not the `<=` rule" in concepts
+    assert "an order placed in answer to the settlement changes nothing it settled" in concepts
+    assert "inside the return and the equity of the period" in concepts
+    assert "Its `pnl_net` is net of that and its `cost` is not" in concepts
+    assert "leave funding exactly as it was booked" in concepts
+    assert "no data adapter fetches funding" in concepts
 
 
 def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> None:
     """The type, its file columns, the realised-not-predicted rule, the validation refusal
-    and the booking that has not landed, each where an operator loading a perpetual reads."""
+    and the booking, each where an operator loading a perpetual reads."""
     from kanso.data.loaders.csv_parquet import columns_for
     from kanso.hyp.validate import FUNDING
 
@@ -211,13 +228,14 @@ def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> Non
     assert "A file maps `ts_event` and `rate`, and `instrument_id` where it holds one" in (
         workspace
     )
-    assert "**The runner does not book funding yet**" in workspace
+    assert "**The runner books each settlement once**" in workspace
     assert "`funding` is required of a hypothesis and asked of its perpetuals alone" in workspace
     assert "does not span the research and certification windows" in workspace
     refusals = section(page("workspace.md"), "What the workspace refuses")
     assert "does not list `funding`" in refusals
     backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 107 |"))
-    assert "delivered and not booked" in backlog
+    assert "~~A perpetual's funding is delivered and not booked~~ **booking closed**" in backlog
+    assert "no data adapter fetches settlements" in backlog
 
 
 def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:

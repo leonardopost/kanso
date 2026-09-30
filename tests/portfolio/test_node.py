@@ -319,6 +319,24 @@ def test_the_node_configuration_carries_the_backstop_and_no_client(placement: Pl
     assert config.exec_clients == {}
 
 
+def test_a_stage_sleeve_books_the_funding_its_simulated_account_does_not_settle(
+    placement: Placement,
+) -> None:
+    """The stage's venue is simulated and settles no funding, so every sleeve it holds
+    books each settlement into its balance as the extraction books it into the record."""
+    assert placement.loaded.sleeve.config.books_funding is False
+    loop = asyncio.new_event_loop()
+    built = TradingNode(config=a_node((placement,)).config(), loop=loop)
+    built.build()
+    try:
+        (strategy,) = node._components(built, (placement,))
+
+        assert strategy.kanso_config.books_funding is True
+    finally:
+        built.dispose()
+        loop.close()
+
+
 def test_each_version_runs_under_an_identity_of_its_own(placement: Placement) -> None:
     assert placement.tag == f"{placement.strategy_id}-1"
     assert placement.identity.endswith(placement.tag)

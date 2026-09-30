@@ -151,6 +151,12 @@ def joined(runs: Sequence[CardRun]) -> CardRun | None:
         cushion=tuple(cushions) if cushion_at else (),
         carry=tuple(carry_at.get(ts, 0.0) for ts in ends) if carry_at else (),
         worst_ratio=tuple(worst_at.get(ts) for ts in ends) if worst_at else (),
+        funding=tuple(
+            sorted(
+                (payment for run in runs for payment in run.funding),
+                key=lambda payment: (payment.ts_ns, payment.instrument_id),
+            )
+        ),
     )
 
 

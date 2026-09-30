@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
-from kanso.criteria.run import CardRun, Fill, Held, Trade
+from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.nautilus.node import Realised
@@ -347,6 +347,7 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         "cushion": list(run.cushion),
         "carry": list(run.carry),
         "worst_ratio": list(run.worst_ratio),
+        "funding": [_encode_funding(payment) for payment in run.funding],
         "capital": run.capital,
         "currency": run.currency,
         "venue_model": dict(run.venue_model),
@@ -354,7 +355,8 @@ def encode_run(run: CardRun) -> dict[str, Any]:
 
 
 def decode_run(payload: Mapping[str, Any]) -> CardRun:
-    """One measured window back from its stored form."""
+    """One measured window back from its stored form; one stored before funding was booked
+    reads as a run that paid none, which is what it measured."""
     opens, closes = payload["window"]
     return CardRun(
         window=(date.fromisoformat(opens), date.fromisoformat(closes)),
@@ -370,6 +372,7 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
         worst_ratio=tuple(
             None if value is None else float(value) for value in payload.get("worst_ratio", ())
         ),
+        funding=tuple(_decode_funding(item) for item in payload.get("funding", ())),
         capital=float(payload["capital"]),
         currency=str(payload["currency"]),
         venue_model=dict(payload["venue_model"]),
@@ -391,6 +394,26 @@ def _decode_held(payload: Mapping[str, Any]) -> Held:
         instrument_id=str(payload["instrument_id"]),
         qty=float(payload["qty"]),
         notional=float(payload["notional"]),
+    )
+
+
+def _encode_funding(payment: FundingPayment) -> dict[str, Any]:
+    return {
+        "ts_ns": payment.ts_ns,
+        "instrument_id": payment.instrument_id,
+        "qty": payment.qty,
+        "rate": payment.rate,
+        "paid": payment.paid,
+    }
+
+
+def _decode_funding(payload: Mapping[str, Any]) -> FundingPayment:
+    return FundingPayment(
+        ts_ns=int(payload["ts_ns"]),
+        instrument_id=str(payload["instrument_id"]),
+        qty=float(payload["qty"]),
+        rate=float(payload["rate"]),
+        paid=float(payload["paid"]),
     )
 
 
@@ -436,11 +459,13 @@ def _encode_trade(trade: Trade) -> dict[str, Any]:
         "cost": trade.cost,
         "fills": [_encode_fill(fill) for fill in trade.fills],
         "multiplier": trade.multiplier,
+        "funding": trade.funding,
     }
 
 
 def _decode_trade(payload: Mapping[str, Any]) -> Trade:
-    """A recorded trade; one recorded before the multiplier was kept reads as one."""
+    """A recorded trade; one recorded before the multiplier was kept reads as one, and one
+    recorded before funding was booked as a trade that paid none."""
     return Trade(
         opened_ns=int(payload["opened_ns"]),
         closed_ns=int(payload["closed_ns"]),
@@ -452,4 +477,5 @@ def _decode_trade(payload: Mapping[str, Any]) -> Trade:
         cost=float(payload["cost"]),
         fills=tuple(_decode_fill(fill) for fill in payload["fills"]),
         multiplier=float(payload.get("multiplier", 1.0)),
+        funding=float(payload.get("funding", 0.0)),
     )

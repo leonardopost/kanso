@@ -9,7 +9,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from kanso.criteria.run import CardRun, Fill, Held, Trade
+from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
 from kanso.errors import Exit, KansoError
 from kanso.nautilus import adapters
 from kanso.portfolio import approvals, approve, approved, capital, clients, files, records
@@ -215,6 +215,35 @@ def test_a_record_written_before_the_book_series_still_decodes() -> None:
     decoded = records.decode_run(payload)
 
     assert (decoded.cushion, decoded.carry, decoded.worst_ratio) == ((), (), ())
+
+
+def test_the_funding_a_run_paid_survives_the_round_trip() -> None:
+    """A realised window's funding is in its equity, and the record says which settlements."""
+    trade = replace(a_run().trades[0], pnl_net=9.3, funding=0.2)
+    run = a_run(
+        trades=(trade,),
+        funding=(
+            FundingPayment(ts_ns=1, instrument_id="DEMO.XNAS", qty=10.0, rate=0.0001, paid=0.25),
+            FundingPayment(ts_ns=2, instrument_id="DEMO.XNAS", qty=10.0, rate=-0.00004, paid=-0.05),
+        ),
+    )
+
+    decoded = records.decode_run(records.encode_run(run))
+
+    assert decoded == run
+    assert decoded.trades[0].funding == 0.2
+
+
+def test_a_record_written_before_funding_was_booked_reads_as_a_run_that_paid_none() -> None:
+    payload = records.encode_run(a_run())
+    del payload["funding"]
+    for recorded in payload["trades"]:
+        del recorded["funding"]
+
+    decoded = records.decode_run(payload)
+
+    assert decoded.funding == ()
+    assert [trade.funding for trade in decoded.trades] == [0.0]
 
 
 def test_whether_a_fill_rested_survives_the_round_trip() -> None:

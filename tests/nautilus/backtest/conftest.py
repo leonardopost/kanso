@@ -270,6 +270,36 @@ def instrument(symbol: str = SYMBOL, **extra: object) -> Equity:
     )
 
 
+PERP = "BTCUSDT-PERP.SIM"
+"""The manual linear perpetual the funding tests hold: 0.01 BTC a contract, settled in USDT."""
+
+
+def perpetual() -> object:
+    """The manual BTCUSDT-PERP entry `docs/workspace.md` shows, built as a workspace would."""
+    from kanso.data.instruments import build, conventions_for
+    from kanso.schemas import InstrumentEntry
+
+    entry = InstrumentEntry.model_validate(
+        {
+            "nautilus_id": PERP,
+            "asset_class": "CRYPTOCURRENCY",
+            "manual": True,
+            "corporate_actions": "none",
+            "override": {
+                "instrument_class": "swap",
+                "base_currency": "BTC",
+                "quote_currency": "USDT",
+                "settlement_currency": "USDT",
+                "multiplier": "0.01",
+                "price_increment": "0.1",
+                "size_increment": "1",
+                "lot_size": "1",
+            },
+        }
+    )
+    return build(entry, conventions_for(entry, RESEARCH[0]))
+
+
 def _venue() -> object:
     from nautilus_trader.model.identifiers import Venue
 
@@ -394,6 +424,7 @@ def hypothesis(
     data_requirements: Sequence[str] = ("bar",),
     costs: dict[str, object] | None = None,
     max_leverage: float = 1.0,
+    resolution: str = "1d",
 ) -> Hypothesis:
     """A classified hypothesis over January 2024, certified in late February."""
     return Hypothesis.model_validate(
@@ -405,7 +436,7 @@ def hypothesis(
             "mechanism": "mean_reversion",
             "universe": list(universe),
             "horizon": "1d",
-            "resolution": "1d",
+            "resolution": resolution,
             "data_requirements": list(data_requirements),
             "costs": costs
             or {

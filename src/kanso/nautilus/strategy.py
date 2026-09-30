@@ -129,6 +129,7 @@ from kanso.nautilus.costs import (
     carry,
     fill_cost,
     fixed_half_spread,
+    funding_payment,
     month_turned,
     quote_half_spread,
     reset,
@@ -247,6 +248,11 @@ class KansoConfig(StrategyConfig, frozen=True):
     sizing_budget: float = 0.0
     """The budget every order is sized to when the hypothesis declares `sizing`; zero
     is free sizing, where the author chooses a size within the risk limits."""
+    books_funding: bool = False
+    """Whether the balance books each funding settlement it is handed, as the runner's
+    extraction does. The runner and a stage node on a simulated venue set it, because the
+    simulated account settles no funding; an account a broker keeps settles its own, and a
+    sleeve on one leaves it off. Either way the strategy's `on_data` is handed the point."""
     fixed_params: tuple[str, ...] = ()
     """The numeric fields of an author's own configuration that are not knobs — a selector
     among rules, a clock constant, a size the hypothesis sets — so the `param_plateau` gate
@@ -469,6 +475,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._carried_from_ns = 0
         self._period_index: int | None = None
         self._period_last_ns = 0
+        self._mark_at: dict[str, tuple[int, float]] = {}
+        self._settling: list[tuple[int, str, float, float]] = []
+        self._filled: list[tuple[int, str, float]] = []
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -644,6 +653,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         anything else is done with it (`_turn`). So a balance read at a period's last point
         is the equity struck there before that end's carry and transfer, and one read at
         any later point has them.
+
+        With `books_funding` it is also net of every funding settlement it has been handed
+        (`_fund`), booked when the point is delivered, before `on_data` sees it, on what the
+        runner counts as held there: every fill stamped before the instant and none stamped
+        at it, so an order placed in answer to the settlement changes nothing it settled.
+        One thing the runner uses at that instant can only be known after the point: a print
+        of the instant delivered after it, which moves the mark. The first point of a later
+        instant settles the difference before anything else is done with it, so from then on
+        the two agree.
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
@@ -665,8 +683,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         after its end are the ones the venue just matched against this point. Periods are
         cut as the runner cuts them — from `_anchor_ns`, `_period_ns` long, ending at the
         last point inside — and nothing turns over a warmup prefix, which the runner
-        measures in no period.
+        measures in no period. A funding settlement booked at an earlier instant is settled
+        first (`_refund`), so the period closes on the book the runner closes it on.
         """
+        if self._settling and ts_ns > self._settling[0][0]:
+            self._refund()
+        if self._filled:
+            self._filled = [filled for filled in self._filled if filled[0] >= ts_ns]
         if self._policy is None or ts_ns < self._anchor_ns or ts_ns < self._trading_from_ns:
             return
         index = (ts_ns - self._anchor_ns) // self._period_ns
@@ -706,6 +729,80 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             moved, self._cushion = reset(value - charged, self.capital, self._cushion)
             self._cash += moved
         self._settled_ns = end
+
+    def _fund(self, data: object) -> None:
+        """Book one funding settlement into cash as the runner books it (`_equity`).
+
+        The rate on what this sleeve held before the instant — every fill the venue matched
+        at it so far is booked and taken back out (`_since`), as the runner leaves it out —
+        marked at the last print at or before it, the greatest of an instant's, as the
+        runner picks, and times the multiplier. A print of the instant that follows the point
+        is settled by `_refund`.
+        """
+        from kanso.data.types import Funding
+
+        if not isinstance(data, Funding):
+            return
+        key = data.instrument_id.value
+        ts = int(data.ts_init)
+        rate = float(data.rate)
+        self._settle()
+        paid = self._funding_due(key, rate, self._holding(key, self._since(ts)))
+        self._cash -= paid
+        self._settling.append((ts, key, rate, paid))
+
+    def _refund(self) -> None:
+        """Settle the instant's funding again on everything the instant held, now it is over.
+
+        Called by the first point of a later instant before it moves a price: the holdings
+        are taken back to what was held before the settlement instant — every fill stamped
+        at it or after it is taken out, as `_book_at` takes out the fills after a period's
+        end — and each payment is struck again at the instant's final mark and the difference
+        booked, so what was booked is what the runner books.
+        """
+        instant = self._settling[0][0]
+        later = [
+            (event.instrument_id.value, self._signed(event))
+            for event in self._settle(until_ns=instant - 1)
+        ]
+        taken = [*later, *self._since(instant)]
+        for _ts, key, rate, booked in self._settling:
+            self._cash -= self._funding_due(key, rate, self._holding(key, taken)) - booked
+        self._settling.clear()
+
+    def _since(self, instant: int) -> list[tuple[str, float]]:
+        """The fills this sleeve has booked that the venue stamped at or after `instant`, as
+        `(instrument, signed quantity)`: what a settlement there does not see. Kept from the
+        booking (`_settle`) until a later instant is delivered, because a fill of the
+        instant may have been booked — by a read of the balance — before its settlement
+        point arrived."""
+        return [(key, signed) for ts, key, signed in self._filled if ts >= instant]
+
+    def _funding_due(self, key: str, rate: float, qty: float) -> float:
+        """What a settlement at `rate` takes from `qty` held of `key`, at its last print."""
+        mark = self._mark_at.get(key)
+        return funding_payment(
+            qty, 0.0 if mark is None else mark[1], self._multiplier_of(key), rate
+        )
+
+    def _holding(self, key: str, taken: Sequence[tuple[str, float]] = ()) -> float:
+        """This sleeve's signed quantity of `key`, with the fills in `taken` —
+        `(instrument, signed quantity)` — taken back out."""
+        qty = fsum(
+            float(position.signed_qty)
+            for position in self.cache.positions_open(strategy_id=self.id)
+            if position.instrument_id.value == key
+        )
+        for name, signed in taken:
+            if name == key:
+                qty -= signed
+        return qty
+
+    @staticmethod
+    def _signed(event: Any) -> float:
+        """A fill's quantity, negative for a sale."""
+        filled = float(event.last_qty)
+        return filled if event.order_side == OrderSide.BUY else -filled
 
     def _book_at(self, end: int) -> tuple[float, float]:
         """The book's equity and gross at `end`, as the runner strikes them.
@@ -749,7 +846,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         and the market-wide ones the runner loaded — reach the author's `on_data` as that
         type, at the instant each became public: a `corporate_action` arrives as a
         `CorporateAction`, with `kind`, `ratio`, `cash`, `currency` and `ex_date_ns`, and a
-        `funding` as a `Funding`, with the realised `rate` of the period that settled. The
+        `funding` as a `Funding`, with the realised `rate` of the period that settled — which,
+        under `books_funding`, the balance has already booked when `on_data` sees it. The
         harness subscribes because the author cannot: a researched `strategy.py` may not
         import `kanso.data`, and the class is the one thing a subscription needs.
         """
@@ -822,7 +920,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._turn(int(bar.ts_init))
         self._delivered_ns = int(bar.ts_init)
         key = bar.bar_type.instrument_id.value
-        self._printed(key, float(bar.close), int(bar.ts_event))
+        self._printed(key, float(bar.close), int(bar.ts_event), int(bar.ts_init))
         if not self._is_extra_bar(bar):
             self._last_bar[key] = bar
             self._observe_price(key, float(bar.close), int(bar.ts_event))
@@ -845,7 +943,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         key = tick.instrument_id.value
         self._last_quote[key] = tick
         mid = (float(tick.bid_price) + float(tick.ask_price)) / 2.0
-        self._printed(key, mid, int(tick.ts_event))
+        self._printed(key, mid, int(tick.ts_event), int(tick.ts_init))
         self._observe_price(key, mid, int(tick.ts_event))
         if self._charges.get("spread") == "quotes":
             times, values = self._quoted.setdefault(key, ([], []))
@@ -870,7 +968,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
         self._last_trade[key] = tick
-        self._printed(key, float(tick.price), int(tick.ts_event))
+        self._printed(key, float(tick.price), int(tick.ts_event), int(tick.ts_init))
         self._observe_price(key, float(tick.price), int(tick.ts_event))
         if self._held():
             self._pending.append(tick)
@@ -910,6 +1008,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 return
             self._turn(ts_init)
             self._delivered_ns = ts_init
+        if self._cfg.books_funding:
+            self._fund(data)
         self._note_scope(data)
         if self._held():
             self._pending.append(data)
@@ -1003,10 +1103,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if not self._cfg.extra_resolutions:
                 self._overlay_due = (instrument_id, None, None)
 
-    def _printed(self, key: str, price: float, ts_event: int) -> None:
-        """Keep the last price an instrument printed at, and when, for marking what it holds."""
+    def _printed(self, key: str, price: float, ts_event: int, ts_init: int) -> None:
+        """Keep the last price an instrument printed at, and when, for marking what it holds;
+        and the mark a funding settlement is struck at, chosen as the runner chooses it — the
+        latest by availability, and of one instant's, the greatest."""
         self._last_print[key] = price
         self._print_ns[key] = ts_event
+        held = self._mark_at.get(key)
+        if held is None or ts_init > held[0] or (ts_init == held[0] and price > held[1]):
+            self._mark_at[key] = (ts_init, price)
 
     def _observe_price(self, key: str | None, price: float | None, ts_event: int) -> None:
         if key is not None and price is not None:
@@ -2235,6 +2340,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                         continue
                     self._booked.add(event.id)
                     self._cash -= self._paid(event)
+                    if self._cfg.books_funding:
+                        self._filled.append(
+                            (int(event.ts_event), event.instrument_id.value, self._signed(event))
+                        )
                 if not held_back:
                     entry[1] = count
             if held_back or not order.is_closed:

@@ -24,12 +24,14 @@ from kanso.nautilus.backtest import run, run_subprocess
 from .conftest import (
     CLOSE_NS,
     INSTRUMENT,
+    PERP,
     RESEARCH,
     SECOND_NS,
     bars,
     catalog,
     hypothesis,
     instrument,
+    perpetual,
 )
 
 DAY_NS = 86_400 * SECOND_NS
@@ -222,8 +224,6 @@ def test_a_card_not_handed_the_extension_cannot_read_its_type(
 
 # --- a perpetual's funding ---------------------------------------------------
 
-PERP = "BTCUSDT-PERP.SIM"
-
 FUNDING_TAKER = b'''
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
@@ -248,32 +248,6 @@ FUNDING_ROWS = [
     [PERP, "0.000125", "2024-01-20T00:00:00"],
 ]
 """Three settlements inside the research window and one the day before it opens."""
-
-
-def perpetual() -> object:
-    """The manual BTCUSDT-PERP entry `docs/workspace.md` shows, built as a workspace would."""
-    from kanso.data.instruments import build, conventions_for
-    from kanso.schemas import InstrumentEntry
-
-    entry = InstrumentEntry.model_validate(
-        {
-            "nautilus_id": PERP,
-            "asset_class": "CRYPTOCURRENCY",
-            "manual": True,
-            "corporate_actions": "none",
-            "override": {
-                "instrument_class": "swap",
-                "base_currency": "BTC",
-                "quote_currency": "USDT",
-                "settlement_currency": "USDT",
-                "multiplier": "0.01",
-                "price_increment": "0.1",
-                "size_increment": "1",
-                "lot_size": "1",
-            },
-        }
-    )
-    return build(entry, conventions_for(entry, RESEARCH[0]))
 
 
 def funded(root: Path) -> Path:

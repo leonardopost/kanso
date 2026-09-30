@@ -13,6 +13,12 @@ A sleeve's harness needs the same number while it runs, to know what its account
 holds, so the arithmetic lives here and both call it: the balance a strategy sizes against
 is the equity the runner strikes.
 
+A perpetual's funding is the third charge, and the only one that is neither a fill cost nor
+a period-end policy: at each settlement the holder pays the realised rate on the notional it
+holds then (`funding_payment`), so a long pays a positive rate and a short receives it. The
+runner books it once, in the extraction, at the settlement instant; the harness books the
+same amount when the settlement point is delivered, before the sleeve is handed it.
+
 The book policy a hypothesis declares is the same shape of promise at the period end. A
 monthly reset moves a surplus into a cushion and restores a deficit from it; a financing
 carry charges a yearly rate on what the book holds above its equity; both are applied
@@ -50,6 +56,7 @@ __all__ = [
     "fill_cost",
     "fill_rate",
     "fixed_half_spread",
+    "funding_payment",
     "maintenance_ratio",
     "month_turned",
     "policy_of",
@@ -140,6 +147,17 @@ def fill_cost(
     if maker and maker_bps is not None:
         return charged
     return charged + qty * commission_per_share
+
+
+def funding_payment(signed_qty: float, mark: float, multiplier: float, rate: float) -> float:
+    """What one funding settlement takes from the holder, in the account currency.
+
+    The rate is the realised rate of the period that settled, a fraction of notional, and
+    the notional is signed: `qty x mark x multiplier`, a short's negative. So a long pays a
+    positive rate and is paid a negative one, and a short the reverse — a negative amount is
+    one the holder received. Nothing is held, nothing is paid.
+    """
+    return signed_qty * mark * multiplier * rate
 
 
 @dataclass(frozen=True)
