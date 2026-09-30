@@ -102,8 +102,13 @@ def build_run(
     cushion: tuple[float, ...] = (),
     carry: tuple[float, ...] = (),
     worst_ratio: tuple[float | None, ...] = (),
+    ends: tuple[int, ...] | None = None,
 ) -> CardRun:
-    """A daily run: one return period per day, equity compounded from the returns."""
+    """A daily run: one return period per day, equity compounded from the returns.
+
+    `ends` replaces the period ends, for a run whose periods close on another clock than
+    the last instant of each day.
+    """
     span = len(returns) if days is None else days
     running = capital
     curve: list[float] = []
@@ -115,7 +120,9 @@ def build_run(
         period="1d",
         period_ends_ns=tuple(
             midnight_ns(start + timedelta(days=i + 1)) - 1 for i in range(len(returns))
-        ),
+        )
+        if ends is None
+        else ends,
         returns=returns,
         equity=tuple(curve) if equity is None else equity,
         trades=trades,
