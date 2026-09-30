@@ -13,6 +13,7 @@ failure, not an id's. And the request carries a User-Agent and nothing else.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -428,11 +429,49 @@ def test_the_survey_is_one_public_request_for_the_listing(ws: Workspace) -> None
     ]
 
 
-def test_a_listing_that_does_not_answer_is_an_unreachable_survey(ws: Workspace) -> None:
-    survey = ADAPTER.survey(ws, transport=Replay(answers={None: "refused_user_agent.txt"}))
+def test_a_listing_that_does_not_answer_stops_the_survey_and_names_no_credential(
+    ws: Workspace,
+) -> None:
+    """Recorded: the edge's 403. A survey's `reachable` is a credential's verdict, and this
+    adapter sends none, so a host that does not answer is the call's failure instead."""
+    with pytest.raises(KansoError) as stopped:
+        ADAPTER.survey(ws, transport=Replay(answers={None: "refused_user_agent.txt"}))
 
-    assert (survey.reachable, survey.requests) == (False, 1)
-    assert survey.notes == ("the listing did not answer (HTTP 403: error code: 1010)",)
+    assert stopped.value.code is Exit.ERROR
+    assert stopped.value.message == (
+        f"okx: {INSTRUMENTS} did not answer as the exchange's API does (HTTP 403: error code: 1010)"
+    )
+    assert stopped.value.remedy is not None and "credential" not in stopped.value.remedy
+
+
+def test_doctor_grades_a_host_that_does_not_answer_as_that_check_s_failure(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.cli.doctor import _adapters, _guard
+
+    for name in [name for name in os.environ if name.startswith("KANSO_")]:
+        monkeypatch.delenv(name)  # no other configured adapter is asked anything
+    refusing = Replay(answers={None: "refused_user_agent.txt"})
+    monkeypatch.setattr(reference, "pyo3_transport", lambda rate, **_: refusing)
+
+    check = _guard("adapters", lambda: _adapters(ws, True))
+
+    assert check.status == "fail"
+    assert "did not answer" in check.detail and "authenticate" not in check.detail
+    assert check.remedy is not None and "rate_per_second" in check.remedy
+    assert "credential" not in check.remedy
+
+
+def test_a_transport_fault_is_the_call_s_failure_with_a_remedy(ws: Workspace) -> None:
+    def unreachable(url: str, params: Any) -> Response:
+        raise RuntimeError("error sending request for url")
+
+    with pytest.raises(KansoError) as stopped:
+        ADAPTER.provider(ws, transport=unreachable).resolve([BTC], AS_OF)
+
+    assert stopped.value.code is Exit.ERROR
+    assert stopped.value.message == f"okx: {INSTRUMENTS} could not be reached (RuntimeError)"
+    assert stopped.value.remedy is not None and "network" in stopped.value.remedy
 
 
 # --- the wire -------------------------------------------------------------------

@@ -20,7 +20,11 @@ error (HTTP 400, code `51000`), as is a lower-case one; and an id the exchange d
 answers HTTP 200 with code `51001` and no rows. So an id is asked for on its own, an unknown
 id is that id's failure and never the endpoint's, and a malformed one is refused per id too.
 Every other answer — a throttle, a gateway error, a body that is not the API's envelope —
-stops the call: nothing about the id was established by it.
+stops the call: nothing about the id was established by it. That includes `51000` under HTTP
+200, which the exchange was seen to answer once, transiently, for a well-formed id in review
+of this adapter (seven repeats answered code `0`): only the 400 marks an id malformed. A fault
+below any answer — a refused connection, a timeout — stops the call too, with a network
+remedy.
 
 **The fields, as the recorded rows carry them.** A linear swap's row leaves `baseCcy` and
 `quoteCcy` empty; the contract's own currency is `ctValCcy` (`BTC`) and the quote is the
@@ -253,7 +257,15 @@ class PublicClient:
         params = {"instType": SWAP}
         if inst_id is not None:
             params["instId"] = inst_id
-        return _answer(self.transport(f"{self.base_url}{INSTRUMENTS}", params))
+        try:
+            response = self.transport(f"{self.base_url}{INSTRUMENTS}", params)
+        except Exception as exc:  # every fault below the answer is one outcome
+            raise KansoError(
+                f"okx: {INSTRUMENTS} could not be reached ({type(exc).__name__})",
+                Exit.ERROR,
+                remedy="check the network and the exchange's status page, then re-run",
+            ) from exc
+        return _answer(response)
 
 
 def _unanswered(answer: Answer) -> KansoError:
@@ -463,11 +475,16 @@ class ReferenceAdapter:
         return OkxReference(self.client(ws, transport=transport))
 
     def survey(self, ws: Workspace, *, transport: Transport | None = None) -> Survey:
-        """One public request, the swap listing: does the host answer, and what it lists."""
+        """One public request, the swap listing: does the host answer, and what it lists.
+
+        A survey's `reachable` is a credential's verdict, and this adapter sends none, so a
+        host that does not answer — the edge's 403, a throttle, a gateway error — is never
+        reported as `reachable: false`: it raises, as `resolve` does, and the probe that
+        asked reports the call's failure with a network remedy instead of blaming a key.
+        """
         answer = self.client(ws, transport=transport).swaps()
         if not answer.listed:
-            said = f"the listing did not answer ({answer.said()})"
-            return Survey(adapter=self.id, reachable=False, detail=said, requests=1, notes=(said,))
+            raise _unanswered(answer)
         linear = [
             row
             for row in answer.rows

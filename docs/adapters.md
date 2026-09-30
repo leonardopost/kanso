@@ -511,7 +511,12 @@ one naming `okx` as its reference with no `region` is refused before anything is
 host is the one the engine maps the region to; every regional host answered the listing on
 2026-09-30, and the recordings the suite replays were made on `us.okx.com`. With the table
 present and a `region` stated, `--check` makes one request, the unnarrowed swap listing, and
-reports how many live linear swaps it lists. A table that states no `region` — valid for the
+reports how many live linear swaps it lists. It never reports the exchange as "did not
+authenticate", because nothing it sends could fail to: a host that does not answer the listing
+— the edge's 403, a throttle, a gateway error, a refused connection — is the probe's failure.
+`kanso data adapters --check` stops with exit 1 and that error, and `kanso doctor
+--check-adapters` grades its `adapters` check `fail` with the same message; both carry a
+network remedy — re-run, lower `rate_per_second`, or check the exchange's status page. A table that states no `region` — valid for the
 broker, which refuses it only when a client opens — gives the reference no host, so it counts
 as unconfigured: both probes pass it by without a request and go on to every other adapter.
 
@@ -542,8 +547,10 @@ on every fill. Each id is refused by name (exit 3), and every refusal is reporte
   as malformed (HTTP 400, code `51000` — its ids are in capitals);
 - an id on another venue than `OKX`.
 
-An answer that is not the API's own — a throttle, a gateway error, the edge's 403 — stops the
-command rather than marking an id, because nothing about the id was established.
+An answer that is not the API's own — a throttle, a gateway error, the edge's 403, a code
+`51000` under HTTP 200, which the exchange was once seen to answer transiently for a valid id
+— and a request that reached no answer at all stop the command (exit 1) rather than marking an
+id, because nothing about the id was established.
 
 The listing is today's. A contract the exchange has delisted is not in it and is unknown, and
 a definition resolved as of an earlier day carries the terms the exchange lists today, dated
