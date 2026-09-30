@@ -12,6 +12,7 @@ from kanso.nautilus.venue import (
     LIMIT_FILL,
     NETTING,
     fill_model,
+    known_currency,
     latency_model,
     starting_balance,
     venue_config,
@@ -175,3 +176,34 @@ def test_one_function_builds_the_venue_both_paths_are_configured_from() -> None:
     assert {k: v for k, v in deep.dict().items() if k not in ("book_type", "queue_position")} == {
         k: v for k, v in built.dict().items() if k not in ("book_type", "queue_position")
     }, "the book is the only thing `book` changes"
+
+
+def test_a_currency_the_engine_registers_funds_at_the_engine_s_own_precision() -> None:
+    """Measured on nautilus_trader 1.231.0: `Money(100000, USDT)` renders eight decimals,
+    where USD renders two; kanso adds no precision of its own."""
+    from nautilus_trader.model.objects import Money
+
+    known_currency("USD")
+    known_currency("USDT")
+    rendered = starting_balance(100_000, "USDT")
+
+    assert rendered == "100000.00000000 USDT"
+    assert Money.from_str(rendered).as_double() == pytest.approx(100_000)
+
+
+@pytest.mark.parametrize("code", ["FOOBAR", "usdt", "USTD"])
+def test_a_currency_the_engine_does_not_register_is_refused_before_it_is_minted(
+    hyp: Hypothesis, code: str
+) -> None:
+    """Measured on nautilus_trader 1.231.0: `Currency.from_str("FOOBAR")` raises nothing and
+    mints a crypto currency at precision 8, so the refusal has to come before it is asked."""
+    with pytest.raises(ValidationError) as caught:
+        starting_balance(100_000, code)
+    assert repr(code) in caught.value.message
+    assert caught.value.remedy == (
+        "set [research] currency in kanso.toml or venues.<MIC>.currency in portfolio.yaml "
+        "to a code the engine registers"
+    )
+
+    with pytest.raises(ValidationError, match="not a code the engine registers"):
+        venue_configs(hyp, {**venue_model(hyp), "currency": "FOOBAR"}, CAPITAL)

@@ -93,6 +93,21 @@ def test_validate_refuses_a_hypothesis_whose_universe_does_not_resolve(
     assert "GONE.SIM" in payload(result)["error"]
 
 
+def test_validate_refuses_an_account_currency_the_engine_does_not_register(
+    runner: CliRunner, loaded: Path
+) -> None:
+    config = loaded / "kanso.toml"
+    text = config.read_text(encoding="utf-8").replace('currency = "USD"', 'currency = "USTD"')
+    config.write_text(text, encoding="utf-8")
+    path = write_hypothesis(loaded)
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "'USTD'" in payload(result)["error"]
+    assert "[research] currency in kanso.toml" in payload(result)["remedy"]
+
+
 def test_add_registers_the_file_under_the_sha_of_its_bytes(runner: CliRunner, loaded: Path) -> None:
     from hashlib import sha256
 

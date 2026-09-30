@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from pydantic import ValidationError as PydanticValidationError
 
 from kanso.errors import PreconditionError, ValidationError
+from kanso.schemas.venue import Currency
 
 CONFIG_NAME = "kanso.toml"
 _TEMPLATE = "kanso.toml"
@@ -40,7 +41,7 @@ class ResearchConfig(BaseModel):
     capital: float = Field(default=100_000, gt=0)
     broker: str | None = None
     account: Literal["margin", "cash"] = "margin"
-    currency: str = "USD"
+    currency: Currency = "USD"
     return_period: Duration = "1d"
     annualisation: Literal["auto"] | float = "auto"
     align_every: int = Field(default=10, gt=0)
