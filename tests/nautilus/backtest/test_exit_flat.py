@@ -864,7 +864,7 @@ def test_an_exit_at_market_cancels_a_stop_the_order_emulator_holds(
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
 
 
-@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0, 2500.0])
 def test_an_exit_at_market_leaves_an_order_whose_modify_is_in_flight_to_it(
     request_for, latency_ms: float
 ) -> None:
@@ -872,22 +872,26 @@ def test_an_exit_at_market_leaves_an_order_whose_modify_is_in_flight_to_it(
     exits at market, is pending update until the venue answers the modify; the exit at market
     must not cancel it, which on a node would overtake the modify, nor count it spent. It
     counts, the market exit is cut to nothing and owed, the modify fills it, and the sleeve is
-    flat. Measured on the round before this test: at 0 ms the exit at market cancelled the
-    order it read as held open and counted it spent, went whole, and the modify filled as
-    well, leaving the backtest short 100."""
+    flat. At 2500 ms, longer than the second between points, the modify is still unanswered
+    on the next point, where the cancel is sent anyway; the modify was stamped first, so it
+    still lands first. Measured on the round before this test: at 0 ms the exit at market
+    cancelled the order it read as held open and counted it spent, went whole, and the modify
+    filled as well, leaving the backtest short 100; and on origin/main at 2500 ms the run
+    went short 100."""
     run = _run(request_for, latency_ms, MODIFIED_OPEN)
     assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
 
 
-@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0, 2500.0])
 def test_an_exit_at_market_is_paid_behind_a_modify_the_sleeve_sends_on_every_point(
     request_for, latency_ms: float
 ) -> None:
     """A sleeve that modifies its resting exit on every quote leaves it pending update at the
     end of every handler, and the owed exit is asked for again only then. The exit at market
-    holds its cancel back until the venue has answered the modify — at 0 ms as the answer
-    lands, at 20 ms on the next quote, before the handler — so it lands behind the modify; the
-    order is cancelled, the owed exit is paid, and the sleeve is flat within the session.
+    holds its cancel back — at 0 ms until the venue answers the modify, under a latency until
+    the next quote, before the handler, answered or not (at 2500 ms it is not) — so it lands
+    behind the modify; the order is cancelled, the owed exit is paid, and the sleeve is flat
+    within the session.
     Measured on the round before this test: the exit at market neither cancelled the order
     nor counted it spent, so it was cut to nothing and owed at every quote, never paid, and
     the position was held to the end of the window."""

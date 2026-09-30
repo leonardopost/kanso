@@ -413,8 +413,15 @@ def test_the_two_paths_cancel_an_order_the_emulator_holds_alike(
     assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
 
 
-@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
-@pytest.mark.parametrize("source", ["MODIFIED_OPEN", "bracket:plain", "bracket:emulated"])
+@pytest.mark.parametrize(
+    ("source", "latency_ms"),
+    [
+        (source, latency_ms)
+        for source in ("MODIFIED_OPEN", "bracket:plain", "bracket:emulated")
+        for latency_ms in (0.0, 20.0)
+    ]
+    + [("MODIFIED_OPEN", 2500.0)],
+)
 def test_the_two_paths_size_an_exit_at_market_beside_orders_not_yet_live_alike(
     source: str, latency_ms: float
 ) -> None:
@@ -423,7 +430,9 @@ def test_the_two_paths_size_an_exit_at_market_beside_orders_not_yet_live_alike(
     on a node the cancel would overtake the modify, which the backtest lands first — and
     counts until the modify lands; the second do not count, since they can fill only after
     the entry. So the two paths agree order for order and fill for fill, and neither holds
-    the position to the end of the window or goes past flat. Measured on the round before
+    the position to the end of the window or goes past flat — at 2500 ms too, longer than
+    the gap between points, where the cancel goes out on the next point with the modify
+    still unanswered and lands behind it all the same. Measured on the round before
     this test: with the modified order cancelled and counted spent, at 0 ms the backtest
     went short 100 and the node did not, and at 20 ms the node sent an owed exit the
     backtest never did; with the bracket's exits counted, both paths sold 80 of 100 and held
@@ -454,14 +463,15 @@ def test_the_two_paths_size_an_exit_at_market_beside_orders_not_yet_live_alike(
     assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
 
 
-@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0, 2500.0])
 def test_the_two_paths_pay_an_exit_behind_a_modify_sent_on_every_point_alike(
     latency_ms: float,
 ) -> None:
     """An exit at market beside a resting exit the sleeve modifies on every quote, with no
-    print between quotes to pay the owed exit on. The cancel it holds back is sent once the
-    venue has answered the modify — at 0 ms as the answer lands, at 20 ms on the next quote —
-    so it lands behind the modify on both paths, where a cancel sent at once would overtake
+    print between quotes to pay the owed exit on. The cancel it holds back is sent at 0 ms as
+    the venue answers the modify, and under a latency on the next quote, answered or not (at
+    2500 ms it is not, the quotes being a second apart); the modify was stamped first, so the
+    cancel lands behind it on both paths, where a cancel sent at once would overtake
     the modify on a node, and the owed exit is paid at the same quote on both. So the two
     agree order for order and fill for fill and both are flat.
     Measured on the round before this test: neither path cancelled the order, the market exit

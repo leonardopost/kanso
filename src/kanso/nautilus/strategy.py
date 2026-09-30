@@ -387,8 +387,11 @@ def _held_open(order: Any) -> bool:
     `Strategy.modify_order` goes through the live risk engine's queue and `cancel_order`
     straight to the live execution engine's (`trading/strategy.pyx`), so a cancel sent
     behind the modify would overtake it, where the backtest engine lands the modify first
-    and fills it if it is marketable; an exit at market cancels it once the venue has
-    answered the modify instead (`_modifying`, `KansoStrategy._cancel_behind_modify`,
+    and fills it if it is marketable; an exit at market cancels it later instead, with no
+    latency stated as the venue answers the modify, and under one on the next point, before
+    the sleeve's handler, whether or not the modify has been answered by then — the modify
+    was stamped first, so the cancel still lands behind it (`_modifying`,
+    `KansoStrategy._cancel_behind_modify`, `KansoStrategy._send_behind_modify`,
     `KansoStrategy._answered`). Measured on both paths by
     the exit and replay tests, an order modified in flight, cancelled or not, and an order
     the venue holds modified in the handler that exits at market, among them.
@@ -1484,16 +1487,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit cancels it like any other. So is an order the sleeve itself cancelled while it
         was still on its way to the venue: the venue takes it before the cancel, on both
         paths (`_hold_cancel`). An order the venue holds whose modify it has not answered
-        yet counts too, and is cancelled once the venue has: on a node a cancel sent in the
-        handler that sent the modify would overtake it (`_cancel_behind_modify`). What it
-        cut is owed and paid as for any cancelled order. With no latency stated the venue
-        answers an order in flight, and a modify, before the next point, and an exit at
-        market owed behind either is paid in the instant it was asked for (`_answered`), so
-        one asked for on a session's last point or the window's is not carried past it.
-        A resting order whose cancel the venue refused is cancelled again. An order the
-        engine's order emulator holds has not reached the venue: it counts until it is
-        cancelled, an exit at market cancels it with the resting ones, and its cancel takes
-        it out at once, at any latency (`_working`).
+        yet counts too, and is not cancelled in the handler that sent the modify, where on a
+        node the cancel would overtake it (`_cancel_behind_modify`): with no latency stated
+        it is cancelled as the venue answers the modify, and under one on the next point,
+        before the sleeve's handler, whether or not the modify has been answered by then,
+        the cancel landing behind the modify that was stamped before it
+        (`_send_behind_modify`). What it cut is owed and paid as for any cancelled order.
+        With no latency stated the venue answers an order in flight, and a modify, before
+        the next point, and an exit at market owed behind either is paid in the instant it
+        was asked for (`_answered`), so one asked for on a session's last point or the
+        window's is not carried past it. A resting order whose cancel the venue refused is
+        cancelled again. An order the engine's order emulator holds has not reached the
+        venue: it counts until it is cancelled, an exit at market cancels it with the
+        resting ones, and its cancel takes it out at once, at any latency (`_working`).
 
         What is owed is not dropped. When a cancel still in flight leaves less than asked,
         and whenever an exit at market is left less than asked, the exit is asked for again,
@@ -1719,13 +1725,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Send the cancels `_cancel_behind_modify` held back, before the author's handler
         for this point, which could put the order back in flight with a modify of its own.
 
-        Under a stated latency it is sent before the handler, not when the venue answers the
-        modify: the backtest engine answers it in the drain after one point's handlers and
-        the node in the drain before the next point's (`SimulatedVenue.on_data`), so a
-        cancel sent on the answer is stamped a point later on the node. With no latency
-        stated both answer it in the drain after the point's handlers, and `_answered` sends
-        it then; one it has not sent by the next point is sent here. Measured on both paths
-        by the exit and replay tests, a sleeve that modifies its exit on every quote.
+        Under a stated latency it is sent here whether or not the venue has answered the
+        modify by then, not when it answers. When the latency is shorter than the gap
+        between points the backtest engine answers the modify in the drain after one point's
+        handlers and the node in the drain before the next point's
+        (`SimulatedVenue.on_data`), so a cancel sent on the answer would be stamped a point
+        later on the node; when it is not shorter, neither has answered it yet and the
+        order is still `PENDING_UPDATE` here. Either way the cancel is stamped after the
+        modify and delayed by the same latency, so it lands behind it on both paths. With
+        no latency stated both answer the modify in the drain after the point's handlers,
+        and `_answered` sends the cancel then; one it has not sent by the next point is sent
+        here. Measured on both paths by the exit and replay tests, a sleeve that modifies
+        its exit on every quote and a modify followed by an exit at market under a latency
+        longer than the gap between points among them.
         """
         held, self._behind_modify = self._behind_modify, {}
         for order in held.values():

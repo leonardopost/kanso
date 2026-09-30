@@ -381,17 +381,19 @@ paid once the venue holds that order open and the owed exit has cancelled it. An
 venue holds whose modify has not been answered yet, one sent in the same handler among them,
 counts too, and an exit at market does not cancel it at once: on a node a cancel sent in the
 handler that sent the modify would overtake it, where the backtest lands the modify first.
-It cancels it once the venue has answered the modify, so on both paths the modify lands
-first, filling the order at once if it made it marketable, and then the cancel; what the
-order cut from the exit is owed and paid as for any cancelled order, a sleeve that modifies
-that order on every point included. With no latency stated the venue answers both before the
+With no latency stated it cancels it as the venue answers the modify; under a latency it
+cancels it on the next point, before the sleeve's handler for it, whether or not the venue
+has answered the modify by then, and the cancel still lands behind the modify, which was
+stamped first and waits the same latency. So on both paths the modify lands first, filling
+the order at once if it made it marketable, and then the cancel; what the order cut from the
+exit is owed and paid as for any cancelled order, a sleeve that modifies that order on every
+point included. With no latency stated the venue answers both before the
 next point, on both paths, so the order is cancelled as the venue takes it or answers its
 modify, and the owed exit goes out as soon as the order is closed — cancelled, filled or
 refused — in the instant it was asked for: an exit at market asked for on a session's last
-point, or on the window's, is not carried past it. Under a latency the cancel goes on the
-next point, before the sleeve's handler for it, and the owed exit is paid on a later point,
-which for one asked on a session's last point is in the next session, and on the window's
-last never. A resting order whose cancel the venue refused is cancelled again. **An order the engine's order
+point, or on the window's, is not carried past it. Under a latency the owed exit is paid
+on a later point, which for one asked on a session's last point is in the next session, and
+on the window's last never. A resting order whose cancel the venue refused is cancelled again. **An order the engine's order
 emulator holds** (one sent with an `emulation_trigger`) has not reached the venue: it counts
 until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
 takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
