@@ -150,7 +150,7 @@ ARCHIVES: Final = "/api/v5/public/market-data-history"
 """The listing of the exchange's daily history archives (`history.py`, `trades.py`)."""
 
 KEYED_QUOTAS: Final[dict[str, int]] = {ARCHIVES: 1}
-"""Paths metered on a quota of their own, in requests per second, below the table's rate.
+"""Paths metered on a quota of their own, in requests per second, whatever the table's rate.
 
 Measured on 2026-09-30 against `us.okx.com`: the archive listing answered HTTP 429, code
 `50011`, to every second request sent half a second apart, to three of eight sent a second

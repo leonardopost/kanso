@@ -260,6 +260,21 @@ def test_a_page_the_endpoint_repeats_ends_the_walk(ws: Workspace) -> None:
 # --- the shape of a spec ------------------------------------------------------------
 
 
+def test_a_week_bar_belongs_to_the_monday_it_closes_on(ws: Workspace) -> None:
+    """A `1w` spec over a Tuesday alone is served no bar, although the source holds the week
+    that closed the day before, and its manifest is refused as an empty series."""
+    replay = History()
+    loader = opened(OkxBarsLoader, ws, replay)
+    [ref] = loader.discover(spec(resolution="1w", start="2026-09-29", end="2026-09-29"))
+
+    assert list(loader.load(ref, ref.span)) == []
+    with pytest.raises(ValidationError, match="served no points"):
+        loader.manifest(ref)
+    assert {params["bar"] for _, params in replay.asked} == {"1Wutc"}
+    week = body("history-candles__after-1790035200001_bar-1Wutc_instId-USDC-USDT-SWAP_limit-1.json")
+    assert datetime.fromtimestamp(int(week["data"][0][0]) / 1000, tz=UTC).weekday() == 0
+
+
 def test_a_spec_is_refused_for_what_it_cannot_ask(ws: Workspace) -> None:
     replay = History()
     bars = opened(OkxBarsLoader, ws, replay)
@@ -737,6 +752,6 @@ def test_the_recordings_say_where_they_came_from() -> None:
     assert names == set(HISTORY_PROVENANCE["files"])
     assert HISTORY_PROVENANCE["authentication"].startswith("none")
     for entry in HISTORY_PROVENANCE["files"].values():
-        assert entry["recorded_at"].startswith("2026-09-30T16:2")
+        assert entry["recorded_at"].startswith("2026-09-30T1")
         assert entry["url"].startswith(f"https://{entry['host']}/")
         assert entry["host"] in {"us.okx.com", "static.okx.com"}

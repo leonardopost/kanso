@@ -481,8 +481,8 @@ credential.
 `rate_per_second` governs kanso's own requests only. The engine's own clients meter
 themselves — its compiled client carries a global rate-limit bucket and one per endpoint —
 and take no quota from their caller. Five a second is a conservative default, not a
-measured ceiling. One endpoint is metered below it on a quota of its own: the trade-archive
-listing, at one request a second (below).
+measured ceiling. One endpoint is metered on a quota of its own whatever the table's rate: the
+trade-archive listing, at one request a second after a two-second pause (below).
 
 ### The public reference
 

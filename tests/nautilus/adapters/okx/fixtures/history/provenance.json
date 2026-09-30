@@ -2,7 +2,7 @@
   "source": "OKX public REST API and its archive file host, as the okx_bars, okx_trades and okx_funding loaders asked them",
   "authentication": "none: public endpoints, requested with no credential header of any kind",
   "user_agent": "kanso/0.13.0",
-  "recorded_with": "the loaders themselves over reference.pyo3_transport (the engine's HttpClient), each answer saved as it arrived, on 2026-09-30 between 16:21 and 16:27 UTC; the machine's clock read 2026-09-30, so the loaders ran with as_of 2026-09-30",
+  "recorded_with": "the loaders themselves over reference.pyo3_transport (the engine's HttpClient), each answer saved as it arrived, on 2026-09-30 between 16:21 and 16:27 UTC, and the two 1Wutc answers at 17:47 UTC; the machine's clock read 2026-09-30, so the loaders ran with as_of 2026-09-30",
   "names": "an API answer is named for its endpoint and its parameters, sorted; an archive keeps its own filename",
   "files": {
     "USDC-USDT-SWAP-trades-2023-03-19.zip": {
@@ -398,7 +398,7 @@
       "status": 400,
       "recorded_at": "2026-09-30T16:22:56Z",
       "body": "verbatim",
-      "note": "an eleven-day range: begin 2026-09-19T16:00Z (the exchange's 2026-09-20), end 2026-09-28T16:00Z (its 2026-09-29); the same request repeated three times at 16:24 UTC answered the same"
+      "note": "an eleven-day range: begin 2026-09-18T16:00Z (the exchange's 2026-09-19), end 2026-09-28T16:00Z (its 2026-09-29); the same request repeated three times at 16:24 UTC answered the same"
     },
     "market-data-history__begin-1790265600000_dateAggrType-daily_end-1790438400000_instFamilyList-USDC-USDT_instType-SWAP_module-1.json": {
       "url": "https://us.okx.com/api/v5/public/market-data-history",
@@ -461,6 +461,35 @@
       "recorded_at": "2026-09-30T16:21:29Z",
       "body": "verbatim",
       "note": "answered to the second listing request sent within about two seconds of the first"
+    },
+    "history-candles__after-1790035200001_bar-1Wutc_instId-USDC-USDT-SWAP_limit-1.json": {
+      "url": "https://us.okx.com/api/v5/market/history-candles",
+      "params": {
+        "instId": "USDC-USDT-SWAP",
+        "bar": "1Wutc",
+        "after": "1790035200001",
+        "limit": "1"
+      },
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T17:47:36Z",
+      "body": "verbatim",
+      "note": "the newest week closing by Tuesday 2026-09-29 00:00Z: it opened Monday 2026-09-21T00:00Z (1789948800000) and closed Monday 2026-09-28; recorded by driving okx_bars with a 1w spec for 2026-09-29 alone"
+    },
+    "history-candles__after-1790121600000_bar-1Wutc_before-1790035199999_instId-USDC-USDT-SWAP_limit-300.json": {
+      "url": "https://us.okx.com/api/v5/market/history-candles",
+      "params": {
+        "instId": "USDC-USDT-SWAP",
+        "bar": "1Wutc",
+        "after": "1790121600000",
+        "limit": "300",
+        "before": "1790035199999"
+      },
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T17:47:36Z",
+      "body": "verbatim",
+      "note": "the same drive's page for Tuesday 2026-09-29: no week opens in [2026-09-22, 2026-09-23), so the day holds no 1w bar"
     }
   }
 }
