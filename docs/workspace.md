@@ -927,7 +927,7 @@ end: 2026-09-28
 ```yaml
 loader: okx_funding              # the realised rate at each settlement
 instruments: [BTC-USDT-SWAP]
-start: 2026-07-01
+start: 2026-09-01
 end: 2026-09-28
 ```
 

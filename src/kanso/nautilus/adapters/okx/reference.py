@@ -156,8 +156,8 @@ Measured on 2026-09-30 against `us.okx.com`: the archive listing answered HTTP 4
 `50011`, to every second request sent half a second apart, to three of eight sent a second
 apart through this client on that quota, and to none of six sent two seconds apart. The
 engine's quota admits a burst as large as its rate, so one a second — with a burst of one —
-is the slowest it can state; the loaders that read the listing pause and ask again on the
-429 it still draws now and then."""
+is the slowest it can state, and `okx_trades` also pauses two seconds before every listing
+request it sends, which the quota cannot say."""
 
 ASSET_CLASS: Final = "perpetuals"
 DATASET: Final = "reference"

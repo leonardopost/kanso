@@ -649,9 +649,10 @@ exchange publishes instead: one zip a day, listed with a URL on the exchange's f
   continue each other's trade ids. So a UTC day `D` is served by two archives, `D`'s and
   `D+1`'s, and only when both are listed — a day with one of them would be a third short. A
   range with a day that is not is refused naming the days and the archives they need. The
-  archive of a day is listed only once that day has ended in Hong Kong and some hours
-  after: at 16:01 UTC on 2026-09-30 the newest listed was 2026-09-29's, so the last UTC day
-  served was 2026-09-28.
+  archive is not listed as its day ends, and when it is was not measured: the archive of
+  2026-09-30, whose day ended at 16:00 UTC, was still unlisted at 16:01, 16:52 and 17:03 UTC
+  that day, when the newest listed was 2026-09-29's, so the last UTC day served was
+  2026-09-28.
 - **The file.** One CSV, oldest print first, read by column name: the header was
   `instrument_name,trade_id,side,price,size,created_time` through 2023 and gained `source` by
   2026. `size` is in contracts — on `USDC-USDT-SWAP`, a contract of 10 USDC, trade 3031605
@@ -661,18 +662,22 @@ exchange publishes instead: one zip a day, listed with a URL on the exchange's f
   instant it printed. Every print is kept, whatever its `source`.
 - **The listing** answers at most ten days a request (HTTP 400, code `50076`, for eleven)
   and throttles hard: it answered 429 to every second request sent half a second apart, to
-  three of eight sent a second apart, and to none of six sent two seconds apart. It is metered on its own quota of one request a second — the
-  slowest the engine's quota states — and a 429 it still draws is waited out.
+  three of eight sent a second apart, and to none of six sent two seconds apart. So every
+  listing request is sent after a pause of two seconds, on top of its own quota of one
+  request a second — the slowest the engine's quota states, and a quota that admits a burst
+  as large as its rate — and a 429 it draws all the same is waited out.
 - **The archives are kept** in the catalog's adapter cache, `catalog/.cache/okx/trades/`,
   because a day reads two of them and a backfill reads each twice; each is written only once
   it has arrived whole and passes the zip's own CRC. They are public and re-fetchable, so
   deleting the directory costs a download and nothing else. A `BTC-USDT-SWAP` archive was 6
   to 18 MB a day in late September 2026 and about 1 MB in January 2023.
 
-A load holds one archive in memory at a time, but `kanso data load` gathers a dataset's
-points before it writes them: that one day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3
-MB, loaded in 82 seconds at a peak of 1.8 GB resident. A spec over many days of a liquid swap
-is therefore best loaded as `data backfill`, which writes chunk by chunk.
+The loader reads one archive at a time, but every path that writes a dataset — `kanso data
+load`, `data backfill` and `data sync` — gathers all the points it will write before writing
+any of them: `load` its whole span, `backfill` and `sync` each 30-day chunk whole. That one
+day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, loaded in 82 seconds at a peak of
+1.8 GB resident, so a backfill chunk of a liquid swap's prints holds about thirty times that.
+Load a liquid swap's trades one day to a spec (backlog entry 106).
 
 #### `okx_funding`
 

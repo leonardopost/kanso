@@ -14,8 +14,8 @@ is never read. A row with no finite `realizedRate` is refused rather than filled
 
 **Stamped at the settlement.** `fundingTime` is the millisecond settlement instant; a
 realised rate is known when it settles and not before, so `ts_event` = `ts_init` = that
-instant. The endpoint lists settled periods only: its newest row was the settlement nine
-minutes before the request.
+instant. The endpoint lists settled periods only: asked at 16:22:30 UTC, its newest row
+was the settlement at 16:00.
 
 **Rows newest first, both bounds exclusive, 400 to a page.** `after=X` answers the
 settlements strictly before `X`, `before=Y` those strictly after `Y`; `limit=400` answered
@@ -123,7 +123,8 @@ class OkxFundingLoader(HistoryLoader):
     def points(
         self, client: PublicClient, series: Series, span: tuple[date, date]
     ) -> Iterator[Any]:
-        """The settlements of `span`, oldest first."""
+        """The settlements of `span`, oldest first; a row outside it is dropped, whatever the
+        endpoint's exclusive bounds should have kept out."""
         found: dict[int, Mapping[str, Any]] = {}
         after = day_ms(span[1] + DAY)
         while True:
@@ -134,7 +135,8 @@ class OkxFundingLoader(HistoryLoader):
             found.update(zip(settled, rows, strict=True))
             after = min(settled)
         for key in sorted(found):
-            yield build_funding(series, found[key])
+            if day_ms(span[0]) <= key < day_ms(span[1] + DAY):
+                yield build_funding(series, found[key])
 
     def _page(
         self,

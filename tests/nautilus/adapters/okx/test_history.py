@@ -109,7 +109,10 @@ def test_a_loader_opens_the_client_on_the_table_s_host_once(ws: Workspace) -> No
 
     assert loader.client() is loader.client()
     assert loader.client().base_url == US
-    assert loader.latest() == datetime.now(tz=UTC).date() - history.DAY
+    before = datetime.now(tz=UTC).date()
+    latest = loader.latest()
+    after = datetime.now(tz=UTC).date()
+    assert latest in {before - history.DAY, after - history.DAY}
 
 
 # --- bars -----------------------------------------------------------------------
@@ -248,8 +251,10 @@ def test_a_page_the_endpoint_repeats_ends_the_walk(ws: Workspace) -> None:
     series = Series("USDC-USDT-SWAP", 6, 0, US, "1m")
 
     points = list(loader.points(loader.client(), series, (date(2026, 9, 28),) * 2))
+    later = list(loader.points(loader.client(), series, (date(2026, 9, 29),) * 2))
 
     assert len(points) == len(body(name)["data"])
+    assert later == []  # every candle of that page closes on the 28th, so none is the 29th's
 
 
 # --- the shape of a spec ------------------------------------------------------------
@@ -328,7 +333,7 @@ def test_a_throttle_is_waited_out(ws: Workspace) -> None:
     [ref] = loader.discover(spec(start="2023-03-19", end="2023-03-19"))
 
     assert ref.span == (date(2023, 3, 19), date(2023, 3, 19))
-    assert loader.pauses == [2.0, 4.0]
+    assert loader.pauses == [trades.LISTING_GAP_S, 2.0, 4.0]
     assert answer(throttled).status == 429
 
 
@@ -341,7 +346,7 @@ def test_a_throttle_that_does_not_lift_stops_the_call(ws: Workspace) -> None:
 
     assert stopped.value.code is Exit.ERROR
     assert "HTTP 429, code 50011" in stopped.value.message
-    assert loader.pauses == [2.0, 4.0, 6.0, 8.0]
+    assert loader.pauses == [trades.LISTING_GAP_S, 2.0, 4.0, 6.0, 8.0]
 
 
 def test_any_other_refusal_stops_the_call_at_once(ws: Workspace) -> None:
@@ -354,7 +359,7 @@ def test_any_other_refusal_stops_the_call_at_once(ws: Workspace) -> None:
 
     with pytest.raises(KansoError, match="HTTP 400, code 50076"):
         loader.discover(spec())
-    assert loader.pauses == []
+    assert loader.pauses == [trades.LISTING_GAP_S]
 
 
 # --- trades ---------------------------------------------------------------------
@@ -383,6 +388,34 @@ def test_a_utc_day_of_prints_is_read_from_its_two_archives(ws: Workspace) -> Non
         "USDC-USDT-SWAP-trades-2026-09-26.zip",
         "USDC-USDT-SWAP-trades-2026-09-27.zip",
     ]
+    listings = [url for url, _ in replay.asked if url.endswith(ARCHIVES)]
+    assert len(listings) == 2  # discover's and load's, each after its own pause
+    assert loader.pauses == [trades.LISTING_GAP_S] * len(listings)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "refusal"),
+    [
+        ("filename", "../USDC-USDT-SWAP-trades-2026-09-26.zip", "not a bare zip name"),
+        ("filename", "cache/USDC-USDT-SWAP-trades-2026-09-26.zip", "not a bare zip name"),
+        ("filename", ".zip", "not a bare zip name"),
+        ("filename", "USDC-USDT-SWAP-trades-2026-09-26.csv", "not a bare zip name"),
+        ("url", "http://static.okx.com/x.zip", "from a URL that is not https"),
+    ],
+)
+def test_a_listing_entry_that_would_leave_the_cache_or_https_is_refused(
+    field: str, value: str, refusal: str
+) -> None:
+    """The recorded listing with one entry's field changed in the test: the exchange was
+    never measured naming such a file or URL, and a loader must not follow one if it does."""
+    listing = body(
+        "market-data-history__begin-1790265600000_dateAggrType-daily_end-1790438400000"
+        "_instFamilyList-USDC-USDT_instType-SWAP_module-1.json"
+    )["data"]
+    listing[0]["details"][0]["groupDetails"][0][field] = value
+
+    with pytest.raises(ValidationError, match=refusal):
+        list(trades._archives(tuple(listing)))
 
 
 def test_a_print_is_the_rest_endpoint_s_print_in_contracts_and_taker_side(
@@ -677,7 +710,9 @@ def test_a_funding_page_the_endpoint_repeats_ends_the_walk(ws: Workspace) -> Non
     with pytest.raises(ValidationError, match="settlements begin at 2026-06-29 08:00 UTC"):
         loader.measure(loader.client(), series, (date(2026, 6, 1),) * 2)
     points = list(loader.points(loader.client(), series, (date(2026, 9, 28), date(2026, 9, 29))))
-    assert len(points) == len(body(name)["data"])
+    assert len(body(name)["data"]) == 281  # the page holds the whole three months ...
+    assert len(points) == 6  # ... and only the six settlements of the two days are the span's
+    assert {utc_day(point.ts_event) for point in points} == {date(2026, 9, 28), date(2026, 9, 29)}
 
 
 # --- the catalog's side of the interface ------------------------------------------

@@ -186,12 +186,14 @@ class OkxBarsLoader(HistoryLoader):
     def points(
         self, client: PublicClient, series: Series, span: tuple[date, date]
     ) -> Iterator[Any]:
-        """Each day's closed candles, oldest first, one day in memory at a time."""
+        """Each day's closed candles, oldest first, one day in memory at a time; a candle that
+        does not close inside its day is dropped, whatever the bounds should have kept out."""
         step = self._step(series)
         for day in days(span):
             lower = day_ms(day) - step
+            after_day = day_ms(day + DAY) - step
             found: dict[int, Sequence[Any]] = {}
-            after = day_ms(day + DAY) - step
+            after = after_day
             while True:
                 rows = self._page(client, series, after=after, before=lower - 1)
                 opened = [int(row[TS]) for row in rows]
@@ -200,7 +202,7 @@ class OkxBarsLoader(HistoryLoader):
                 found.update(zip(opened, rows, strict=True))
                 after = min(opened)
             for key in sorted(found):
-                point = build_bar(series, found[key])
+                point = build_bar(series, found[key]) if lower <= key < after_day else None
                 if point is not None:
                     yield point
 

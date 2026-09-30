@@ -37,8 +37,9 @@ yet — `data sync` extends a series to today — serves what the source holds a
 the manifest records the span actually served.
 
 **A throttle is waited out; nothing else is.** An answer of HTTP 429 or code `50011` is
-asked again after a growing pause, up to `RETRIES` times — the archive listing draws one now
-and then even on its own quota (`reference.KEYED_QUOTAS`). Any other answer that is not the
+asked again after a growing pause, up to `RETRIES` times — the archive listing is paced
+below its measured limit (`trades.LISTING_GAP_S`), and this is what is left if it throttles
+anyway. Any other answer that is not the
 API's success stops the call, because nothing about the data was established by it.
 
 Every dataset is `realtime`: a bar is public at its close, a print when it prints and a

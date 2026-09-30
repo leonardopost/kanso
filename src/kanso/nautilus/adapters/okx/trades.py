@@ -10,7 +10,8 @@ the suite replays were recorded then (`tests/nautilus/adapters/okx/fixtures/`).
 instFamilyList=BTC-USDT&dateAggrType=daily&begin=&end=` lists one zip per day, each with
 its `dateTs`, `filename`, `sizeMB` and `url` — on the exchange's file host, with a query
 string of its own. It answers HTTP 400, code `50076`, for a range over ten days, so the
-listing is asked in ranges of ten. It throttles hard (`reference.KEYED_QUOTAS`). `begin`
+listing is asked in ranges of ten. It throttles hard, so every listing request is sent
+`LISTING_GAP_S` after a pause of its own, on top of its quota (`reference.KEYED_QUOTAS`). `begin`
 and `end` are read as the exchange's days, both included, and sent here at the exchange's
 midnight, which is each archive's `dateTs`: a `begin` of 00:00 UTC on the newest archive's
 day — eight hours into it — listed nothing, where the same offset lists an older day, so
@@ -22,8 +23,9 @@ the archive named `2023-01-01` holds the prints from 2022-12-31 15:59:41 UTC to 
 15:59:51 UTC — the cut falls a few seconds either side of 16:00 UTC, and consecutive
 archives continue each other's trade ids with none repeated. A UTC day `D` is therefore
 served by two archives, the ones named `D` and `D+1`, and only when both are listed: a
-day with one of them is a day with a third of its prints missing. The archive of `D+1` is
-not listed until its own day has ended in UTC: at 16:01 UTC on 2026-09-30 the newest archive
+day with one of them is a day with a third of its prints missing. An archive is not listed
+as its day ends, and when it is was not measured: the archive of 2026-09-30, whose day ended
+at 16:00 UTC, was still unlisted at 16:01, 16:52 and 17:03 UTC that day, when the newest
 listed was 2026-09-29's, so the last UTC day served was 2026-09-28, two behind.
 
 **The file.** One CSV per zip, named as the zip is, oldest print first. Its header is
@@ -69,6 +71,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, Final
+from urllib.parse import urlsplit
 
 from nautilus_trader.model.enums import AggressorSide
 
@@ -90,12 +93,25 @@ from kanso.nautilus.adapters.okx.history import (
 from kanso.nautilus.adapters.okx.reference import ARCHIVES, PublicClient
 from kanso.nautilus.adapters.okx.venue import VENUE
 
-__all__ = ["COLUMNS", "EXCHANGE_DAY", "LISTING_DAYS", "Archive", "OkxTradesLoader", "listed"]
+__all__ = [
+    "COLUMNS",
+    "EXCHANGE_DAY",
+    "LISTING_DAYS",
+    "LISTING_GAP_S",
+    "Archive",
+    "OkxTradesLoader",
+    "listed",
+]
 
 TRADES_MODULE: Final = "1"
 """The listing's `module` for daily trade archives; `2` lists candles, `4`-`6` books."""
 
 LISTING_DAYS: Final = 10
+LISTING_GAP_S: Final = 2.0
+"""The pause before every listing request, so no two are sent closer than this: measured on
+2026-09-30, requests a second apart drew HTTP 429 three times in eight and requests two
+seconds apart none in six. The quota cannot say it — the engine's admits a burst as large as
+its rate — so a `discover` followed by its `load` would otherwise send two at once."""
 """The widest range the listing answers; eleven days answered HTTP 400, code `50076`."""
 
 EXCHANGE_DAY: Final = timedelta(hours=8)
@@ -136,6 +152,7 @@ def listed(
     begin = first - DAY
     while begin < last:
         end = min(begin + DAY * (LISTING_DAYS - 1), last)
+        pause(LISTING_GAP_S)
         data = answered(
             client,
             ARCHIVES,
@@ -162,15 +179,27 @@ def _offset_ms() -> int:
 
 def _archives(data: tuple[Any, ...]) -> Iterator[Archive]:
     """The archives a listing names: one swap's, since a family holds one swap. A file of
-    another instrument would be refused row by row, by the name every row carries."""
+    another instrument would be refused row by row, by the name every row carries. A file
+    name is joined onto the cache directory and a URL is fetched, so an entry whose name is
+    not a bare `.zip` name, or whose URL is not `https`, is refused rather than followed."""
     blocks = [block for block in data if isinstance(block, Mapping)]
     for block in blocks:
         for detail in block.get("details") or ():
             for entry in detail.get("groupDetails") or ():
                 opened = datetime.fromtimestamp(int(entry["dateTs"]) / 1000, tz=UTC)
-                yield Archive(
-                    (opened + EXCHANGE_DAY).date(), str(entry["filename"]), str(entry["url"])
-                )
+                name, url = str(entry["filename"]), str(entry["url"])
+                if Path(name).name != name or name.startswith(".") or not name.endswith(".zip"):
+                    raise ValidationError(
+                        f"okx: the archive listing names a file {name!r}, which is not a bare "
+                        "zip name",
+                        remedy="the exchange changed its listing; measure it again",
+                    )
+                if urlsplit(url).scheme != "https":
+                    raise ValidationError(
+                        f"okx: the archive listing serves {name} from a URL that is not https",
+                        remedy="the exchange changed its listing; measure it again",
+                    )
+                yield Archive((opened + EXCHANGE_DAY).date(), name, url)
 
 
 @dataclass
