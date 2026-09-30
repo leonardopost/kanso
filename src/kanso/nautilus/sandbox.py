@@ -332,7 +332,8 @@ class SimulatedVenue(LiveExecutionClient):
     The exchange and its execution client are built from the same `BacktestVenueConfig` the
     backtest path builds its venue from, through the engine's own converters, so nothing that
     touches a fill can differ between the two: account type, currency, leverage, starting
-    balance, bar execution, and the margin, fill and fee models. The leverage travels through
+    balance, bar and trade execution, the book type and its queue position, and the margin,
+    fill, fee and latency models. The leverage travels through
     its own string, so a decimal written as `2.5` stays that number rather than the binary
     float nearest it.
     """
