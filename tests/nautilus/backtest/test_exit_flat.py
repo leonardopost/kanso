@@ -326,8 +326,10 @@ def test_an_exit_sent_once_after_a_cancel_still_closes_the_position(
     """The exit that rested far above is cancelled and a market exit is asked for once.
     Under a latency the cancel is still in flight when it is asked for, so the old exit
     could still take the whole position and the market exit is sized to nothing; what it
-    held back is owed and goes at market once the cancel has landed. Measured before the
-    exit was owed: at 20 ms the sleeve never sold, and held the 100 shares overnight."""
+    held back is owed and goes at market once the cancel has landed. This guards the
+    sizing, not origin/main: an exit sized to nothing and then dropped would never sell and
+    would hold the 100 shares overnight. origin/main passes, because it did not count
+    working exits at all."""
     flat_within_the_session(_run(request_for, latency_ms, MARKET_AFTER_CANCEL))
 
 
@@ -336,10 +338,11 @@ def test_a_stop_at_market_cancels_the_take_profit_it_would_otherwise_wait_on(
     request_for, latency_ms: float
 ) -> None:
     """A market exit the sleeve's own resting take-profit would cut is not held back by it:
-    the take-profit is cancelled and the stop takes the position. Measured before: with the
-    take-profit counted, at 0 ms the stop was sized to nothing and the sleeve held overnight;
-    before exits counted the ones working at all, at 20 ms each stop in flight was joined by
-    another and the sleeve sold 200 of the 100 it had bought."""
+    the take-profit is cancelled and the stop takes the position. At 0 ms this guards the
+    sizing, not origin/main: a stop that counted the take-profit would be sized to nothing
+    and the sleeve would hold overnight, and origin/main passes. At 20 ms origin/main fails:
+    it counted no working exit, each stop in flight was joined by another, and the sleeve
+    sold 200 of the 100 it had bought, then bought 200 and held 100 across the night."""
     run = _run(request_for, latency_ms, STOP_OVER_TAKE_PROFIT)
     flat_within_the_session(run)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
@@ -363,8 +366,9 @@ def test_an_owed_exit_at_market_outlives_the_sleeve_s_later_cancels(
     """A market order is taken by the venue before any cancel that follows it, so the
     exit at market a cancel in flight held back is not taken back by a cancel the sleeve
     sends after it: it goes once the first cancel has landed, and the sleeve ends flat.
-    Measured before: every later cancel threw the owed exit away and the 100 shares were
-    held overnight, where the market order sent at once would have sold them."""
+    This guards the owed exit, not origin/main: a later cancel that threw it away would
+    hold the 100 shares overnight, where the market order sent at once would have sold
+    them. origin/main passes, because it owed nothing and sent the exit whole."""
     flat_within_the_session(_run(request_for, 20.0, taken_back(cancel)))
 
 
@@ -373,8 +377,9 @@ def test_housekeeping_cancels_do_not_strand_an_exit_at_market(
     request_for, latency_ms: float
 ) -> None:
     """The sleeve cancels its take-profit and exits at market once, then cancels every order
-    it has on every quote after. Measured before: the first of those cancels threw the owed
-    exit away, and the position was held overnight at every latency but none."""
+    it has on every quote after. This guards the owed exit, not origin/main: were the first
+    of those cancels to throw it away, the position would be held overnight at every latency
+    but none. origin/main passes, because it owed nothing and sent the exit whole."""
     source = HOUSEKEEPING.replace(
         b"        elif self.seen >= 30:\n            self.cancel_all_orders(instrument_id)\n",
         b"        elif self.seen >= 30:\n            self.cancel_all_orders(instrument_id)\n"
@@ -392,8 +397,9 @@ def test_a_stop_sent_behind_a_take_profit_in_flight_still_closes(
     """A take-profit far above the market still in flight to the venue is not cancelled and
     counts, so the stop sent behind it is cut to nothing; what it cuts is owed, and once the
     venue holds the take-profit open the owed stop cancels it and takes the position.
-    Measured before: nothing was owed, the stop was never sent again, and the 100 shares
-    were held overnight."""
+    This guards the sizing, not origin/main: an exit that counted the take-profit in
+    flight and owed nothing would never send the stop again and would hold the 100 shares
+    overnight. origin/main passes, because it did not count working orders at all."""
     run = _run(request_for, latency_ms, tp_in_flight_then_stop(gap))
     flat_within_the_session(run)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
@@ -406,8 +412,9 @@ def test_an_exit_rule_that_says_so_once_closes_whatever_its_host_cancels(
     """The rule says exit once, on the thirtieth quote, while the host's take-profit is
     waiting on the cancel the host sent; the host goes on cancelling everything on every
     quote. The exit the cancel in flight held back is the rule's, so the host's cancels do
-    not take it back, and it goes once the cancel has landed. Measured before the exit was
-    owed: at 20 ms the rule's exit was sized to nothing and the position held overnight."""
+    not take it back, and it goes once the cancel has landed. This guards the sizing, not
+    origin/main: a rule's exit sized to nothing and never owed would hold the position
+    overnight. origin/main passes, because it did not count working exits at all."""
     quotes = [point for point in points()[0] if type(point).__name__ == "QuoteTick"]
     rule = (("exit", exit_once_from(quotes[29].ts_event), {}),)
     flat_within_the_session(_run(request_for, latency_ms, HOUSEKEEPING, rule))
@@ -423,9 +430,9 @@ def test_an_exit_cancelled_in_flight_still_counts_until_its_cancel_lands(
     """The venue takes an order before the cancel that follows it, so a marketable exit
     cancelled while still in flight fills, whatever the latency. The market exit sent
     beside it is held back and owed; the old exit's fill leaves the position flat, the owed
-    exit is dropped there, and the short the sleeve opens later is its own. Measured before:
-    at 0 ms, with the cancelled order read as spent, both exits filled and the sleeve was
-    short 100 before it ever asked to be."""
+    exit is dropped there, and the short the sleeve opens later is its own. Measured on
+    origin/main: at 0 ms and at 20 ms, with the cancelled order read as spent, both exits
+    filled and the sleeve was short 100 before it ever asked to be."""
     run = _run(request_for, latency_ms, CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancel.encode()))
     assert [(fill.side, fill.qty) for fill in run.fills] == [
         ("BUY", 100.0),
