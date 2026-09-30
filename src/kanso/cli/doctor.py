@@ -557,11 +557,17 @@ def _execution(ws: Workspace) -> Check:
     wall-clock client with replayed data or any speed but one, putting real capital
     anywhere but the live stage, or naming a client this version's node cannot run.
 
+    Each packaged broker's `[adapters.<id>]` table is read through that broker's own model,
+    whether or not the table is there, so a key it does not know or a value outside what it
+    accepts fails here rather than when a client is first opened.
+
     No value is read: a client is reported by the variables its account needs and where
     each of them resolves from.
     """
     found = exec_client_declarations(ws)
-    items = [_client_item(one) for one in found]
+    tables = [_broker_table(ws, broker) for _, broker in sorted(brokers.packaged().items())]
+    items = [line for line, _ in tables]
+    items += [_client_item(one) for one in found]
     configured = [one for one in found if one.credentials and one.configured]
     problems = stage_refusals(ws)
     items += [f"{stage}: {problem or 'ok'}" for stage, problem in sorted(problems.items())]
@@ -570,6 +576,15 @@ def _execution(ws: Workspace) -> Check:
         f"{len(found)} client(s) · {len(configured)} broker account(s) configured · "
         f"{len(STAGES) - len(refused)}/{len(STAGES)} stages deployable"
     )
+    invalid = [broker for line, broker in tables if broker is not None]
+    if invalid:
+        return Check(
+            "execution",
+            "fail",
+            f"{detail}; {', '.join(f'[adapters.{one}]' for one in invalid)} refused",
+            items=tuple(items),
+            remedy="fix the table in kanso.toml; docs/adapters.md lists the keys each accepts",
+        )
     if refused:
         return Check(
             "execution",
@@ -580,6 +595,22 @@ def _execution(ws: Workspace) -> Check:
             "may be named",
         )
     return Check("execution", "ok", detail, items=tuple(items))
+
+
+def _broker_table(ws: Workspace, broker: brokers.BrokerAdapter) -> tuple[str, str | None]:
+    """One broker as a line — its table read by its own model, its accounts — and its id
+    again when that model refused the table."""
+    table = f"[adapters.{broker.id}]"
+    accounts = sum(1 for spec in broker.exec_clients if broker.configured(ws, spec.id))
+    state = f"{accounts}/{len(broker.exec_clients)} account(s) configured"
+    if not accounts:
+        state = f"not configured ({state})"
+    try:
+        broker.config(ws)
+    except KansoError as refusal:
+        return f"broker {broker.id}: {state} · {table} refused: {refusal.message}", broker.id
+    read = "valid" if broker.id in ws.config.adapters else "absent, read as its defaults"
+    return f"broker {broker.id}: {state} · {table} {read}", None
 
 
 def _client_item(one: Declared) -> str:

@@ -378,6 +378,14 @@ the kernel's portfolio and cache and the exchange itself. That call is the only
 place kanso can act between a point arriving and an order being matched against
 it, and both of kanso's venues are a `SimulatedExchange`, which is why the
 corporate action lives there rather than in a strategy.
+
+Claims a broker adapter makes
+-----------------------------
+A broker package binds to the engine's own adapter for that broker, and this module may
+not name one. So each broker states the claims its package rests on as `engine_facts`,
+`kanso.nautilus.adapters.engine_facts()` collects them from the adapter directory, and
+`claims()` puts them after the core's own: `verify()` re-establishes both kinds the same
+way, and a broker claim that stops holding is a broken binding like any other.
 """
 
 from __future__ import annotations
@@ -2743,6 +2751,13 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
 )
 
 
+def claims() -> tuple[tuple[str, Callable[[], tuple[bool, str]]], ...]:
+    """Every engine claim: the core's own, then each packaged broker's, in broker id order."""
+    from kanso.nautilus import adapters
+
+    return (*_CHECKS, *adapters.engine_facts())
+
+
 def verify() -> list[Fact]:
     """Check every engine claim against the installed package.
 
@@ -2751,7 +2766,7 @@ def verify() -> list[Fact]:
     so one broken binding never hides the rest.
     """
     facts: list[Fact] = []
-    for claim, check in _CHECKS:
+    for claim, check in claims():
         try:
             holds, evidence = check()
         except Exception as exc:

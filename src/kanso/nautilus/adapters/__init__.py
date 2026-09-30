@@ -24,12 +24,21 @@ execution client: how its capital is funded and which clock it runs on. Those ar
 forbid real money off the live stage and a historical replay feeding a broker that fills
 against current prices, and they are declarations rather than behaviour precisely so the
 refusals can be made before anything connects.
+
+**What a broker's package relies on in the engine is re-checked like the core's.** A
+broker package binds to the engine's own adapter for that broker — its enums, its hosts,
+the way its clients read a credential — and those are engine facts like any other. They
+cannot be claimed in `kanso.nautilus.facts`, which may not name a broker, so each adapter
+states its own as `engine_facts`, and `facts.verify()` collects them through this registry
+and re-establishes them after its own: `kanso doctor` grades a broker's binding exactly as
+it grades the core's.
 """
 
 from __future__ import annotations
 
 import importlib
 import pkgutil
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -43,11 +52,16 @@ declaration: this module names the directory, and no module in kanso names what 
 BROKER_ATTR = "BROKER"
 """The module attribute a packaged broker adapter exposes itself under."""
 
+EngineClaim = tuple[str, Callable[[], tuple[bool, str]]]
+"""One claim about the engine and the check that re-establishes it: `(holds, evidence)`."""
+
 __all__ = [
     "BROKER_ATTR",
     "PACKAGE",
     "BrokerAdapter",
+    "EngineClaim",
     "broker_of",
+    "engine_facts",
     "exec_clients",
     "packaged",
     "venue_declaration",
@@ -70,6 +84,13 @@ class BrokerAdapter(Protocol):
 
     data_clients: tuple[str, ...]
     """The live data client ids this broker offers, or `()` when it offers none."""
+
+    engine_facts: tuple[EngineClaim, ...]
+    """What this package relies on in the engine's own adapter, each with its check."""
+
+    def config(self, ws: Workspace) -> object:
+        """The `[adapters.<id>]` table, validated by this broker's own model, or a refusal."""
+        ...
 
     def credentials(self, client_id: str) -> tuple[str, ...]:
         """The variable names one of this broker's clients resolves, never their values."""
@@ -118,6 +139,15 @@ def exec_clients() -> dict[str, ExecutionClientSpec]:
         for spec in broker.exec_clients:
             found.setdefault(spec.id, spec)
     return found
+
+
+def engine_facts() -> tuple[EngineClaim, ...]:
+    """Every engine claim the packaged brokers make, in broker id order.
+
+    Read through the registry so `kanso.nautilus.facts` can re-check a broker's binding
+    without naming the broker, which is the only way it may.
+    """
+    return tuple(claim for _, broker in sorted(packaged().items()) for claim in broker.engine_facts)
 
 
 def broker_of(client_id: str) -> BrokerAdapter | None:

@@ -748,6 +748,27 @@ def test_a_configured_adapter_nothing_registers_is_named(
     assert any("acme" in item for item in items(result, "adapters"))
 
 
+def test_an_alpaca_table_its_model_refuses_fails_the_execution_check(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """Every packaged broker's table is read through its own model, not only the newest's."""
+    path = workspace / "kanso.toml"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n[adapters.alpaca]\nrequests_per_minute = 0\n",
+        encoding="utf-8",
+    )
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert status(result, "execution") == "fail"
+    assert "[adapters.alpaca] refused" in str(checks(result)["execution"]["detail"])
+    assert any(
+        item.startswith("broker alpaca:") and "requests_per_minute" in item
+        for item in items(result, "execution")
+    )
+
+
 def test_an_extension_that_loads_is_listed_without_a_warning(
     runner: CliRunner, workspace: Path
 ) -> None:

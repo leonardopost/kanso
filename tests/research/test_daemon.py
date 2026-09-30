@@ -13,7 +13,6 @@ import platform
 import signal
 import subprocess
 import sys
-import threading
 import time
 from collections.abc import Callable, Iterator
 from hashlib import sha256
@@ -29,6 +28,7 @@ from kanso.nautilus import backtest
 from kanso.research import daemon, explore, lanes, records, scheduler
 from kanso.research import driver as research_driver
 from kanso.research import loop as research_loop
+from kanso.schemas import parse_duration
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.processes import children, ends, running
@@ -189,12 +189,21 @@ def test_a_turn_that_stalled_asks_whether_to_explore_after_the_driver_returned(
 
 
 def test_a_worker_with_nothing_to_do_waits_rather_than_spinning(
-    ws: Workspace, store: StateStore
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """It sleeps a slice at a time and notices the stop between slices. The stop lands on the
+    first slice rather than on a timer, which could fire before the loop had begun."""
     assert daemon.claim(store, "l1") is None
-    threading.Timer(0.05, daemon.request_stop).start()
+    slept: list[float] = []
+
+    def sleeping(seconds: float) -> None:
+        slept.append(seconds)
+        daemon.request_stop()
+
+    monkeypatch.setattr(daemon, "time", SimpleNamespace(monotonic=time.monotonic, sleep=sleeping))
 
     assert daemon.worker(ws, "l1") == 0
+    assert slept == [daemon._TICK]
 
 
 def test_a_hypothesis_whose_baseline_will_not_run_goes_back_behind_the_others(
@@ -304,12 +313,21 @@ def test_a_pass_that_cannot_run_is_recorded_and_the_cadence_is_kept(
 
 
 def test_a_workspace_with_nothing_deployed_is_an_ordinary_pass(
-    ws: Workspace, store: StateStore
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The pass finds no version and the loop simply keeps its cadence."""
-    threading.Timer(0.05, daemon.request_stop).start()
+    waited: list[float] = []
+
+    def waiting(seconds: float) -> None:
+        waited.append(seconds)
+        daemon.request_stop()
+
+    monkeypatch.setattr(daemon, "_wait", waiting)
+    interval = parse_duration(ws.config.monitor.interval, "monitor.interval").total_seconds()
 
     assert daemon.monitor(ws) == 0
+    assert waited == [interval]
+    assert store.events(kind=daemon.MONITOR_FAILED) == []
 
 
 def test_the_supervisor_writes_a_pid_starts_its_children_and_stops_them(

@@ -188,6 +188,16 @@ the output would say so. `[adapters.<id>]` is the exception at the top level onl
 adapter validates its own table with its own model, just as strictly, which keeps every
 vendor key out of a kanso-owned schema.
 
+```toml
+[adapters.okx]
+region = "us"             # global | eea | us: the regional host that accepts the account's key; no default
+rate_per_second = 5       # the quota the public-history loaders share; the engine's own clients meter themselves
+```
+
+A broker's table is read by `kanso doctor` through that broker's model whether or not it is
+there, and one the model refuses fails the `execution` check — an `api_key` pasted in
+included, since no table holds a credential. `docs/adapters.md` lists every adapter's keys.
+
 `[research] broker` is the single place the core lets a broker's name in: it says whose venue
 model — account type, currency, costs — research inherits. A workspace naming a broker it has
 no adapter for falls back to the two `[research]` keys below and then to the shipped venue
