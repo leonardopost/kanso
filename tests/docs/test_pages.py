@@ -341,3 +341,21 @@ def test_the_repair_budget_the_cli_page_states_is_the_one_the_driver_enforces() 
     stated = re.search(r"(\w+) repairs per idea", prose(page("cli.md")))
     assert stated is not None
     assert spelled(stated.group(1).lower()) == driver.REPAIRS
+
+
+def test_both_pages_state_the_utc_period_rule_a_continuous_calendar_relies_on() -> None:
+    """A round-the-clock series is annualised, warmed and scoped on the same UTC clock as
+    an equity one; the pages say where its bars land and what the synthetic loader
+    refuses."""
+    card = prose(section(page("concepts.md"), "Card"))
+    assert "Return periods are cut on the UTC clock" in card
+    assert "closes at 00:00Z and lands in the following UTC period" in card
+    assert "daily bar a vendor stamps at 05:00Z" in card
+    assert "trading days are calendar days" in card
+    assert "about 365 periods a year" in card
+    assert "the calendar days that printed" in card
+    assert "`[00:00Z, first market point)`" in card
+    catalog = prose(section(page("workspace.md"), "`catalog/`"))
+    assert "`calendar: continuous`" in catalog
+    assert "`timezone`, `session_start` or `session_end` is refused (exit 3)" in catalog
+    assert "`calendar: weekdays` is the default and is recorded in no manifest" in catalog
