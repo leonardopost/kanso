@@ -748,7 +748,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         custom type is subscribed once, by its class, and its points — every instrument's
         and the market-wide ones the runner loaded — reach the author's `on_data` as that
         type, at the instant each became public: a `corporate_action` arrives as a
-        `CorporateAction`, with `kind`, `ratio`, `cash`, `currency` and `ex_date_ns`. The
+        `CorporateAction`, with `kind`, `ratio`, `cash`, `currency` and `ex_date_ns`, and a
+        `funding` as a `Funding`, with the realised `rate` of the period that settled. The
         harness subscribes because the author cannot: a researched `strategy.py` may not
         import `kanso.data`, and the class is the one thing a subscription needs.
         """
