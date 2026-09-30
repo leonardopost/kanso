@@ -19,7 +19,7 @@ function a card's is (`kanso.nautilus.venue.venue_config`), so a version certifi
 latency or on a level-two book trades the stage under the same. Two things differ, both
 because this is a node and not a backtest: the exchange keeps its own `TestClock`, since a
 node's kernel clock is wall time and a fill has to be stamped from the data; and its command
-queue is off, for the reason recorded below.
+queue is off unless the venue model states a latency, for the reason recorded below.
 
 **The client's own subscription does not reach a bar, so kanso makes that binding.** The
 client subscribes to `data.*.{venue}.*` when it connects. A quote is published to

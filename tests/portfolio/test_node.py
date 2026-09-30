@@ -196,7 +196,8 @@ def test_the_stages_exchange_honours_the_latency_the_node_configures(
     stage's exchange waits it out: a placement certified at 50 ms yields an exchange whose
     latency model says 50 ms and whose command queue is on to honour it."""
     staged = a_node((_costs(placement, latency_ms=50),))
-    built = TradingNode(config=staged.config(), loop=asyncio.new_event_loop())
+    loop = asyncio.new_event_loop()
+    built = TradingNode(config=staged.config(), loop=loop)
     built.build()
     try:
         (venue,) = staged.venues()
@@ -207,6 +208,7 @@ def test_the_stages_exchange_honours_the_latency_the_node_configures(
         assert client.exchange.use_message_queue is True
     finally:
         built.dispose()
+        loop.close()
 
 
 def test_two_versions_certified_under_different_latencies_are_refused(

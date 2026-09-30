@@ -51,9 +51,13 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   a node is wall time. A replayed stage compresses months of decisions into seconds, so the
   rate is lifted and the same strategy is throttled the same amount — none — on both paths.
 * `Strategy.close_all_positions` and `cancel_all_orders` take an instrument id and submit
-  through the strategy's own `submit_order`, which kanso classifies as an exit; the simulated
-  exchange runs with no message queue and zero latency, so the closing order is matched
-  against the last point's book in the same call rather than on a point that never comes.
+  through the strategy's own `submit_order`, which kanso classifies as an exit. With no
+  stated latency the simulated exchange runs with its message queue off and zero latency,
+  so the closing order is matched against the last point's book in the same call rather
+  than on a point that never comes. Under a venue model that states `costs.latency_ms` the
+  queue is on and the closing order waits in flight, so `_drive` lands it with
+  `SimulatedVenue.advance_past_latency()` after the window's last point, exactly as the
+  research path's settle does (`kanso.nautilus.sandbox`).
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.
