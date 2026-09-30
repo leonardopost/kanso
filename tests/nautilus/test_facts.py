@@ -71,6 +71,8 @@ BINDINGS = {
     "so a marketable one fills even with no latency",
     "close_position sends a reduce-only order, which the simulated venue trims to what "
     "is left of the position and refuses once the position is already closed",
+    "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
+    "flight as it is, and cancels both",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

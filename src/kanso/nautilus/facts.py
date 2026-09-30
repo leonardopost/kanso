@@ -271,8 +271,15 @@ the other side, and its matching engine trims a reduce-only fill to the quantity
 — measured, a long of 10 sold at market and closed in the same handler ends flat with the
 close rejected, and one sold 4 and closed ends flat with the close cut to 6 and filled —
 which is what keeps a node's flatten from racing an exit still in flight. `submit_exit` does
-not set it: the shipped broker adapter refuses any order that carries the flag, and one
-strategy class runs on every path.
+not set it, for two reasons: the shipped broker adapter refuses any order that carries the
+flag, and one strategy class runs on every path; and on any fill the simulated venue resizes
+every resting standalone reduce-only order to the whole position (`backtest/engine.pyx`),
+so a partial exit — 50 of 100 — marked reduce-only would be grown or shrunk behind the
+author's back and fill differently even with no latency. `cancel_all_orders` marks an order
+open at the venue `PENDING_CANCEL` at once, sends the cancel for one still in flight without
+marking it, and — read in `trading/strategy.pyx` rather than measured — leaves one not yet
+sent; that is what `KansoStrategy.cancel_all_orders` mirrors when it notes the orders it
+cancelled.
 
 Risk configuration
 ------------------
@@ -990,6 +997,67 @@ def _check_an_order_cancelled_in_flight_is_taken_before_its_cancel() -> tuple[bo
         f"handler with no latency, read (status once sent, final status, filled) = {seen}: "
         "the venue takes the order before the cancel that follows it, and a marketable one "
         "fills there"
+    )
+
+
+def _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight() -> tuple[bool, str]:
+    """What `KansoStrategy.cancel_all_orders` mirrors when it notes the orders it cancelled:
+    the engine marks an order open at the venue `PENDING_CANCEL` at once, leaves one still in
+    flight as it is, and cancels both."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.orders: list[Any] = []
+            self.sent: tuple[str, ...] = ()
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen in (1, 2):
+                order = self.order_factory.limit(
+                    equity.id, OrderSide.BUY, Quantity.from_int(10), Price(9.0, 2)
+                )
+                self.orders.append(order)
+                self.submit_order(order)
+            if self.seen == 2:
+                self.cancel_all_orders(equity.id)
+                self.sent = tuple(order_status_to_str(order.status) for order in self.orders)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0))
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        seen = (*probe.sent, *(order_status_to_str(order.status) for order in probe.orders))
+    finally:
+        engine.dispose()
+    return seen == ("PENDING_CANCEL", "SUBMITTED", "CANCELED", "CANCELED"), (
+        "a buy resting at 9.00, and a second sent in the handler that then called "
+        f"cancel_all_orders, read (resting, in flight, once cancelled; then both at the end) = "
+        f"{seen}: the engine marks the resting order pending cancel at once, leaves the one "
+        "in flight as it is, and cancels both"
     )
 
 
@@ -2770,6 +2838,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "close_position sends a reduce-only order, which the simulated venue trims to what "
         "is left of the position and refuses once the position is already closed",
         _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position,
+    ),
+    (
+        "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
+        "flight as it is, and cancels both",
+        _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight,
     ),
 )
 
