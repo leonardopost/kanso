@@ -476,12 +476,19 @@ credential.
 | key | default | what it does |
 |---|---|---|
 | `region` | *none* | `global`, `eea` or `us`, in any case; the regional host that accepts the account's key |
-| `rate_per_second` | `5` | the flat quota kanso's own public requests share — the reference's and the public-history loaders'; `1` to `1000` |
+| `rate_per_second` | `5` | the flat quota kanso's own public requests to the API share — the reference's and the public-history loaders'; `1` to `1000` |
 
 `rate_per_second` governs kanso's own requests only. The engine's own clients meter
 themselves — its compiled client carries a global rate-limit bucket and one per endpoint —
-and take no quota from their caller. Five a second is a conservative default, not a
-measured ceiling. One endpoint is metered on a quota of its own whatever the table's rate: the
+and take no quota from their caller. Five a second is a conservative default, not a measured
+ceiling. Every request kanso sends to the API names one rate-limit key, and that is what
+holds it to the rate: the engine's client holds a request to its default quota only under a
+key the request names, and a request that names none is held to nothing (measured on
+`nautilus_trader 1.231.0`; `kanso doctor` re-checks among its engine facts that a named key
+is held, from every thread that sends under it). The quota admits a burst as large as the
+rate and then one request every `1/rate_per_second` seconds, however many threads send. An
+archive fetched from the exchange's file host is not an API request and is not metered. One
+endpoint is metered on a quota of its own as well, whatever the table's rate: the
 trade-archive listing, at one request a second after a two-second pause (below).
 
 ### The public reference

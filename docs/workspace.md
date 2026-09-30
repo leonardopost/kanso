@@ -192,7 +192,7 @@ vendor key out of a kanso-owned schema.
 ```toml
 [adapters.okx]
 region = "us"             # global | eea | us: the regional host that accepts the account's key; no default
-rate_per_second = 5       # the quota kanso's own public requests share; the engine's own clients meter themselves
+rate_per_second = 5       # the quota kanso's own requests to the public API share; the engine's own clients meter themselves
 ```
 
 A broker's table is read by `kanso doctor` through that broker's model whether or not it is

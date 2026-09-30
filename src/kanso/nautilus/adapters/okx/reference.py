@@ -69,7 +69,13 @@ NautilusTrader facts (`nautilus_trader 1.231.0`)
 records the map and `kanso doctor` re-checks it), and the request is sent through
 `nautilus_pyo3.HttpClient`, built once per client with a `User-Agent` default header and the
 table's rate as its `default_quota`; its `request` is a coroutine that must be created inside
-a running loop, and resolves to a response carrying `status` and `body`. The exchange's edge
+a running loop, and resolves to a response carrying `status` and `body`. The default quota
+holds a request only under a key the request names, and a request naming none is held to
+nothing — measured on a loopback server, twelve requests from six threads naming no key, on a
+default quota of two a second, all arrived within 0.6 s — so every request to the API names
+`QUOTA_KEY`. A key's bucket lives in the client, and requests sent from several threads, each
+in an event loop of its own, share it; `kanso.nautilus.facts` states both, and `kanso doctor`
+re-checks that a named key is held from every thread. The exchange's edge
 refuses a request whose User-Agent is the standard library's default before the API answers:
 HTTP 403, body `error code: 1010`, recorded on 2026-09-30.
 """
@@ -109,6 +115,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "ADAPTER",
     "INSTRUMENTS",
+    "QUOTA_KEY",
     "USER_AGENT",
     "Answer",
     "OkxReference",
@@ -159,6 +166,13 @@ engine's quota admits a burst as large as its rate, so one a second — with a b
 is the slowest it can state, and `okx_trades` also pauses two seconds before every listing
 request it sends, which the quota cannot say."""
 
+QUOTA_KEY: Final = "okx"
+"""The key every request to the API is sent under, so that the table's `rate_per_second` —
+the client's default quota — holds all of them, from every thread, as one rate. The engine
+holds a request to its default quota only under a key the request names, so a request naming
+none would be held to nothing; and it keeps a bucket per key, so this key is the same for
+every path rather than the path itself."""
+
 ASSET_CLASS: Final = "perpetuals"
 DATASET: Final = "reference"
 DATASETS: Final = (DATASET, "bars", "trades", "funding")
@@ -188,10 +202,14 @@ def pyo3_transport(rate_per_second: int, *, factory: Any = None) -> Transport:
     The quota lives in the client, so a client per request would be no quota at all.
     `factory` exists so the suite drives the same coroutine plumbing without a socket.
 
-    A request to a path `KEYED_QUOTAS` names is sent under that path's own key as well, so
-    the endpoint that throttles hardest is metered on its own; a request outside the API —
-    an archive on the exchange's file host, tens of megabytes — is given `DOWNLOAD_TIMEOUT_S`
-    rather than the API's `TIMEOUT_S`.
+    Every request to the API is sent under `QUOTA_KEY`, which is what holds it to
+    `rate_per_second`, and a request to a path `KEYED_QUOTAS` names under that path's own
+    key first, so the endpoint that throttles hardest is metered on its own as well. A
+    request outside the API — an archive on the exchange's file host, tens of megabytes — is
+    no request of the API's quota: it names no key and is given `DOWNLOAD_TIMEOUT_S` rather
+    than the API's `TIMEOUT_S`. `send` may be called from several threads at once; each
+    awaits its request in an event loop of its own, and the client's quota holds them
+    together.
     """
     client = (factory or _http_client)(rate_per_second)
 
@@ -199,8 +217,9 @@ def pyo3_transport(rate_per_second: int, *, factory: Any = None) -> Transport:
         from nautilus_trader.core import nautilus_pyo3
 
         path = urlsplit(url).path
-        keys = [path] if path in KEYED_QUOTAS else None
-        timeout = TIMEOUT_S if path.startswith(API) else DOWNLOAD_TIMEOUT_S
+        api = path.startswith(API)
+        keys = [*([path] if path in KEYED_QUOTAS else []), QUOTA_KEY] if api else None
+        timeout = TIMEOUT_S if api else DOWNLOAD_TIMEOUT_S
 
         async def once() -> Any:
             return await client.request(

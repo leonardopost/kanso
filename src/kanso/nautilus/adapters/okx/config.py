@@ -20,8 +20,10 @@ engine region maps to `app.okx.com` or `my.okx.com`; an account served only ther
 region to state, and `docs/backlog.md` records it.
 
 **The quota is kanso's own requests', not the engine's clients'.** `rate_per_second` is the
-single flat rate kanso's own public requests share — the reference provider's and the
-public-history loaders'. The engine's own HTTP client meters itself — its
+single flat rate kanso's own public requests to the API share — the reference provider's and
+the public-history loaders', however many a loader has in flight — because each is sent
+under one key, `reference.QUOTA_KEY`; an archive fetched from the exchange's file host is not
+the API's and is not metered. The engine's own HTTP client meters itself — its
 compiled module carries a global bucket `okx:global` and one bucket per endpoint,
 `okx:/api/v5/market/history-candles` among them — and takes no quota from its caller, so
 this key governs nothing the engine sends. Five a second is a deliberately conservative
