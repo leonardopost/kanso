@@ -1030,8 +1030,8 @@ unset as on a card, so the exchange charges the instruments' zero rates and the 
 charges once. A version certified under a 20 ms round trip on a level-two book therefore
 trades the stage under 20 ms on a level-two book, and two versions on one venue that were
 certified under different latencies, or one on a book and one without, are refused at
-`deploy` (exit 2) before the stage is written rather than run on whichever venue came
-first.
+`deploy` (exit 2) before the stage is written, and at `promote` before an approval is
+recorded, rather than run on whichever venue came first.
 
 The stage file carries only the **id** of an execution client. What matters is the pair of
 declarations behind that id: `capital` is `simulated`, `broker_paper` or `real`, and `clock`
