@@ -192,7 +192,7 @@ vendor key out of a kanso-owned schema.
 ```toml
 [adapters.okx]
 region = "us"             # global | eea | us: the regional host that accepts the account's key; no default
-rate_per_second = 5       # the quota the public-history loaders share; the engine's own clients meter themselves
+rate_per_second = 5       # the quota kanso's own public requests share; the engine's own clients meter themselves
 ```
 
 A broker's table is read by `kanso doctor` through that broker's model whether or not it is
@@ -958,6 +958,32 @@ account currency — `[research] currency = "USDT"` in `kanso.toml`, or
 `venues.<MIC>.currency` in `portfolio.yaml` — or `kanso hyp validate` refuses it (exit 3);
 one whose two differ fits no account. What a perpetual is to a
 card, and what it is not yet, is in `docs/concepts.md`.
+
+A perpetual the exchange lists need not be written by hand. Name the OKX package's public
+reference and the regional host, and resolve it by the exchange's own id with the venue
+appended:
+
+```toml
+[research]
+currency = "USDT"         # or broker = "okx", whose venue OKX declares a USDT account
+
+[adapters.okx]
+region = "us"
+
+[data]
+reference = "okx"
+```
+
+```
+$ kanso data instruments resolve BTC-USDT-SWAP.OKX --as-of 2026-09-30
+```
+
+The entry is written for you — `asset_class: CRYPTOCURRENCY`, `instrument_class: swap` in
+`override`, and `sources: {okx: BTC-USDT-SWAP}` — and the contract's size, tick, lot and
+minimum come from the exchange's listing, with no credential sent. An `override` you add to
+that entry is applied over what the exchange lists. An inverse contract (`BTC-USD-SWAP`) and a
+contract that is not live are refused by name (exit 3); `docs/adapters.md` lists the fields
+it reads and why the definition's fees are zero.
 
 **A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
 every settlement, so a hypothesis whose universe holds one lists `funding` in

@@ -8,7 +8,8 @@ region. And the venue declaration states the account, the currency and the two f
 and leaves the spread and slippage to kanso's defaults — so a bar-only hypothesis with no
 spread width is refused rather than costed at a spread of zero.
 
-Nothing here resolves a real credential or opens a socket: the package has no network code.
+Nothing here resolves a real credential or opens a socket; the public reference beside these
+declarations is driven against its recordings in `test_reference.py`.
 """
 
 from __future__ import annotations
