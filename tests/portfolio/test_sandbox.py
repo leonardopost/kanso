@@ -36,6 +36,7 @@ from nautilus_trader.config import (
 )
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import (
+    BatchCancelOrders,
     CancelAllOrders,
     CancelOrder,
     ModifyOrder,
@@ -455,6 +456,7 @@ def test_every_order_command_is_the_exchanges_to_answer(kernel: Any) -> None:
     client.modify_order("c")
     client.cancel_order("d")
     client.cancel_all_orders("e")
+    client.batch_cancel_orders("f")
 
     assert seen == [
         "submit_order(a)",
@@ -462,6 +464,7 @@ def test_every_order_command_is_the_exchanges_to_answer(kernel: Any) -> None:
         "modify_order(c)",
         "cancel_order(d)",
         "cancel_all_orders(e)",
+        "batch_cancel_orders(f)",
     ]
 
 
@@ -503,6 +506,9 @@ def commands() -> list[Any]:
         ),
         CancelOrder(**resting, **common),
         CancelAllOrders(instrument_id=instrument_id, order_side=OrderSide.SELL, **common),
+        BatchCancelOrders(
+            instrument_id=instrument_id, cancels=[CancelOrder(**resting, **common)], **common
+        ),
     ]
 
 

@@ -58,6 +58,15 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   queue is on and the closing order waits in flight, so `_drive` lands it with
   `SimulatedVenue.advance_past_latency()` after the window's last point, exactly as the
   research path's settle does (`kanso.nautilus.sandbox`).
+  The flatten cannot race an exit still working the way a replacement exit can
+  (`KansoStrategy.submit_exit`): it is sent after the last point, so no point is matched
+  before its cancels land. Under a stated latency the flatten and any exit the sleeve sent
+  at the last point wait in flight together and land in `advance_past_latency()` with no
+  point matched in between. The close is sized to the position when it was sent and
+  carries `reduce_only`, `close_position`'s default, which the simulated venue honours: it
+  refuses the close once the position is closed, and trims it to the quantity still open
+  when the exit has closed part of it (`kanso.nautilus.facts` measures both, in the claim
+  that `close_position` sends a reduce-only order the simulated venue trims and refuses).
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.

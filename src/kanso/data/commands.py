@@ -1000,7 +1000,7 @@ def check_adapters(ws: Workspace) -> tuple[list[registry.Survey], list[str]]:
     notes: list[str] = []
     for adapter_id, adapter in sorted(known.items()):
         if not adapter.configured(ws):
-            notes.append(f"{adapter_id}: no credential resolves, so no request was made for it")
+            notes.append(f"{adapter_id}: not configured, so no request was made for it")
             continue
         surveys.append(adapter.survey(ws))
     if not surveys:

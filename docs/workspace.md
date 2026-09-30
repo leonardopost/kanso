@@ -192,7 +192,7 @@ vendor key out of a kanso-owned schema.
 ```toml
 [adapters.okx]
 region = "us"             # global | eea | us: the regional host that accepts the account's key; no default
-rate_per_second = 5       # the quota the public-history loaders share; the engine's own clients meter themselves
+rate_per_second = 5       # the quota kanso's own public requests share; the engine's own clients meter themselves
 ```
 
 A broker's table is read by `kanso doctor` through that broker's model whether or not it is
@@ -361,6 +361,47 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+**An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
+smaller of what was asked and what is left to close: the position less the unfilled quantity
+of every order of the sleeve's own on the closing side that the venue has not closed —
+resting, in flight to it, or, under a stated latency, waiting on a cancel that has not
+landed — and returns `None` when those already close it. Every such order counts in full,
+an exit or not, so a stop that would reverse the position, or both legs of a bracket only one
+of which can fill, leave that much less to close. The stop-loss and take-profit of a bracket
+whose entry has filled nothing do not count: they can fill only after the entry and close
+what it opens, and neither the venue nor the order emulator has them open to cancel; once the
+entry has filled any of it they count in full. With no latency stated, an exit at market
+is never held back by a resting one: when the sleeve's own limit or stop orders resting at
+the venue on the closing side would leave it less than asked, it cancels them first, so a
+stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
+after the stop has closed. Under a latency the cancelled orders can still fill until their
+cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
+below); an order of the sleeve's still in flight to the venue, modified or not, is not
+cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
+paid once the venue holds that order open and the owed exit has cancelled it. An order the
+venue holds whose modify has not been answered yet, one sent in the same handler among them,
+counts too, and an exit at market does not cancel it at once: on a node a cancel sent in the
+handler that sent the modify would overtake it, where the backtest lands the modify first.
+With no latency stated it cancels it as the venue answers the modify; under a latency it
+cancels it on the next point, before the sleeve's handler for it, whether or not the venue
+has answered the modify by then, and the cancel still lands behind the modify, which was
+stamped first and waits the same latency. So on both paths the modify lands first, filling
+the order at once if it made it marketable, and then the cancel; what the order cut from the
+exit is owed and paid as for any cancelled order, a sleeve that modifies that order on every
+point included. With no latency stated the venue answers both before the
+next point, on both paths, so the order is cancelled as the venue takes it or answers its
+modify, and the owed exit goes out as soon as the order is closed — cancelled, filled or
+refused — in the instant it was asked for: an exit at market asked for on a session's last
+point, or on the window's, is not carried past it. Under a latency the owed exit is paid
+on a later point, which for one asked on a session's last point is in the next session, and
+on the window's last never. A resting order whose cancel the venue refused is cancelled again. **An order the engine's order
+emulator holds** (one sent with an `emulation_trigger`) has not reached the venue: it counts
+until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
+takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
+emulator, and batches the rest. An attached exit rule closes through the same market exit.
+`self.held(id)` applies the sleeve's market orders in flight and no limit or stop order, so
+a sleeve whose exit rests at the ask reads the whole position there until the exit fills; an
+exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
 equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
@@ -670,7 +711,45 @@ is measured there, on real orders, rather than assumed. State the whole round tr
 that reaches the strategy late and an order that reaches the book late add up, and a rule
 that reacts to a point and posts lands the same instant either way, so one number carries
 both. Availability (`ts_init`, `docs/concepts.md`) is a property of the data, when it became
-public, never of the route that carries it to you. Zero, the
+public, never of the route that carries it to you. **Under a stated latency a cancel is not
+instant**: it is a command like the rest, and the order it cancels can still fill until it
+lands. So `submit_exit` counts an order waiting on its cancel as an exit still working, and
+an exit that replaces one whose cancel is in flight is sized to what the old one cannot also
+take — often nothing, in which case it returns `None`. What the cancel in flight held back is
+owed, not dropped: kanso asks for that exit again, at the price given and sized to what is
+left then, on every later point after the strategy's own handler has run, until it goes out
+whole — so a sleeve that cancels and exits once is closed once the cancel lands, and one that
+re-posts on every point replaces the owed exit with its own. An order sent on a session's
+last point under a latency reaches the book on the next session's first, and one sent on the
+window's last point reaches it after the window has ended and never fills, owed or not. An owed exit is forgotten when
+the position is flat or has changed sides and when the sleeve asks for another exit in the
+name. A cancel on that side takes back only an owed exit that has a price, as it would have
+taken back the limit order itself; an owed exit at market stands for an order the venue
+would have taken before any cancel that followed it, so the sleeve's later cancels leave it
+owed. One an attached exit rule asked for is forgotten only when the position is flat,
+whatever its host sends or cancels, so a rule that says exit once still closes. An owed exit
+with a price still owed when a session ends is asked for at that price on the next session's
+points if the position is still open; it never goes past flat, but the price may be the last
+session's. Measured on 0.13.0, before exits
+counted the ones still working: a rule that followed the ask with its exit on every change of
+the book bought 50 shares in one session at 20 ms, sold 92, and was left short 42 to the
+session's end, and every card of its lane at 20 ms held a position for close to a day. With
+no latency stated a cancel lands before anything further is matched, so an order the venue
+held open when its cancel was sent is not counted. **A cancel for an order still on its way
+to the venue lands behind the order**, on every path, whatever the latency — `cancel_order`,
+`cancel_orders` and `cancel_all_orders` alike; an order the engine's order emulator holds
+has not been sent to the venue at all, and its cancel takes it out at once (above). The venue takes the order, filling it if it is
+marketable, and then the cancel: with no latency stated before it matches anything further,
+so an order sent and cancelled in one handler that does not fill when it is taken never
+rests through a point; under a latency both land at the same instant, the order first. The
+order counts as working until the cancel lands. A node may not yet have handed the order to
+the venue when the strategy's handler cancels it, and would send the cancel ahead of it,
+where it is lost and the order rests; kanso holds such a cancel back and sends it the moment
+the node reports the order submitted, before the venue has matched it, so a node and a
+backtest fill alike (`kanso replay parity`). A cancel the sleeve itself sends right behind a
+modify of an order the venue already holds is not held back, as an exit at market's is: on a node it overtakes the
+modify, where the backtest lands the modify first and fills it if it is marketable, so the
+two paths can differ there (`docs/backlog.md`). Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the
@@ -879,6 +958,32 @@ account currency — `[research] currency = "USDT"` in `kanso.toml`, or
 `venues.<MIC>.currency` in `portfolio.yaml` — or `kanso hyp validate` refuses it (exit 3);
 one whose two differ fits no account. What a perpetual is to a
 card, and what it is not yet, is in `docs/concepts.md`.
+
+A perpetual the exchange lists need not be written by hand. Name the OKX package's public
+reference and the regional host, and resolve it by the exchange's own id with the venue
+appended:
+
+```toml
+[research]
+currency = "USDT"         # or broker = "okx", whose venue OKX declares a USDT account
+
+[adapters.okx]
+region = "us"
+
+[data]
+reference = "okx"
+```
+
+```
+$ kanso data instruments resolve BTC-USDT-SWAP.OKX --as-of 2026-09-30
+```
+
+The entry is written for you — `asset_class: CRYPTOCURRENCY`, `instrument_class: swap` in
+`override`, and `sources: {okx: BTC-USDT-SWAP}` — and the contract's size, tick, lot and
+minimum come from the exchange's listing, with no credential sent. An `override` you add to
+that entry is applied over what the exchange lists. An inverse contract (`BTC-USD-SWAP`) and a
+contract that is not live are refused by name (exit 3); `docs/adapters.md` lists the fields
+it reads and why the definition's fees are zero.
 
 **A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
 every settlement, so a hypothesis whose universe holds one lists `funding` in

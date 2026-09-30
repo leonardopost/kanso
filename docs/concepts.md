@@ -514,7 +514,7 @@ it. A stage node books funding into its sleeves the same way, because its venue 
 and settles none; an account a broker keeps settles its own, and a sleeve on one would not
 book it (`docs/backlog.md` row 15). A stage replays the catalog, so a deployed sleeve is
 handed and pays the settlements the catalog holds for its window — which today means the
-ones an operator loaded from a file, since no data adapter fetches funding (row 104). And
+ones an operator loaded from a file, since no data adapter fetches funding (row 107). And
 neither margin nor liquidation is simulated: what bounds a perpetual book is the sleeve's
 room, `max_leverage` and the `maintenance_margin` gate (`docs/backlog.md`).
 
