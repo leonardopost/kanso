@@ -259,14 +259,20 @@ only at the first point after its delay, once that point has been matched, so th
 fill the order in between; with none, the backtest drains the commands a handler sent before
 it matches the next point, and the cancel always lands first. Measured, a buy resting at 9.50
 and cancelled a minute before a print at 9.49: filled whole under a 30-second latency,
-cancelled unfilled under none — which is why `submit_exit` counts a pending-cancel order as
-working exactly when the venue model states a latency. The engine's own guard is the
+cancelled unfilled under none — which is why `submit_exit` counts an order the venue held
+open when its cancel was sent as working exactly when the venue model states a latency. An
+order cancelled while still in flight is another matter: the venue takes it before the cancel
+that follows it, and a marketable one fills whatever the latency — measured, a buy at 10.50
+against prints at 10.00, submitted and cancelled in one handler with none, filled whole — so
+it counts until its cancel lands either way. The engine's own guard is the
 `reduce_only` flag, and the simulated venue honours it: `close_position` sets it by default,
-and a reduce-only order the position has no room left for is rejected rather than opening
-the other side — measured, a long of 10 sold at market and closed in the same handler ends
-flat with the close rejected — which is what keeps a node's flatten from racing an exit
-still in flight. `submit_exit` does not set it: the shipped broker adapter refuses any order
-that carries the flag, and one strategy class runs on every path.
+a reduce-only order the position has no room left for is rejected rather than opening
+the other side, and its matching engine trims a reduce-only fill to the quantity still open
+— measured, a long of 10 sold at market and closed in the same handler ends flat with the
+close rejected, and one sold 4 and closed ends flat with the close cut to 6 and filled —
+which is what keeps a node's flatten from racing an exit still in flight. `submit_exit` does
+not set it: the shipped broker adapter refuses any order that carries the flag, and one
+strategy class runs on every path.
 
 Risk configuration
 ------------------
@@ -925,9 +931,72 @@ def _check_a_cancel_in_flight_leaves_the_order_to_fill() -> tuple[bool, str]:
     )
 
 
-def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tuple[bool, str]:
-    """The node flatten's premise: `close_position` sends a reduce-only order, and the
-    simulated venue refuses it once another sale has already closed the position."""
+def _check_an_order_cancelled_in_flight_is_taken_before_its_cancel() -> tuple[bool, str]:
+    """Why `submit_exit` counts an order cancelled while in flight even with no latency: the
+    venue takes the order before the cancel that follows it, so a marketable one fills."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.order: Any = None
+            self.sent = ""
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 2:
+                self.order = self.order_factory.limit(
+                    equity.id, OrderSide.BUY, Quantity.from_int(10), Price(10.5, 2)
+                )
+                self.submit_order(self.order)
+                self.sent = order_status_to_str(self.order.status)
+                self.cancel_order(self.order)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0))
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        seen = (
+            probe.sent,
+            order_status_to_str(probe.order.status),
+            float(probe.order.filled_qty),
+        )
+    finally:
+        engine.dispose()
+    return seen == ("SUBMITTED", "FILLED", 10.0), (
+        "a buy limit at 10.50 against prints at 10.00, submitted and cancelled in the same "
+        f"handler with no latency, read (status once sent, final status, filled) = {seen}: "
+        "the venue takes the order before the cancel that follows it, and a marketable one "
+        "fills there"
+    )
+
+
+def _probe_close_after_a_sale(sold: int) -> tuple[bool, str, float, float, float]:
+    """A long of 10; then, in one handler, a sale of `sold` at market and `close_position`.
+    Returns the close's (is_reduce_only, status, quantity, filled) and the net position at
+    the end."""
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
     from nautilus_trader.model.currencies import USD
@@ -954,7 +1023,7 @@ def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tu
                 )
             elif self.seen == 3:
                 self.submit_order(
-                    self.order_factory.market(equity.id, OrderSide.SELL, Quantity.from_int(10))
+                    self.order_factory.market(equity.id, OrderSide.SELL, Quantity.from_int(sold))
                 )
                 (position,) = self.cache.positions_open(strategy_id=self.id)
                 self.close_position(position)
@@ -970,23 +1039,39 @@ def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tu
         )
         engine.add_instrument(equity)
         engine.add_data(_limit_points("trade", 10.0, 10.0, 10.0))
-        probe = Probe()
-        engine.add_strategy(probe)
+        engine.add_strategy(Probe())
         engine.run()
         close = engine.cache.orders(side=OrderSide.SELL)[-1]
-        seen = (
+        return (
             bool(close.is_reduce_only),
             order_status_to_str(close.status),
+            float(close.quantity),
             float(close.filled_qty),
             float(engine.portfolio.net_position(equity.id)),
         )
     finally:
         engine.dispose()
-    return seen == (True, "REJECTED", 0.0, 0.0), (
-        "a long of 10 sold at market and then closed with close_position in the same handler: "
-        f"(close is reduce-only, its status, filled, net position) = {seen}. The close carries "
-        "reduce_only by default, and the venue refuses a reduce-only order the position no "
-        "longer has room for rather than open the other side"
+
+
+def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tuple[bool, str]:
+    """The node flatten's premise: `close_position` sends a reduce-only order, and the
+    simulated venue refuses it once another sale has already closed the position, and trims
+    it to what is left when another sale has closed part of it."""
+    closed = _probe_close_after_a_sale(10)
+    part = _probe_close_after_a_sale(4)
+    holds = closed == (True, "REJECTED", 10.0, 0.0, 0.0) and part == (
+        True,
+        "FILLED",
+        6.0,
+        6.0,
+        0.0,
+    )
+    return holds, (
+        "a long of 10, then in one handler a sale at market and close_position: (close is "
+        f"reduce-only, its status, quantity, filled, net position) = {closed} after a sale "
+        f"of 10 and {part} after a sale of 4. The close carries reduce_only by default, and "
+        "the venue refuses a reduce-only order the position no longer has room for and "
+        "trims one to the quantity still open, rather than open the other side"
     )
 
 
@@ -2677,8 +2762,13 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_cancel_in_flight_leaves_the_order_to_fill,
     ),
     (
-        "close_position sends a reduce-only order, which the simulated venue refuses once "
-        "the position is already closed",
+        "an order cancelled while still in flight is taken by the venue before its cancel, "
+        "so a marketable one fills even with no latency",
+        _check_an_order_cancelled_in_flight_is_taken_before_its_cancel,
+    ),
+    (
+        "close_position sends a reduce-only order, which the simulated venue trims to what "
+        "is left of the position and refuses once the position is already closed",
         _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position,
     ),
 )

@@ -67,8 +67,10 @@ BINDINGS = {
     "a Bar carries low and high, and every market point carries ts_init",
     "an order whose cancel was sent is not closed until the cancel lands, and under a "
     "latency the market can fill it first",
-    "close_position sends a reduce-only order, which the simulated venue refuses once "
-    "the position is already closed",
+    "an order cancelled while still in flight is taken by the venue before its cancel, "
+    "so a marketable one fills even with no latency",
+    "close_position sends a reduce-only order, which the simulated venue trims to what "
+    "is left of the position and refuses once the position is already closed",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

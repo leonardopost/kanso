@@ -59,9 +59,10 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   before its cancels land, and under a latency an exit the sleeve sent at the last point
   lands in the same call as the flatten and may fill there — but the close is sized to the
   position when it was sent and carries `reduce_only`, `close_position`'s default, which the
-  simulated venue honours: it refuses the close once the position is closed
-  (`kanso.nautilus.facts` measures it) and its matching engine trims a reduce-only fill to
-  the quantity still open.
+  simulated venue honours: it refuses the close once the position is closed, and its
+  matching engine trims the close to the quantity still open when the exit has closed part
+  of it (`kanso.nautilus.facts` measures both, in the claim that `close_position` sends a
+  reduce-only order the simulated venue trims and refuses).
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.
