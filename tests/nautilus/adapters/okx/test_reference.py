@@ -8,7 +8,8 @@ named the exchange asks it nothing. A linear USDT swap resolves into a `CryptoPe
 whose contract terms are the row's and whose fees are zero, and it validates on a USDT
 account. An inverse contract, a suspended one, one not yet listed and one the exchange does
 not list are each refused by name, per id. An answer that is not the API's is the call's
-failure, not an id's. And the request carries a User-Agent and nothing else.
+failure, not an id's. And the request carries a User-Agent and nothing else, and every
+request to the API is held to the table's rate, however many threads send.
 """
 
 from __future__ import annotations
