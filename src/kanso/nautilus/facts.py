@@ -251,6 +251,23 @@ at 9.50 against a print at 9.49: a seller's print, or one with no aggressor, fil
 the engine walks them as book updates — so this bites only on trade data, which is why
 a trade file that records no side is loaded as `NO_AGGRESSOR` and never given one.
 
+**An order whose cancel was sent is working until the cancel lands.** `Strategy.cancel_order`
+and `cancel_all_orders` apply `OrderPendingCancel` to the order before the command leaves
+the strategy, so it reads `PENDING_CANCEL` and not `is_closed` at once, and the order state
+machine lets a pending-cancel order fill. Under a latency model the cancel reaches the book
+only at the first point after its delay, once that point has been matched, so the market can
+fill the order in between; with none, the backtest drains the commands a handler sent before
+it matches the next point, and the cancel always lands first. Measured, a buy resting at 9.50
+and cancelled a minute before a print at 9.49: filled whole under a 30-second latency,
+cancelled unfilled under none — which is why `submit_exit` counts a pending-cancel order as
+working exactly when the venue model states a latency. The engine's own guard is the
+`reduce_only` flag, and the simulated venue honours it: `close_position` sets it by default,
+and a reduce-only order the position has no room left for is rejected rather than opening
+the other side — measured, a long of 10 sold at market and closed in the same handler ends
+flat with the close rejected — which is what keeps a node's flatten from racing an exit
+still in flight. `submit_exit` does not set it: the shipped broker adapter refuses any order
+that carries the flag, and one strategy class runs on every path.
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -824,6 +841,152 @@ def _check_a_touched_limit_is_the_fill_models_to_fill() -> tuple[bool, str]:
         + "; ".join(seen)
         + ". A limit the market only reaches is the fill model's to fill, and one it goes "
         "beyond fills at its own price as a maker whatever the model says"
+    )
+
+
+def _probe_cancel_in_flight(latency_ns: int) -> tuple[str, bool, str, float]:
+    """A buy resting at 9.50, cancelled at minute three; a seller's print at 9.49 at minute
+    four. Returns the order's status and `is_closed` just after the cancel was sent, and its
+    status and filled quantity at the end."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.order: Any = None
+            self.sent: tuple[str, bool] = ("", True)
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.order = self.order_factory.limit(
+                    equity.id, OrderSide.BUY, Quantity.from_int(10), Price(9.5, 2)
+                )
+                self.submit_order(self.order)
+            elif self.seen == 3:
+                self.cancel_order(self.order)
+                self.sent = (order_status_to_str(self.order.status), bool(self.order.is_closed))
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0, 9.49, 10.0))
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        order = probe.order
+        return (
+            *probe.sent,
+            order_status_to_str(order.status),
+            float(order.filled_qty),
+        )
+    finally:
+        engine.dispose()
+
+
+def _check_a_cancel_in_flight_leaves_the_order_to_fill() -> tuple[bool, str]:
+    """`submit_exit`'s premise: an order whose cancel was sent is working until the cancel
+    lands — under a latency it fills if the market reaches it first; with none it cannot."""
+    slow = _probe_cancel_in_flight(_MINUTE_NS // 2)
+    instant = _probe_cancel_in_flight(0)
+    holds = slow == ("PENDING_CANCEL", False, "FILLED", 10.0) and instant == (
+        "PENDING_CANCEL",
+        False,
+        "CANCELED",
+        0.0,
+    )
+    return holds, (
+        "a buy resting at 9.50 and cancelled a minute before a print at 9.49 read (status "
+        f"after the cancel, is_closed, final status, filled) {slow} with a 30-second latency "
+        f"and {instant} with none: the cancel is applied as PENDING_CANCEL before it leaves "
+        "the strategy, the order is not closed until it lands, a latency lets the market "
+        "fill it in between, and with no latency it lands before the next point is matched"
+    )
+
+
+def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tuple[bool, str]:
+    """The node flatten's premise: `close_position` sends a reduce-only order, and the
+    simulated venue refuses it once another sale has already closed the position."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(10))
+                )
+            elif self.seen == 3:
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.SELL, Quantity.from_int(10))
+                )
+                (position,) = self.cache.positions_open(strategy_id=self.id)
+                self.close_position(position)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0, 10.0))
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        close = engine.cache.orders(side=OrderSide.SELL)[-1]
+        seen = (
+            bool(close.is_reduce_only),
+            order_status_to_str(close.status),
+            float(close.filled_qty),
+            float(engine.portfolio.net_position(equity.id)),
+        )
+    finally:
+        engine.dispose()
+    return seen == (True, "REJECTED", 0.0, 0.0), (
+        "a long of 10 sold at market and then closed with close_position in the same handler: "
+        f"(close is reduce-only, its status, filled, net position) = {seen}. The close carries "
+        "reduce_only by default, and the venue refuses a reduce-only order the position no "
+        "longer has room for rather than open the other side"
     )
 
 
@@ -2507,6 +2670,16 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "closing a position costs the same whatever was closed before it",
         _check_close_cost_is_flat,
+    ),
+    (
+        "an order whose cancel was sent is not closed until the cancel lands, and under a "
+        "latency the market can fill it first",
+        _check_a_cancel_in_flight_leaves_the_order_to_fill,
+    ),
+    (
+        "close_position sends a reduce-only order, which the simulated venue refuses once "
+        "the position is already closed",
+        _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position,
     ),
 )
 

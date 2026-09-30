@@ -65,6 +65,10 @@ BINDINGS = {
     "LeveragedMarginModel asks zero margin of an instrument whose margin rates are zero",
     "handle_bar(historical=True) routes to on_historical_data and never to on_bar",
     "a Bar carries low and high, and every market point carries ts_init",
+    "an order whose cancel was sent is not closed until the cancel lands, and under a "
+    "latency the market can fill it first",
+    "close_position sends a reduce-only order, which the simulated venue refuses once "
+    "the position is already closed",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
