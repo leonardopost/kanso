@@ -17,6 +17,8 @@ One line per user-visible change, newest release first. The format is the one
 - **The research path no longer throttles order submission.** The engine's default risk limit of a hundred orders a second denied the hundred-and-first inside one second of data time on the card path and not on the node path; both now run without the limit, and `kanso replay parity` holds through a flicker of more than a hundred orders a second.
 - Two engine facts in `kanso doctor`: a print fills a resting limit by its own size, and a joining order under `queue_position` waits for the size ahead of it.
 - `docs/backlog.md` rows 98 (a taker's fill at tick resolution pays half a spread the engine already crossed) and 99 (a book-only hypothesis states a fixed spread).
+- **`costs.latency_ms`: how long the simulated venue takes to see an order.** Every insert, update and cancel reaches the book that many milliseconds after the sleeve sent it, on both code paths, and the book carries on in between; zero, the default, configures no model. Measured on the honest AMD book lane: a rule that re-posts on every touch move made +10.7 bp a session at 0 ms and nothing at any real delay.
+- **A failed lane puts back only the hypothesis it holds.** A claim recorded under another lane is that lane's to answer for, so a hypothesis re-pinned and claimed elsewhere while the first lane's card ran is no longer queued a second time.
 - The `kanso-data` skill names the `book` type and its columns; the `hypothesis.yaml` template names `fixed_params`, `sell_fee_bps` and `sell_fee_per_share`.
 
 ## v0.12.1 — 2026-09-28
