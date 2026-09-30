@@ -65,8 +65,9 @@ AMBIENT: Final[tuple[str, str, str]] = ("OKX_API_KEY", "OKX_API_SECRET", "OKX_AP
 MARKER: Final = "kanso-engine-fact-probe"
 """What the probe's child holds in those variables: a string that is nobody's key."""
 
-PROBE_ENV: Final = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
-"""The only ambient variables the probe's child inherits; none of them is a credential."""
+PROBE_ENV: Final = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH")
+"""The only ambient variables the probe's child inherits; none of them is a credential.
+`PYTHONPATH` passes through so a host that reaches the engine only through it still can."""
 
 PUBLIC_STREAM: Final = "wss://ws.okx.com:8443/ws/v5/public"
 """Where a credentialed stream handed no url connects: the global host's public stream."""
@@ -133,9 +134,14 @@ def _check_hosts() -> tuple[bool, str]:
 
 
 def _probe() -> tuple[list[Any] | None, str]:
-    """The child's four answers, or `None` and why it failed."""
+    """The child's four answers, or `None` and why it failed.
+
+    The child runs with `-P`, so the directory `kanso doctor` was started from is not put on
+    its import path: a `json.py` or a `nautilus_trader/` lying in a workspace is never
+    imported and run by the probe.
+    """
     done = subprocess.run(
-        [sys.executable, "-c", _PROBE],
+        [sys.executable, "-P", "-c", _PROBE],
         env=probe_env(),
         capture_output=True,
         text=True,

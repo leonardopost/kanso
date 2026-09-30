@@ -270,6 +270,19 @@ def test_the_ambient_probe_runs_in_a_child_and_leaves_this_process_untouched(
     assert all(env[name] == facts.MARKER for name in facts.AMBIENT)
 
 
+def test_a_module_lying_in_the_working_directory_is_never_run_by_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`kanso doctor` runs from a workspace; a `json.py` sitting there must not be imported by
+    the probe's child, which would otherwise run whatever that file holds."""
+    (tmp_path / "json.py").write_text("raise SystemExit('the working directory was imported')\n")
+    monkeypatch.chdir(tmp_path)
+
+    holds, evidence = dict(facts.CLAIMS)[facts.CLAIMS[2][0]]()
+
+    assert holds, evidence
+
+
 def test_a_probe_that_fails_is_a_claim_that_does_not_hold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(facts, "_PROBE", "raise SystemExit('engine gone')")
 
