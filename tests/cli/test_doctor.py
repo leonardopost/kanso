@@ -8,6 +8,8 @@ import json
 import shutil
 import socket
 import sqlite3
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from typer.testing import CliRunner
 
 from kanso import env
 from kanso.cli import doctor as doctor_module
+from kanso.data.instruments import build, conventions_for, write_store
 from kanso.data.snapshot import InstrumentDrift, newest
 from kanso.errors import Exit, PreconditionError
 from kanso.ext import KINDS, shipped
@@ -1158,6 +1161,62 @@ def test_instrument_drift_is_the_comparison_a_run_is_pinned_by(
     assert _remedy(moved, "instruments") == (
         "run `kanso data snapshot` to pin the definitions the store holds now"
     )
+
+
+def test_a_stored_definition_carrying_a_fee_rate_fails_by_name(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """A store written before `build` refused fee rates holds definitions the simulated
+    venue charges on every fill, on top of the commission the runner deducts."""
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol
+    from nautilus_trader.model.instruments import Equity
+    from nautilus_trader.model.objects import Currency, Price, Quantity
+
+    charged = Equity(
+        instrument_id=InstrumentId.from_str("AAPL.XNAS"),
+        raw_symbol=Symbol("AAPL"),
+        currency=Currency.from_str("USD"),
+        price_precision=2,
+        price_increment=Price.from_str("0.01"),
+        lot_size=Quantity.from_int(1),
+        taker_fee=Decimal("0.0005"),
+        ts_event=1_717_372_800_000_000_000,
+        ts_init=1_717_372_800_000_000_000,
+    )
+    write_store(find(workspace), [charged])
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert status(result, "instruments") == "fail"
+    assert str(checks(result)["instruments"]["detail"]).endswith(
+        "; 1 stored definition(s) carry a fee rate"
+    )
+    assert items(result, "instruments") == [
+        "AAPL.XNAS as of 2024-06-03: the store holds it with taker_fee 0.0005, which the "
+        "simulated venue charges on every fill on top of the venue model's commission"
+    ]
+    assert _remedy(result, "instruments") == (
+        "remove the rate from instruments.yaml, then run "
+        "`kanso data instruments resolve AAPL.XNAS --as-of 2024-06-03 --refresh`"
+    )
+
+
+def test_a_stored_definition_at_zero_rates_passes(runner: CliRunner, workspace: Path) -> None:
+    from kanso.schemas import InstrumentEntry
+
+    entry = InstrumentEntry.model_validate(
+        {
+            "nautilus_id": "AAPL.XNAS",
+            "asset_class": "EQUITY",
+            "manual": True,
+            "corporate_actions": "none",
+            "override": {"currency": "USD"},
+        }
+    )
+    write_store(find(workspace), [build(entry, conventions_for(entry, date(2024, 6, 3)))])
+
+    assert status(at(runner, workspace, "doctor", "--json"), "instruments") == "ok"
 
 
 def test_instruments_makes_no_catalog_where_there_is_none(

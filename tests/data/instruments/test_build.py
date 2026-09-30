@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from kanso.data.instruments import (
     build,
@@ -19,7 +21,7 @@ from kanso.errors import Exit, ValidationError
 from kanso.schemas import InstrumentEntry
 from kanso.workspace import Workspace
 
-from .conftest import AS_OF, CLASSES, EQUITY, FUTURE, INDEX, OPTION
+from .conftest import AS_OF, CLASSES, EQUITY, FUTURE, INDEX, OPTION, PERPETUAL
 
 
 def built(spec: dict[str, Any], as_of: date = AS_OF) -> Any:
@@ -186,3 +188,143 @@ def test_a_field_that_is_not_a_number_is_refused() -> None:
 def test_writing_nothing_writes_nothing(ws: Workspace) -> None:
     write_store(ws, [])
     assert read_store(ws) == {}
+
+
+# --- the perpetual ------------------------------------------------------------
+
+WORKSPACE_PAGE = Path(__file__).resolve().parents[3] / "docs" / "workspace.md"
+
+
+def documented_perpetual() -> dict[str, Any]:
+    """The manual perpetual entry `docs/workspace.md` shows, read off the page itself."""
+    text = WORKSPACE_PAGE.read_text(encoding="utf-8")
+    section = text[text.index("\n### A perpetual\n") :]
+    block = section[section.index("```yaml\n") + len("```yaml\n") :]
+    document: dict[str, Any] = yaml.safe_load(block[: block.index("```")])
+    [entry] = document.values()
+    return dict(entry)
+
+
+def perpetual(**override: Any) -> dict[str, Any]:
+    """The perpetual entry with these override fields replaced; `None` removes one."""
+    merged = {**PERPETUAL["override"], **override}
+    return {**PERPETUAL, "override": {k: v for k, v in merged.items() if v is not None}}
+
+
+def test_the_documented_perpetual_builds_a_linear_contract_of_a_hundredth_of_a_coin() -> None:
+    assert documented_perpetual() == PERPETUAL
+
+    contract = built(documented_perpetual())
+
+    assert type(contract).__name__ == "CryptoPerpetual"
+    assert str(contract.multiplier) == "0.01"
+    assert (contract.maker_fee, contract.taker_fee) == (Decimal(0), Decimal(0))
+    assert contract.is_inverse is False
+    assert contract.settlement_currency.code == "USDT"
+    assert (contract.price_precision, contract.size_precision) == (1, 0)
+
+
+def test_a_perpetual_s_precisions_follow_its_increments() -> None:
+    contract = built(perpetual(price_precision=None, size_precision=None))
+    assert (contract.price_precision, contract.size_precision) == (1, 0)
+
+
+@pytest.mark.parametrize("field", ["multiplier", "lot_size"])
+def test_a_perpetual_s_contract_size_is_never_the_engine_s_default(field: str) -> None:
+    """The engine would build one with a contract value of one; kanso names the field."""
+    with pytest.raises(ValidationError) as caught:
+        built(perpetual(**{field: None}))
+    assert caught.value.message == (
+        f"BTC-USDT-SWAP.SIM: CryptoPerpetual needs {field}, which neither the convention "
+        "table nor `override` supplies"
+    )
+
+
+@pytest.mark.parametrize("flag", [True, "true"])
+def test_an_inverse_perpetual_is_refused_by_name(flag: object) -> None:
+    with pytest.raises(ValidationError) as caught:
+        built(perpetual(is_inverse=flag))
+    assert caught.value.code is Exit.VALIDATION
+    assert caught.value.message == (
+        "BTC-USDT-SWAP.SIM: is_inverse is true in `override` in instruments.yaml; kanso trades "
+        "linear perpetuals: the runner's notional is qty x px x multiplier"
+    )
+
+
+def test_a_stated_linear_flag_builds_and_anything_else_is_refused() -> None:
+    assert built(perpetual(is_inverse="false")).is_inverse is False
+    with pytest.raises(ValidationError, match="'no' is not true or false"):
+        built(perpetual(is_inverse="no"))
+
+
+def test_a_minimum_notional_is_money_in_the_settlement_currency() -> None:
+    contract = built(perpetual(min_notional=5, max_notional="1000000 USDT"))
+    assert str(contract.min_notional) == "5.00000000 USDT"
+    assert str(contract.max_notional) == "1000000.00000000 USDT"
+    with pytest.raises(ValidationError, match="is not in the settlement currency USDT"):
+        built(perpetual(min_notional="5 USDC"))
+
+
+def test_a_swap_is_a_cryptocurrency_instrument() -> None:
+    with pytest.raises(ValidationError) as caught:
+        built({**PERPETUAL, "asset_class": "EQUITY"})
+    assert caught.value.message == (
+        "BTC-USDT-SWAP.SIM: a CryptoPerpetual is a CRYPTOCURRENCY instrument, and this entry "
+        "says EQUITY"
+    )
+    assert (
+        caught.value.remedy == "set asset_class to CRYPTOCURRENCY in this entry of instruments.yaml"
+    )
+
+
+def test_the_classes_an_entry_may_name_include_the_swap() -> None:
+    with pytest.raises(ValidationError) as caught:
+        built({**EQUITY, "asset_class": "COMMODITY"})
+    assert caught.value.remedy is not None
+    assert "`instrument_class: swap`" in caught.value.remedy
+
+
+# --- the fee-rate guard -------------------------------------------------------
+
+FEE_REMEDY = (
+    "the runner charges commission once from the venue model; state it under "
+    "venues.<MIC>.costs or the hypothesis costs and remove the rate from the definition"
+)
+
+
+@pytest.mark.parametrize(
+    ("spec", "field"),
+    [
+        (perpetual(taker_fee="0.0005"), "taker_fee"),
+        ({**EQUITY, "override": {"currency": "USD", "maker_fee": "0.0002"}}, "maker_fee"),
+    ],
+)
+def test_a_fee_rate_in_an_override_is_refused_by_name(spec: dict[str, Any], field: str) -> None:
+    with pytest.raises(ValidationError) as caught:
+        built(spec)
+    assert caught.value.code is Exit.VALIDATION
+    assert f"{field} 0.000" in caught.value.message
+    assert "in `override` in instruments.yaml" in caught.value.message
+    assert caught.value.remedy == FEE_REMEDY
+
+
+def test_a_zero_fee_rate_and_a_margin_rate_are_still_accepted() -> None:
+    contract = built(perpetual(maker_fee="0", taker_fee=0, margin_init="0.5", margin_maint="0.25"))
+    assert contract.margin_init == Decimal("0.5")
+    assert contract.margin_maint == Decimal("0.25")
+    assert built({**EQUITY, "override": {"currency": "USD", "margin_init": "0.5"}}).margin_init == (
+        Decimal("0.5")
+    )
+
+
+def test_a_fee_rate_in_a_resolved_definition_is_refused_by_name() -> None:
+    """A resolved definition reaches `build` as its fields; the rate is refused from there."""
+    entry = InstrumentEntry.model_validate({**EQUITY, "manual": False, "override": {}})
+    resolved = {**conventions_for(entry, AS_OF), "currency": "USD", "maker_fee": "0.0002"}
+    with pytest.raises(ValidationError) as caught:
+        build(entry, resolved)
+    assert caught.value.message == (
+        "AAPL.XNAS: maker_fee 0.0002 in the resolved definition; a kanso definition charges "
+        "no fee of its own"
+    )
+    assert caught.value.remedy == FEE_REMEDY
