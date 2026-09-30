@@ -86,7 +86,9 @@ TIMESTAMPS = st.datetimes(
     min_value=datetime(2000, 1, 1), max_value=datetime(2030, 1, 1), timezones=st.just(UTC)
 )
 VENUE_CODES = st.from_regex(r"\A[A-Z]{3,4}\Z")
-CURRENCIES = st.sampled_from(["USD", "EUR", "GBP", "JPY", "AUD"])
+CURRENCIES = st.one_of(st.from_regex(r"\A[A-Z][A-Z0-9]{1,7}\Z"), st.just("USDT"))
+"""Any code the schema admits — a fiat code, a crypto code such as USDT — not only the
+ones the engine registers, because the schema does not ask the engine."""
 VERSION_STRINGS = st.from_regex(r"\A[0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 
 
@@ -113,7 +115,7 @@ def costs(draw: st.DrawFn) -> Costs:
 @st.composite
 def venue_models(draw: st.DrawFn, currency: str | None = None) -> VenueModel:
     account = draw(st.sampled_from(["margin", "cash"]))
-    origin = st.sampled_from(["default", "broker", "venue_override", "hypothesis"])
+    origin = st.sampled_from(["default", "config", "broker", "venue_override", "hypothesis"])
     return VenueModel(
         venue=draw(VENUE_CODES),
         broker=draw(st.none() | IDENTIFIERS),

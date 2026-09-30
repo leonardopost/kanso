@@ -42,8 +42,12 @@ into the other with `get_oms_type`, `get_account_type`, `get_base_currency`,
 `get_starting_balances` and `get_fill_model`, the last building a `FillModel` from an
 `ImportableFillModelConfig` through `FillModelFactory`; `starting_balances` entries are
 strings parsed by `Money.from_str`, which requires the amount to carry the currency's own
-precision; `fee_model` left unset means the exchange charges nothing beyond an
-instrument's own maker and taker rates, which kanso's resolved instruments leave at zero;
+precision; `Currency.from_str` never refuses a code — an unknown one is minted as a crypto
+currency at precision 8 — so whether a code is registered is asked of `Currency.is_fiat`
+and `Currency.is_crypto` instead, and a registered crypto currency such as USDT funds at
+the precision the engine registered it with; `fee_model` left unset means the exchange
+charges nothing beyond an instrument's own maker and taker rates, which kanso's resolved
+instruments leave at zero;
 `latency_model` is an `ImportableLatencyModelConfig` that `get_latency_model` builds into
 a `LatencyModel`, whose `base_latency_nanos` is added to every command's timestamp before
 the exchange processes it from its in-flight queue, and left unset it means no delay;
@@ -72,6 +76,7 @@ __all__ = [
     "LIMIT_FILL",
     "NETTING",
     "fill_model",
+    "known_currency",
     "latency_model",
     "starting_balance",
     "venue_configs",
@@ -143,8 +148,36 @@ def latency_model(latency_ms: float) -> ImportableLatencyModelConfig | None:
     )
 
 
+def known_currency(code: str) -> None:
+    """Refuse an account currency the engine does not register.
+
+    Engine fact (nautilus_trader 1.231.0): `Currency.from_str("FOOBAR")` raises nothing and
+    hands back a currency it has just minted, `Currency(code='FOOBAR', precision=8,
+    currency_type=CRYPTO)`, so an account funded in a misspelt code would be funded at a
+    precision nobody chose and every figure on its cards would read in a currency that does
+    not exist. `Currency.is_fiat` and `Currency.is_crypto` answer only for a registered code
+    — `USD` is fiat, `USDT` is crypto, `FOOBAR` and `usdt` are neither — so a code is
+    admitted here only when one of them holds.
+    """
+    if Currency.is_fiat(code) or Currency.is_crypto(code):
+        return
+    raise ValidationError(
+        f"currency: {code!r} is not a code the engine registers, as fiat or as crypto",
+        remedy=(
+            "set [research] currency in kanso.toml or venues.<MIC>.currency in "
+            "portfolio.yaml to a code the engine registers"
+        ),
+    )
+
+
 def starting_balance(capital: float, currency: str) -> str:
-    """The run's capital as the amount-and-currency string a venue is funded with."""
+    """The run's capital as the amount-and-currency string a venue is funded with.
+
+    The currency is checked against the engine's register first, because `Currency.from_str`
+    would mint an unknown code rather than raise; what the clause below catches is the
+    engine refusing the amount itself, above `MONEY_MAX` or not a number.
+    """
+    known_currency(currency)
     try:
         return str(Money(capital, Currency.from_str(currency)))
     except (ValueError, OverflowError) as exc:

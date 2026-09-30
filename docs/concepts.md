@@ -975,7 +975,9 @@ pointer to source that might change — it is a closed record of four things.
   backtest, a replay and a live node all load — one class everywhere, so the thing that was
   measured and the thing that trades cannot drift apart.
 - **`pins`**: what it was certified under — the kanso version, the engine version, the
-  criteria version, the plan version, the data snapshot and the resolved venue model.
+  criteria version, the plan version, the data snapshot and the resolved venue model, each
+  field of which records its origin as `default`, `config` (`[research]` in `kanso.toml`),
+  `broker`, `venue_override` (`venues.<MIC>` in `portfolio.yaml`) or `hypothesis`.
 - **`expectation`**: what composition measured by running that implementation over the
   sleeve's certification window — the objective, a ninety-percent interval and the
   ninety-fifth-percentile drawdown. The paper and live gates judge the deployment against

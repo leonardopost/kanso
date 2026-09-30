@@ -1,12 +1,15 @@
 """The venue model: account type, account currency and cost model, and where each came from.
 
-A venue's trading model is inherited, never invented. The broker behind the configured
-execution client declares it for the venues it serves; a per-venue entry in the portfolio
-overrides any field; a hypothesis's own `costs` overrides the cost model for that
-hypothesis alone. Where nothing is declared the shipped defaults apply: a margin account
-whose leverage is the hypothesis's `max_leverage`, USD, zero commission and one basis
-point of slippage, with the spread taken from quotes when quotes are available, and a
-resting limit order filled when the market reaches its price.
+A venue's trading model is inherited, never invented. The workspace's `[research]`
+table states an account type and an account currency for every venue; the broker behind
+the configured execution client declares them, and its costs, for the venues it serves; a
+per-venue entry in the portfolio overrides any field; a hypothesis's own `costs` overrides
+the cost model for that hypothesis alone. Where nothing is declared the shipped defaults
+apply: a margin account whose leverage is the hypothesis's `max_leverage`, USD, zero
+commission and one basis point of slippage, with the spread taken from quotes when quotes
+are available, and a resting limit order filled when the market reaches its price. A
+currency code is any code the engine could register — a fiat code or a crypto code such as
+USDT — and whether it does register it is checked where an account is funded, not here.
 
 A fill that rested on the book may be charged apart. `maker_bps`, when a layer states it, is
 the whole charge on a fill the venue reports as a maker's — no slippage, since a resting
@@ -51,12 +54,12 @@ from kanso.schemas.base import KansoModel, NonEmpty
 Account = Literal["margin", "cash"]
 Spread = Literal["quotes", "fixed_bps"]
 LimitFill = Literal["touch", "through"]
-Origin = Literal["default", "broker", "venue_override", "hypothesis"]
+Origin = Literal["default", "config", "broker", "venue_override", "hypothesis"]
 Funding = Literal["simulated", "broker_paper", "real"]
 Clock = Literal["replay", "wall"]
 
 VenueCode = Annotated[str, StringConstraints(pattern=r"^[A-Z0-9]{1,16}$")]
-Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9]{1,7}$")]
 
 DEFAULT_ACCOUNT: Account = "margin"
 DEFAULT_CURRENCY = "USD"
@@ -198,6 +201,7 @@ def _merge_costs(
 def resolve_venue_model(
     venue: str,
     *,
+    config: VenueDeclaration | None = None,
     broker: str | None = None,
     declaration: VenueDeclaration | None = None,
     override: VenueOverride | None = None,
@@ -205,12 +209,19 @@ def resolve_venue_model(
     max_leverage: float | None = None,
     quotes_available: bool = True,
 ) -> VenueModel:
-    """Inherit a venue's model from the broker, the operator's override and the hypothesis."""
+    """Inherit a venue's model from the workspace configuration, the broker, the operator's
+    override and the hypothesis, in that order of precedence.
+
+    `config` is what `[research]` states beyond the shipped defaults; it carries an account
+    type and a currency and never a cost, so a broker's declared currency still wins over it
+    and the operator's `venues.<MIC>` entry is the place to override the broker.
+    """
     account: Account = DEFAULT_ACCOUNT
     account_origin: Origin = "default"
     currency = DEFAULT_CURRENCY
     currency_origin: Origin = "default"
     layers: tuple[tuple[Origin, VenueDeclaration | None], ...] = (
+        ("config", config),
         ("broker", declaration),
         ("venue_override", override),
     )
