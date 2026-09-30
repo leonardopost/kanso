@@ -431,12 +431,12 @@ def test_the_two_paths_size_an_exit_at_market_beside_orders_not_yet_live_alike(
     counts until the modify lands; the second do not count, since they can fill only after
     the entry. So the two paths agree order for order and fill for fill, and neither holds
     the position to the end of the window or goes past flat — at 2500 ms too, longer than
-    the gap between points, where the cancel goes out on the next point with the modify
-    still unanswered and lands behind it all the same. Measured on the round before
-    this test: with the modified order cancelled and counted spent, at 0 ms the backtest
-    went short 100 and the node did not, and at 20 ms the node sent an owed exit the
-    backtest never did; with the bracket's exits counted, both paths sold 80 of 100 and held
-    the rest to the end of the window."""
+    the gap between points, where the cancel goes out as the venue takes the order, on the
+    next point with the modify still unanswered, and lands behind it all the same. Measured
+    on the round before this test: with the modified order cancelled and counted spent, at
+    0 ms the backtest went short 100 and the node did not, and at 20 ms the node sent an
+    owed exit the backtest never did; with the bracket's exits counted, both paths sold 80
+    of 100 and held the rest to the end of the window."""
     from tests.nautilus.backtest import test_exit_flat
 
     if source.startswith("bracket:"):
@@ -468,12 +468,12 @@ def test_the_two_paths_pay_an_exit_behind_a_modify_sent_on_every_point_alike(
     latency_ms: float,
 ) -> None:
     """An exit at market beside a resting exit the sleeve modifies on every quote, with no
-    print between quotes to pay the owed exit on. The cancel it holds back is sent at 0 ms as
-    the venue answers the modify, and under a latency on the next quote, answered or not (at
-    2500 ms it is not, the quotes being a second apart); the modify was stamped first, so the
-    cancel lands behind it on both paths, where a cancel sent at once would overtake
-    the modify on a node, and the owed exit is paid at the same quote on both. So the two
-    agree order for order and fill for fill and both are flat.
+    print between quotes to pay the owed exit on. The cancel it holds back is sent at 0 ms
+    as the venue answers the modify, and under a latency on the next quote, answered or not
+    (at 20 ms and at 2500 ms alike it is not, the quotes being a second apart); the modify
+    was stamped first, so the cancel lands behind it on both paths, where a cancel sent at
+    once would overtake the modify on a node, and the owed exit is paid at the same quote on
+    both. So the two agree order for order and fill for fill and both are flat.
     Measured on the round before this test: neither path cancelled the order, the market exit
     was owed at every quote and never paid, and both held the position to the end."""
     from tests.nautilus.backtest import test_exit_flat
@@ -500,6 +500,42 @@ def test_the_two_paths_pay_an_exit_behind_a_modify_sent_on_every_point_alike(
         ("BUY", 100.0),
         ("SELL", 100.0),
     ]
+
+
+@pytest.mark.parametrize("latency_ms", [20.0, 2500.0])
+def test_a_cancel_held_behind_a_modify_every_point_goes_out_before_the_latest_is_answered(
+    latency_ms: float,
+) -> None:
+    """Under a latency, the cancel an exit at market holds behind a modify goes out on the
+    next quote before either path has answered the latest modify, shorter than the second
+    between quotes or not; and for a sleeve that modifies on every quote the order then reads
+    `ACCEPTED`, not `PENDING_UPDATE`, the answer to an earlier modify having landed since.
+    Both paths stay flat and agree. Measured on the round before this test: a docstring said
+    the order read `PENDING_UPDATE` there at 2500 ms, and on both paths it read `ACCEPTED`."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    source = test_exit_flat.MODIFIED_EVERY_QUOTE + test_exit_flat.SEEN_AT_SEND
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        test_exit_flat.quotes_only(test_exit_flat.points(sessions)),
+    )
+
+    assert not engine.crashed, engine.traceback_tail
+    assert not node.crashed, node.traceback_tail
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
 
 
 @pytest.mark.parametrize("last", ["session", "window"])

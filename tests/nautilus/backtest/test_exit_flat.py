@@ -869,15 +869,16 @@ def test_an_exit_at_market_leaves_an_order_whose_modify_is_in_flight_to_it(
     request_for, latency_ms: float
 ) -> None:
     """An exit the venue holds open, modified to a marketable price in the handler that then
-    exits at market, is pending update until the venue answers the modify; the exit at market
-    must not cancel it, which on a node would overtake the modify, nor count it spent. It
-    counts, the market exit is cut to nothing and owed, the modify fills it, and the sleeve is
-    flat. At 2500 ms, longer than the second between points, the modify is still unanswered
-    on the next point, where the cancel is sent anyway; the modify was stamped first, so it
-    still lands first. Measured on the round before this test: at 0 ms the exit at market
-    cancelled the order it read as held open and counted it spent, went whole, and the modify
-    filled as well, leaving the backtest short 100; and on origin/main at 2500 ms the run
-    went short 100."""
+    exits at market, is pending update until the venue answers the modify; the exit at
+    market must not cancel it, which on a node would overtake the modify, nor count it
+    spent. It counts, the market exit is cut to nothing and owed, the modify fills it, and
+    the sleeve is flat. At 2500 ms, longer than the second between points, the venue has not
+    taken the exit yet when it is modified; the cancel goes out as it takes it, on the next
+    point, with the modify still unanswered, and the modify, stamped first, still lands
+    first. Measured on the round before this test: at 0 ms the exit at market cancelled the
+    order it read as held open and counted it spent, went whole, and the modify filled as
+    well, leaving the backtest short 100; and on origin/main at 2500 ms the run went short
+    100."""
     run = _run(request_for, latency_ms, MODIFIED_OPEN)
     assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
 
@@ -886,18 +887,39 @@ def test_an_exit_at_market_leaves_an_order_whose_modify_is_in_flight_to_it(
 def test_an_exit_at_market_is_paid_behind_a_modify_the_sleeve_sends_on_every_point(
     request_for, latency_ms: float
 ) -> None:
-    """A sleeve that modifies its resting exit on every quote leaves it pending update at the
-    end of every handler, and the owed exit is asked for again only then. The exit at market
-    holds its cancel back — at 0 ms until the venue answers the modify, under a latency until
-    the next quote, before the handler, answered or not (at 2500 ms it is not) — so it lands
-    behind the modify; the order is cancelled, the owed exit is paid, and the sleeve is flat
-    within the session.
+    """A sleeve that modifies its resting exit on every quote leaves it pending update at
+    the end of every handler, and the owed exit is asked for again only then. The exit at
+    market holds its cancel back — at 0 ms until the venue answers the modify, under a
+    latency until the next quote, before the handler, answered or not (at 20 ms and 2500 ms
+    alike it is not) — so it lands behind the modify; the order is cancelled, the owed exit
+    is paid, and the sleeve is flat within the session.
     Measured on the round before this test: the exit at market neither cancelled the order
     nor counted it spent, so it was cut to nothing and owed at every quote, never paid, and
     the position was held to the end of the window."""
     run = _run(request_for, latency_ms, MODIFIED_EVERY_QUOTE, quotes=True)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
     flat_within_the_session(run)
+
+
+SEEN_AT_SEND = b"""
+    def modify_order(self, order, quantity=None, price=None, *args, **kwargs):
+        self.asked = price
+        super().modify_order(order, quantity, price, *args, **kwargs)
+
+    def _send_behind_modify(self):
+        for held in self._behind_modify.values():
+            current = self._current(held)
+            seen = (current.status_string(), current.price == self.asked)
+            assert seen == ("ACCEPTED", False), seen
+            self.checked = True
+        super()._send_behind_modify()
+
+    def on_stop(self):
+        assert getattr(self, "checked", False), "no cancel was held behind a modify"
+"""
+"""What MODIFIED_EVERY_QUOTE adds to fail the run unless, whenever a cancel held behind its
+modify is sent, the order reads `ACCEPTED` with the latest modify still unanswered, and unless
+one was sent at all."""
 
 
 @pytest.mark.parametrize("last", ["session", "window"])

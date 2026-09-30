@@ -1727,17 +1727,21 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Under a stated latency it is sent here whether or not the venue has answered the
         modify by then, not when it answers. When the latency is shorter than the gap
-        between points the backtest engine answers the modify in the drain after one point's
-        handlers and the node in the drain before the next point's
+        between points the backtest engine answers the modify in the drain after the next
+        point's handlers and the node in the drain before the point after that
         (`SimulatedVenue.on_data`), so a cancel sent on the answer would be stamped a point
-        later on the node; when it is not shorter, neither has answered it yet and the
-        order is still `PENDING_UPDATE` here. Either way the cancel is stamped after the
-        modify and delayed by the same latency, so it lands behind it on both paths. With
-        no latency stated both answer the modify in the drain after the point's handlers,
-        and `_answered` sends the cancel then; one it has not sent by the next point is sent
-        here. Measured on both paths by the exit and replay tests, a sleeve that modifies
-        its exit on every quote and a modify followed by an exit at market under a latency
-        longer than the gap between points among them.
+        later on the node; when it is not shorter, later still. Either way neither path has
+        answered the latest modify when the cancel is sent here. The order reads
+        `PENDING_UPDATE` unless the answer to an earlier modify has landed since and
+        returned it to `ACCEPTED`, as it has for a sleeve that modifies on every point. The
+        cancel is stamped after every modify and delayed by the same latency, so it lands
+        behind them on both paths. With no latency stated both answer the modify in the
+        drain after the point's handlers, and `_answered` sends the cancel then; one it has
+        not sent by the next point is sent here. Measured on both paths by the exit and
+        replay tests, among them a sleeve that modifies its exit on every quote, at 20 and
+        at 2500 ms with the status seen here, and a modify followed by an exit at market at
+        20 ms. (At 2500 ms that sleeve modifies an order the venue has not taken yet, whose
+        cancel goes out as it is taken, not from here.)
         """
         held, self._behind_modify = self._behind_modify, {}
         for order in held.values():
