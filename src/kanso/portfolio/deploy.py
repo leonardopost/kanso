@@ -16,6 +16,12 @@ happen, and each refusal exists because the alternative is a book nobody intende
 * **A wall-clock execution client cannot be fed a replay, or run at any speed but one.** A
   broker matches against current prices; feeding it history would fill orders at prices
   unrelated to the data that triggered them.
+* **Versions sharing a venue must agree about it.** One venue is one account and one
+  exchange, built as the card's venue was: two versions on it certified under different
+  account types, currencies, `limit_fill` rules, latencies or books are refused before the
+  stage is written, so a refusal leaves the file, the strategy files and the rows as they
+  were — rather than when the node is built, after the stage already records the pair, or
+  never, on a stage with no new data to run.
 * **Real capital needs a named approval on record, per version.** `deploy --stage live`
   refuses a version that has none, so editing `portfolio.yaml` by hand can never move real
   money — the file says what is deployed, and the approval says what was allowed.
@@ -145,6 +151,7 @@ def deploy(ws: Workspace, store: StateStore, stage: str) -> Deployment:
     _check_pins(chosen)
     chosen = tuple(replace(one, target=_target(ws, store, one)) for one in chosen)
     _check_data(ws, chosen)
+    node.agree((one.subject, one.resolved.hyp, one.resolved.venue_model) for one in chosen)
     if spec.capital == "real":
         _check_approvals(store, stage, chosen)
     check_runnable(stage, spec)

@@ -11,7 +11,7 @@ from kanso.schemas import StrategyFile
 from kanso.state import StateStore
 from kanso.strategy import files as strategy_files
 from kanso.workspace import Workspace
-from tests.portfolio.conftest import reconfigure, second_version
+from tests.portfolio.conftest import deployable, reconfigure, second_version
 
 
 def make_promotable(ws: Workspace, store: StateStore, strategy_id: str) -> int:
@@ -147,6 +147,33 @@ def test_a_live_stage_with_no_capital_blocks_the_promotion(
     assert approvals(store, promotable, 1) == [], "nothing is approved that cannot be funded"
     kinds = store.connection.execute("SELECT kind FROM escalations").fetchall()
     assert [row[0] for row in kinds] == ["deploy_blocked"]
+
+
+def test_a_version_the_live_venue_cannot_hold_is_refused_before_it_is_approved(
+    ws: Workspace, store: StateStore, promotable: str
+) -> None:
+    """A version certified under another round trip than the one live already trades on
+    its venue is refused (exit 2) before its approval is recorded or anything moves: the
+    live stage's deployment would refuse it, after the move, with the approval on record."""
+    from tests.replay.conftest import DOCUMENT, document
+
+    promote(ws, store, promotable, operator="Leonardo")
+    deployable(
+        ws, store, "other", doc=document(id="other", costs={**DOCUMENT["costs"], "latency_ms": 50})
+    )
+    deploy(ws, store, "paper")
+    make_promotable(ws, store, "other")
+    portfolio = files.read(ws)
+
+    with pytest.raises(KansoError) as raised:
+        promote(ws, store, "other", operator="Leonardo")
+
+    assert raised.value.code == Exit.PRECONDITION
+    assert f"{promotable}@1" in raised.value.message and "other@1" in raised.value.message
+    assert "one venue is one round trip" in raised.value.message
+    assert approvals(store, "other", 1) == []
+    assert strategies.require(ws, "other").latest().state == "promotable"
+    assert files.read(ws) == portfolio
 
 
 def test_a_halted_live_stage_refuses_a_promotion_into_it(

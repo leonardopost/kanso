@@ -10,12 +10,16 @@ current prices.
 ships a client that wires a `SimulatedExchange` and a `BacktestExecClient` together for a
 live node, but it fixes the matching, the fee model and the fill model behind a configuration
 that exposes none of them. So this module builds the same pair itself, with the arguments
-`BacktestEngine.add_venue` builds the research path's exchange with — the same margin, fill
-and fee models, the same book type, the same leverage and balances, read out of the one
-`BacktestVenueConfig` both paths are configured from. Two things differ, both because this is
-a node and not a backtest: the exchange keeps its own `TestClock`, since a node's kernel
-clock is wall time and a fill has to be stamped from the data; and its command queue is off,
-for the reason recorded below.
+`BacktestEngine.add_venue` builds the research path's exchange with — the same margin, fill,
+fee and latency models, the same book type and queue position, the same bar and trade
+execution, the same leverage and balances, read out of the one `BacktestVenueConfig` both
+paths are configured from with the converters the engine's own node uses (`get_fill_model`,
+`get_latency_model`, `get_book_type` and the rest). A stage's configuration is built by the
+function a card's is (`kanso.nautilus.venue.venue_config`), so a version certified under a
+latency or on a level-two book trades the stage under the same. Two things differ, both
+because this is a node and not a backtest: the exchange keeps its own `TestClock`, since a
+node's kernel clock is wall time and a fill has to be stamped from the data; and its command
+queue is off unless the venue model states a latency, for the reason recorded below.
 
 **The client's own subscription does not reach a bar, so kanso makes that binding.** The
 client subscribes to `data.*.{venue}.*` when it connects. A quote is published to
@@ -328,7 +332,8 @@ class SimulatedVenue(LiveExecutionClient):
     The exchange and its execution client are built from the same `BacktestVenueConfig` the
     backtest path builds its venue from, through the engine's own converters, so nothing that
     touches a fill can differ between the two: account type, currency, leverage, starting
-    balance, bar execution, and the margin, fill and fee models. The leverage travels through
+    balance, bar and trade execution, the book type and its queue position, and the margin,
+    fill, fee and latency models. The leverage travels through
     its own string, so a decimal written as `2.5` stays that number rather than the binary
     float nearest it.
     """

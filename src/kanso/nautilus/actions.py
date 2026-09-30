@@ -48,8 +48,9 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   cache and the exchange itself. `SimulationModule.process`, `log_diagnostics` and `reset`
   raise `NotImplementedError` unless overridden; `pre_process` does not.
 * `SimulatedExchange.send` processes a command in the same call when `use_message_queue` is
-  off, which is what the node's venue sets, and queues it when it is on, which is the
-  research venue's default; `process(ts_now)` drains that queue. Both are called here, so
+  off, which is what a stage or replay venue sets unless its venue model states a latency,
+  and queues it when it is on, which is the research venue's default and the stage's under a
+  stated latency; `process(ts_now)` drains that queue. Both are called here, so
   a cancel raised from `pre_process` is applied on either path before the point that
   raised it reaches the matching engine.
 * `SimulatedExchange.instruments` is the venue's own instrument map, populated by
@@ -58,8 +59,9 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   returns, so a sleeve subscribed to `TOPIC` has taken in a split — restated what it holds
   and booked the payment in lieu — before the point that applied the split reaches it.
 * `SimulatedExchange.get_matching_engine(instrument_id)` returns the instrument's
-  `OrderMatchingEngine` on both venues. Its `get_book()` is the L1 book both of kanso's
-  venues declare, and `process_quote_tick` sets that book's top level from a quote, skipping
+  `OrderMatchingEngine` on both venues. Its `get_book()` is the book the venue declares — L1
+  unless the hypothesis requires `book`, then L2 by price level — and on an L1 book
+  `process_quote_tick` sets the top level from a quote, skipping
   one older than its last update. A market order is matched against that top level.
 """
 
