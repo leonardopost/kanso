@@ -297,6 +297,50 @@ def test_the_two_paths_cancel_an_exit_still_in_flight_alike(cancel: str, latency
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize(
+    "cancels",
+    [
+        "self.cancel_order(order); self.cancel_order(order)",
+        "self.cancel_order(order); self.cancel_all_orders(instrument_id)",
+        "self.cancel_orders([order]); self.cancel_order(order)",
+    ],
+)
+def test_the_two_paths_cancel_an_exit_still_in_flight_twice_alike(
+    cancels: str, latency_ms: float
+) -> None:
+    """A marketable exit cancelled twice in the handler that sent it, while the venue does
+    not yet hold it, beside an exit at market. The backtest's first cancel leaves the order
+    pending cancel, which the engine reports as open; the second must not read that as an
+    order the venue held open, or the backtest drops it as spent, sends the market exit at
+    full size and goes short where the node, whose order is still unsent, does not. Both
+    paths cut the market exit, agree order for order and fill for fill, and are flat before
+    the sleeve sells short on its own."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CANCELLED_IN_FLIGHT,
+        chasing_costs,
+        never_short,
+        points,
+    )
+
+    source = CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancels.encode())
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert never_short(engine.run.fills[:2]) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 @pytest.mark.parametrize("price", ["round(float(tick.ask_price) + 0.03, 2)", "99.0"])
 @pytest.mark.parametrize(
     "cancel",

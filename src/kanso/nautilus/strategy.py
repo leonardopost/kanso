@@ -1810,12 +1810,21 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         one the venue held open is spent the moment its cancel is sent, since the cancel
         lands before anything further is matched; one still on its way to the venue is not,
         because the venue takes it before the cancel, and a marketable one fills there.
+
+        In nautilus_trader 1.231.0 an order's first cancel moves it to `PENDING_CANCEL`,
+        which `Order.is_open` reports as open even when the venue never took it (from
+        `SUBMITTED` on the backtest engine), so a second cancel reads it as held open only
+        if it is not already pending cancel. One the venue held open was flagged by its
+        first cancel, and one whose cancel was rejected returns to the status it had before
+        (`Order.apply` on `OrderCancelRejected`), so the next cancel reads it afresh.
+        Measured on the backtest engine and on the node by the exit and replay tests.
         """
         current = self._current(order)
         if current.is_closed:
             return
         key = current.client_order_id
-        self._cancels[key] = self._cancels.get(key, False) or bool(current.is_open)
+        held = bool(current.is_open and not current.is_pending_cancel)
+        self._cancels[key] = self._cancels.get(key, False) or held
 
     def _working(self, key: str, side: OrderSide, *, clips: bool) -> list[Any]:
         """This sleeve's own orders on one side of a name that can still fill: every one the

@@ -563,6 +563,35 @@ def test_an_exit_cancelled_in_flight_still_counts_until_its_cancel_lands(
     assert never_short(run.fills[:2]) == (100.0, 100.0, 0.0)
 
 
+CANCELLED_TWICE = [
+    "self.cancel_order(order); self.cancel_order(order)",
+    "self.cancel_order(order); self.cancel_all_orders(instrument_id)",
+    "self.cancel_orders([order]); self.cancel_order(order)",
+]
+"""An exit still in flight cancelled twice in the handler that sent it: the first cancel
+leaves it pending cancel, which the engine reports as open although the venue never took
+it."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("cancels", CANCELLED_TWICE)
+def test_an_exit_cancelled_twice_in_flight_still_counts_until_its_cancel_lands(
+    request_for, cancels: str, latency_ms: float
+) -> None:
+    """A second cancel does not make an order the venue has not taken yet into one it held
+    open, so the marketable exit still counts, the market exit beside it is cut and owed,
+    and the sleeve is never short before it asks to be. Measured on the round before this
+    test: at 0 ms the second cancel read the pending-cancel order as held open and spent,
+    the market exit went at full size, both filled and the sleeve was short 100."""
+    run = _run(request_for, latency_ms, CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancels.encode()))
+    assert [(fill.side, fill.qty) for fill in run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+        ("SELL", 100.0),
+    ]
+    assert never_short(run.fills[:2]) == (100.0, 100.0, 0.0)
+
+
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_an_exit_owed_to_a_sleeve_that_holds_only_the_book_is_still_paid(
     request_for, latency_ms: float
