@@ -20,6 +20,7 @@ from kanso.criteria.integrity import (
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
     check,
+    clashes,
     import_allowed,
     owned,
     scan,
@@ -487,6 +488,7 @@ def test_assigning_a_name_the_sleeve_base_owns_names_the_name_the_line_and_the_b
     [
         ("    def _close(self, instrument_id):\n        pass\n", 3, "_close", "'def _close'"),
         ("    _fund = None\n", 3, "_fund", "binding '_fund' on the class"),
+        ("    _refund: int = 0\n", 3, "_refund", "binding '_refund' on the class"),
         ("    def on_start(self):\n        self._last_price = {}\n", 4, "_last_price", None),
         ("    def on_start(self):\n        self._cfg: dict = {}\n", 4, "_cfg", None),
         ("    def on_start(self):\n        self.size = 10\n", 4, "size", None),
@@ -586,6 +588,14 @@ def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> No
     (problem,) = scan(source)
 
     assert "'_close' belongs to KansoStrategy" in problem
+
+
+def test_a_file_that_does_not_parse_has_no_clash_to_name_and_scan_says_why() -> None:
+    source = f"{SLEEVE_HEAD}    def on_start(self:\n        self._close = 3\n"
+
+    assert clashes(source) == []
+    (problem,) = scan(source)
+    assert "does not parse" in problem
 
 
 def test_a_bare_annotation_binds_nothing_and_a_static_helper_has_no_self() -> None:
