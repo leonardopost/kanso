@@ -27,7 +27,7 @@ from kanso.nautilus.strategy import (
     _resolution_of_bar,
 )
 
-from .conftest import DEEP, DEMO, HEDGE, flat, saw_tooth, second_bar
+from .conftest import DEEP, DEMO, HEDGE, bar, flat, saw_tooth, second_bar
 
 
 class Host(KansoStrategy):
@@ -599,6 +599,47 @@ def test_an_exit_rule_does_not_pile_on_an_exit_already_in_flight(backtest) -> No
     assert [i.side for i in run.strategy.intents] == ["BUY", "SELL"]
     (position,) = run.engine.cache.positions()
     assert position.is_closed
+
+
+class TakesProfit(Host):
+    """Buys 100 on its third bar and rests a take-profit for all of it at 12 on its fifth."""
+
+    def on_bar(self, bar_: object) -> None:
+        self.bars += 1
+        if self.bars == 3:
+            self.submit_entry(DEMO, "BUY", qty=100)
+        if self.bars == 5:
+            self.submit_exit(DEMO, qty=100, price=12.0)
+
+
+def test_an_exit_rule_cancels_a_resting_take_profit_rather_than_leave_it_to_go_short(
+    backtest,
+) -> None:
+    """The rule closes on the seventh bar with the take-profit still resting below a market
+    that has not reached it. Left there, it would fill when the market rose to 13 and sell
+    shares the sleeve no longer held; the rule cancels it and closes the whole position,
+    so nothing is sold that was not bought. Measured on 0.13.0: the take-profit filled at 13,
+    the sleeve was short 100, and the rule bought it back with a fourth order."""
+
+    class FromTheSeventh(KansoModifier):
+        construct = EXIT
+        config_cls = Attached
+
+        def evaluate(self, ctx: HookContext) -> Decision:
+            return Decision(exit=ctx.ts_event >= flat(DEMO)[6].ts_event)
+
+    rising = [*flat(DEMO, n=10), *(bar(DEMO, index, 13.0) for index in range(10, 20))]
+    strategy = TakesProfit(host().kanso_config)
+    run = backtest(strategy, [attached_for(FromTheSeventh, "TakesProfit")], data=rising)
+
+    assert [(i.side, i.order_type, i.qty) for i in run.strategy.intents] == [
+        ("BUY", "MARKET", 100.0),
+        ("SELL", "LIMIT", 100.0),
+        ("SELL", "MARKET", 100.0),
+    ]
+    assert float(run.engine.portfolio.net_position(DEMO)) == 0.0
+    take_profit = run.engine.cache.orders(side=OrderSide.SELL)[0]
+    assert (take_profit.is_canceled, float(take_profit.filled_qty)) == (True, 0.0)
 
 
 # --- a hedge leg is funded like an entry --------------------------------------

@@ -141,6 +141,7 @@ from nautilus_trader.config import BacktestVenueConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.execution.engine import ExecutionEngine
 from nautilus_trader.execution.messages import (
+    BatchCancelOrders,
     CancelAllOrders,
     CancelOrder,
     GenerateFillReports,
@@ -267,7 +268,7 @@ def _restamped(command: Any, ts_init: int) -> Any:
     """The same command stamped `ts_init`, every other field copied: the order objects, every
     id — the correlation id included — and the params are the original's, so the events the
     exchange generates land on the orders the node's cache holds. NautilusTrader 1.231: each
-    of these five classes takes `params` and `correlation_id` beside its own fields."""
+    of these six classes takes `params` and `correlation_id` beside its own fields."""
     if isinstance(command, SubmitOrder):
         return SubmitOrder(
             trader_id=command.trader_id,
@@ -327,6 +328,18 @@ def _restamped(command: Any, ts_init: int) -> Any:
             strategy_id=command.strategy_id,
             instrument_id=command.instrument_id,
             order_side=command.order_side,
+            command_id=command.id,
+            ts_init=ts_init,
+            client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
+        )
+    if isinstance(command, BatchCancelOrders):
+        return BatchCancelOrders(
+            trader_id=command.trader_id,
+            strategy_id=command.strategy_id,
+            instrument_id=command.instrument_id,
+            cancels=command.cancels,
             command_id=command.id,
             ts_init=ts_init,
             client_id=command.client_id,
@@ -499,6 +512,18 @@ class SimulatedVenue(LiveExecutionClient):
     def cancel_all_orders(self, command: Any) -> None:
         """Cancel every resting order of one instrument on the exchange."""
         self._send("cancel_all_orders", command)
+
+    def batch_cancel_orders(self, command: Any) -> None:
+        """Cancel a batch of orders of one instrument on the exchange.
+
+        The live client this venue subclasses would hand the batch to a coroutine that, in
+        nautilus_trader 1.231.0, raises `NotImplementedError` in its own task
+        (`live/execution_client.py`), after the strategy has already marked each order
+        `PENDING_CANCEL`: the orders would go on resting while they read as cancelled. The
+        `BacktestExecClient` this venue wraps takes the batch as it takes a single cancel,
+        which is what the research path's venue is given.
+        """
+        self._send("batch_cancel_orders", command)
 
     def on_data(self, data: Data) -> None:
         """Move the market with this point, then advance the exchange to its instant.
