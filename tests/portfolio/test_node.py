@@ -226,7 +226,7 @@ def test_two_versions_certified_under_different_latencies_are_refused(
     assert f"venues.{VENUE}.costs.latency_ms" in raised.value.message
     assert placement.label in raised.value.message and slow.label in raised.value.message
     assert "one venue is one round trip" in raised.value.message
-    assert "separate stages" in str(raised.value.remedy)
+    assert f"kanso strat retire {placement.label}" in str(raised.value.remedy)
     assert "re-certify" in str(raised.value.remedy)
 
 
@@ -247,7 +247,7 @@ def test_a_book_version_and_a_top_of_book_version_are_refused_one_venue(
     assert f"{deep.label} was certified on a level-two book" in raised.value.message
     assert f"{placement.label} on the top of the book" in raised.value.message
     assert "one venue keeps one book" in raised.value.message
-    assert "separate stages" in str(raised.value.remedy)
+    assert f"kanso strat retire {placement.label}" in str(raised.value.remedy)
 
 
 def test_a_stage_with_no_capital_cannot_fund_a_venue(placement: Placement) -> None:

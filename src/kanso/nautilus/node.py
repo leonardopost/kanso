@@ -67,7 +67,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final
@@ -107,6 +107,7 @@ __all__ = [
     "Realised",
     "StageNode",
     "StageRun",
+    "agree",
     "max_notional_per_order",
     "run",
     "trader_id",
@@ -346,42 +347,57 @@ def venues_for(placements: Sequence[Placement], capital: float) -> list[Backtest
     Each is built by the function a card's venue is built by, from the venue model the
     versions were certified under and the book their hypotheses require, so a version
     trades on the stage exactly the venue it was measured on — the same latency, book type,
-    queue position and fill model, and no fee model, since the runner charges once. Two
-    versions trading one venue trade one account on one exchange, so they must agree about
-    both: an account has a single type and a single currency, an exchange a single fill
-    model, a single round trip and a single book, and a stage whose versions were certified
-    against different ones is refused rather than built from whichever came first. The
-    leverage ceiling is the highest any version on that venue was certified with, which is
-    the only value that lets each of them size as it was measured.
+    queue position and fill model, with the fee model left unset as on a card. The leverage
+    ceiling is the highest any version on that venue was certified with, which is the only
+    value that lets each of them size as it was measured. What the versions must agree
+    about is `agree`'s, which refuses before anything is built.
     """
     if capital <= 0:
         raise ValidationError(f"capital: {capital} is not an amount to fund a stage with")
-    models: dict[str, tuple[str, VenueModel, float, bool]] = {}
-    for placed in placements:
-        for venue in venues_of(placed.hyp.universe):
-            leverage = placed.hyp.risk_limits.max_leverage
-            held = models.get(venue)
-            if held is None:
-                models[venue] = (placed.label, placed.venue_model, leverage, _book(placed))
-                continue
-            _agree(venue, held, placed)
-            models[venue] = (held[0], held[1], max(held[2], leverage), held[3])
+    agreed = agree((placed.label, placed.hyp, placed.venue_model) for placed in placements)
     return [
         venue_config(venue, model, capital, leverage, book=book)
-        for venue, (_, model, leverage, book) in sorted(models.items())
+        for venue, (model, leverage, book) in sorted(agreed.items())
     ]
 
 
-def _book(placed: Placement) -> bool:
-    """Whether this version was certified on a level-two book with queue position."""
-    return BOOK in placed.hyp.data_requirements
+def agree(
+    versions: Iterable[tuple[str, Hypothesis, VenueModel]],
+) -> dict[str, tuple[VenueModel, float, bool]]:
+    """The venue model, leverage ceiling and book each venue these versions trade is built
+    from, refusing two versions that would share a venue two different ways.
+
+    Each version is its label, its pinned hypothesis and the venue model it was certified
+    under. Two versions trading one venue trade one account on one exchange, so they must
+    agree about both: an account has a single type and a single currency, an exchange a
+    single fill model, a single round trip and a single book, and a stage whose versions were
+    certified against different ones is refused rather than built from whichever came
+    first. Nothing is built here, so `deploy` asks it before it writes a stage.
+    """
+    held: dict[str, tuple[str, VenueModel, float, bool]] = {}
+    for label, hyp, model in versions:
+        book = BOOK in hyp.data_requirements
+        leverage = hyp.risk_limits.max_leverage
+        for venue in venues_of(hyp.universe):
+            first = held.get(venue)
+            if first is None:
+                held[venue] = (label, model, leverage, book)
+                continue
+            _agree(venue, first, (label, model, leverage, book))
+            held[venue] = (first[0], first[1], max(first[2], leverage), first[3])
+    return {venue: (model, leverage, book) for venue, (_, model, leverage, book) in held.items()}
 
 
-def _agree(venue: str, held: tuple[str, VenueModel, float, bool], placed: Placement) -> None:
+def _agree(
+    venue: str,
+    held: tuple[str, VenueModel, float, bool],
+    placed: tuple[str, VenueModel, float, bool],
+) -> None:
     """Refuse two versions that would fund one venue's account, fill its orders, reach its
     book or keep that book two different ways."""
     first, model, _, book = held
-    mine = placed.venue_model
+    label, mine, _, mine_book = placed
+    retire = f"`kanso strat retire {label}` or `kanso strat retire {first}`"
     for field, theirs, ours in (
         ("account", model.account, mine.account),
         ("currency", model.currency, mine.currency),
@@ -389,13 +405,13 @@ def _agree(venue: str, held: tuple[str, VenueModel, float, bool], placed: Placem
         if theirs != ours:
             raise PreconditionError(
                 f"venues.{venue}.{field}: {first} was certified against {theirs!r} and "
-                f"{placed.label} against {ours!r}; one venue is one account",
+                f"{label} against {ours!r}; one venue is one account",
                 remedy=f"set venues.{venue}.{field} in portfolio.yaml and re-certify",
             )
     if model.costs.limit_fill != mine.costs.limit_fill:
         raise PreconditionError(
             f"venues.{venue}.costs.limit_fill: {first} was certified against "
-            f"{model.costs.limit_fill!r} and {placed.label} against {mine.costs.limit_fill!r}; "
+            f"{model.costs.limit_fill!r} and {label} against {mine.costs.limit_fill!r}; "
             "one venue is one exchange, and it fills a touched limit one way",
             remedy=f"state one limit_fill for both — in each hypothesis's costs, or under "
             f"venues.{venue}.costs in portfolio.yaml — and re-certify",
@@ -403,20 +419,19 @@ def _agree(venue: str, held: tuple[str, VenueModel, float, bool], placed: Placem
     if model.costs.latency_ms != mine.costs.latency_ms:
         raise PreconditionError(
             f"venues.{venue}.costs.latency_ms: {first} was certified under "
-            f"{model.costs.latency_ms!r} and {placed.label} under {mine.costs.latency_ms!r}; "
+            f"{model.costs.latency_ms!r} and {label} under {mine.costs.latency_ms!r}; "
             "one venue is one round trip",
-            remedy=f"deploy the two on separate stages, or state one latency_ms for both — "
-            f"in each hypothesis's costs, or under venues.{venue}.costs in portfolio.yaml — "
-            "and re-certify",
+            remedy=f"{retire}, or state one latency_ms for both — in each hypothesis's "
+            f"costs, or under venues.{venue}.costs in portfolio.yaml — and re-certify",
         )
-    if book != _book(placed):
-        with_book, without = (first, placed.label) if book else (placed.label, first)
+    if book != mine_book:
+        with_book, without = (first, label) if book else (label, first)
         raise PreconditionError(
             f"venues.{venue}: {with_book} was certified on a level-two book, which its "
             f"hypothesis requires as {BOOK!r}, and {without} on the top of the book; one "
             "venue keeps one book",
-            remedy="deploy the two on separate stages, or require the same book in both "
-            "hypotheses' data_requirements and re-certify",
+            remedy=f"{retire}, or require the same book in both hypotheses' "
+            "data_requirements and re-certify",
         )
 
 

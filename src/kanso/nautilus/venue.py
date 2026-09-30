@@ -201,8 +201,9 @@ def venue_config(
     cannot disagree about a field: the account type and currency, the starting balance,
     the leverage ceiling — `leverage` on a margin account, one on a cash account, which
     cannot borrow — bar and trade execution, the book type and queue position `book` asks
-    for, the fill model the model's `limit_fill` names, no fee model, and the latency model
-    its `latency_ms` states.
+    for, the fill model the model's `limit_fill` names, the fee model left unset — so the
+    exchange charges the instruments' zero rates — and the latency model its `latency_ms`
+    states.
     """
     return BacktestVenueConfig(
         name=venue,

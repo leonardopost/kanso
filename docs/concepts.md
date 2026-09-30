@@ -1025,11 +1025,13 @@ limits     gross 100% · net 100% · per strategy 40% · daily loss 3%
 same configuration a card built its own from, by the same function, from the venue model
 each version was certified under: the same latency (`costs.latency_ms`), the same book type
 and queue position (a level-two book for a hypothesis that requires `book`, the top of the
-book for every other), the same fill model (`limit_fill`) and no fee model, since the
-runner charges once. A version certified under a 20 ms round trip on a level-two book
-therefore trades the stage under 20 ms on a level-two book, and two versions on one venue
-that were certified under different latencies, or one on a book and one without, are
-refused at `deploy` (exit 2) rather than run on whichever venue came first.
+book for every other) and the same fill model (`limit_fill`), with the fee model left
+unset as on a card, so the exchange charges the instruments' zero rates and the runner
+charges once. A version certified under a 20 ms round trip on a level-two book therefore
+trades the stage under 20 ms on a level-two book, and two versions on one venue that were
+certified under different latencies, or one on a book and one without, are refused at
+`deploy` (exit 2) before the stage is written rather than run on whichever venue came
+first.
 
 The stage file carries only the **id** of an execution client. What matters is the pair of
 declarations behind that id: `capital` is `simulated`, `broker_paper` or `real`, and `clock`
