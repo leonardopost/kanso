@@ -51,11 +51,26 @@ def test_the_loaders_the_manual_provider_and_the_adapter_are_what_is_registered(
     assert result.exit_code == Exit.OK
     document = payload(result)
     by_id = {item["id"]: item for item in document["adapters"]}
-    assert set(by_id) == {"synthetic", "csv_parquet", "manual", "massive"}
+    assert set(by_id) == {"synthetic", "csv_parquet", "manual", "massive", "okx"}
     assert by_id["synthetic"]["kind"] == "data"
     assert by_id["manual"]["kind"] == "reference"
     assert by_id["massive"]["kind"] == "data"
     assert by_id["massive"]["provider"] == "builtin"
+
+
+def test_the_exchange_s_public_reference_is_listed_needing_no_credential(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """A broker's package ships its public reference: a data adapter with no key to set,
+    configured by its table, so a fresh workspace lists it unconfigured and says nothing."""
+    document = payload(at(runner, workspace, "data", "adapters", "--json"))
+
+    okx = next(item for item in document["adapters"] if item["id"] == "okx")
+    assert (okx["kind"], okx["provider"]) == ("data", "builtin")
+    assert (okx["credentials"], okx["credential_origins"]) == ([], {})
+    assert okx["capabilities"] == ["reference"]
+    assert (okx["quota"], okx["loaders"]) == ("5/s", [])
+    assert not [note for note in document["notes"] if "okx" in note]
 
 
 def test_a_loader_that_needs_nothing_resolves_and_an_adapter_that_needs_three_does_not(

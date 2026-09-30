@@ -1,8 +1,9 @@
 """A broker package that exposes a data adapter, made for the length of one test.
 
 A broker's package may carry that party's public-history loaders and reference provider,
-exposed as a module-level `ADAPTER` beside its `BROKER`. No shipped broker does yet, so the
-registry's discovery of one is tested against a package written here: a directory in the
+exposed as a module-level `ADAPTER` beside its `BROKER`. The registry's discovery rules —
+the clashes, a package with no `ADAPTER` — are tested against a package written here rather
+than against a shipped one, whose contents change as the broker does: a directory in the
 test's own temporary tree, appended to `kanso.nautilus.adapters.__path__` and entered in
 `sys.modules`, both undone when the test ends. Nothing under `src/` is written.
 """

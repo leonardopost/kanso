@@ -402,7 +402,7 @@ def test_an_unconfigured_adapter_is_registered_reported_and_green(
     result = at(runner, workspace, "doctor", "--json")
 
     assert status(result, "adapters") == "ok"
-    assert "1 registered · 0 configured" in str(checks(result)["adapters"]["detail"])
+    assert "2 registered · 0 configured" in str(checks(result)["adapters"]["detail"])
     listed = items(result, "adapters")
     assert any(item.startswith("massive: data · 90/s") for item in listed)
     assert any("KANSO_MASSIVE_API_KEY=unset" in item for item in listed)

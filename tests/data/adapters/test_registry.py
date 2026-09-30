@@ -26,22 +26,30 @@ WS = cast("Workspace", object())
 """The stand-in adapter reads nothing from the workspace it is handed."""
 
 
-def test_no_shipped_broker_exposes_a_data_adapter_yet() -> None:
-    """Every adapter the registry reaches today is a packaged data adapter."""
-    assert registry.adapters() == registry.packaged()
+def test_a_shipped_broker_s_data_adapter_is_reached_and_is_not_packaged() -> None:
+    """The packaged data adapters, then what the broker packages expose, and nothing else."""
+    brokered = registry.brokered()
+
+    assert brokered
+    assert not set(brokered) & set(registry.packaged())
+    assert registry.adapters() == {**registry.packaged(), **brokered}
+    for adapter_id, adapter in brokered.items():
+        assert adapter_id in brokers.packaged()
+        assert adapter.kind in {"data", "reference"}
 
 
 def test_a_broker_package_s_adapter_is_reached_and_is_not_packaged(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     shipped = set(brokers.packaged())
+    before = set(registry.adapters())
     module = expose(monkeypatch, tmp_path, "tidebroker", "tide")
 
     found = registry.adapters()
 
     assert found["tide"] is module.ADAPTER
     assert "tide" not in registry.packaged()
-    assert set(found) == set(registry.packaged()) | {"tide"}
+    assert set(found) == before | {"tide"}
     assert set(brokers.packaged()) == shipped
 
 
@@ -86,7 +94,8 @@ def test_a_broker_module_without_an_adapter_is_passed_over(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A broker package with only a `BROKER` contributes nothing to the data registry."""
+    shipped = registry.adapters()
     module = expose(monkeypatch, tmp_path, "tidebroker", "tide")
     monkeypatch.delattr(module, "ADAPTER")
 
-    assert registry.adapters() == registry.packaged()
+    assert registry.adapters() == shipped

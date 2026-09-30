@@ -1,13 +1,14 @@
-"""The OKX broker: what it offers, what it declares, and the rule its clients will follow.
+"""The OKX broker: what it offers, what it declares, and the public reference it reads.
 
-This package is the whole of what kanso knows about this exchange, and in this version it
-is declarations only: two execution clients, one live data client id, six credential names,
-the `[adapters.okx]` table and the venue model of perpetual swaps on `OKX`. It builds no
-client and holds no network code, so nothing here can open a socket; the clients, the
-instrument provider and the public-history loaders arrive in later changes and build on
-what is declared here. Nothing outside this package names the exchange, its venue code, its
-hosts or its instrument grammar, and every command works with all six variables unset —
-the adapter is enabled by its credentials, never by installation.
+This package is the whole of what kanso knows about this exchange: two execution clients,
+one live data client id, six credential names, the `[adapters.okx]` table, the venue model
+of perpetual swaps on `OKX`, and — as `ADAPTER`, beside the `BROKER` — the exchange's public
+reference, which resolves a listed swap into an instrument with no credential at all
+(`reference.py`). It builds no execution client yet; those and the public-history loaders
+arrive in later changes and build on what is declared here. Nothing outside this package
+names the exchange, its venue code, its hosts or its instrument grammar, and every command
+works with all six variables unset — the broker is enabled by its credentials, never by
+installation, and the public reference by its table.
 
 **Two execution clients, because there are two accounts.** `okx_demo` declares
 `capital: broker_paper` and `okx` declares `capital: real`, and both declare `clock: wall`.
@@ -51,12 +52,15 @@ from kanso.nautilus.adapters.okx import facts
 from kanso.nautilus.adapters.okx.config import (
     CLIENTS,
     DEMO,
+    ID,
     LIVE,
     LIVE_CLIENT,
     OkxConfig,
     Region,
     credential_names,
+    table,
 )
+from kanso.nautilus.adapters.okx.reference import ADAPTER
 from kanso.nautilus.adapters.okx.venue import declaration
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -65,6 +69,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.workspace import Workspace
 
 __all__ = [
+    "ADAPTER",
     "BROKER",
     "CREDENTIALS",
     "DATA_CLIENTS",
@@ -75,9 +80,6 @@ __all__ = [
     "OkxConfig",
     "Region",
 ]
-
-ID: Final = "okx"
-"""The id this adapter is registered and configured under: `[adapters.okx]`."""
 
 KIND: Final = "execution"
 """It will execute orders and serve the live feed that goes with them."""
@@ -113,7 +115,7 @@ class OkxBroker:
 
     def config(self, ws: Workspace) -> OkxConfig:
         """The `[adapters.okx]` table, validated by this adapter's own model."""
-        return OkxConfig.model_validate(ws.config.adapters.get(self.id, {}))
+        return table(ws)
 
     def credentials(self, client_id: str) -> tuple[str, ...]:
         """The variable names one client resolves, refusing an id this broker has not got."""

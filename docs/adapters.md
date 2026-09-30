@@ -398,11 +398,12 @@ polling rather than by an order stream, which is recorded there too.
 ## The OKX adapter
 
 A crypto exchange, for perpetual swaps, in two accounts: a demo-trading one and a real one.
-In this version the package is **declarations only** — the two execution clients, the data
-client id, the six credential names, `[adapters.okx]` and the venue model — and holds no
-network code: nothing it ships can open a socket, and `kanso doctor` with its table set
-makes no request of it. The clients, the instrument provider and the public-history loaders
-arrive in later versions on top of what is declared here.
+In this version the package holds the broker's **declarations** — the two execution clients,
+the data client id, the six credential names, `[adapters.okx]` and the venue model — and the
+exchange's **public reference**, a data adapter with id `okx` that resolves a listed swap into
+an instrument with no credential at all. The execution clients and the public-history
+loaders arrive in later versions on top of what is declared here; nothing the package ships
+can place an order.
 
 ### Credentials
 
@@ -475,12 +476,80 @@ credential.
 | key | default | what it does |
 |---|---|---|
 | `region` | *none* | `global`, `eea` or `us`, in any case; the regional host that accepts the account's key |
-| `rate_per_second` | `5` | the flat quota the public-history loaders will share; `1` to `1000` |
+| `rate_per_second` | `5` | the flat quota kanso's own public requests share — the reference's today, the public-history loaders' when they land; `1` to `1000` |
 
-`rate_per_second` governs kanso's own loaders only. The engine's own clients meter
+`rate_per_second` governs kanso's own requests only. The engine's own clients meter
 themselves — its compiled client carries a global rate-limit bucket and one per endpoint —
 and take no quota from their caller. Five a second is a conservative default, not a
 measured ceiling.
+
+### The public reference
+
+`[data] reference = "okx"` resolves the exchange's perpetual swaps, by the exchange's own
+`instId` with the venue appended — `BTC-USDT-SWAP.OKX`, or the bare `BTC-USDT-SWAP` — into
+the engine's `CryptoPerpetual`:
+
+```toml
+[adapters.okx]
+region = "us"
+
+[data]
+reference = "okx"
+```
+
+```
+$ kanso data instruments resolve BTC-USDT-SWAP.OKX ETH-USDT-SWAP.OKX --as-of 2026-10-01
+```
+
+It reads one public endpoint, `GET /api/v5/public/instruments?instType=SWAP&instId=…`, one
+id per request, and **sends no credential**: no key, secret or passphrase, and no header but
+a `User-Agent` — the exchange's edge refuses the Python standard library's default one with
+HTTP 403 `error code: 1010`. So the adapter has no variable to be enabled by; it is enabled
+by its table. A workspace with no `[adapters.okx]` makes no request of the exchange — `kanso
+data adapters --check` and `kanso doctor --check-adapters` pass it by as unconfigured — and
+one naming `okx` as its reference with no `region` is refused before anything is sent. The
+host is the one the engine maps the region to; every regional host answered the listing on
+2026-09-30, and the recordings the suite replays were made on `us.okx.com`. With the table
+present, `--check` makes one request, the unnarrowed swap listing, and reports how many live
+linear swaps it lists.
+
+What the listing's row becomes, measured on `BTC-USDT-SWAP` and `ETH-USDT-SWAP`:
+
+| row field | definition field | `BTC-USDT-SWAP` on 2026-10-01 |
+|---|---|---|
+| `ctValCcy` | `base_currency` | `BTC` |
+| second half of `uly` | `quote_currency` | `USDT` |
+| `settleCcy` | `settlement_currency` | `USDT` |
+| `ctVal` x `ctMult` | `multiplier` — the contract's size in the base currency | `0.01` |
+| `tickSz` | `price_increment`, and `price_precision` from it | `0.1` |
+| `lotSz` | `size_increment` and `lot_size` | `0.01` |
+| `minSz` | `min_quantity` | `0.01` |
+| `listTime` | the day it listed | 2019-11-12 |
+
+A swap's row leaves `baseCcy` and `quoteCcy` empty, which is why the currencies are read from
+`ctValCcy` and `uly`. **The definition's `maker_fee` and `taker_fee` are zero, stated as zero
+by the adapter:** the listing carries no rate, and the runner charges commission once, from
+the venue model below; a rate on the instrument would be charged again by the simulated venue
+on every fill. Each id is refused by name (exit 3), and every refusal is reported together:
+
+- an **inverse** contract (`ctType` `inverse`, such as `BTC-USD-SWAP`, margined and settled
+  in the coin) — kanso trades linear perpetuals;
+- a contract whose `state` is not `live` — suspended, or not yet open;
+- an id asked for as of a day before its `listTime`, which is *listed after* that day;
+- an id the exchange does not list (it answers code `51001` and no rows), or one it rejects
+  as malformed (HTTP 400, code `51000` — its ids are in capitals);
+- an id on another venue than `OKX`.
+
+An answer that is not the API's own — a throttle, a gateway error, the edge's 403 — stops the
+command rather than marking an id, because nothing about the id was established.
+
+The listing is today's. A contract the exchange has delisted is not in it and is unknown, and
+a definition resolved as of an earlier day carries the terms the exchange lists today, dated
+the day it was resolved as of. The entry kanso writes records `instrument_class: swap` and
+`sources: {okx: BTC-USDT-SWAP}`; an `override` you add to it is applied over what the
+exchange lists. A perpetual settles and is booked in USDT, so it validates on a USDT account:
+`[research] currency = "USDT"`, or `[research] broker = "okx"`, whose venue `OKX` declares
+one.
 
 ### The venue it declares
 
@@ -491,8 +560,8 @@ account settled in `USDT`, `commission_bps: 5.0` on a fill that takes liquidity 
 kanso's shipped defaults, so a hypothesis on bars alone still states `spread: fixed_bps`
 and its width; with neither quotes nor a width the venue model is refused rather than
 costed at a spread of zero. The rates are charged once, by the runner, like every venue's:
-the instrument provider will hand kanso instruments whose own maker and taker rates are
-zero, so the simulated venue charges nothing on top.
+the public reference hands kanso instruments whose own maker and taker rates are zero, so the
+simulated venue charges nothing on top.
 
 The rates are the exchange's published Regular (Lv1) perpetual schedule, and were measured
 on the operator's account on 2026-09-30 with `GET /api/v5/account/trade-fee?instType=SWAP`:

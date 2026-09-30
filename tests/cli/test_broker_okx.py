@@ -1,20 +1,24 @@
-"""The OKX broker from the shell: listed, refused at deploy, and read by `doctor`.
+"""The OKX broker from the shell: listed, refused at deploy, read by `doctor`, and resolved.
 
-The package is declarations only, so what an operator can see of it is exactly what these
-drive: `portfolio clients` lists both accounts with the variables each would read and the
-refusal a stage naming one would meet, and `doctor` reads `[adapters.okx]` through the
-package's own model and reports the clients unset. No variable is set and nothing reaches a
-network — there is no network code to reach one.
+`portfolio clients` lists both accounts with the variables each would read and the refusal a
+stage naming one would meet, and `doctor` reads `[adapters.okx]` through the package's own
+model and reports the clients unset. The package's public reference resolves a listed swap
+through `kanso data instruments resolve` and is surveyed by `--check`, answered here from
+the recordings in `tests/nautilus/adapters/okx/fixtures/`. No variable is set and nothing
+reaches a network.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.nautilus.adapters.okx import reference
 
+from ..nautilus.adapters.okx.recorded import Replay
 from .conftest import at, payload, reconfigure
 
 DEMO = "okx_demo"
@@ -117,3 +121,110 @@ def test_doctor_fails_a_table_the_package_s_model_refuses(
     assert code == Exit.PRECONDITION and check["status"] == "fail"
     assert "[adapters.okx] refused" in str(check["detail"])
     assert any("'au'" in str(item) for item in check["items"])  # type: ignore[attr-defined]
+
+
+# -- the public reference -------------------------------------------------------------
+
+
+@pytest.fixture
+def replay(monkeypatch: pytest.MonkeyPatch) -> Replay:
+    """The recorded answers, served wherever the adapter would build the engine's client."""
+    served = Replay()
+    monkeypatch.setattr(reference, "pyo3_transport", lambda rate, **_: served)
+    return served
+
+
+def resolving(root: Path) -> Path:
+    """The workspace on the US host, resolving through the exchange, on a USDT account."""
+    with_table(root, 'region = "us"\n\n[data]\nreference = "okx"\n')
+    path = root / "kanso.toml"
+    text = path.read_text(encoding="utf-8").replace('currency = "USD"', 'currency = "USDT"', 1)
+    path.write_text(text, encoding="utf-8")
+    return root
+
+
+def test_resolve_puts_the_listed_swap_in_the_store_with_zero_fees(
+    runner: CliRunner, workspace: Path, replay: Replay
+) -> None:
+    result = at(
+        runner,
+        resolving(workspace),
+        "data",
+        "instruments",
+        "resolve",
+        "BTC-USDT-SWAP.OKX",
+        "ETH-USDT-SWAP.OKX",
+        "--as-of",
+        "2026-09-30",
+        "--json",
+    )
+
+    assert result.exit_code == Exit.OK, result.stdout
+    held = {one["id"]: one["definition"] for one in payload(result)["instruments"]}
+    btc = held["BTC-USDT-SWAP.OKX"]
+    assert btc["type"] == "CryptoPerpetual"
+    assert (btc["multiplier"], btc["price_increment"], btc["lot_size"]) == ("0.01", "0.1", "0.01")
+    assert (btc["settlement_currency"], btc["quote_currency"]) == ("USDT", "USDT")
+    assert (btc["maker_fee"], btc["taker_fee"], btc["is_inverse"]) == ("0", "0", False)
+    assert held["ETH-USDT-SWAP.OKX"]["multiplier"] == "0.1"
+    assert [params["instId"] for _, params in replay.asked] == ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+
+
+def test_resolve_refuses_the_inverse_contract_by_name(
+    runner: CliRunner, workspace: Path, replay: Replay
+) -> None:
+    result = at(
+        runner,
+        resolving(workspace),
+        "data",
+        "instruments",
+        "resolve",
+        "BTC-USD-SWAP.OKX",
+        "--as-of",
+        "2026-09-30",
+        "--json",
+    )
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "BTC-USD-SWAP is an inverse contract" in result.stdout
+    assert "kanso trades linear perpetuals" in result.stdout
+
+
+def test_check_surveys_the_listing_with_one_request_once_the_table_names_a_host(
+    runner: CliRunner, workspace: Path, replay: Replay
+) -> None:
+    unnamed = payload(at(runner, workspace, "data", "adapters", "--check", "--json"))
+    assert replay.asked == []
+    assert "okx: not configured, so no request was made for it" in unnamed["notes"]
+
+    named = payload(
+        at(
+            runner,
+            with_table(workspace, 'region = "us"\n'),
+            "data",
+            "adapters",
+            "--check",
+            "--json",
+        )
+    )
+
+    assert len(replay.asked) == 1
+    [survey] = [one for one in named["reach"] if one["adapter"] == "okx"]
+    assert (survey["reachable"], survey["requests"]) == (True, 1)
+
+
+def test_doctor_checks_the_listing_only_when_asked(
+    runner: CliRunner, workspace: Path, replay: Replay
+) -> None:
+    root = with_table(workspace, 'region = "us"\n')
+    plain = payload(at(runner, root, "doctor", "--json"))
+    adapters = next(one for one in plain["checks"] if one["name"] == "adapters")
+    assert "2 registered · 1 configured; no request was made" in str(adapters["detail"])
+    assert replay.asked == []
+
+    checked = payload(at(runner, root, "doctor", "--check-adapters", "--json"))
+
+    adapters = next(one for one in checked["checks"] if one["name"] == "adapters")
+    assert adapters["status"] == "ok"
+    assert "1/1 datasets included · 1 request(s)" in str(adapters["detail"])
+    assert any("okx perpetuals reference → ok" in str(item) for item in adapters["items"])
