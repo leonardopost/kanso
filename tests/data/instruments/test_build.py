@@ -235,7 +235,7 @@ def test_a_perpetual_s_contract_size_is_never_the_engine_s_default(field: str) -
     with pytest.raises(ValidationError) as caught:
         built(perpetual(**{field: None}))
     assert caught.value.message == (
-        f"BTC-USDT-SWAP.SIM: CryptoPerpetual needs {field}, which neither the convention "
+        f"BTCUSDT-PERP.SIM: CryptoPerpetual needs {field}, which neither the convention "
         "table nor `override` supplies"
     )
 
@@ -246,7 +246,7 @@ def test_an_inverse_perpetual_is_refused_by_name(flag: object) -> None:
         built(perpetual(is_inverse=flag))
     assert caught.value.code is Exit.VALIDATION
     assert caught.value.message == (
-        "BTC-USDT-SWAP.SIM: is_inverse is true in `override` in instruments.yaml; kanso trades "
+        "BTCUSDT-PERP.SIM: is_inverse is true in `override` in instruments.yaml; kanso trades "
         "linear perpetuals: the runner's notional is qty x px x multiplier"
     )
 
@@ -269,7 +269,7 @@ def test_a_swap_is_a_cryptocurrency_instrument() -> None:
     with pytest.raises(ValidationError) as caught:
         built({**PERPETUAL, "asset_class": "EQUITY"})
     assert caught.value.message == (
-        "BTC-USDT-SWAP.SIM: a CryptoPerpetual is a CRYPTOCURRENCY instrument, and this entry "
+        "BTCUSDT-PERP.SIM: a CryptoPerpetual is a CRYPTOCURRENCY instrument, and this entry "
         "says EQUITY"
     )
     assert (
@@ -288,7 +288,8 @@ def test_the_classes_an_entry_may_name_include_the_swap() -> None:
 
 FEE_REMEDY = (
     "the runner charges commission once from the venue model; state it under "
-    "venues.<MIC>.costs or the hypothesis costs and remove the rate from the definition"
+    "venues.<MIC>.costs or the hypothesis costs, and {step} this entry's `override` in "
+    "instruments.yaml"
 )
 
 
@@ -305,7 +306,7 @@ def test_a_fee_rate_in_an_override_is_refused_by_name(spec: dict[str, Any], fiel
     assert caught.value.code is Exit.VALIDATION
     assert f"{field} 0.000" in caught.value.message
     assert "in `override` in instruments.yaml" in caught.value.message
-    assert caught.value.remedy == FEE_REMEDY
+    assert caught.value.remedy == FEE_REMEDY.format(step=f"remove {field} from")
 
 
 def test_a_zero_fee_rate_and_a_margin_rate_are_still_accepted() -> None:
@@ -327,4 +328,25 @@ def test_a_fee_rate_in_a_resolved_definition_is_refused_by_name() -> None:
         "AAPL.XNAS: maker_fee 0.0002 in the resolved definition; a kanso definition charges "
         "no fee of its own"
     )
-    assert caught.value.remedy == FEE_REMEDY
+    assert caught.value.remedy == FEE_REMEDY.format(step='set maker_fee: "0" in')
+
+
+def test_a_resolved_rate_is_zeroed_by_the_override_the_remedy_names() -> None:
+    """A refresh fetches the provider's rate again; the override the remedy names wins."""
+    entry = InstrumentEntry.model_validate(
+        {**EQUITY, "manual": False, "override": {"maker_fee": "0"}}
+    )
+    resolved = {**conventions_for(entry, AS_OF), "currency": "USD", "maker_fee": "0.0002"}
+    assert build(entry, resolved).maker_fee == Decimal(0)
+
+
+def test_rates_from_both_sources_are_each_given_their_step() -> None:
+    entry = InstrumentEntry.model_validate(
+        {**EQUITY, "manual": False, "override": {"taker_fee": "0.0005"}}
+    )
+    resolved = {**conventions_for(entry, AS_OF), "currency": "USD", "maker_fee": "0.0002"}
+    with pytest.raises(ValidationError) as caught:
+        build(entry, resolved)
+    assert caught.value.remedy == FEE_REMEDY.format(
+        step='remove taker_fee from, and set maker_fee: "0" in'
+    )

@@ -597,6 +597,28 @@ def test_a_resolved_perpetual_is_written_as_a_swap_and_rebuilds_equal(
     assert definition_checksum(rebuilt) == definition_checksum(contract)
 
 
+@pytest.mark.parametrize(
+    ("stated", "hit"),
+    [("10", True), ("10.00 USDT", True), ("10 USDC", False), ("ten", False), ("11", False)],
+)
+def test_a_notional_bound_in_the_override_compares_as_money(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch, stated: str, hit: bool
+) -> None:
+    """The store renders the bound `10.00000000 USDT`; an operator writes `10`. Compared as
+    written, the two never agreed and every resolution asked the provider again."""
+    contract = kit_perpetual(maker_fee="0", taker_fee="0")
+    probe = Probe(answers={"BTCUSDT-PERP": contract})
+    resolve_universe(probing(ws, probe, monkeypatch), ["BTCUSDT-PERP"], AS_OF)
+    entry = cache(ws)["BTCUSDT-PERP"].model_copy(
+        update={"override": {"instrument_class": "swap", "min_notional": stated}}
+    )
+    assert entry.resolved is not None
+
+    held = instruments._from_cache(entry, {entry.resolved.checksum: contract}, AS_OF)
+
+    assert (held is contract) is hit
+
+
 def test_a_resolved_perpetual_carrying_a_fee_rate_is_refused_and_nothing_is_written(
     ws: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -657,7 +679,7 @@ def test_a_resolved_class_with_no_instrument_class_to_name_says_to_correct_the_a
 
 
 def test_a_manual_perpetual_resolves_into_the_store(ws: Workspace) -> None:
-    write(ws, **{"BTC-USDT-SWAP": PERPETUAL})
-    resolved = resolve_universe(ws, ["BTC-USDT-SWAP.SIM"], AS_OF)
-    assert type(resolved["BTC-USDT-SWAP.SIM"]).__name__ == "CryptoPerpetual"
-    assert definition_checksum(resolved["BTC-USDT-SWAP.SIM"]) in read_store(ws)
+    write(ws, **{"BTCUSDT-PERP": PERPETUAL})
+    resolved = resolve_universe(ws, ["BTCUSDT-PERP.SIM"], AS_OF)
+    assert type(resolved["BTCUSDT-PERP.SIM"]).__name__ == "CryptoPerpetual"
+    assert definition_checksum(resolved["BTCUSDT-PERP.SIM"]) in read_store(ws)

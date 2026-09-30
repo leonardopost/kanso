@@ -139,7 +139,11 @@ def test_the_fee_and_settlement_claims_hold(verified: list[Fact]) -> None:
     assert held[
         "MakerTakerFeeModel charges a fill the instrument's maker or taker rate on its notional"
     ]
-    assert held[
+    [settlement] = [fact for fact in verified if fact.claim.startswith("get_settlement_")]
+    assert settlement.claim == (
         "get_settlement_currency answers a perpetual's settlement currency and every other "
-        "class's quote currency"
-    ]
+        "class's quote currency; get_cost_currency, which the account manager books and "
+        "converts from, answers the quote currency of every class"
+    )
+    assert settlement.holds
+    assert "settles in USDC and is booked in USDT" in settlement.evidence

@@ -60,7 +60,7 @@ PERPETUAL_OVERRIDE: dict[str, Any] = {
 }
 
 PERP_ENTRY: dict[str, Any] = {
-    "nautilus_id": "BTC-USDT-SWAP.SIM",
+    "nautilus_id": "BTCUSDT-PERP.SIM",
     "asset_class": "CRYPTOCURRENCY",
     "manual": True,
     "corporate_actions": "none",

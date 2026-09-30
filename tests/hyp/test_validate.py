@@ -318,7 +318,7 @@ def test_an_equity_quoted_in_another_currency_than_its_venue_s_account_is_refuse
 
     assert failure.message == (
         "universe: BUND.XETR settles in EUR, and XETR's account currency is USD; a "
-        "hypothesis's fills settle in the account's own currency"
+        "hypothesis's fills settle and are booked in the account's own currency"
     )
     assert failure.remedy == (
         "set venues.XETR.currency to EUR in portfolio.yaml, or [research] currency to EUR in "
@@ -326,22 +326,27 @@ def test_an_equity_quoted_in_another_currency_than_its_venue_s_account_is_refuse
     )
 
 
-def test_a_perpetual_settled_in_another_stablecoin_than_the_account_is_refused(
-    ws: Workspace,
+@pytest.mark.parametrize("account", ["USDT", "USDC"])
+def test_a_perpetual_settled_in_another_stablecoin_than_its_quote_fits_no_account(
+    ws: Workspace, account: str
 ) -> None:
-    """USDC and USDT are two codes: the engine calls the pair no quanto, and the account
-    holds only one of them."""
+    """USDC and USDT are two codes: the engine calls the pair no quanto, settles the
+    contract in USDC and books its positions, PnL and margin in USDT, the quote currency.
+    A USDT account would be paid in USDC; a USDC account would be booked in USDT and find no
+    USDT/USDC rate to convert at, so the balance update is deferred. No account holds both."""
     write_instruments(ws, "DEMO", "USDC_PERP")
 
-    failure = refused(configured(ws, currency="USDT"), document(universe=["USDC_PERP"]))
+    failure = refused(configured(ws, currency=account), document(universe=["USDC_PERP"]))
 
     assert failure.message == (
-        "universe: BTC-USDT-USDC.SIM settles in USDC, and SIM's account currency is USDT; a "
-        "hypothesis's fills settle in the account's own currency"
+        "universe: BTC-USDT-USDC.SIM settles in USDC and is booked in USDT, and SIM's "
+        f"account currency is {account}; a hypothesis's fills settle and are booked in the "
+        "account's own currency"
     )
-    assert failure.remedy is not None
-    assert "venues.SIM.currency" in failure.remedy
-    assert "[research] currency" in failure.remedy
+    assert failure.remedy == (
+        "remove BTC-USDT-USDC.SIM from `universe` in hypothesis.yaml: no one account currency "
+        "is both its settlement currency USDC and its booked currency USDT"
+    )
 
 
 def test_a_perpetual_settled_in_the_account_s_currency_is_admissible(ws: Workspace) -> None:

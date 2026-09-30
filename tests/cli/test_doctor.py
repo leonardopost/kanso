@@ -1197,7 +1197,8 @@ def test_a_stored_definition_carrying_a_fee_rate_fails_by_name(
         "simulated venue charges on every fill on top of the venue model's commission"
     ]
     assert _remedy(result, "instruments") == (
-        "remove the rate from instruments.yaml, then run "
+        "remove the rate from the entry's `override` in instruments.yaml, or state it there "
+        'as "0" where the reference provider resolved it, then run '
         "`kanso data instruments resolve AAPL.XNAS --as-of 2024-06-03 --refresh`"
     )
 

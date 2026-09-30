@@ -55,10 +55,12 @@ NautilusTrader facts this module relies on (nautilus_trader 1.231.0):
   have no introspectable signature, and raise `TypeError` for a missing or unexpected
   argument, so the accepted field set per class is stated here and checked before
   construction.
-* Tick size, lot size and multiplier are constructor inputs with no engine defaults, except
-  on `CryptoPerpetual`, which defaults `multiplier` and `lot_size` to 1 when they are
-  omitted. kanso requires both of it anyway: a contract value of one is a claim about the
-  contract, and a perpetual's is usually a fraction of a coin. `Equity` fixes
+* Tick size is a constructor input with no engine default. Lot size and multiplier have none
+  on `Equity`, `FuturesContract` and `OptionContract`; `CurrencyPair` defaults `multiplier`
+  to `Quantity(1)` and `lot_size` to `None`, `IndexInstrument` fixes `multiplier` at 1, and
+  `CryptoPerpetual` defaults both to `Quantity(1)`. kanso requires the perpetual's anyway: a
+  contract value of one is a claim about the contract, and a perpetual's is usually a
+  fraction of a coin. `Equity` fixes
   `size_precision` to 0 and `size_increment` and `multiplier` to 1 itself, and rejects all
   three as arguments.
 * `CryptoPerpetual` fixes its asset class to `CRYPTOCURRENCY` and its instrument class to
@@ -690,19 +692,28 @@ def _refuse_charged(entry: InstrumentEntry, arguments: Mapping[str, Any]) -> Non
 
     The simulated venue charges a fill its instrument's rate on top of the commission the
     runner deducts from the venue model, so a definition carrying one is charged twice on
-    every fill while the card reports the runner's number once.
+    every fill while the card reports the runner's number once. A rate the entry's
+    `override` states is removed from it; a rate the reference provider resolved is zeroed
+    by stating it as `"0"` in the override, which wins over the resolved field — a refresh
+    would only fetch the provider's rate again.
     """
     charged = [field for field in _CHARGED if arguments.get(field, Decimal(0)) != 0]
     if charged:
         stated = ", ".join(
             f"{field} {arguments[field]} in {_source(entry, field)}" for field in charged
         )
+        stated_here = [field for field in charged if field in entry.override]
+        resolved = [field for field in charged if field not in entry.override]
+        steps = [
+            *([f"remove {' and '.join(stated_here)} from"] if stated_here else []),
+            *([" and ".join(f'set {field}: "0" in' for field in resolved)] if resolved else []),
+        ]
         raise ValidationError(
             f"{entry.nautilus_id}: {stated}; a kanso definition charges no fee of its own",
             remedy=(
                 "the runner charges commission once from the venue model; state it under "
-                "venues.<MIC>.costs or the hypothesis costs and remove the rate from the "
-                "definition"
+                f"venues.<MIC>.costs or the hypothesis costs, and {', and '.join(steps)} "
+                f"this entry's `override` in {CACHE_NAME}"
             ),
         )
 
@@ -1136,9 +1147,26 @@ def _from_cache(entry: InstrumentEntry, cached: Mapping[str, object], as_of: dat
     for field, value in entry.override.items():
         if field in _CONSUMED:
             continue
-        if field not in stored or _comparable(stored[field]) != _comparable(value):
+        if field not in stored or not _agrees(field, stored[field], value):
             return None
     return held
+
+
+def _agrees(field: str, stored: object, stated: object) -> bool:
+    """Whether a stored definition's field is the value the override states.
+
+    A money bound is stored as `<amount> <code>` (`5.00000000 USDT`) and written by an
+    operator as a bare amount (`5`) or with its code, so it agrees when the amounts are
+    equal and any code stated is the stored one.
+    """
+    if field in _MONEY:
+        held, _, held_code = str(stored).strip().partition(" ")
+        amount, _, code = str(stated).strip().partition(" ")
+        try:
+            return Decimal(held) == Decimal(amount) and code.strip() in ("", held_code.strip())
+        except InvalidOperation:
+            return False
+    return _comparable(stored) == _comparable(stated)
 
 
 def _comparable(value: object) -> str:

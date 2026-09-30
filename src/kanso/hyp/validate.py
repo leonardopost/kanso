@@ -43,9 +43,12 @@ they are reported together rather than one per attempt.
 
 NautilusTrader facts this module relies on (nautilus_trader 1.231.0): an `Instrument`
 carries its venue on `id.venue`, whose `value` is the venue code a venue model is
-resolved for; and `Instrument.get_settlement_currency()` answers the currency a trade in it
+resolved for; `Instrument.get_settlement_currency()` answers the currency a trade in it
 settles in — a `CryptoPerpetual`'s stated `settlement_currency`, and the quote currency of
-every other class kanso builds, none of which is inverse.
+every other class kanso builds, none of which is inverse; and `get_cost_currency()` answers
+the currency the engine books positions, PnL and margin in — the quote currency of every
+linear class, a perpetual's included — which its account manager converts to the account's
+base currency, deferring the balance update when it holds no rate between the two.
 """
 
 from __future__ import annotations
@@ -175,9 +178,9 @@ def venue_models(
     hypothesis does not require, or a fixed spread with no width — a universe spanning more
     than one account currency, and an account currency the engine does not register are
     all refused here, because each would put a number on a card that nothing in the
-    workspace can account for. So is an instrument that settles in a currency other than
-    its venue's account currency: its fills would be struck in a currency the account holds
-    none of, at a conversion rate nothing in the workspace records.
+    workspace can account for. So is an instrument that settles, or is booked, in a currency
+    other than its venue's account currency: its fills would be struck in a currency the
+    account holds none of, at a conversion rate nothing in the workspace records.
 
     The broker is named in `kanso.toml` and its declaration is asked of whichever adapter
     provides it, so this reads a broker's account type, currency and costs without naming
@@ -214,33 +217,54 @@ def venue_models(
 
 
 def _check_settlement(instruments: Mapping[str, Any], models: Mapping[str, VenueModel]) -> None:
-    """Every instrument settles in the account currency of the venue it trades on.
+    """Every instrument settles in, and is booked in, the account currency of its venue.
 
-    The settlement currency is a perpetual's stated one, a currency pair's quote currency,
-    and every other instrument's currency; a mismatch is refused naming the instrument,
-    what it settles in and what its venue's account holds.
+    Two engine currencies are compared with the account's, and both must equal it: the
+    settlement currency (a perpetual's stated one, every other class's quote currency) and
+    the cost currency the engine books positions, PnL and margin in and converts to the
+    account's base currency from (the quote currency of every linear class kanso builds).
+    A perpetual quoted in USDT and settled in USDC settles in one and is booked in the
+    other, so no account currency admits it. The check reads every resolved instrument of
+    the universe, a data leg as well as a traded one. A mismatch is refused naming the
+    instrument, both of its currencies where they differ, and what its venue's account
+    holds.
     """
-    wrong: dict[str, tuple[str, str, str]] = {}
+    wrong: dict[str, tuple[str, str, str, str]] = {}
     for held in instruments.values():
         venue = _venue_of(held)
         settles = str(held.get_settlement_currency().code)
+        books = str(held.get_cost_currency().code)
         account = models[venue].currency
-        if settles != account:
-            wrong[str(held.id)] = (settles, venue, account)
+        if settles != account or books != account:
+            wrong[str(held.id)] = (settles, books, venue, account)
     if not wrong:
         return
     named = "; ".join(
-        f"{instrument} settles in {settles}, and {venue}'s account currency is {account}"
-        for instrument, (settles, venue, account) in sorted(wrong.items())
+        f"{instrument} {_currencies(settles, books)}, and {venue}'s account currency is {account}"
+        for instrument, (settles, books, venue, account) in sorted(wrong.items())
     )
-    first = sorted(wrong.values())[0]
+    instrument, (settles, books, venue, _) = sorted(wrong.items())[0]
+    if settles != books:
+        remedy = (
+            f"remove {instrument} from `universe` in hypothesis.yaml: no one account "
+            f"currency is both its settlement currency {settles} and its booked currency {books}"
+        )
+    else:
+        remedy = (
+            f"set venues.{venue}.currency to {settles} in portfolio.yaml, or [research] "
+            f"currency to {settles} in kanso.toml"
+        )
     raise ValidationError(
-        f"universe: {named}; a hypothesis's fills settle in the account's own currency",
-        remedy=(
-            f"set venues.{first[1]}.currency to {first[0]} in portfolio.yaml, or [research] "
-            f"currency to {first[0]} in kanso.toml"
-        ),
+        f"universe: {named}; a hypothesis's fills settle and are booked in the account's "
+        "own currency",
+        remedy=remedy,
     )
+
+
+def _currencies(settles: str, books: str) -> str:
+    if settles == books:
+        return f"settles in {settles}"
+    return f"settles in {settles} and is booked in {books}"
 
 
 def _venue_of(instrument: Any) -> str:

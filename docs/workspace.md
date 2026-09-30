@@ -121,7 +121,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
-| put an instrument in a universe that settles in a currency other than its venue's account currency | 3 · at `hyp validate`, naming the instrument, its currency and the account's |
+| put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
 | give a definition a non-zero `maker_fee` or `taker_fee`, or a perpetual `is_inverse: true` — in `override` or from the reference adapter | 3 · wherever it is built: the runner charges commission once, from the venue model, and kanso trades linear perpetuals |
 | resolve a venue to an account currency the engine does not register, from `[research] currency` or `venues.<MIC>.currency` | 3 · at `hyp validate`, and again wherever a venue is funded; the engine would otherwise mint the misspelt code at a precision nobody chose |
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
@@ -208,13 +208,18 @@ capitals and digits, and `kanso hyp validate` refuses one the engine does not re
 (exit 3), naming the code and the two places to set it. Whichever layer it came from, it
 is the account currency that `kanso hyp validate` checks: a universe whose instruments sit
 on venues with more than one account currency is refused (exit 3), because a hypothesis
-trades one. Each instrument's settlement currency is compared with its venue's account
-currency too — a perpetual's `settlement_currency`, a currency pair's quote currency, every
-other instrument's `currency` — and a mismatch is refused (exit 3), naming the instrument,
-what it settles in and the account currency, with the two places to set it: a leg that
-settles in a currency the account holds none of is struck at a conversion rate nothing in
-the workspace records. So a workspace trading USDT-settled perpetuals sets
-`currency = "USDT"` here.
+trades one. Every instrument of the universe — a data leg as well as a traded one — is
+compared with its venue's account currency twice: the currency it settles in (a perpetual's
+`settlement_currency`, a currency pair's quote currency, every other instrument's
+`currency`) and the currency the engine books its positions, PnL and margin in (its quote
+currency, a perpetual's included). Both must be the account's, and a mismatch is refused
+(exit 3), naming the instrument, what it settles in, what it is booked in where the two
+differ, and the account currency, with the two places to set it: a leg booked in a currency
+the account holds none of is converted at a rate nothing in the workspace records, and the
+engine defers the balance update when it has none. A perpetual quoted in USDT and settled in
+USDC settles in one and is booked in the other, so no account currency admits it and the
+remedy is to take it out of the universe. So a workspace trading USDT-quoted, USDT-settled
+perpetuals sets `currency = "USDT"` here.
 
 ## `.env`
 
@@ -811,12 +816,15 @@ or from the reference provider's measured definition, and otherwise from your `o
 they are never guessed. Two things a definition may not carry, from `override` or from what
 the reference adapter resolved, and each is refused by name (exit 3): a non-zero
 `maker_fee` or `taker_fee` — the runner charges commission once, from the venue model, so
-state it under `venues.<MIC>.costs` or the hypothesis's `costs` and remove the rate from
-the definition, because the simulated venue would charge the instrument's rate on every fill
-on top — and an inverse perpetual. `margin_init` and `margin_maint` stay yours to correct.
-`kanso doctor` fails its `instruments` check on a stored definition that carries a maker or
-taker rate, naming it and the `kanso data instruments resolve ID --as-of DATE --refresh` that
-replaces it once the rate is gone.
+state it under `venues.<MIC>.costs` or the hypothesis's `costs`, because the simulated venue
+would charge the instrument's rate on every fill on top — and an inverse perpetual. A rate
+your `override` states, remove from it; a rate the reference provider resolved, state as
+`"0"` in the entry's `override` (`maker_fee: "0"`), which wins over the resolved field — a
+`--refresh` alone would fetch the provider's rate again. `margin_init` and `margin_maint`
+stay yours to correct. `kanso doctor` fails its `instruments` check on a stored definition
+that carries a maker or taker rate, naming it and the
+`kanso data instruments resolve ID --as-of DATE --refresh` that replaces it once the rate is
+gone.
 
 ### A perpetual
 
@@ -826,8 +834,8 @@ convention table covers one, so a manual entry states its contract as the venue 
 it:
 
 ```yaml
-BTC-USDT-SWAP:
-  nautilus_id: BTC-USDT-SWAP.SIM
+BTCUSDT-PERP:
+  nautilus_id: BTCUSDT-PERP.SIM
   asset_class: CRYPTOCURRENCY
   manual: true
   corporate_actions: none
@@ -851,9 +859,10 @@ contract linear, and a definition stating `is_inverse: true` is refused by name 
 the runner's notional is `qty x px x multiplier` in the quote currency, and an inverse
 contract's is not. `min_notional` and `max_notional`, where a venue states them, are
 amounts in the settlement currency: `min_notional: 5` is five USDT. A perpetual settles in
-its `settlement_currency`, so its venue's account currency must be the same code —
-`[research] currency = "USDT"` in `kanso.toml`, or `venues.<MIC>.currency` in
-`portfolio.yaml` — or `kanso hyp validate` refuses it (exit 3). What a perpetual is to a
+its `settlement_currency` and is booked in its `quote_currency`, so both must be its venue's
+account currency — `[research] currency = "USDT"` in `kanso.toml`, or
+`venues.<MIC>.currency` in `portfolio.yaml` — or `kanso hyp validate` refuses it (exit 3);
+one whose two differ fits no account. What a perpetual is to a
 card, and what it is not yet, is in `docs/concepts.md`.
 
 A workspace whose entries are all `manual` may still name a reference adapter in `[data]

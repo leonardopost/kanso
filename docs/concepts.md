@@ -473,8 +473,9 @@ is re-run before a cost model is re-applied to it.
 **A perpetual is a linear contract settled in the account's currency.** A crypto perpetual
 swap (`instrument_class: swap`, `docs/workspace.md`) is to kanso a contract whose notional is
 `qty x px x multiplier` in its quote currency — the same product every other notional above
-is — so it is built linear and an inverse one is refused. It settles in the account currency
-of its venue, which `hyp validate` checks, and it is charged exactly what any other fill is:
+is — so it is built linear and an inverse one is refused. It settles and is booked in the
+account currency of its venue — its `settlement_currency` and its quote currency must both be
+that code, which `hyp validate` checks — and it is charged exactly what any other fill is:
 the venue model's costs, once, by the runner, with its own maker and taker rates held at
 zero. Two things a real perpetual carries are not modelled yet. Funding — the periodic
 payment between longs and shorts — arrives in a later release, so a held perpetual earns

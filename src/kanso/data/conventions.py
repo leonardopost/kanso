@@ -30,8 +30,9 @@ file is a refusal, not a default: the instrument's entry must then declare its o
 inventing one.
 
 These values feed the `price_increment` and `lot_size` constructor arguments of the
-NautilusTrader instrument classes (nautilus_trader 1.231.0), which have no engine defaults
-of their own.
+NautilusTrader instrument class an entry builds (nautilus_trader 1.231.0). `Equity` requires
+both with no default, as do `FuturesContract` and `OptionContract`; `price_increment` has no
+default on any class.
 """
 
 from __future__ import annotations

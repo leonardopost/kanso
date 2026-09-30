@@ -1012,7 +1012,8 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     if charged:
         remedies.insert(
             0,
-            "remove the rate from instruments.yaml, then run "
+            "remove the rate from the entry's `override` in instruments.yaml, or state it "
+            'there as "0" where the reference provider resolved it, then run '
             + " and ".join(f"`{command}`" for _, command in charged),
         )
     if failed or charged:

@@ -129,12 +129,14 @@ signature; the required fields, established by construction, are:
   `quote_currency`, `settlement_currency`, `is_inverse`, `price_precision`,
   `size_precision`, `price_increment`, `size_increment`, `ts_event`, `ts_init`.
 
-Omitting a required field raises `TypeError`. Tick size, lot size and
-multiplier are constructor inputs with no engine defaults, except that
-`CryptoPerpetual` defaults `multiplier` and `lot_size` to `Quantity(1)` when
-they are omitted — kanso requires both of it all the same, because a contract
-value of one is a claim about the contract. So they come from the convention
-table or the reference provider's measured definition, never guessed. `Equity`
+Omitting a required field raises `TypeError`. Tick size is a constructor input
+with no engine default. Lot size and multiplier have none on `Equity`,
+`FuturesContract` and `OptionContract`; `CurrencyPair` defaults `multiplier` to
+`Quantity(1)` and `lot_size` to `None`, `IndexInstrument` fixes `multiplier` at
+1, and `CryptoPerpetual` defaults both to `Quantity(1)`. kanso requires the
+perpetual's anyway, because a contract value of one is a claim about the
+contract. So they come from the convention table or the reference provider's
+measured definition, never guessed. `Equity`
 takes no multiplier and carries `Quantity(1)`, so a share's notional is its
 quantity at its price; every other class carries the one it was built with.
 `CryptoPerpetual` fixes its asset class to `CRYPTOCURRENCY` and its instrument
@@ -152,9 +154,15 @@ them.
 
 `Instrument.get_settlement_currency()` answers the currency a trade settles
 in: a `CryptoPerpetual`'s stated `settlement_currency`, and the quote currency
-of every other class kanso builds (none of them inverse). A USDC-settled
-perpetual quoted in USDT answers USDC, and is not quanto, because the engine
-treats the two as USD equivalents.
+of every other class kanso builds (none of them inverse).
+`Instrument.get_cost_currency()` answers the currency positions, PnL and margin
+are booked in — the quote currency of every linear class, a perpetual's
+included — and the account manager converts from it to the account's base
+currency, deferring the balance update (logged at debug only) when the cache
+holds no rate between them. A USDC-settled perpetual quoted in USDT answers
+USDC to the first and USDT to the second, and is not quanto, because the engine
+treats the two as USD equivalents: it settles in one currency and is booked in
+the other, so `hyp validate` requires both to be the account's.
 
 `nautilus_trader.common.providers.InstrumentProvider` is not the interface
 kanso needs: `load(instrument_id, filters)` takes an already fully qualified
@@ -1475,8 +1483,8 @@ def _sample_perpetual(**fields: Any) -> Any:
 
     usdt = Currency.from_str("USDT")
     required: dict[str, Any] = {
-        "instrument_id": InstrumentId.from_str("BTC-USDT-SWAP.SIM"),
-        "raw_symbol": Symbol("BTC-USDT-SWAP"),
+        "instrument_id": InstrumentId.from_str("BTCUSDT-PERP.SIM"),
+        "raw_symbol": Symbol("BTCUSDT-PERP"),
         "base_currency": Currency.from_str("BTC"),
         "quote_currency": usdt,
         "settlement_currency": usdt,
@@ -1723,22 +1731,24 @@ def _check_fee_model_charges_the_instrument_rates() -> tuple[bool, str]:
 
 
 def _check_settlement_currency() -> tuple[bool, str]:
-    """The currency `hyp validate` compares with a venue's account currency."""
+    """The two currencies `hyp validate` compares with a venue's account currency."""
     from nautilus_trader.model.objects import Currency
 
     usdc = _sample_perpetual(settlement_currency=Currency.from_str("USDC"))
     same = _sample_perpetual()
     equity: Any = _sample_equity()
-    answered = (
-        usdc.get_settlement_currency().code,
-        same.get_settlement_currency().code,
-        equity.get_settlement_currency().code,
+    answered = tuple(
+        (held.get_settlement_currency().code, held.get_cost_currency().code)
+        for held in (usdc, same, equity)
     )
-    holds = answered == ("USDC", "USDT", "USD") and not usdc.is_quanto
+    holds = answered == (("USDC", "USDT"), ("USDT", "USDT"), ("USD", "USD")) and not (
+        usdc.is_quanto
+    )
     return holds, (
-        f"a USDT-quoted perpetual settled in USDC answers {answered[0]} (quanto: "
-        f"{usdc.is_quanto}), one settled in USDT answers {answered[1]}, and a USD equity "
-        f"answers {answered[2]}, its quote currency"
+        f"a USDT-quoted perpetual settled in USDC settles in {answered[0][0]} and is booked "
+        f"in {answered[0][1]} (quanto: {usdc.is_quanto}), one settled in USDT settles and is "
+        f"booked in {answered[1][0]}/{answered[1][1]}, and a USD equity in "
+        f"{answered[2][0]}/{answered[2][1]}, its quote currency"
     )
 
 
@@ -2612,7 +2622,8 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     ),
     (
         "get_settlement_currency answers a perpetual's settlement currency and every other "
-        "class's quote currency",
+        "class's quote currency; get_cost_currency, which the account manager books and "
+        "converts from, answers the quote currency of every class",
         _check_settlement_currency,
     ),
     (

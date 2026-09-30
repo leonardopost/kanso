@@ -92,7 +92,7 @@ FUTURE: dict[str, Any] = {
 }
 
 PERPETUAL: dict[str, Any] = {
-    "nautilus_id": "BTC-USDT-SWAP.SIM",
+    "nautilus_id": "BTCUSDT-PERP.SIM",
     "asset_class": "CRYPTOCURRENCY",
     "manual": True,
     "corporate_actions": "none",
