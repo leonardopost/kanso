@@ -67,13 +67,17 @@ with none before it (`kanso.nautilus.facts` measures both on the backtest engine
 replay tests hold the node to the same fills); `cancel_all_orders` marks every order open at
 the venue `PENDING_CANCEL` at once and cancels one in flight to it as well
 (`kanso.nautilus.facts` measures it on the backtest engine), and skips one still
-`INITIALIZED` (read in `trading/strategy.pyx`), which only a node has; a cancel sent for an
+`INITIALIZED` (read in `trading/strategy.pyx`), which on the backtest engine an order handed
+to `submit_order` never is when the call returns; a cancel sent for an
 order a node has not yet handed to the venue reaches the venue before the order, where it is
 lost and the order rests (read in `live/risk_engine.py`, `execution/manager.pyx` and
 `trading/strategy.pyx`), which is why kanso holds such a cancel back until the node has
 handed the order over (`KansoStrategy._hold_cancel`); `Strategy.cancel_orders` sends a
-`BatchCancelOrders` and refuses one whose orders are in more than one instrument after
-marking the first `PENDING_CANCEL` (read in `trading/strategy.pyx`);
+`BatchCancelOrders` and refuses one whose orders are in more than one instrument, or that
+holds an emulated order after its first, after marking the orders before it
+`PENDING_CANCEL` (read in `trading/strategy.pyx`); the order emulator takes an emulated
+order out and marks it pending cancel locally before `cancel_order` returns (read in
+`execution/emulator.pyx`, measured on both paths by the exit and replay tests);
 `StrategyConfig` and `ActorConfig` are frozen msgspec structs
 whose subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls`
 here is kanso's own attribute, honoured by kanso's loader alone.
@@ -372,9 +376,9 @@ def _held_open(order: Any) -> bool:
     taken yet (from `SUBMITTED` on the backtest engine), and it is false for an order with
     an emulation trigger (`Order.is_open_c` in `model/orders/base.pyx`). So kanso reads
     whether the venue has taken it from `venue_order_id`, which `Order.apply` sets only from
-    the venue's own events, its acceptance, a fill or an update, and never on submission, on
-    both paths. Measured on both by the exit and replay tests, an order modified and then
-    cancelled while still in flight among them.
+    the venue's own acceptance or a fill (an update only replaces one already set), and never
+    on submission, a modify or a cancel, on both paths. Measured on both paths by the exit and
+    replay tests, an order modified while still in flight, cancelled or not, among them.
     """
     return bool(order.venue_order_id is not None and order.is_open and not order.is_pending_cancel)
 
@@ -1448,7 +1452,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit cancels it like any other. So is an order the sleeve itself cancelled while it
         was still on its way to the venue: the venue takes it before the cancel, on both
         paths (`_hold_cancel`). A resting order whose cancel the venue refused is cancelled
-        again.
+        again. An order the engine's order emulator holds has not reached the venue: it
+        counts until it is cancelled, an exit at market cancels it with the resting ones, and
+        its cancel takes it out at once, at any latency (`_working`).
 
         What is owed is not dropped. When a cancel still in flight leaves less than asked,
         and whenever an exit at market is left less than asked, the exit is asked for again,
@@ -1754,8 +1760,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the backtest engine). When any has not been handed over yet, each is cancelled on its
         own through `cancel_order` instead, so the cancel for that one is held back as it is
         there: the engine's own skips an order still `INITIALIZED` (read in
-        `trading/strategy.pyx` of nautilus_trader 1.231.0), which only a node has, since on
-        the backtest engine an order is `SUBMITTED` by the time `submit_order` returns.
+        `trading/strategy.pyx` of nautilus_trader 1.231.0), which on the backtest engine an
+        order handed to `submit_order` never is by the time the call returns (`_hold_cancel`
+        names the exceptions).
         """
         orders = [
             order
@@ -1790,7 +1797,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         `SUBMITTED` — inside the call that hands it to the venue, before the venue has
         matched it, which reaches the venue behind the order as on the backtest engine. The
         replay tests measure it on both paths. An order the node closes first, by denying
-        it, is never cancelled. Only a node ever holds a cancel back.
+        it, is never cancelled.
+
+        On the backtest engine an order handed to `submit_order` is past `INITIALIZED` when
+        the call returns, so a cancel is held back there only for an order the engine itself
+        has not submitted yet: the child of an emulated one-triggers-other list, which the
+        order emulator keeps back until its parent fills (`OrderEmulator
+        ._handle_submit_order_list` in `execution/emulator.pyx`, read, not measured), or an
+        order never submitted at all. Its cancel is sent once the order leaves `INITIALIZED`.
         """
         current = self._current(order)
         if current.status != OrderStatus.INITIALIZED:

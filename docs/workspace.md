@@ -368,10 +368,10 @@ order whose cancel the venue refused is cancelled again. **An order the engine's
 emulator holds** (one sent with an `emulation_trigger`) has not reached the venue: it counts
 until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
 takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
-emulator, and batches the rest. An attached exit rule closes through the same market exit. `self.held(id)` applies the
-sleeve's market orders in flight and no limit or stop order, so a sleeve whose exit rests at
-the ask reads the whole position there until the exit fills; an exit sized from it is cut to
-what the working ones leave.
+emulator, and batches the rest. An attached exit rule closes through the same market exit.
+`self.held(id)` applies the sleeve's market orders in flight and no limit or stop order, so
+a sleeve whose exit rests at the ask reads the whole position there until the exit fills; an
+exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
 equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
@@ -705,7 +705,8 @@ session's end, and every card of its lane at 20 ms held a position for close to 
 no latency stated a cancel lands before anything further is matched, so an order the venue
 held open when its cancel was sent is not counted. **A cancel for an order still on its way
 to the venue lands behind the order**, on every path, whatever the latency — `cancel_order`,
-`cancel_orders` and `cancel_all_orders` alike. The venue takes the order, filling it if it is
+`cancel_orders` and `cancel_all_orders` alike; an order the engine's order emulator holds
+has not been sent to the venue at all, and its cancel takes it out at once (above). The venue takes the order, filling it if it is
 marketable, and then the cancel: with no latency stated before it matches anything further,
 so an order sent and cancelled in one handler that does not fill when it is taken never
 rests through a point; under a latency both land at the same instant, the order first. The

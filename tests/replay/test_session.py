@@ -345,6 +345,44 @@ def test_the_two_paths_cancel_an_exit_still_in_flight_twice_alike(
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_leave_an_exit_modified_in_flight_alike(latency_ms: float) -> None:
+    """A marketable exit modified in the handler that sent it, while the venue does not
+    yet hold it, beside an exit at market. On the backtest the modify leaves it pending
+    update, which the engine reports as open; the exit at market must not cancel it as a
+    resting order and count it spent, or the backtest sends the market exit whole and goes
+    short where the node, whose order is still unsent, does not. Both paths leave it to
+    fill, agree order for order and fill for fill, and match the three fills the sleeve
+    asks for."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CANCELLED_IN_FLIGHT,
+        MODIFIED,
+        chasing_costs,
+        points,
+    )
+
+    source = CANCELLED_IN_FLIGHT.replace(b"CANCEL", MODIFIED.encode())
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+        ("SELL", 100.0),
+    ]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 @pytest.mark.parametrize("source", ["EMULATED_STOP", "BATCH_WITH_EMULATED"])
 def test_the_two_paths_cancel_an_order_the_emulator_holds_alike(
     source: str, latency_ms: float

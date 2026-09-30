@@ -679,6 +679,26 @@ def test_an_exit_cancelled_twice_in_flight_still_counts_until_its_cancel_lands(
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_exit_modified_in_flight_is_not_cancelled_by_an_exit_at_market(
+    request_for, latency_ms: float
+) -> None:
+    """A marketable exit modified in the handler that sent it is pending update, which the
+    engine reports as open although the venue never took it; the exit at market sent
+    beside it must not read it as resting, cancel it and count it spent. It counts, the
+    market exit is cut and owed, and the sleeve is never short before it asks to be.
+    Measured on the round before this test: at 0 ms the market exit cancelled the modified
+    one, sent itself whole, both filled and the backtest sold 100 more than it held, where
+    the node, whose order was still unsent, did not."""
+    run = _run(request_for, latency_ms, CANCELLED_IN_FLIGHT.replace(b"CANCEL", MODIFIED.encode()))
+    assert [(fill.side, fill.qty) for fill in run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+        ("SELL", 100.0),
+    ]
+    assert never_short(run.fills[:2]) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_an_exit_at_market_cancels_a_stop_the_order_emulator_holds(
     request_for, latency_ms: float
 ) -> None:
