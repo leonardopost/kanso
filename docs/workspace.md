@@ -586,7 +586,10 @@ commission and no spread, so under the defaults a bar-only hypothesis is refused
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
-as it does for `sizing`; a row pinned before 0.13 reads as unchanged until it is re-pinned.
+`latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
+in its pins, so its re-pin compares against the costs the file it pinned states, read back
+from the state store; only when the store no longer holds those bytes, or this kanso cannot
+read them as a hypothesis, does the missing key read as unchanged.
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 
@@ -814,7 +817,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id`, `warmup`, `benchmark` or `book` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup`, `benchmark`, `book` or `costs` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.

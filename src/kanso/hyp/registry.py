@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-from kanso.errors import PreconditionError
+from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp.scaffold import HYPOTHESIS_FILE, hypothesis_file
 from kanso.hyp.validate import read_source, validate
 from kanso.schemas import Hypothesis, load_yaml, parse_yaml
@@ -79,13 +79,13 @@ OBJECTIVE: Final = "objective"
 WARMUP: Final = "warmup"
 BENCHMARK: Final = "benchmark"
 BOOK: Final = "book"
-COSTS: Final = "costs"
-"""The scope field that joined in 0.13; a row pinned before it reads as unchanged."""
 """`sizing` joined the scope in 0.4.0, and `warmup`, `benchmark` and `book` in 0.8.0;
 `objective` in 0.5.0, answering from its own column. A row pinned before `sizing`,
 `warmup`, `benchmark` or `book` holds no key for it, which reads as `None` — the same
 answer a file without the key gives — so an older pin keeps its best until the file
 actually declares a rule."""
+COSTS: Final = "costs"
+"""The scope field that joined in 0.13; a row pinned before it answers from its pinned file."""
 
 REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"
@@ -190,16 +190,14 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     objective and constraints, and `draft` otherwise: an operator who already knows what a
     thesis is needs no model to say so, which is the same override that is open to them
     after a classification. A re-pin keeps the status while the file is still classified
-    and returns it to `draft` otherwise, and clears the hypothesis's `best` when the
-    universe, the resolution, the data requirements or the construct changed.
+    and returns it to `draft` otherwise, and clears the hypothesis's `best` when any field
+    of `scope_of` moved from the scope the held row was pinned under.
     """
     refuse_active_run(store, hyp.id, "re-pin")
     held = _row(store, hyp.id)
     sha = store.put_blob(source)
     scope = scope_of(hyp)
-    before = {} if held is None else _scope_of(held)
-    if held is not None and COSTS not in _pins(held):
-        before[COSTS] = scope[COSTS]  # pinned before costs joined the scope: no move to report
+    before = {} if held is None else _scope_of(store, held, scope)
     cleared = held is not None and held["best_sha"] is not None and before != scope
     status: Status
     if hyp.construct is None:
@@ -429,7 +427,9 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
 
     `hyp add` clears a best when they move, and composition refuses a certificate whose
     run pinned a hypothesis of another scope than the one registered now: one definition
-    of what a number is comparable under, read in both places.
+    of what a number is comparable under, read in both places. A row pinned before a field
+    joined is read by `_scope_of`; for the cost model that means this function again, over
+    the file the row pinned.
     """
     return {
         "universe": sorted(hyp.universe),
@@ -447,15 +447,20 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
     }
 
 
-def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
-    """The scope the row was pinned under.
+def _scope_of(store: StateStore, held: sqlite3.Row, now: dict[str, Any]) -> dict[str, Any]:
+    """The scope the row was pinned under, to be compared with `now`.
 
     The construct and the objective were pinned in their own columns before they joined
     the pins, and the columns are written with the pins, so a row from before then answers
     from its column rather than reporting a move that never happened. `sizing`, `warmup`,
     `benchmark` and `book` joined later still and have no column: a pin without the key
-    answers `None`. `costs` joined last, and a pin without it is read by `register` as the
-    scope it is compared against, since nearly every hypothesis states one.
+    answers `None`. `costs` joined last, and nearly every hypothesis states one, so a pin
+    without it answers from the file it pinned — the bytes stored under the row's
+    `hypothesis_sha`, read by `scope_of` exactly as the file being pinned now is, latency
+    included. Only when the store holds no such bytes, or this kanso no longer reads them as
+    a hypothesis, does it answer `now`'s costs, since nothing then says what the old pin
+    charged. Answering `now` whenever the key was missing was measured keeping the bests of
+    four hypotheses scored at no latency through a re-pin that added 20 ms.
     """
     pins = _pins(held)
     scope = {name: pins.get(name) for name in SCOPE}
@@ -463,7 +468,20 @@ def _scope_of(held: sqlite3.Row) -> dict[str, Any]:
         scope[CONSTRUCT] = _optional(held["construct_id"])
     if OBJECTIVE not in pins:
         scope[OBJECTIVE] = _optional(held["objective_id"])
+    if COSTS not in pins:
+        scope[COSTS] = _pinned_costs(store, held, now[COSTS])
     return scope
+
+
+def _pinned_costs(store: StateStore, held: sqlite3.Row, now: Any) -> Any:
+    sha = _optional(held["hypothesis_sha"])
+    if sha is None or not store.has_blob(sha):
+        return now
+    try:
+        pinned = parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
+    except ValidationError:
+        return now
+    return scope_of(pinned)[COSTS]
 
 
 def moved(before: dict[str, Any], after: dict[str, Any]) -> str:
