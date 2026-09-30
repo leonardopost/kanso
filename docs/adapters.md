@@ -634,6 +634,10 @@ before a request (the endpoint itself answers code `51000`, "Parameter bar error
 |---|---|---|---|---|---|---|
 | asked as | the same | the same | `1H` `2H` `4H` | `6Hutc` `12Hutc` | `1Dutc` | `1Wutc` |
 
+A day holds the bars that close in it, so a `1w` bar, which opens and closes at Monday 00:00
+UTC, belongs to a Monday: a `1w` spec whose range holds no Monday yields no bar and is refused
+as a series the source served no points for, although the source holds it.
+
 The horizon is found with requests of one row: day `D` is served when a candle closing at or
 before `D` 00:00 is, and when a range's first day is not, the first day that is is found by
 bisection up to today — a handful of requests — and named in the refusal.
@@ -675,8 +679,10 @@ exchange publishes instead: one zip a day, listed with a URL on the exchange's f
 The loader reads one archive at a time, but every path that writes a dataset — `kanso data
 load`, `data backfill` and `data sync` — gathers all the points it will write before writing
 any of them: `load` its whole span, `backfill` and `sync` each 30-day chunk whole. That one
-day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, loaded in 82 seconds at a peak of
-1.8 GB resident, so a backfill chunk of a liquid swap's prints holds about thirty times that.
+day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, took `kanso data load` 82 and 87
+seconds in two runs on 2026-09-30, the first at a peak of 1.8 GB resident, where the loader
+alone, with no write path, streamed it in 62 seconds at 207 MB; so a backfill chunk of a
+liquid swap's prints holds about thirty times that.
 Load a liquid swap's trades one day to a spec (backlog entry 106).
 
 #### `okx_funding`

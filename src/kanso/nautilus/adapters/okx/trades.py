@@ -107,12 +107,13 @@ TRADES_MODULE: Final = "1"
 """The listing's `module` for daily trade archives; `2` lists candles, `4`-`6` books."""
 
 LISTING_DAYS: Final = 10
+"""The widest range the listing answers; eleven days answered HTTP 400, code `50076`."""
+
 LISTING_GAP_S: Final = 2.0
 """The pause before every listing request, so no two are sent closer than this: measured on
 2026-09-30, requests a second apart drew HTTP 429 three times in eight and requests two
 seconds apart none in six. The quota cannot say it — the engine's admits a burst as large as
 its rate — so a `discover` followed by its `load` would otherwise send two at once."""
-"""The widest range the listing answers; eleven days answered HTTP 400, code `50076`."""
 
 EXCHANGE_DAY: Final = timedelta(hours=8)
 """How far the exchange's day, which names an archive, runs ahead of UTC."""
