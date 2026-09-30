@@ -55,7 +55,7 @@ from kanso.criteria.quantities import (
     sharpe,
     standard_error,
 )
-from kanso.criteria.run import CardRun, Fill, Held, Trade
+from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
 
 __all__ = [
     "plan_complaints",
@@ -71,6 +71,7 @@ __all__ = [
     "DatasetFacts",
     "DeployedBook",
     "Fill",
+    "FundingPayment",
     "Held",
     "Gate",
     "GateContext",

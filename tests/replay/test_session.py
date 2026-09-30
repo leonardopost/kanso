@@ -18,7 +18,7 @@ from nautilus_trader.model.data import CustomData, DataType
 from nautilus_trader.model.identifiers import ClientId, InstrumentId
 
 from kanso.criteria.run import midnight_ns
-from kanso.data.types import CorporateAction
+from kanso.data.types import CorporateAction, Funding
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
 from kanso.nautilus.cross_section import is_marker
@@ -277,6 +277,51 @@ def test_a_custom_requirement_reaches_the_sleeve_without_a_subscription_of_its_o
 
     assert node.intents == engine.intents
     assert [(order[2], order[3]) for order in engine.intents] == [("BUY", 24.0), ("BUY", 26.0)]
+
+
+FUNDED_SIZER = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Holds the perpetual from its fifth bar, and at every settlement adds a size read off
+    the last digits of the balance, which moves with every payment the harness books."""
+
+    config_cls = KansoConfig
+
+    def on_start(self) -> None:
+        self.bars = 0
+
+    def on_bar(self, bar) -> None:
+        self.bars += 1
+        if self.bars == 5:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=10)
+
+    def on_data(self, data) -> None:
+        if self.bars >= 5:
+            self.submit_entry(data.instrument_id, "BUY", qty=1 + int(self.balance * 1000) % 7)
+'''
+
+
+def test_the_two_paths_fund_a_held_perpetual_alike() -> None:
+    """Both paths book every settlement into the balance before the sleeve is handed it,
+    and both extractions book it once: the intents sized off that balance, the payments
+    and the equity curve are the same on the node as in the engine."""
+    from tests.nautilus.backtest.conftest import perpetual
+    from tests.nautilus.backtest.test_funding import generated, perp_hypothesis, perp_request
+
+    points = generated("1h")
+    groups = [
+        tuple(point for point in points if not isinstance(point, Funding)),
+        tuple(CustomData(DataType(Funding), p) for p in points if isinstance(p, Funding)),
+    ]
+
+    node, engine = both(perp_request(perp_hypothesis("1h"), FUNDED_SIZER), [perpetual()], groups)
+
+    assert len(engine.run.funding) == 3 * 4  # every settlement of the four sessions
+    assert node.intents == engine.intents
+    assert node.run.funding == engine.run.funding
+    assert node.run.equity == engine.run.equity
 
 
 RESTING_BUY = b'''

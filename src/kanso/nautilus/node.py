@@ -679,8 +679,15 @@ def _components(built: TradingNode, placements: Sequence[Placement]) -> tuple[An
     made: list[Any] = []
     for placed in placements:
         loaded = placed.loaded
+        # A stage node executes against a simulated venue, whose account settles no
+        # funding, so each sleeve's balance books it as the extraction does. An account a
+        # broker keeps settles its own and would leave the flag off; no stage node attaches
+        # one in this version (`portfolio deploy` refuses a `clock: wall` client).
         config = _reconfigured(
-            loaded.sleeve.config, capital=placed.capital, order_id_tag=placed.tag
+            loaded.sleeve.config,
+            capital=placed.capital,
+            order_id_tag=placed.tag,
+            books_funding=True,
         )
         strategy = loaded.sleeve.cls(config=config)
         for index, actor in enumerate(loaded.attached):

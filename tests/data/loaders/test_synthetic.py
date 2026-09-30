@@ -509,3 +509,57 @@ def test_a_resolution_longer_than_a_day_closes_no_continuous_bar(
 ) -> None:
     with pytest.raises(ValidationError, match="longer than the 00:00-24:00 session"):
         LOADER.discover(continuous(synthetic_spec, resolution="2d"))
+
+
+# -- a perpetual's funding --------------------------------------------------------------
+
+GOLDEN_FUNDING = {
+    ("DEMO.SIM", "funding"): "847f7676d3fa2ae82527cbd1c5be059892652ef9834597d1f843166599cf8518",
+    ("OTHER.SIM", "funding"): "38fd6549c49c98ba53bbffde7c73a89c478e8a8f863d6ab12720976d81c2b705",
+}
+
+
+def test_funding_settles_at_00_08_and_16_utc_every_day(synthetic_spec: dict[str, Any]) -> None:
+    """Each session's three eight-hour periods close at 08:00, 16:00 and the next 00:00Z,
+    as its last daily bar does, and each settlement is public the instant it settles."""
+    ref = LOADER.discover(continuous(synthetic_spec, types=["funding"]))[0]
+    settled = list(LOADER.load(ref, ref.span))
+
+    assert ref.type == "funding"
+    assert ref.resolution is None
+    assert ref.span == (MONDAY, SUNDAY + timedelta(days=1))
+    assert [point.ts_init for point in settled] == [
+        midnight_ns(MONDAY) + hours * NS_PER_HOUR for hours in range(8, 7 * 24 + 1, 8)
+    ]
+    assert all(point.ts_event == point.ts_init for point in settled)
+    assert {str(point.instrument_id) for point in settled} == {"DEMO.SIM"}
+
+
+def test_a_funding_rate_is_a_whole_hundredth_of_a_basis_point_from_minus_one_to_two(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    ref = LOADER.discover(continuous(synthetic_spec, types=["funding"]))[0]
+    rates = [point.rate for point in LOADER.load(ref, ref.span)]
+
+    assert all(-0.0001 <= rate < 0.0002 for rate in rates)
+    assert all(round(rate * 1_000_000) / 1_000_000 == rate for rate in rates)
+    assert any(rate > 0 for rate in rates) and any(rate < 0 for rate in rates)
+
+
+def test_funding_reproduces_byte_for_byte_and_moves_no_other_series(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    """Funding draws from a fifth seed of its own, so a spec that adds it generates every
+    other series exactly as it did without it."""
+    spec = continuous(
+        synthetic_spec,
+        start="2024-03-04",
+        end="2024-03-05",
+        types=["bar", "quote", "trade", "funding"],
+    )
+    assert checksums(spec) == {**GOLDEN_CONTINUOUS, **GOLDEN_FUNDING}
+
+
+def test_funding_on_a_weekday_calendar_is_refused(synthetic_spec: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="funding is settled round the clock"):
+        LOADER.discover({**synthetic_spec, "types": ["bar", "funding"]})

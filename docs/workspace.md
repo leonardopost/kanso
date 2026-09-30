@@ -932,10 +932,13 @@ which instruments are asked is read from the stored definitions, as `hyp validat
 them. `research begin` refuses a snapshot whose funding dataset for a perpetual does not
 span the research and certification windows, whole UTC days as for every series, and a
 card is handed each point of its window in `on_data`, at the settlement instant, as a
-`Funding`. **The runner
-does not book funding yet**: a card today measures a held perpetual as if it paid and
-earned none, and a later release books each settlement in the runner's extraction, where
-every other cost is applied (`docs/backlog.md` row 104).
+`Funding`. **The runner books each settlement once**, in its extraction, where every other
+cost is applied: the rate on the quantity held at the instant, times the last print at or
+before it and the multiplier, out of cash — a long pays a positive rate, a short receives
+it — and the sleeve's `balance` has booked the same amount by the time `on_data` is handed
+the point. What that puts in a card's run, its trades and its equity is in
+`docs/concepts.md`. A dataset without a settlement that happened is a card that did not pay
+it: load the whole settled history of each window.
 
 A workspace whose entries are all `manual` may still name a reference adapter in `[data]
 reference` without setting that adapter's key: the adapter is built only once resolution
@@ -1053,7 +1056,19 @@ error: timezone: 'America/New_York' conflicts with calendar 'continuous', whose 
 `calendar: weekdays` is the default and is recorded in no manifest, so a dataset generated
 before the field existed carries the request parameters it always did and its snapshot id
 is unchanged; a continuous dataset records its calendar with the zone and session it fixed.
-The loader emits bars, quotes and trades on either calendar, and nothing else.
+The loader emits bars, quotes and trades on either calendar, and on a continuous one a
+perpetual's `funding` too: a settlement at 00:00, 08:00 and 16:00 UTC — each session's last
+at 00:00Z of the next day, as its last daily bar — with a rate drawn from the instrument's
+own seed, a whole number of hundredths of a basis point from -1 up to +2, so a card holding
+a perpetual pays and is paid funding with no vendor in the loop. Adding `funding` to `types`
+changes no other series of the spec, and a weekday spec that asks for it is refused (exit 3):
+
+```
+$ kanso data load --loader synthetic --spec weekday_funding.yaml
+error: types: funding is settled round the clock and needs calendar 'continuous'; a weekday calendar has no settlements to generate
+```
+
+Nothing else is generated.
 
 **Coverage counts one fact the manifests do not hold**: the days between two served spans of
 a series that its source was asked for and answered with nothing, which `state.db` records
