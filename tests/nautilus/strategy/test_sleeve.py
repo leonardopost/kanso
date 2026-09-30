@@ -11,7 +11,7 @@ from nautilus_trader.model.objects import Quantity
 from kanso.errors import ValidationError
 from kanso.nautilus.strategy import ENTRY, EXIT_ORDER, KansoConfig, KansoStrategy
 
-from .conftest import DEMO, HEDGE, bar, every_grain, quote, saw_tooth, trade
+from .conftest import DEMO, HEDGE, bar, every_grain, flat, quote, saw_tooth, trade
 
 FREE = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes"}}
 """A cost model that charges nothing, so a sizing assertion is exact arithmetic."""
@@ -644,3 +644,50 @@ def test_a_cancel_is_noted_only_while_its_order_can_still_fill(backtest) -> None
     assert strategy.entry.is_closed and strategy.after_filled == {}
     assert list(strategy.after_resting) == [strategy.rest.client_order_id]
     assert strategy.rest.is_closed and strategy._cancels == {}
+
+
+def test_cancel_orders_cancels_orders_in_more_than_one_name(backtest) -> None:
+    """The engine's own `cancel_orders` refuses a batch whose orders are in more than one
+    instrument after marking the first `PENDING_CANCEL`, and sends nothing, so that order
+    would rest while the sleeve read it as cancelled. The sleeve sends one batch per name,
+    and both resting entries are cancelled."""
+
+    class Rests(KansoStrategy):
+        def on_start(self) -> None:
+            self.bars = 0
+
+        def on_bar(self, bar_: object) -> None:
+            if bar_.bar_type.instrument_id != DEMO:  # type: ignore[attr-defined]
+                return
+            self.bars += 1
+            if self.bars == 2:
+                self.resting = [
+                    self.submit_entry(name, "BUY", qty=10, price=5.0) for name in (DEMO, HEDGE)
+                ]
+            elif self.bars == 4:
+                self.cancel_orders(self.resting)
+
+    universe = ("DEMO.XNAS", "HEDGE.XNAS")
+    run = backtest(
+        Rests(config(universe=universe)),
+        data=sorted([*flat(DEMO), *flat(HEDGE)], key=lambda point: point.ts_init),
+        instruments=(DEMO, HEDGE),
+    )
+    assert [order.is_canceled for order in run.strategy.resting] == [True, True]
+
+
+def test_cancel_orders_refuses_an_empty_list_as_the_engine_does(backtest) -> None:
+    """An empty list is handed on to the engine's own `cancel_orders`, which refuses it."""
+
+    class Empty(KansoStrategy):
+        def on_start(self) -> None:
+            self.refused = ""
+
+        def on_bar(self, bar_: object) -> None:
+            if not self.refused:
+                try:
+                    self.cancel_orders([])
+                except ValueError as exc:
+                    self.refused = str(exc)
+
+    assert "orders" in backtest(Empty(config())).strategy.refused

@@ -263,15 +263,15 @@ it matches the next point, and the cancel always lands first. Measured, a buy re
 and cancelled a minute before a print at 9.49: filled whole under a 30-second latency,
 cancelled unfilled under none — which is why `submit_exit` counts an order the venue held
 open when its cancel was sent as working exactly when the venue model states a latency. All
-of this is measured on the backtest engine, and kanso relies on it for an order the venue
-holds open only, because a cancel sent for an order still on its way to the venue does
-different things on the two code paths. The backtest has already handed such an order to
-the venue (`SUBMITTED`), which takes it and then the cancel; a node still holds it
-`INITIALIZED`, its submit waiting in the live risk engine's queue while the cancel goes
-straight to the live execution engine's, so the cancel reaches the venue first and is lost,
-and the order rests (read in `live/risk_engine.py` and `execution/manager.pyx`). So
-`KansoStrategy` never sends one: it holds the cancel back until the venue holds the order
-open, and counts the order as working until then. The engine's own guard is the
+of this is measured on the backtest engine. A cancel sent for an order still on its way to
+the venue does different things on the two code paths. The backtest has already handed such
+an order to the venue (`SUBMITTED`), which takes it and then the cancel; a node may still
+hold it `INITIALIZED`, its submit waiting in the live risk engine's queue while the cancel
+goes straight to the live execution engine's, so the cancel reaches the venue first and is
+lost, and the order rests (read in `live/risk_engine.py` and `execution/manager.pyx`). So
+`KansoStrategy` never sends a cancel for an `INITIALIZED` order: it holds it back until the
+node reports the order `SUBMITTED`, and counts the order as working until the cancel lands;
+the replay tests measure that the two paths then fill alike. The engine's own guard is the
 `reduce_only` flag, and the simulated venue honours it: `close_position` sets it by default,
 a reduce-only order the position has no room left for is rejected rather than opening
 the other side, and its matching engine trims a reduce-only fill to the quantity still open
@@ -286,8 +286,8 @@ author's back and fill differently even with no latency. `cancel_all_orders` mar
 open at the venue `PENDING_CANCEL` at once, which is what `KansoStrategy.cancel_all_orders`
 mirrors when it notes the orders it cancelled; on the backtest it also sends the cancel for
 one still in flight without marking it, and — read in `trading/strategy.pyx` rather than
-measured — leaves one a node has not yet sent, so kanso hands it the orders only when the
-venue holds every one of them open, and cancels them one by one otherwise.
+measured — leaves one a node has not yet sent, so kanso hands it the orders only when none
+is still `INITIALIZED`, and cancels them one by one otherwise.
 
 Risk configuration
 ------------------
@@ -949,8 +949,8 @@ def _check_a_cancel_in_flight_leaves_the_order_to_fill() -> tuple[bool, str]:
 def _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight() -> tuple[bool, str]:
     """What `KansoStrategy.cancel_all_orders` mirrors when it notes the orders it cancelled:
     the engine marks an order open at the venue `PENDING_CANCEL` at once. On the backtest it
-    also cancels one still in flight, left as it is, which is why kanso hands it the orders
-    only when the venue holds every one of them open."""
+    also cancels one still in flight, left as it is; one a node has not yet sent it skips,
+    which is why kanso hands it the orders only when none is still `INITIALIZED`."""
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
     from nautilus_trader.model.currencies import USD

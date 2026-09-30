@@ -690,14 +690,17 @@ counted the ones still working: a rule that followed the ask with its exit on ev
 the book bought 50 shares in one session at 20 ms, sold 92, and was left short 42 to the
 session's end, and every card of its lane at 20 ms held a position for close to a day. With
 no latency stated a cancel lands before anything further is matched, so an order the venue
-held open when its cancel was sent is not counted. **A cancel for an order the venue does not
-hold yet is held back until it does**, on every path, whatever the latency — `cancel_order`,
-`cancel_orders` and `cancel_all_orders` alike. A node would send it ahead of the order,
-which the venue would then rest uncancelled, and a backtest behind it, so kanso sends it at
-the first point at which the venue holds the order open, before the strategy's handler for
-that point, and counts the order as working until the cancel lands: a marketable one fills
-when the venue takes it, and a resting one can fill on any point matched before its cancel
-lands — with no latency stated, the first point after the one it was sent on. Zero, the
+held open when its cancel was sent is not counted. **A cancel for an order still on its way
+to the venue lands behind the order**, on every path, whatever the latency — `cancel_order`,
+`cancel_orders` and `cancel_all_orders` alike. The venue takes the order, filling it if it is
+marketable, and then the cancel: with no latency stated before it matches anything further,
+so an order sent and cancelled in one handler that does not fill when it is taken never
+rests through a point; under a latency both land at the same instant, the order first. The
+order counts as working until the cancel lands. A node may not yet have handed the order to
+the venue when the strategy's handler cancels it, and would send the cancel ahead of it,
+where it is lost and the order rests; kanso holds such a cancel back and sends it the moment
+the node reports the order submitted, before the venue has matched it, so a node and a
+backtest fill alike (`kanso replay parity`). Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the

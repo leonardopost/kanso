@@ -63,14 +63,17 @@ strategies, so a modifier is registered before its host runs; `close_position` a
 `close_all_positions` route through `submit_order`; `portfolio.net_position(instrument_id)`
 returns a signed `Decimal`; an order whose cancel was sent is not `is_closed` and can
 still fill until the cancel lands — under a latency model after the next point is matched,
-with none before it (`kanso.nautilus.facts` measures both); `cancel_all_orders` marks every
-order open at the venue `PENDING_CANCEL` at once, and on the backtest cancels one still in
-flight to it as well (`kanso.nautilus.facts` measures it) where on a node it skips one still
-`INITIALIZED` (read in `trading/strategy.pyx`); a cancel sent for an order still on its way
-to the venue reaches the backtest's venue after the order and a node's before it, where it
-is lost and the order rests (read in `live/risk_engine.py`, `execution/manager.pyx` and
-`trading/strategy.pyx`), which is why kanso holds such a cancel back until the venue holds
-the order open (`KansoStrategy._hold_cancel`);
+with none before it (`kanso.nautilus.facts` measures both on the backtest engine, and the
+replay tests hold the node to the same fills); `cancel_all_orders` marks every order open at
+the venue `PENDING_CANCEL` at once and cancels one in flight to it as well
+(`kanso.nautilus.facts` measures it on the backtest engine), and skips one still
+`INITIALIZED` (read in `trading/strategy.pyx`), which only a node has; a cancel sent for an
+order a node has not yet handed to the venue reaches the venue before the order, where it is
+lost and the order rests (read in `live/risk_engine.py`, `execution/manager.pyx` and
+`trading/strategy.pyx`), which is why kanso holds such a cancel back until the node has
+handed the order over (`KansoStrategy._hold_cancel`); `Strategy.cancel_orders` sends a
+`BatchCancelOrders` and refuses one whose orders are in more than one instrument after
+marking the first `PENDING_CANCEL` (read in `trading/strategy.pyx`);
 `StrategyConfig` and `ActorConfig` are frozen msgspec structs
 whose subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls`
 here is kanso's own attribute, honoured by kanso's loader alone.
@@ -103,6 +106,7 @@ from nautilus_trader.model.enums import (
     BookType,
     LiquiditySide,
     OrderSide,
+    OrderStatus,
     OrderType,
     PriceType,
     order_side_to_str,
@@ -836,10 +840,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         in flight held back, and would hold the position to the end of the window. In
         nautilus_trader 1.231.0 `Actor.handle_order_book_deltas` is `cpdef`, hands the
         deltas to `on_order_book_deltas` only while the component is running, and hands
-        historical ones to `handle_historical_data` instead.
+        historical ones to `handle_historical_data` instead (read in `common/actor.pyx`; the
+        replay tests measure the owed exit it pays on both paths, the backtest engine and
+        the node).
         """
-        if not historical:
-            self._send_unsent()
         super().handle_order_book_deltas(deltas, historical)
         if not historical and self.is_running and not self._warming():
             self._pay_owed()
@@ -908,7 +912,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._consult_overlay(instrument_id, last_bar=last_bar, price=price)
 
     def _dispatch_bar(self, bar: Bar) -> None:
-        self._send_unsent()
         self._data_time = int(bar.ts_event)
         instrument_id = bar.bar_type.instrument_id
         if self._is_extra_bar(bar):
@@ -921,7 +924,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._overlay_due = (instrument_id, None, None)
 
     def _dispatch_quote(self, tick: QuoteTick) -> None:
-        self._send_unsent()
         self._data_time = int(tick.ts_event)
         super().handle_quote_tick(tick, False)
         self._pay_owed()
@@ -930,7 +932,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._overlay_due = (tick.instrument_id, None, None)
 
     def _dispatch_trade(self, tick: TradeTick) -> None:
-        self._send_unsent()
         self._data_time = int(tick.ts_event)
         super().handle_trade_tick(tick, False)
         self._pay_owed()
@@ -939,7 +940,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._overlay_due = (tick.instrument_id, None, None)
 
     def _dispatch_data(self, data: object) -> None:
-        self._send_unsent()
         instrument_id = getattr(data, "instrument_id", None)
         key = None if instrument_id is None else str(instrument_id)
         self._observe(key, int(getattr(data, "ts_event", self._data_time)), None)
@@ -1429,9 +1429,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         until their cancels land, so the exit is cut to what they leave, and the rest is
         owed. An order still in flight to the venue is not cancelled and counts, and what it
         cuts from an exit at market is owed as well; once the venue holds it open, the owed
-        exit cancels it like any other. So is the cancel the sleeve itself sends for an order
-        still on its way to the venue: it is held back until the venue holds the order open
-        (`_hold_cancel`). A resting order whose cancel the venue refused is cancelled again.
+        exit cancels it like any other. So is an order the sleeve itself cancelled while it
+        was still on its way to the venue: the venue takes it before the cancel, on both
+        paths (`_hold_cancel`). A resting order whose cancel the venue refused is cancelled
+        again.
 
         What is owed is not dropped. When a cancel still in flight leaves less than asked,
         and whenever an exit at market is left less than asked, the exit is asked for again,
@@ -1682,8 +1683,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         for. An exit at market owed there is kept, as the market order it stands for would
         have been taken by the venue before the cancel that followed it.
 
-        A cancel for an order the venue does not hold open yet is held back and sent at the
-        first point at which it does (`_hold_cancel`)."""
+        A cancel for an order not yet handed to the venue is held back and sent once it has
+        been (`_hold_cancel`)."""
         self._forget(order.instrument_id.value, order.side, priced_only=True)
         if not self._hold_cancel(order, client_id, params):
             self._cancelling(order)
@@ -1696,15 +1697,25 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         params: dict[str, object] | None = None,
     ) -> None:
         """Cancel orders, forgetting the exits at a price owed on their sides and holding
-        back the cancel for any the venue does not hold open yet, as `cancel_order` does."""
-        sent = []
+        back the cancel for any not yet handed to the venue, as `cancel_order` does.
+
+        The rest go to the engine's own `cancel_orders` one batch per instrument. The engine
+        refuses a batch that mixes instruments after it has already marked its first order
+        `PENDING_CANCEL`, and sends nothing, so that order would rest while it read as
+        cancelled (read in `trading/strategy.pyx` of nautilus_trader 1.231.0, which applies
+        to both paths, the backtest engine and the node). An empty list is handed on as it
+        is, for the engine to refuse.
+        """
+        batches: dict[object, list[Any]] = {}
         for order in orders:
             self._forget(order.instrument_id.value, order.side, priced_only=True)
             if not self._hold_cancel(order, client_id, params):
                 self._cancelling(order)
-                sent.append(order)
-        if sent or not orders:
-            super().cancel_orders(sent, client_id, params)
+                batches.setdefault(order.instrument_id, []).append(order)
+        if not orders:
+            super().cancel_orders(orders, client_id, params)
+        for batch in batches.values():
+            super().cancel_orders(batch, client_id, params)
 
     def cancel_all_orders(
         self,
@@ -1716,12 +1727,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Cancel this sleeve's orders in a name, forgetting the exits at a price owed on
         those sides as `cancel_order` does.
 
-        When the venue holds every one of them open, the engine's own `cancel_all_orders`
-        cancels them, marking each `PENDING_CANCEL` at once (`kanso.nautilus.facts` measures
-        it). When any is still on its way to the venue, each is cancelled on its own through
-        `cancel_order` instead, so the cancel for one the venue does not hold yet is held
-        back as it is there: the engine's own would send it on the backtest path, where the
-        order is `SUBMITTED`, and skip it on the node, where it is still `INITIALIZED`.
+        When every one of them has been handed to the venue, the engine's own
+        `cancel_all_orders` cancels them, those open at the venue and those in flight to it,
+        marking each open one `PENDING_CANCEL` at once (`kanso.nautilus.facts` measures it on
+        the backtest engine). When any has not been handed over yet, each is cancelled on its
+        own through `cancel_order` instead, so the cancel for that one is held back as it is
+        there: the engine's own skips an order still `INITIALIZED` (read in
+        `trading/strategy.pyx` of nautilus_trader 1.231.0), which only a node has, since on
+        the backtest engine an order is `SUBMITTED` by the time `submit_order` returns.
         """
         orders = [
             order
@@ -1731,7 +1744,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             and not order.is_closed
         ]
         self._forget(instrument_id.value, order_side, priced_only=True)
-        if any(not order.is_open for order in orders):
+        if any(order.status == OrderStatus.INITIALIZED for order in orders):
             for order in orders:
                 self.cancel_order(order, client_id, params)
             return
@@ -1740,39 +1753,54 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         super().cancel_all_orders(instrument_id, order_side, client_id, params)
 
     def _hold_cancel(self, order: Any, client_id: Any, params: dict[str, object] | None) -> bool:
-        """Hold back the cancel for an order the venue does not hold open yet, and say so.
+        """Hold back the cancel for an order not yet handed to the venue, and say so.
 
-        A cancel sent for an order still on its way to the venue does different things on
-        the two code paths. The backtest has already handed the order to the venue
-        (`SUBMITTED`), and the venue takes it and then the cancel. A node has not: the order
-        is still `INITIALIZED`, its submit waits in the live risk engine's queue while the
-        cancel goes straight to the live execution engine's, so the cancel reaches the venue
+        On the backtest engine `submit_order` hands the order to the venue before it returns
+        (`SUBMITTED`), so a cancel sent after it reaches the venue behind the order: the
+        venue takes the order, filling it if it is marketable, and then the cancel — with no
+        latency stated before it matches anything further, under one both at the same
+        instant, the order first. A node has not handed it over yet. The order is still
+        `INITIALIZED` while its submit waits in the live risk engine's queue, and a cancel
+        sent then goes straight to the live execution engine's, so it reaches the venue
         first, for an order it does not know, and the order then rests uncancelled (read in
         `live/risk_engine.py`, `execution/manager.pyx` and `trading/strategy.pyx` of
-        nautilus_trader 1.231.0). So kanso sends neither: the cancel is noted, the order
-        counts as working, and `_send_unsent` sends the cancel at the first point at which
-        the venue holds the order open, before the author's handler for it — on both paths
-        the point at which the order's delay has passed. An order the venue closes first,
-        by filling or refusing it, is never cancelled.
+        nautilus_trader 1.231.0). So kanso holds such a cancel back, counts the order as
+        working, and sends the cancel from `handle_event` when the node reports the order
+        `SUBMITTED` — inside the call that hands it to the venue, before the venue has
+        matched it, which reaches the venue behind the order as on the backtest engine. The
+        replay tests measure it on both paths. An order the node closes first, by denying
+        it, is never cancelled. Only a node ever holds a cancel back.
         """
         current = self._current(order)
-        if current.is_open or current.is_closed or current.is_emulated:
-            self._unsent.pop(current.client_order_id, None)
+        if current.status != OrderStatus.INITIALIZED:
             return False
         self._cancelling(current)
         self._unsent[current.client_order_id] = (current, client_id, params)
         return True
 
-    def _send_unsent(self) -> None:
-        """Send every held-back cancel whose order the venue now holds open, and let go of
-        those whose order it has closed (`_hold_cancel`)."""
-        for key, (order, client_id, params) in list(self._unsent.items()):
-            current = self._current(order)
-            if current.is_open or current.is_closed:
-                del self._unsent[key]
-            if current.is_open:
-                self._cancelling(current)
-                super().cancel_order(current, client_id, params)
+    def handle_event(self, event: Any) -> None:
+        """Hand an event to the engine's own handling, then send a cancel held back for the
+        order it is about once the node has handed that order to the venue (`_hold_cancel`).
+
+        In nautilus_trader 1.231.0 the node's simulated venue reports an order `SUBMITTED`
+        from inside the call that hands it to the exchange, before the exchange matches it,
+        and the event reaches `Strategy.handle_event` in that same call, since kanso's relay
+        delivers the venue's events to the execution engine's synchronous handler
+        (`kanso.nautilus.sandbox`). A cancel sent here goes to the live execution engine's
+        queue, which the replay feed drains before it releases the next point
+        (`kanso.nautilus.replay_client`); under a latency it is stamped with the same
+        instant as the order and lands right behind it (`SimulatedVenue._send`). Measured on
+        both paths by the replay tests.
+        """
+        super().handle_event(event)
+        held = self._unsent.get(getattr(event, "client_order_id", None))
+        if held is None or self._current(held[0]).status == OrderStatus.INITIALIZED:
+            return
+        order, client_id, params = held
+        current = self._current(order)
+        del self._unsent[current.client_order_id]
+        if not current.is_closed:
+            super().cancel_order(current, client_id, params)
 
     def _cancelling(self, order: Any) -> None:
         """Note that a cancel was sent or held back for an order, and whether the venue held
@@ -1780,8 +1808,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         An order stays working until its cancel lands (`_working`). With no latency stated
         one the venue held open is spent the moment its cancel is sent, since the cancel
-        lands before anything further is matched; one whose cancel is held back is not,
-        because the venue has still to take it, and a marketable one fills there.
+        lands before anything further is matched; one still on its way to the venue is not,
+        because the venue takes it before the cancel, and a marketable one fills there.
         """
         current = self._current(order)
         if current.is_closed:
@@ -1798,10 +1826,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         matched, so the order can fill in between and is counted. With no latency stated the
         venue lands a cancel sent in a handler before it matches anything further, on both
         code paths, so an order it held open when the cancel was sent, and that still waits
-        on it, is spent and is not counted. A cancel is only ever sent for an order the venue
-        holds open: one for an order still on its way there is held back (`_hold_cancel`),
-        and the order is counted until the venue has taken it and the cancel has landed,
-        since a marketable one fills when it is taken. `clips`
+        on it, is spent and is not counted; one still on its way to the venue when the cancel
+        was sent is counted until the cancel lands, since the venue takes the order first and
+        a marketable one fills there. `clips`
         counts the attached overlays' clips as well, for a reading of the whole net position
         rather than the sleeve's own share of it.
         """

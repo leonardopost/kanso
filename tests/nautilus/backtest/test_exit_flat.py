@@ -262,6 +262,31 @@ class Strategy(KansoStrategy):
 '''
 )
 
+SENT_AND_CANCELLED = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once, then on every quote from its fourth rests one share at the ask and cancels
+    it in the same handler, before the venue has taken it."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen >= 4:
+            order = self.submit_exit(instrument_id, qty=1, price=float(tick.ask_price))
+            if order is not None:
+                CANCEL
+'''
+)
+
 BOOK_ONLY = (
     HEAD
     + b'''
@@ -513,7 +538,12 @@ def test_an_exit_rule_that_says_so_once_closes_whatever_its_host_cancels(
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 @pytest.mark.parametrize(
-    "cancel", ["self.cancel_order(order)", "self.cancel_all_orders(instrument_id)"]
+    "cancel",
+    [
+        "self.cancel_order(order)",
+        "self.cancel_orders([order])",
+        "self.cancel_all_orders(instrument_id)",
+    ],
 )
 def test_an_exit_cancelled_in_flight_still_counts_until_its_cancel_lands(
     request_for, cancel: str, latency_ms: float
@@ -556,3 +586,25 @@ def test_an_exit_owed_to_a_sleeve_that_holds_only_the_book_is_still_paid(
     assert [(fill.side, fill.qty) for fill in fills] == [("BUY", 100.0), ("SELL", 100.0)]
     base = midnight_ns(day) + BOOK_OPEN_NS
     assert all(fill.ts_ns - base < 80 * 1_000_000_000 for fill in fills)
+
+
+CANCELS = [
+    "self.cancel_order(order)",
+    "self.cancel_orders([order])",
+    "self.cancel_all_orders(instrument_id)",
+]
+"""The three ways a sleeve cancels one of its own orders."""
+
+
+@pytest.mark.parametrize("cancel", CANCELS)
+def test_an_order_cancelled_in_the_handler_that_sent_it_never_rests(
+    request_for, cancel: str
+) -> None:
+    """With no latency stated the backtest's venue takes the order and then the cancel that
+    followed it, before it matches anything further, so an order that does not fill when it
+    is taken is cancelled there and never rests through a point: the sleeve buys and sells
+    nothing else. Measured on the round that held such a cancel back to the next point:
+    each one-share exit rested through a quote, and the sleeve sold all 100 shares in 100
+    fills that no venue would have given it."""
+    run = _run(request_for, 0.0, SENT_AND_CANCELLED.replace(b"CANCEL", cancel.encode()))
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0)]
