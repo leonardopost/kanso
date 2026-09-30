@@ -36,9 +36,44 @@ DEMO_ENTRY: dict[str, Any] = {
 """The synthetic instrument the demo loader generates, on the simulated venue."""
 
 EURO_ENTRY: dict[str, Any] = dict(
-    DEMO_ENTRY, nautilus_id="EURO.XETR", override={"currency": "EUR", "price_increment": "0.01"}
+    DEMO_ENTRY, nautilus_id="EURO.XETR", override={"currency": "USD", "price_increment": "0.01"}
 )
-"""A second instrument, on a venue the portfolio can give another account currency."""
+"""A second instrument, on a venue the portfolio can give another account currency.
+
+It is quoted in USD, the currency its venue's account holds by default: an instrument that
+settles in another currency than its venue's account is refused on its own account."""
+
+BUND_ENTRY: dict[str, Any] = dict(
+    DEMO_ENTRY, nautilus_id="BUND.XETR", override={"currency": "EUR", "price_increment": "0.01"}
+)
+"""An equity quoted in EUR, on a venue whose account holds USD unless the portfolio says."""
+
+PERPETUAL_OVERRIDE: dict[str, Any] = {
+    "instrument_class": "swap",
+    "base_currency": "BTC",
+    "quote_currency": "USDT",
+    "settlement_currency": "USDT",
+    "multiplier": "0.01",
+    "price_increment": "0.1",
+    "size_increment": "1",
+    "lot_size": "1",
+}
+
+PERP_ENTRY: dict[str, Any] = {
+    "nautilus_id": "BTC-USDT-SWAP.SIM",
+    "asset_class": "CRYPTOCURRENCY",
+    "manual": True,
+    "corporate_actions": "none",
+    "override": PERPETUAL_OVERRIDE,
+}
+"""A linear perpetual settled in USDT, on the simulated venue."""
+
+USDC_PERP_ENTRY: dict[str, Any] = dict(
+    PERP_ENTRY,
+    nautilus_id="BTC-USDT-USDC.SIM",
+    override={**PERPETUAL_OVERRIDE, "settlement_currency": "USDC"},
+)
+"""The same contract quoted in USDT and settled in USDC."""
 
 GONE_ENTRY: dict[str, Any] = dict(
     DEMO_ENTRY, nautilus_id="GONE.SIM", attributes={"delisted": "2023-06-30"}
@@ -52,6 +87,9 @@ INSTRUMENTS: dict[str, dict[str, Any]] = {
     "EURO": EURO_ENTRY,
     "GONE": GONE_ENTRY,
     "LATE": LATE_ENTRY,
+    "BUND": BUND_ENTRY,
+    "PERP": PERP_ENTRY,
+    "USDC_PERP": USDC_PERP_ENTRY,
 }
 
 DOCUMENT: dict[str, Any] = {

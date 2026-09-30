@@ -304,6 +304,61 @@ def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> 
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
 
 
+# -- the currency each instrument settles in ---------------------------------------
+
+
+def test_an_equity_quoted_in_another_currency_than_its_venue_s_account_is_refused(
+    ws: Workspace,
+) -> None:
+    """The row the backlog kept open: a EUR leg on a USD account fills in EUR, and the
+    engine's conversion error is lost to a logger kanso builds bypassed."""
+    write_instruments(ws, "DEMO", "BUND")
+
+    failure = refused(ws, document(universe=["DEMO", "BUND"]))
+
+    assert failure.message == (
+        "universe: BUND.XETR settles in EUR, and XETR's account currency is USD; a "
+        "hypothesis's fills settle in the account's own currency"
+    )
+    assert failure.remedy == (
+        "set venues.XETR.currency to EUR in portfolio.yaml, or [research] currency to EUR in "
+        "kanso.toml"
+    )
+
+
+def test_a_perpetual_settled_in_another_stablecoin_than_the_account_is_refused(
+    ws: Workspace,
+) -> None:
+    """USDC and USDT are two codes: the engine calls the pair no quanto, and the account
+    holds only one of them."""
+    write_instruments(ws, "DEMO", "USDC_PERP")
+
+    failure = refused(configured(ws, currency="USDT"), document(universe=["USDC_PERP"]))
+
+    assert failure.message == (
+        "universe: BTC-USDT-USDC.SIM settles in USDC, and SIM's account currency is USDT; a "
+        "hypothesis's fills settle in the account's own currency"
+    )
+    assert failure.remedy is not None
+    assert "venues.SIM.currency" in failure.remedy
+    assert "[research] currency" in failure.remedy
+
+
+def test_a_perpetual_settled_in_the_account_s_currency_is_admissible(ws: Workspace) -> None:
+    write_instruments(ws, "DEMO", "PERP")
+
+    parsed = accepted(configured(ws, currency="USDT"), document(universe=["PERP"]))
+
+    assert parsed.universe == ["PERP"]
+
+
+def test_a_usd_instrument_on_a_usdt_account_is_refused(ws: Workspace) -> None:
+    """The demo's instrument under an account the workspace moved to USDT."""
+    failure = refused(configured(ws, currency="USDT"), DOCUMENT)
+
+    assert failure.message.startswith("universe: DEMO.SIM settles in USD, and SIM's account ")
+
+
 # -- the account and currency `[research]` states -------------------------------------
 
 
@@ -359,7 +414,8 @@ def test_a_template_workspace_resolves_the_model_it_did_before_the_configuration
 
 
 def test_a_configured_currency_the_engine_registers_reaches_the_card(ws: Workspace) -> None:
-    (model,) = resolved(configured(ws, currency="USDT"), DOCUMENT).values()
+    write_instruments(ws, "DEMO", "PERP")
+    (model,) = resolved(configured(ws, currency="USDT"), document(universe=["PERP"])).values()
 
     assert model["currency"] == "USDT"
     assert model["origins"]["currency"] == "config"

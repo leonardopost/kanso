@@ -27,7 +27,8 @@ document is parsed. Everything else needs the workspace, and that is this module
 * the venues those instruments trade on resolve to a complete cost model, and to one
   account currency. A spread taken from quotes needs quotes; a fixed spread needs its
   width; a universe spanning two account currencies would have a leg priced at a rate
-  nothing in the workspace records, so it is refused;
+  nothing in the workspace records, so it is refused — and so, for the same reason, is an
+  instrument that settles in a currency other than its venue's account currency;
 * when classification has been written, its construct is in the catalogue, its host is
   present exactly when the construct needs one and names a certified strategy, its
   parameters are ones that construct declares with values inside the sets it declares
@@ -42,7 +43,9 @@ they are reported together rather than one per attempt.
 
 NautilusTrader facts this module relies on (nautilus_trader 1.231.0): an `Instrument`
 carries its venue on `id.venue`, whose `value` is the venue code a venue model is
-resolved for.
+resolved for; and `Instrument.get_settlement_currency()` answers the currency a trade in it
+settles in — a `CryptoPerpetual`'s stated `settlement_currency`, and the quote currency of
+every other class kanso builds, none of which is inverse.
 """
 
 from __future__ import annotations
@@ -172,7 +175,9 @@ def venue_models(
     hypothesis does not require, or a fixed spread with no width — a universe spanning more
     than one account currency, and an account currency the engine does not register are
     all refused here, because each would put a number on a card that nothing in the
-    workspace can account for.
+    workspace can account for. So is an instrument that settles in a currency other than
+    its venue's account currency: its fills would be struck in a currency the account holds
+    none of, at a conversion rate nothing in the workspace records.
 
     The broker is named in `kanso.toml` and its declaration is asked of whichever adapter
     provides it, so this reads a broker's account type, currency and costs without naming
@@ -204,7 +209,38 @@ def venue_models(
     for model in models.values():
         known_currency(model.currency)
     single_currency(models)
+    _check_settlement(instruments, models)
     return models
+
+
+def _check_settlement(instruments: Mapping[str, Any], models: Mapping[str, VenueModel]) -> None:
+    """Every instrument settles in the account currency of the venue it trades on.
+
+    The settlement currency is a perpetual's stated one, a currency pair's quote currency,
+    and every other instrument's currency; a mismatch is refused naming the instrument,
+    what it settles in and what its venue's account holds.
+    """
+    wrong: dict[str, tuple[str, str, str]] = {}
+    for held in instruments.values():
+        venue = _venue_of(held)
+        settles = str(held.get_settlement_currency().code)
+        account = models[venue].currency
+        if settles != account:
+            wrong[str(held.id)] = (settles, venue, account)
+    if not wrong:
+        return
+    named = "; ".join(
+        f"{instrument} settles in {settles}, and {venue}'s account currency is {account}"
+        for instrument, (settles, venue, account) in sorted(wrong.items())
+    )
+    first = sorted(wrong.values())[0]
+    raise ValidationError(
+        f"universe: {named}; a hypothesis's fills settle in the account's own currency",
+        remedy=(
+            f"set venues.{first[1]}.currency to {first[0]} in portfolio.yaml, or [research] "
+            f"currency to {first[0]} in kanso.toml"
+        ),
+    )
 
 
 def _venue_of(instrument: Any) -> str:
