@@ -1,8 +1,10 @@
 """The exchange's public reference: a listed perpetual swap resolved into an instrument.
 
 This is the data adapter the OKX package exposes beside its broker, as `ADAPTER`, and the
-instrument provider `[data] reference = "okx"` names. It reads one public endpoint, the
-instruments listing, and it reads it with no credential at all.
+instrument provider `[data] reference = "okx"` names. As a provider it reads one public
+endpoint, the instruments listing, with no credential at all; the adapter also hands out the
+public-history loaders (`history.py`), which read through the same client, and this module
+holds the wire they share.
 
 **Public, so enabled by its table.** The listing needs no key, so this adapter has no
 credential to be enabled by; it is enabled by `[adapters.okx]` instead, which is also where
@@ -81,6 +83,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol
+from urllib.parse import urlsplit
 
 from kanso import __version__
 from kanso.data.instruments import (
@@ -137,9 +140,29 @@ USER_AGENT: Final = f"kanso/{__version__}"
 """Sent with every request: the exchange's edge refuses the standard library's default."""
 
 TIMEOUT_S: Final = 30
+DOWNLOAD_TIMEOUT_S: Final = 600
+"""An API answer is small; a day's trade archive of a liquid swap is tens of megabytes."""
+
+API: Final = "/api/"
+"""Every path of the exchange's REST API begins here; anything else is its file host."""
+
+ARCHIVES: Final = "/api/v5/public/market-data-history"
+"""The listing of the exchange's daily history archives (`history.py`, `trades.py`)."""
+
+KEYED_QUOTAS: Final[dict[str, int]] = {ARCHIVES: 1}
+"""Paths metered on a quota of their own, in requests per second, whatever the table's rate.
+
+Measured on 2026-09-30 against `us.okx.com`: the archive listing answered HTTP 429, code
+`50011`, to every second request sent half a second apart, to three of eight sent a second
+apart through this client on that quota, and to none of six sent two seconds apart. The
+engine's quota admits a burst as large as its rate, so one a second — with a burst of one —
+is the slowest it can state, and `okx_trades` also pauses two seconds before every listing
+request it sends, which the quota cannot say."""
 
 ASSET_CLASS: Final = "perpetuals"
 DATASET: Final = "reference"
+DATASETS: Final = (DATASET, "bars", "trades", "funding")
+"""The reference, then one dataset per public-history loader (`history.py`)."""
 
 
 # --- the wire -----------------------------------------------------------------
@@ -164,14 +187,29 @@ def pyo3_transport(rate_per_second: int, *, factory: Any = None) -> Transport:
 
     The quota lives in the client, so a client per request would be no quota at all.
     `factory` exists so the suite drives the same coroutine plumbing without a socket.
+
+    A request to a path `KEYED_QUOTAS` names is sent under that path's own key as well, so
+    the endpoint that throttles hardest is metered on its own; a request outside the API —
+    an archive on the exchange's file host, tens of megabytes — is given `DOWNLOAD_TIMEOUT_S`
+    rather than the API's `TIMEOUT_S`.
     """
     client = (factory or _http_client)(rate_per_second)
 
     def send(url: str, params: Mapping[str, str]) -> Response:
         from nautilus_trader.core import nautilus_pyo3
 
+        path = urlsplit(url).path
+        keys = [path] if path in KEYED_QUOTAS else None
+        timeout = TIMEOUT_S if path.startswith(API) else DOWNLOAD_TIMEOUT_S
+
         async def once() -> Any:
-            return await client.request(nautilus_pyo3.HttpMethod.GET, url, params=dict(params))
+            return await client.request(
+                nautilus_pyo3.HttpMethod.GET,
+                url,
+                params=dict(params),
+                keys=keys,
+                timeout_secs=timeout,
+            )
 
         answer = asyncio.run(once())
         return Response(status=int(answer.status), body=bytes(answer.body or b""))
@@ -186,7 +224,9 @@ def _http_client(rate_per_second: int) -> Any:
     return nautilus_pyo3.HttpClient(
         default_headers={"User-Agent": USER_AGENT},
         header_keys=[],
-        keyed_quotas=[],
+        keyed_quotas=[
+            (path, nautilus_pyo3.Quota.rate_per_second(rate)) for path, rate in KEYED_QUOTAS.items()
+        ],
         default_quota=nautilus_pyo3.Quota.rate_per_second(rate_per_second),
         timeout_secs=TIMEOUT_S,
     )
@@ -208,6 +248,9 @@ class Answer:
     code: str | None
     message: str
     rows: tuple[Mapping[str, Any], ...] = ()
+    data: tuple[Any, ...] = ()
+    """Every element of the envelope's `data`, as served: an endpoint whose rows are arrays
+    rather than objects — the candles — is read from here, and `rows` keeps the objects."""
 
     @property
     def listed(self) -> bool:
@@ -240,14 +283,14 @@ def _answer(response: Response) -> Answer:
     if not isinstance(parsed, Mapping) or "code" not in parsed:
         text = response.body.decode("utf-8", "replace").strip()
         return Answer(response.status, None, text)
-    data = parsed.get("data")
-    rows = tuple(row for row in data if isinstance(row, Mapping)) if isinstance(data, list) else ()
-    return Answer(response.status, str(parsed["code"]), str(parsed.get("msg") or ""), rows)
+    data = tuple(parsed["data"]) if isinstance(parsed.get("data"), list) else ()
+    rows = tuple(row for row in data if isinstance(row, Mapping))
+    return Answer(response.status, str(parsed["code"]), str(parsed.get("msg") or ""), rows, data)
 
 
 @dataclass(frozen=True, slots=True)
 class PublicClient:
-    """The listing on one regional host, through one transport, with no credential."""
+    """The public API on one regional host, through one transport, with no credential."""
 
     base_url: str
     transport: Transport
@@ -257,15 +300,24 @@ class PublicClient:
         params = {"instType": SWAP}
         if inst_id is not None:
             params["instId"] = inst_id
+        return self.get(INSTRUMENTS, params)
+
+    def get(self, path: str, params: Mapping[str, str]) -> Answer:
+        """One public endpoint's answer, read as the API's envelope."""
+        return _answer(self.fetch(f"{self.base_url}{path}", params, name=path))
+
+    def fetch(
+        self, url: str, params: Mapping[str, str] | None = None, *, name: str = ""
+    ) -> Response:
+        """One GET of `url` as it came back, or a stop when nothing came back at all."""
         try:
-            response = self.transport(f"{self.base_url}{INSTRUMENTS}", params)
+            return self.transport(url, dict(params or {}))
         except Exception as exc:  # every fault below the answer is one outcome
             raise KansoError(
-                f"okx: {INSTRUMENTS} could not be reached ({type(exc).__name__})",
+                f"okx: {name or url} could not be reached ({type(exc).__name__})",
                 Exit.ERROR,
                 remedy="check the network and the exchange's status page, then re-run",
             ) from exc
-        return _answer(response)
 
 
 def _unanswered(answer: Answer) -> KansoError:
@@ -415,16 +467,19 @@ class OkxReference(InstrumentProvider):
 
 @dataclass(frozen=True, slots=True)
 class Capabilities:
-    """What the public reference offers: definitions of the listed perpetual swaps."""
+    """What the exchange's public data offers: definitions of the listed perpetual swaps,
+    and their bars, trade prints and realised funding."""
 
     def names(self) -> tuple[str, ...]:
-        return (DATASET,)
+        return DATASETS
 
     def payload(self) -> dict[str, object]:
         return {
-            "classes": [{"asset_class": ASSET_CLASS, "datasets": [DATASET], "grain": "endpoint"}],
-            "datasets": [DATASET],
-            "credential": "none: the listing is public",
+            "classes": [
+                {"asset_class": ASSET_CLASS, "datasets": list(DATASETS), "grain": "endpoint"}
+            ],
+            "datasets": list(DATASETS),
+            "credential": "none: the listing and the history are public",
         }
 
 
@@ -467,8 +522,10 @@ class ReferenceAdapter:
         return f"{table(ws).rate_per_second}/s"
 
     def loaders(self, ws: Workspace) -> dict[str, Callable[[], Loader]]:
-        """None yet: the public-history loaders are a later change."""
-        return {}
+        """The public-history loaders, as factories: listing them builds none and sends nothing."""
+        from kanso.nautilus.adapters.okx.history import loaders
+
+        return loaders(ws)
 
     def provider(self, ws: Workspace, *, transport: Transport | None = None) -> OkxReference:
         """The instrument provider `[data] reference = "okx"` names."""

@@ -3,9 +3,9 @@
 `portfolio clients` lists both accounts with the variables each would read and the refusal a
 stage naming one would meet, and `doctor` reads `[adapters.okx]` through the package's own
 model and reports the clients unset. The package's public reference resolves a listed swap
-through `kanso data instruments resolve` and is surveyed by `--check`, answered here from
-the recordings in `tests/nautilus/adapters/okx/fixtures/`. No variable is set and nothing
-reaches a network.
+through `kanso data instruments resolve` and is surveyed by `--check`, and its public-history
+loaders fill the catalog through `kanso data load`, answered here from the recordings in
+`tests/nautilus/adapters/okx/fixtures/`. No variable is set and nothing reaches a network.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 from kanso.errors import Exit
 from kanso.nautilus.adapters.okx import reference
 
-from ..nautilus.adapters.okx.recorded import Replay
+from ..nautilus.adapters.okx.recorded import History, Replay, recorded_for
 from .conftest import at, payload, reconfigure
 
 DEMO = "okx_demo"
@@ -247,3 +247,83 @@ def test_a_table_that_names_no_host_is_passed_by_and_every_other_adapter_still_p
     assert adapters["status"] == "ok"
     assert "2 registered · 0 configured" in str(adapters["detail"])
     assert replay.asked == []
+
+
+def test_data_load_fills_the_catalog_with_bars_prints_and_funding_and_no_credential(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each loader through the command, on the requests the loaders were recorded sending."""
+    listing, history = Replay(), History()
+    monkeypatch.setattr(
+        reference,
+        "pyo3_transport",
+        lambda rate, **_: (
+            lambda url, params: (
+                history(url, params) if recorded_for(url, params) else listing(url, params)
+            )
+        ),
+    )
+    root = resolving(workspace)
+    resolved = at(
+        runner, root, "data", "instruments", "resolve", "BTC-USDT-SWAP.OKX", "USDC-USDT-SWAP.OKX",
+        "--as-of", "2026-09-30", "--json",
+    )  # fmt: skip
+    assert resolved.exit_code == Exit.OK, resolved.stdout
+    specs = {
+        "okx_bars": "instruments: [USDC-USDT-SWAP]\nstart: 2026-09-28\nend: 2026-09-28\n"
+        "resolution: 1m\n",
+        "okx_trades": "instruments: [USDC-USDT-SWAP.OKX]\nstart: 2026-09-26\nend: 2026-09-26\n",
+        "okx_funding": "instruments: [BTC-USDT-SWAP]\nstart: 2026-09-28\nend: 2026-09-29\n",
+    }
+    loaded: dict[str, dict[str, object]] = {}
+    for loader, text in specs.items():
+        spec = root / f"{loader}.yaml"
+        spec.write_text(f"loader: {loader}\n{text}", encoding="utf-8")
+        result = at(runner, root, "data", "load", "--loader", loader, "--spec", spec, "--json")
+        assert result.exit_code == Exit.OK, result.stdout
+        [loaded[loader]] = payload(result)["datasets"]
+
+    assert {name: one["rows"] for name, one in loaded.items()} == {
+        "okx_bars": 1440,
+        "okx_trades": 214,
+        "okx_funding": 6,
+    }
+    assert loaded["okx_funding"]["dataset_id"] == "BTC_USDT_SWAP.OKX-funding-none-raw-20260929"
+    assert all(one["publication"] == "realtime" and not one["truncated"] for one in loaded.values())
+    assert not [url for url, params in history.asked if "key" in str(params).lower()]
+
+
+def test_data_load_refuses_trade_days_the_archives_do_not_serve(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listing, history = Replay(), History()
+    monkeypatch.setattr(
+        reference,
+        "pyo3_transport",
+        lambda rate, **_: (
+            lambda url, params: (
+                history(url, params) if recorded_for(url, params) else listing(url, params)
+            )
+        ),
+    )
+    root = resolving(workspace)
+    at(
+        runner,
+        root,
+        "data",
+        "instruments",
+        "resolve",
+        "USDC-USDT-SWAP.OKX",
+        "--as-of",
+        "2026-09-30",
+    )
+    spec = root / "trades.yaml"
+    spec.write_text(
+        "loader: okx_trades\ninstruments: [USDC-USDT-SWAP]\nstart: 2026-09-28\nend: 2026-09-29\n",
+        encoding="utf-8",
+    )
+
+    result = at(runner, root, "data", "load", "--loader", "okx_trades", "--spec", spec, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "UTC days 2026-09-29 are not served" in payload(result)["error"]

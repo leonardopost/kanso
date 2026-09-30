@@ -207,7 +207,7 @@ def test_the_concepts_page_states_how_funding_is_booked() -> None:
     assert "inside the return and the equity of the period" in concepts
     assert "Its `pnl_net` is net of that and its `cost` is not" in concepts
     assert "leave funding exactly as it was booked" in concepts
-    assert "no data adapter fetches funding" in concepts
+    assert "fetched by the OKX package's `okx_funding` loader" in concepts
 
 
 def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> None:
@@ -235,7 +235,7 @@ def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> Non
     assert "does not list `funding`" in refusals
     backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 107 |"))
     assert "~~A perpetual's funding is delivered and not booked~~ **booking closed**" in backlog
-    assert "no data adapter fetches settlements" in backlog
+    assert "the OKX package's `okx_funding` loader serves the exchange's settled rates" in backlog
 
 
 def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:

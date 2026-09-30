@@ -115,9 +115,11 @@ def test_the_adapter_is_discovered_beside_the_broker_and_needs_no_credential(
     assert ADAPTER.kind == "data"
     assert ADAPTER.credentials == ()
     assert ADAPTER.credential_origins(fresh) == {}
-    assert ADAPTER.loaders(fresh) == {}
-    assert ADAPTER.capabilities.names() == ("reference",)
-    assert ADAPTER.capabilities.payload()["credential"] == "none: the listing is public"
+    assert set(ADAPTER.loaders(fresh)) == {"okx_bars", "okx_trades", "okx_funding"}
+    assert ADAPTER.capabilities.names() == ("reference", "bars", "trades", "funding")
+    assert ADAPTER.capabilities.payload()["credential"] == (
+        "none: the listing and the history are public"
+    )
 
 
 def test_a_workspace_that_never_named_the_exchange_has_it_unconfigured(
@@ -492,7 +494,8 @@ def test_the_engine_client_carries_a_user_agent_and_no_other_header(
     reference._http_client(7)
 
     assert built["default_headers"] == {"User-Agent": USER_AGENT}
-    assert built["header_keys"] == [] and built["keyed_quotas"] == []
+    assert built["header_keys"] == []
+    assert [key for key, _ in built["keyed_quotas"]] == [reference.ARCHIVES]
     assert USER_AGENT.startswith("kanso/")
 
 
@@ -511,9 +514,14 @@ def test_the_transport_drives_the_engine_s_coroutine_and_reads_status_and_body()
         body = recorded("swap_BTC-USDT-SWAP.json").body
 
     class Client:
-        async def request(self, method: Any, url: str, params: dict[str, str]) -> Answered:
+        async def request(
+            self, method: Any, url: str, params: dict[str, str], **keyed: Any
+        ) -> Answered:
             sent.append((method, url, params))
+            quoted.append(keyed)
             return Answered()
+
+    quoted: list[dict[str, Any]] = []
 
     rates: list[int] = []
     send = pyo3_transport(3, factory=lambda rate: rates.append(rate) or Client())
@@ -524,6 +532,31 @@ def test_the_transport_drives_the_engine_s_coroutine_and_reads_status_and_body()
     assert answer.listed and answer.rows[0]["instId"] == "BTC-USDT-SWAP"
     assert sent[0][1:] == (f"{US}{INSTRUMENTS}", {"instType": "SWAP", "instId": "BTC-USDT-SWAP"})
     assert str(sent[0][0]).endswith("GET")
+    assert quoted[0] == {"keys": None, "timeout_secs": reference.TIMEOUT_S}
+
+
+def test_the_archive_listing_is_metered_on_its_own_key_and_a_download_waits_longer() -> None:
+    """The listing throttles hardest, so it is sent under its path's own quota; a file on
+    the exchange's file host is tens of megabytes, so it is given the longer timeout."""
+    quoted: list[dict[str, Any]] = []
+
+    class Answered:
+        status = 200
+        body = b"{}"
+
+    class Client:
+        async def request(self, method: Any, url: str, params: dict[str, str], **keyed: Any) -> Any:
+            quoted.append(keyed)
+            return Answered()
+
+    send = pyo3_transport(3, factory=lambda rate: Client())
+    send(f"{US}{reference.ARCHIVES}", {})
+    send("https://static.okx.com/cdn/okex/traderecords/trades/daily/x.zip?v=999", {})
+
+    assert quoted == [
+        {"keys": [reference.ARCHIVES], "timeout_secs": reference.TIMEOUT_S},
+        {"keys": None, "timeout_secs": reference.DOWNLOAD_TIMEOUT_S},
+    ]
 
 
 def test_a_body_that_is_json_but_not_the_envelope_is_no_answer() -> None:
@@ -535,7 +568,7 @@ def test_a_body_that_is_json_but_not_the_envelope_is_no_answer() -> None:
 
 def test_the_recordings_say_where_they_came_from() -> None:
     """Every fixture is accounted for: its url, its host, its status and when."""
-    names = {path.name for path in FIXTURES.iterdir()} - {"provenance.json"}
+    names = {path.name for path in FIXTURES.iterdir() if path.is_file()} - {"provenance.json"}
 
     assert names == set(PROVENANCE["files"])
     for name in names:
