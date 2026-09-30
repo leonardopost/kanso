@@ -91,12 +91,33 @@ FUTURE: dict[str, Any] = {
     },
 }
 
+PERPETUAL: dict[str, Any] = {
+    "nautilus_id": "BTCUSDT-PERP.SIM",
+    "asset_class": "CRYPTOCURRENCY",
+    "manual": True,
+    "corporate_actions": "none",
+    "override": {
+        "instrument_class": "swap",
+        "base_currency": "BTC",
+        "quote_currency": "USDT",
+        "settlement_currency": "USDT",
+        "multiplier": "0.01",
+        "price_increment": "0.1",
+        "price_precision": 1,
+        "size_increment": "1",
+        "size_precision": 0,
+        "lot_size": "1",
+    },
+}
+"""A linear perpetual of 0.01 BTC a contract: the entry `docs/workspace.md` shows."""
+
 CLASSES: dict[str, dict[str, Any]] = {
     "Equity": EQUITY,
     "IndexInstrument": INDEX,
     "CurrencyPair": CURRENCY_PAIR,
     "OptionContract": OPTION,
     "FuturesContract": FUTURE,
+    "CryptoPerpetual": PERPETUAL,
 }
 """One entry per instrument class kanso resolves, keyed by the class it must build."""
 

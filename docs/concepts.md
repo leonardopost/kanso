@@ -470,6 +470,19 @@ re-applied to the record charges the notional the runner charged. A record writt
 multiplier was kept reads as one, a share's; a run struck on a multiplied instrument before then
 is re-run before a cost model is re-applied to it.
 
+**A perpetual is a linear contract settled in the account's currency.** A crypto perpetual
+swap (`instrument_class: swap`, `docs/workspace.md`) is to kanso a contract whose notional is
+`qty x px x multiplier` in its quote currency — the same product every other notional above
+is — so it is built linear and an inverse one is refused. It settles and is booked in the
+account currency of its venue — its `settlement_currency` and its quote currency must both be
+that code, which `hyp validate` checks — and it is charged exactly what any other fill is:
+the venue model's costs, once, by the runner, with its own maker and taker rates held at
+zero. Two things a real perpetual carries are not modelled yet. Funding — the periodic
+payment between longs and shorts — arrives in a later release, so a held perpetual earns
+and pays none today. And neither margin nor liquidation is simulated: what bounds a
+perpetual book is the sleeve's room, `max_leverage` and the `maintenance_margin` gate
+(`docs/backlog.md`).
+
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
 subtracted first and the remainder re-marked, so what is judged is what the modifier added.

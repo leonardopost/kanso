@@ -22,7 +22,17 @@ naming the id.
 
 `override` is applied after resolution and before construction: it is the operator's
 correction of a definition, not a note about one, so it reaches the constructor. Tick and
-lot come from the dated convention table, never from a vendor.
+lot come from the dated convention table or the reference provider's measured definition,
+never guessed.
+
+Two things a definition may carry are refused rather than built. A non-zero `maker_fee` or
+`taker_fee`, from `override` or from the resolved definition: the runner charges commission
+once, from the venue model, and the simulated venue charges each fill the instrument's own
+rate on top, so a definition carrying one would be charged twice and the card would say
+once. The margin rates `margin_init` and `margin_maint` stay accepted — they are documented
+corrections, and the engine's liquidation path computes from them. And an inverse
+perpetual: kanso trades linear perpetuals, whose notional is `qty x px x multiplier` in the
+quote currency, and that product is the one every notional the runner records is.
 
 What is resolved is recorded, when the caller asks for it to be: the definitions go to the
 catalog's instrument store, which is the registry of record, and the cache is written back
@@ -40,13 +50,27 @@ added beside the held ones, so a run pinned to an earlier date still reproduces.
 
 NautilusTrader facts this module relies on (nautilus_trader 1.231.0):
 
-* The five instrument classes are `Equity`, `OptionContract`, `FuturesContract`,
-  `CurrencyPair` and `IndexInstrument`. Their constructors are Cython, have no
-  introspectable signature, and raise `TypeError` for a missing or unexpected argument, so
-  the accepted field set per class is stated here and checked before construction.
-* Tick size, lot size and multiplier are constructor inputs with no engine defaults.
-  `Equity` fixes `size_precision` to 0 and `size_increment` and `multiplier` to 1 itself,
-  and rejects all three as arguments.
+* The six instrument classes are `Equity`, `OptionContract`, `FuturesContract`,
+  `CurrencyPair`, `IndexInstrument` and `CryptoPerpetual`. Their constructors are Cython,
+  have no introspectable signature, and raise `TypeError` for a missing or unexpected
+  argument, so the accepted field set per class is stated here and checked before
+  construction.
+* Tick size is a constructor input with no engine default. Lot size and multiplier have none
+  on `Equity`, `FuturesContract` and `OptionContract`; `CurrencyPair` defaults `multiplier`
+  to `Quantity(1)` and `lot_size` to `None`, `IndexInstrument` fixes `multiplier` at 1, and
+  `CryptoPerpetual` defaults both to `Quantity(1)`. kanso requires the perpetual's anyway: a
+  contract value of one is a claim about the contract, and a perpetual's is usually a
+  fraction of a coin. `Equity` fixes
+  `size_precision` to 0 and `size_increment` and `multiplier` to 1 itself, and rejects all
+  three as arguments.
+* `CryptoPerpetual` fixes its asset class to `CRYPTOCURRENCY` and its instrument class to
+  `SWAP`, takes a `settlement_currency` and an `is_inverse` flag, and its `to_dict` carries
+  no `asset_class` key — so an entry written for a resolved one reads the asset class off
+  the instrument, not off its field map. Its `min_notional` and `max_notional` are `Money`,
+  rendered by `to_dict` as an amount and a currency code (`5.00000000 USDT`).
+* Every class carries `maker_fee` and `taker_fee`, zero when not given, and the backtest
+  venue's `MakerTakerFeeModel` charges a fill its notional times one of them, in the quote
+  currency. kanso's definitions keep both at zero so that charge is nothing.
 * `price_precision` must equal `price_increment.precision`, and `size_precision`
   `size_increment.precision`, so the precisions are derived from the increments rather than
   asked for.
@@ -213,8 +237,27 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
         "ts_event",
         "ts_init",
     ),
+    "CryptoPerpetual": (
+        "instrument_id",
+        "raw_symbol",
+        "base_currency",
+        "quote_currency",
+        "settlement_currency",
+        "is_inverse",
+        "price_precision",
+        "size_precision",
+        "price_increment",
+        "size_increment",
+        "multiplier",
+        "lot_size",
+        "ts_event",
+        "ts_init",
+    ),
 }
-"""What each class must be given. Omitting one raises `TypeError` from the engine."""
+"""What each class must be given. Omitting one raises `TypeError` from the engine, except a
+perpetual's `multiplier` and `lot_size`, which the engine defaults to one and kanso requires:
+a contract value of one is a claim about the contract, not an absence of one. `is_inverse`
+kanso supplies itself, as false."""
 
 _FEES = ("margin_init", "margin_maint", "maker_fee", "taker_fee")
 
@@ -233,13 +276,28 @@ _OPTIONAL: dict[str, tuple[str, ...]] = {
         "tick_scheme_name",
     ),
     "IndexInstrument": ("tick_scheme_name",),
+    "CryptoPerpetual": (
+        *_FEES,
+        "max_quantity",
+        "min_quantity",
+        "max_notional",
+        "min_notional",
+        "max_price",
+        "min_price",
+        "tick_scheme_name",
+        "info",
+    ),
 }
-"""What each class also accepts, so an override may correct a fee, a bound or an isin.
+"""What each class also accepts, so an override may correct a margin rate, a bound or an isin.
+
+`maker_fee` and `taker_fee` are accepted as fields and refused unless zero (`_charged`): a
+definition that states one is told why by name rather than told the field does not exist.
 
 `info` is an equity's free-form map and is where a split schedule lives — `info.splits`,
-read by `kanso.nautilus.splits`. It is here and not on the other four because a split is an
-equity's corporate action; a dated derivative expires instead. Because `engine_fields` is
-`to_dict` and `info` is one of its keys, a schedule is content-addressed into
+read by `kanso.nautilus.splits`. It is on no dated derivative because a split is an equity's
+corporate action and a dated derivative expires instead; a perpetual accepts one because a
+reference provider's definition carries its venue's metadata there. Because `engine_fields`
+is `to_dict` and `info` is one of its keys, a schedule is content-addressed into
 `definition_checksum`, `instruments_checksum` and the run's `snapshot_id` for free.
 """
 
@@ -251,8 +309,15 @@ _BY_ASSET_CLASS: dict[str, str] = {
 }
 """The class an asset class implies when the entry names no `instrument_class`."""
 
-_BY_INSTRUMENT_CLASS: dict[str, str] = {"OPTION": "OptionContract", "FUTURE": "FuturesContract"}
+_BY_INSTRUMENT_CLASS: dict[str, str] = {
+    "OPTION": "OptionContract",
+    "FUTURE": "FuturesContract",
+    "SWAP": "CryptoPerpetual",
+}
 """A derivative is not implied by its underlying's asset class, so the entry states it."""
+
+_ASSET_CLASS_OF: dict[str, str] = {"CryptoPerpetual": "CRYPTOCURRENCY"}
+"""The classes whose engine constructor fixes the asset class, and the one it fixes."""
 
 _NAMED_CLASS: dict[str, str] = {name: kind.lower() for kind, name in _BY_INSTRUMENT_CLASS.items()}
 """The same mapping read backwards, for writing a new entry for a resolved derivative."""
@@ -265,6 +330,15 @@ _CONSUMED = ("instrument_class",)
 
 _DERIVED = (("price_increment", "price_precision"), ("size_increment", "size_precision"))
 """Precisions the engine requires to equal an increment's, so they are never asked for."""
+
+_CHARGED = ("maker_fee", "taker_fee")
+"""The rates the simulated venue would charge a fill, which a kanso definition keeps at zero."""
+
+_MONEY = ("max_notional", "min_notional")
+"""Bounds stated in money, in the definition's settlement currency."""
+
+LINEAR = "kanso trades linear perpetuals: the runner's notional is qty x px x multiplier"
+"""Why an inverse perpetual is refused, in the words the refusal uses."""
 
 
 # --- coercion -----------------------------------------------------------------
@@ -345,6 +419,35 @@ def _info(value: object) -> dict[str, Any]:
     return canonical
 
 
+def _boolean(value: object) -> bool:
+    """A flag as YAML or a definition states it, and nothing else read as one.
+
+    The engine's `bint` takes any object's truth, so the string `"false"` would build an
+    inverse contract; only a boolean or the words `true` and `false` are accepted here.
+    """
+    if isinstance(value, bool):
+        return value
+    word = str(value).strip().lower()
+    if word in ("true", "false"):
+        return word == "true"
+    raise ValueError(f"{value!r} is not true or false")
+
+
+def _money(value: object, currency: object) -> Any:
+    """An amount in `currency`, from a bare number or the engine's `<amount> <code>` form.
+
+    A resolved definition renders a bound as `5.00000000 USDT`; an operator writes `5`. A
+    code that is not the definition's settlement currency is refused rather than converted.
+    """
+    from nautilus_trader.model.objects import Money
+
+    code = str(currency)
+    amount, _, stated = str(value).strip().partition(" ")
+    if stated and stated.strip() != code:
+        raise ValueError(f"{value!r} is not in the settlement currency {code}")
+    return Money.from_str(f"{format(_decimal(amount), 'f')} {code}")
+
+
 def _asset_class(value: object) -> Any:
     from nautilus_trader.model.enums import AssetClass
 
@@ -389,6 +492,8 @@ _COERCE: dict[str, Callable[[object], Any]] = {
     "currency": _currency,
     "base_currency": _currency,
     "quote_currency": _currency,
+    "settlement_currency": _currency,
+    "is_inverse": _boolean,
     "price_increment": _price,
     "strike_price": _price,
     "max_price": _price,
@@ -431,12 +536,22 @@ def _engine_class(entry: InstrumentEntry) -> str:
                 f"{entry.nautilus_id}: instrument_class {stated!r} names no instrument class "
                 f"kanso builds; expected one of {', '.join(sorted(_BY_INSTRUMENT_CLASS))}"
             )
+        fixed = _ASSET_CLASS_OF.get(named)
+        if fixed is not None and entry.asset_class != fixed:
+            raise ValidationError(
+                f"{entry.nautilus_id}: a {named} is a {fixed} instrument, and this entry "
+                f"says {entry.asset_class}",
+                remedy=f"set asset_class to {fixed} in this entry of {CACHE_NAME}",
+            )
         return named
     implied = _BY_ASSET_CLASS.get(entry.asset_class)
     if implied is None:
         raise ValidationError(
             f"{entry.nautilus_id}: asset class {entry.asset_class} implies no instrument class",
-            remedy="name `instrument_class: option` or `instrument_class: future` in `override`",
+            remedy=(
+                "name `instrument_class: option`, `instrument_class: future` or "
+                "`instrument_class: swap` in `override`"
+            ),
         )
     return implied
 
@@ -484,6 +599,11 @@ def build(entry: InstrumentEntry, conventions: Mapping[str, object]) -> object:
     are dropped from it silently, because a default is kanso's business. An `override` key
     the class does not accept is refused loudly, because it is the operator's assertion and
     dropping it would build something other than what the file says.
+
+    `conventions` is also how a resolved definition arrives to be rebuilt under the
+    override, so what is refused here is refused from either source: a non-zero maker or
+    taker rate, and an inverse perpetual. A perpetual's `is_inverse` is supplied as false
+    when neither states it.
     """
     name = _engine_class(entry)
     accepted = (*_REQUIRED[name], *_OPTIONAL[name])
@@ -511,6 +631,8 @@ def build(entry: InstrumentEntry, conventions: Mapping[str, object]) -> object:
     fields["raw_symbol"] = entry.symbol
     if "asset_class" in accepted:
         fields["asset_class"] = entry.asset_class
+    if "is_inverse" in accepted:
+        fields.setdefault("is_inverse", False)
     try:
         for increment, precision in _DERIVED:
             if increment in fields and precision in accepted and precision not in entry.override:
@@ -527,15 +649,88 @@ def build(entry: InstrumentEntry, conventions: Mapping[str, object]) -> object:
         )
 
     try:
-        arguments = {field: _COERCE[field](fields[field]) for field in accepted if field in fields}
+        arguments = {
+            field: _money(fields[field], fields["settlement_currency"])
+            if field in _MONEY
+            else _COERCE[field](fields[field])
+            for field in accepted
+            if field in fields
+        }
     except (TypeError, ValueError) as exc:
         raise _rejected(entry, name, exc) from None
+    _refuse_inverse(entry, arguments)
+    _refuse_charged(entry, arguments)
     splits.schedule(arguments.get("info"), entry.nautilus_id)
     try:
         instrument: object = _engine(name)(**arguments)
     except (TypeError, ValueError) as exc:
         raise _rejected(entry, name, exc) from None
     return instrument
+
+
+def _source(entry: InstrumentEntry, field: str) -> str:
+    """Where a field of a definition came from, for a refusal to point at."""
+    if field in entry.override:
+        return f"`override` in {CACHE_NAME}"
+    return "the resolved definition"
+
+
+def _refuse_inverse(entry: InstrumentEntry, arguments: Mapping[str, Any]) -> None:
+    """An inverse perpetual is refused by name, wherever the flag came from."""
+    if arguments.get("is_inverse") is True:
+        raise ValidationError(
+            f"{entry.nautilus_id}: is_inverse is true in {_source(entry, 'is_inverse')}; {LINEAR}",
+            remedy=(
+                f"trade the linear contract instead, or drop is_inverse from this entry of "
+                f"{CACHE_NAME}"
+            ),
+        )
+
+
+def _refuse_charged(entry: InstrumentEntry, arguments: Mapping[str, Any]) -> None:
+    """A non-zero maker or taker rate is refused by name, wherever it came from.
+
+    The simulated venue charges a fill its instrument's rate on top of the commission the
+    runner deducts from the venue model, so a definition carrying one is charged twice on
+    every fill while the card reports the runner's number once. A rate the entry's
+    `override` states is removed from it; a rate the reference provider resolved is zeroed
+    by stating it as `"0"` in the override, which wins over the resolved field — a refresh
+    would only fetch the provider's rate again.
+    """
+    charged = [field for field in _CHARGED if arguments.get(field, Decimal(0)) != 0]
+    if charged:
+        stated = ", ".join(
+            f"{field} {arguments[field]} in {_source(entry, field)}" for field in charged
+        )
+        stated_here = [field for field in charged if field in entry.override]
+        resolved = [field for field in charged if field not in entry.override]
+        steps = [
+            *([f"remove {' and '.join(stated_here)} from"] if stated_here else []),
+            *([" and ".join(f'set {field}: "0" in' for field in resolved)] if resolved else []),
+        ]
+        raise ValidationError(
+            f"{entry.nautilus_id}: {stated}; a kanso definition charges no fee of its own",
+            remedy=(
+                "the runner charges commission once from the venue model; state it under "
+                f"venues.<MIC>.costs or the hypothesis costs, and {', and '.join(steps)} "
+                f"this entry's `override` in {CACHE_NAME}"
+            ),
+        )
+
+
+def charged_rates(instrument: object) -> dict[str, str]:
+    """The maker and taker rates a held definition carries that are not zero, by field.
+
+    `doctor` asks this of every definition in the store: one stored before the refusal in
+    `build` existed is charged by the simulated venue on every fill of every run priced
+    under it.
+    """
+    stored = engine_fields(instrument)
+    return {
+        field: str(stored[field])
+        for field in _CHARGED
+        if field in stored and _decimal(stored[field]) != 0
+    }
 
 
 def _rejected(entry: InstrumentEntry, name: str, exc: Exception) -> ValidationError:
@@ -886,13 +1081,32 @@ def _reconstructed(file: InstrumentsFile, answered: Mapping[str, object]) -> dic
     A provider reports what the reference source says; the operator's correction is applied
     after that and before construction, so the definition that reaches the engine, the store
     and the content address is the corrected one rather than the reported one.
+
+    The rebuilt definition is of the class the provider reported or it is refused: an entry
+    whose asset class implies another class would otherwise drop the fields that class does
+    not take and build it anyway — a perpetual filed as a bare `CRYPTOCURRENCY` entry would
+    come back a spot pair with no multiplier.
     """
     out: dict[str, object] = {}
     for wanted, outcome in answered.items():
         if isinstance(outcome, ResolveError):
             out[wanted] = outcome
-        else:
-            out[wanted] = build(_entry_for(file, wanted, outcome), _resolved_fields(outcome))
+            continue
+        entry = _entry_for(file, wanted, outcome)
+        rebuilt = build(entry, _resolved_fields(outcome))
+        reported, made = type(outcome).__name__, type(rebuilt).__name__
+        if made != reported:
+            named = _NAMED_CLASS.get(reported)
+            raise ValidationError(
+                f"{wanted}: the reference adapter answered a definition of class {reported}, "
+                f"and its entry in {CACHE_NAME} builds it as {made}",
+                remedy=(
+                    f"name `instrument_class: {named}` in this entry's `override`"
+                    if named is not None
+                    else f"correct asset_class in this entry of {CACHE_NAME}"
+                ),
+            )
+        out[wanted] = rebuilt
     return out
 
 
@@ -933,9 +1147,26 @@ def _from_cache(entry: InstrumentEntry, cached: Mapping[str, object], as_of: dat
     for field, value in entry.override.items():
         if field in _CONSUMED:
             continue
-        if field not in stored or _comparable(stored[field]) != _comparable(value):
+        if field not in stored or not _agrees(field, stored[field], value):
             return None
     return held
+
+
+def _agrees(field: str, stored: object, stated: object) -> bool:
+    """Whether a stored definition's field is the value the override states.
+
+    A money bound is stored as `<amount> <code>` (`5.00000000 USDT`) and written by an
+    operator as a bare amount (`5`) or with its code, so it agrees when the amounts are
+    equal and any code stated is the stored one.
+    """
+    if field in _MONEY:
+        held, _, held_code = str(stored).strip().partition(" ")
+        amount, _, code = str(stated).strip().partition(" ")
+        try:
+            return Decimal(held) == Decimal(amount) and code.strip() in ("", held_code.strip())
+        except InvalidOperation:
+            return False
+    return _comparable(stored) == _comparable(stated)
 
 
 def _comparable(value: object) -> str:
@@ -1012,15 +1243,19 @@ def _entry_for(file: InstrumentsFile, wanted: str, instrument: object) -> Instru
 
     A new entry records the instrument class when the definition is a derivative, since an
     asset class alone does not imply one and the entry has to be able to rebuild itself.
+    The asset class is read off the instrument rather than its field map: measured on
+    nautilus_trader 1.231.0, `CryptoPerpetual.to_dict` and `CurrencyPair.to_dict` carry no
+    `asset_class` key, and every instrument carries the attribute.
     """
     found = _lookup(file, wanted)
     if not isinstance(found, ResolveError):
         return found
     stated = _NAMED_CLASS.get(type(instrument).__name__)
     stored = engine_fields(instrument)
+    held: Any = instrument
     return InstrumentEntry(
         nautilus_id=str(stored["id"]),
-        asset_class=str(stored.get("asset_class", "EQUITY")),
+        asset_class=str(held.asset_class.name),
         corporate_actions="adjust_all",
         override={} if stated is None else {"instrument_class": stated},
     )
