@@ -12,6 +12,7 @@ generates with no vendor in the loop.
 from __future__ import annotations
 
 from datetime import date
+from math import fsum
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,99 @@ class Strategy(KansoStrategy):
             self.submit_entry(
                 data.instrument_id, "BUY", qty=10, price=None if price is None else round(price, 1)
             )
+'''
+
+
+RESTING = b'''
+from nautilus_trader.model.objects import Price
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    enter: int = 7
+    below: float = 0.0005
+    amend: bool = False
+    record: str = ""
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of ten contracts `below` the close of its `enter`-th bar; with `amend`,
+    lifts that order through the market in answer to the next settlement it is handed."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.order = None
+
+    def on_bar(self, bar):
+        self.seen += 1
+        if self.seen == self.kanso_config.enter:
+            price = round(float(bar.close) * (1 - self.kanso_config.below), 1)
+            self.order = self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=10, price=price)
+
+    def on_data(self, data):
+        if self.kanso_config.record:
+            with open(self.kanso_config.record, "a") as out:
+                out.write(f"{data.ts_init} {data.rate!r} {self.balance!r}\\n")
+        if self.kanso_config.amend and self.order is not None and self.order.is_open:
+            lifted = round(self.last_price(data.instrument_id) * 1.01, 1)
+            self.modify_order(self.order, price=Price(lifted, 1))
+'''
+
+HARVEST = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Takes the side a settlement's rate pays, in answer to it, and leaves on the next bar:
+    what a harvest of the rate already known looks like."""
+
+    config_cls = KansoConfig
+
+    def on_start(self):
+        self.entered = None
+
+    def on_bar(self, bar):
+        if self.entered is not None and bar.ts_init > self.entered:
+            self.entered = None
+            self.submit_exit(bar.bar_type.instrument_id)
+
+    def on_data(self, data):
+        if data.rate and self.entered is None:
+            side = "SELL" if data.rate > 0 else "BUY"
+            if self.submit_entry(data.instrument_id, side, qty=10) is not None:
+                self.entered = data.ts_init
+'''
+
+DODGE = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Long ten contracts from its first bar, sold in answer to every settlement that
+    charges a long and bought back on the next bar: what a dodge of a known rate looks like."""
+
+    config_cls = KansoConfig
+
+    def on_start(self):
+        self.seen = 0
+        self.left = None
+
+    def on_bar(self, bar):
+        self.seen += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=10)
+        elif self.left is not None and bar.ts_init > self.left:
+            self.left = None
+            self.submit_entry(instrument_id, "BUY", qty=10)
+
+    def on_data(self, data):
+        if self.seen and data.rate > 0 and self.left is None:
+            self.submit_exit(data.instrument_id)
+            self.left = data.ts_init
 '''
 
 
@@ -224,7 +318,7 @@ def test_a_held_perpetual_pays_each_settlement_it_held_once_in_the_extraction(
     prices = closes(hourly, "1h")
     bought, sold = funded.run.fills
     held_through = [
-        (ts, rate) for ts, rate in settlements(hourly, "1h") if bought.ts_ns <= ts < sold.ts_ns
+        (ts, rate) for ts, rate in settlements(hourly, "1h") if bought.ts_ns < ts <= sold.ts_ns
     ]
 
     assert len(held_through) == 3
@@ -250,16 +344,72 @@ def test_a_held_perpetual_pays_each_settlement_it_held_once_in_the_extraction(
     assert trade.pnl_net == pytest.approx(plain.pnl_net - total, abs=1e-9)
 
 
-def test_a_fill_stamped_at_a_settlement_is_funded_there(hourly: Path) -> None:
-    """Bought on the 08:00 bar, the fill is stamped at 08:00: held when 08:00 settled."""
+def test_an_order_placed_at_a_settlement_is_not_funded_there(hourly: Path) -> None:
+    """Bought at market on the 08:00 bar, the fill is stamped 08:00, when the 08:00 rate was
+    already public: the first settlement it pays is 16:00."""
     result = run(perp_request(perp_hypothesis("1h"), enter=8, leave=20), hourly)
     bought, _ = result.run.fills
+    eight = midnight_ns(SERVED[0]) + 8 * HOUR_NS
 
-    assert bought.ts_ns == midnight_ns(SERVED[0]) + 8 * HOUR_NS
-    assert [payment.ts_ns for payment in result.run.funding] == [
-        bought.ts_ns,
-        midnight_ns(SERVED[0]) + 16 * HOUR_NS,
-    ]
+    assert bought.ts_ns == eight
+    assert [payment.ts_ns for payment in result.run.funding] == [eight + 8 * HOUR_NS]
+
+
+def test_a_fill_at_a_settlement_is_not_held_there_however_early_its_order_rested(
+    hourly: Path,
+) -> None:
+    """Rested under the 07:00 close, the buy fills against the 08:00 bar: stamped at 08:00,
+    and not held when 08:00 settled — no fill of the instant is, since which point of it an
+    order answered is not recorded where both paths can read it."""
+    result = run(perp_request(perp_hypothesis("1h"), RESTING), hourly)
+    (bought,) = result.run.fills
+    eight = midnight_ns(SERVED[0]) + 8 * HOUR_NS
+
+    assert bought.ts_ns == eight
+    assert bought.maker
+    assert result.run.funding[0].ts_ns == eight + 8 * HOUR_NS
+    assert result.run.funding[0].qty == 10.0
+
+
+def test_an_order_amended_through_the_market_at_a_settlement_is_not_funded_there(
+    hourly: Path,
+) -> None:
+    """The same buy rested far under the market and lifted through it in answer to 08:00:
+    filled at 08:00, and not held when 08:00 settled."""
+    result = run(perp_request(perp_hypothesis("1h"), RESTING, below=0.05, amend=True), hourly)
+    (bought,) = result.run.fills
+    eight = midnight_ns(SERVED[0]) + 8 * HOUR_NS
+
+    assert bought.ts_ns == eight
+    assert not bought.maker
+    assert [payment.ts_ns for payment in result.run.funding][:1] == [eight + 8 * HOUR_NS]
+
+
+def test_a_harvest_of_a_known_rate_collects_nothing(hourly: Path) -> None:
+    """Entered on the side each settlement's rate pays, in answer to it, and left on the next
+    bar: never held at a settlement, so no payment is booked and no trade carries one."""
+    result = run(perp_request(perp_hypothesis("1h"), HARVEST), hourly)
+    assert len(result.run.trades) >= 10
+    assert result.run.fills[0].ts_ns == midnight_ns(SERVED[0]) + 8 * HOUR_NS
+    assert result.run.funding == ()
+    assert all(trade.funding == 0.0 for trade in result.run.trades)
+
+
+def test_a_dodge_of_a_known_rate_pays_what_holding_through_pays(hourly: Path) -> None:
+    """Sold in answer to every settlement that charges a long and bought back on the next
+    bar, the book is long every hour but the settlements' and still pays each of them, as a
+    book long throughout does."""
+    dodged = run(perp_request(perp_hypothesis("1h"), DODGE), hourly)
+    held = run(perp_request(perp_hypothesis("1h"), enter=1, leave=999), hourly)
+
+    assert len(dodged.run.trades) >= 5
+    assert any(payment.paid > 0 for payment in dodged.run.funding)
+    assert dodged.run.funding == held.run.funding
+    for trade in dodged.run.trades:
+        assert trade.funding == fsum(
+            p.paid for p in dodged.run.funding if trade.opened_ns < p.ts_ns <= trade.closed_ns
+        )
+        assert trade.funding != 0.0
 
 
 def test_a_short_receives_a_positive_rate_and_pays_a_negative_one(hourly: Path) -> None:
@@ -450,31 +600,60 @@ def test_a_sleeve_that_does_not_book_funding_still_sees_every_settlement(
             assert balance == pytest.approx(ends[ts] + cumulative(result, ts), abs=1e-9)
 
 
-def test_an_order_placed_in_answer_to_a_settlement_is_funded_and_the_balance_catches_up(
+def test_an_order_placed_in_answer_to_a_settlement_is_not_funded_there_on_either_path(
     daily: Path, tmp_path: Path
 ) -> None:
-    """Bought in `on_data` at 08:00, the fill is stamped 08:00 and the runner funds it there;
-    the harness booked 08:00 before the order existed and settles the difference when the
-    next instant arrives, so the balance read at 16:00 is the equity struck there."""
+    """Bought in `on_data` at the first settlement after a daily bar — 00:00, whose bar is
+    handed over first — the fill is stamped at the settlement and the runner leaves it out of
+    what that settlement took; the harness booked it on what was held before the order
+    existed and keeps it out when it settles the instant again, so every balance read at a
+    period's end is the equity struck there."""
     record = tmp_path / "balances.txt"
     result = run(perp_request(perp_hypothesis("1d"), ANSWERING, record=str(record)), daily)
     (bought,) = result.run.fills
     ends = dict(zip(result.run.period_ends_ns, result.run.equity, strict=True))
 
-    assert result.run.funding[0].ts_ns == bought.ts_ns
+    assert bought.ts_ns == midnight_ns(SERVED[0]) + NS_PER_DAY
+    assert bought.ts_ns in dict(settlements(daily, "1d"))
+    assert result.run.funding[0].ts_ns == bought.ts_ns + 8 * HOUR_NS
     assert result.run.funding[0].qty == 10.0
-    for ts, _, balance in balances(record):
-        if ts in ends:
-            assert balance == pytest.approx(ends[ts], abs=1e-9)
+    compared = [(ts, balance) for ts, _, balance in balances(record) if ts in ends]
+    assert compared
+    for ts, balance in compared:
+        assert balance == pytest.approx(ends[ts], abs=1e-9)
+
+
+def test_an_amended_order_is_left_out_of_the_settlement_it_answered_on_either_path(
+    daily: Path, tmp_path: Path
+) -> None:
+    """Lifted through the market in answer to 08:00, the buy fills at 08:00, before the
+    harness books the point: neither the runner nor the balance counts it in what 08:00
+    settled."""
+    record = tmp_path / "balances.txt"
+    result = run(
+        perp_request(
+            perp_hypothesis("1d"), RESTING, enter=1, below=0.05, amend=True, record=str(record)
+        ),
+        daily,
+    )
+    (bought,) = result.run.fills
+    ends = dict(zip(result.run.period_ends_ns, result.run.equity, strict=True))
+
+    assert all(payment.ts_ns > bought.ts_ns for payment in result.run.funding)
+    assert result.run.funding
+    compared = [(ts, balance) for ts, _, balance in balances(record) if ts in ends]
+    assert compared
+    for ts, balance in compared:
+        assert balance == pytest.approx(ends[ts], abs=1e-9)
 
 
 def test_a_fill_that_lands_after_a_settlement_is_left_out_of_what_it_settled(
     daily: Path, tmp_path: Path
 ) -> None:
     """A buy resting under the market from a 16:00 settlement fills when the next bar, at
-    00:00, reaches it: the runner funds it at 00:00 and not at 16:00, and the harness,
-    settling 16:00 again when that bar arrives, takes the fill the venue has just matched
-    against it back out before it strikes 16:00."""
+    00:00, reaches it: stamped at a settlement, it is funded at neither 16:00 nor 00:00 but
+    first at 08:00, and the harness, settling 16:00 and 00:00 again when later points arrive,
+    takes the fill back out of both before it strikes them."""
     record = tmp_path / "balances.txt"
     result = run(
         perp_request(perp_hypothesis("1d"), ANSWERING, record=str(record), hour=16, below=0.0005),
@@ -485,7 +664,7 @@ def test_a_fill_that_lands_after_a_settlement_is_left_out_of_what_it_settled(
     answered = midnight_ns(SERVED[0]) + NS_PER_DAY + 16 * HOUR_NS
 
     assert bought.ts_ns == answered + 8 * HOUR_NS
-    assert [payment.ts_ns for payment in result.run.funding][:1] == [bought.ts_ns]
+    assert [payment.ts_ns for payment in result.run.funding][:1] == [bought.ts_ns + 8 * HOUR_NS]
     for ts, _, balance in balances(record):
         if ts in ends:
             assert balance == pytest.approx(ends[ts], abs=1e-9)

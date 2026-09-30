@@ -1055,7 +1055,12 @@ class Marks:
     settlement is held. That needs the settlements a print belongs to known before the
     print arrives, which is what `take` arranges: a chunk's settlements are folded before
     its prints, and a chunk is a slice of time, so a print a later chunk's settlement
-    reaches back to is one print per name, carried.
+    reaches back to is one print per name, carried. It also needs each name's settlements
+    folded in time order — a later one folded first would take the carried print from an
+    earlier one — which both callers give it: the catalog serves a name's funding as one
+    time-sorted series, and chunks are cut in time. A settlement of a name that has not
+    printed by then is marked at nothing, and nothing can be held at it, since a fill
+    needs a price.
     """
 
     def __init__(self, request: RunRequest, model: VenueModel) -> None:
@@ -1515,10 +1520,10 @@ def _trades(
     The trade carries the instrument's multiplier, as its fills do, so its opening value is
     in the currency its profit is.
 
-    A funding payment belongs to the trade of its instrument open at its settlement:
-    opened at or before the instant and closed after it. Under netting one position of a
-    name is open at a time, and a fill at the instant is counted as held — so a position
-    closed at a settlement paid nothing there, and one opened at it paid what it held.
+    A funding payment belongs to the trade of its instrument held at its settlement:
+    opened before the instant and closed at or after it. Under netting one position of a
+    name is open at a time, and a fill at the instant is not held there (`_equity`) — so a
+    position opened at a settlement pays nothing there, and one closed at it still pays.
     `cost` stays the fills' cost alone, so a cost model re-applied to the fills leaves the
     funding where it was booked.
     """
@@ -1544,7 +1549,7 @@ def _trades(
         times, amounts = paid_at.get(name, ([], []))
         opened_ns = int(position.ts_opened)
         paid = fsum(
-            amounts[bisect.bisect_left(times, opened_ns) : bisect.bisect_left(times, closed)]
+            amounts[bisect.bisect_right(times, opened_ns) : bisect.bisect_right(times, closed)]
         )
         trades.append(
             Trade(
@@ -1620,13 +1625,20 @@ def _equity(
     (`kanso.nautilus.costs.funding_payment`): the realised rate on the signed quantity held
     then, marked at the instrument's last print at or before the instant — of several at
     that instant, the greatest, as a period's mark is chosen — and times its multiplier,
-    taken out of cash. What is held at the instant counts every fill stamped at it, by the
-    same `<=` rule that books a period's fills up to and including its end: the engine
-    stamps a fill at the data instant it matched on, so a fill at the settlement is a
-    position held when it settled. The payment is inside the return and the equity of the
-    period holding the instant, and each one is recorded (`CardRun.funding`) with what was
-    held; a settlement at which nothing was held pays and records nothing. A settlement in
-    the warmup prefix is not booked, since nothing is held before the open.
+    taken out of cash. What is held at the instant is every fill stamped before it, and no
+    fill stamped at it — deliberately not the `<=` rule that books a period's fills up to
+    and including its end. The realised rate is public at the settlement: the sleeve is
+    handed it there, and the engine stamps the fill of an order sent in answer at that same
+    instant, so under `<=` a position opened because the rate was known would collect it
+    and one closed because of it would escape it. Which point of an instant an order
+    answered is recorded nowhere either path can read — a stage node stamps an order by its
+    live clock, not by the data — so no fill of the instant is held, a resting order placed
+    earlier that fills there included: what a settlement sees was decided before its rate
+    was public. A split adjustment at the instant is booked after the settlement for the
+    same reason. The payment is inside the return and the equity of the period holding the
+    instant, and each one is recorded (`CardRun.funding`) with what was held; a settlement
+    at which nothing was held pays and records nothing. A settlement in the warmup prefix is
+    not booked, since nothing is held before the open.
 
     A stream may begin before the window with the warmup prefix. No period ends inside it
     — the first period is the window's first — but its points are consumed for the marks,
@@ -1685,7 +1697,7 @@ def _equity(
         lows, highs = fold.lows, fold.highs
         while settled < len(settlements) and settlements[settled][0] <= end:
             ts, key, rate, mark = settlements[settled]
-            cash, fill, split = _booked_to(ts, fills, adjustments, held, cash, fill, split)
+            cash, fill, split = _booked_to(ts - 1, fills, adjustments, held, cash, fill, split)
             qty = held.get(key, 0.0)
             if qty:
                 payment = funding_payment(qty, mark, multipliers.get(key, 1.0), rate)

@@ -106,8 +106,9 @@ class Fill:
 class FundingPayment:
     """One funding settlement of a perpetual, on the position held at it, booked once.
 
-    `qty` is the signed quantity held at the settlement instant, fills stamped at that
-    instant included; `rate` the realised rate that settled; `paid` what left the book —
+    `qty` is the signed quantity held at the settlement instant — every fill stamped before
+    it, and none stamped at it, since the rate is public there and an order sent in answer
+    fills at that same instant; `rate` the realised rate that settled; `paid` what left the book —
     `qty x mark x multiplier x rate` (`kanso.nautilus.costs.funding_payment`), marked at
     the instrument's last print at or before the instant — so a long pays a positive rate
     and a negative `paid` is funding received. A settlement at which nothing was held pays
@@ -129,8 +130,9 @@ class Trade:
     the position, so the opening value is in the currency the profit is.
 
     `funding` is what the position paid in funding over its life — every settlement in
-    `[opened_ns, closed_ns)` of its instrument, negative when it was paid more than it paid
-    — and `pnl_net` is net of it; `cost` is its fills' cost alone."""
+    `(opened_ns, closed_ns]` of its instrument, since a fill at a settlement is not held
+    there, negative when it was paid more than it paid — and `pnl_net` is net of it; `cost`
+    is its fills' cost alone."""
 
     opened_ns: int
     closed_ns: int

@@ -201,7 +201,9 @@ def test_the_concepts_page_states_how_funding_is_booked() -> None:
     assert "`qty x mark x multiplier x rate` out of cash" in concepts
     assert "A long pays a positive rate and a short receives it" in concepts
     assert "of several prints at the instant, the greatest" in concepts
-    assert "counts every fill stamped at the instant" in concepts
+    assert "every fill stamped before the instant and no fill stamped at it" in concepts
+    assert "deliberately not the `<=` rule" in concepts
+    assert "an order placed in answer to the settlement changes nothing it settled" in concepts
     assert "inside the return and the equity of the period" in concepts
     assert "Its `pnl_net` is net of that and its `cost` is not" in concepts
     assert "leave funding exactly as it was booked" in concepts

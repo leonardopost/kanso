@@ -930,15 +930,15 @@ no funding, so a basis universe — `[BTCUSDT.SIM, BTCUSDT-PERP.SIM]` with `data
 [bar, funding]` — is covered by bars for both and a funding history for the perpetual only;
 which instruments are asked is read from the stored definitions, as `hyp validate` reads
 them. `research begin` refuses a snapshot whose funding dataset for a perpetual does not
-span the research and certification windows, whole UTC days as for every series, and a
-card is handed each point of its window in `on_data`, at the settlement instant, as a
-`Funding`. **The runner books each settlement once**, in its extraction, where every other
-cost is applied: the rate on the quantity held at the instant, times the last print at or
-before it and the multiplier, out of cash — a long pays a positive rate, a short receives
-it — and the sleeve's `balance` has booked the same amount by the time `on_data` is handed
-the point. What that puts in a card's run, its trades and its equity is in
-`docs/concepts.md`. A dataset without a settlement that happened is a card that did not pay
-it: load the whole settled history of each window.
+span the research and certification windows, whole UTC days as for every series, and a card
+is handed each point of its window in `on_data`, at the settlement instant, as a `Funding`.
+**The runner books each settlement once**, in its extraction, where every other cost is
+applied: the rate on the quantity held before the instant — a fill stamped at it is not held
+there — times the last print at or before it and the multiplier, out of cash — a long pays a
+positive rate, a short receives it — and the sleeve's `balance` has booked the same amount
+by the time `on_data` is handed the point. What that puts in a card's run, its trades and
+its equity is in `docs/concepts.md`. A dataset without a settlement that happened is a card
+that did not pay it: load the whole settled history of each window.
 
 A workspace whose entries are all `manual` may still name a reference adapter in `[data]
 reference` without setting that adapter's key: the adapter is built only once resolution
