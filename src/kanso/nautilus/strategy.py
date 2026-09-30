@@ -363,6 +363,22 @@ def _leaves(orders: Sequence[Any]) -> Decimal:
     return sum((order.leaves_qty.as_decimal() for order in orders), Decimal(0))
 
 
+def _held_open(order: Any) -> bool:
+    """Whether the venue holds an order open, with no cancel pending for it: it has taken
+    the order and not closed it.
+
+    In nautilus_trader 1.231.0 `Order.is_open` does not say so. It counts `PENDING_UPDATE`
+    and `PENDING_CANCEL`, which a modify or a cancel applies to an order the venue has not
+    taken yet (from `SUBMITTED` on the backtest engine), and it is false for an order with
+    an emulation trigger (`Order.is_open_c` in `model/orders/base.pyx`). So kanso reads
+    whether the venue has taken it from `venue_order_id`, which `Order.apply` sets only from
+    the venue's own events, its acceptance, a fill or an update, and never on submission, on
+    both paths. Measured on both by the exit and replay tests, an order modified and then
+    cancelled while still in flight among them.
+    """
+    return bool(order.venue_order_id is not None and order.is_open and not order.is_pending_cancel)
+
+
 def _order_price(order: object) -> float | None:
     price = getattr(order, "price", None)
     return None if price is None else float(price)
@@ -1614,9 +1630,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             resting = [
                 order
                 for order in working
-                if order.order_type != OrderType.MARKET
-                and order.is_open
-                and not order.is_pending_cancel
+                if order.order_type != OrderType.MARKET and (_held_open(order) or order.is_emulated)
             ]
             for order in resting:
                 self.cancel_order(order)
@@ -1699,18 +1713,25 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Cancel orders, forgetting the exits at a price owed on their sides and holding
         back the cancel for any not yet handed to the venue, as `cancel_order` does.
 
-        The rest go to the engine's own `cancel_orders` one batch per instrument. The engine
-        refuses a batch that mixes instruments after it has already marked its first order
-        `PENDING_CANCEL`, and sends nothing, so that order would rest while it read as
-        cancelled (read in `trading/strategy.pyx` of nautilus_trader 1.231.0, which applies
-        to both paths, the backtest engine and the node). An empty list is handed on as it
-        is, for the engine to refuse.
+        An order the engine's order emulator holds is cancelled on its own, through the
+        engine's `cancel_order`, which routes it to the emulator; the rest go to the engine's
+        own `cancel_orders` one batch per instrument. The engine refuses a batch that mixes
+        instruments, or holds an emulated order after its first, after it has already marked
+        the orders before it `PENDING_CANCEL`, and sends nothing, so those would rest while
+        they read as cancelled (read in `trading/strategy.pyx` of nautilus_trader 1.231.0,
+        which applies to both paths, the backtest engine and the node; the emulated case is
+        measured on both by the exit and replay tests). An empty list is handed on as it is,
+        for the engine to refuse.
         """
         batches: dict[object, list[Any]] = {}
         for order in orders:
             self._forget(order.instrument_id.value, order.side, priced_only=True)
-            if not self._hold_cancel(order, client_id, params):
-                self._cancelling(order)
+            if self._hold_cancel(order, client_id, params):
+                continue
+            self._cancelling(order)
+            if self._current(order).is_emulated:
+                super().cancel_order(order, client_id, params)
+            else:
                 batches.setdefault(order.instrument_id, []).append(order)
         if not orders:
             super().cancel_orders(orders, client_id, params)
@@ -1811,20 +1832,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         lands before anything further is matched; one still on its way to the venue is not,
         because the venue takes it before the cancel, and a marketable one fills there.
 
-        In nautilus_trader 1.231.0 an order's first cancel moves it to `PENDING_CANCEL`,
-        which `Order.is_open` reports as open even when the venue never took it (from
-        `SUBMITTED` on the backtest engine), so a second cancel reads it as held open only
-        if it is not already pending cancel. One the venue held open was flagged by its
-        first cancel, and one whose cancel was rejected returns to the status it had before
-        (`Order.apply` on `OrderCancelRejected`), so the next cancel reads it afresh.
-        Measured on the backtest engine and on the node by the exit and replay tests.
+        Whether the venue held it open is `_held_open`, read before the cancel is applied.
+        One the venue held open was flagged by its first cancel, and one whose cancel was
+        rejected returns to the status it had before (`Order.apply` on
+        `OrderCancelRejected` in nautilus_trader 1.231.0), so the next cancel reads it
+        afresh. Measured on the backtest engine and on the node by the exit and replay tests.
         """
         current = self._current(order)
         if current.is_closed:
             return
         key = current.client_order_id
-        held = bool(current.is_open and not current.is_pending_cancel)
-        self._cancels[key] = self._cancels.get(key, False) or held
+        self._cancels[key] = self._cancels.get(key, False) or _held_open(current)
 
     def _working(self, key: str, side: OrderSide, *, clips: bool) -> list[Any]:
         """This sleeve's own orders on one side of a name that can still fill: every one the
@@ -1837,9 +1855,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         code paths, so an order it held open when the cancel was sent, and that still waits
         on it, is spent and is not counted; one still on its way to the venue when the cancel
         was sent is counted until the cancel lands, since the venue takes the order first and
-        a marketable one fills there. `clips`
-        counts the attached overlays' clips as well, for a reading of the whole net position
-        rather than the sleeve's own share of it.
+        a marketable one fills there.
+
+        An order the engine's order emulator holds has not reached the venue and counts
+        until it is cancelled. Its cancel is spent the moment it is sent, at any latency: in
+        nautilus_trader 1.231.0 the emulator takes the order out of its matching core and
+        marks it pending cancel locally before `cancel_order` returns (`OrderEmulator
+        ._cancel_order` in `execution/emulator.pyx`), on both paths. The `OrderCanceled` it
+        generates reaches the order at once on the backtest engine and on the node only once
+        the live execution engine's queue drains, so kanso reads the engine's local mark
+        (`Cache.is_order_pending_cancel_local`), which both set at once. Measured on both
+        paths by the exit and replay tests.
+
+        `clips` counts the attached overlays' clips as well, for a reading of the whole net
+        position rather than the sleeve's own share of it.
         """
         instant = float(self._charges.get("latency_ms") or 0.0) <= 0.0
         working = []
@@ -1847,6 +1876,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             order = self._current(entry[0])
             if (
                 order.is_closed
+                or self.cache.is_order_pending_cancel_local(order.client_order_id)
                 or order.side != side
                 or order.instrument_id.value != key
                 or (

@@ -351,11 +351,14 @@ the venue on the closing side would leave it less than asked, it cancels them fi
 stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
 after the stop has closed. Under a latency the cancelled orders can still fill until their
 cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
-below); an order of the sleeve's still in flight to the venue is not cancelled and counts,
-and what it cuts from an exit at market is owed at any latency, and paid once the venue holds
-that order open and the owed exit has cancelled it. A resting order whose cancel the venue
-refused is cancelled again. An attached exit rule closes through the
-same market exit. `self.held(id)` applies the
+below); an order of the sleeve's still in flight to the venue, modified or not, is not
+cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
+paid once the venue holds that order open and the owed exit has cancelled it. A resting
+order whose cancel the venue refused is cancelled again. **An order the engine's order
+emulator holds** (one sent with an `emulation_trigger`) has not reached the venue: it counts
+until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
+takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
+emulator, and batches the rest. An attached exit rule closes through the same market exit. `self.held(id)` applies the
 sleeve's market orders in flight and no limit or stop order, so a sleeve whose exit rests at
 the ask reads the whole position there until the exit fills; an exit sized from it is cut to
 what the working ones leave.

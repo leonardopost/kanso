@@ -303,18 +303,22 @@ def test_the_two_paths_cancel_an_exit_still_in_flight_alike(cancel: str, latency
         "self.cancel_order(order); self.cancel_order(order)",
         "self.cancel_order(order); self.cancel_all_orders(instrument_id)",
         "self.cancel_orders([order]); self.cancel_order(order)",
+        "from nautilus_trader.model.objects import Price; "
+        "self.modify_order(order, price=Price(round(float(tick.bid_price) - 0.04, 2), 2)); "
+        "self.cancel_order(order)",
     ],
 )
 def test_the_two_paths_cancel_an_exit_still_in_flight_twice_alike(
     cancels: str, latency_ms: float
 ) -> None:
-    """A marketable exit cancelled twice in the handler that sent it, while the venue does
-    not yet hold it, beside an exit at market. The backtest's first cancel leaves the order
-    pending cancel, which the engine reports as open; the second must not read that as an
-    order the venue held open, or the backtest drops it as spent, sends the market exit at
-    full size and goes short where the node, whose order is still unsent, does not. Both
-    paths cut the market exit, agree order for order and fill for fill, and are flat before
-    the sleeve sells short on its own."""
+    """A marketable exit cancelled twice in the handler that sent it, or modified and then
+    cancelled, while the venue does not yet hold it, beside an exit at market. On the
+    backtest the first command leaves the order pending cancel or pending update, which the
+    engine reports as open; the cancel after it must not read that as an order the venue
+    held open, or the backtest drops it as spent, sends the market exit at full size and
+    goes short where the node, whose order is still unsent, does not. Both paths cut the
+    market exit, agree order for order and fill for fill, and are flat before the sleeve
+    sells short on its own."""
     from tests.nautilus.backtest.test_exit_flat import (
         CANCELLED_IN_FLIGHT,
         chasing_costs,
@@ -338,6 +342,37 @@ def test_the_two_paths_cancel_an_exit_still_in_flight_twice_alike(
     assert node.intents == engine.intents
     assert node.run.fills == engine.run.fills
     assert never_short(engine.run.fills[:2]) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("source", ["EMULATED_STOP", "BATCH_WITH_EMULATED"])
+def test_the_two_paths_cancel_an_order_the_emulator_holds_alike(
+    source: str, latency_ms: float
+) -> None:
+    """An order held by the engine's order emulator, cancelled by an exit at market or in a
+    batch beside a resting exit, is taken out by the emulator at once on both paths — though
+    on the node its cancelled event reaches the order only once the live execution engine's
+    queue drains — so the two agree order for order and fill for fill, and neither holds the
+    position to the end of the window or goes past flat."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    request = request_for(source=getattr(test_exit_flat, source), hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model), [instrument()], test_exit_flat.points(sessions)
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])

@@ -314,6 +314,83 @@ class Strategy(KansoStrategy):
 '''
 )
 
+EMULATED_STOP = (
+    HEAD
+    + b'''
+from nautilus_trader.model.enums import OrderSide, TriggerType
+from nautilus_trader.model.objects import Price, Quantity
+
+
+class Strategy(KansoStrategy):
+    """Buys once; on its fifth quote sends a stop far below the market that the engine's
+    order emulator holds rather than the venue; on its thirtieth exits at market once, and
+    never asks again."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 5:
+            stop = self.order_factory.stop_market(
+                instrument_id,
+                OrderSide.SELL,
+                Quantity.from_int(100),
+                Price(round(float(tick.bid_price) * 0.5, 2), 2),
+                emulation_trigger=TriggerType.BID_ASK,
+            )
+            self.submit_order(stop)
+        elif self.seen == 30:
+            self.submit_exit(instrument_id)
+'''
+)
+
+BATCH_WITH_EMULATED = (
+    HEAD
+    + b'''
+from nautilus_trader.model.enums import OrderSide, TriggerType
+from nautilus_trader.model.objects import Price, Quantity
+
+
+class Strategy(KansoStrategy):
+    """Buys once, rests an exit just above the ask on its twenty-eighth quote and sends a
+    buy stop far above the market, held by the order emulator, on its twenty-ninth; on its
+    thirtieth cancels both in one batch and exits at market once."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 28:
+            self.resting = self.submit_exit(
+                instrument_id, price=round(float(tick.ask_price) + 0.03, 2)
+            )
+        elif self.seen == 29:
+            self.emulated = self.order_factory.stop_market(
+                instrument_id,
+                OrderSide.BUY,
+                Quantity.from_int(1),
+                Price(round(float(tick.ask_price) * 2.0, 2), 2),
+                emulation_trigger=TriggerType.BID_ASK,
+            )
+            self.submit_order(self.emulated)
+        elif self.seen == 30:
+            self.cancel_orders([self.resting, self.emulated])
+            self.submit_exit(instrument_id)
+'''
+)
+
 BOOK_OPEN_NS = 14 * 3_600 * 1_000_000_000
 """Where the book below opens, from midnight UTC of its session."""
 
@@ -563,14 +640,21 @@ def test_an_exit_cancelled_in_flight_still_counts_until_its_cancel_lands(
     assert never_short(run.fills[:2]) == (100.0, 100.0, 0.0)
 
 
+MODIFIED = (
+    "from nautilus_trader.model.objects import Price; "
+    "self.modify_order(order, price=Price(round(float(tick.bid_price) - 0.04, 2), 2))"
+)
+"""A modify of the marketable exit, still marketable, sent while it is in flight."""
+
 CANCELLED_TWICE = [
     "self.cancel_order(order); self.cancel_order(order)",
     "self.cancel_order(order); self.cancel_all_orders(instrument_id)",
     "self.cancel_orders([order]); self.cancel_order(order)",
+    MODIFIED + "; self.cancel_order(order)",
 ]
-"""An exit still in flight cancelled twice in the handler that sent it: the first cancel
-leaves it pending cancel, which the engine reports as open although the venue never took
-it."""
+"""An exit still in flight cancelled twice in the handler that sent it, or modified and
+then cancelled: the first command leaves it pending cancel or pending update, which the
+engine reports as open although the venue never took it."""
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
@@ -578,11 +662,13 @@ it."""
 def test_an_exit_cancelled_twice_in_flight_still_counts_until_its_cancel_lands(
     request_for, cancels: str, latency_ms: float
 ) -> None:
-    """A second cancel does not make an order the venue has not taken yet into one it held
-    open, so the marketable exit still counts, the market exit beside it is cut and owed,
-    and the sleeve is never short before it asks to be. Measured on the round before this
-    test: at 0 ms the second cancel read the pending-cancel order as held open and spent,
-    the market exit went at full size, both filled and the sleeve was short 100."""
+    """A second cancel, or a modify before the cancel, does not make an order the venue has
+    not taken yet into one it held open, so the marketable exit still counts, the market
+    exit beside it is cut and owed, and the sleeve is never short before it asks to be.
+    Measured on the round before this test: at 0 ms the second cancel read the
+    pending-cancel order as held open and spent, the market exit went at full size, both
+    filled and the sleeve was short 100; and on the round after it, the cancel read the
+    pending-update order the same way, with the same result."""
     run = _run(request_for, latency_ms, CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancels.encode()))
     assert [(fill.side, fill.qty) for fill in run.fills] == [
         ("BUY", 100.0),
@@ -590,6 +676,34 @@ def test_an_exit_cancelled_twice_in_flight_still_counts_until_its_cancel_lands(
         ("SELL", 100.0),
     ]
     assert never_short(run.fills[:2]) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_exit_at_market_cancels_a_stop_the_order_emulator_holds(
+    request_for, latency_ms: float
+) -> None:
+    """A stop held by the engine's order emulator has not reached the venue, and the engine
+    reports it as not open; an exit at market cancels it with the sleeve's resting orders,
+    and the emulator takes it out at once, so the exit goes whole and the sleeve is flat.
+    Measured on the round before this test: the stop counted as working and was never
+    cancelled, so it cut the exit to nothing on every point and the 100 shares were held to
+    the end of the window."""
+    run = _run(request_for, latency_ms, EMULATED_STOP)
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_a_batch_of_cancels_with_an_emulated_order_in_it_cancels_every_one(
+    request_for, latency_ms: float
+) -> None:
+    """The engine's own `cancel_orders` sends nothing for a batch with an emulated order
+    after its first, having already marked the first pending cancel; kanso cancels an
+    emulated order on its own, through the emulator, and batches the rest, so the resting
+    exit is cancelled and the market exit beside it never goes past flat. Measured on the
+    round before this test: at 0 ms the resting exit read as cancelled, the market exit
+    went at full size, both filled and the sleeve was short 100."""
+    run = _run(request_for, latency_ms, BATCH_WITH_EMULATED)
+    assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])

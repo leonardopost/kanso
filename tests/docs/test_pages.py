@@ -204,6 +204,8 @@ def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> Non
     assert "What the cancel in flight held back is owed, not dropped" in text
     assert "With no latency stated, an exit at market is never held back by a resting one" in text
     assert "A cancel on that side takes back only an owed exit that has a price" in text
+    assert "An order the engine's order emulator holds" in text
+    assert "`cancel_orders` cancels it on its own, through the emulator" in text
 
 
 def test_the_research_template_says_an_exit_can_return_none_while_exits_are_working() -> None:
