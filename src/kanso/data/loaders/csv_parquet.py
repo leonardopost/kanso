@@ -597,7 +597,13 @@ def _coerce(value: object, kind: object, entry: FileSpec, field: str) -> object:
                 )
             return instrument_id(symbol, venue)
         if kind is float:
-            return float(text)
+            number = float(text)
+            if not math.isfinite(number):
+                raise ValidationError(
+                    f"files.columns.{field}: {text!r} in {entry.path} is not a finite number; "
+                    "a custom point carries a measured value, never a placeholder"
+                )
+            return number
         if kind is int:
             return int(text)
         if kind is bool:

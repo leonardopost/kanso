@@ -148,6 +148,16 @@ def test_a_rate_published_before_it_settled_is_refused(tmp_path: Path) -> None:
         loaded(path, ts_init="known")
 
 
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_a_rate_that_is_not_a_finite_number_is_refused(tmp_path: Path, bad: str) -> None:
+    """A placeholder rate would poison every balance the payment is booked into."""
+    rows = [list(row) for row in ROWS]
+    rows[1][HEADER.index("rate")] = bad
+    path = write_csv(tmp_path / "funding.csv", HEADER, rows)
+    with pytest.raises(ValidationError, match="is not a finite number"):
+        loaded(path)
+
+
 def test_funding_is_written_to_the_store_and_read_back(catalog: Any, tmp_path: Path) -> None:
     written = loaded(write_csv(tmp_path / "funding.csv", HEADER, ROWS))
 

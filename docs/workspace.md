@@ -898,7 +898,9 @@ settled, as a fraction of notional — `0.0001` is one basis point, paid by long
 when positive and by shorts to longs when negative. It is never the rate a venue publishes
 for the period in progress: that is a prediction, which moves until the instant it settles,
 and a series of predictions read as payments charges a book what it was never charged. Load
-the settled history, and leave a feed's "current" or "next" rate out of the catalog.
+the settled history, and leave a feed's "current" or "next" rate out of the catalog. A rate
+that is not a finite number — `nan`, `inf` — is refused at load, as any custom type's
+decimal field is: a placeholder would be booked as a payment.
 `ts_event` and `ts_init` are both the settlement instant, since that is when the rate stopped
 moving and when it was paid, so a funding dataset is `realtime` and names no publication
 rule. A file maps `ts_event` and `rate`, and `instrument_id` where it holds one — the entry
