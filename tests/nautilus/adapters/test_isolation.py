@@ -10,6 +10,12 @@ Neither check names a broker either. The names are read from the adapter directo
 day a second one lands it is scanned without anyone remembering to add it — which is exactly
 the day this would otherwise start passing by accident.
 
+A broker's package is that party's one home, so it may also carry the party's
+public-history loaders and reference provider, exposed as a module-level `ADAPTER` beside
+the `BROKER`. The data registry reaches such an adapter through `registry.adapters()` and
+never through `registry.packaged()`, which stays the data adapter directory; the broker
+registry reads only `BROKER`, so an `ADAPTER` changes nothing asserted here.
+
 Three directories are exempt, the same three the vendor scan exempts. `templates/` is
 rendered into an operator's workspace rather than imported, and is the one place a broker is
 deliberately named, since `[research] broker` has to default to something while the core
@@ -25,6 +31,7 @@ import re
 from pathlib import Path
 
 import kanso
+from kanso.data import registry
 from kanso.nautilus import adapters
 from kanso.portfolio import clients
 
@@ -112,6 +119,16 @@ def test_every_broker_package_registers_itself_under_its_own_directory_name() ->
         assert broker.id == broker_id
         assert broker.kind == "execution"
         assert broker.exec_clients
+
+
+def test_a_data_adapter_a_broker_package_exposes_is_a_data_or_reference_adapter() -> None:
+    """What a broker's package offers the data registry is data, never a second broker."""
+    packaged = registry.packaged()
+    for adapter_id, adapter in registry.brokered().items():
+        assert adapter.id == adapter_id
+        assert adapter_id not in packaged
+        assert adapter.kind in {"data", "reference"}
+        assert type(adapter).__module__.startswith(f"{adapters.PACKAGE}.")
 
 
 def test_every_broker_client_declares_what_the_core_is_allowed_to_know() -> None:

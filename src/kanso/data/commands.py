@@ -914,14 +914,15 @@ def adapters(ws: Workspace) -> tuple[list[Registered], list[str]]:
 
     Three kinds of thing are registered: the package's own loaders and an extension's,
     which take no credential and reach nothing; the manual instrument provider; and the
-    vendor adapters, discovered from the adapter packages rather than named here. A vendor
-    adapter is registered whether or not it is configured — it is enabled by the presence
-    of its credentials, never by installation — so this reports what it would need beside
-    what it declares, and resolves nothing to say so.
+    data adapters, discovered from the vendor packages and the broker packages rather than
+    named here, and built in wherever in the package they ship from. A data adapter is
+    registered whether or not it is configured — it is enabled by the presence of its
+    credentials, never by installation — so this reports what it would need beside what it
+    declares, and resolves nothing to say so.
     """
     extensions = ext.discover(ws.root, ws.config.extensions_paths)
     known = registry.adapters(extensions)
-    packaged = set(registry.packaged())
+    shipped = set(registry.packaged()) | set(registry.brokered())
     found = [
         Registered(
             id=loader_id,
@@ -943,7 +944,7 @@ def adapters(ws: Workspace) -> tuple[list[Registered], list[str]]:
         Registered(
             id=adapter.id,
             kind=adapter.kind,
-            provider="builtin" if adapter.id in packaged else "extension",
+            provider="builtin" if adapter.id in shipped else "extension",
             credentials=adapter.credentials,
             capabilities=adapter.capabilities.names(),
             quota=adapter.quota(ws),
@@ -961,6 +962,9 @@ def _adapter_notes(ws: Workspace, known: Mapping[str, registry.Adapter]) -> list
     An adapter needing several credentials can be half-configured, and that is worth saying
     rather than rounding to "configured": the path needing the unset name refuses when it
     is used, which is a long way from where the variable was forgotten.
+
+    A table nothing provides is named by the registry's one rule, which consults the
+    brokers too: a broker's table is configuration, not an orphan.
     """
     notes: list[str] = []
     for adapter_id, adapter in sorted(known.items()):
@@ -976,7 +980,7 @@ def _adapter_notes(ws: Workspace, known: Mapping[str, registry.Adapter]) -> list
                 f"{adapter_id} is configured, and {', '.join(unset)} is unset: whatever needs "
                 "it refuses when it is used"
             )
-    unknown = sorted(name for name in ws.config.adapters if name not in known)
+    unknown = registry.unprovided(ws, known)
     if unknown:
         notes.append(f"kanso.toml configures {', '.join(unknown)}, which nothing here provides")
     return notes

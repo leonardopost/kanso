@@ -20,12 +20,14 @@ from kanso.cli import doctor as doctor_module
 from kanso.data.snapshot import InstrumentDrift, newest
 from kanso.errors import Exit, PreconditionError
 from kanso.ext import KINDS, shipped
+from kanso.nautilus import adapters as brokers
 from kanso.nautilus import facts
 from kanso.nautilus.adapters import exec_clients
 from kanso.skills_sync import packaged_skills
 from kanso.state import SCHEMA_VERSION, StateStore, migrations
 from kanso.workspace import find
 
+from ..data.adapters.brokered import expose
 from ..data.adapters.massive import Replay, refused
 from .conftest import HYP_ID, INSTRUMENT, RESEARCH, at, lane, payload, run
 
@@ -515,6 +517,37 @@ def test_the_shadow_check_reads_every_kind_a_declaration_may_carry(
 def test_the_declaration_and_the_shadow_check_name_the_same_kinds(workspace: Path) -> None:
     """One comparison reads both tables, so a kind in only one of them is a blind spot."""
     assert set(shipped(find(workspace))) == set(KINDS)
+
+
+def test_a_data_adapter_a_broker_package_exposes_is_one_an_extension_would_shadow(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A broker-side adapter wins over an extension's, so an extension naming it is told so."""
+    expose(monkeypatch, tmp_path / "brokers", "tidebroker", "tide")
+
+    assert "tide" in shipped(find(workspace))["adapters"]
+
+
+def test_a_broker_s_table_is_configuration_to_doctor_and_to_data_adapters_alike(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """One rule decides what nothing provides, and both commands read it."""
+    broker_id = sorted(brokers.packaged())[0]
+    config = workspace / "kanso.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + f"\n[adapters.{broker_id}]\n[adapters.acme]\n",
+        encoding="utf-8",
+    )
+
+    doctor = items(at(runner, workspace, "doctor", "--json"), "adapters")
+    notes = payload(at(runner, workspace, "data", "adapters", "--json"))["notes"]
+
+    assert [line for line in doctor if "nothing registered here provides" in line] == [
+        "acme: configured in kanso.toml, and nothing registered here provides it"
+    ]
+    assert [note for note in notes if "nothing here provides" in note] == [
+        "kanso.toml configures acme, which nothing here provides"
+    ]
 
 
 def test_doctor_makes_no_network_call(

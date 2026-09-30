@@ -507,12 +507,18 @@ connects.
 
 ## Writing your own
 
-A **data adapter** is a package exposing a module-level `ADAPTER` with `id`, `kind`,
-`capabilities`, `credentials`, and the methods the registry calls: `client(ws)`,
-`configured(ws)`, `credential_origins(ws)`, `quota(ws)`, `loaders(ws)`, `provider(ws)` — a
-`kanso.data.instruments.InstrumentProvider`, or `None` — and `survey(ws)`. A workspace
-extension declares its ids in `PROVIDES["adapters"]` and exposes them in an `ADAPTERS`
-mapping, exactly as it declares loaders.
+A **data adapter** is a package exposing a module-level `ADAPTER` with `id`, `kind`
+(`data` or `reference`), `capabilities`, `credentials`, and the methods the registry calls:
+`client(ws)`, `configured(ws)`, `credential_origins(ws)`, `quota(ws)`, `loaders(ws)`,
+`provider(ws)` — a `kanso.data.instruments.InstrumentProvider`, or `None` — and `survey(ws)`.
+There is one package per outside party: a pure data vendor's lives under `data/adapters/`,
+and a broker whose public history or reference data kanso reads keeps those in its own
+package under `nautilus/adapters/`, exposed as the same `ADAPTER` beside its `BROKER`. The
+data registry finds both — the vendor packages first, then the broker packages, a vendor's
+id winning a clash — so `kanso data adapters`, the loaders and the instrument providers
+reach a broker-side adapter exactly as they reach a vendor's. A workspace extension declares
+its ids in `PROVIDES["adapters"]` and exposes them in an `ADAPTERS` mapping, exactly as it
+declares loaders; an id that ships from either directory wins over it.
 
 A **broker adapter** is a package under `nautilus/adapters/` exposing a module-level `BROKER`
 with `id`, `kind`, `exec_clients` (each an `ExecutionClientSpec` declaring `capital` and
