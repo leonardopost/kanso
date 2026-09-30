@@ -22,7 +22,7 @@ from kanso.nautilus.strategy import KansoStrategy
 from kanso.schemas import InstrumentEntry
 
 from .conftest import DEEP, VENUE, flat
-from .test_sleeve import config
+from .test_sleeve import FREE, config
 
 FUT = InstrumentId(Symbol("FUT"), VENUE)
 MULTIPLIER = 50.0
@@ -31,6 +31,8 @@ CONTRACT = PRICE * MULTIPLIER
 """What one contract is worth at the flat price."""
 BUDGET = 30_000.0
 CAPITAL = 100_000.0
+PER_CONTRACT = {"costs": {**FREE["costs"], "commission_per_share": 1.0}}
+"""The free model with one currency unit of commission a contract."""
 
 
 def future() -> Any:
@@ -108,6 +110,29 @@ def test_a_full_book_entry_fills_the_budget_in_contracts(backtest) -> None:
 
     expected = float(int(full_book_quantity(BUDGET, PRICE * MULTIPLIER, 0.25 * MULTIPLIER, 0.0)))
     assert expected == 5.0
+    assert intents(run) == [(FUT.value, "BUY", expected)]
+
+
+def test_a_per_share_commission_is_per_contract_in_the_reserve(backtest) -> None:
+    """One unit of commission a contract is 2 bp of a 5,000 contract, not the 100 bp it would
+    be over the price of a share; 30,100 sized over (1 + 2 x 2 bp) x 5,012.5 is six whole
+    contracts, where the share's arithmetic, over 1.02 x 5,012.5, would have bought five."""
+
+    class Enters(OnThird):
+        def act(self) -> None:
+            self.submit_entry(FUT, "BUY")
+
+    run = backtest(
+        Enters(contract_config(sizing_budget=30_100.0, venue_model=PER_CONTRACT)),
+        data=series(),
+        instruments=(future(),),
+    )
+
+    rate = run.strategy.cost_rate_at(PRICE, MULTIPLIER)
+    assert rate == pytest.approx(run.strategy.cost_rate + 1.0 / (PRICE * MULTIPLIER))
+    assert rate == pytest.approx(0.0002)
+    expected = float(int(full_book_quantity(30_100.0, PRICE * MULTIPLIER, 0.25 * MULTIPLIER, rate)))
+    assert expected == 6.0
     assert intents(run) == [(FUT.value, "BUY", expected)]
 
 
