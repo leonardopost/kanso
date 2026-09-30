@@ -145,6 +145,33 @@ class Strategy(KansoStrategy):
 )
 
 
+def tp_in_flight_then_stop(gap: int) -> bytes:
+    """Buys once, sends a take-profit far above the market on its thirtieth quote, and exits
+    at market once, `gap` quotes later — in the same handler, while the take-profit is still
+    in flight to the venue, when `gap` is 0."""
+    return (
+        HEAD
+        + f"""
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        if self.seen == 30:
+            self.submit_exit(instrument_id, price=round(float(tick.ask_price) * 1.5, 2))
+        if self.seen == 30 + {gap}:
+            self.submit_exit(instrument_id)
+""".encode()
+    )
+
+
 def exit_once_from(ts_ns: int) -> bytes:
     """An exit rule that says so exactly once, at the first point at or after `ts_ns`."""
     return f"""
@@ -195,17 +222,24 @@ class Strategy(KansoStrategy):
 )
 
 
-def taken_back(cancel: str) -> bytes:
+def taken_back(cancel: str, *, priced: bool = False) -> bytes:
     """MARKET_AFTER_CANCEL, which on its thirty-first quote cancels its exits again with
-    `cancel` — before the first cancel has landed under a latency."""
+    `cancel`; with `priced` its exit on the thirtieth is a limit below the bid, one the
+    market would take at once, rather than an order at market."""
+    source = MARKET_AFTER_CANCEL
+    if priced:
+        source = source.replace(
+            b"            self.submit_exit(instrument_id)\n",
+            b"            self.submit_exit(instrument_id, "
+            b"price=round(float(tick.bid_price) - 0.05, 2))\n",
+        )
     calls = {
         "cancel_all_orders": "self.cancel_all_orders(instrument_id)",
         "cancel_orders": "self.cancel_orders(self.cache.orders(strategy_id=self.id)[1:2])",
         "cancel_order": "self.cancel_order(self.cache.orders(strategy_id=self.id)[1])",
     }
     return (
-        MARKET_AFTER_CANCEL
-        + ("\n        elif self.seen == 31:\n            " + calls[cancel] + "\n").encode()
+        source + ("\n        elif self.seen == 31:\n            " + calls[cancel] + "\n").encode()
     )
 
 
@@ -312,13 +346,57 @@ def test_a_stop_at_market_cancels_the_take_profit_it_would_otherwise_wait_on(
 
 
 @pytest.mark.parametrize("cancel", ["cancel_all_orders", "cancel_orders", "cancel_order"])
-def test_an_owed_exit_is_forgotten_once_the_sleeve_cancels_its_exits_again(
+def test_an_owed_exit_at_a_price_is_forgotten_once_the_sleeve_cancels_its_exits_again(
     request_for, cancel: str
 ) -> None:
-    """A sleeve that cancels on the closing side after asking for an exit has taken it back,
-    so the exit its cancel in flight held back is never sent and the position is kept."""
-    run = _run(request_for, 20.0, taken_back(cancel))
+    """A sleeve that cancels on the closing side after asking for an exit at a price has
+    taken it back, as the cancel would have taken back the limit order itself, so the exit
+    its cancel in flight held back is never sent and the position is kept."""
+    run = _run(request_for, 20.0, taken_back(cancel, priced=True))
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0)]
+
+
+@pytest.mark.parametrize("cancel", ["cancel_all_orders", "cancel_orders", "cancel_order"])
+def test_an_owed_exit_at_market_outlives_the_sleeve_s_later_cancels(
+    request_for, cancel: str
+) -> None:
+    """A market order is taken by the venue before any cancel that follows it, so the
+    exit at market a cancel in flight held back is not taken back by a cancel the sleeve
+    sends after it: it goes once the first cancel has landed, and the sleeve ends flat.
+    Measured before: every later cancel threw the owed exit away and the 100 shares were
+    held overnight, where the market order sent at once would have sold them."""
+    flat_within_the_session(_run(request_for, 20.0, taken_back(cancel)))
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0, 1500.0])
+def test_housekeeping_cancels_do_not_strand_an_exit_at_market(
+    request_for, latency_ms: float
+) -> None:
+    """The sleeve cancels its take-profit and exits at market once, then cancels every order
+    it has on every quote after. Measured before: the first of those cancels threw the owed
+    exit away, and the position was held overnight at every latency but none."""
+    source = HOUSEKEEPING.replace(
+        b"        elif self.seen >= 30:\n            self.cancel_all_orders(instrument_id)\n",
+        b"        elif self.seen >= 30:\n            self.cancel_all_orders(instrument_id)\n"
+        b"            if self.seen == 30:\n                self.submit_exit(instrument_id)\n",
+    )
+    assert source != HOUSEKEEPING
+    flat_within_the_session(_run(request_for, latency_ms, source))
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0, 1500.0])
+@pytest.mark.parametrize("gap", [0, 1])
+def test_a_stop_sent_behind_a_take_profit_in_flight_still_closes(
+    request_for, gap: int, latency_ms: float
+) -> None:
+    """A take-profit far above the market still in flight to the venue is not cancelled and
+    counts, so the stop sent behind it is cut to nothing; what it cuts is owed, and once the
+    venue holds the take-profit open the owed stop cancels it and takes the position.
+    Measured before: nothing was owed, the stop was never sent again, and the 100 shares
+    were held overnight."""
+    run = _run(request_for, latency_ms, tp_in_flight_then_stop(gap))
+    flat_within_the_session(run)
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])

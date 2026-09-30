@@ -195,6 +195,36 @@ def test_the_two_paths_pay_an_exit_a_cancel_in_flight_held_back_alike(latency_ms
     assert never_short(engine.run.fills) == (100.0, 100.0, 0.0)
 
 
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_pay_a_stop_a_take_profit_in_flight_cut_alike(latency_ms: float) -> None:
+    """A stop sent behind the sleeve's own take-profit still in flight is cut to nothing and
+    owed; once the venue holds the take-profit open the owed stop cancels it and takes the
+    position, at the same point on both paths, so the two agree order for order and fill
+    for fill and both end the session flat."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        chasing_costs,
+        never_short,
+        points,
+        tp_in_flight_then_stop,
+    )
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=tp_in_flight_then_stop(0), hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert never_short(engine.run.fills) == (100.0, 100.0, 0.0)
+
+
 def test_the_two_paths_hold_cancels_in_flight_alike_through_a_flicker() -> None:
     """A re-posting sleeve under latency has cancels and inserts in flight at once; both
     paths land each at the first point after its delay, so neither path fills or denies an

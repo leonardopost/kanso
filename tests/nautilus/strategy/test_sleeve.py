@@ -615,3 +615,32 @@ def test_half_the_sell_side_fee_is_reserved_per_side(backtest) -> None:
     run = backtest(Trader(config(venue_model=fee)))
     assert run.strategy.cost_rate == pytest.approx(0.0006)
     assert run.strategy.cost_rate_at(11.0) == pytest.approx(0.0006 + 0.0055 / 11.0)
+
+
+def test_a_cancel_is_noted_only_while_its_order_can_still_fill(backtest) -> None:
+    """The record of the cancels the sleeve sent, which an exit reads to count what is still
+    working, holds an order only while the venue has not closed it: one cancelled after it
+    has filled is not noted, and one the ledger lets go of is dropped from it, so it does
+    not grow with every cancel over a run."""
+
+    class Cancels(KansoStrategy):
+        def on_start(self) -> None:
+            self.bars = 0
+
+        def on_bar(self, bar_: object) -> None:
+            self.bars += 1
+            if self.bars == 2:
+                self.entry = self.submit_entry(DEMO, "BUY", qty=10)
+            elif self.bars == 4:
+                self.cancel_order(self.entry)
+                self.after_filled = dict(self._cancels)
+                self.rest = self.submit_exit(DEMO, price=1_000.0)
+            elif self.bars == 6:
+                self.cancel_order(self.rest)
+                self.after_resting = dict(self._cancels)
+
+    strategy = backtest(Cancels(config())).strategy
+    strategy.balance  # noqa: B018 - reading the balance settles the ledger
+    assert strategy.entry.is_closed and strategy.after_filled == {}
+    assert list(strategy.after_resting) == [strategy.rest.client_order_id]
+    assert strategy.rest.is_closed and strategy._cancels == {}

@@ -66,7 +66,8 @@ still fill until the cancel lands — under a latency model after the next point
 with none before it for an order the venue held open, and never before the venue has taken
 an order still in flight, which fills there if it is marketable (`kanso.nautilus.facts`
 measures all three); `cancel_all_orders` cancels the strategy's orders open at the venue
-and in flight to it, and not one still `INITIALIZED` (read in `trading/strategy.pyx`);
+and in flight to it (`kanso.nautilus.facts` measures it), and not one still `INITIALIZED`
+(read in `trading/strategy.pyx`);
 `StrategyConfig` and `ActorConfig` are frozen msgspec structs
 whose subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls`
 here is kanso's own attribute, honoured by kanso's loader alone.
@@ -1391,20 +1392,27 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit or not: a stop that would reverse the position, or both legs of a bracket only
         one of which can fill, leave that much less to close.
 
-        An exit at market is never held back by a resting one: when this sleeve's own limit
-        or stop orders resting at the venue on the closing side would leave it less than
-        asked, it cancels them first. With no latency stated those cancels land before
-        anything further is matched and the whole of what was asked goes at market. An
-        order still in flight to the venue is not cancelled, and counts.
+        An exit at market cancels this sleeve's own limit or stop orders resting at the
+        venue on the closing side when they would leave it less than asked. With no latency
+        stated those cancels land before anything further is matched and the whole of what
+        was asked goes at market. Under a stated latency the cancelled orders can still fill
+        until their cancels land, so the exit is cut to what they leave, and the rest is
+        owed. An order still in flight to the venue is not cancelled and counts, and what it
+        cuts from an exit at market is owed as well; once the venue holds it open, the owed
+        exit cancels it like any other.
 
-        What an order waiting on its cancel holds back is owed, not dropped. When a cancel
-        still in flight leaves less than asked, the exit is asked for again, with what is
-        still owed at the price given, at every later point once the author's handler for
-        it has run — each time sized to what is left then — until nothing waiting on a
-        cancel holds any of it back. It is forgotten when the position is flat or has
-        changed sides, when this sleeve asks for another exit in the name, and when it
-        cancels an order on that side of it; an exit an attached exit rule asked for is
-        forgotten only when the position is flat, whatever its host sends or cancels.
+        What is owed is not dropped. When a cancel still in flight leaves less than asked,
+        and whenever an exit at market is left less than asked, the exit is asked for again,
+        with what is still owed at the price given, at every later point once the author's
+        handler for it has run — each time sized to what is left then — until it goes out
+        whole. It is forgotten when the position is flat or has changed sides and when this
+        sleeve asks for another exit in the name. A cancel on that side takes back only an
+        owed exit that has a price: an exit at market stands for an order the venue would
+        have taken before any cancel that followed it. An exit an attached exit rule asked
+        for is forgotten only when the position is flat, whatever its host sends or cancels.
+        An owed exit with a price is asked for at that price on the next session's points
+        too, if the position is still open there; it never goes past flat, but the price
+        may be the last session's.
 
         Returns the order, or `None` when flat or when the orders still working already
         close what was asked, including when what is left is owed.
@@ -1581,8 +1589,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             working = self._working(key, side, clips=clips)
         quantity = self._quantise(instrument, min(asked, float(abs(net) - _leaves(working))))
         sent = 0.0 if quantity is None else float(quantity)
-        if sent < asked and any(order.client_order_id in self._cancels for order in working):
-            owed = (None if qty is None else asked - sent, price, self._exiting)
+        whole = self._quantise(instrument, asked)
+        short = 0.0 if whole is None else float(whole) - sent
+        if short > 0 and (
+            price is None or any(order.client_order_id in self._cancels for order in working)
+        ):
+            owed = (None if qty is None else short, price, self._exiting)
             self._owed.setdefault((key, side), owed)
         if quantity is None:
             return None
@@ -1611,15 +1623,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             finally:
                 self._exiting = exiting
 
-    def _forget(self, key: str, side: OrderSide, *, ruled: bool = False) -> None:
+    def _forget(
+        self, key: str, side: OrderSide, *, ruled: bool = False, priced_only: bool = False
+    ) -> None:
         """Drop the exit owed on one side of a name, or on both for `NO_ORDER_SIDE`; one an
-        exit rule is owed only when `ruled`."""
+        exit rule is owed only when `ruled`, and one at market not when `priced_only`."""
         for owed in (OrderSide.BUY, OrderSide.SELL):
             held = self._owed.get((key, owed))
             if (
                 side in (OrderSide.NO_ORDER_SIDE, owed)
                 and held is not None
                 and (ruled or not held[2])
+                and not (priced_only and held[1] is None)
             ):
                 del self._owed[(key, owed)]
 
@@ -1629,10 +1644,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """Cancel an order, and forget the exit owed on its side of the name: a sleeve
-        that cancels an order on the closing side has taken back the exit it asked for."""
+        """Cancel an order, and forget the exit at a price owed on its side of the name: a
+        sleeve that cancels an order on the closing side has taken back the limit it asked
+        for. An exit at market owed there is kept, as the market order it stands for would
+        have been taken by the venue before the cancel that followed it."""
         self._cancelling(order)
-        self._forget(order.instrument_id.value, order.side)
+        self._forget(order.instrument_id.value, order.side, priced_only=True)
         super().cancel_order(order, client_id, params)
 
     def cancel_orders(
@@ -1641,10 +1658,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """Cancel orders, forgetting the exits owed on their sides as `cancel_order` does."""
+        """Cancel orders, forgetting the exits at a price owed on their sides as
+        `cancel_order` does."""
         for order in orders:
             self._cancelling(order)
-            self._forget(order.instrument_id.value, order.side)
+            self._forget(order.instrument_id.value, order.side, priced_only=True)
         super().cancel_orders(orders, client_id, params)
 
     def cancel_all_orders(
@@ -1654,10 +1672,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """Cancel this sleeve's orders in a name, forgetting the exits owed on those sides.
+        """Cancel this sleeve's orders in a name, forgetting the exits at a price owed on
+        those sides as `cancel_order` does.
 
         The engine cancels the orders open at the venue and those in flight to it, and
-        leaves one it has not yet sent; those are the ones noted as cancelled.
+        leaves one it has not yet sent; those are the ones noted as cancelled
+        (`kanso.nautilus.facts` measures which).
         """
         for entry in self._ledger:
             order = self._current(entry[0])
@@ -1667,7 +1687,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 and (order.is_open or order.is_inflight)
             ):
                 self._cancelling(order)
-        self._forget(instrument_id.value, order_side)
+        self._forget(instrument_id.value, order_side, priced_only=True)
         super().cancel_all_orders(instrument_id, order_side, client_id, params)
 
     def _cancelling(self, order: Any) -> None:
@@ -1680,6 +1700,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         there.
         """
         current = self._current(order)
+        if current.is_closed:
+            return
         key = current.client_order_id
         self._cancels[key] = self._cancels.get(key, False) or bool(current.is_open)
 
@@ -1884,6 +1906,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     entry[1] = count
             if held_back or not order.is_closed:
                 waiting.append(entry)
+            else:
+                self._cancels.pop(order.client_order_id, None)
         self._ledger = waiting
         for name, (times, values) in self._quoted.items():
             if key is None or name == key:

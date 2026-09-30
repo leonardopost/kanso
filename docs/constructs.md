@@ -97,7 +97,7 @@ one hook:
 |---|---|---|---|
 | `filter` | `allow: bool` | `before_entry` | withhold an entry the host's signal asked for. It never changes the signal |
 | `overlay` | `scale: float ∈ [0, 1]`, `hedges: [Hedge]` — or, under `sizing`, `clips: [Clip]` | `size`, `hedges` (on a host entry); `on_data` (on the overlay's grain) | resize what the signal already asked for, and add or take off legs beside it — including while the host is already holding |
-| `exit` | `exit: bool` | `before_exit` | close an open position, with the last word over the host's own exit logic — cancelling the host's resting orders on the closing side first, and, under a latency, asking again until closed whatever the host cancels |
+| `exit` | `exit: bool` | `before_exit` | close an open position, with the last word over the host's own exit logic — cancelling the host's resting orders on the closing side that would cut it, and asking again for what they or a cancel still in flight hold back until it is closed, whatever the host cancels |
 
 `Decision.neutral(construct)` is the identity for that part — the answer that leaves the
 host exactly as it was. It is what the shipped stub returns, which is why the baseline card

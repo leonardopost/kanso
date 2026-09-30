@@ -342,11 +342,16 @@ of every order of the sleeve's own on the closing side that the venue has not cl
 resting, in flight to it, or, under a stated latency, waiting on a cancel that has not
 landed — and returns `None` when those already close it. Every such order counts in full,
 an exit or not, so a stop that would reverse the position, or both legs of a bracket only one
-of which can fill, leave that much less to close. An exit at market is never held back by a
-resting one: when the sleeve's own limit or stop orders resting at the venue on the closing
-side would leave it less than asked, it cancels them first, so a stop is not blocked by a
-take-profit, and a take-profit left above the market cannot fill after the stop has closed.
-An attached exit rule closes through the same market exit. `self.held(id)` applies the
+of which can fill, leave that much less to close. With no latency stated, an exit at market
+is never held back by a resting one: when the sleeve's own limit or stop orders resting at
+the venue on the closing side would leave it less than asked, it cancels them first, so a
+stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
+after the stop has closed. Under a latency the cancelled orders can still fill until their
+cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
+below); an order of the sleeve's still in flight to the venue is not cancelled and counts,
+and what it cuts from an exit at market is owed at any latency, and paid once the venue holds
+that order open and the owed exit has cancelled it. An attached exit rule closes through the
+same market exit. `self.held(id)` applies the
 sleeve's market orders in flight and no limit or stop order, so a sleeve whose exit rests at
 the ask reads the whole position there until the exit fills; an exit sized from it is cut to
 what the working ones leave.
@@ -663,13 +668,18 @@ lands. So `submit_exit` counts an order waiting on its cancel as an exit still w
 an exit that replaces one whose cancel is in flight is sized to what the old one cannot also
 take — often nothing, in which case it returns `None`. What the cancel in flight held back is
 owed, not dropped: kanso asks for that exit again, at the price given and sized to what is
-left then, on every later point after the strategy's own handler has run, until no cancel in
-flight holds any of it back — so a sleeve that cancels and exits once is closed once the
-cancel lands, and one that re-posts on every point replaces the owed exit with its own. An
-owed exit is forgotten when the position is flat or has changed sides, when the sleeve asks
-for another exit in the name, and when it cancels an order on that side of it; one an
-attached exit rule asked for is forgotten only when the position is flat, whatever its host
-sends or cancels, so a rule that says exit once still closes. Measured on 0.13.0, before exits
+left then, on every later point after the strategy's own handler has run, until it goes out
+whole — so a sleeve that cancels and exits once is closed once the cancel lands, and one that
+re-posts on every point replaces the owed exit with its own. An owed exit is forgotten when
+the position is flat or has changed sides and when the sleeve asks for another exit in the
+name. A cancel on that side takes back only an owed exit that has a price, as it would have
+taken back the limit order itself; an owed exit at market stands for an order the venue
+would have taken before any cancel that followed it, so the sleeve's later cancels leave it
+owed. One an attached exit rule asked for is forgotten only when the position is flat,
+whatever its host sends or cancels, so a rule that says exit once still closes. An owed exit
+with a price still owed when a session ends is asked for at that price on the next session's
+points if the position is still open; it never goes past flat, but the price may be the last
+session's. Measured on 0.13.0, before exits
 counted the ones still working: a rule that followed the ask with its exit on every change of
 the book bought 50 shares in one session at 20 ms, sold 92, and was left short 42 to the
 session's end, and every card of its lane at 20 ms held a position for close to a day. With
