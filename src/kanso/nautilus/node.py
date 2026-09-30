@@ -88,7 +88,8 @@ from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered
-from kanso.nautilus.venue import NETTING, fill_model, starting_balance, venues_of
+from kanso.nautilus.strategy import BOOK
+from kanso.nautilus.venue import venue_config, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -97,7 +98,6 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.strategy import Loaded
 
 __all__ = [
-    "ACCOUNT_TYPES",
     "Book",
     "Placement",
     "Realised",
@@ -108,9 +108,6 @@ __all__ = [
     "trader_id",
     "venues_for",
 ]
-
-ACCOUNT_TYPES: Final[dict[str, str]] = {"margin": "MARGIN", "cash": "CASH"}
-"""How a resolved venue model's account type is spelled to the engine."""
 
 START_TURNS: Final = 100_000
 """How many turns of the loop a node is given to come up before the stage gives up."""
@@ -339,48 +336,47 @@ def max_notional_per_order(
 
 
 def venues_for(placements: Sequence[Placement], capital: float) -> list[BacktestVenueConfig]:
-    """One cost-neutral venue configuration per venue these versions trade.
+    """One venue configuration per venue these versions trade: the card's, funded with the
+    stage capital.
 
-    Two versions trading one venue trade one account on one exchange, so they must agree
-    about both: an account has a single type and a single currency, an exchange a single
-    fill model, and a stage whose versions were certified against different ones is refused
-    rather than built from whichever came first. The leverage ceiling is the highest any
-    version on that venue was certified with, which is the only value that lets each of
-    them size as it was measured.
+    Each is built by the function a card's venue is built by, from the venue model the
+    versions were certified under and the book their hypotheses require, so a version
+    trades on the stage exactly the venue it was measured on — the same latency, book type,
+    queue position and fill model, and no fee model, since the runner charges once. Two
+    versions trading one venue trade one account on one exchange, so they must agree about
+    both: an account has a single type and a single currency, an exchange a single fill
+    model, a single round trip and a single book, and a stage whose versions were certified
+    against different ones is refused rather than built from whichever came first. The
+    leverage ceiling is the highest any version on that venue was certified with, which is
+    the only value that lets each of them size as it was measured.
     """
     if capital <= 0:
         raise ValidationError(f"capital: {capital} is not an amount to fund a stage with")
-    models: dict[str, tuple[str, VenueModel, float]] = {}
+    models: dict[str, tuple[str, VenueModel, float, bool]] = {}
     for placed in placements:
         for venue in venues_of(placed.hyp.universe):
             leverage = placed.hyp.risk_limits.max_leverage
             held = models.get(venue)
             if held is None:
-                models[venue] = (placed.label, placed.venue_model, leverage)
+                models[venue] = (placed.label, placed.venue_model, leverage, _book(placed))
                 continue
             _agree(venue, held, placed)
-            models[venue] = (held[0], held[1], max(held[2], leverage))
+            models[venue] = (held[0], held[1], max(held[2], leverage), held[3])
     return [
-        BacktestVenueConfig(
-            name=venue,
-            oms_type=NETTING,
-            account_type=ACCOUNT_TYPES[model.account],
-            starting_balances=[starting_balance(capital, model.currency)],
-            base_currency=model.currency,
-            default_leverage=1.0 if model.account == "cash" else leverage,
-            bar_execution=True,
-            fill_model=fill_model(model.costs.limit_fill),
-            fee_model=None,
-            latency_model=None,
-        )
-        for venue, (_, model, leverage) in sorted(models.items())
+        venue_config(venue, model, capital, leverage, book=book)
+        for venue, (_, model, leverage, book) in sorted(models.items())
     ]
 
 
-def _agree(venue: str, held: tuple[str, VenueModel, float], placed: Placement) -> None:
-    """Refuse two versions that would fund one venue's account, or fill its orders, two
-    different ways."""
-    first, model, _ = held
+def _book(placed: Placement) -> bool:
+    """Whether this version was certified on a level-two book with queue position."""
+    return BOOK in placed.hyp.data_requirements
+
+
+def _agree(venue: str, held: tuple[str, VenueModel, float, bool], placed: Placement) -> None:
+    """Refuse two versions that would fund one venue's account, fill its orders, reach its
+    book or keep that book two different ways."""
+    first, model, _, book = held
     mine = placed.venue_model
     for field, theirs, ours in (
         ("account", model.account, mine.account),
@@ -399,6 +395,24 @@ def _agree(venue: str, held: tuple[str, VenueModel, float], placed: Placement) -
             "one venue is one exchange, and it fills a touched limit one way",
             remedy=f"state one limit_fill for both — in each hypothesis's costs, or under "
             f"venues.{venue}.costs in portfolio.yaml — and re-certify",
+        )
+    if model.costs.latency_ms != mine.costs.latency_ms:
+        raise PreconditionError(
+            f"venues.{venue}.costs.latency_ms: {first} was certified under "
+            f"{model.costs.latency_ms!r} and {placed.label} under {mine.costs.latency_ms!r}; "
+            "one venue is one round trip",
+            remedy=f"deploy the two on separate stages, or state one latency_ms for both — "
+            f"in each hypothesis's costs, or under venues.{venue}.costs in portfolio.yaml — "
+            "and re-certify",
+        )
+    if book != _book(placed):
+        with_book, without = (first, placed.label) if book else (placed.label, first)
+        raise PreconditionError(
+            f"venues.{venue}: {with_book} was certified on a level-two book, which its "
+            f"hypothesis requires as {BOOK!r}, and {without} on the top of the book; one "
+            "venue keeps one book",
+            remedy="deploy the two on separate stages, or require the same book in both "
+            "hypotheses' data_requirements and re-certify",
         )
 
 

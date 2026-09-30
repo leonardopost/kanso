@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 import pytest
+from nautilus_trader.live.node import TradingNode
 
 from kanso.errors import Exit, KansoError
-from kanso.nautilus import node
+from kanso.nautilus import node, sandbox
 from kanso.nautilus.node import Placement, StageNode
-from kanso.nautilus.venue import fill_model
+from kanso.nautilus.venue import fill_model, latency_model, venue_configs
 from kanso.portfolio import deploy
 from kanso.schemas import Limits, StrategyFile
 from kanso.state import StateStore
@@ -122,11 +125,127 @@ def test_two_versions_disagreeing_about_a_touched_limit_are_refused(
 
 def _limit_fill(placed: Placement, rule: str) -> Placement:
     """The same placement, certified under another limit-fill rule."""
-    from dataclasses import replace
+    return _costs(placed, limit_fill=rule)
 
+
+def _costs(placed: Placement, **costs: object) -> Placement:
+    """The same placement, certified under a venue model whose costs differ in these keys."""
     model = placed.venue_model
-    costs = model.costs.model_copy(update={"limit_fill": rule})
-    return replace(placed, venue_model=model.model_copy(update={"costs": costs}))
+    return replace(
+        placed,
+        venue_model=model.model_copy(update={"costs": model.costs.model_copy(update=costs)}),
+    )
+
+
+def _on_a_book(placed: Placement) -> Placement:
+    """The same placement, certified by a hypothesis that requires a level-two book."""
+    return replace(
+        placed,
+        hyp=hypothesis(
+            id=placed.strategy_id,
+            resolution="tick",
+            horizon="1d",
+            data_requirements=["book", "trade"],
+        ),
+    )
+
+
+# --- the stage venue is the card's venue ----------------------------------------
+
+
+def test_a_stage_venue_carries_the_latency_its_version_was_certified_under(
+    placement: Placement,
+) -> None:
+    """A version certified under a round trip of 50 ms trades the stage under 50 ms, not
+    under none: the latency model is the card's, built from the same venue model."""
+    slow = _costs(placement, latency_ms=50)
+
+    (venue,) = node.venues_for((slow,), 100_000.0)
+
+    assert venue.latency_model == latency_model(50)
+
+
+def test_a_stage_venue_keeps_the_book_its_versions_hypothesis_requires(
+    placement: Placement,
+) -> None:
+    """A version certified on a level-two book with queue position trades the stage on
+    one, rather than on the top-of-book venue a bar hypothesis gets."""
+    (top,) = node.venues_for((placement,), 100_000.0)
+    (deep,) = node.venues_for((_on_a_book(placement),), 100_000.0)
+
+    assert (top.book_type, top.queue_position) == ("L1_MBP", False)
+    assert (deep.book_type, deep.queue_position) == ("L2_MBP", True)
+
+
+def test_a_stage_venue_is_field_for_field_the_cards_venue(placement: Placement) -> None:
+    """One evaluation path: for one hypothesis, one venue model and one capital, the
+    configuration a stage builds is the configuration a card builds, every field."""
+    placed = _costs(_on_a_book(placement), latency_ms=50, limit_fill="through")
+
+    (card,) = venue_configs(placed.hyp, placed.venue_model, CAPITAL)
+    (stage,) = node.venues_for((placed,), CAPITAL)
+
+    assert stage.dict() == card.dict()
+    assert stage.latency_model == latency_model(50) and stage.book_type == "L2_MBP"
+
+
+def test_the_stages_exchange_honours_the_latency_the_node_configures(
+    placement: Placement,
+) -> None:
+    """The sandbox reads the node's configuration, so once the node carries the latency the
+    stage's exchange waits it out: a placement certified at 50 ms yields an exchange whose
+    latency model says 50 ms and whose command queue is on to honour it."""
+    staged = a_node((_costs(placement, latency_ms=50),))
+    built = TradingNode(config=staged.config(), loop=asyncio.new_event_loop())
+    built.build()
+    try:
+        (venue,) = staged.venues()
+        client = sandbox.SimulatedVenue(built.kernel, venue)
+
+        assert client.exchange.latency_model is not None
+        assert client.exchange.latency_model.base_latency_nanos == 50_000_000
+        assert client.exchange.use_message_queue is True
+    finally:
+        built.dispose()
+
+
+def test_two_versions_certified_under_different_latencies_are_refused(
+    ws: Workspace, store: StateStore, placement: Placement
+) -> None:
+    """One venue is one round trip: a version certified at 0 ms and one at 50 ms cannot
+    share an exchange, and the refusal names both."""
+    deployable(ws, store, "slow", doc=document(id="slow"))
+    slow = _costs(a_placement(ws, "slow"), latency_ms=50)
+
+    with pytest.raises(KansoError) as raised:
+        node.venues_for((placement, slow), 100_000.0)
+
+    assert raised.value.code == Exit.PRECONDITION
+    assert f"venues.{VENUE}.costs.latency_ms" in raised.value.message
+    assert placement.label in raised.value.message and slow.label in raised.value.message
+    assert "one venue is one round trip" in raised.value.message
+    assert "separate stages" in str(raised.value.remedy)
+    assert "re-certify" in str(raised.value.remedy)
+
+
+@pytest.mark.parametrize("book_first", [True, False])
+def test_a_book_version_and_a_top_of_book_version_are_refused_one_venue(
+    ws: Workspace, store: StateStore, placement: Placement, book_first: bool
+) -> None:
+    """One venue keeps one book: a version certified on a level-two book and one on the
+    top of the book cannot share it, whichever was deployed first."""
+    deployable(ws, store, "deep", doc=document(id="deep"))
+    deep = _on_a_book(a_placement(ws, "deep"))
+    placed = (deep, placement) if book_first else (placement, deep)
+
+    with pytest.raises(KansoError) as raised:
+        node.venues_for(placed, 100_000.0)
+
+    assert raised.value.code == Exit.PRECONDITION
+    assert f"{deep.label} was certified on a level-two book" in raised.value.message
+    assert f"{placement.label} on the top of the book" in raised.value.message
+    assert "one venue keeps one book" in raised.value.message
+    assert "separate stages" in str(raised.value.remedy)
 
 
 def test_a_stage_with_no_capital_cannot_fund_a_venue(placement: Placement) -> None:

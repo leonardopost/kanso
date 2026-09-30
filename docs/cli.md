@@ -182,11 +182,11 @@ for a read, the version on the stage for a move.
 |---|---|
 | `kanso portfolio show` | both stages: how each is configured — including whose money its execution client trades and which clock it runs on — whether its node has consumed everything the catalog holds, what each deployed version holds and what it has realised over the windows its stage has closed. The file's entries are read against the record: one no deployment wrote — a stage entry added to `portfolio.yaml` by hand — prints as `not deployed · in portfolio.yaml only`, is `"recorded": false` under `--json`, and is counted in neither the stage's allocation nor its P&L. Writes nothing |
 | `kanso portfolio clients` | every execution client a stage may name: what each declares (`capital`, `clock`), which adapter provides it, which stages it may be configured on, and per credential the variable name and where it resolves from — never a value. Then, per stage, what `deploy` would refuse its configuration for, or `ok`. Opens nothing and reaches nothing |
-| `kanso portfolio deploy --stage paper\|live` | admit what composition produced, apply the capital rule, validate what the stage's execution client declares, render the node configuration and (re)start the node. A node flattens before every stop, so a stage always restarts flat and each redeploy realises its window into the record the paper and live gates read |
+| `kanso portfolio deploy --stage paper\|live` | admit what composition produced, apply the capital rule, validate what the stage's execution client declares, render the node configuration and (re)start the node. The stage's simulated venue is the card's venue, built by the same function from the venue model each version was certified under: the same latency, book type, queue position and fill model, and no fee model. Two versions on one venue must therefore have been certified under one `costs.latency_ms` and one book requirement (`book` in `data_requirements`, or not); a stage that already holds a version certified under one latency refuses a version certified under another (exit 2, naming both) — deploy them on separate stages, or re-certify under one. A node flattens before every stop, so a stage always restarts flat and each redeploy realises its window into the record the paper and live gates read |
 | `kanso promote STRATEGY[@V] --live --as NAME` | move a `promotable` version onto the live stage under a named operator's recorded approval, retiring whatever was live, then redeploy both stages |
 | `kanso demote STRATEGY[@V]` | take a live version off the live stage — back to paper, or retired when a newer version is already there — then redeploy the stages that are not halted |
 
-**`deploy` refuses six things with exit 2**, one with exit 3 and two with exit 4, and blocks one more with a `deploy_blocked` escalation: a share below the version's budgets — the sleeve's `sizing` budget and its sized overlays' together — because a sized version deployed at less than its budgets would size every order over the money it has; raise `limits.per_strategy_max_pct` or the stage's capital.
+**`deploy` refuses eight things with exit 2**, one with exit 3 and two with exit 4, and blocks one more with a `deploy_blocked` escalation: a share below the version's budgets — the sleeve's `sizing` budget and its sized overlays' together — because a sized version deployed at less than its budgets would size every order over the money it has; raise `limits.per_strategy_max_pct` or the stage's capital.
 
 With exit 2: a stage whose `kill_switch` is on, because the switch is the operator's and a
 deployment that cleared it by starting a node would make it advisory; an execution client id
@@ -197,7 +197,13 @@ holds nothing at or after the forward window's start, because that stage has not
 trade and nothing to be judged on; a `clock: wall` execution client paired with replay data
 or with any speed but one, because a broker matches against current prices; and a
 `clock: wall` client at all, because in this version a stage node cannot run one — see
-below.
+below; two versions on one venue certified under different `costs.latency_ms`, because one
+venue is one round trip and the stage's venue carries the latency its versions were
+measured under; and a version whose hypothesis requires `book` beside one whose does not,
+because one venue keeps one book — a level-two book with queue position or the top of the
+book — and each version was certified on its own. For the last two the way out is separate
+stages, or one latency and one book requirement in both hypotheses and a re-certification;
+the refusal names both versions.
 
 With exit 3: a version whose implementation is not the code it was certified with. Every
 file under `strategies/<id>/impl/<version>/` is hashed against the `strategy_sha` its
