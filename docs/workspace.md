@@ -625,8 +625,11 @@ the first point of data after its delay has passed, and only after matching that
 the delay a run models is never shorter than the one stated and at tick resolution
 exceeds it by one point. It models the round trip from
 the strategy to the exchange's book through the account and route it will trade on, and it
-is measured there, on real orders, rather than assumed; what the strategy sees late is the
-data's business and belongs to `ts_init` (`docs/concepts.md`, Availability). Zero, the
+is measured there, on real orders, rather than assumed. State the whole round trip: a feed
+that reaches the strategy late and an order that reaches the book late add up, and a rule
+that reacts to a point and posts lands the same instant either way, so one number carries
+both. Availability (`ts_init`, `docs/concepts.md`) is a property of the data, when it became
+public, never of the route that carries it to you. Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the
