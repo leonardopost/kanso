@@ -246,6 +246,21 @@ session under an environment allow-list. A card therefore has no route to data o
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.
 
+**Return periods are cut on the UTC clock.** The window opens at 00:00Z of its first day,
+and from there the runner cuts one `[research] return_period` after another — a day by
+default — for as long as the window lasts; a period exists only when a point landed in it,
+and a point lands in the period its `ts_init` falls in. A bar is stamped at its close, so a
+daily bar lands in the period after the day it summarises: on a 24-hour venue the day's bar
+closes at 00:00Z and lands in the following UTC period, the same rule under which an equity
+daily bar a vendor stamps at 05:00Z is counted in the UTC day of that stamp. On such a
+venue trading days are calendar days, so a series that printed every day is annualised at
+what `periods_per_year` observes — about 365 periods a year, the count the window held
+over its own length in years, with no constant assumed; the warmup sessions the runner
+resolves are the calendar days that printed, seven a week; and a `session_scope` point
+admitting a name for a session must be stamped in `[00:00Z, first market point)` of that
+session, because the session opens at midnight there. kanso keeps no calendar of its own:
+the sessions are the days the catalog holds prints on, whichever venue printed them.
+
 A card proposed by a model carries the proposer's own account of what it was: `tags`, one
 or more of the twenty-one strings `kanso.schemas.TAGS` fixes — `signal_*` for what the
 change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*`, and

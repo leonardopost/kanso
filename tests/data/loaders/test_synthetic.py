@@ -10,16 +10,25 @@ a card nobody can reproduce.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from kanso.criteria.run import NS_PER_SECOND, midnight_ns
 from kanso.data.loader import get_loader, utc_day
-from kanso.data.loaders.synthetic import SyntheticLoader, SyntheticSpec
+from kanso.data.loaders.synthetic import (
+    SyntheticLoader,
+    SyntheticSpec,
+    _decode,
+    _request_params,
+    _spec_of,
+)
 from kanso.errors import ValidationError
+
+NS_PER_HOUR = 3_600 * NS_PER_SECOND
 
 GOLDEN_OU = {
     ("DEMO.SIM", "bar"): "9779b7af8847202ff22320f5ecc7db5baf63eba9db3712eac9628f3365de769e",
@@ -39,7 +48,56 @@ GOLDEN_GBM = {
     ("OTHER.SIM", "trade"): "a6dfbeaad4c83aba9de84ce92ada0a164201a40e98603d6f8e15d50581a07c45",
 }
 
+GOLDEN_CONTINUOUS = {
+    ("DEMO.SIM", "bar"): "5b8af3a825bad5c676f76d6bbea7b6761074c84de41a80c3f20793f260c07d8f",
+    ("DEMO.SIM", "quote"): "1dd0708adda99af7c2f78c41783dd678305594868237a9212b1995935cf2858e",
+    ("DEMO.SIM", "trade"): "3e32ac643d13e12980d145ecd9429e4def6482099a292bb17ef5ecb724da4afc",
+    ("OTHER.SIM", "bar"): "bc1ae401a72d54d08a1ecd3e50d3a1c0dcabde293bd8113ff5aaaeadca6f157d",
+    ("OTHER.SIM", "quote"): "7fd55008a2760b0d4ef17e16569c9d605138421a3c4c88f4fd076c12dd8a53cf",
+    ("OTHER.SIM", "trade"): "248571bfee438deafc1cbc369f9d09e10e91d0316dcf4cee83311988b2d28e60",
+}
+
+PINNED_PARAMS = {
+    "end": "2024-03-05",
+    "instruments": "DEMO,OTHER",
+    "kappa": "0.02",
+    "loader": "synthetic",
+    "model": "ou",
+    "mu_bps": "0.0",
+    "price_precision": "2",
+    "resolution": "5m",
+    "seed": "7",
+    "session_end": "16:00",
+    "session_start": "09:30",
+    "sigma_bps": "10.0",
+    "size_precision": "0",
+    "spread_bps": "2.0",
+    "start": "2024-03-04",
+    "start_price": "100.0",
+    "theta": "",
+    "timezone": "America/New_York",
+    "types": "bar,quote,trade",
+    "venue": "SIM",
+    "volume": "5000",
+}
+"""The request parameters the fixture spec recorded before `calendar` existed: what every
+manifest already written holds, and what a default spec must go on recording."""
+
+MONDAY = date(2024, 3, 4)
+SUNDAY = date(2024, 3, 10)
+
 LOADER = SyntheticLoader()
+
+
+def continuous(spec: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """The fixture spec on a continuous calendar over one Monday-to-Sunday week."""
+    return {
+        **spec,
+        "calendar": "continuous",
+        "start": MONDAY.isoformat(),
+        "end": SUNDAY.isoformat(),
+        **overrides,
+    }
 
 
 def checksums(spec: dict[str, Any]) -> dict[tuple[str, str], str]:
@@ -249,9 +307,10 @@ def test_a_flat_path_never_falls_through_the_tick_floor() -> None:
     seed=st.integers(min_value=0, max_value=2**31),
     steps=st.sampled_from(["1m", "5m", "15m", "1h"]),
     model=st.sampled_from(["ou", "gbm"]),
+    calendar=st.sampled_from(["weekdays", "continuous"]),
 )
 def test_any_valid_spec_produces_ordered_available_points(
-    seed: int, steps: str, model: str
+    seed: int, steps: str, model: str, calendar: str
 ) -> None:
     """The property every loader owes the engine, over the spec space."""
     spec = {
@@ -262,6 +321,7 @@ def test_any_valid_spec_produces_ordered_available_points(
         "resolution": steps,
         "start": "2024-03-04",
         "end": "2024-03-04",
+        "calendar": calendar,
     }
     ref = SyntheticLoader().discover(spec)[0]
     points = list(SyntheticLoader().load(ref, ref.span))
@@ -292,6 +352,7 @@ def test_a_spec_that_generates_nothing_is_refused(
     ),
     types=st.lists(st.sampled_from(["bar", "quote", "trade"]), min_size=1, unique=True),
     theta=st.one_of(st.none(), st.floats(min_value=1.0, max_value=500.0)),
+    calendar=st.sampled_from(["weekdays", "continuous"]),
 )
 def test_a_spec_survives_the_round_trip_a_ref_makes_it_take(
     seed: int,
@@ -299,10 +360,9 @@ def test_a_spec_survives_the_round_trip_a_ref_makes_it_take(
     instruments: list[str],
     types: list[str],
     theta: float | None,
+    calendar: str,
 ) -> None:
     """`load` is given a ref and nothing else, so the ref must carry the whole spec."""
-    from kanso.data.loaders.synthetic import _spec_of
-
     payload: dict[str, Any] = {
         "loader": "synthetic",
         "model": model,
@@ -312,12 +372,15 @@ def test_a_spec_survives_the_round_trip_a_ref_makes_it_take(
         "resolution": "30m",
         "start": "2024-03-04",
         "end": "2024-03-04",
+        "calendar": calendar,
     }
     if theta is not None:
         payload["theta"] = theta
     original = SyntheticSpec.model_validate(payload)
     for ref in LOADER.discover(payload):
         assert _spec_of(ref) == original
+        assert ref.request_params is not None
+        assert _request_params(_spec_of(ref)) == ref.request_params
 
 
 def test_a_ref_whose_instrument_the_spec_does_not_generate_is_refused(
@@ -329,3 +392,120 @@ def test_a_ref_whose_instrument_the_spec_does_not_generate_is_refused(
     ref = dataclasses.replace(LOADER.discover(synthetic_spec)[0], instrument="GHOST.SIM")
     with pytest.raises(ValidationError, match="which its own spec does not generate"):
         list(LOADER.load(ref, ref.span))
+
+
+# -- the continuous calendar ------------------------------------------------------------
+
+
+def test_a_default_spec_records_the_parameters_it_always_did(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    """A synthetic dataset's identity is its spec, so the default calendar is recorded
+    nowhere: every manifest written before the field existed is byte-identical."""
+    params = _request_params(SyntheticSpec.model_validate(synthetic_spec))
+    assert params == PINNED_PARAMS
+    assert "calendar" not in params
+    assert SyntheticSpec.model_validate(_decode(params)).calendar == "weekdays"
+
+
+def test_a_continuous_calendar_is_accepted_and_fixes_its_session(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    spec = SyntheticSpec.model_validate(continuous(synthetic_spec))
+    assert spec.calendar == "continuous"
+    assert (spec.timezone, spec.session_start, spec.session_end) == ("UTC", "00:00", "24:00")
+    assert spec.steps_per_session == 24 * 12
+
+
+def test_a_continuous_calendar_has_a_session_every_day(synthetic_spec: dict[str, Any]) -> None:
+    """Monday to Sunday is seven sessions, where the weekday calendar holds five."""
+    spec = SyntheticSpec.model_validate(continuous(synthetic_spec))
+    assert spec.sessions() == [MONDAY + timedelta(days=i) for i in range(7)]
+    assert (
+        len(
+            SyntheticSpec.model_validate(
+                {**continuous(synthetic_spec), "calendar": "weekdays"}
+            ).sessions()
+        )
+        == 5
+    )
+
+
+def test_continuous_bars_close_on_the_utc_grid_through_the_weekend(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    """The first bar of a day closes one resolution after 00:00Z, the last at 00:00Z of
+    the next day, and Saturday and Sunday are stamped like any other day."""
+    ref = LOADER.discover(continuous(synthetic_spec, types=["bar"], resolution="1h"))[0]
+    bars = list(LOADER.load(ref, ref.span))
+    assert len(bars) == 24 * 7
+    assert bars[0].ts_init == midnight_ns(MONDAY) + NS_PER_HOUR
+    assert bars[23].ts_init == midnight_ns(MONDAY + timedelta(days=1))
+    assert bars[-1].ts_init == midnight_ns(SUNDAY + timedelta(days=1))
+    assert {utc_day(bar.ts_init).weekday() for bar in bars} == set(range(7))
+    assert ref.span == (MONDAY, SUNDAY + timedelta(days=1))
+
+
+def test_a_daily_bar_on_a_continuous_calendar_closes_at_the_next_midnight(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    """A whole-day resolution fits a whole-day session, one bar a day, stamped at 00:00Z
+    of the day after the one it summarises."""
+    ref = LOADER.discover(continuous(synthetic_spec, types=["bar"], resolution="1d"))[0]
+    bars = list(LOADER.load(ref, ref.span))
+    assert [bar.ts_init for bar in bars] == [
+        midnight_ns(MONDAY + timedelta(days=i + 1)) for i in range(7)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("override", "field"),
+    [
+        ({"timezone": "America/New_York"}, "timezone"),
+        ({"session_start": "09:30"}, "session_start"),
+        ({"session_end": "16:00"}, "session_end"),
+    ],
+)
+def test_a_continuous_spec_stating_a_session_is_refused_naming_the_field(
+    synthetic_spec: dict[str, Any], override: dict[str, Any], field: str
+) -> None:
+    with pytest.raises(ValidationError, match=f"{field}: .* conflicts with calendar 'continuous'"):
+        LOADER.discover(continuous(synthetic_spec, **override))
+
+
+def test_a_continuous_spec_may_restate_the_session_it_fixes(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    """What a manifest records decodes to the spec that wrote it."""
+    spec = SyntheticSpec.model_validate(
+        continuous(synthetic_spec, timezone="UTC", session_start="00:00", session_end="24:00")
+    )
+    assert spec == SyntheticSpec.model_validate(continuous(synthetic_spec))
+
+
+def test_a_continuous_spec_round_trips_through_its_manifest_byte_for_byte(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    ref = LOADER.discover(continuous(synthetic_spec))[0]
+    assert ref.request_params is not None
+    assert ref.request_params["calendar"] == "continuous"
+    assert ref.request_params["timezone"] == "UTC"
+    assert ref.request_params["session_end"] == "24:00"
+    decoded = SyntheticSpec.model_validate(_decode(ref.request_params))
+    assert decoded == SyntheticSpec.model_validate(continuous(synthetic_spec))
+    assert _request_params(decoded) == ref.request_params
+    assert _spec_of(ref) == decoded
+
+
+def test_a_continuous_seed_reproduces_byte_for_byte(synthetic_spec: dict[str, Any]) -> None:
+    """The reproducibility contract holds on the continuous calendar too, on both hosts."""
+    spec = continuous(synthetic_spec, start="2024-03-04", end="2024-03-05")
+    assert checksums(spec) == GOLDEN_CONTINUOUS
+    assert all(GOLDEN_CONTINUOUS[key] != GOLDEN_OU[key] for key in GOLDEN_OU)
+
+
+def test_a_resolution_longer_than_a_day_closes_no_continuous_bar(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError, match="longer than the 00:00-24:00 session"):
+        LOADER.discover(continuous(synthetic_spec, resolution="2d"))

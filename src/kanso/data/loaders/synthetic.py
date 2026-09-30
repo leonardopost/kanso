@@ -36,7 +36,13 @@ Sessions are the regular hours of a US equity venue by default — 09:30 to 16:0
 `America/New_York`, weekdays only, no holiday calendar, since a market calendar is a
 regulator fact this loader has no business inventing. The timezone comes from the
 `zoneinfo` database on the host; the offsets it supplies for the sessions a workspace
-generates have been fixed by statute since 2007, so they are the same on both hosts.
+generates have been fixed by statute since 2007, so they are the same on both hosts. A
+spec whose `calendar` is `continuous` is a round-the-clock venue instead: every calendar
+day from `start` to `end` is a session, the zone is UTC and the session is 00:00 to 24:00,
+so the last bar of a day closes at 00:00Z of the next. A continuous calendar fixes the
+zone and the session, and a spec that states one of them differently is refused naming
+the field. The default calendar is recorded in no manifest, so every dataset generated
+before the field existed carries the request parameters it always did.
 
 Points are `realtime`: a bar is available at its close and a quote or a trade at its
 instant, so `ts_init == ts_event`. Publication is declared by the adapter that produced
@@ -86,6 +92,16 @@ the scaling is a subtraction rather than a multiplication by an irrational const
 
 WEEKDAYS: Final = 5
 
+Calendar = Literal["weekdays", "continuous"]
+DEFAULT_CALENDAR: Final[Calendar] = "weekdays"
+CONTINUOUS_SESSION: Final[dict[str, str]] = {
+    "timezone": "UTC",
+    "session_start": "00:00",
+    "session_end": "24:00",
+}
+"""What a `continuous` calendar fixes: one session per calendar day, midnight to midnight
+UTC. `24:00` is not a clock time, so the session span is taken as a day rather than parsed."""
+
 GeneratedType = Literal["bar", "quote", "trade"]
 DEFAULT_TYPES: Final[tuple[GeneratedType, ...]] = ("bar",)
 """What a spec generates when it names no types: the grain a hypothesis usually asks for."""
@@ -112,9 +128,27 @@ class SyntheticSpec(KansoModel):
     volume: int = Field(default=5_000, gt=0)
     price_precision: int = Field(default=2, ge=0, le=9)
     size_precision: int = Field(default=0, ge=0, le=9)
+    calendar: Calendar = DEFAULT_CALENDAR
     timezone: str = "America/New_York"
     session_start: str = "09:30"
     session_end: str = "16:00"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _continuous_session(cls, data: Any) -> Any:
+        """A continuous calendar fixes the zone and the session; a spec that states one of
+        them differently contradicts itself and is refused naming the field."""
+        if not isinstance(data, Mapping) or data.get("calendar") != "continuous":
+            return data
+        stated = dict(data)
+        for field, fixed in CONTINUOUS_SESSION.items():
+            if stated.get(field, fixed) != fixed:
+                raise ValueError(
+                    f"{field}: {stated[field]!r} conflicts with calendar 'continuous', whose "
+                    f"every session is a UTC calendar day, 00:00 to 24:00; drop the field"
+                )
+            stated[field] = fixed
+        return stated
 
     @model_validator(mode="after")
     def _validate(self) -> SyntheticSpec:
@@ -127,7 +161,7 @@ class SyntheticSpec(KansoModel):
         if not self.types:
             raise ValueError("types: name at least one of bar, quote, trade")
         zone(self.timezone)
-        if _clock(self.session_end, "session_end") <= _clock(self.session_start, "session_start"):
+        if self.calendar == "weekdays" and self.session_span <= timedelta(0):
             raise ValueError(
                 f"session_end: {self.session_end} is not after session_start {self.session_start}"
             )
@@ -146,14 +180,20 @@ class SyntheticSpec(KansoModel):
         return parse_duration(self.resolution, "resolution")
 
     @property
-    def steps_per_session(self) -> int:
-        """Whole steps that close inside one session."""
+    def session_span(self) -> timedelta:
+        """How long one session lasts: a whole day on a continuous calendar."""
+        if self.calendar == "continuous":
+            return timedelta(days=1)
         opening = _clock(self.session_start, "session_start")
         closing = _clock(self.session_end, "session_end")
-        span = timedelta(hours=closing.hour, minutes=closing.minute) - timedelta(
+        return timedelta(hours=closing.hour, minutes=closing.minute) - timedelta(
             hours=opening.hour, minutes=opening.minute
         )
-        return int(span // self.step)
+
+    @property
+    def steps_per_session(self) -> int:
+        """Whole steps that close inside one session."""
+        return int(self.session_span // self.step)
 
     @property
     def long_run(self) -> float:
@@ -161,11 +201,12 @@ class SyntheticSpec(KansoModel):
         return self.start_price if self.theta is None else self.theta
 
     def sessions(self) -> list[date]:
-        """The weekday sessions between `start` and `end`, inclusive."""
+        """The sessions between `start` and `end`, inclusive: the weekdays, or every
+        calendar day on a continuous calendar."""
         day = self.start
         found: list[date] = []
         while day <= self.end:
-            if day.weekday() < WEEKDAYS:
+            if self.calendar == "continuous" or day.weekday() < WEEKDAYS:
                 found.append(day)
             day += timedelta(days=1)
         return found
@@ -259,10 +300,15 @@ def _request_params(spec: SyntheticSpec) -> dict[str, str]:
     A synthetic dataset's provenance *is* its spec: recording it means a manifest names
     everything needed to regenerate the dataset byte for byte, which is what a
     reproducible snapshot claims. Lists are comma-joined and an absent value is empty,
-    so the map round-trips through the model's own field types.
+    so the map round-trips through the model's own field types. The default calendar is
+    left out, so a dataset generated before the field existed records the map it always
+    did and its manifest is byte-identical; a continuous spec records its calendar and the
+    zone and session it fixed, which decode to the same spec.
     """
     encoded: dict[str, str] = {}
     for key, value in spec.model_dump(mode="json").items():
+        if key == "calendar" and value == DEFAULT_CALENDAR:
+            continue
         if isinstance(value, list):
             encoded[key] = ",".join(str(item) for item in value)
         else:
