@@ -216,7 +216,7 @@ def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> Non
     assert "does not span the research and certification windows" in workspace
     refusals = section(page("workspace.md"), "What the workspace refuses")
     assert "does not list `funding`" in refusals
-    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 104 |"))
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 107 |"))
     assert "delivered and not booked" in backlog
 
 
@@ -243,6 +243,27 @@ def test_the_workspace_page_states_the_fixed_spread_a_bar_only_hypothesis_needs(
     text = page("workspace.md")
     assert "`costs.fixed_bps`" in text
     assert "`fixed_bps`" in section(text, "What the workspace refuses")
+
+
+def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> None:
+    """`submit_exit` sizes against what the working exits leave, a cancel in flight among
+    them under a latency (`tests/nautilus/backtest/test_exit_flat.py`)."""
+    text = prose(page("workspace.md"))
+    assert "An exit never goes past flat, counting the exits still working." in text
+    assert "Under a stated latency a cancel is not instant" in text
+    assert "What the cancel in flight held back is owed, not dropped" in text
+    assert "With no latency stated, an exit at market is never held back by a resting one" in text
+    assert "A cancel on that side takes back only an owed exit that has a price" in text
+    assert "An order the engine's order emulator holds" in text
+    assert "`cancel_orders` cancels it on its own, through the emulator" in text
+
+
+def test_the_research_template_says_an_exit_can_return_none_while_exits_are_working() -> None:
+    """The loop model writes `strategy.py` from `program.md`, so it is told what the docs say:
+    `submit_exit` returns `None` while working exits cover it, and a cancel is not instant."""
+    text = prose((ROOT / "src" / "kanso" / "templates" / "program.md").read_text())
+    assert "An exit never goes past flat, counting the exits still working" in text
+    assert "Under a latency a cancel is not instant" in text
 
 
 def test_the_workspace_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:
