@@ -122,6 +122,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
+| hold a perpetual in a universe whose `data_requirements` does not list `funding` | 3 · at `hyp validate`, naming the instrument; a perpetual is known by its resolved definition, not its id |
 | give a definition a non-zero `maker_fee` or `taker_fee`, or a perpetual `is_inverse: true` — in `override` or from the reference adapter | 3 · wherever it is built: the runner charges commission once, from the venue model, and kanso trades linear perpetuals |
 | resolve a venue to an account currency the engine does not register, from `[research] currency` or `venues.<MIC>.currency` | 3 · at `hyp validate`, and again wherever a venue is funded; the engine would otherwise mint the misspelt code at a precision nobody chose |
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
@@ -878,6 +879,56 @@ account currency — `[research] currency = "USDT"` in `kanso.toml`, or
 `venues.<MIC>.currency` in `portfolio.yaml` — or `kanso hyp validate` refuses it (exit 3);
 one whose two differ fits no account. What a perpetual is to a
 card, and what it is not yet, is in `docs/concepts.md`.
+
+**A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
+every settlement, so a hypothesis whose universe holds one lists `funding` in
+`data_requirements`, or `kanso hyp validate` refuses it (exit 3) naming the instrument:
+
+```
+error: data_requirements: BTCUSDT-PERP.SIM is a perpetual and funding is not required; a perpetual's P&L is not honest without the funding it paid and was paid
+remedy: add funding to data_requirements and load its realised funding history
+```
+
+What makes an instrument a perpetual is its resolved definition — the engine's
+`CryptoPerpetual`, the same definition the settlement check reads — never its id.
+
+`funding` is a built-in custom type, `kanso.data.types.Funding`, whose points carry
+`instrument_id` and `rate`. The rate is the **realised** rate of the period that just
+settled, as a fraction of notional — `0.0001` is one basis point, paid by longs to shorts
+when positive and by shorts to longs when negative. It is never the rate a venue publishes
+for the period in progress: that is a prediction, which moves until the instant it settles,
+and a series of predictions read as payments charges a book what it was never charged. Load
+the settled history, and leave a feed's "current" or "next" rate out of the catalog.
+`ts_event` and `ts_init` are both the settlement instant, since that is when the rate stopped
+moving and when it was paid, so a funding dataset is `realtime` and names no publication
+rule. A file maps `ts_event` and `rate`, and `instrument_id` where it holds one — the entry
+names the instrument otherwise — and leaves `ts_init` unmapped; a `ts_init` mapped earlier
+than the settlement is refused at load (exit 3). Three settlements of a day:
+
+```
+instrument_id,rate,ts
+BTCUSDT-PERP.SIM,0.0001,2024-01-01T00:00:00
+BTCUSDT-PERP.SIM,-0.00005,2024-01-01T08:00:00
+BTCUSDT-PERP.SIM,0.000125,2024-01-01T16:00:00
+```
+
+```yaml
+loader: csv_parquet
+timezone: UTC
+files:
+  - path: data/btcusdt_funding.csv
+    instrument: BTCUSDT-PERP
+    venue: SIM
+    type: funding
+    columns: {instrument_id: instrument_id, rate: rate, ts_event: ts}
+```
+
+A card is handed each point of its window in `on_data`, at the settlement instant, as a
+`Funding`; `research begin` pins the dataset like any series, so its settlements run from
+before the research window opens to after the certification window closes. **The runner
+does not book funding yet**: a card today measures a held perpetual as if it paid and
+earned none, and a later release books each settlement in the runner's extraction, where
+every other cost is applied (`docs/backlog.md` row 104).
 
 A workspace whose entries are all `manual` may still name a reference adapter in `[data]
 reference` without setting that adapter's key: the adapter is built only once resolution

@@ -350,7 +350,7 @@ grain      1m · bar, house_signal
 and without it, refused by name — which is the message that sends you here:
 
 ```
-error: data_requirements: house_signal is not a data type this workspace knows; it knows bar, corporate_action, financial_statement, quote, trade
+error: data_requirements: house_signal is not a data type this workspace knows; it knows bar, book, corporate_action, financial_statement, funding, quote, trade
 remedy: require one of those, or install the extension that registers the type
 ```
 
