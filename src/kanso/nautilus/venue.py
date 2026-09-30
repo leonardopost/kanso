@@ -155,9 +155,11 @@ def known_currency(code: str) -> None:
     hands back a currency it has just minted, `Currency(code='FOOBAR', precision=8,
     currency_type=CRYPTO)`, so an account funded in a misspelt code would be funded at a
     precision nobody chose and every figure on its cards would read in a currency that does
-    not exist. `Currency.is_fiat` and `Currency.is_crypto` answer only for a registered code
-    — `USD` is fiat, `USDT` is crypto, `FOOBAR` and `usdt` are neither — so a code is
-    admitted here only when one of them holds.
+    not exist. `Currency.is_fiat` and `Currency.is_crypto` answer for the codes registered
+    at the moment they are asked — `USD` is fiat, `USDT` is crypto, `FOOBAR` and `usdt` are
+    neither — so a code is admitted here only when one of them holds. A code `from_str` has
+    already minted in this process answers as crypto from then on, which is why this check
+    runs before any venue is funded, ahead of `from_str` on every path that reaches one.
     """
     if Currency.is_fiat(code) or Currency.is_crypto(code):
         return

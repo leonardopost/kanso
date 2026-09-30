@@ -188,7 +188,8 @@ vendor key out of a kanso-owned schema.
 
 `[research] broker` is the single place the core lets a broker's name in: it says whose venue
 model — account type, currency, costs — research inherits. A workspace naming a broker it has
-no adapter for falls back to the shipped venue defaults rather than refusing.
+no adapter for falls back to the two `[research]` keys below and then to the shipped venue
+defaults rather than refusing.
 
 `account` and `currency` are the account type and the **account** currency of every venue
 nothing else declares. A venue's model is resolved in a fixed order of precedence — the
