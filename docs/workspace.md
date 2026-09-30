@@ -121,6 +121,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
+| resolve a venue to an account currency the engine does not register, from `[research] currency` or `venues.<MIC>.currency` | 3 · at `hyp validate`, and again wherever a venue is funded; the engine would otherwise mint the misspelt code at a precision nobody chose |
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
 | declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
@@ -187,9 +188,22 @@ vendor key out of a kanso-owned schema.
 
 `[research] broker` is the single place the core lets a broker's name in: it says whose venue
 model — account type, currency, costs — research inherits. A workspace naming a broker it has
-no adapter for falls back to the shipped venue defaults rather than refusing.
+no adapter for falls back to the two `[research]` keys below and then to the shipped venue
+defaults rather than refusing.
 
-`currency` is the **account** currency of every venue the broker does not override, and it
+`account` and `currency` are the account type and the **account** currency of every venue
+nothing else declares. A venue's model is resolved in a fixed order of precedence — the
+shipped defaults, then these two `[research]` keys, then the broker's declaration, then
+`venues.<MIC>` in `portfolio.yaml`, then the hypothesis's own `costs` — and every card,
+certificate and version records where each field came from as one of `default`, `config`,
+`broker`, `venue_override` or `hypothesis`. So a broker's declared currency still wins over
+`[research] currency`: to trade a venue the broker serves in another currency, override it
+under `venues.<MIC>`. A value that restates the shipped default (`margin`, `USD`) is not a
+layer and leaves the origin at `default`, which is why a workspace that never touched these
+keys resolves the same model it always did. The code must be one the engine registers, as
+fiat or as crypto (`USD`, `EUR`, `USDT`, ...): the grammar admits any code of two to eight
+capitals and digits, and `kanso hyp validate` refuses one the engine does not register
+(exit 3), naming the code and the two places to set it. Whichever layer it came from, it
 is the account currency that `kanso hyp validate` checks: a universe whose instruments sit
 on venues with more than one account currency is refused (exit 3), because a hypothesis
 trades one. An instrument's own quote currency is not compared against its venue's account

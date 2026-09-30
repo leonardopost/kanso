@@ -63,6 +63,7 @@ from kanso.data.types import data_types
 from kanso.errors import ValidationError
 from kanso.hyp.scaffold import HYPOTHESES, hypothesis_file
 from kanso.nautilus import adapters
+from kanso.nautilus.venue import known_currency
 from kanso.schemas import (
     Benchmark,
     Book,
@@ -72,12 +73,14 @@ from kanso.schemas import (
     ObjectiveRef,
     Portfolio,
     StrategyFile,
+    VenueDeclaration,
     VenueModel,
     load_yaml,
     parse_yaml,
     resolve_venue_model,
     single_currency,
 )
+from kanso.schemas.venue import DEFAULT_ACCOUNT, DEFAULT_CURRENCY
 
 PERCENT: Final = 100.0
 
@@ -160,11 +163,15 @@ def venue_models(
 ) -> dict[str, VenueModel]:
     """The resolved trading model of every venue this universe trades on.
 
-    Each venue inherits the configured broker's declaration, then the operator's
-    `venues.<MIC>` override, then the hypothesis's own `costs`. A cost model that cannot
-    be completed — a spread from quotes the hypothesis does not require, or a fixed
-    spread with no width — and a universe spanning more than one account currency are
-    both refused here, because both would put a number on a card that nothing in the
+    Each venue inherits the account type and currency `[research]` states in `kanso.toml`,
+    then the configured broker's declaration, then the operator's `venues.<MIC>` override,
+    then the hypothesis's own `costs`. A `[research]` value that restates the shipped
+    default is not a layer: it leaves the field's origin at `default`, so a workspace that
+    never touched the two keys resolves the model it always did, byte for byte, and no card
+    anchor moves. A cost model that cannot be completed — a spread from quotes the
+    hypothesis does not require, or a fixed spread with no width — a universe spanning more
+    than one account currency, and an account currency the engine does not register are
+    all refused here, because each would put a number on a card that nothing in the
     workspace can account for.
 
     The broker is named in `kanso.toml` and its declaration is asked of whichever adapter
@@ -175,10 +182,16 @@ def venue_models(
     """
     overrides = _venue_overrides(ws)
     quotes = QUOTE_TYPE in hyp.data_requirements
-    broker = ws.config.research.broker
+    research = ws.config.research
+    broker = research.broker
+    config = VenueDeclaration(
+        account=None if research.account == DEFAULT_ACCOUNT else research.account,
+        currency=None if research.currency == DEFAULT_CURRENCY else research.currency,
+    )
     models = {
         venue: resolve_venue_model(
             venue,
+            config=config,
             broker=broker,
             declaration=adapters.venue_declaration(broker, venue),
             override=overrides.get(venue),
@@ -188,6 +201,8 @@ def venue_models(
         )
         for venue in sorted({_venue_of(held) for held in instruments.values()})
     }
+    for model in models.values():
+        known_currency(model.currency)
     single_currency(models)
     return models
 

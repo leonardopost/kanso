@@ -6,12 +6,16 @@ so the test asserts both rather than only that something went wrong.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
 
 from kanso import hyp
+from kanso.config import CONFIG_NAME, load_config
+from kanso.data.instruments import resolve_universe
 from kanso.errors import Exit, KansoError, ValidationError
+from kanso.hyp.validate import venue_models
 from kanso.workspace import Workspace
 from tests.hyp.conftest import (
     DOCUMENT,
@@ -298,6 +302,89 @@ def test_a_policy_that_moves_money_is_admissible_on_a_margin_account(ws: Workspa
 
 def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> None:
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
+
+
+# -- the account and currency `[research]` states -------------------------------------
+
+
+def configured(ws: Workspace, **research: str) -> Workspace:
+    """The same workspace reopened with these `[research]` keys rewritten in `kanso.toml`."""
+    path = ws.path(CONFIG_NAME)
+    text = path.read_text(encoding="utf-8")
+    for key, value in research.items():
+        text, count = re.subn(rf"^{key} = .*$", f'{key} = "{value}"', text, flags=re.M)
+        assert count == 1, key
+    path.write_text(text, encoding="utf-8")
+    return Workspace(root=ws.root, config=load_config(path))
+
+
+def resolved(ws: Workspace, doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """What the card of an accepted hypothesis would be measured under, per venue."""
+    parsed = accepted(ws, doc)
+    held = resolve_universe(ws, parsed.universe, parsed.windows.research.start, record=False)
+    return {venue: m.model_dump(mode="json") for venue, m in venue_models(ws, parsed, held).items()}
+
+
+TEMPLATE_VENUE_MODEL: dict[str, Any] = {
+    "venue": "SIM",
+    "account": "margin",
+    "default_leverage": 1.0,
+    "currency": "USD",
+    "costs": {
+        "commission_bps": 0.5,
+        "commission_per_share": 0.0,
+        "slippage_bps": 1.0,
+        "spread": "fixed_bps",
+        "fixed_bps": 2.0,
+        "maker_bps": None,
+        "sell_fee_bps": 0.0,
+        "sell_fee_per_share": 0.0,
+        "limit_fill": "touch",
+        "latency_ms": 0.0,
+    },
+    "origins": {"account": "default", "currency": "default", "costs": "hypothesis"},
+}
+"""The demo hypothesis's venue model as a template workspace resolved it on 0.13.0, before
+`[research]` became a layer, less the broker the template names."""
+
+
+def test_a_template_workspace_resolves_the_model_it_did_before_the_configuration_layer(
+    ws: Workspace,
+) -> None:
+    """`account = "margin"` and `currency = "USD"` restate the defaults, so they are not a
+    layer: the origins still read `default` and no card anchor moves."""
+    (model,) = resolved(ws, DOCUMENT).values()
+
+    assert model == {**TEMPLATE_VENUE_MODEL, "broker": ws.config.research.broker}
+
+
+def test_a_configured_currency_the_engine_registers_reaches_the_card(ws: Workspace) -> None:
+    (model,) = resolved(configured(ws, currency="USDT"), DOCUMENT).values()
+
+    assert model["currency"] == "USDT"
+    assert model["origins"]["currency"] == "config"
+    assert model["origins"]["account"] == "default"
+
+
+def test_a_configured_cash_account_reaches_the_card(ws: Workspace) -> None:
+    (model,) = resolved(configured(ws, account="cash"), DOCUMENT).values()
+
+    assert (model["account"], model["default_leverage"]) == ("cash", None)
+    assert model["origins"]["account"] == "config"
+
+
+def test_a_configured_currency_the_engine_does_not_register_is_refused(ws: Workspace) -> None:
+    """The grammar admits USTD, and only the engine knows it registers nothing by that name."""
+    failure = refused(configured(ws, currency="USTD"), DOCUMENT)
+
+    assert (
+        failure.message
+        == "currency: 'USTD' is not a code the engine registers, as fiat or as crypto"
+    )
+    assert failure.remedy is not None
+    assert "[research] currency" in failure.remedy
+    assert "kanso.toml" in failure.remedy
+    assert "venues.<MIC>.currency" in failure.remedy
 
 
 def test_validation_writes_neither_the_store_nor_the_cache(ws: Workspace) -> None:

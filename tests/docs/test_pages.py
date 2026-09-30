@@ -170,6 +170,25 @@ def test_the_workspace_page_states_the_currency_check_as_the_account_currency() 
     assert "different account currencies" in refusals
 
 
+def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:
+    """`[research]` is a layer between the defaults and the broker, a restated default is
+    not one, and the code must be one the engine registers."""
+    research = prose(page("workspace.md"))
+    assert "then these two `[research]` keys, then the broker's declaration" in research
+    assert "a broker's declared currency still wins over `[research] currency`" in research
+    assert "is not a layer and leaves the origin at `default`" in research
+    assert "The code must be one the engine registers" in research
+    origins = "`default`, `config`, `broker`, `venue_override` or `hypothesis`"
+    assert origins in research
+    assert "`config` (`[research]` in `kanso.toml`)" in prose(page("concepts.md"))
+    refusals = section(page("workspace.md"), "What the workspace refuses")
+    assert "an account currency the engine does not register" in refusals
+    validate = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp validate")
+    )
+    assert "an account currency the engine registers" in validate
+
+
 def test_the_workspace_page_states_the_fixed_spread_a_bar_only_hypothesis_needs() -> None:
     text = page("workspace.md")
     assert "`costs.fixed_bps`" in text
