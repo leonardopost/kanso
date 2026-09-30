@@ -52,6 +52,7 @@ from kanso.nautilus.adapters.alpaca.config import (
 from kanso.nautilus.adapters.alpaca.venue import VENUES, declaration
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from kanso.nautilus.adapters import EngineClaim
     from kanso.schemas import ExecutionClientSpec, VenueDeclaration
     from kanso.workspace import Workspace
 
@@ -111,6 +112,9 @@ class AlpacaBroker:
     kind: str = KIND
     exec_clients: tuple[ExecutionClientSpec, ...] = EXEC_CLIENTS
     data_clients: tuple[str, ...] = DATA_CLIENTS
+    engine_facts: tuple[EngineClaim, ...] = ()
+    """None re-checked yet: the rate-limited HTTP client every request goes through is
+    claimed by the core's facts, and the rest is recorded in each module's docstring."""
 
     def config(self, ws: Workspace) -> AlpacaConfig:
         """The `[adapters.alpaca]` table, validated by this adapter's own model."""

@@ -12,11 +12,14 @@ from kanso.nautilus.venue import (
     LIMIT_FILL,
     NETTING,
     fill_model,
+    known_currency,
+    latency_model,
     starting_balance,
+    venue_config,
     venue_configs,
     venues_of,
 )
-from kanso.schemas import Hypothesis, LimitFill
+from kanso.schemas import Hypothesis, LimitFill, VenueModel
 
 from .conftest import CAPITAL, INSTRUMENT, hypothesis, venue_model
 
@@ -60,6 +63,29 @@ def test_a_touched_limit_fills_unless_the_venue_model_says_through() -> None:
     assert stated.fill_model == fill_model("through")
     assert get_fill_model(stated).prob_fill_on_limit == 0.0
     assert set(LIMIT_FILL) == set(get_args(LimitFill))
+
+
+def test_a_stated_latency_delays_every_command_by_that_much_and_none_is_no_model() -> None:
+    """A latency model only when the venue model states one: zero configures none at all."""
+    from nautilus_trader.backtest.node import get_latency_model
+
+    quiet = hypothesis()
+    slow = hypothesis(costs={"spread": "fixed_bps", "fixed_bps": 4.0, "latency_ms": 20})
+
+    (default,) = venue_configs(quiet, venue_model(quiet), CAPITAL)
+    (stated,) = venue_configs(slow, venue_model(slow), CAPITAL)
+
+    assert default.latency_model is None
+    assert stated.latency_model == latency_model(20)
+    built = get_latency_model(stated)
+    assert built.base_latency_nanos == 20_000_000
+    # the engine reads the base for every command kind left at zero
+    assert (
+        built.insert_latency_nanos,
+        built.update_latency_nanos,
+        built.cancel_latency_nanos,
+    ) == (20_000_000, 20_000_000, 20_000_000)
+    assert latency_model(0) is None
 
 
 def test_a_margin_account_carries_the_hypothesis_leverage() -> None:
@@ -123,3 +149,61 @@ def test_a_resolved_model_object_is_accepted_as_readily_as_its_mapping(hyp: Hypo
     model = VenueModel.model_validate(mapping)
 
     assert venue_configs(hyp, model, CAPITAL) == venue_configs(hyp, mapping, CAPITAL)
+
+
+def test_one_function_builds_the_venue_both_paths_are_configured_from() -> None:
+    """`venue_config` sets every field a card's venue carries: the latency, the book, the
+    queue position, the fill model and the fee model. That a stage's venue equals a card's
+    is `tests/portfolio/test_node.py`'s to show."""
+    hyp = hypothesis(
+        max_leverage=3.0,
+        costs={"spread": "fixed_bps", "fixed_bps": 4.0, "latency_ms": 50, "limit_fill": "through"},
+    )
+    model = VenueModel.model_validate(venue_model(hyp))
+
+    built = venue_config("XNAS", model, CAPITAL, 3.0, book=False)
+
+    assert built.name == "XNAS"
+    assert (built.oms_type, built.account_type, built.base_currency) == (NETTING, "MARGIN", "USD")
+    assert (built.starting_balances, built.default_leverage) == (["100000.00 USD"], 3.0)
+    assert (built.bar_execution, built.trade_execution) == (True, True)
+    assert (built.book_type, built.queue_position) == ("L1_MBP", False)
+    assert built.fill_model == fill_model("through")
+    assert built.fee_model is None, "the runner charges once"
+    assert built.latency_model == latency_model(50)
+    deep = venue_config("XNAS", model, CAPITAL, 3.0, book=True)
+    assert (deep.book_type, deep.queue_position) == ("L2_MBP", True)
+    assert {k: v for k, v in deep.dict().items() if k not in ("book_type", "queue_position")} == {
+        k: v for k, v in built.dict().items() if k not in ("book_type", "queue_position")
+    }, "the book is the only thing `book` changes"
+
+
+def test_a_currency_the_engine_registers_funds_at_the_engine_s_own_precision() -> None:
+    """Measured on nautilus_trader 1.231.0: `Money(100000, USDT)` renders eight decimals,
+    where USD renders two; kanso adds no precision of its own."""
+    from nautilus_trader.model.objects import Money
+
+    known_currency("USD")
+    known_currency("USDT")
+    rendered = starting_balance(100_000, "USDT")
+
+    assert rendered == "100000.00000000 USDT"
+    assert Money.from_str(rendered).as_double() == pytest.approx(100_000)
+
+
+@pytest.mark.parametrize("code", ["FOOBAR", "usdt", "USTD"])
+def test_a_currency_the_engine_does_not_register_is_refused_before_it_is_minted(
+    hyp: Hypothesis, code: str
+) -> None:
+    """Measured on nautilus_trader 1.231.0: `Currency.from_str("FOOBAR")` raises nothing and
+    mints a crypto currency at precision 8, so the refusal has to come before it is asked."""
+    with pytest.raises(ValidationError) as caught:
+        starting_balance(100_000, code)
+    assert repr(code) in caught.value.message
+    assert caught.value.remedy == (
+        "set [research] currency in kanso.toml or venues.<MIC>.currency in portfolio.yaml "
+        "to a code the engine registers"
+    )
+
+    with pytest.raises(ValidationError, match="not a code the engine registers"):
+        venue_configs(hyp, {**venue_model(hyp), "currency": "FOOBAR"}, CAPITAL)

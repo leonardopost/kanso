@@ -143,9 +143,9 @@ def test_a_marker_in_a_loaded_group_is_not_a_clock_tick(request_for) -> None:
     demo = bars(DAYS)
     other = bars(DAYS, OTHER)
     marker = with_cross_section((demo[0], other[0]))[2]
-    stream = checked(request_for(), [instrument()], [tuple(demo), (marker,)])
+    marks = checked(request_for(), [instrument()], [tuple(demo), (marker,)])
 
-    assert [row[1] for row in stream] == [INSTRUMENT] * len(demo)
+    assert [set(fold.marks) for fold in marks.periods()] == [{INSTRUMENT}] * len(demo)
 
 
 def test_an_empty_feed_is_not_added_to_the_engine() -> None:

@@ -255,3 +255,22 @@ def test_a_taker_pays_the_per_share_commission_on_top_and_a_maker_under_a_rate_d
     for fill in takers:
         assert fill.cost == pytest.approx(fill.qty * fill.px * TAKER + fill.qty * 0.01, rel=1e-12)
     assert_the_same(card, record, at_least=1)
+
+
+def test_a_sale_pays_the_sell_side_fees_on_top_and_the_balance_is_still_the_equity(
+    tmp_path: Path, request_for
+) -> None:
+    """Two bp of notional and a cent a share on every sale, maker or taker, on top of what the
+    fill pays otherwise: a maker's purchase under a zero rate still pays nothing at all."""
+    card, record = resting_card(
+        tmp_path,
+        request_for,
+        {**FIXED, "maker_bps": 0.0, "sell_fee_bps": 2.0, "sell_fee_per_share": 0.01},
+    )
+    for fill in card.fills:
+        fee = fill.qty * fill.px * 2.0 / 10_000 + fill.qty * 0.01 if fill.side == "SELL" else 0.0
+        base = 0.0 if fill.maker else fill.qty * fill.px * TAKER
+        assert fill.cost == pytest.approx(base + fee, rel=1e-12)
+    assert any(fill.maker and fill.side == "SELL" for fill in card.fills)
+    assert any(not fill.maker and fill.side == "SELL" for fill in card.fills)
+    assert_the_same(card, record, at_least=1)

@@ -5,11 +5,17 @@ extracted by the runner from its own fills rather than read from the engine's an
 so one definition of a return, a trade and an equity curve serves cards, certification
 gates, composition expectations and the realised paper and live objectives alike.
 
-The three shapes are deliberately flat and immutable: a `Fill` is one execution with the
-cost the runner applied to it, a `Trade` is a closed position with the fills that made it,
-and a `CardRun` is a window's worth of both plus the period-end equity curve. A position
-still open when the window closes keeps its unrealised profit in `equity` but is not a
-trade, because a trade is a closed position.
+The shapes are deliberately flat and immutable: a `Fill` is one execution with the cost
+the runner applied to it, a `Trade` is a closed position with the fills that made it, a
+`FundingPayment` is one perpetual's funding settlement on what was held at it, and a
+`CardRun` is a window's worth of all three plus the period-end equity curve. A position
+still open when the window closes keeps its unrealised profit — and what it paid and was
+paid in funding — in `equity` but is not a trade, because a trade is a closed position.
+
+**Funding is not a fill cost.** `Fill.cost` and `Trade.cost` are what the fills paid, and
+nothing else, so `cost_stress` and `cost_scenario`, which re-price recorded fills, leave
+funding exactly as it was booked; it is in `Trade.pnl_net`, in the returns and in the equity
+curve, which is why a Sharpe, an edge and a net edge all read one post-funding number.
 
 `folds(n)` cuts the window into `n` contiguous, equal calendar spans and restricts the
 run to each. The cut is by calendar, not by observation count, so a fold's length does not
@@ -72,6 +78,12 @@ class Fill:
     what a model re-applied to recorded fills needs to know. It is recorded whatever the
     model charged: a maker's fill under a model without `maker_bps` paid what any fill pays,
     and is still a maker's. A fill the venue reported no liquidity side for is not one.
+
+    `multiplier` is the instrument's contract multiplier at the fill — one for a share, the
+    contract size for a future or an option — and is what turns a quantity at a price into
+    the currency it moved. A fill recorded before it was kept reads as one, a share's; a
+    run struck on a multiplied instrument before then is re-run before a cost model is
+    re-applied to its record.
     """
 
     ts_ns: int
@@ -81,16 +93,46 @@ class Fill:
     px: float
     cost: float
     maker: bool = False
+    multiplier: float = 1.0
 
     @property
     def notional(self) -> float:
-        """Absolute traded value, the base a participation limit is measured against."""
-        return abs(self.qty) * self.px
+        """Absolute traded value in the account currency — quantity, price and multiplier —
+        the base a cost rate is charged on and a participation limit is measured against."""
+        return abs(self.qty) * self.px * self.multiplier
+
+
+@dataclass(frozen=True)
+class FundingPayment:
+    """One funding settlement of a perpetual, on the position held at it, booked once.
+
+    `qty` is the signed quantity held at the settlement instant — every fill stamped before
+    it, and none stamped at it, since the rate is public there and an order sent in answer
+    fills at that same instant; `rate` the realised rate that settled; `paid` what left the book —
+    `qty x mark x multiplier x rate` (`kanso.nautilus.costs.funding_payment`), marked at
+    the instrument's last print at or before the instant — so a long pays a positive rate
+    and a negative `paid` is funding received. A settlement at which nothing was held pays
+    nothing and is not recorded.
+    """
+
+    ts_ns: int
+    instrument_id: str
+    qty: float
+    rate: float
+    paid: float
 
 
 @dataclass(frozen=True)
 class Trade:
-    """A closed position: what was opened, what closed it, and what it netted after costs."""
+    """A closed position: what was opened, what closed it, and what it netted after costs.
+
+    `multiplier` is the instrument's contract multiplier, copied from the fills that made
+    the position, so the opening value is in the currency the profit is.
+
+    `funding` is what the position paid in funding over its life — every settlement in
+    `(opened_ns, closed_ns]` of its instrument, since a fill at a settlement is not held
+    there, negative when it was paid more than it paid — and `pnl_net` is net of it; `cost`
+    is its fills' cost alone."""
 
     opened_ns: int
     closed_ns: int
@@ -101,11 +143,14 @@ class Trade:
     pnl_net: float
     cost: float
     fills: tuple[Fill, ...]
+    multiplier: float = 1.0
+    funding: float = 0.0
 
     @property
     def notional(self) -> float:
-        """The position's opening value, the base its edge is expressed in bps of."""
-        return abs(self.qty) * self.avg_open
+        """The position's opening value in the account currency — peak quantity, average
+        opening price and multiplier — the base its edge is expressed in bps of."""
+        return abs(self.qty) * self.avg_open * self.multiplier
 
 
 @dataclass(frozen=True)
@@ -132,6 +177,10 @@ class CardRun:
     notional and not a fill cost, so `cost_stress` leaves it alone. `worst_ratio` is the
     book's equity over its gross with each end's holdings valued at the period's adverse
     extreme, `None` at an end where nothing was held: what `maintenance_margin` reads.
+
+    `funding` is every perpetual funding settlement the run booked on a held position, in
+    time order — already in the returns and the equity at the end of the period each falls
+    in, kept apart because it is a payment on what was held and not a fill cost.
     """
 
     window: tuple[date, date]
@@ -148,6 +197,7 @@ class CardRun:
     cushion: tuple[float, ...] = ()
     carry: tuple[float, ...] = ()
     worst_ratio: tuple[float | None, ...] = ()
+    funding: tuple[FundingPayment, ...] = ()
 
     def __post_init__(self) -> None:
         start, end = self.window
@@ -191,9 +241,10 @@ class CardRun:
     def between(self, opens: int, closes: int) -> CardRun:
         """This run restricted to the half-open instant span `[opens, closes)`.
 
-        Every series is filtered, `held` included: `replace` would carry the whole run's
-        holdings into each fold, so a gate reading them fold-wise would judge periods the
-        fold does not contain.
+        Every series is filtered, `held` and `funding` included: `replace` would carry the
+        whole run's holdings into each fold, so a gate reading them fold-wise would judge
+        periods the fold does not contain. A funding payment belongs to the span holding its
+        settlement instant.
         """
         kept = [i for i, ts in enumerate(self.period_ends_ns) if opens <= ts < closes]
         return replace(
@@ -205,6 +256,7 @@ class CardRun:
             trades=tuple(t for t in self.trades if opens <= t.closed_ns < closes),
             fills=tuple(f for f in self.fills if opens <= f.ts_ns < closes),
             held=tuple(h for h in self.held if opens <= h.ts_ns < closes),
+            funding=tuple(p for p in self.funding if opens <= p.ts_ns < closes),
             cushion=tuple(self.cushion[i] for i in kept) if self.cushion else (),
             carry=tuple(self.carry[i] for i in kept) if self.carry else (),
             worst_ratio=tuple(self.worst_ratio[i] for i in kept) if self.worst_ratio else (),

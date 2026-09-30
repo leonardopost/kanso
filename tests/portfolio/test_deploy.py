@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -202,6 +204,72 @@ def test_two_versions_share_a_stage_and_are_measured_apart(
     by_id = {result.strategy_id: result for result in made.results}
     assert by_id[composed_strategy.id].run.trades
     assert by_id["quiet"].run.trades == (), "a sleeve that trades nothing records nothing"
+
+
+def _slow() -> dict[str, Any]:
+    """A hypothesis certified under a round trip of 50 ms."""
+    from tests.replay.conftest import DOCUMENT, document
+
+    return document(id="other", costs={**DOCUMENT["costs"], "latency_ms": 50})
+
+
+def _deep() -> dict[str, Any]:
+    """A hypothesis certified on a level-two book with queue position."""
+    from tests.replay.conftest import document
+
+    return document(
+        id="other", resolution="tick", horizon="1d", data_requirements=["book", "trade"]
+    )
+
+
+def _written(ws: Workspace, store: StateStore) -> tuple[object, ...]:
+    """What a deployment writes: the portfolio file, the strategy files and the state rows."""
+    from kanso import strategy as strategies
+
+    return (
+        files.read(ws),
+        tuple(strategies.strategies(ws)),
+        tuple(
+            store.connection.execute(
+                "SELECT strategy_id, version, state, stage, capital FROM strategy_versions"
+                " ORDER BY strategy_id, version"
+            ).fetchall()
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("doc", "said"),
+    [(_slow, "one venue is one round trip"), (_deep, "one venue keeps one book")],
+    ids=["latency", "book"],
+)
+@pytest.mark.parametrize("idle", [True, False], ids=["idle", "fresh"])
+def test_a_version_the_venue_cannot_hold_is_refused_before_anything_is_written(
+    ws: Workspace,
+    store: StateStore,
+    composed_strategy: StrategyFile,
+    doc: Callable[[], dict[str, Any]],
+    said: str,
+    idle: bool,
+) -> None:
+    """A version certified under another latency, or on another book, than the one a stage
+    already holds on its venue is refused (exit 2) before the stage is written: the file,
+    the strategy files and the rows stand as they were, whether the stage's node would have
+    run — new data behind it — or not, its clock already at the catalog's end."""
+    if idle:
+        deploy(ws, store, "paper")
+    deployable(ws, store, "other", doc=doc())
+    before = _written(ws, store)
+
+    with pytest.raises(KansoError) as raised:
+        deploy(ws, store, "paper")
+
+    assert raised.value.code == Exit.PRECONDITION
+    assert f"{composed_strategy.id}@1" in raised.value.message
+    assert "other@1" in raised.value.message
+    assert said in raised.value.message
+    assert "kanso strat retire other@1" in str(raised.value.remedy)
+    assert _written(ws, store) == before
 
 
 def test_show_reports_the_stage_its_liveness_and_the_realised_pnl(

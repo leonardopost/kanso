@@ -22,10 +22,11 @@ behalf. Committing a workspace is the operator's business; versioning the file r
 mutates is kanso's own, content-addressed in the state store. `tests/workspace/test_no_git.py`
 and `tests/cli/test_no_git.py` spy on every process launch and fail the moment one is git.
 
-**The core knows no vendor and no broker.** Every outside party lives in exactly one
-package — `data/adapters/<vendor>/` for data and reference, `nautilus/adapters/<broker>/`
-for execution and live feeds — and nothing outside it names a vendor, an endpoint, a vendor
-field or a vendor symbology. Mapping to engine types and kanso schemas happens at the
+**The core knows no vendor and no broker.** One package per outside party:
+`data/adapters/<vendor>/` for a pure data vendor, `nautilus/adapters/<broker>/` for a broker,
+which may also carry that party's public-history loaders and reference provider, exposed as
+an `ADAPTER` the data registry discovers. Nothing outside that package names a vendor, an
+endpoint, a vendor field or a vendor symbology. Mapping to engine types and kanso schemas happens at the
 adapter boundary. Provider specifics stay inside `models/` the same way. The isolation
 tests (`tests/data/adapters/`, `tests/nautilus/adapters/`, `tests/models/`) are a source
 scan and an import-graph check, and they read the names from the adapter directories rather
@@ -33,9 +34,11 @@ than from a list, so a new adapter is scanned without anyone remembering to add 
 
 **An adapter is enabled by its credentials, never by installation.** There are no extras.
 The full suite, `kanso doctor` and the demo are green with every vendor and broker
-credential unset, and CI has no credential at all, which is what proves it. A test that
-genuinely needs a real key carries the `live` marker, is deselected by default and never
-runs in CI.
+credential unset, and CI has no credential at all, which is what proves it. The suite is
+offline in its entirety: there is no `live` marker and no credentialed test, because a test
+CI never runs is a promise nobody keeps. Credentialed acceptance is a maintainer-driven CLI
+run against the live vendor or the paper account, recorded in the pull request body
+(`docs/maintainers.md` §2).
 
 **Availability, not observation.** Every catalog point's `ts_init` is the instant its
 information became public and `ts_event` is its economic reference time; `ts_init >=
@@ -46,6 +49,7 @@ declared publication rule is refused at write (`data/publication.py`).
 **Costs are applied once, by the runner, in the extraction.** Commission — in basis points
 and, where the model states it, per share — slippage and half the spread each side — or, on a
 fill that rested on the book under a venue model that states `maker_bps`, that rate alone —
+plus, on a sale, the sell-side fees the model states, maker or taker —
 are deducted per fill in `nautilus/backtest.py` and nowhere else. One application means one number: a card, a certification gate, a composition
 expectation and a realised paper objective all read the same arithmetic, and a cost model
 can be re-applied to recorded fills without re-running anything. The per-fill arithmetic

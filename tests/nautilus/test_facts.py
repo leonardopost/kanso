@@ -14,7 +14,7 @@ import pytest
 from kanso.nautilus import facts
 from kanso.nautilus.facts import DESIGN_CONSTRAINTS, ENGINE_VERSION, Fact, verify
 
-CLAIMS = [claim for claim, _ in facts._CHECKS]
+CLAIMS = [claim for claim, _ in facts.claims()]
 
 
 @pytest.fixture(scope="module")
@@ -65,6 +65,12 @@ BINDINGS = {
     "LeveragedMarginModel asks zero margin of an instrument whose margin rates are zero",
     "handle_bar(historical=True) routes to on_historical_data and never to on_bar",
     "a Bar carries low and high, and every market point carries ts_init",
+    "an order whose cancel was sent is not closed until the cancel lands, and under a "
+    "latency the market can fill it first",
+    "close_position sends a reduce-only order, which the simulated venue trims to what "
+    "is left of the position and refuses once the position is already closed",
+    "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
+    "flight as it is, and cancels both",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -86,10 +92,20 @@ def test_a_raising_check_is_reported_rather_than_propagated(
     def explode() -> tuple[bool, str]:
         raise RuntimeError("engine gone")
 
-    monkeypatch.setattr(facts, "_CHECKS", (("a claim that cannot be checked", explode),))
+    monkeypatch.setattr(facts, "claims", lambda: (("a claim that cannot be checked", explode),))
     (fact,) = verify()
     assert fact.holds is False
     assert "RuntimeError: engine gone" in fact.evidence
+
+
+def test_a_broker_s_claims_are_checked_after_the_core_s_own() -> None:
+    """A broker's package may name its broker and this module may not, so each broker
+    states its own claims and they are collected through the registry."""
+    from kanso.nautilus import adapters
+
+    stated = [claim for claim, _ in adapters.engine_facts()]
+    assert stated, "a packaged broker states the engine facts its package rests on"
+    assert [claim for claim, _ in facts._CHECKS] + stated == CLAIMS
 
 
 def test_raises_helper_reports_the_exception() -> None:
@@ -98,3 +114,52 @@ def test_raises_helper_reports_the_exception() -> None:
 
     assert facts._raises(boom) == "ValueError: nope"
     assert facts._raises(lambda: 1) is None
+
+
+# -- the perpetual ------------------------------------------------------------------
+
+
+def test_the_perpetual_builds_from_exactly_the_fields_the_engine_requires() -> None:
+    """Each required field omitted raises, and the two kanso requires on top default to one.
+
+    The builder's own list is the engine's plus `multiplier` and `lot_size`: the engine
+    would carry a contract value of one, which kanso reads as a claim about the contract.
+    """
+    from nautilus_trader.model.instruments import CryptoPerpetual
+
+    from kanso.data.instruments import _REQUIRED
+
+    assert set(_REQUIRED["CryptoPerpetual"]) == {
+        *facts.PERPETUAL_REQUIRED,
+        "multiplier",
+        "lot_size",
+    }
+    bare = facts._sample_perpetual()
+    fields = facts._perpetual_fields(bare)
+    assert set(fields) == set(facts.PERPETUAL_REQUIRED)
+    for field in facts.PERPETUAL_REQUIRED:
+        refused = facts._without(CryptoPerpetual, fields, field)
+        assert refused is not None and refused.startswith("TypeError"), field
+    assert facts._without(CryptoPerpetual, fields, "multiplier") is None
+    assert (str(bare.multiplier), str(bare.lot_size)) == ("1", "1")
+
+
+def test_the_instrument_claim_counts_the_six_classes(verified: list[Fact]) -> None:
+    [fact] = [fact for fact in verified if fact.claim.startswith("the six instrument classes")]
+    assert fact.holds
+    assert "CryptoPerpetual" in fact.evidence
+
+
+def test_the_fee_and_settlement_claims_hold(verified: list[Fact]) -> None:
+    held = {fact.claim: fact.holds for fact in verified}
+    assert held[
+        "MakerTakerFeeModel charges a fill the instrument's maker or taker rate on its notional"
+    ]
+    [settlement] = [fact for fact in verified if fact.claim.startswith("get_settlement_")]
+    assert settlement.claim == (
+        "get_settlement_currency answers a perpetual's settlement currency and every other "
+        "class's quote currency; get_cost_currency, which the account manager books and "
+        "converts from, answers the quote currency of every class"
+    )
+    assert settlement.holds
+    assert "settles in USDC and is booked in USDT" in settlement.evidence

@@ -132,7 +132,8 @@ def test_the_registry_finds_the_broker_by_reading_the_directory() -> None:
 def test_the_registry_hands_out_both_execution_client_declarations() -> None:
     found = adapters.exec_clients()
 
-    assert sorted(found) == sorted([PAPER_CLIENT, LIVE_CLIENT])
+    assert {PAPER_CLIENT, LIVE_CLIENT} <= set(found)
+    assert [spec.id for spec in BROKER.exec_clients] == [PAPER_CLIENT, LIVE_CLIENT]
     assert found[LIVE_CLIENT].capital == "real"
 
 

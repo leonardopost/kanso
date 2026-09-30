@@ -10,6 +10,12 @@ Neither check names a vendor either. The vendors are read from the adapter direc
 the day a second one lands it is scanned without anyone remembering to add it — which is
 exactly the day this would otherwise start passing by accident.
 
+The data adapter directory is the home of a pure data vendor. A broker's package under
+`nautilus/adapters/` may also expose an `ADAPTER` — that party's public-history loaders and
+reference provider — which `registry.adapters()` reaches and `registry.packaged()` never
+does, so the equalities below hold the directory and `packaged()` to each other, and the
+broker scan holds the broker's package to itself.
+
 Three directories are exempt by design. `templates/` is rendered into an operator's
 workspace rather than imported, `skills/` is prose an agent reads, and the criteria library
 is data; what any of them says about a vendor is documentation for a person, not a
@@ -88,5 +94,5 @@ def test_every_adapter_package_registers_itself_under_its_own_directory_name() -
     assert sorted(registry.packaged()) == list(vendors())
     for adapter_id, adapter in registry.packaged().items():
         assert adapter.id == adapter_id
-        assert adapter.kind in {"data", "reference", "exec"}
+        assert adapter.kind in {"data", "reference"}
         assert adapter.credentials

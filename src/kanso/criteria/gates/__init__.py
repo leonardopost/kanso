@@ -372,7 +372,7 @@ def _orders(fills: Sequence[Fill]) -> list[tuple[int, str, str, float, float]]:
         key = (fill.ts_ns, fill.instrument_id, fill.side)
         qty, notional = gathered.get(key, (0.0, 0.0))
         signed = -fill.qty if fill.side == "SELL" else fill.qty
-        gathered[key] = (qty + signed, notional + abs(fill.qty) * fill.px)
+        gathered[key] = (qty + signed, notional + fill.notional)
     return [
         (ts, instrument_id, side, round(qty, 9), round(notional, 6))
         for (ts, instrument_id, side), (qty, notional) in sorted(gathered.items())
@@ -791,6 +791,30 @@ def expected_maximum(trial_variance: float, n_trials: int) -> float:
     )
 
 
+MAD_TO_SIGMA: Final = 1.4826
+"""The median absolute deviation of a normal sample, scaled to its standard deviation."""
+
+
+def robust_variance(values: Sequence[float]) -> float:
+    """The variance of a set read off its median absolute deviation, scaled to a normal's.
+
+    The spread of a search's candidates is what the expected maximum is built from, and
+    a few trials that sit far out — a rule that traded itself to ruin, a seed that fired
+    once — hand a plain variance a width no candidate the selection weighed ever had:
+    measured on a posting hypothesis, thirty-three trials whose kept candidates lay within
+    thirty basis points of each other gave an expected maximum of a hundred and five. The
+    median absolute deviation, scaled by 1.4826, is the same number as the standard
+    deviation on a normal sample and is moved by no single trial. Falls back to the plain
+    variance when the deviation is zero — most trials on one value — so a set that varies
+    at all still has a spread.
+    """
+    centre = median(values)
+    deviation = median(abs(value - centre) for value in values)
+    if deviation == 0.0:
+        return variance(values)
+    return (MAD_TO_SIGMA * deviation) ** 2
+
+
 CONTRIBUTION_FAMILY: Final = frozenset({"wf_contribution_bps", "marginal_wf_contribution_bps"})
 """The objectives that read a mean net return per period in basis points of the capital."""
 
@@ -803,7 +827,9 @@ class _DeflatedContribution:
     host's for the marginal form — and the expected maximum it is measured against is built
     from the trials' own metrics, in the same units: their count is how many candidates the
     selection took the maximum over and their spread is the distribution it took it from
-    (`trial_metrics`, the same set `deflated_sharpe` reads). The probability reported is
+    (`trial_metrics`, the same set `deflated_sharpe` reads), read robustly as 1.4826 times
+    their median absolute deviation (`robust_variance`), so a few trials that blew up do
+    not widen the search past any candidate the selection weighed. The probability reported is
     that of the estimate exceeding that maximum by its own error, and the gate passes when
     it clears the floor chosen for it. A t-statistic on the contribution deflated for the
     search, in short — the multiple-testing control a per-period objective has where a
@@ -838,7 +864,8 @@ class _DeflatedContribution:
         estimate = _metric(
             objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
         )
-        expected = expected_maximum(variance(metrics), len(metrics))
+        spread = robust_variance(metrics)
+        expected = expected_maximum(spread, len(metrics))
         probability = NormalDist().cdf((estimate - expected) / error)
         return verdict(
             self.id,
@@ -849,6 +876,7 @@ class _DeflatedContribution:
                 "contribution_bps": estimate,
                 "standard_error_bps": error,
                 "expected_maximum_bps": expected,
+                "trial_spread_bps": sqrt(spread),
                 "trials": len(metrics),
                 "periods": len(series),
             },
@@ -902,8 +930,10 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
 
     Costs are applied once, by the runner, in the extraction that produced this run, so
     re-pricing them is arithmetic on the recorded fills rather than another backtest: each
-    fill's notional, quantity and liquidity side are on record, and the scenario's rates are
-    put through the same per-fill arithmetic the runner used. The difference between what a
+    fill's notional — quantity, price and contract multiplier — its quantity and its
+    liquidity side are on record, and the scenario's rates are put through the same per-fill
+    arithmetic the runner used, so the runner's own scenario reproduces the runner's own
+    cost on any instrument. The difference between what a
     fill now costs and what it cost is charged to the return period it falls in, exactly as
     a cost multiple is; the carry, the transfers and the cushion stand as recorded, for the
     reasons `stressed` gives. A key the scenario leaves out is zero, and a scenario that
@@ -916,7 +946,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
 
     def recost(fill: Fill) -> float:
         return fill_cost(
-            fill.qty * fill.px,
+            fill.notional,
             fill.qty,
             scenario.get("commission_bps") or 0.0,
             scenario.get("slippage_bps") or 0.0,
@@ -924,6 +954,9 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             maker_bps,
             scenario.get("commission_per_share") or 0.0,
             maker=fill.maker,
+            sell=fill.side == "SELL",
+            sell_fee_bps=scenario.get("sell_fee_bps") or 0.0,
+            sell_fee_per_share=scenario.get("sell_fee_per_share") or 0.0,
         )
 
     ends = run.period_ends_ns

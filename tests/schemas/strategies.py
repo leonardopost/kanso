@@ -86,7 +86,9 @@ TIMESTAMPS = st.datetimes(
     min_value=datetime(2000, 1, 1), max_value=datetime(2030, 1, 1), timezones=st.just(UTC)
 )
 VENUE_CODES = st.from_regex(r"\A[A-Z]{3,4}\Z")
-CURRENCIES = st.sampled_from(["USD", "EUR", "GBP", "JPY", "AUD"])
+CURRENCIES = st.one_of(st.from_regex(r"\A[A-Z][A-Z0-9]{1,7}\Z"), st.just("USDT"))
+"""Any code the schema admits — a fiat code, a crypto code such as USDT — not only the
+ones the engine registers, because the schema does not ask the engine."""
 VERSION_STRINGS = st.from_regex(r"\A[0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 
 
@@ -104,6 +106,8 @@ def costs(draw: st.DrawFn) -> Costs:
         spread=spread,
         fixed_bps=draw(NON_NEGATIVE) if spread == "fixed_bps" else None,
         maker_bps=draw(st.none() | st.floats(min_value=-5, max_value=5, allow_nan=False)),
+        sell_fee_bps=draw(NON_NEGATIVE),
+        sell_fee_per_share=draw(NON_NEGATIVE),
         limit_fill=draw(st.sampled_from(["touch", "through"])),
     )
 
@@ -111,7 +115,7 @@ def costs(draw: st.DrawFn) -> Costs:
 @st.composite
 def venue_models(draw: st.DrawFn, currency: str | None = None) -> VenueModel:
     account = draw(st.sampled_from(["margin", "cash"]))
-    origin = st.sampled_from(["default", "broker", "venue_override", "hypothesis"])
+    origin = st.sampled_from(["default", "config", "broker", "venue_override", "hypothesis"])
     return VenueModel(
         venue=draw(VENUE_CODES),
         broker=draw(st.none() | IDENTIFIERS),
@@ -345,6 +349,7 @@ def certificates(draw: st.DrawFn) -> Certificate:
     return Certificate(
         hyp_id=draw(HYP_IDS),
         strategy_sha=draw(SHAS),
+        hypothesis_sha=draw(st.one_of(st.none(), SHAS)),
         nautilus_version=draw(VERSION_STRINGS),
         venue_model=draw(venue_models()),
         snapshot_id=draw(IDENTIFIERS),

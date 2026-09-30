@@ -129,10 +129,11 @@ def test_a_tick_resolution_requires_its_own_type(resolution: str, required: list
         build(resolution=resolution, data_requirements=required)
 
 
-def test_tick_resolution_accepts_trades_or_quotes() -> None:
+def test_tick_resolution_accepts_trades_quotes_or_the_book() -> None:
     assert build(resolution="tick", data_requirements=["trade"]).resolution == "tick"
     assert build(resolution="tick", data_requirements=["quote"]).resolution == "tick"
-    with pytest.raises(ValidationError, match="needs 'trade' or 'quote'"):
+    assert build(resolution="tick", data_requirements=["book", "trade"]).resolution == "tick"
+    with pytest.raises(ValidationError, match="needs 'trade', 'quote' or 'book'"):
         build(resolution="tick", data_requirements=["bar"])
 
 

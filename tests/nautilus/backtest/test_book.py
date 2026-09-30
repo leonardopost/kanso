@@ -17,7 +17,7 @@ from nautilus_trader.model.objects import Price
 
 from kanso.criteria import drawdown_pct
 from kanso.criteria.run import NS_PER_DAY, Fill, midnight_ns
-from kanso.nautilus.backtest import RunRequest, _equity, execute, run
+from kanso.nautilus.backtest import RunRequest, _equity, execute, folded, run
 from kanso.nautilus.costs import NS_PER_YEAR, carry
 from kanso.schemas import Hypothesis
 
@@ -311,7 +311,7 @@ def test_the_adverse_range_is_the_period_s_own_and_never_the_prefix_s(request_fo
     )
     bought = Fill(ts_ns=opens + 1, instrument_id=INSTRUMENT, side="BUY", qty=1_000, px=10.0, cost=0)
 
-    curve = _equity(request, stream, [bought], {})
+    curve = _equity(request, folded(request, stream), [bought], {})
 
     cash = CAPITAL - 10_000.0
     assert curve.worst_ratio == (
@@ -331,7 +331,7 @@ def test_a_name_that_did_not_print_in_the_period_is_valued_at_its_mark(request_f
     )
     bought = Fill(ts_ns=opens + 1, instrument_id=INSTRUMENT, side="BUY", qty=1_000, px=10.0, cost=0)
 
-    curve = _equity(request, stream, [bought], {})
+    curve = _equity(request, folded(request, stream), [bought], {})
 
     assert curve.worst_ratio[1] == pytest.approx((CAPITAL - 10_000.0 + 10_000.0) / 10_000.0)
 
@@ -564,7 +564,10 @@ def test_a_restart_carries_from_the_instant_it_resumed_and_resets_across_the_tur
 
     curve = _equity(
         request,
-        [(resumes + 1, INSTRUMENT, 10.0, 9.0, 10.0), (end, INSTRUMENT, 9.9, 9.9, 9.9)],
+        folded(
+            request,
+            [(resumes + 1, INSTRUMENT, 10.0, 9.0, 10.0), (end, INSTRUMENT, 9.9, 9.9, 9.9)],
+        ),
         [bought],
         {},
     )
@@ -601,6 +604,6 @@ def test_a_restart_inside_the_month_it_settled_in_resets_nothing(request_for) ->
         settled_ns=opens - 1,
     )
 
-    curve = _equity(request, [(opens + 1, INSTRUMENT, 10.0, 9.0, 10.0)], [], {})
+    curve = _equity(request, folded(request, [(opens + 1, INSTRUMENT, 10.0, 9.0, 10.0)]), [], {})
 
     assert (curve.cushion, curve.equity) == ((1_000.0,), (CAPITAL,))

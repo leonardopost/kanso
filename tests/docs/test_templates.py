@@ -97,3 +97,12 @@ def test_the_program_names_every_status_a_card_can_carry_and_only_the_printed_on
     assert listed is not None
     assert set(listed.group(1).split("|")) == set(get_args(CardStatus)) - {"redundant"}
     assert "`redundant` (exit 2)" in text, "the status the command refuses rather than prints"
+
+
+def test_the_program_tells_the_proposer_a_settlement_is_not_answered() -> None:
+    """The proposer is handed each settlement's realised rate; the program says what the
+    runner does with an order placed in answer to it, so the loop does not search for a
+    carry the extraction refuses to pay."""
+    text = re.sub(r"\s+", " ", template("program.md"))
+    assert "on what you held before that instant" in text
+    assert "an order placed in answer to the rate neither collects nor escapes it" in text

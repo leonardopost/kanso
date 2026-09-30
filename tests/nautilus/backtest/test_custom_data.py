@@ -24,12 +24,14 @@ from kanso.nautilus.backtest import run, run_subprocess
 from .conftest import (
     CLOSE_NS,
     INSTRUMENT,
+    PERP,
     RESEARCH,
     SECOND_NS,
     bars,
     catalog,
     hypothesis,
     instrument,
+    perpetual,
 )
 
 DAY_NS = 86_400 * SECOND_NS
@@ -204,7 +206,9 @@ def test_a_card_imports_the_extension_whose_type_it_is_handed(
 def test_a_card_not_handed_the_extension_cannot_read_its_type(
     tmp_path: Path, request_for, taped: Taped
 ) -> None:
-    """The control: the same card, told nothing, dies unpickling the first print."""
+    """The control: the same card, told nothing, does not know the type it was asked to
+    subscribe to — a crash the run records with its traceback and the type's name, since the
+    points are read as the run consumes them and the subscription comes first."""
     held, _ = taped
     request = request_for(
         source=TAPE_TAKER,
@@ -213,5 +217,130 @@ def test_a_card_not_handed_the_extension_cannot_read_its_type(
 
     carded = run_subprocess(request, held, tmp_path)
 
-    assert carded.crashed and carded.reason == "died"
-    assert "No module named 'kanso_card_tape'" in (carded.traceback_tail or "")
+    assert carded.crashed and carded.reason == "exception"
+    assert "kanso_card_tape" in (carded.traceback_tail or "")
+    assert "not a known data type" in (carded.traceback_tail or "")
+
+
+# --- a perpetual's funding ---------------------------------------------------
+
+FUNDING_TAKER = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Buys twenty contracts for every basis point of funding, the moment it settles."""
+
+    config_cls = KansoConfig
+
+    def on_bar(self, bar) -> None:
+        return
+
+    def on_data(self, data) -> None:
+        self.submit_entry(data.instrument_id, "BUY", qty=round(abs(data.rate) * 200_000))
+'''
+
+FUNDING_HEADER = ["instrument_id", "rate", "ts"]
+FUNDING_ROWS = [
+    [PERP, "0.0003", "2023-12-31T16:00:00"],
+    [PERP, "0.0001", "2024-01-03T08:00:00"],
+    [PERP, "-0.00005", "2024-01-10T16:00:00"],
+    [PERP, "0.000125", "2024-01-20T00:00:00"],
+]
+"""Three settlements inside the research window and one the day before it opens."""
+
+
+def funded(root: Path) -> Path:
+    """A catalog of continuous synthetic daily bars on the perpetual and a funding file."""
+    from kanso.data.loaders.synthetic import SyntheticLoader
+
+    synthetic = SyntheticLoader()
+    (bar_ref,) = synthetic.discover(
+        {
+            "loader": "synthetic",
+            "seed": 11,
+            "instruments": ["BTCUSDT-PERP"],
+            "venue": "SIM",
+            "resolution": "1d",
+            "types": ["bar"],
+            "start": RESEARCH[0],
+            "end": RESEARCH[1],
+            "start_price": 10_000.0,
+            "price_precision": 1,
+            "calendar": "continuous",
+        }
+    )
+    rows = root / "funding.csv"
+    with rows.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(FUNDING_HEADER)
+        writer.writerows(FUNDING_ROWS)
+    files = CsvParquetLoader()
+    (funding_ref,) = files.discover(
+        {
+            "loader": "csv_parquet",
+            "timezone": "UTC",
+            "files": [
+                {
+                    "path": str(rows),
+                    "instrument": "BTCUSDT-PERP",
+                    "venue": "SIM",
+                    "type": "funding",
+                    "columns": {"instrument_id": "instrument_id", "rate": "rate", "ts_event": "ts"},
+                }
+            ],
+        }
+    )
+    points = [
+        *synthetic.load(bar_ref, bar_ref.span),
+        *files.load(funding_ref, funding_ref.span),
+    ]
+    return catalog(root / "catalog", points, [perpetual()])
+
+
+def test_a_card_on_a_perpetual_is_handed_each_funding_settlement_at_its_instant(
+    tmp_path: Path,
+) -> None:
+    """The perpetual trades on a round-the-clock calendar and its funding reaches `on_data`
+    at the settlement instant: each fill is struck then, sized from the rate it was handed,
+    and the settlement before the window is not handed over at all."""
+    from kanso.nautilus.backtest import RunRequest
+    from kanso.schemas import resolve_venue_model
+    from kanso.schemas.venue import CostsOverride, VenueDeclaration
+
+    from .conftest import CAPITAL, SNAPSHOT
+
+    hyp = hypothesis(universe=(PERP,), data_requirements=("bar", "funding"))
+    model = resolve_venue_model(
+        "SIM",
+        config=VenueDeclaration(currency="USDT"),
+        broker="synthetic",
+        hypothesis_costs=CostsOverride.model_validate(hyp.costs.model_dump(exclude_none=True)),
+        max_leverage=hyp.risk_limits.max_leverage,
+        quotes_available=False,
+    )
+    request = RunRequest(
+        hyp=hyp,
+        strategy_source=FUNDING_TAKER,
+        window=RESEARCH,
+        snapshot_id=SNAPSHOT,
+        venue_model=model.model_dump(),
+        capital=CAPITAL,
+    )
+    held = funded(tmp_path)
+
+    carded = run_subprocess(request, held, tmp_path)
+    in_process = run(request, held)
+
+    assert not carded.crashed, carded.traceback_tail
+    settled = [
+        midnight_ns(RESEARCH[0]) + offset
+        for offset in (2 * DAY_NS + 8 * 3_600 * SECOND_NS, 9 * DAY_NS + 16 * 3_600 * SECOND_NS)
+    ] + [midnight_ns(RESEARCH[0]) + 19 * DAY_NS]
+    assert [(fill.side, fill.qty, fill.ts_ns) for fill in carded.run.fills] == [
+        ("BUY", 20.0, settled[0]),
+        ("BUY", 10.0, settled[1]),
+        ("BUY", 25.0, settled[2]),
+    ]
+    assert all(fill.instrument_id == PERP for fill in carded.run.fills)
+    assert carded.run.fills == in_process.run.fills

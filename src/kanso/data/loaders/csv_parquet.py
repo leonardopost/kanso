@@ -70,8 +70,11 @@ from kanso.data.loader import (
 from kanso.data.loaders.points import (
     aggressor,
     bar_type,
+    book_action,
+    book_side,
     instrument_id,
     make_bar,
+    make_delta,
     make_quote,
     make_trade,
     zone,
@@ -90,6 +93,7 @@ REQUIRED_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "bar": ("ts_event", "open", "high", "low", "close", "volume"),
     "quote": ("ts_event", "bid_price", "ask_price", "bid_size", "ask_size"),
     "trade": ("ts_event", "price", "size"),
+    "book": ("ts_event", "action", "side", "price", "size"),
 }
 """What a market-data file must map. A custom type's requirement is its own annotations."""
 
@@ -97,6 +101,7 @@ OPTIONAL_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "bar": ("ts_init",),
     "quote": ("ts_init",),
     "trade": ("ts_init", "aggressor_side", "trade_id"),
+    "book": ("ts_init", "order_id", "flags", "sequence"),
 }
 
 EPOCH_UNITS: Final[dict[str, int]] = {
@@ -500,10 +505,48 @@ def _build_trade(
     )
 
 
+def _build_delta(
+    entry: FileSpec,
+    row: Mapping[str, object],
+    columns: Mapping[str, str],
+    ts_event: int,
+    ts_init: int,
+) -> object:
+    """One change to one level of the book: the action, the side, the price and the size
+    the level shows after it; an order id, flags and a sequence when the file carries them."""
+
+    def whole(field: str) -> int:
+        if field not in columns:
+            return 0
+        cell = _cell(row, columns[field], entry)
+        try:
+            return int(float(str(cell)))
+        except (TypeError, ValueError):
+            raise ValidationError(
+                f"{field}: {cell!r} in {entry.path} is not a whole number"
+            ) from None
+
+    return make_delta(
+        instrument_id(entry.instrument, entry.venue),
+        book_action(str(_cell(row, columns["action"], entry))),
+        book_side(str(_cell(row, columns["side"], entry))),
+        _ticks(_cell(row, columns["price"], entry), entry.price_precision, entry, "price"),
+        _ticks(_cell(row, columns["size"], entry), entry.size_precision, entry, "size"),
+        whole("order_id"),
+        entry.price_precision,
+        entry.size_precision,
+        ts_event,
+        ts_init,
+        flags=whole("flags"),
+        sequence=whole("sequence"),
+    )
+
+
 _BUILDERS: Final[dict[str, Builder]] = {
     "bar": _build_bar,
     "quote": _build_quote,
     "trade": _build_trade,
+    "book": _build_delta,
 }
 
 
@@ -554,7 +597,13 @@ def _coerce(value: object, kind: object, entry: FileSpec, field: str) -> object:
                 )
             return instrument_id(symbol, venue)
         if kind is float:
-            return float(text)
+            number = float(text)
+            if not math.isfinite(number):
+                raise ValidationError(
+                    f"files.columns.{field}: {text!r} in {entry.path} is not a finite number; "
+                    "a custom point carries a measured value, never a placeholder"
+                )
+            return number
         if kind is int:
             return int(text)
         if kind is bool:

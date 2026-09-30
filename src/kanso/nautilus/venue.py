@@ -4,11 +4,20 @@ A hypothesis names its universe as fully qualified instrument ids, so the venues
 trades are read off the universe rather than declared twice. Each of them becomes one
 engine venue configuration carrying the resolved venue model's account type and account
 currency, netting, bar execution, the hypothesis's leverage ceiling, the fill model its
-`limit_fill` names, and a starting balance of the run's capital.
+`limit_fill` names, and a starting balance of the run's capital. `venue_config` is the one
+place such a configuration is built: a card's venues come from it through `venue_configs`,
+and a stage's from it through `kanso.nautilus.node.venues_for`, so the two paths cannot
+disagree about a field a version was certified under.
 
-**The simulated venue is deliberately cost-neutral.** No fee model and no latency model is
-configured, and the fill model slips nothing, because kanso deducts commission, slippage
-and the spread exactly once, in the runner's extraction. One application means one number:
+**The simulated venue is deliberately cost-neutral.** No fee model is configured, and the
+fill model slips nothing, because kanso deducts commission, slippage and the spread exactly
+once, in the runner's extraction. A latency model is configured only when the venue model
+states `latency_ms`, and it charges nothing: it delays every order command — insert,
+update and cancel alike — by that long before the simulated book acts on it, so a resting
+order that a print would have filled in the meantime is not there yet, and a cancel sent
+too late finds the order already filled. Zero, the default, configures no model at all, so
+a venue model that states no latency is built exactly as it was before the key existed. One
+application means one number:
 the same cost arithmetic produces the figure on a card, the figure a certification gate
 reads and the figure a replay or a broker-paper session is compared against, and a cost
 model's charges can be re-applied to recorded fills without re-running anything. A venue
@@ -36,9 +45,16 @@ into the other with `get_oms_type`, `get_account_type`, `get_base_currency`,
 `get_starting_balances` and `get_fill_model`, the last building a `FillModel` from an
 `ImportableFillModelConfig` through `FillModelFactory`; `starting_balances` entries are
 strings parsed by `Money.from_str`, which requires the amount to carry the currency's own
-precision; `fee_model` and `latency_model` left unset mean the exchange charges nothing
-beyond an instrument's own maker and taker rates, which kanso's resolved instruments leave
-at zero; `FillModel.is_limit_filled` and `is_slipped` answer a probability of exactly zero
+precision; `Currency.from_str` never refuses a code — an unknown one is minted as a crypto
+currency at precision 8 — so whether a code is registered is asked of `Currency.is_fiat`
+and `Currency.is_crypto` instead, and a registered crypto currency such as USDT funds at
+the precision the engine registered it with; `fee_model` left unset means the exchange
+charges nothing beyond an instrument's own maker and taker rates, which kanso's resolved
+instruments leave at zero;
+`latency_model` is an `ImportableLatencyModelConfig` that `get_latency_model` builds into
+a `LatencyModel`, whose `base_latency_nanos` is added to every command's timestamp before
+the exchange processes it from its in-flight queue, and left unset it means no delay;
+`FillModel.is_limit_filled` and `is_slipped` answer a probability of exactly zero
 or one without drawing, and the matching engine asks the first of them only for a MAKER
 order whose price the market reached exactly (`kanso.nautilus.facts` measures which
 market state counts as reaching it); `default_leverage` is a `Decimal` and is meaningless
@@ -50,18 +66,23 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from nautilus_trader.backtest.config import ImportableLatencyModelConfig
 from nautilus_trader.config import BacktestVenueConfig, ImportableFillModelConfig
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Currency, Money
 
 from kanso.errors import ValidationError
+from kanso.nautilus.strategy import BOOK
 from kanso.schemas import Hypothesis, LimitFill, VenueModel
 
 __all__ = [
     "LIMIT_FILL",
     "NETTING",
     "fill_model",
+    "known_currency",
+    "latency_model",
     "starting_balance",
+    "venue_config",
     "venue_configs",
     "venues_of",
 ]
@@ -109,8 +130,60 @@ def fill_model(limit_fill: LimitFill) -> ImportableFillModelConfig:
     )
 
 
+LATENCY_MODEL: Final = "nautilus_trader.backtest.models:LatencyModel"
+LATENCY_MODEL_CONFIG: Final = "nautilus_trader.backtest.config:LatencyModelConfig"
+NS_PER_MS: Final = 1_000_000
+
+
+def latency_model(latency_ms: float) -> ImportableLatencyModelConfig | None:
+    """The latency model a venue is configured with: `latency_ms` on every order command,
+    and none at all — not a model of zero — when the venue model states no latency."""
+    if latency_ms <= 0:
+        return None
+    return ImportableLatencyModelConfig(
+        latency_model_path=LATENCY_MODEL,
+        config_path=LATENCY_MODEL_CONFIG,
+        config={
+            "base_latency_nanos": int(round(latency_ms * NS_PER_MS)),
+            "insert_latency_nanos": 0,
+            "update_latency_nanos": 0,
+            "cancel_latency_nanos": 0,
+        },
+    )
+
+
+def known_currency(code: str) -> None:
+    """Refuse an account currency the engine does not register.
+
+    Engine fact (nautilus_trader 1.231.0): `Currency.from_str("FOOBAR")` raises nothing and
+    hands back a currency it has just minted, `Currency(code='FOOBAR', precision=8,
+    currency_type=CRYPTO)`, so an account funded in a misspelt code would be funded at a
+    precision nobody chose and every figure on its cards would read in a currency that does
+    not exist. `Currency.is_fiat` and `Currency.is_crypto` answer for the codes registered
+    at the moment they are asked — `USD` is fiat, `USDT` is crypto, `FOOBAR` and `usdt` are
+    neither — so a code is admitted here only when one of them holds. A code `from_str` has
+    already minted in this process answers as crypto from then on, which is why this check
+    runs before any venue is funded, ahead of `from_str` on every path that reaches one.
+    """
+    if Currency.is_fiat(code) or Currency.is_crypto(code):
+        return
+    raise ValidationError(
+        f"currency: {code!r} is not a code the engine registers, as fiat or as crypto",
+        remedy=(
+            "set [research] currency in kanso.toml or venues.<MIC>.currency in "
+            "portfolio.yaml to a code the engine registers"
+        ),
+    )
+
+
 def starting_balance(capital: float, currency: str) -> str:
-    """The run's capital as the amount-and-currency string a venue is funded with."""
+    """The run's capital as the amount-and-currency string a venue is funded with.
+
+    The currency is checked against the engine's register first, because `Currency.from_str`
+    would mint an unknown code rather than raise; what the clause below catches is the
+    engine refusing the amount itself, above `MONEY_MAX` or not a number.
+    """
+    known_currency(currency)
     try:
         return str(Money(capital, Currency.from_str(currency)))
     except (ValueError, OverflowError) as exc:
@@ -127,10 +200,13 @@ def venue_configs(
 ) -> list[BacktestVenueConfig]:
     """One cost-neutral engine venue per venue in the hypothesis's universe.
 
-    The account type, the currency and the limit-fill rule come from the resolved venue
-    model, the leverage ceiling from the hypothesis's risk limits, and the starting
-    balance from the run's capital. The model's charges are deliberately not translated
-    into a fee model: the runner applies them once, to the fills, after the backtest.
+    The account type, the currency, the limit-fill rule and the latency come from the
+    resolved venue model, the leverage ceiling from the hypothesis's risk limits, and the
+    starting balance from the run's capital. The model's charges are deliberately not translated
+    into a fee model: the runner applies them once, to the fills, after the backtest. A
+    hypothesis that requires `book` gets a level-two book kept from the deltas it loads,
+    with `queue_position` on, so a resting order that joins a level waits for the size the
+    book showed ahead of it; every other hypothesis gets the top-of-book venue it always had.
     """
     model = (
         venue_model
@@ -139,20 +215,43 @@ def venue_configs(
     )
     if capital <= 0:
         raise ValidationError(f"capital: {capital} is not an amount to fund a venue with")
-    balance = starting_balance(capital, model.currency)
-    leverage = CASH_LEVERAGE if model.account == "cash" else hyp.risk_limits.max_leverage
     return [
-        BacktestVenueConfig(
-            name=venue,
-            oms_type=NETTING,
-            account_type=_ACCOUNT_TYPES[model.account],
-            starting_balances=[balance],
-            base_currency=model.currency,
-            default_leverage=leverage,
-            bar_execution=True,
-            fill_model=fill_model(model.costs.limit_fill),
-            fee_model=None,
-            latency_model=None,
+        venue_config(
+            venue,
+            model,
+            capital,
+            hyp.risk_limits.max_leverage,
+            book=BOOK in hyp.data_requirements,
         )
         for venue in venues_of(hyp.universe)
     ]
+
+
+def venue_config(
+    venue: str, model: VenueModel, capital: float, leverage: float, *, book: bool
+) -> BacktestVenueConfig:
+    """The one venue configuration both code paths are built from.
+
+    A card's venue and a stage's are this function's answer and nothing else's, so the two
+    cannot disagree about a field: the account type and currency, the starting balance,
+    the leverage ceiling — `leverage` on a margin account, one on a cash account, which
+    cannot borrow — bar and trade execution, the book type and queue position `book` asks
+    for, the fill model the model's `limit_fill` names, the fee model left unset — so the
+    exchange charges the instruments' zero rates — and the latency model its `latency_ms`
+    states.
+    """
+    return BacktestVenueConfig(
+        name=venue,
+        oms_type=NETTING,
+        account_type=_ACCOUNT_TYPES[model.account],
+        starting_balances=[starting_balance(capital, model.currency)],
+        base_currency=model.currency,
+        default_leverage=CASH_LEVERAGE if model.account == "cash" else leverage,
+        bar_execution=True,
+        book_type="L2_MBP" if book else "L1_MBP",
+        trade_execution=True,
+        queue_position=book,
+        fill_model=fill_model(model.costs.limit_fill),
+        fee_model=None,
+        latency_model=latency_model(model.costs.latency_ms),
+    )

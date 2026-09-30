@@ -40,6 +40,14 @@ reports by. Nothing else joins spans: a range the source answered empty on days 
 opened is a hole, because a source that lost a trading day and a market that shut look
 alike in its answer. An instrument the store does not define, and a market with no calendar
 on file, are read with every day open.
+
+One required type is asked of fewer instruments than the rest: `funding` is asked only of
+an instrument whose stored definition is a perpetual, the engine's `CryptoPerpetual` —
+the class `hyp validate` reads when it requires `funding` of a universe holding one. A
+spot leg beside a perpetual settles no funding, so it has none to load, and asking it for
+some would leave a basis universe coverable only by a series invented for it. An
+instrument the store holds no definition for is not asked either; `covering` refuses it by
+name before it hands out a snapshot.
 """
 
 from __future__ import annotations
@@ -209,6 +217,7 @@ def covering(
     held = manifests(ws)
     defined = _definitions(ws, universe)
     closed = closures.by_instrument(defined.values())
+    asked = _asked(ws, universe, types)
     required = (
         *((window.start, window.end) for window in (windows.research, windows.certification)),
         *prefixes,
@@ -218,7 +227,7 @@ def covering(
         picked = [held[name] for name in snapshot.datasets if name in held]
         if len(picked) != len(snapshot.datasets):
             continue
-        if _covers(picked, universe, types, resolution, required, closed):
+        if _covers(picked, asked, resolution, required, closed):
             candidates.append(snapshot)
     if not candidates:
         return None
@@ -287,20 +296,48 @@ def _definitions(ws: Workspace, universe: Sequence[str]) -> dict[str, Any]:
     return {str(item.id): item for item in held}
 
 
+def _asked(
+    ws: Workspace, universe: Sequence[str], types: Sequence[str]
+) -> dict[str, tuple[str, ...]]:
+    """The required types each instrument is asked for: all of them, bar `funding` off a perpetual.
+
+    NautilusTrader 1.231.0: a stored definition reads back as the class it was written as,
+    and a perpetual swap is `nautilus_trader.model.instruments.CryptoPerpetual`, the one
+    class kanso builds for `instrument_class: swap`.
+    """
+    from nautilus_trader.model.instruments import CryptoPerpetual
+
+    from kanso.data.catalog import open_catalog
+    from kanso.data.types.funding import TYPE_ID as FUNDING
+
+    if FUNDING not in types:
+        return {instrument: tuple(types) for instrument in universe}
+    perpetuals = {
+        str(item.id)
+        for item in open_catalog(ws).instruments(instrument_ids=list(universe))
+        if isinstance(item, CryptoPerpetual)
+    }
+    return {
+        instrument: tuple(
+            required for required in types if required != FUNDING or instrument in perpetuals
+        )
+        for instrument in universe
+    }
+
+
 def _covers(
     picked: Sequence[Manifest],
-    universe: Sequence[str],
-    types: Sequence[str],
+    asked: Mapping[str, Sequence[str]],
     resolution: str | None,
     windows: Sequence[tuple[date, date]],
     closed: Mapping[str, Closed],
 ) -> bool:
-    """True when these manifests cover every instrument and type over every window.
+    """True when these manifests cover every instrument and the types it is asked for.
 
     Each instrument is read on its own market's closures, so a day it could not have
     printed is never the day that refuses it.
     """
-    for instrument in universe:
+    for instrument, types in asked.items():
         shut = closed.get(instrument, closures.never)
         for required in types:
             relied = [

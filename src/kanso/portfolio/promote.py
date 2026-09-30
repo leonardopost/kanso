@@ -31,9 +31,11 @@ from typing import TYPE_CHECKING
 from kanso import strategy as strategies
 from kanso.errors import ApprovalError, PreconditionError
 from kanso.inbox import escalate
+from kanso.nautilus import node
 from kanso.portfolio import files, records
 from kanso.portfolio.capital import assign
 from kanso.portfolio.deploy import BLOCKED, LIVE, PAPER, RETIRED, Deployment, deploy, restated
+from kanso.replay.target import resolve as resolve_target
 from kanso.schemas import StrategyFile, StrategyVersion
 from kanso.schemas.portfolio import STAGES
 from kanso.schemas.strategy import PAPER_STATES
@@ -144,6 +146,7 @@ def promote(
             remedy="raise stages.live.capital, or demote what holds it",
         )
 
+    _check_venues(ws, store, file, chosen)
     approval = records.approve(store, strategy_id, chosen.version, named)
     replaced = _move_to_live(ws, store, file, chosen)
     store.event(
@@ -284,6 +287,28 @@ def _version(
             remedy=f"only a {required} version makes this move",
         )
     return file, chosen
+
+
+def _check_venues(
+    ws: Workspace, store: StateStore, file: StrategyFile, chosen: StrategyVersion
+) -> None:
+    """Refuse a promotion the live stage's venues could not hold, before anything is recorded.
+
+    The live stage's deployment refuses two versions that would share a venue two different
+    ways; asked only there, the approval would already be recorded and the version already
+    moved when it refused, so the stage the promotion leaves is asked here first.
+    """
+    joining = [
+        (other.id, held.version)
+        for other in strategies.strategies(ws)
+        if other.id != file.id and (held := other.deployed(LIVE)) is not None
+    ]
+    joining.append((file.id, chosen.version))
+    node.agree(
+        (records.subject_of(strategy_id, version), target.hyp, target.venue_model)
+        for strategy_id, version in joining
+        for target in (resolve_target(ws, store, strategy=strategy_id, version=version),)
+    )
 
 
 def _move_to_live(

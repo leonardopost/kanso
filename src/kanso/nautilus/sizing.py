@@ -18,7 +18,10 @@ The quantity is `budget / ((1 + 2 x cost_rate) x (price + increment))`, floored 
 lot: the round trip the runner will charge and one price increment are reserved inside the
 budget, because the simulated venue fills a market order past a quarter of the bar's volume
 one increment worse for the remainder (`nautilus/facts.py`), and a fill one increment over
-the budget is what a floor on entry fills would otherwise refuse.
+the budget is what a floor on entry fills would otherwise refuse. The price and the
+increment are one contract's, so on a multiplied instrument the harness hands in `price x
+multiplier` and `increment x multiplier` — the notional one contract costs and the notional
+one tick moves it by — and a per-share commission is per contract in the `cost_rate`.
 """
 
 from __future__ import annotations
@@ -112,6 +115,7 @@ def full_book_quantity(budget: float, price: float, increment: float, cost_rate:
 
     `cost_rate` is one-way; a round trip is reserved. `increment` is the instrument's price
     increment, reserved because the venue walks a market order one increment for whatever
-    is past a quarter of the bar's volume.
+    is past a quarter of the bar's volume. Both `price` and `increment` are per contract —
+    the instrument's price and tick times its multiplier — so the quotient is in contracts.
     """
     return budget / ((1.0 + ROUND_TRIP * cost_rate) * (price + increment))

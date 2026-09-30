@@ -108,6 +108,37 @@ class Strategy(KansoStrategy):
             self.long = False
 '''
 
+POSTING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    clip_usd: float = 60_000.0
+
+
+class Strategy(KansoStrategy):
+    """Rests a clip two cents over the bid, cancelling and re-posting whenever the bid moves.
+
+    Two clips do not fit the book, so a re-post while the last post still rests is cut to
+    what the room has left; only an order the venue has closed frees it.
+    """
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.posted = None
+
+    def on_quote_tick(self, tick) -> None:
+        want = round(float(tick.bid_price) + 0.02, 2)
+        if want == self.posted:
+            return
+        self.cancel_all_orders(tick.instrument_id)
+        self.posted = None
+        qty = int(self.kanso_config.clip_usd / want)
+        if self.submit_entry(tick.instrument_id, "BUY", qty=qty, price=want) is not None:
+            self.posted = want
+'''
+
 FLAT = b'''
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
@@ -296,6 +327,27 @@ def quotes(window: tuple[date, date], symbol: str = SYMBOL) -> list[QuoteTick]:
     return made
 
 
+def flickering(day: date, count: int, gap_ns: int, symbol: str = SYMBOL) -> list[QuoteTick]:
+    """`count` quotes from two o'clock on `day`, `gap_ns` apart, the bid flickering 31 cents."""
+    start = midnight_ns(day) + 14 * 3_600 * SECOND_NS
+    made: list[QuoteTick] = []
+    for index in range(count):
+        bid = 1077.12 if index % 2 == 0 else 1077.43
+        ts = start + index * gap_ns
+        made.append(
+            QuoteTick(
+                InstrumentId(Symbol(symbol), Venue(VENUE)),
+                Price(bid, 2),
+                Price(1077.60, 2),
+                Quantity.from_int(300),
+                Quantity.from_int(200),
+                ts_event=ts,
+                ts_init=ts,
+            )
+        )
+    return made
+
+
 def trades(window: tuple[date, date], symbol: str = SYMBOL) -> list[TradeTick]:
     """One print per day at the day's close, published a second later."""
     made: list[TradeTick] = []
@@ -348,12 +400,12 @@ def dataset(instrument_id: str = INSTRUMENT, span: tuple[date, date] = SPAN) -> 
     )
 
 
-def venue_model() -> Any:
-    """The resolved model every card here is costed with."""
+def venue_model(doc: dict[str, Any] | None = None) -> Any:
+    """The resolved model a card here is costed with: the demo's, or `doc`'s own costs."""
     return resolve_venue_model(
         VENUE,
         broker="synthetic",
-        hypothesis_costs=CostsOverride.model_validate(DOCUMENT["costs"]),
+        hypothesis_costs=CostsOverride.model_validate((doc or DOCUMENT)["costs"]),
         max_leverage=1.0,
         quotes_available=False,
     )
@@ -588,7 +640,7 @@ def carded(
             peak_mem_gb=1.0,
             status="keep",
             desc="the card replay replays",
-            venue_model=venue_model(),
+            venue_model=venue_model(document_),
             created_at=datetime(2024, 3, 1, tzinfo=UTC),
         ),
     )
@@ -619,7 +671,7 @@ def composed(
         "criteria_version": criteria_version(),
         "plan_version": 1,
         "snapshot_id": frozen.snapshot_id,
-        "venue_model": venue_model().model_dump(),
+        "venue_model": venue_model(doc).model_dump(),
     }
     expectation = {
         "objective_id": "wf_sharpe_net",

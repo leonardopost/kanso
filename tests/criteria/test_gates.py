@@ -1404,6 +1404,17 @@ def test_position_size_judges_entry_fills_against_the_budget_under_sizing() -> N
     assert result.evidence["budget"] == 10_000.0
 
 
+def test_position_size_measures_an_entry_at_its_contract_notional() -> None:
+    """Two contracts of a 50-times future at 100 are 10,000 of a 10,000 budget: the whole
+    book, not the two per cent that two shares at 100 would be."""
+    contract = replace(_fill(START, "BUY", 2.0, 100.0, "ESZ4.XCME"), multiplier=50.0)
+
+    result = position_size.evaluate(filled(contract, params={"min_pct": 98.0, "max_pct": 100.0}))
+
+    assert result.passed, result.evidence
+    assert result.evidence["n_entries"] == 1
+
+
 def test_position_size_gathers_a_walked_order_before_judging_it() -> None:
     """The venue fills a large market order as two events; together they are one entry."""
     result = position_size.evaluate(

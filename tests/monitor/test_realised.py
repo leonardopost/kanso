@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
-from kanso.criteria.run import NS_PER_DAY, midnight_ns
+from kanso.criteria.run import NS_PER_DAY, FundingPayment, midnight_ns
 from kanso.monitor import combined, tenure
 from kanso.monitor.realised import combined_benchmark
 from kanso.portfolio.records import StageResult
@@ -19,7 +19,7 @@ def result(
     run_returns: tuple[float, ...],
     *,
     start: date = START,
-    positions: tuple[tuple[str, float, float], ...] = (),
+    positions: tuple[tuple[str, float, float, float], ...] = (),
     **run_kwargs: object,
 ) -> StageResult:
     """One closed window, as the event that recorded it hands it back."""
@@ -87,6 +87,26 @@ def test_trades_and_fills_are_joined_in_time_order() -> None:
     assert len(joined.fills) == 2
 
 
+def test_the_funding_of_every_window_is_joined_in_time_order() -> None:
+    def paid(day: date) -> FundingPayment:
+        return FundingPayment(
+            ts_ns=midnight_ns(day) + 8 * 3_600 * 1_000_000_000,
+            instrument_id="DEMO.XNAS",
+            qty=10.0,
+            rate=0.0001,
+            paid=0.1,
+        )
+
+    early = replace(result((10.0,)), run=replace(result((10.0,)).run, funding=(paid(START),)))
+    late = result((10.0,), start=SECOND_DAY)
+    late = replace(late, run=replace(late.run, funding=(paid(SECOND_DAY),)))
+
+    joined = combined([early, late])
+
+    assert joined is not None
+    assert joined.funding == (paid(START), paid(SECOND_DAY))
+
+
 def test_a_tenure_reads_its_clock_from_the_stage_when_there_is_one() -> None:
     reached = midnight_ns(date(2024, 4, 1))
 
@@ -107,15 +127,24 @@ def test_a_tenure_without_a_session_clock_ends_at_its_last_window() -> None:
 
 def test_the_book_is_the_last_windows_and_not_every_windows() -> None:
     """Each window's positions were recorded before its flatten; only the last still stands."""
-    first = result((10.0,), positions=(("AAA.XNAS", 100.0, 10.0),))
-    second = result((10.0,), start=SECOND_DAY, positions=(("BBB.XNAS", -50.0, 10.0),))
+    first = result((10.0,), positions=(("AAA.XNAS", 100.0, 10.0, 1.0),))
+    second = result((10.0,), start=SECOND_DAY, positions=(("BBB.XNAS", -50.0, 10.0, 1.0),))
 
     held = tenure("paper", [first, second], None)
 
     assert held is not None
-    assert held.positions == (("BBB.XNAS", -50.0, 10.0),)
+    assert held.positions == (("BBB.XNAS", -50.0, 10.0, 1.0),)
     assert held.gross == 500.0
     assert held.net == -500.0
+
+
+def test_the_book_is_valued_at_the_contract_multiplier() -> None:
+    """Three contracts of a 50-times future at 100 are 15,000 of exposure, not 300."""
+    held = tenure("paper", [result((10.0,), positions=(("ESZ4.XCME", 3.0, 100.0, 50.0),))], None)
+
+    assert held is not None
+    assert held.gross == 15_000.0
+    assert held.net == 15_000.0
 
 
 def test_a_days_profit_is_the_periods_that_ended_on_it() -> None:

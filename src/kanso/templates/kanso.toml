@@ -14,7 +14,7 @@ targets = [".claude/skills", ".cursor/skills", ".codex/skills"]
 capital = 100000          # default backtest starting balance for cards/cert/compose; hypothesis.yaml `capital` overrides
 broker = "alpaca"         # whose venue model (account type, currency, costs) research inherits; portfolio.yaml venues.<MIC> overrides per venue
 account = "margin"        # margin | cash. margin with default_leverage = risk_limits.max_leverage, so max_leverage 1 still forbids borrowing but allows shorts
-currency = "USD"          # account currency of every venue the broker does not override; a universe whose venues carry more than one account currency is refused at `kanso hyp validate`
+currency = "USD"          # account currency of every venue the broker does not override; a universe whose venues carry more than one account currency, or an instrument settling or booked in another currency, is refused at `kanso hyp validate`
 return_period = "1d"      # the period a return is measured over, for every objective and drawdown
 annualisation = "auto"    # observed periods per year in the window; set a number to force one
 align_every = 10          # alignment check cadence (cards)

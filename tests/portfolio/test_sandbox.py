@@ -26,7 +26,8 @@ from nautilus_trader.adapters.sandbox.execution import SandboxExecutionClient
 from nautilus_trader.backtest.engine import SimulatedExchange
 from nautilus_trader.backtest.models import FillModel, MakerTakerFeeModel
 from nautilus_trader.common import Environment
-from nautilus_trader.common.component import is_matching_py
+from nautilus_trader.common.component import TestClock, is_matching_py
+from nautilus_trader.common.factories import OrderFactory
 from nautilus_trader.config import (
     BacktestVenueConfig,
     LiveExecEngineConfig,
@@ -34,20 +35,33 @@ from nautilus_trader.config import (
     TradingNodeConfig,
 )
 from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.execution.messages import (
+    BatchCancelOrders,
+    CancelAllOrders,
+    CancelOrder,
+    ModifyOrder,
+    QueryOrder,
+    SubmitOrder,
+    SubmitOrderList,
+)
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import Bar
-from nautilus_trader.model.enums import BookType
+from nautilus_trader.model.enums import BookType, OrderSide
 from nautilus_trader.model.events import OrderDenied
 from nautilus_trader.model.identifiers import (
+    ClientId,
     ClientOrderId,
     InstrumentId,
+    PositionId,
     StrategyId,
     TraderId,
     Venue,
+    VenueOrderId,
 )
-from nautilus_trader.model.objects import Quantity
+from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.data.types.corporate_action import CorporateAction
+from kanso.errors import ValidationError
 from kanso.nautilus import actions, backtest, sandbox, session
 from kanso.nautilus.venue import venue_configs
 from tests.replay.conftest import (
@@ -442,6 +456,7 @@ def test_every_order_command_is_the_exchanges_to_answer(kernel: Any) -> None:
     client.modify_order("c")
     client.cancel_order("d")
     client.cancel_all_orders("e")
+    client.batch_cancel_orders("f")
 
     assert seen == [
         "submit_order(a)",
@@ -449,7 +464,89 @@ def test_every_order_command_is_the_exchanges_to_answer(kernel: Any) -> None:
         "modify_order(c)",
         "cancel_order(d)",
         "cancel_all_orders(e)",
+        "batch_cancel_orders(f)",
     ]
+
+
+def commands() -> list[Any]:
+    """One of every command a sleeve sends, each carrying every field its class has.
+
+    Nothing is left at a default: a copy that dropped a field would read back the default
+    and differ from the original, so every field set here is one the copy is held to.
+    """
+    factory = OrderFactory(trader_id=TRADER, strategy_id=StrategyId("S-1"), clock=TestClock())
+    instrument_id = InstrumentId.from_str(INSTRUMENT)
+    entry = factory.market(instrument_id, OrderSide.BUY, Quantity.from_int(3))
+    exit_ = factory.limit(instrument_id, OrderSide.SELL, Quantity.from_int(3), Price.from_str("9"))
+    common: dict[str, Any] = {
+        "trader_id": TRADER,
+        "strategy_id": StrategyId("S-1"),
+        "command_id": UUID4(),
+        "ts_init": 1,
+        "client_id": ClientId(VENUE),
+        "params": {"tag": "resting"},
+        "correlation_id": UUID4(),
+    }
+    resting = {
+        "instrument_id": instrument_id,
+        "client_order_id": exit_.client_order_id,
+        "venue_order_id": VenueOrderId("V-1"),
+    }
+    return [
+        SubmitOrder(order=entry, position_id=PositionId("P-1"), **common),
+        SubmitOrderList(
+            order_list=factory.create_list([entry, exit_]), position_id=PositionId("P-1"), **common
+        ),
+        ModifyOrder(
+            quantity=Quantity.from_int(2),
+            price=Price.from_str("10"),
+            trigger_price=Price.from_str("11"),
+            **resting,
+            **common,
+        ),
+        CancelOrder(**resting, **common),
+        CancelAllOrders(instrument_id=instrument_id, order_side=OrderSide.SELL, **common),
+        BatchCancelOrders(
+            instrument_id=instrument_id, cancels=[CancelOrder(**resting, **common)], **common
+        ),
+    ]
+
+
+@pytest.mark.parametrize("command", commands(), ids=lambda command: type(command).__name__)
+def test_a_restamped_command_is_the_same_command_at_the_data_clock(command: Any) -> None:
+    """Under a latency the exchange times a command from its `ts_init`, so that is the one
+    thing the copy changes: the class, the order objects, every id and the params are the
+    original's, or the events the exchange generates would land on no order the node holds."""
+    restamped = sandbox._restamped(command, 42)
+    before = type(command).to_dict(command)
+    after = type(restamped).to_dict(restamped)
+
+    assert type(restamped) is type(command)
+    assert restamped.ts_init == 42
+    assert (before.pop("ts_init"), after.pop("ts_init")) == (1, 42)
+    assert after == before
+    assert restamped.id == command.id
+    assert restamped.params == command.params
+    assert restamped.correlation_id == command.correlation_id
+    if isinstance(command, SubmitOrder):
+        assert restamped.order is command.order
+    if isinstance(command, SubmitOrderList):
+        assert restamped.order_list is command.order_list
+
+
+def test_a_command_no_sleeve_sends_cannot_have_its_flight_timed() -> None:
+    query = QueryOrder(
+        trader_id=TRADER,
+        strategy_id=StrategyId("S-1"),
+        instrument_id=InstrumentId.from_str(INSTRUMENT),
+        client_order_id=ClientOrderId("O-1"),
+        venue_order_id=None,
+        command_id=UUID4(),
+        ts_init=1,
+    )
+
+    with pytest.raises(ValidationError, match="QueryOrder: not a command a sleeve sends"):
+        sandbox._restamped(query, 42)
 
 
 # --- the client's own surface -------------------------------------------------

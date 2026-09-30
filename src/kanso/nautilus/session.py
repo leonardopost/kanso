@@ -68,7 +68,7 @@ from nautilus_trader.model.identifiers import TraderId
 
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, sandbox
-from kanso.nautilus.backtest import RunRequest, RunResult
+from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest, RunResult
 from kanso.nautilus.cross_section import arm, ordered, warm, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
@@ -101,9 +101,6 @@ it carries is the one the engine gave.
 
 START_TURNS: Final = 100_000
 """How many turns of the loop a node is given to come up before the session gives up."""
-
-SUBMIT_RATE: Final = "1000000/00:00:01"
-"""An order submission rate a replay cannot reach, so no wall-clock throttle binds."""
 
 POST_STOP_S: Final = 0.1
 CONNECT_S: Final = 10.0
@@ -165,7 +162,7 @@ def run_node(
     clock a stage resumes from, are the window's own points, so a prefix is never claimed
     and never resumed into.
     """
-    stream = backtest.checked(request, instruments, groups)
+    marks = backtest.checked(request, instruments, groups)
     points = ordered(groups)
     opens, _ = request.bounds
     backtest._seed_globals(request.snapshot_id)
@@ -200,7 +197,7 @@ def run_node(
             warm(strategy, opens)
         backtest.booked(strategy, request)
         loop.run_until_complete(_drive(node, client, strategy, halt))
-        card = backtest._extract(request, kernel, stream, groups)
+        card = backtest._extract(request, kernel, marks)
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents

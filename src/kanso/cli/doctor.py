@@ -38,16 +38,23 @@ import json
 import platform
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from kanso import __version__, creds, env, ext, skills_sync
 from kanso.certify.certificate import source_file
 from kanso.cli.context import STATE_DB
 from kanso.criteria.integrity import scope as lane_scope
 from kanso.data import registry
-from kanso.data.instruments import CACHE_NAME, ManualProvider, ResolveError, _lookup, read_store
+from kanso.data.instruments import (
+    CACHE_NAME,
+    ManualProvider,
+    ResolveError,
+    _lookup,
+    charged_rates,
+    read_store,
+)
 from kanso.data.manifest import catalog_path
 from kanso.data.snapshot import instrument_drift, newest
 from kanso.env import envelope as envelope_module
@@ -524,18 +531,14 @@ def _adapter_item(ws: Workspace, adapter: registry.Adapter) -> str:
 
 
 def _unprovided(ws: Workspace, known: Mapping[str, registry.Adapter]) -> tuple[str, ...]:
-    """The `[adapters.<id>]` tables naming something nothing here registers.
+    """The `[adapters.<id>]` tables naming something nothing here registers, as lines.
 
-    A broker adapter is configured through the same table as a data adapter and lives in
-    its own registry, so both are consulted: a table for a broker that is installed is
-    configuration, not a mistake, and reporting it as one would send an operator to delete
-    the settings their stage depends on.
+    Which tables those are is the registry's one rule, the one `kanso data adapters` reads
+    too, and it consults the brokers: a broker's table is configuration, not a mistake.
     """
-    provided = set(known) | set(brokers.packaged())
     return tuple(
         f"{name}: configured in kanso.toml, and nothing registered here provides it"
-        for name in sorted(ws.config.adapters)
-        if name not in provided
+        for name in registry.unprovided(ws, known)
     )
 
 
@@ -550,11 +553,17 @@ def _execution(ws: Workspace) -> Check:
     wall-clock client with replayed data or any speed but one, putting real capital
     anywhere but the live stage, or naming a client this version's node cannot run.
 
+    Each packaged broker's `[adapters.<id>]` table is read through that broker's own model,
+    whether or not the table is there, so a key it does not know or a value outside what it
+    accepts fails here rather than when a client is first opened.
+
     No value is read: a client is reported by the variables its account needs and where
     each of them resolves from.
     """
     found = exec_client_declarations(ws)
-    items = [_client_item(one) for one in found]
+    tables = [_broker_table(ws, broker) for _, broker in sorted(brokers.packaged().items())]
+    items = [line for line, _ in tables]
+    items += [_client_item(one) for one in found]
     configured = [one for one in found if one.credentials and one.configured]
     problems = stage_refusals(ws)
     items += [f"{stage}: {problem or 'ok'}" for stage, problem in sorted(problems.items())]
@@ -563,6 +572,15 @@ def _execution(ws: Workspace) -> Check:
         f"{len(found)} client(s) · {len(configured)} broker account(s) configured · "
         f"{len(STAGES) - len(refused)}/{len(STAGES)} stages deployable"
     )
+    invalid = [broker for line, broker in tables if broker is not None]
+    if invalid:
+        return Check(
+            "execution",
+            "fail",
+            f"{detail}; {', '.join(f'[adapters.{one}]' for one in invalid)} refused",
+            items=tuple(items),
+            remedy="fix the table in kanso.toml; docs/adapters.md lists the keys each accepts",
+        )
     if refused:
         return Check(
             "execution",
@@ -573,6 +591,22 @@ def _execution(ws: Workspace) -> Check:
             "may be named",
         )
     return Check("execution", "ok", detail, items=tuple(items))
+
+
+def _broker_table(ws: Workspace, broker: brokers.BrokerAdapter) -> tuple[str, str | None]:
+    """One broker as a line — its table read by its own model, its accounts — and its id
+    again when that model refused the table."""
+    table = f"[adapters.{broker.id}]"
+    accounts = sum(1 for spec in broker.exec_clients if broker.configured(ws, spec.id))
+    state = f"{accounts}/{len(broker.exec_clients)} account(s) configured"
+    if not accounts:
+        state = f"not configured ({state})"
+    try:
+        broker.config(ws)
+    except KansoError as refusal:
+        return f"broker {broker.id}: {state} · {table} refused: {refusal.message}", broker.id
+    read = "valid" if broker.id in ws.config.adapters else "absent, read as its defaults"
+    return f"broker {broker.id}: {state} · {table} {read}", None
 
 
 def _client_item(one: Declared) -> str:
@@ -931,6 +965,11 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     `kanso.data.snapshot.instrument_drift`, the one `research begin` pins a run by, asked
     here rather than remade, so the two cannot disagree about whether the store moved.
 
+    A fourth: every definition the store holds is read for a maker or taker rate. The
+    simulated venue charges a fill its instrument's own rate on top of the commission the
+    runner deducts, so a stored definition carrying one — resolved before `build` refused
+    them — double-charges every fill of every run priced under it, and fails here.
+
     An id that cannot resolve at all fails, since registering, classifying and planning
     the hypothesis all stop on it; an id doctor could not verify, and a store the newest
     snapshot no longer describes, warn.
@@ -946,6 +985,8 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     remedies: list[str] = []
     universes = 0
     hypotheses = 0
+    charged = _charged(held.values())
+    items.extend(item for item, _ in charged)
 
     if unread is not None:
         items.append(f"universes not checked: {unread.reason}")
@@ -995,11 +1036,22 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
     else:
         detail += " · the store matches the newest snapshot"
 
-    if failed:
+    if charged:
+        remedies.insert(
+            0,
+            "remove the rate from the entry's `override` in instruments.yaml, or state it "
+            'there as "0" where the reference provider resolved it, then run '
+            + " and ".join(f"`{command}`" for _, command in charged),
+        )
+    if failed or charged:
+        reasons = [
+            *([f"{len(failed)} id(s) do not resolve"] if failed else []),
+            *([f"{len(charged)} stored definition(s) carry a fee rate"] if charged else []),
+        ]
         return Check(
             "instruments",
             "fail",
-            f"{detail}; {len(failed)} id(s) do not resolve",
+            f"{detail}; {' · '.join(reasons)}",
             items=tuple(items),
             remedy="; ".join(remedies),
         )
@@ -1018,6 +1070,31 @@ def _instruments(ws: Workspace, unread: Unread | None) -> Check:
             remedy=remedy or None,
         )
     return Check("instruments", "ok", detail, items=tuple(items))
+
+
+def _charged(held: Iterable[object]) -> list[tuple[str, str]]:
+    """Each stored definition carrying a non-zero maker or taker rate, with its re-resolve.
+
+    The item names the definition by id and the date it was resolved as of, since the
+    store keeps one per date and only a resolution as of that date replaces it.
+    """
+    found: list[tuple[str, str]] = []
+    for definition in held:
+        rates = charged_rates(definition)
+        if not rates:
+            continue
+        shown: Any = definition
+        name = str(shown.id)
+        day = datetime.fromtimestamp(int(shown.ts_init) / 1_000_000_000, tz=UTC).date()
+        stated = ", ".join(f"{field} {rate}" for field, rate in sorted(rates.items()))
+        found.append(
+            (
+                f"{name} as of {day}: the store holds it with {stated}, which the simulated "
+                "venue charges on every fill on top of the venue model's commission",
+                f"kanso data instruments resolve {name} --as-of {day} --refresh",
+            )
+        )
+    return sorted(found)
 
 
 def _entry_item(key: str, entry: InstrumentEntry) -> str:

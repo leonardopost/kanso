@@ -71,7 +71,7 @@ def deployable(
     what `strat compose` leaves behind.
     """
     carded(ws, store, doc=doc or document(id=hyp_id), strategy=sleeve)
-    file = composed(ws, store, hyp_id, sleeve=sleeve)
+    file = composed(ws, store, hyp_id, sleeve=sleeve, doc=doc)
     strategy_files.record(store, hyp_id, file.latest())
     return file
 

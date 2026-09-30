@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from nautilus_trader.core.data import Data
 from nautilus_trader.model.custom import customdataclass
-from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
 
 from kanso.data.types import (
@@ -42,8 +42,10 @@ SPLIT = build_type(instrument_id=InstrumentId, note=str, factor=float)
 UNREGISTERED = type("KansoTestUnregistered", (Data,), {})
 
 
-def test_the_three_market_types_are_built_in() -> None:
-    assert dict(BUILTIN_TYPES) == dict(bar=Bar, quote=QuoteTick, trade=TradeTick)
+def test_the_four_market_types_are_built_in() -> None:
+    assert dict(BUILTIN_TYPES) == dict(
+        bar=Bar, quote=QuoteTick, trade=TradeTick, book=OrderBookDelta
+    )
 
 
 def test_the_shipped_custom_type_is_registered() -> None:

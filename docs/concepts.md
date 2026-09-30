@@ -248,6 +248,27 @@ session under an environment allow-list. A card therefore has no route to data o
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.
 
+**Return periods are cut on the UTC clock.** The window opens at 00:00Z of its first day,
+and from there the runner cuts one `[research] return_period` after another — a day by
+default — for as long as the window lasts; a period exists only when a point landed in it,
+and a point lands in the period its `ts_init` falls in. A bar is stamped at its close, so a
+daily bar lands in the period after the day it summarises: on a 24-hour venue the day's bar
+closes at 00:00Z and lands in the following UTC period, the same rule under which an equity
+daily bar a vendor stamps at 05:00Z is counted in the UTC day of that stamp. On such a
+venue trading days are calendar days, so a series that printed every day is annualised at
+what `periods_per_year` observes — about 365 periods a year, the count the window held
+over its own length in years, with no constant assumed; the warmup sessions the runner
+resolves are the calendar days that printed, seven a week; and a `session_scope` point
+admitting a name for a session must be stamped in `[00:00Z, first market point)` of that
+session, because the session opens at midnight there — where the first market point is
+the bar that closes at exactly 00:00Z, which summarises the previous day's last period,
+that bar is ordered ahead of a scope point stamped at the same instant and is judged
+under the previous session's scope while its return folds into the new period
+(`docs/backlog.md` row 100). No calendar decides a session: the sessions are the days the
+catalog holds prints on, whichever venue printed them, and the closures
+`kanso.data.closures` holds decide only which missing days coverage excuses (Snapshot,
+above).
+
 A card proposed by a model carries the proposer's own account of what it was: `tags`, one
 or more of the twenty-one strings `kanso.schemas.TAGS` fixes — `signal_*` for what the
 change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*`, and
@@ -444,7 +465,64 @@ A fill's is traded value struck at one price, so a strategy that tops up in thre
 like three small positions; a trade's is `peak_qty x avg_open`, an opening cost basis, which
 is biased upward by the strategy that rebalances toward a target as the price falls and blind
 to the drift of one entered once and left alone. A gate built on either would refuse the
-compliant strategy and pass the drifting one.
+compliant strategy and pass the drifting one. Every notional a run records or sizes — a
+fill's, a trade's, a holding's, the room a sleeve sizes an entry to, the budget a `full_book`
+rule fills and the book a stage reports — is `qty x price x multiplier`, the instrument's
+contract multiplier being one for a share and the contract size for a future or an option.
+Each recorded fill and trade carries the multiplier it was struck with, so a cost model
+re-applied to the record charges the notional the runner charged. A record written before the
+multiplier was kept reads as one, a share's; a run struck on a multiplied instrument before then
+is re-run before a cost model is re-applied to it.
+
+**A perpetual is a linear contract settled in the account's currency.** A crypto perpetual
+swap (`instrument_class: swap`, `docs/workspace.md`) is to kanso a contract whose notional is
+`qty x px x multiplier` in its quote currency — the same product every other notional above
+is — so it is built linear and an inverse one is refused. It settles and is booked in the
+account currency of its venue — its `settlement_currency` and its quote currency must both be
+that code, which `hyp validate` checks — and it is charged exactly what any other fill is:
+the venue model's costs, once, by the runner, with its own maker and taker rates held at
+zero.
+
+**A perpetual's funding is booked once, by the runner, beside every other cost.** A
+hypothesis holding a perpetual must require the `funding` type, and at each settlement the
+extraction takes `qty x mark x multiplier x rate` out of cash: the realised rate of the
+period that settled, on the signed quantity held at the settlement instant, marked at the
+instrument's last print at or before that instant — of several prints at the instant, the
+greatest, exactly as a period's mark is chosen. A long pays a positive rate and a short
+receives it; a negative rate reverses both. What is held is every fill stamped before the
+instant and no fill stamped at it. That is deliberately not the `<=` rule that books a
+period's fills up to and including its end: the rate is public at the settlement — the
+sleeve is handed it there — and the engine stamps the fill of an order sent in answer at
+that same instant, so under `<=` a position opened because the rate was known would collect
+it and one closed because of it would escape it. Which point of an instant an order answered
+is recorded nowhere both code paths can read — a stage node stamps its orders by its live
+clock, not by the data — so the line is drawn at the instant: a position opened by a fill at
+08:00 pays nothing at 08:00, whether its order was sent in answer to the settlement or
+rested from 07:00, and one closed by a fill at 08:00 still pays it. What a settlement sees
+was decided before its rate was public. The payment is inside the return and the equity of
+the period that holds the instant, and the run records each one in `funding` — the instant,
+the instrument, the quantity held, the rate and what was paid, negative when it was
+received; a settlement at which nothing was held pays and records nothing, and one in the
+warmup prefix is never booked. A closed trade carries what it paid over its life in
+`funding`: every settlement of its instrument after its opening fill, up to and including
+its close. Its `pnl_net` is net of that and its `cost` is not, so a Sharpe, an edge and a
+net edge all read one post-funding number, while `cost_stress` and `cost_scenario`, which
+re-price the recorded fills, leave funding exactly as it was booked. The sleeve's `balance`
+books the same amount when the settlement point is delivered, before `on_data` is handed it,
+so a balance read there is the equity the runner strikes at that instant, on the same
+holdings: an order placed in answer to the settlement changes nothing it settled, in the
+balance as in the card. One thing the runner uses at the instant arrives only after the
+point — a print of the instant that follows it, which moves the mark — and the first point
+of a later instant settles the difference into the balance before anything else is done with
+it. A stage node books funding into its sleeves the same way, because its venue is simulated
+and settles none; an account a broker keeps settles its own, and a sleeve on one would not
+book it (`docs/backlog.md` row 15). A stage replays the catalog, so a deployed sleeve is
+handed and pays the settlements the catalog holds for its window — loaded from a file, or
+fetched by the OKX package's `okx_funding` loader, which serves the exchange's settled rates
+for its last three months (`docs/adapters.md`) — and a held perpetual pays nothing past the
+last settlement loaded (row 107). And
+neither margin nor liquidation is simulated: what bounds a perpetual book is the sleeve's
+room, `max_leverage` and the `maintenance_margin` gate (`docs/backlog.md`).
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
@@ -746,7 +824,10 @@ under `touch` and leaves it resting under `through`; on a quote the engine asks 
 when the order's own side of the book is at the price, so an ask falling to a resting buy
 fills it under either. Both code paths build their venue from the same configuration, so a
 card and a stage fill the same resting orders, and the rule draws no random number, so they
-fill them the same way every time.
+fill them the same way every time. A print fills the order by its own size and no more, so
+the honesty of a fill is the honesty of the print: an exchange's own executions, one per
+print, fill a resting order as that exchange would; a consolidated or merged tape fills it
+with size the book never showed it (`docs/workspace.md`, `limit_fill`).
 
 A trade print reaches a resting order only from the side that can trade with it: the engine
 moves only the ask down for a seller's print and only the bid up for a buyer's, so a
@@ -756,7 +837,19 @@ file that records none is loaded with no aggressor rather than a guessed one
 (`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
 unfilled.
 
-**A fill that rested can be charged as one.** Every fill pays commission, slippage and half
+**An order that joins a level waits behind what the level showed.** A hypothesis that
+requires `book` loads the exchange's level-two changes beside its prints — one `book` point
+per change to one level, as a market-by-order or market-by-price file spells it — and both
+venues keep a book from them with the engine's queue position on: a resting order that
+joins a displayed level is filled only after the size shown ahead of it has traded through,
+print by print, so joining the touch is as honest as improving it. Measured through the
+runner and on both code paths: 500 shown on the bid, an order of 300 joining it, and eight
+sellers' prints of 100 a second apart fill the order at the seventh, eighth and ninth prints;
+the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
+third and fourth, credited with what stood ahead of it — which is why a posting thesis on
+that venue rests a level of its own. `kanso doctor` checks both engine facts.
+
+**A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
 the venue reported the fill as a maker's, in which case it pays exactly that and nothing
 else, since a resting limit fills at its own price and the spread is what it earns. A
@@ -891,7 +984,7 @@ gates      5 judged · 5 pass · 0 fail · 0 skipped
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.38450757237500577, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204389, 12.394500908889786]
 objective  net_edge_bps 10.149871 ± 0.603055
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
-written    /…/certificates/demo_mr/f729a53-4-p1-e1.231.0.yaml
+written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
 next       kanso cert show demo_mr
 ```
@@ -938,13 +1031,19 @@ Three gates read what the others cannot. `deflated_contribution` is the multiple
 control for a run scored on a contribution, where `deflated_sharpe` skips: the research
 estimate in basis points per period, against the expected maximum of the search's trials in
 the same units, over the estimate's own standard error, reported as a probability and held
-to `min_probability`. `min_event_days` is a card gate counting the distinct sessions any
+to `min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
+deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
+seed that fired once — do not widen the search past any candidate the selection weighed; the
+spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a card gate counting the distinct sessions any
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
 commission, a flat rate, a maker rate, a fixed width — through the runner's own per-fill
-arithmetic, recomputes the objective on the re-priced run and holds it to `min_metric`: the
-same fills under the schedule of another account, without a second backtest.
+arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
+objective on the re-priced run and holds it to `min_metric`: the same fills under the
+schedule of another account, without a second backtest, and the card's own schedule
+reproduces the card's own costs on any instrument. Neither gate touches a perpetual's
+funding, which is a payment on what was held rather than a cost of trading it.
 
 ## The strategy version
 
@@ -959,7 +1058,9 @@ pointer to source that might change — it is a closed record of four things.
   backtest, a replay and a live node all load — one class everywhere, so the thing that was
   measured and the thing that trades cannot drift apart.
 - **`pins`**: what it was certified under — the kanso version, the engine version, the
-  criteria version, the plan version, the data snapshot and the resolved venue model.
+  criteria version, the plan version, the data snapshot and the resolved venue model, each
+  field of which records its origin as `default`, `config` (`[research]` in `kanso.toml`),
+  `broker`, `venue_override` (`venues.<MIC>` in `portfolio.yaml`) or `hypothesis`.
 - **`expectation`**: what composition measured by running that implementation over the
   sleeve's certification window — the objective, a ninety-percent interval and the
   ninety-fifth-percentile drawdown. The paper and live gates judge the deployment against
@@ -1004,6 +1105,19 @@ live       down · exec sandbox (simulated) · data replay · speed 1 · capital
            clock never run · catalog to nothing · allocated 0 · pnl +0.00
 limits     gross 100% · net 100% · per strategy 40% · daily loss 3%
 ```
+
+**The stage venue is the card's venue.** A simulated stage builds its exchange from the
+same configuration a card built its own from, by the same function, from the venue model
+each version was certified under: the same latency (`costs.latency_ms`), the same book type
+and queue position (a level-two book for a hypothesis that requires `book`, the top of the
+book for every other) and the same fill model (`limit_fill`), with the fee model left
+unset as on a card, so the exchange charges the instruments' zero rates and the runner
+charges once. A version certified under a 20 ms round trip on a level-two book therefore
+trades the stage under 20 ms on a level-two book, and two versions on one venue that were
+certified under different latencies, or one on a book and one without, are refused at
+`deploy` (exit 2) before the stage is written, and at `promote` before an approval is
+recorded when the live stage could not hold the version, rather than run on whichever
+venue came first.
 
 The stage file carries only the **id** of an execution client. What matters is the pair of
 declarations behind that id: `capital` is `simulated`, `broker_paper` or `real`, and `clock`

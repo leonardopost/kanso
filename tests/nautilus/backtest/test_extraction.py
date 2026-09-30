@@ -19,6 +19,7 @@ from .conftest import (
     FLAT_SLEEVE,
     INSTRUMENT,
     RESEARCH,
+    SLEEVE,
     bars,
     catalog,
     hypothesis,
@@ -288,6 +289,23 @@ def test_a_file_that_defines_no_strategy_is_refused(store: Path, request_for) ->
         run(request_for(source=b"answer = 42\n"), store)
 
 
+def test_a_configuration_the_sleeve_s_own_class_rejects_is_refused_by_name(
+    store: Path, request_for
+) -> None:
+    """The config class's own check speaks through the runner, naming the file and class."""
+    source = SLEEVE.replace(
+        b"    every: int = 6\n",
+        b'    every: int = 6\n    fixed_params: tuple[str, ...] = ("evry",)\n',
+    )
+    assert source != SLEEVE
+
+    with pytest.raises(
+        ValidationError,
+        match=r"^strategy\.py: Config: fixed_params: evry is not a numeric field of Config",
+    ):
+        run(request_for(source=source), store)
+
+
 def test_an_attached_modifier_is_consulted_by_the_sleeve(store: Path, request_for) -> None:
     denied = run(
         request_for(modifiers=(("filter", FILTER_MODIFIER, {"allow": False}),)),
@@ -362,3 +380,39 @@ def test_one_fill_is_counted_once_however_many_positions_hold_it() -> None:
 def test_a_return_period_of_no_time_is_refused(store: Path, request_for) -> None:
     with pytest.raises(ValidationError, match="is no time at all"):
         run(request_for(period="0d"), store)
+
+
+def test_a_run_fed_its_window_in_daily_chunks_is_the_run_fed_it_whole(
+    store: Path, request_for
+) -> None:
+    """The child takes one session at a time; what it extracts is what the whole window gives."""
+    from kanso.criteria.run import day_of
+    from kanso.nautilus.backtest import execute, execute_chunked, window_data
+
+    request = request_for()
+    instruments, groups = window_data(request, store)
+    days = sorted({day_of(int(p.ts_init)) for g in groups for p in g})
+    chunks = [
+        tuple(
+            chunk
+            for chunk in (tuple(p for p in g if day_of(int(p.ts_init)) == day) for g in groups)
+            if chunk
+        )
+        for day in days
+    ]
+    assert len(chunks) > 1
+
+    whole = execute(request, instruments, groups)
+    chunked = execute_chunked(request, instruments, chunks)
+
+    assert chunked.intents == whole.intents
+    assert chunked.run.period_ends_ns == whole.run.period_ends_ns
+    assert chunked.run.equity == whole.run.equity
+    assert chunked.run.returns == whole.run.returns
+    assert [(f.ts_ns, f.side, f.qty, f.px, f.cost, f.maker) for f in chunked.run.fills] == [
+        (f.ts_ns, f.side, f.qty, f.px, f.cost, f.maker) for f in whole.run.fills
+    ]
+    assert [(t.opened_ns, t.closed_ns, t.pnl_net) for t in chunked.run.trades] == [
+        (t.opened_ns, t.closed_ns, t.pnl_net) for t in whole.run.trades
+    ]
+    assert chunked.run.held == whole.run.held

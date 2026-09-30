@@ -173,10 +173,118 @@ def test_the_workspace_page_states_the_currency_check_as_the_account_currency() 
     assert "different account currencies" in refusals
 
 
+def test_the_pages_state_the_settlement_check_and_the_fee_rate_refusal() -> None:
+    """Both refusals landed with the perpetual; the backlog row that asked for the first
+    is closed, and the pages that stated its absence say what it refuses now."""
+    workspace = prose(page("workspace.md"))
+    assert "An instrument's own quote currency is not compared" not in workspace
+    assert "settles in a currency other than its venue's account currency" in workspace
+    assert "a non-zero `maker_fee` or `taker_fee`" in workspace
+    doctor = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso doctor")
+    )
+    assert "non-zero maker or taker rate" in doctor
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 46 |"))
+    assert backlog.split("|")[3].strip().startswith("~~")
+
+
+def test_the_concepts_page_says_what_a_perpetual_is_not_yet() -> None:
+    concepts = prose(page("concepts.md"))
+    assert "**A perpetual is a linear contract" in concepts
+    assert "neither margin nor liquidation is simulated" in concepts
+
+
+def test_the_concepts_page_states_how_funding_is_booked() -> None:
+    """What is booked, when, the sign, the tie, where it lands, what the cost gates ignore
+    and what the node lacks: each is a claim the funding suite checks."""
+    concepts = prose(page("concepts.md"))
+    assert "**A perpetual's funding is booked once, by the runner, beside every other cost.**" in (
+        concepts
+    )
+    assert "`qty x mark x multiplier x rate` out of cash" in concepts
+    assert "A long pays a positive rate and a short receives it" in concepts
+    assert "of several prints at the instant, the greatest" in concepts
+    assert "every fill stamped before the instant and no fill stamped at it" in concepts
+    assert "deliberately not the `<=` rule" in concepts
+    assert "an order placed in answer to the settlement changes nothing it settled" in concepts
+    assert "inside the return and the equity of the period" in concepts
+    assert "Its `pnl_net` is net of that and its `cost` is not" in concepts
+    assert "leave funding exactly as it was booked" in concepts
+    assert "fetched by the OKX package's `okx_funding` loader" in concepts
+
+
+def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> None:
+    """The type, its file columns, the realised-not-predicted rule, the validation refusal
+    and the booking, each where an operator loading a perpetual reads."""
+    from kanso.data.loaders.csv_parquet import columns_for
+    from kanso.hyp.validate import FUNDING
+
+    workspace = prose(page("workspace.md"))
+    assert "**A perpetual's funding is data it requires.**" in workspace
+    assert f"lists `{FUNDING}` in `data_requirements`" in workspace
+    assert "remedy: add funding to data_requirements and load its realised funding history" in (
+        workspace
+    )
+    assert "The rate is the **realised** rate of the period that just settled" in workspace
+    required, optional = columns_for(FUNDING)
+    assert required == ("ts_event", "rate") and optional == ("ts_init", "instrument_id")
+    assert "A file maps `ts_event` and `rate`, and `instrument_id` where it holds one" in (
+        workspace
+    )
+    assert "**The runner books each settlement once**" in workspace
+    assert "`funding` is required of a hypothesis and asked of its perpetuals alone" in workspace
+    assert "does not span the research and certification windows" in workspace
+    refusals = section(page("workspace.md"), "What the workspace refuses")
+    assert "does not list `funding`" in refusals
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 107 |"))
+    assert "~~A perpetual's funding is delivered and not booked~~ **booking closed**" in backlog
+    assert "the OKX package's `okx_funding` loader serves the exchange's settled rates" in backlog
+
+
+def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:
+    """`[research]` is a layer between the defaults and the broker, a restated default is
+    not one, and the code must be one the engine registers."""
+    research = prose(page("workspace.md"))
+    assert "then these two `[research]` keys, then the broker's declaration" in research
+    assert "a broker's declared currency still wins over `[research] currency`" in research
+    assert "is not a layer and leaves the origin at `default`" in research
+    assert "The code must be one the engine registers" in research
+    origins = "`default`, `config`, `broker`, `venue_override` or `hypothesis`"
+    assert origins in research
+    assert "`config` (`[research]` in `kanso.toml`)" in prose(page("concepts.md"))
+    refusals = section(page("workspace.md"), "What the workspace refuses")
+    assert "an account currency the engine does not register" in refusals
+    validate = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp validate")
+    )
+    assert "an account currency the engine registers" in validate
+
+
 def test_the_workspace_page_states_the_fixed_spread_a_bar_only_hypothesis_needs() -> None:
     text = page("workspace.md")
     assert "`costs.fixed_bps`" in text
     assert "`fixed_bps`" in section(text, "What the workspace refuses")
+
+
+def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> None:
+    """`submit_exit` sizes against what the working exits leave, a cancel in flight among
+    them under a latency (`tests/nautilus/backtest/test_exit_flat.py`)."""
+    text = prose(page("workspace.md"))
+    assert "An exit never goes past flat, counting the exits still working." in text
+    assert "Under a stated latency a cancel is not instant" in text
+    assert "What the cancel in flight held back is owed, not dropped" in text
+    assert "With no latency stated, an exit at market is never held back by a resting one" in text
+    assert "A cancel on that side takes back only an owed exit that has a price" in text
+    assert "An order the engine's order emulator holds" in text
+    assert "`cancel_orders` cancels it on its own, through the emulator" in text
+
+
+def test_the_research_template_says_an_exit_can_return_none_while_exits_are_working() -> None:
+    """The loop model writes `strategy.py` from `program.md`, so it is told what the docs say:
+    `submit_exit` returns `None` while working exits cover it, and a cancel is not instant."""
+    text = prose((ROOT / "src" / "kanso" / "templates" / "program.md").read_text())
+    assert "An exit never goes past flat, counting the exits still working" in text
+    assert "Under a latency a cancel is not instant" in text
 
 
 def test_the_workspace_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:
@@ -325,3 +433,21 @@ def test_the_repair_budget_the_cli_page_states_is_the_one_the_driver_enforces() 
     stated = re.search(r"(\w+) repairs per idea", prose(page("cli.md")))
     assert stated is not None
     assert spelled(stated.group(1).lower()) == driver.REPAIRS
+
+
+def test_both_pages_state_the_utc_period_rule_a_continuous_calendar_relies_on() -> None:
+    """A round-the-clock series is annualised, warmed and scoped on the same UTC clock as
+    an equity one; the pages say where its bars land and what the synthetic loader
+    refuses."""
+    card = prose(section(page("concepts.md"), "Card"))
+    assert "Return periods are cut on the UTC clock" in card
+    assert "closes at 00:00Z and lands in the following UTC period" in card
+    assert "daily bar a vendor stamps at 05:00Z" in card
+    assert "trading days are calendar days" in card
+    assert "about 365 periods a year" in card
+    assert "the calendar days that printed" in card
+    assert "`[00:00Z, first market point)`" in card
+    catalog = prose(section(page("workspace.md"), "`catalog/`"))
+    assert "`calendar: continuous`" in catalog
+    assert "`timezone`, `session_start` or `session_end` is refused (exit 3)" in catalog
+    assert "`calendar: weekdays` is the default and is recorded in no manifest" in catalog

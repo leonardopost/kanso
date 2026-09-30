@@ -115,6 +115,7 @@ __all__ = [
     "Measured",
     "Subject",
     "certify",
+    "pinned_sha",
     "show",
 ]
 
@@ -162,6 +163,7 @@ class Subject:
     construct: ConstructRef
     objective_id: str
     strategy_sha: str
+    hypothesis_sha: str
     source: bytes
     snapshot_id: str
     harness: Harness
@@ -250,6 +252,7 @@ def certify(
         store,
         hyp_id,
         strategy_sha=subject.strategy_sha,
+        hypothesis_sha=subject.hypothesis_sha,
         n_trials=n_trials,
         plan_version=plan.plan_version,
         nautilus_version=engine,
@@ -260,6 +263,7 @@ def certify(
     made = Certificate(
         hyp_id=hyp_id,
         strategy_sha=subject.strategy_sha,
+        hypothesis_sha=subject.hypothesis_sha,
         nautilus_version=engine,
         venue_model=subject.venue_model,
         snapshot_id=subject.snapshot_id,
@@ -333,6 +337,7 @@ def _subject(ws: Workspace, store: StateStore, hyp_id: str, sha: str | None) -> 
         construct=hyp.construct,
         objective_id=hyp.objective.id,
         strategy_sha=chosen,
+        hypothesis_sha=run.hypothesis_sha,
         source=store.get_blob(chosen),
         snapshot_id=run.snapshot_id,
         harness=harness,
@@ -395,6 +400,18 @@ def _chosen_sha(store: StateStore, hyp_id: str, sha: str | None) -> str:
             remedy="pass more characters of the sha",
         )
     return str(rows[0][0])
+
+
+def pinned_sha(store: StateStore, hyp_id: str, sha: str) -> str:
+    """The hypothesis file the newest card of these bytes was measured under, as its run
+    pinned it — the pin a certification of the card would record."""
+    cards = [card for card in records.cards_of(store, hyp_id) if card.strategy_sha == sha]
+    if not cards:
+        raise PreconditionError(
+            f"{hyp_id} has no card of {sha[:7]}",
+            remedy="name a strategy this hypothesis has carded",
+        )
+    return _run_of(store, hyp_id, cards[-1].run_id).hypothesis_sha
 
 
 def _run_of(store: StateStore, hyp_id: str, run_id: str) -> RunRecord:

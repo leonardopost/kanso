@@ -143,8 +143,9 @@ def shipped(ws: Workspace) -> dict[str, frozenset[str]]:
 
     Every kind is here, because a packaged id wins in every one of those registries: an
     extension declaring one is registered nowhere, and a check that read some of them
-    would grade that silence `ok`. `loaders` carries the ones every packaged adapter
-    provides for `ws` beside the built-in two, and `exec_clients` the framework's own
+    would grade that silence `ok`. `adapters` carries the data adapters a broker's package
+    exposes beside the packaged ones, `loaders` the ones every such adapter provides for
+    `ws` beside the built-in two, and `exec_clients` the framework's own
     `sandbox` beside each broker's — the client that is not a broker's is shadowed
     exactly as easily and matters more, since it is the one every workspace has.
 
@@ -155,13 +156,13 @@ def shipped(ws: Workspace) -> dict[str, frozenset[str]]:
     """
     from kanso.classify.construct import builtin as builtin_constructs
     from kanso.data.loaders import BUILTIN_LOADERS
-    from kanso.data.registry import adapter_loaders, packaged
+    from kanso.data.registry import adapter_loaders, adapters
     from kanso.data.types import BUILTIN_TYPES
     from kanso.portfolio import clients
 
     return {
         "loaders": frozenset({*BUILTIN_LOADERS, *adapter_loaders(ws)}),
-        "adapters": frozenset(packaged()),
+        "adapters": frozenset(adapters()),
         "constructs": frozenset(builtin_constructs()),
         "data_types": frozenset(BUILTIN_TYPES),
         "exec_clients": frozenset(clients.builtin()),

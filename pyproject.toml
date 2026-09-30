@@ -1,6 +1,6 @@
 [project]
 name = "kanso"
-version = "0.12.0"
+version = "0.13.0"
 description = "Minimal, agent-first quant workbench: hypotheses → infinite autoresearch → certification → strategies → portfolio, on NautilusTrader."
 readme = "README.md"
 license = "Apache-2.0"
@@ -63,6 +63,10 @@ addopts = "-q --cov=kanso --cov-report=term-missing"
 source = ["kanso"]
 # Cards, lanes and nodes run in subprocesses; without this their lines never count.
 patch = ["subprocess"]
+# A test may put a throwaway package on `kanso.nautilus.adapters.__path__` (a broker exposing a
+# data adapter, written under pytest's temporary directory); it is imported as part of kanso but
+# is not kanso's source, so it is never measured.
+omit = ["*/pytest-of-*/*"]
 
 [tool.ruff]
 line-length = 100

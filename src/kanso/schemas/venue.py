@@ -1,12 +1,15 @@
 """The venue model: account type, account currency and cost model, and where each came from.
 
-A venue's trading model is inherited, never invented. The broker behind the configured
-execution client declares it for the venues it serves; a per-venue entry in the portfolio
-overrides any field; a hypothesis's own `costs` overrides the cost model for that
-hypothesis alone. Where nothing is declared the shipped defaults apply: a margin account
-whose leverage is the hypothesis's `max_leverage`, USD, zero commission and one basis
-point of slippage, with the spread taken from quotes when quotes are available, and a
-resting limit order filled when the market reaches its price.
+A venue's trading model is inherited, never invented. The workspace's `[research]`
+table states an account type and an account currency for every venue; the broker behind
+the configured execution client declares them, and its costs, for the venues it serves; a
+per-venue entry in the portfolio overrides any field; a hypothesis's own `costs` overrides
+the cost model for that hypothesis alone. Where nothing is declared the shipped defaults
+apply: a margin account whose leverage is the hypothesis's `max_leverage`, USD, zero
+commission and one basis point of slippage, with the spread taken from quotes when quotes
+are available, and a resting limit order filled when the market reaches its price. A
+currency code is any code the engine could register — a fiat code or a crypto code such as
+USDT — and whether it does register it is checked where an account is funded, not here.
 
 A fill that rested on the book may be charged apart. `maker_bps`, when a layer states it, is
 the whole charge on a fill the venue reports as a maker's — no slippage, since a resting
@@ -21,7 +24,10 @@ more of its price than a dear one, the way a per-share-priced account does; a ma
 under a stated `maker_bps` still pays that rate alone, per share included, because the
 rate is the whole charge on that fill by contract. Zero unless stated.
 
-The cost model carries one key that is not a charge. `limit_fill` is the matching rule the
+The cost model carries two keys that are not charges. `latency_ms` is how long the venue
+takes to see an order — the delay between a sleeve's insert, update or cancel and the
+simulated book acting on it, zero unless stated, measured on the account and route the
+strategy will trade through. `limit_fill` is the matching rule the
 simulated venue is built with: `touch` fills a resting limit the market only reached, and
 `through` fills it only once the market trades beyond its price. It decides which fills a
 run has rather than what they cost, so it cannot be re-applied to recorded fills the way the
@@ -48,12 +54,12 @@ from kanso.schemas.base import KansoModel, NonEmpty
 Account = Literal["margin", "cash"]
 Spread = Literal["quotes", "fixed_bps"]
 LimitFill = Literal["touch", "through"]
-Origin = Literal["default", "broker", "venue_override", "hypothesis"]
+Origin = Literal["default", "config", "broker", "venue_override", "hypothesis"]
 Funding = Literal["simulated", "broker_paper", "real"]
 Clock = Literal["replay", "wall"]
 
 VenueCode = Annotated[str, StringConstraints(pattern=r"^[A-Z0-9]{1,16}$")]
-Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9]{1,7}$")]
 
 DEFAULT_ACCOUNT: Account = "margin"
 DEFAULT_CURRENCY = "USD"
@@ -75,16 +81,22 @@ class CostsOverride(KansoModel):
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    sell_fee_bps: float | None = Field(default=None, ge=0)
+    sell_fee_per_share: float | None = Field(default=None, ge=0)
     limit_fill: LimitFill | None = None
+    latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class Costs(KansoModel):
-    """A complete cost model: what the runner charges, once, to every fill, and whether the
-    venue fills a resting limit the market only touched (`limit_fill`).
+    """A complete cost model: what the runner charges, once, to every fill, whether the
+    venue fills a resting limit the market only touched (`limit_fill`), and how long the
+    venue takes to see an order (`latency_ms`, zero unless stated).
 
     `maker_bps` is the charge on a fill the venue reports as a maker's, in place of all three
     of the others; negative is a rebate, and `None` charges a maker's fill like any other.
     `commission_per_share` is charged per share on every fill that pays commission, on top.
+    `sell_fee_bps` and `sell_fee_per_share` are charged on every sale, maker or taker, on top
+    of everything else: the regulatory fees an account passes through on sells alone.
     """
 
     commission_bps: float = Field(ge=0)
@@ -93,7 +105,10 @@ class Costs(KansoModel):
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    sell_fee_bps: float = Field(default=0.0, ge=0)
+    sell_fee_per_share: float = Field(default=0.0, ge=0)
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
+    latency_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _fixed_bps_present(self) -> Costs:
@@ -165,6 +180,7 @@ def _merge_costs(
         "fixed_bps": None,
         "maker_bps": None,
         "limit_fill": DEFAULT_LIMIT_FILL,
+        "latency_ms": 0.0,
     }
     origin: Origin = "default"
     for layer_origin, override in layers:
@@ -185,6 +201,7 @@ def _merge_costs(
 def resolve_venue_model(
     venue: str,
     *,
+    config: VenueDeclaration | None = None,
     broker: str | None = None,
     declaration: VenueDeclaration | None = None,
     override: VenueOverride | None = None,
@@ -192,12 +209,19 @@ def resolve_venue_model(
     max_leverage: float | None = None,
     quotes_available: bool = True,
 ) -> VenueModel:
-    """Inherit a venue's model from the broker, the operator's override and the hypothesis."""
+    """Inherit a venue's model from the workspace configuration, the broker, the operator's
+    override and the hypothesis, in that order of precedence.
+
+    `config` is what `[research]` states beyond the shipped defaults; it carries an account
+    type and a currency and never a cost, so a broker's declared currency still wins over it
+    and the operator's `venues.<MIC>` entry is the place to override the broker.
+    """
     account: Account = DEFAULT_ACCOUNT
     account_origin: Origin = "default"
     currency = DEFAULT_CURRENCY
     currency_origin: Origin = "default"
     layers: tuple[tuple[Origin, VenueDeclaration | None], ...] = (
+        ("config", config),
         ("broker", declaration),
         ("venue_override", override),
     )

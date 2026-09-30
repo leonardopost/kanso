@@ -8,7 +8,7 @@ mechanism:                         # mean_reversion|momentum|microstructure|stat
 universe: []                       # ids from instruments.yaml; venues derive from their nautilus_id
 horizon:                           # holding period: <n>(s|m|h|d|w)
 resolution:                        # bar duration <n>(s|m|h|d|w), or tick|quote|trade
-data_requirements: [bar]           # bar|quote|trade|<any registered custom type id>
+data_requirements: [bar]           # bar|quote|trade|book|<any registered custom type id>; book = the exchange's level-two changes, run on a venue with queue position
 # costs:                           # optional. Costs are inherited from the venue, which the configured broker defines
 #   commission_bps: 0.5            # (kanso.toml research.broker, portfolio.yaml venues.<MIC>). Set any subset here only to
 #   commission_per_share: 0.0055   # charged on every share of a fill that pays commission, on top of the rates; a maker's fill
@@ -19,11 +19,13 @@ data_requirements: [bar]           # bar|quote|trade|<any registered custom type
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
                                    # rebate. Unset, it pays what any fill pays
+#   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
+                                   # measured on the account and route the strategy will trade through. Zero unless stated
 #   limit_fill: touch              # touch | through: a resting limit fills when the market reaches its price (the engine's
                                    # rule), or only once a bar's low/high or a print goes beyond it. kanso's simulated venues only
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
 # sizing:                          # yours: classification never touches it. Scope: changing it clears `best`
-#   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / price) whole lots with the
+#   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / (price x multiplier)) whole lots with the
 #   budget: 100000                 # round trip reserved; one instrument held at a time; every exit the whole position; submit_entry
 #                                  # and submit_exit take no size. `kanso hyp validate` refuses (exit 3) unless
 #                                  # capital x max_position_pct / 100 >= budget and capital x max_leverage >= budget

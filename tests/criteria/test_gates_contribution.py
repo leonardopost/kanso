@@ -62,6 +62,34 @@ def test_a_wider_or_noisier_search_deflates_a_contribution_further() -> None:
     assert loose.evidence["probability"] < tight.evidence["probability"]
 
 
+def test_a_few_ruinous_trials_do_not_widen_the_search() -> None:
+    """The spread the expected maximum is built from is the candidates', not the outliers'."""
+    steady = (2.0, 2.4, 2.2, 2.3, 2.1, 2.5)
+    calm = deflated_contribution.evaluate(contribution_context(trial_metrics=steady))
+    ruined = deflated_contribution.evaluate(
+        contribution_context(trial_metrics=(*steady, -400.0, -250.0))
+    )
+
+    assert ruined.evidence["trial_spread_bps"] == pytest.approx(
+        calm.evidence["trial_spread_bps"], rel=0.5
+    )
+    assert ruined.evidence["expected_maximum_bps"] < 5.0
+    assert abs(ruined.evidence["probability"] - calm.evidence["probability"]) < 0.1
+
+
+def test_the_robust_variance_is_the_plain_one_on_a_normal_sample_and_unmoved_by_an_outlier() -> (
+    None
+):
+    from statistics import variance
+
+    from kanso.criteria.gates import robust_variance
+
+    sample = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+    assert robust_variance(sample) == pytest.approx((1.4826 * 2.0) ** 2)
+    assert robust_variance((*sample, 1_000.0)) == pytest.approx((1.4826 * 2.5) ** 2)
+    assert robust_variance((3.0, 3.0, 3.0, 4.0)) == variance((3.0, 3.0, 3.0, 4.0))
+
+
 def test_deflated_contribution_fails_below_the_floor() -> None:
     result = deflated_contribution.evaluate(
         contribution_context(params={"min_probability": 0.999}, trial_metrics=(-40.0, 40.0))
@@ -155,6 +183,28 @@ def test_repriced_recharges_every_fill_under_the_scenario_and_moves_the_series()
     assert fsum(f.cost for f in under.fills) == pytest.approx(8.0)
 
 
+def test_repriced_charges_the_sell_side_fees_on_sales_alone() -> None:
+    """A scenario of one bp and a cent a share on sells alone: a sale of 100 at 100 pays 2.00
+    and a purchase nothing, whoever filled it."""
+    fills = tuple(
+        Fill(
+            ts_ns=at(START),
+            instrument_id="DEMO",
+            side=side,
+            qty=100.0,
+            px=100.0,
+            cost=1.0,
+            maker=maker,
+        )
+        for side, maker in (("BUY", False), ("SELL", False), ("BUY", True), ("SELL", True))
+    )
+    run = build_run((19.0, 19.0, 19.0, 19.0), fills=fills)
+
+    under = repriced(run, {"sell_fee_bps": 1.0, "sell_fee_per_share": 0.01})
+
+    assert [f.cost for f in under.fills] == pytest.approx([0.0, 2.0, 0.0, 2.0])
+
+
 def test_repriced_charges_a_maker_the_stated_rate_alone_and_a_taker_the_rest() -> None:
     maker = Fill(
         ts_ns=at(START), instrument_id="DEMO", side="BUY", qty=100.0, px=100.0, cost=1.0, maker=True
@@ -175,6 +225,26 @@ def test_repriced_charges_a_maker_the_stated_rate_alone_and_a_taker_the_rest() -
     assert under.fills[1].cost == pytest.approx(0.5 + 1.0), (
         "the taker pays per share and half the width"
     )
+
+
+def test_repriced_charges_a_contract_on_its_multiplied_notional() -> None:
+    """Two contracts of a 50-times future at 100: 10,000 of notional, so a fixed width of 2 bp
+    is 1.00 a fill and a cent a contract 0.02 — not the 20 of a two-share notional."""
+    contract = Fill(
+        ts_ns=at(START),
+        instrument_id="ESZ4.XCME",
+        side="BUY",
+        qty=2.0,
+        px=100.0,
+        cost=0.0,
+        multiplier=50.0,
+    )
+    run = build_run((10.0,), fills=(contract,))
+
+    under = repriced(run, {"commission_per_share": 0.01, "fixed_bps": 2.0})
+
+    assert under.fills[0].cost == pytest.approx(1.0 + 0.02)
+    assert under.fills[0].multiplier == 50.0
 
 
 def test_cost_scenario_recomputes_the_objective_under_the_scenario() -> None:

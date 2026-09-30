@@ -10,7 +10,7 @@ from hypothesis import strategies as st
 from pydantic import ValidationError as PydanticValidationError
 
 from kanso import __version__
-from kanso.config import Config, load_config, render_config
+from kanso.config import Config, ResearchConfig, load_config, render_config
 from kanso.errors import Exit, PreconditionError, ValidationError
 
 MINIMAL = 'kanso_version = "0.1.0"\nschema_version = 1\n'
@@ -136,6 +136,9 @@ def test_the_flat_field_names_are_accepted_directly() -> None:
         "[research]\nexplore_after_stalls = -1\n",
         "[research]\ncapital = 0\n",
         '[research]\naccount = "spot"\n',
+        '[research]\ncurrency = "usd"\n',
+        '[research]\ncurrency = "ABCDEFGHI"\n',
+        "[research]\ncurrency = 840\n",
         '[research]\nreturn_period = "1 day"\n',
         '[monitor]\ninterval = "soon"\n',
         '[data]\nadjusted = "yes"\n',
@@ -227,3 +230,18 @@ def test_an_unfilled_placeholder_in_the_template_is_caught(
 def test_a_document_that_is_not_a_table_is_rejected() -> None:
     with pytest.raises(PydanticValidationError):
         Config.model_validate(["kanso_version", "0.1.0"])
+
+
+@given(code=st.from_regex(r"\A[A-Z][A-Z0-9]{1,7}\Z"))
+def test_a_currency_is_any_code_the_venue_schema_admits(code: str) -> None:
+    """The same grammar as `venues.<MIC>.currency`, so a crypto code such as USDT loads."""
+    assert ResearchConfig(currency=code).currency == code
+
+
+@pytest.mark.parametrize("code", ["usd", "ABCDEFGHI", "U", "1USD"])
+def test_a_currency_outside_that_grammar_is_refused_at_load(tmp_path: Path, code: str) -> None:
+    with pytest.raises(PydanticValidationError, match="currency"):
+        ResearchConfig(currency=code)
+    with pytest.raises(ValidationError) as caught:
+        load_config(write(tmp_path, MINIMAL + f'[research]\ncurrency = "{code}"\n'))
+    assert "currency" in caught.value.message

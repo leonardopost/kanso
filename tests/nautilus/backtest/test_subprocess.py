@@ -5,9 +5,11 @@ from __future__ import annotations
 import contextlib
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from kanso.criteria.run import day_of
 from kanso.nautilus.backtest import (
     ALLOWED_ENV,
     child_env,
@@ -89,20 +91,27 @@ def test_a_payload_a_killed_lane_left_is_reclaimed_by_its_next_card(
     assert not left.exists()
 
 
-def test_the_payload_is_two_pickles_in_sequence_on_one_file(
+def test_the_payload_is_a_header_the_request_and_one_pickle_per_session(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The points are streamed to the file once: no copy of them is held as bytes beside
-    the objects, which for a window of five-second bars is a gigabyte."""
+    """The points reach the file a session at a time: no process holds the window, and no
+    copy of it is held as bytes beside the objects, which for a window of ticks is gigabytes."""
     import pickle
 
     from kanso.nautilus import backtest as runner
 
-    read: list[tuple[object, object, bytes]] = []
+    read: list[tuple[object, object, list[object]]] = []
 
     def reading(request: object, room: Path, workdir: Path) -> object:
         with (room / runner.REQUEST_FILE).open("rb") as handle:
-            read.append((pickle.load(handle), pickle.load(handle), handle.read()))
+            header, body = pickle.load(handle), pickle.load(handle)
+            chunks: list[object] = []
+            while True:
+                try:
+                    chunks.append(pickle.load(handle))
+                except EOFError:
+                    break
+            read.append((header, body, chunks))
         raise RuntimeError("read, and not run")
 
     monkeypatch.setattr(runner, "_supervised", reading)
@@ -111,11 +120,16 @@ def test_the_payload_is_two_pickles_in_sequence_on_one_file(
     with pytest.raises(RuntimeError, match="read, and not run"):
         run_subprocess(request, store, lane, (("/elsewhere", "an_extension"),))
 
-    ((header, body, rest),) = read
+    ((header, body, chunks),) = read
     assert header == {"extensions": [["/elsewhere", "an_extension"]]}
-    assert isinstance(body, dict) and set(body) == {"request", "instruments", "groups"}
+    assert isinstance(body, dict) and set(body) == {"request", "instruments"}
     assert body["request"] == request.plain()
-    assert rest == b"", "two pickles and nothing after them"
+    _, groups = runner.window_data(request, store)
+    whole = sorted(int(p.ts_init) for g in groups for p in g)
+    assert all(set(chunk) == {"groups"} for chunk in chunks)
+    sessions = {day_of(ts) for ts in whole}
+    assert len(chunks) == len(sessions), "one pickle per session that held a point"
+    assert sorted(int(p.ts_init) for c in chunks for g in c["groups"] for p in g) == whole
     assert not (lane / runner.CARD_ROOM).exists(), "removed even when the card never ran"
 
 
@@ -302,23 +316,35 @@ def test_a_refusal_stops_the_run_at_the_first_refused_order(
 
 
 def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
-    store: Path, lane: Path, request_for
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The child leads its own session; only the watcher can kill it with the lane."""
-    import threading
+    """The child leads its own session; only the watcher can kill it with the lane.
+
+    The stop lands once the child is running, as the watcher starts, rather than on a
+    timer: a timer that fired while the window was still being read was the refusal to
+    start a card, which the tests below measure, and left the watcher's kill unmeasured.
+    """
+    import signal
 
     from kanso.errors import PreconditionError
     from kanso.nautilus import backtest as runner
 
-    timer = threading.Timer(0.3, runner.interrupt)
-    timer.start()
+    watch = runner._watch
+    watched: list[Any] = []
+
+    def stopped_once_running(child: Any, budget_s: Any, mem_cap_gb: Any) -> Any:
+        watched.append(child)
+        runner.interrupt()
+        return watch(child, budget_s, mem_cap_gb)
+
+    monkeypatch.setattr(runner, "_watch", stopped_once_running)
     try:
         with pytest.raises(PreconditionError, match="the card was interrupted") as failure:
             run_subprocess(request_for(source=SLOW_SLEEVE), store, lane)
     finally:
-        timer.cancel()
         runner.resume()
 
+    assert [child.returncode for child in watched] == [-signal.SIGKILL]
     assert "the run resumes" in str(failure.value.remedy)
     assert not runner._INTERRUPT.is_set()
 
@@ -345,13 +371,13 @@ def test_a_stop_that_lands_while_the_window_is_read_starts_no_card(
     from kanso.errors import PreconditionError
     from kanso.nautilus import backtest as runner
 
-    read = runner.window_data
+    read = runner._window_points
 
     def reading(*args: object) -> object:
         runner.interrupt()
         return read(*args)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(runner, "window_data", reading)
+    monkeypatch.setattr(runner, "_window_points", reading)
     monkeypatch.setattr(
         runner.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a card was started")
     )
@@ -383,7 +409,10 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     """Measured with real processes: a lane killed outright takes its card with it.
 
     The card leads its own session, so the kill never reaches it; left to itself this one
-    would spend far longer than the wait below in `on_start` alone.
+    would spend far longer than the wait below in `on_start` alone. The payload is staged
+    as the parent stages it — the header, the request, then the session's points as their
+    own record — because a card handed no session runs nothing and ends at once, which
+    made this check a race against the child's start-up.
     """
     import pickle
     import signal
@@ -398,9 +427,8 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     handed = tmp_path / "request.pkl"
     with handed.open("wb") as handle:
         pickle.dump({"extensions": []}, handle)
-        pickle.dump(
-            {"request": request.plain(), "instruments": instruments, "groups": groups}, handle
-        )
+        pickle.dump({"request": request.plain(), "instruments": instruments}, handle)
+        pickle.dump({"groups": groups}, handle)  # one session, as the parent stages it
     starts_a_card = (
         "import os, subprocess, sys, time\n"
         f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r}, {str(handed)!r},"
@@ -422,3 +450,50 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     finally:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(card, signal.SIGKILL)
+
+
+def test_the_window_is_released_before_the_card_is_supervised(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child holds its own copy of the points for the whole card; the parent, which read
+    them only to write the payload, holds none of them while it waits. Measured before this:
+    a lane kept 1.4 GB of an eighteen-month five-second window alive beside a 2.7 GB card."""
+    import sys
+
+    from kanso.nautilus import backtest as runner
+
+    read = runner._window_points
+    window: list[object] = []
+
+    def reading(*args: object) -> object:
+        groups, loaded = read(*args)  # type: ignore[arg-type]
+        window.extend(groups)
+        return groups, loaded
+
+    supervised = runner._supervised
+
+    def checking(request: object, room: Path, workdir: Path) -> object:
+        holding: list[str] = []
+        frame = sys._getframe(1)
+        while frame is not None:
+            if frame.f_code.co_filename == runner.__file__:
+                holding += [
+                    f"{frame.f_code.co_name}.{name}"
+                    for name, value in frame.f_locals.items()
+                    if any(value is held for held in window)
+                ]
+            frame = frame.f_back
+        assert holding == [], f"the parent still holds the window while the card runs: {holding}"
+        return supervised(request, room, workdir)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner, "_window_points", reading)
+    monkeypatch.setattr(runner, "_supervised", checking)
+
+    request = request_for()
+    carded = run_subprocess(request, store, lane)
+
+    assert not carded.crashed, carded.traceback_tail
+    reads = len(window)
+    _, groups = runner.window_data(request, store)
+    sessions = {day_of(int(p.ts_init)) for g in groups for p in g}
+    assert reads == len(sessions), "the window was read once, a session at a time"

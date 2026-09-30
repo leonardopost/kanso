@@ -121,6 +121,10 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
+| put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
+| hold a perpetual in a universe whose `data_requirements` does not list `funding` | 3 · at `hyp validate`, naming the instrument; a perpetual is known by its resolved definition, not its id |
+| give a definition a non-zero `maker_fee` or `taker_fee`, or a perpetual `is_inverse: true` — in `override` or from the reference adapter | 3 · wherever it is built: the runner charges commission once, from the venue model, and kanso trades linear perpetuals |
+| resolve a venue to an account currency the engine does not register, from `[research] currency` or `venues.<MIC>.currency` | 3 · at `hyp validate`, and again wherever a venue is funded; the engine would otherwise mint the misspelt code at a precision nobody chose |
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
 | declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
@@ -185,16 +189,48 @@ the output would say so. `[adapters.<id>]` is the exception at the top level onl
 adapter validates its own table with its own model, just as strictly, which keeps every
 vendor key out of a kanso-owned schema.
 
+```toml
+[adapters.okx]
+region = "us"             # global | eea | us: the regional host that accepts the account's key; no default
+rate_per_second = 5       # the quota kanso's own public requests share; the engine's own clients meter themselves
+```
+
+A broker's table is read by `kanso doctor` through that broker's model whether or not it is
+there, and one the model refuses fails the `execution` check — an `api_key` pasted in
+included, since no table holds a credential. `docs/adapters.md` lists every adapter's keys.
+
 `[research] broker` is the single place the core lets a broker's name in: it says whose venue
 model — account type, currency, costs — research inherits. A workspace naming a broker it has
-no adapter for falls back to the shipped venue defaults rather than refusing.
+no adapter for falls back to the two `[research]` keys below and then to the shipped venue
+defaults rather than refusing.
 
-`currency` is the **account** currency of every venue the broker does not override, and it
+`account` and `currency` are the account type and the **account** currency of every venue
+nothing else declares. A venue's model is resolved in a fixed order of precedence — the
+shipped defaults, then these two `[research]` keys, then the broker's declaration, then
+`venues.<MIC>` in `portfolio.yaml`, then the hypothesis's own `costs` — and every card,
+certificate and version records where each field came from as one of `default`, `config`,
+`broker`, `venue_override` or `hypothesis`. So a broker's declared currency still wins over
+`[research] currency`: to trade a venue the broker serves in another currency, override it
+under `venues.<MIC>`. A value that restates the shipped default (`margin`, `USD`) is not a
+layer and leaves the origin at `default`, which is why a workspace that never touched these
+keys resolves the same model it always did. The code must be one the engine registers, as
+fiat or as crypto (`USD`, `EUR`, `USDT`, ...): the grammar admits any code of two to eight
+capitals and digits, and `kanso hyp validate` refuses one the engine does not register
+(exit 3), naming the code and the two places to set it. Whichever layer it came from, it
 is the account currency that `kanso hyp validate` checks: a universe whose instruments sit
 on venues with more than one account currency is refused (exit 3), because a hypothesis
-trades one. An instrument's own quote currency is not compared against its venue's account
-currency, so a `manual` entry or a resolved definition quoted in another currency is
-accepted and funded from the account as configured.
+trades one. Every instrument of the universe — a data leg as well as a traded one — is
+compared with its venue's account currency twice: the currency it settles in (a perpetual's
+`settlement_currency`, a currency pair's quote currency, every other instrument's
+`currency`) and the currency the engine books its positions, PnL and margin in (its quote
+currency, a perpetual's included). Both must be the account's, and a mismatch is refused
+(exit 3), naming the instrument, what it settles in, what it is booked in where the two
+differ, and the account currency, with the two places to set it: a leg booked in a currency
+the account holds none of is converted at a rate nothing in the workspace records, and the
+engine defers the balance update when it has none. A perpetual quoted in USDT and settled in
+USDC settles in one and is booked in the other, so no account currency admits it and the
+remedy is to take it out of the universe. So a workspace trading USDT-quoted, USDT-settled
+perpetuals sets `currency = "USDT"` here.
 
 ## `.env`
 
@@ -316,13 +352,57 @@ sizing:                            # scope: adding or changing it clears `best`
 
 Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty` or
 `price`; `self.held(id)` is the position reader; a flip is `submit_exit(old)` then
-`submit_entry(new, side)` in one handler. Without the key, `submit_entry(id, side,
+`submit_entry(new, side)` in one handler. The budget is filled in whole lots of the
+instrument, and on a multiplied instrument — a future, an option — the price and the tick it
+is divided by are one contract's, `price x multiplier`, as is every notional the harness
+sizes, reserves or reads back on either path. Without the key, `submit_entry(id, side,
 notional=…)` sizes to the smaller of what was asked and what the risk limits leave — read on the smaller
 of the capital and the balance the sleeve has left, so an account that has lost money cannot
 borrow to keep its size, and one that has made money does not grow past its capital — and on
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+**An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
+smaller of what was asked and what is left to close: the position less the unfilled quantity
+of every order of the sleeve's own on the closing side that the venue has not closed —
+resting, in flight to it, or, under a stated latency, waiting on a cancel that has not
+landed — and returns `None` when those already close it. Every such order counts in full,
+an exit or not, so a stop that would reverse the position, or both legs of a bracket only one
+of which can fill, leave that much less to close. The stop-loss and take-profit of a bracket
+whose entry has filled nothing do not count: they can fill only after the entry and close
+what it opens, and neither the venue nor the order emulator has them open to cancel; once the
+entry has filled any of it they count in full. With no latency stated, an exit at market
+is never held back by a resting one: when the sleeve's own limit or stop orders resting at
+the venue on the closing side would leave it less than asked, it cancels them first, so a
+stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
+after the stop has closed. Under a latency the cancelled orders can still fill until their
+cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
+below); an order of the sleeve's still in flight to the venue, modified or not, is not
+cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
+paid once the venue holds that order open and the owed exit has cancelled it. An order the
+venue holds whose modify has not been answered yet, one sent in the same handler among them,
+counts too, and an exit at market does not cancel it at once: on a node a cancel sent in the
+handler that sent the modify would overtake it, where the backtest lands the modify first.
+With no latency stated it cancels it as the venue answers the modify; under a latency it
+cancels it on the next point, before the sleeve's handler for it, whether or not the venue
+has answered the modify by then, and the cancel still lands behind the modify, which was
+stamped first and waits the same latency. So on both paths the modify lands first, filling
+the order at once if it made it marketable, and then the cancel; what the order cut from the
+exit is owed and paid as for any cancelled order, a sleeve that modifies that order on every
+point included. With no latency stated the venue answers both before the
+next point, on both paths, so the order is cancelled as the venue takes it or answers its
+modify, and the owed exit goes out as soon as the order is closed — cancelled, filled or
+refused — in the instant it was asked for: an exit at market asked for on a session's last
+point, or on the window's, is not carried past it. Under a latency the owed exit is paid
+on a later point, which for one asked on a session's last point is in the next session, and
+on the window's last never. A resting order whose cancel the venue refused is cancelled again. **An order the engine's order
+emulator holds** (one sent with an `emulation_trigger`) has not reached the venue: it counts
+until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
+takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
+emulator, and batches the rest. An attached exit rule closes through the same market exit.
+`self.held(id)` applies the sleeve's market orders in flight and no limit or stop order, so
+a sleeve whose exit rests at the ask reads the whole position there until the exit fills; an
+exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
 equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
@@ -339,6 +419,25 @@ together exceed what its own `capital × max_leverage` funds or whose host budge
 own position ceiling, and a filter or exit rule whose `resolution` is not its host's. An
 overlay's `capital` is the whole book its cards run on — host budget and its own — and its
 clips are sized to its own budget (`docs/constructs.md`).
+
+**`fixed_params` names the numbers that are not knobs.** Every numeric field an author adds
+to the strategy's `Config` is a parameter the `param_plateau` gate moves a little each way
+and re-scores; a selector among rules, a clock constant or a size the hypothesis sets is a
+number the strategy reads, not one it was tuned on, and moving it tests a different strategy
+rather than the same one nearby. Name those in `fixed_params` and the gate leaves them where
+they are:
+
+```python
+class Config(KansoConfig):
+    gate: float = 5.0  # which of ten state rules admits a post
+    g1: float = 1.75  # that rule's threshold: a knob
+    start_minute: float = 575.0  # a clock constant
+    fixed_params: tuple[str, ...] = ("gate", "start_minute")
+```
+
+A name that is not a numeric field of the class is refused when the strategy is built
+(`strategy.py: Config: fixed_params: … is not a numeric field`), so a typo cannot quietly
+fix nothing.
 
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;
@@ -371,9 +470,9 @@ before it widens. An attached construct declares the same `warmup` as its host, 
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
-fed to a strategy whole at an intraday grain: the runner reads every name's bars over the
-window into memory, and a card over that many is refused by the lane's memory cap long
-before it trades. A scope delivers each name's market data only on the sessions a series
+fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
+at a time, the card holds a session of them beside what it has folded, and a session over
+that many names is refused by the lane's memory cap long before it trades. A scope delivers each name's market data only on the sessions a series
 you built says it is in play:
 
 ```yaml
@@ -486,12 +585,14 @@ set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
 `venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
-the block for exactly that reason.
+the block for exactly that reason. The block is scope: every metric is net of it, so a best selected under one schedule
+is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
+as it does for `sizing`; a row pinned before 0.13 reads as unchanged until it is re-pinned.
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 
 ```yaml
-costs:
+costs:                             # scope: changing any key clears `best`
   commission_bps: 0.35             # every fill that took liquidity pays these three
   slippage_bps: 0.5
   spread: fixed_bps
@@ -530,13 +631,39 @@ A per-share-priced account charges a cheap share more of its price than a dear o
 is 5.5 bp of a $10 share and 0.2 bp of a $300 one — and a flat rate in basis points cannot say
 so over a universe that spans both. The per-share commission is charged on every share of a
 fill that pays commission at all: a taker's, and a maker's under a model that states no
-`maker_bps`. A maker's fill under a stated `maker_bps` still pays that rate alone, because the
-rate is by contract the whole charge on that fill; a per-share-priced account states its maker
-net there, commission less the rebate. It is applied where every cost is, once, in the
-runner's extraction; `self.balance` books the same; what a sleeve reserves when it sizes
+`maker_bps`. Per share means per contract on a multiplied instrument, whose notional is the
+price times the contract multiplier, and so does `sell_fee_per_share` below. A maker's fill
+under a stated `maker_bps` still pays that rate alone, because the rate is by contract the
+whole charge on that fill; a per-share-priced account states its maker net there, commission
+less the rebate. It is applied where every cost is, once, in the runner's extraction;
+`self.balance` books the same; what a sleeve reserves when it sizes
 includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
 is part of the recorded cost of the fill. Zero unless stated, so no number moves for a model
 that does not name it.
+
+`costs.sell_fee_bps` and `costs.sell_fee_per_share` charge every sale on top of the rest,
+whoever the venue reports the fill as:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.0025
+  slippage_bps: 0.5
+  spread: quotes
+  maker_bps: -0.2                  # a fill that rested earns this alone …
+  sell_fee_bps: 0.206              # … but a sale still pays $20.60 per million of notional
+  sell_fee_per_share: 0.000166     # and $0.000166 a share, as the account passes them through
+```
+
+A regulatory transaction fee is charged on sells alone, per notional, and a trading activity
+fee per share sold, and an account passes both through whatever the fill's liquidity side:
+a maker's sale under a stated `maker_bps` pays that rate and these on top, where the
+per-share commission does not. Before the keys existed the only way to state them was a
+larger `maker_bps` on both sides, which charges a purchase for a fee it never pays. They
+are applied where every cost is, once, in the runner's extraction; `self.balance` books the
+same; what a sleeve reserves when it sizes includes half of each, since a round trip pays
+them once and the reserve is struck per side; `cost_stress` multiplies them with the rest,
+and `cost_scenario` states them key for key like any other. Zero unless stated.
 
 `costs.limit_fill` is the one key of the block that is not a charge: it is how the simulated
 venue fills a limit order resting on the book.
@@ -562,8 +689,91 @@ to it (`kanso doctor` re-checks both behaviours as engine facts). A broker fills
 fills: the key moves kanso's simulated venues and nothing a broker does. Like every cost it
 is inherited — a broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and
 two versions certified under different rules cannot share a stage venue, which is one
-exchange: the stage's node refuses to build it (exit 2), naming
+exchange: `deploy` refuses the pair before it writes the stage (exit 2), naming
 `venues.<MIC>.costs.limit_fill`.
+
+`costs.latency_ms` is the other key that is not a charge: how long the simulated venue
+takes to see an order.
+
+```yaml
+costs:
+  latency_ms: 20                   # zero unless stated: no delay, no model
+```
+
+Every order command — an insert, an update, a cancel — reaches the venue's book that many
+milliseconds after the sleeve sent it, on both code paths alike, and the book carries on in
+between: a print that would have filled the order in that interval finds it not there yet,
+and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
+the first point of data after its delay has passed, and only after matching that point, so
+the delay a run models is never shorter than the one stated and at tick resolution
+exceeds it by one point. It models the round trip from
+the strategy to the exchange's book through the account and route it will trade on, and it
+is measured there, on real orders, rather than assumed. State the whole round trip: a feed
+that reaches the strategy late and an order that reaches the book late add up, and a rule
+that reacts to a point and posts lands the same instant either way, so one number carries
+both. Availability (`ts_init`, `docs/concepts.md`) is a property of the data, when it became
+public, never of the route that carries it to you. **Under a stated latency a cancel is not
+instant**: it is a command like the rest, and the order it cancels can still fill until it
+lands. So `submit_exit` counts an order waiting on its cancel as an exit still working, and
+an exit that replaces one whose cancel is in flight is sized to what the old one cannot also
+take — often nothing, in which case it returns `None`. What the cancel in flight held back is
+owed, not dropped: kanso asks for that exit again, at the price given and sized to what is
+left then, on every later point after the strategy's own handler has run, until it goes out
+whole — so a sleeve that cancels and exits once is closed once the cancel lands, and one that
+re-posts on every point replaces the owed exit with its own. An order sent on a session's
+last point under a latency reaches the book on the next session's first, and one sent on the
+window's last point reaches it after the window has ended and never fills, owed or not. An owed exit is forgotten when
+the position is flat or has changed sides and when the sleeve asks for another exit in the
+name. A cancel on that side takes back only an owed exit that has a price, as it would have
+taken back the limit order itself; an owed exit at market stands for an order the venue
+would have taken before any cancel that followed it, so the sleeve's later cancels leave it
+owed. One an attached exit rule asked for is forgotten only when the position is flat,
+whatever its host sends or cancels, so a rule that says exit once still closes. An owed exit
+with a price still owed when a session ends is asked for at that price on the next session's
+points if the position is still open; it never goes past flat, but the price may be the last
+session's. Measured on 0.13.0, before exits
+counted the ones still working: a rule that followed the ask with its exit on every change of
+the book bought 50 shares in one session at 20 ms, sold 92, and was left short 42 to the
+session's end, and every card of its lane at 20 ms held a position for close to a day. With
+no latency stated a cancel lands before anything further is matched, so an order the venue
+held open when its cancel was sent is not counted. **A cancel for an order still on its way
+to the venue lands behind the order**, on every path, whatever the latency — `cancel_order`,
+`cancel_orders` and `cancel_all_orders` alike; an order the engine's order emulator holds
+has not been sent to the venue at all, and its cancel takes it out at once (above). The venue takes the order, filling it if it is
+marketable, and then the cancel: with no latency stated before it matches anything further,
+so an order sent and cancelled in one handler that does not fill when it is taken never
+rests through a point; under a latency both land at the same instant, the order first. The
+order counts as working until the cancel lands. A node may not yet have handed the order to
+the venue when the strategy's handler cancels it, and would send the cancel ahead of it,
+where it is lost and the order rests; kanso holds such a cancel back and sends it the moment
+the node reports the order submitted, before the venue has matched it, so a node and a
+backtest fill alike (`kanso replay parity`). A cancel the sleeve itself sends right behind a
+modify of an order the venue already holds is not held back, as an exit at market's is: on a node it overtakes the
+modify, where the backtest lands the modify first and fills it if it is marketable, so the
+two paths can differ there (`docs/backlog.md`). Zero, the
+default, configures no latency model at all, so a venue model that states none is built
+exactly as it was before the key existed. Like every cost it is inherited — a broker's
+declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the
+hypothesis's scope, so a re-pin that changes it starts the search again. A stage venue
+carries the latency its versions were certified under, so two versions certified under
+different values cannot share one, which is one round trip: `deploy` refuses the pair
+before it writes the stage (exit 2), naming `venues.<MIC>.costs.latency_ms` and both
+versions.
+
+**A print fills a resting limit by its own size**, and no more: a buy of 320 met by four
+sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per print, and met
+by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine fact). So the
+fills a run reports are exactly as honest as the print sizes it is fed. A resting order sits
+on one exchange's book and is filled only by the executions that reach that book, so the
+trade stream that stands in for that exchange has to be its own executions, one print per
+execution: a consolidated tape fills the order with prints from venues it never rested on,
+and a file that merges a run of same-price prints into one hands it their sum in one fill.
+Measured on a posting strategy over one month of two Nasdaq names, the consolidated tape's
+fills were an order of magnitude larger than the exchange's own executions at the same
+prices and instants allowed. On a level-two book (`OrderBookDelta` data) the venue can also
+track queue position — `queue_position` in the engine's venue configuration — so a limit
+that joins a level showing 500 ahead fills only after those 500 have traded through; an
+order posted inside the spread creates its own level and has nothing ahead of it either way.
 
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 
@@ -696,6 +906,179 @@ instrument was on each date is its own fact.
 fields yourself. That is the path the file loaders, the synthetic loader and the demo take,
 and it is why a workspace can run end to end with no reference adapter and no credential.
 
+Tick and lot come from kanso's dated convention table where one is on file — US equities —
+or from the reference provider's measured definition, and otherwise from your `override`;
+they are never guessed. Two things a definition may not carry, from `override` or from what
+the reference adapter resolved, and each is refused by name (exit 3): a non-zero
+`maker_fee` or `taker_fee` — the runner charges commission once, from the venue model, so
+state it under `venues.<MIC>.costs` or the hypothesis's `costs`, because the simulated venue
+would charge the instrument's rate on every fill on top — and an inverse perpetual. A rate
+your `override` states, remove from it; a rate the reference provider resolved, state as
+`"0"` in the entry's `override` (`maker_fee: "0"`), which wins over the resolved field — a
+`--refresh` alone would fetch the provider's rate again. `margin_init` and `margin_maint`
+stay yours to correct. `kanso doctor` fails its `instruments` check on a stored definition
+that carries a maker or taker rate, naming it and the
+`kanso data instruments resolve ID --as-of DATE --refresh` that replaces it once the rate is
+gone.
+
+### A perpetual
+
+A crypto perpetual swap is an entry of asset class `CRYPTOCURRENCY` with
+`instrument_class: swap` in `override`, and it builds the engine's `CryptoPerpetual`. No
+convention table covers one, so a manual entry states its contract as the venue publishes
+it:
+
+```yaml
+BTCUSDT-PERP:
+  nautilus_id: BTCUSDT-PERP.SIM
+  asset_class: CRYPTOCURRENCY
+  manual: true
+  corporate_actions: none
+  override:
+    instrument_class: swap
+    base_currency: BTC
+    quote_currency: USDT
+    settlement_currency: USDT
+    multiplier: "0.01"          # one contract is 0.01 BTC
+    price_increment: "0.1"
+    price_precision: 1
+    size_increment: "1"
+    size_precision: 0
+    lot_size: "1"
+```
+
+`multiplier` and `lot_size` are required, though the engine would default both to one: a
+contract value of one is a claim about the contract, and most perpetuals' is a fraction of
+a coin. The precisions follow from the increments when you leave them out. kanso builds the
+contract linear, and a definition stating `is_inverse: true` is refused by name (exit 3) —
+the runner's notional is `qty x px x multiplier` in the quote currency, and an inverse
+contract's is not. `min_notional` and `max_notional`, where a venue states them, are
+amounts in the settlement currency: `min_notional: 5` is five USDT. A perpetual settles in
+its `settlement_currency` and is booked in its `quote_currency`, so both must be its venue's
+account currency — `[research] currency = "USDT"` in `kanso.toml`, or
+`venues.<MIC>.currency` in `portfolio.yaml` — or `kanso hyp validate` refuses it (exit 3);
+one whose two differ fits no account. What a perpetual is to a
+card, and what it is not yet, is in `docs/concepts.md`.
+
+A perpetual the exchange lists need not be written by hand. Name the OKX package's public
+reference and the regional host, and resolve it by the exchange's own id with the venue
+appended:
+
+```toml
+[research]
+currency = "USDT"         # or broker = "okx", whose venue OKX declares a USDT account
+
+[adapters.okx]
+region = "us"
+
+[data]
+reference = "okx"
+```
+
+```
+$ kanso data instruments resolve BTC-USDT-SWAP.OKX --as-of 2026-09-30
+```
+
+The entry is written for you — `asset_class: CRYPTOCURRENCY`, `instrument_class: swap` in
+`override`, and `sources: {okx: BTC-USDT-SWAP}` — and the contract's size, tick, lot and
+minimum come from the exchange's listing, with no credential sent. An `override` you add to
+that entry is applied over what the exchange lists. An inverse contract (`BTC-USD-SWAP`) and a
+contract that is not live are refused by name (exit 3); `docs/adapters.md` lists the fields
+it reads and why the definition's fees are zero.
+
+Its history loads the same way, with no credential, once the swap is resolved — its prices
+and sizes are read at the definition's precision, sizes in contracts. One spec per loader:
+
+```yaml
+loader: okx_bars                 # candles, stamped at their close
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-28
+end: 2026-09-28
+resolution: 1m
+```
+
+```yaml
+loader: okx_trades               # every print, from the exchange's daily archives
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-28
+end: 2026-09-28
+```
+
+```yaml
+loader: okx_funding              # the realised rate at each settlement
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-01
+end: 2026-09-28
+```
+
+```
+$ kanso data load --loader okx_funding --spec funding.yaml
+```
+
+A range reaching before what the exchange serves — about three months of funding, about
+six of `1s` bars — or into a UTC day that has not ended is refused naming the day to use
+(exit 3); `docs/adapters.md` gives each loader's source, horizon, units and rate limits.
+
+**A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
+every settlement, so a hypothesis whose universe holds one lists `funding` in
+`data_requirements`, or `kanso hyp validate` refuses it (exit 3) naming the instrument:
+
+```
+error: data_requirements: BTCUSDT-PERP.SIM is a perpetual and funding is not required; a perpetual's P&L is not honest without the funding it paid and was paid
+remedy: add funding to data_requirements and load its realised funding history
+```
+
+What makes an instrument a perpetual is its resolved definition — the engine's
+`CryptoPerpetual`, the same definition the settlement check reads — never its id.
+
+`funding` is a built-in custom type, `kanso.data.types.Funding`, whose points carry
+`instrument_id` and `rate`. The rate is the **realised** rate of the period that just
+settled, as a fraction of notional — `0.0001` is one basis point, paid by longs to shorts
+when positive and by shorts to longs when negative. It is never the rate a venue publishes
+for the period in progress: that is a prediction, which moves until the instant it settles,
+and a series of predictions read as payments charges a book what it was never charged. Load
+the settled history, and leave a feed's "current" or "next" rate out of the catalog. A rate
+that is not a finite number — `nan`, `inf` — is refused at load, as any custom type's
+decimal field is: a placeholder would be booked as a payment.
+`ts_event` and `ts_init` are both the settlement instant, since that is when the rate stopped
+moving and when it was paid, so a funding dataset is `realtime` and names no publication
+rule. A file maps `ts_event` and `rate`, and `instrument_id` where it holds one — the entry
+names the instrument otherwise — and leaves `ts_init` unmapped; a `ts_init` mapped earlier
+than the settlement is refused at load (exit 3). Three settlements of a day:
+
+```
+instrument_id,rate,ts
+BTCUSDT-PERP.SIM,0.0001,2024-01-01T00:00:00
+BTCUSDT-PERP.SIM,-0.00005,2024-01-01T08:00:00
+BTCUSDT-PERP.SIM,0.000125,2024-01-01T16:00:00
+```
+
+```yaml
+loader: csv_parquet
+timezone: UTC
+files:
+  - path: data/btcusdt_funding.csv
+    instrument: BTCUSDT-PERP
+    venue: SIM
+    type: funding
+    columns: {instrument_id: instrument_id, rate: rate, ts_event: ts}
+```
+
+`funding` is required of a hypothesis and asked of its perpetuals alone. A spot leg settles
+no funding, so a basis universe — `[BTCUSDT.SIM, BTCUSDT-PERP.SIM]` with `data_requirements:
+[bar, funding]` — is covered by bars for both and a funding history for the perpetual only;
+which instruments are asked is read from the stored definitions, as `hyp validate` reads
+them. `research begin` refuses a snapshot whose funding dataset for a perpetual does not
+span the research and certification windows, whole UTC days as for every series, and a card
+is handed each point of its window in `on_data`, at the settlement instant, as a `Funding`.
+**The runner books each settlement once**, in its extraction, where every other cost is
+applied: the rate on the quantity held before the instant — a fill stamped at it is not held
+there — times the last print at or before it and the multiplier, out of cash — a long pays a
+positive rate, a short receives it — and the sleeve's `balance` has booked the same amount
+by the time `on_data` is handed the point. What that puts in a card's run, its trades and
+its equity is in `docs/concepts.md`. A dataset without a settlement that happened is a card
+that did not pay it: load the whole settled history of each window.
+
 A workspace whose entries are all `manual` may still name a reference adapter in `[data]
 reference` without setting that adapter's key: the adapter is built only once resolution
 finds an id the cache and the manual entries cannot answer, and building it is what
@@ -794,6 +1177,38 @@ the dataset they follow in `supersedes`. The manifest records the span that was 
 never the span that was asked for, because a source may answer a five-year request with two
 years, HTTP 200 and no warning.
 
+The synthetic loader, as `demo.yaml` drives it, generates the weekday sessions of a US equity
+venue, 09:30 to 16:00 in `America/New_York`; a spec that sets `calendar: continuous`
+generates every calendar day from `start` to `end` instead, in UTC, 00:00 to 24:00 — what a
+round-the-clock venue looks like to the runner. Bars are stamped at their close on either
+calendar, so at a resolution that divides the day the last bar of a continuous day closes
+at 00:00Z of the next, and a daily bar
+lands in the day after the one it summarises (`docs/concepts.md`, the card's return
+periods). A continuous calendar fixes its zone and its session, so a spec that also states
+`timezone`, `session_start` or `session_end` is refused (exit 3) naming the field:
+
+```
+$ kanso data load --loader synthetic --spec round_the_clock.yaml
+error: timezone: 'America/New_York' conflicts with calendar 'continuous', whose every session is a UTC calendar day, 00:00 to 24:00; drop the field
+```
+
+`calendar: weekdays` is the default and is recorded in no manifest, so a dataset generated
+before the field existed carries the request parameters it always did and its snapshot id
+is unchanged; a continuous dataset records its calendar with the zone and session it fixed.
+The loader emits bars, quotes and trades on either calendar, and on a continuous one a
+perpetual's `funding` too: a settlement at 00:00, 08:00 and 16:00 UTC — each session's last
+at 00:00Z of the next day, as its last daily bar — with a rate drawn from the instrument's
+own seed, a whole number of hundredths of a basis point from -1 up to +2, so a card holding
+a perpetual pays and is paid funding with no vendor in the loop. Adding `funding` to `types`
+changes no other series of the spec, and a weekday spec that asks for it is refused (exit 3):
+
+```
+$ kanso data load --loader synthetic --spec weekday_funding.yaml
+error: types: funding is settled round the clock and needs calendar 'continuous'; a weekday calendar has no settlements to generate
+```
+
+Nothing else is generated.
+
 **Coverage counts only the days a market opened.** A backfill is chunked, and a chunk edge
 that falls on a weekend leaves the spans the chunks served a weekend apart. The store's
 definition of the instrument names its market, and on that market's calendar
@@ -846,7 +1261,8 @@ snapshot pinning none is a promise no run can keep.
 ```
 $ kanso data load --loader synthetic --spec demo.yaml
 error: DEMO.SIM-bar-1m-raw-20250901 is named by a snapshot and cannot be rewritten
-remedy: write a successor dataset recording supersedes=<dataset_id>
+remedy: load it again with --supersedes DEMO.SIM-bar-1m-raw-20250901 to put this dataset in its
+        place; every snapshot naming the old one then stops supporting a certification
 ```
 
 (exit 2 — and `--replace` gives the identical refusal, which is the point: the flag lifts the
@@ -854,7 +1270,12 @@ overlap check, not the pin). A run, a card, a certificate and a deployed version
 a snapshot; rewriting the bytes underneath one would make every result that cites it
 unreproducible while leaving the citation looking fine. The successor path — a new dataset
 recording `supersedes` — is what `kanso data sync` walks, so extending a series never mutates
-one.
+one. A pinned mistake is corrected the same way, in the open: `--supersedes D` lets the load
+take the place of the one pinned dataset `D` it names — its files and its manifest go, as a
+replace's do, and the new dataset records `supersedes: D` — and every snapshot naming `D`
+stops supporting a certification, because the workspace no longer describes what it pinned
+(`cert run` says so by name). Any other pinned dataset the load would overlap is still
+refused: the flag names one dataset, never a span.
 
 An overlapping write into data **no snapshot pins** is a different question and gets a
 different answer:
@@ -949,7 +1370,7 @@ the log.
 
 ```
 certificates/<hyp>/plan.yaml
-certificates/<hyp>/<sha7>-<n_trials>-p<plan>-e<engine>.yaml
+certificates/<hyp>/<sha7>-h<pin7>-<n_trials>-p<plan>-e<engine>.yaml
 certificates/<hyp>/<sha7>.py
 ```
 
@@ -965,8 +1386,9 @@ f729a538831e3ea8f80c46b68c5993ed4662c168bd9c56541cdf570619b6f6e9
 ```
 
 **A certificate is immutable**, and the filename says what it is a certificate *of*: these
-bytes, under that plan version, on that engine — with the trial count that stood when it was
-minted.
+bytes, under the hypothesis file as the card's run pinned it (`h<pin7>`, the first seven of
+that file's sha), under that plan version, on that engine — with the trial count that stood
+when it was minted.
 
 ```
 $ kanso cert run demo_mr
@@ -975,9 +1397,12 @@ error: demo_mr already certified f729a53 under plan version 1 and nautilus_trade
 remedy: research a better strategy, replan, or upgrade the engine
 ```
 
-(exit 2). Change the bytes, the plan version or the engine and it is a different certificate
-under a different name, so re-certifying an unchanged commit after an engine upgrade is a
-plain `cert run` and produces a second file rather than overwriting the first.
+(exit 2). Change the bytes, the pinned file, the plan version or the engine and it is a
+different certificate under a different name, so re-certifying an unchanged commit after an
+engine upgrade is a plain `cert run` and produces a second file rather than overwriting the
+first, and so is certifying the same seed again after `hyp add` re-pinned its file. A
+certificate written before pins were recorded carries no `h<pin7>` in its name and no
+`hypothesis_sha` in its document, and refuses a repeat under any pin.
 
 Editing a certificate file changes nothing kanso will ever act on: the certificate of record
 is in `state.db` and the YAML is a rendering of it. Change `verdict: pass` to

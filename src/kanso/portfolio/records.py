@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
-from kanso.criteria.run import CardRun, Fill, Held, Trade
+from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.nautilus.node import Realised
@@ -210,7 +210,10 @@ class StageResult:
     version: int
     capital: float
     run: CardRun
-    positions: tuple[tuple[str, float, float], ...]
+    positions: tuple[tuple[str, float, float, float], ...]
+    """What the window closed holding, per instrument: `(instrument_id, qty, price,
+    multiplier)`, the mark being the window's last price and the multiplier the instrument's
+    contract size, so `qty x price x multiplier` is the exposure in the account currency."""
     benchmark: CardRun | None = None
     """The hold the version's objective differences against, over the same window; absent
     from a window recorded for a version whose objective measures none."""
@@ -223,12 +226,12 @@ class StageResult:
     @property
     def gross(self) -> float:
         """The absolute exposure this version held when the window closed."""
-        return sum(abs(qty * price) for _, qty, price in self.positions)
+        return sum(abs(qty * price * multiplier) for _, qty, price, multiplier in self.positions)
 
     @property
     def net(self) -> float:
         """The signed exposure this version held when the window closed."""
-        return sum(qty * price for _, qty, price in self.positions)
+        return sum(qty * price * multiplier for _, qty, price, multiplier in self.positions)
 
 
 def record_stage_run(
@@ -237,7 +240,7 @@ def record_stage_run(
     """Append one event per version for the window a stage node just closed."""
     made: list[StageResult] = []
     for one in realised:
-        positions = tuple((b.instrument_id, b.qty, b.price) for b in one.positions)
+        positions = tuple((b.instrument_id, b.qty, b.price, b.multiplier) for b in one.positions)
         detail: dict[str, object] = {
             "stage": stage,
             "session_id": session_id,
@@ -246,7 +249,8 @@ def record_stage_run(
             "capital": one.capital,
             "run": encode_run(one.run),
             "positions": [
-                {"instrument": name, "qty": qty, "price": price} for name, qty, price in positions
+                {"instrument": name, "qty": qty, "price": price, "multiplier": multiplier}
+                for name, qty, price, multiplier in positions
             ],
         }
         if one.benchmark is not None:
@@ -304,7 +308,8 @@ def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
 
 
 def _result(detail: Mapping[str, Any]) -> StageResult:
-    """One recorded window back out of its event."""
+    """One recorded window back out of its event; a position recorded before the multiplier
+    was kept reads as one, a share's."""
     return StageResult(
         stage=str(detail["stage"]),
         session_id=str(detail["session_id"]),
@@ -313,7 +318,12 @@ def _result(detail: Mapping[str, Any]) -> StageResult:
         capital=float(detail["capital"]),
         run=decode_run(detail["run"]),
         positions=tuple(
-            (str(p["instrument"]), float(p["qty"]), float(p["price"]))
+            (
+                str(p["instrument"]),
+                float(p["qty"]),
+                float(p["price"]),
+                float(p.get("multiplier", 1.0)),
+            )
             for p in detail.get("positions", [])
         ),
         benchmark=None if detail.get("benchmark") is None else decode_run(detail["benchmark"]),
@@ -337,6 +347,7 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         "cushion": list(run.cushion),
         "carry": list(run.carry),
         "worst_ratio": list(run.worst_ratio),
+        "funding": [_encode_funding(payment) for payment in run.funding],
         "capital": run.capital,
         "currency": run.currency,
         "venue_model": dict(run.venue_model),
@@ -344,7 +355,8 @@ def encode_run(run: CardRun) -> dict[str, Any]:
 
 
 def decode_run(payload: Mapping[str, Any]) -> CardRun:
-    """One measured window back from its stored form."""
+    """One measured window back from its stored form; one stored before funding was booked
+    reads as a run that paid none, which is what it measured."""
     opens, closes = payload["window"]
     return CardRun(
         window=(date.fromisoformat(opens), date.fromisoformat(closes)),
@@ -360,6 +372,7 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
         worst_ratio=tuple(
             None if value is None else float(value) for value in payload.get("worst_ratio", ())
         ),
+        funding=tuple(_decode_funding(item) for item in payload.get("funding", ())),
         capital=float(payload["capital"]),
         currency=str(payload["currency"]),
         venue_model=dict(payload["venue_model"]),
@@ -384,6 +397,26 @@ def _decode_held(payload: Mapping[str, Any]) -> Held:
     )
 
 
+def _encode_funding(payment: FundingPayment) -> dict[str, Any]:
+    return {
+        "ts_ns": payment.ts_ns,
+        "instrument_id": payment.instrument_id,
+        "qty": payment.qty,
+        "rate": payment.rate,
+        "paid": payment.paid,
+    }
+
+
+def _decode_funding(payload: Mapping[str, Any]) -> FundingPayment:
+    return FundingPayment(
+        ts_ns=int(payload["ts_ns"]),
+        instrument_id=str(payload["instrument_id"]),
+        qty=float(payload["qty"]),
+        rate=float(payload["rate"]),
+        paid=float(payload["paid"]),
+    )
+
+
 def _encode_fill(fill: Fill) -> dict[str, Any]:
     return {
         "ts_ns": fill.ts_ns,
@@ -393,12 +426,15 @@ def _encode_fill(fill: Fill) -> dict[str, Any]:
         "px": fill.px,
         "cost": fill.cost,
         "maker": fill.maker,
+        "multiplier": fill.multiplier,
     }
 
 
 def _decode_fill(payload: Mapping[str, Any]) -> Fill:
     """A recorded fill; one recorded before fills said whether they rested reads as a
-    taker's, which is what it was charged as."""
+    taker's, which is what it was charged as, and one recorded before the multiplier was
+    kept reads as a multiplier of one, a share's; a run struck on a multiplied instrument
+    before the multiplier was kept is re-run before a cost model is re-applied to it."""
     return Fill(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
@@ -407,6 +443,7 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
         px=float(payload["px"]),
         cost=float(payload["cost"]),
         maker=bool(payload.get("maker", False)),
+        multiplier=float(payload.get("multiplier", 1.0)),
     )
 
 
@@ -421,10 +458,14 @@ def _encode_trade(trade: Trade) -> dict[str, Any]:
         "pnl_net": trade.pnl_net,
         "cost": trade.cost,
         "fills": [_encode_fill(fill) for fill in trade.fills],
+        "multiplier": trade.multiplier,
+        "funding": trade.funding,
     }
 
 
 def _decode_trade(payload: Mapping[str, Any]) -> Trade:
+    """A recorded trade; one recorded before the multiplier was kept reads as one, and one
+    recorded before funding was booked as a trade that paid none."""
     return Trade(
         opened_ns=int(payload["opened_ns"]),
         closed_ns=int(payload["closed_ns"]),
@@ -435,4 +476,6 @@ def _decode_trade(payload: Mapping[str, Any]) -> Trade:
         pnl_net=float(payload["pnl_net"]),
         cost=float(payload["cost"]),
         fills=tuple(_decode_fill(fill) for fill in payload["fills"]),
+        multiplier=float(payload.get("multiplier", 1.0)),
+        funding=float(payload.get("funding", 0.0)),
     )

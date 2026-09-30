@@ -10,12 +10,16 @@ current prices.
 ships a client that wires a `SimulatedExchange` and a `BacktestExecClient` together for a
 live node, but it fixes the matching, the fee model and the fill model behind a configuration
 that exposes none of them. So this module builds the same pair itself, with the arguments
-`BacktestEngine.add_venue` builds the research path's exchange with — the same margin, fill
-and fee models, the same book type, the same leverage and balances, read out of the one
-`BacktestVenueConfig` both paths are configured from. Two things differ, both because this is
-a node and not a backtest: the exchange keeps its own `TestClock`, since a node's kernel
-clock is wall time and a fill has to be stamped from the data; and its command queue is off,
-for the reason recorded below.
+`BacktestEngine.add_venue` builds the research path's exchange with — the same margin, fill,
+fee and latency models, the same book type and queue position, the same bar and trade
+execution, the same leverage and balances, read out of the one `BacktestVenueConfig` both
+paths are configured from with the converters the engine's own node uses (`get_fill_model`,
+`get_latency_model`, `get_book_type` and the rest). A stage's configuration is built by the
+function a card's is (`kanso.nautilus.venue.venue_config`), so a version certified under a
+latency or on a level-two book trades the stage under the same. Two things differ, both
+because this is a node and not a backtest: the exchange keeps its own `TestClock`, since a
+node's kernel clock is wall time and a fill has to be stamped from the data; and its command
+queue is off unless the venue model states a latency, for the reason recorded below.
 
 **The client's own subscription does not reach a bar, so kanso makes that binding.** The
 client subscribes to `data.*.{venue}.*` when it connects. A quote is published to
@@ -52,6 +56,13 @@ matched against the *next* point's book — it fills a bar late, at a price the 
 saw, and the missing second fill still never arrives. The queue therefore stays off, which is
 also what makes flattening a node possible at all: an order submitted after the last point of
 a window is matched against that point's book rather than against a point that never comes.
+The one exception is a venue model that states `latency_ms`: the exchange honours a latency
+only through its queue, so the queue is on and every command waits in flight. The exchange
+times that flight from the command's own clock, which on a node is wall time, so
+`SimulatedVenue._send` re-stamps each command from the data clock first; it then lands at
+the first point on or after its delay, once that point has been matched, exactly as on the
+research path, and `advance_past_latency` lands what a node's flatten sent after the
+window's last point.
 
 **The exchange is cost-neutral because of the instrument, not because of the venue.** Both
 paths run a `MakerTakerFeeModel`, because `SimulatedExchange` will not accept no fee model
@@ -118,7 +129,9 @@ from nautilus_trader.backtest.models import MakerTakerFeeModel
 from nautilus_trader.backtest.node import (
     get_account_type,
     get_base_currency,
+    get_book_type,
     get_fill_model,
+    get_latency_model,
     get_oms_type,
     get_starting_balances,
 )
@@ -128,10 +141,16 @@ from nautilus_trader.config import BacktestVenueConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.execution.engine import ExecutionEngine
 from nautilus_trader.execution.messages import (
+    BatchCancelOrders,
+    CancelAllOrders,
+    CancelOrder,
     GenerateFillReports,
     GenerateOrderStatusReport,
     GenerateOrderStatusReports,
     GeneratePositionStatusReports,
+    ModifyOrder,
+    SubmitOrder,
+    SubmitOrderList,
 )
 from nautilus_trader.execution.reports import FillReport, OrderStatusReport, PositionStatusReport
 from nautilus_trader.live.execution_client import LiveExecutionClient
@@ -148,6 +167,7 @@ from nautilus_trader.model.data import (
 from nautilus_trader.model.identifiers import AccountId, ClientId, Venue
 from nautilus_trader.model.instruments import Instrument
 
+from kanso.errors import ValidationError
 from kanso.nautilus import actions
 
 __all__ = [
@@ -244,13 +264,101 @@ def relay(kernel: Any) -> MessageBus:
     return bus
 
 
+def _restamped(command: Any, ts_init: int) -> Any:
+    """The same command stamped `ts_init`, every other field copied: the order objects, every
+    id — the correlation id included — and the params are the original's, so the events the
+    exchange generates land on the orders the node's cache holds. NautilusTrader 1.231: each
+    of these six classes takes `params` and `correlation_id` beside its own fields."""
+    if isinstance(command, SubmitOrder):
+        return SubmitOrder(
+            trader_id=command.trader_id,
+            strategy_id=command.strategy_id,
+            order=command.order,
+            command_id=command.id,
+            ts_init=ts_init,
+            position_id=command.position_id,
+            client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
+        )
+    if isinstance(command, SubmitOrderList):
+        return SubmitOrderList(
+            trader_id=command.trader_id,
+            strategy_id=command.strategy_id,
+            order_list=command.order_list,
+            command_id=command.id,
+            ts_init=ts_init,
+            position_id=command.position_id,
+            client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
+        )
+    if isinstance(command, ModifyOrder):
+        return ModifyOrder(
+            trader_id=command.trader_id,
+            strategy_id=command.strategy_id,
+            instrument_id=command.instrument_id,
+            client_order_id=command.client_order_id,
+            venue_order_id=command.venue_order_id,
+            quantity=command.quantity,
+            price=command.price,
+            trigger_price=command.trigger_price,
+            command_id=command.id,
+            ts_init=ts_init,
+            client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
+        )
+    if isinstance(command, CancelOrder):
+        return CancelOrder(
+            trader_id=command.trader_id,
+            strategy_id=command.strategy_id,
+            instrument_id=command.instrument_id,
+            client_order_id=command.client_order_id,
+            venue_order_id=command.venue_order_id,
+            command_id=command.id,
+            ts_init=ts_init,
+            client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
+        )
+    if isinstance(command, CancelAllOrders):
+        return CancelAllOrders(
+            trader_id=command.trader_id,
+            strategy_id=command.strategy_id,
+            instrument_id=command.instrument_id,
+            order_side=command.order_side,
+            command_id=command.id,
+            ts_init=ts_init,
+            client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
+        )
+    if isinstance(command, BatchCancelOrders):
+        return BatchCancelOrders(
+            trader_id=command.trader_id,
+            strategy_id=command.strategy_id,
+            instrument_id=command.instrument_id,
+            cancels=command.cancels,
+            command_id=command.id,
+            ts_init=ts_init,
+            client_id=command.client_id,
+            params=command.params,
+            correlation_id=command.correlation_id,
+        )
+    raise ValidationError(
+        f"{type(command).__name__}: not a command a sleeve sends, so its flight cannot be timed"
+    )
+
+
 class SimulatedVenue(LiveExecutionClient):
     """One venue simulated inside a live node, configured as the research path's venue is.
 
     The exchange and its execution client are built from the same `BacktestVenueConfig` the
     backtest path builds its venue from, through the engine's own converters, so nothing that
     touches a fill can differ between the two: account type, currency, leverage, starting
-    balance, bar execution, and the margin, fill and fee models. The leverage travels through
+    balance, bar and trade execution, the book type and its queue position, and the margin,
+    fill, fee and latency models. The leverage travels through
     its own string, so a decimal written as `2.5` stays that number rather than the binary
     float nearest it.
     """
@@ -297,11 +405,24 @@ class SimulatedVenue(LiveExecutionClient):
             # The venue model's `limit_fill`, built by the converter the research path's
             # engine uses, from the configuration both paths are given.
             fill_model=get_fill_model(venue),
+            # The same latency the research venue is given, from the same configuration. The
+            # exchange stamps a command's flight from the command's own clock, which on a node
+            # is wall time, so `_send` re-stamps every command from the data clock first.
+            latency_model=get_latency_model(venue),
             fee_model=MakerTakerFeeModel(),
             bar_execution=venue.bar_execution,
+            # A level-two book with queue position when the hypothesis holds one, built from
+            # the same configuration the research path's engine is built from.
+            book_type=get_book_type(venue),
+            trade_execution=venue.trade_execution,
+            queue_position=venue.queue_position,
             # Matched in the call that submits it, which is where the research path's
-            # settle step matches it and what lets a node flatten after its last point.
-            use_message_queue=False,
+            # settle step matches it and what lets a node flatten after its last point —
+            # unless the venue model states a latency, which the exchange honours only
+            # through its queue: a command then waits in flight and lands at the first point
+            # after its delay, as it does on the research path, and `advance_past_latency`
+            # lands the flatten a node sends after its last point.
+            use_message_queue=venue.latency_model is not None,
         )
         self._client = BacktestExecClient(
             exchange=self.exchange,
@@ -311,6 +432,9 @@ class SimulatedVenue(LiveExecutionClient):
         )
         self.exchange.register_client(self._client)
         self.exchange.initialize_account()
+        latency = get_latency_model(venue)
+        self._latency_ns = 0 if latency is None else int(latency.base_latency_nanos)
+        self._last_ts = 0
 
     # --- the node's half of a client -----------------------------------------
 
@@ -354,31 +478,84 @@ class SimulatedVenue(LiveExecutionClient):
 
     def submit_order(self, command: Any) -> None:
         """Send the order to the exchange, which matches it in this call."""
-        self._client.submit_order(command)
+        self._send("submit_order", command)
 
     def submit_order_list(self, command: Any) -> None:
         """Send the list to the exchange, which matches each order in this call."""
-        self._client.submit_order_list(command)
+        self._send("submit_order_list", command)
 
     def modify_order(self, command: Any) -> None:
         """Amend a resting order on the exchange."""
-        self._client.modify_order(command)
+        self._send("modify_order", command)
+
+    def _send(self, method: str, command: Any) -> None:
+        """Hand the command to the exchange, stamped from the data clock under a latency.
+
+        The exchange times a command's flight from `command.ts_init`, which the node's
+        kernel stamps with wall time; under a latency it is re-stamped with the last point
+        this venue saw — the point the sleeve is reacting to, and what the research path's
+        engine clock reads when it sends the same command — so the command lands at the
+        first point on or after its delay, once that point has been matched, on both paths
+        alike. The client still reports the order submitted in this call, as the research
+        path's client does, so a cancel sent while it is in flight finds it. A command's
+        `ts_init` is read-only, so the re-stamp is a copy carrying the same order objects
+        and ids (`_restamped`).
+        """
+        if self._latency_ns > 0:
+            command = _restamped(command, self._last_ts)
+        getattr(self._client, method)(command)
 
     def cancel_order(self, command: Any) -> None:
         """Cancel a resting order on the exchange."""
-        self._client.cancel_order(command)
+        self._send("cancel_order", command)
 
     def cancel_all_orders(self, command: Any) -> None:
         """Cancel every resting order of one instrument on the exchange."""
-        self._client.cancel_all_orders(command)
+        self._send("cancel_all_orders", command)
+
+    def batch_cancel_orders(self, command: Any) -> None:
+        """Cancel a batch of orders of one instrument on the exchange.
+
+        The live client this venue subclasses would hand the batch to a coroutine that, in
+        nautilus_trader 1.231.0, raises `NotImplementedError` in its own task
+        (`live/execution_client.py`), after the strategy has already marked each order
+        `PENDING_CANCEL`: the orders would go on resting while they read as cancelled. The
+        `BacktestExecClient` this venue wraps takes the batch as it takes a single cancel,
+        which is what the research path's venue is given.
+        """
+        self._send("batch_cancel_orders", command)
 
     def on_data(self, data: Data) -> None:
-        """Move the market with this point, then advance the exchange to its instant."""
+        """Move the market with this point, then advance the exchange to its instant.
+
+        Under a latency the exchange is advanced to the *previous* point's instant first,
+        before this point moves the market: what came due by that point lands now, after
+        every sleeve has acted on it and before anything later is matched, which is the
+        order the backtest loop keeps — it matches a point, hands it to the strategies and
+        only then drains the exchange. The bus runs this venue before any sleeve and takes
+        no priority below a sleeve's, so the drain rides on the next point instead.
+        """
+        if self._latency_ns > 0 and self._last_ts:
+            self.exchange.process(self._last_ts)
         for kind, into in ROUTES:
             if isinstance(data, kind):
                 getattr(self.exchange, into)(data)
                 break
-        self.exchange.process(data.ts_init)
+        self._last_ts = data.ts_init
+        if self._latency_ns <= 0:
+            self.exchange.process(data.ts_init)
+
+    def advance_past_latency(self) -> None:
+        """Land every command still in flight after the last point, against that point's book.
+
+        Under a stated latency a command sent after the window's last point — a node's
+        flatten — would wait for a point that never comes; this advances the exchange to
+        the instant the delay has passed, so the command is matched where the research path
+        would have matched it had a point arrived then. Without a latency nothing is in
+        flight and nothing happens.
+        """
+        if self._latency_ns > 0:
+            self.exchange.process(self._last_ts + self._latency_ns)
 
 
 def attach(

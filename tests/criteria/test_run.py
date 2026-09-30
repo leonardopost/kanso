@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
 
-from kanso.criteria import CardRun
+from kanso.criteria import CardRun, FundingPayment
 from kanso.criteria.run import NS_PER_DAY, day_of, midnight_ns
 from kanso.errors import ValidationError
 from tests.criteria.builders import at, build_run, fill, trade
@@ -26,6 +27,18 @@ def test_a_run_reports_its_window_as_a_half_open_span() -> None:
 def test_a_fill_and_a_trade_report_their_notional() -> None:
     assert fill(date(2024, 1, 1), qty=-100.0, px=12.5).notional == 1250.0
     assert trade(date(2024, 1, 1), pnl=10.0, notional=5_000.0).notional == 5_000.0
+
+
+def test_a_notional_is_quantity_times_price_times_the_contract_multiplier() -> None:
+    """A future of 50 times the index: two contracts at 4,000 move 400,000, not 8,000."""
+    made = replace(fill(date(2024, 1, 1), qty=-2.0, px=4_000.0), multiplier=50.0)
+    assert made.notional == 2.0 * 4_000.0 * 50.0
+    opened = replace(trade(date(2024, 1, 1), pnl=10.0, notional=5_000.0), multiplier=50.0)
+    assert opened.notional == 5_000.0 * 50.0
+    assert (fill(date(2024, 1, 1)).multiplier, trade(date(2024, 1, 1), 1.0).multiplier) == (
+        1.0,
+        1.0,
+    )
 
 
 def test_a_run_refuses_series_of_different_lengths() -> None:
@@ -149,3 +162,21 @@ def test_a_fold_carries_only_the_book_series_inside_it() -> None:
     assert (first.carry, second.carry) == ((1.0, 2.0), (3.0, 4.0))
     assert (first.worst_ratio, second.worst_ratio) == ((None, 0.9), (0.8, None))
     assert build_run((0.0, 0.0)).folds(2)[0].cushion == ()
+
+
+def test_a_fold_carries_only_the_funding_settled_inside_it() -> None:
+    run = build_run((0.0, 0.0, 0.0, 0.0))
+    paid = tuple(
+        FundingPayment(ts_ns=at(day, 8), instrument_id="DEMO", qty=1.0, rate=0.0001, paid=0.01)
+        for day in (run.window[0], run.window[0] + timedelta(days=2))
+    )
+    funded = replace(run, funding=paid)
+
+    first, second = funded.folds(2)
+
+    assert (first.funding, second.funding) == ((paid[0],), (paid[1],))
+    assert run.funding == ()
+
+
+def test_a_trade_that_paid_no_funding_says_so() -> None:
+    assert trade(date(2024, 1, 1), 10.0).funding == 0.0

@@ -15,7 +15,9 @@ of a fill that pays commission (`kanso.nautilus.costs.fill_cost`). One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
-maker's.
+maker's. A perpetual's funding is booked here too, once, at each settlement, on what was held
+then (`_equity`) — never by the venue — and the runner configures the sleeve to book the same
+amount into the balance it sizes from (`books_funding`).
 
 **The window is a refusal, not a parameter.** A request may name only a window the
 hypothesis declares, and the card path — `run_subprocess` — accepts only the research
@@ -69,13 +71,18 @@ next data instant, so every fill is stamped at a data instant; `Position` carrie
 events applied to it, which together are the whole trade record; an `OrderFilled` carries
 the `liquidity_side` the matching engine gave its order — `MAKER` for a limit that rested
 on the book until the market reached it, `TAKER` for an order marketable when it arrived;
-with `use_random_ids` left off the exchange generates deterministic trade ids.
+with `use_random_ids` left off the exchange generates deterministic trade ids; the risk
+engine denies the hundred-and-first order submitted inside one second of its clock unless
+`RiskEngineConfig.max_order_submit_rate` says otherwise, and modifies the same way, and a
+denied order is closed — so the research path runs at the same rate as the node paths, one
+no replay reaches, or the two would size the next entry from different rooms.
 """
 
 from __future__ import annotations
 
 import bisect
 import contextlib
+import gc
 import hashlib
 import os
 import pickle
@@ -88,7 +95,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
@@ -99,7 +106,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
-from kanso.criteria import CardRun, Fill, Trade
+from kanso.criteria import CardRun, Fill, FundingPayment, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
@@ -107,6 +114,7 @@ from kanso.nautilus.costs import (
     carry,
     fill_cost,
     fixed_half_spread,
+    funding_payment,
     maintenance_ratio,
     month_turned,
     policy_of,
@@ -139,6 +147,9 @@ __all__ = [
     "warmup_prefix",
     "window_data",
 ]
+
+SUBMIT_RATE: Final = "1000000/00:00:01"
+"""An order rate no replay or backtest reaches, so no throttle binds on either path."""
 
 DEFAULT_PERIOD: Final = "1d"
 """The return period a request that names none is measured over."""
@@ -567,21 +578,37 @@ def window_data(
     request names one — and only the types the hypothesis requires, at the resolution it
     declares, or at every grain the request names when an overlay's differs from its
     host's. Each group is homogeneous because the engine assumes one type per `add_data`
-    call. The upper bound is the window's, prefix or not.
+    call. The upper bound is the window's, prefix or not. A card child is handed the same
+    points a session at a time (`_stage`), through the same reader.
     """
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
-    from kanso.data.types import BUILTIN_TYPES, resolve_type
 
     hyp = request.hyp
     catalog = ParquetDataCatalog(str(catalog_path))
     held = _held(catalog, hyp)
     opens, closes = request.delivered
-    start, end = opens, closes - 1
+    scope = _scope_days(catalog, hyp, opens, closes - 1)
+    groups, loaded = _window_points(request, catalog, held, scope, opens, closes - 1)
+    _refuse_missing_grain(request, loaded)
+    ordered = tuple(held[name] for name in sorted(hyp.universe))
+    return ordered, groups
+
+
+def _window_points(
+    request: RunRequest,
+    catalog: Any,
+    held: Mapping[str, Any],
+    scope: Scope | None,
+    start: int,
+    end: int,
+) -> tuple[tuple[tuple[object, ...], ...], dict[str, int]]:
+    """The points of one span, one type per group, and how many bars each grain served."""
+    from kanso.data.types import BUILTIN_TYPES, resolve_type
+
+    hyp = request.hyp
     groups: list[tuple[object, ...]] = []
     grains = _bar_grains(request)
     loaded: dict[str, int] = {grain: 0 for grain in grains}
-    scope = _scope_days(catalog, hyp, start, end)
     for requirement in sorted(hyp.data_requirements):
         if requirement not in BUILTIN_TYPES:
             custom = _custom_points(catalog, resolve_type(requirement), hyp.universe, start, end)
@@ -602,17 +629,20 @@ def window_data(
             found = _in_scope(found, name, scope)
             if found:
                 groups.append(found)
-    if len(grains) > 1:
+    return tuple(groups), loaded
+
+
+def _refuse_missing_grain(request: RunRequest, loaded: Mapping[str, int]) -> None:
+    """An overlay card needs its host's grain and its own; a window without both is refused."""
+    if len(loaded) > 1:
         missing = [grain for grain, count in loaded.items() if count == 0]
         if missing:
             raise PreconditionError(
-                f"data: the catalog holds no {' and no '.join(missing)} bars for {hyp.id} "
-                f"over {request.span[0]}..{request.span[1]}",
+                f"data: the catalog holds no {' and no '.join(missing)} bars for "
+                f"{request.hyp.id} over {request.span[0]}..{request.span[1]}",
                 remedy="load both the host grain and the overlay grain for the window, "
                 "then take a snapshot",
             )
-    ordered = tuple(held[name] for name in sorted(hyp.universe))
-    return ordered, tuple(groups)
 
 
 def _market_points(
@@ -624,14 +654,14 @@ def _market_points(
     module itself, so the runner loads exactly the grain the strategy will receive rather
     than every grain the catalog happens to hold for that instrument.
     """
-    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
-    from kanso.nautilus.strategy import BAR, QUOTE, _bar_type
+    from kanso.nautilus.strategy import BAR, BOOK, QUOTE, _bar_type
 
     if requirement == BAR:
         identifier = str(_bar_type(instrument.id, resolution))
         return tuple(catalog.query(Bar, identifiers=[identifier], start=start, end=end))
-    data_cls = QuoteTick if requirement == QUOTE else TradeTick
+    data_cls = {QUOTE: QuoteTick, BOOK: OrderBookDelta}.get(requirement, TradeTick)
     identifier = str(instrument.id)
     return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
 
@@ -741,21 +771,29 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     if any(construct == OVERLAY for construct, _, _ in request.modifiers):
         extra = grains[1:]
     scope = hyp.session_scope
-    config = cls.config_cls(
-        hyp_id=hyp.id,
-        universe=tuple(hyp.universe),
-        resolution=grains[0],
-        extra_resolutions=extra,
-        data_requirements=tuple(hyp.data_requirements),
-        session_scope=None if scope is None else (scope.series, scope.flag, tuple(scope.always)),
-        capital=request.capital,
-        sizing_budget=request.sleeve_budget,
-        max_position_pct=hyp.risk_limits.max_position_pct,
-        max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
-        max_leverage=hyp.risk_limits.max_leverage,
-        venue_model=dict(request.venue_model),
-        **dict(request.overrides),
-    )
+    try:
+        config = cls.config_cls(
+            hyp_id=hyp.id,
+            universe=tuple(hyp.universe),
+            resolution=grains[0],
+            extra_resolutions=extra,
+            data_requirements=tuple(hyp.data_requirements),
+            session_scope=None
+            if scope is None
+            else (scope.series, scope.flag, tuple(scope.always)),
+            capital=request.capital,
+            sizing_budget=request.sleeve_budget,
+            max_position_pct=hyp.risk_limits.max_position_pct,
+            max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
+            max_leverage=hyp.risk_limits.max_leverage,
+            venue_model=dict(request.venue_model),
+            # The venue a run fills against is simulated and settles no funding, so the
+            # sleeve's balance books it as this extraction does.
+            books_funding=True,
+            **dict(request.overrides),
+        )
+    except ValueError as exc:
+        raise ValidationError(f"strategy.py: {cls.config_cls.__name__}: {exc}") from None
     return cls, config
 
 
@@ -807,26 +845,58 @@ def execute(
 
     The data is checked against the requested window before anything is added, so a
     child handed points from another window refuses them rather than trading on them.
+    The whole window is one chunk; `execute_chunked` is the form a card child runs.
+    """
+    return execute_chunked(request, instruments, [groups])
+
+
+def execute_chunked(
+    request: RunRequest,
+    instruments: Sequence[object],
+    chunks: Iterable[Sequence[Sequence[object]]],
+) -> RunResult:
+    """Run the strategy over the window one chunk at a time, and extract the run once.
+
+    Each chunk is a slice of the delivered span in time order, grouped one type per
+    group, and holds every point of its instants: the engine is fed it, run in streaming
+    mode to its end, and cleared, so what a card holds at any moment is one chunk beside
+    the marks the extraction folds as the points pass (`Marks`). Every chunk is checked
+    as the whole window was: a point outside the window is refused, and so is a split the
+    window holds and no definition schedules. The cross-section markers are the chunk's
+    own, and the sleeve is armed for them chunk by chunk, which is the same dispatch the
+    whole window gets because a chunk boundary falls between instants, never inside one.
+
+    Engine facts this relies on (nautilus_trader 1.231.0): `run(streaming=True)` pauses
+    after the data it holds is exhausted without finalising; `clear_data` drops the stream
+    and keeps the instruments; `end` finalises once every chunk has run.
     """
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
+        get_book_type,
         get_fill_model,
+        get_latency_model,
         get_oms_type,
         get_starting_balances,
     )
-    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
     from nautilus_trader.model.identifiers import Venue
 
     from kanso.nautilus.actions import modules
+    from kanso.nautilus.cross_section import is_marker, warm
 
-    stream = checked(request, instruments, groups)
+    model = VenueModel.model_validate(dict(request.venue_model))
+    marks = Marks(request, model)
     _seed_globals(request.snapshot_id)
     started = time.perf_counter()
     engine = BacktestEngine(
         config=BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
+            risk_engine=RiskEngineConfig(
+                max_order_submit_rate=SUBMIT_RATE,
+                max_order_modify_rate=SUBMIT_RATE,
+            ),
             run_analysis=False,
         )
     )
@@ -842,33 +912,52 @@ def execute(
                 # than the binary float that happens to be nearest to it.
                 default_leverage=Decimal(str(venue.default_leverage)),
                 bar_execution=venue.bar_execution,
+                # A level-two book with queue position when the hypothesis holds one; see
+                # `kanso.nautilus.venue`.
+                book_type=get_book_type(venue),
+                trade_execution=venue.trade_execution,
+                queue_position=venue.queue_position,
                 # Whether a resting limit the market only touched fills: the venue model's
                 # `limit_fill`, built from the configuration the node's venue is built from.
                 fill_model=get_fill_model(venue),
+                # How long the venue takes to see an order: the venue model's `latency_ms`,
+                # none when it states none.
+                latency_model=get_latency_model(venue),
                 # The venue applies a corporate action one call before it matches the point
                 # that carried the market past it; see `kanso.nautilus.actions`.
                 modules=modules(venue.name),
             )
         for instrument in instruments:
             engine.add_instrument(instrument)
-        points = _ordered(groups)
-        _load_stream(engine, points)
         cls, config = _sleeve(request)
         strategy = cls(config=config)
         for construct, source, params in request.modifiers:
             engine.add_actor(
                 _modifier(construct, source, params, request.hyp.id, cls.__name__),
             )
-        from kanso.nautilus.cross_section import arm, warm
-
-        arm(strategy, points)
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
         booked(strategy, request)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
-        engine.run(start=opens, end=closes - 1)
-        card = _extract(request, engine, stream, groups)
+        ran = False
+        for groups in chunks:
+            splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
+            points = _ordered(groups)
+            marks.take(points)
+            if not points:
+                continue
+            strategy._hold_until_cross_section = any(is_marker(point) for point in points)
+            _load_stream(engine, points)
+            engine.run(start=opens, end=closes - 1, streaming=True)
+            ran = True
+            marks.price(_fill_events(_positions(engine.cache))[0])
+            marks.next_chunk()
+            engine.clear_data()
+        marks.check()
+        if ran:
+            engine.end()
+        card = _extract(request, engine, marks)
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
@@ -917,11 +1006,231 @@ the last two are the adverse range the point spans — a bar's low and high, a q
 ask, a trade's own price twice — or nothing, for a point that prices nothing."""
 
 
+class _Fold:
+    """What one return period folds the points inside it into."""
+
+    __slots__ = ("end", "highs", "lows", "marks")
+
+    def __init__(self) -> None:
+        self.end = 0
+        self.marks: dict[str, tuple[int, float]] = {}
+        self.lows: dict[str, float] = {}
+        self.highs: dict[str, float] = {}
+
+    def mark(self, key: str, ts: int, price: float) -> None:
+        """The last price printed for a name; at one instant, the greatest — which is what
+        the sorted stream this replaces left last, so a mark is the same whatever order the
+        points of an instant arrive in."""
+        held = self.marks.get(key)
+        if held is None or ts > held[0] or (ts == held[0] and price > held[1]):
+            self.marks[key] = (ts, price)
+
+
+class Marks:
+    """The extraction's reading of the points, folded as they pass.
+
+    This is both the clock the return periods are cut on — a period exists when it holds
+    at least one data event, and ends at the last one it holds — and the marks the equity
+    curve is struck at: each period's last price per name and the adverse range printed
+    inside it, and each name's quoted half-spread for the fills that follow. Everything is
+    folded point by point, so a run may be fed its window in chunks and hold no chunk
+    beyond the marks it leaves; a whole window fed at once folds to the same values,
+    because nothing here depends on the order the points arrive in.
+
+    A point is admitted over the delivered span — the warmup prefix the request names and
+    the window — and refused outside it. Points before the window's open leave marks and
+    nothing else: no period ends inside the prefix, and no range is taken from it, so a
+    name that last printed in the prefix is marked at that print in the first period
+    rather than at nothing. Whether the window held anything at all is asked by `check`.
+
+    The quoted spreads are kept per chunk: `price` charges every fill not yet priced with
+    the last quote at or before it, from this chunk's quotes or the last quote the previous
+    chunk left, and `next_chunk` lets the chunk's series go.
+
+    A funding point is a settlement (`settlements`): its instant, its instrument, its rate,
+    and the mark its payment is struck at — the instrument's last print at or before the
+    instant, the greatest of several at one instant, exactly as a period's mark is chosen.
+    A print is credited to the first settlement of its name at or after it, and the mark of
+    each settlement is the latest credited at or before it, so nothing beyond one print per
+    settlement is held. That needs the settlements a print belongs to known before the
+    print arrives, which is what `take` arranges: a chunk's settlements are folded before
+    its prints, and a chunk is a slice of time, so a print a later chunk's settlement
+    reaches back to is one print per name, carried. It also needs each name's settlements
+    folded in time order — a later one folded first would take the carried print from an
+    earlier one — which both callers give it: the catalog serves a name's funding as one
+    time-sorted series, and chunks are cut in time. A settlement of a name that has not
+    printed by then is marked at nothing, and nothing can be held at it, since a fill
+    needs a price.
+    """
+
+    def __init__(self, request: RunRequest, model: VenueModel) -> None:
+        self.opens, self.closes = request.delivered
+        self.measured, _ = request.bounds
+        self.period_ns = request.period_ns
+        self.span = request.span
+        self.window = request.window
+        self.hyp_id = request.hyp.id
+        self.quotes = model.costs.spread == "quotes"
+        self.fixed_half = fixed_half_spread(model.costs.fixed_bps)
+        self.prefix = _Fold()
+        self._folds: dict[int, _Fold] = {}
+        self._series: dict[str, list[tuple[int, float]]] = {}
+        self._last_quote: dict[str, tuple[int, float]] = {}
+        self._halves: dict[str, float] = {}
+        self._settled: list[tuple[int, str, float]] = []
+        self._instants: dict[str, list[int]] = {}
+        self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
+
+    def take(self, points: Iterable[object]) -> None:
+        """Fold a chunk of points, its funding settlements first (see the class)."""
+        held = tuple(points)
+        for point in held:
+            if _funding_of(point) is not None:
+                self.feed(point)
+        for point in held:
+            if _funding_of(point) is None:
+                self.feed(point)
+
+    def feed(self, point: object) -> None:
+        """Fold one point: its instant, its mark, its range and, for a quote, its spread."""
+        from nautilus_trader.model.data import QuoteTick
+
+        from kanso.nautilus.cross_section import is_marker
+
+        if is_marker(point):
+            return
+        ts = int(point.ts_init)  # type: ignore[attr-defined]
+        if not self.opens <= ts < self.closes:
+            raise PreconditionError(
+                f"data: a {type(point).__name__} published at {ts} lies outside the "
+                f"requested window {self.span[0]}..{self.span[1]}",
+                remedy="load the window the run asked for and nothing else",
+            )
+        low, high = _range_of(point)
+        key = _instrument_of(point) or ""
+        self.fold(ts, key, _price_of(point), low, high)
+        funding = _funding_of(point)
+        if funding is not None:
+            self.settle(ts, key, float(funding.rate))
+        if self.quotes and isinstance(point, QuoteTick):
+            half = quote_half_spread(float(point.bid_price), float(point.ask_price))
+            self._series.setdefault(str(point.instrument_id), []).append((ts, half))
+
+    def fold(
+        self, ts: int, key: str, price: float | None, low: float | None, high: float | None
+    ) -> None:
+        """Fold one mark, as `(ts_init, instrument, price, low, high)`."""
+        if ts < self.measured:
+            target = self.prefix
+        else:
+            target = self._folds.setdefault((ts - self.measured) // self.period_ns, _Fold())
+            target.end = max(target.end, ts)
+            if low is not None and high is not None:
+                target.lows[key] = min(target.lows.get(key, low), low)
+                target.highs[key] = max(target.highs.get(key, high), high)
+        if price is not None:
+            target.mark(key, ts, price)
+            self._credit(key, ts, price)
+
+    def settle(self, ts: int, key: str, rate: float) -> None:
+        """Record one funding settlement: `rate` on what `key` holds at `ts`."""
+        self._settled.append((ts, key, rate))
+        instants = self._instants.setdefault(key, [])
+        if ts not in instants:
+            bisect.insort(instants, ts)
+        carried = self._credited.pop((key, None), None)
+        if carried is not None:
+            self._credit(key, *carried)
+
+    def _credit(self, key: str, ts: int, price: float) -> None:
+        """Credit a print to the first settlement of its name at or after it, or carry it."""
+        instants = self._instants.get(key, ())
+        index = bisect.bisect_left(instants, ts)
+        slot = (key, instants[index] if index < len(instants) else None)
+        held = self._credited.get(slot)
+        if held is None or ts > held[0] or (ts == held[0] and price > held[1]):
+            self._credited[slot] = (ts, price)
+
+    def settlements(self) -> tuple[tuple[int, str, float, float], ...]:
+        """Every funding settlement folded, as `(ts, instrument, rate, mark)` in time order;
+        the mark is nothing for a name that has not printed by then."""
+        marked: dict[tuple[str, int], float] = {}
+        for key, instants in self._instants.items():
+            last: tuple[int, float] | None = None
+            for instant in instants:
+                last = self._credited.get((key, instant), last)
+                marked[(key, instant)] = 0.0 if last is None else last[1]
+        return tuple(sorted((ts, key, rate, marked[(key, ts)]) for ts, key, rate in self._settled))
+
+    def check(self) -> None:
+        """The refusal for a window the catalog holds nothing for; a prefix alone is no run."""
+        if not self._folds:
+            raise PreconditionError(
+                f"data: the catalog holds nothing for {self.hyp_id} over "
+                f"{self.window[0]}..{self.window[1]}",
+                remedy="run `kanso data load` for the window, then take a snapshot",
+            )
+
+    def periods(self) -> tuple[_Fold, ...]:
+        """Every return period that held a point, in order."""
+        return tuple(self._folds[index] for index in sorted(self._folds))
+
+    def price(self, events: Sequence[Any]) -> None:
+        """Charge every fill not yet priced its quoted half-spread: the last quote published
+        for its name at or before it, in this chunk or carried from the last one; a fill
+        before any quote bears none."""
+        if not self.quotes:
+            return
+        sorted_series: dict[str, tuple[list[int], list[float]]] = {}
+        for event in events:
+            key = str(event.id)
+            if key in self._halves:
+                continue
+            name = str(event.instrument_id)
+            if name not in sorted_series:
+                ordered = sorted(self._series.get(name, ()))
+                sorted_series[name] = ([ts for ts, _ in ordered], [v for _, v in ordered])
+            times, values = sorted_series[name]
+            index = bisect.bisect_right(times, int(event.ts_event))
+            if index > 0:
+                self._halves[key] = values[index - 1]
+            else:
+                carried = self._last_quote.get(name)
+                self._halves[key] = (
+                    carried[1] if carried is not None and carried[0] <= int(event.ts_event) else 0.0
+                )
+
+    def half(self, event: Any) -> float:
+        """The fraction of notional one side of the spread costs this fill: the stated
+        width's half, or the quoted half `price` charged it."""
+        if not self.quotes:
+            return self.fixed_half
+        return self._halves.get(str(event.id), 0.0)
+
+    def next_chunk(self) -> None:
+        """Let this chunk's quotes go, keeping each name's last for the fills that follow."""
+        for name, series in self._series.items():
+            if series:
+                ts, half = max(series)
+                held = self._last_quote.get(name)
+                if held is None or ts >= held[0]:
+                    self._last_quote[name] = (ts, half)
+        self._series.clear()
+
+
+def folded(request: RunRequest, stream: Sequence[Point]) -> Marks:
+    """The marks a plain stream of `(ts_init, instrument, price, low, high)` folds to."""
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    for ts, key, price, low, high in stream:
+        marks.fold(ts, key, price, low, high)
+    return marks
+
+
 def checked(
     request: RunRequest,
     instruments: Sequence[object],
     groups: Sequence[Sequence[object]],
-) -> tuple[Point, ...]:
+) -> Marks:
     """Everything a run refuses before it builds an engine, and then its clock.
 
     Two refusals, both about data the run was handed rather than about the strategy. A
@@ -931,61 +1240,20 @@ def checked(
     through the corporate action and report it as return, so it is refused with the entry
     the operator has to write.
 
-    Every path that extracts a run calls this — `execute` here, `session.run_node` and
-    `node._realised` — because a refusal one path makes and another does not is a
-    divergence waiting to happen. `run_subprocess` makes the split half of it once more in
-    the parent, before the child exists, so a card refuses with a message an operator can
-    read instead of crashing with one only the run records. The split check runs over the
-    whole delivered span: a split inside the warmup prefix adjusts no position, but the
-    venue restates the book at it, and an undeclared one would leave the harness's prices
-    wrong without a refusal.
+    Every path that extracts a run calls this — `execute` here, chunk by chunk, and
+    `session.run_node` and `node._realised` over their whole window — because a refusal
+    one path makes and another does not is a divergence waiting to happen. `run_subprocess`
+    makes the split half of it once more in the parent, before the child exists, so a card
+    refuses with a message an operator can read instead of crashing with one only the run
+    records. The split check runs over the whole delivered span: a split inside the warmup
+    prefix adjusts no position, but the venue restates the book at it, and an undeclared
+    one would leave the harness's prices wrong without a refusal.
     """
     splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
-    return _stream(request, groups)
-
-
-def _stream(request: RunRequest, groups: Sequence[Sequence[object]]) -> tuple[Point, ...]:
-    """Every point as `(ts_init, instrument, price, low, high)`, in the order the engine
-    sees them.
-
-    This is both the clock the return periods are cut on — a period exists when it holds
-    at least one data event — and the source of the marks the equity curve is struck at.
-    Ties are broken by instrument and then by price, so two points at one instant always
-    order the same way and the mark they leave is reproducible. The range a point spans
-    rides beside its mark for the maintenance ratio: what a period's holdings were worth
-    at the period's worst prices.
-
-    A point is admitted over the delivered span — the warmup prefix the request names and
-    the window — and refused outside it; the upper bound is the window's own, prefix or
-    not. The refusal for an empty run is made on the window alone: a prefix with nothing
-    measured after it is not a run.
-    """
-    from kanso.nautilus.cross_section import is_marker
-
-    opens, closes = request.delivered
-    measured, _ = request.bounds
-    stream: list[Point] = []
-    for group in groups:
-        for point in group:
-            if is_marker(point):
-                continue
-            ts = int(point.ts_init)  # type: ignore[attr-defined]
-            if not opens <= ts < closes:
-                raise PreconditionError(
-                    f"data: a {type(point).__name__} published at {ts} lies outside the "
-                    f"requested window {request.span[0]}..{request.span[1]}",
-                    remedy="load the window the run asked for and nothing else",
-                )
-            low, high = _range_of(point)
-            stream.append((ts, _instrument_of(point) or "", _price_of(point), low, high))
-    stream.sort(key=lambda item: (item[0], item[1], -1e308 if item[2] is None else item[2]))
-    if not any(ts >= measured for ts, *_ in stream):
-        raise PreconditionError(
-            f"data: the catalog holds nothing for {request.hyp.id} over "
-            f"{request.window[0]}..{request.window[1]}",
-            remedy="run `kanso data load` for the window, then take a snapshot",
-        )
-    return tuple(stream)
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    marks.take(chain.from_iterable(groups))
+    marks.check()
+    return marks
 
 
 def _price_of(point: object) -> float | None:
@@ -999,6 +1267,14 @@ def _price_of(point: object) -> float | None:
     if isinstance(point, TradeTick):
         return float(point.price)
     return None
+
+
+def _funding_of(point: object) -> Any:
+    """The funding settlement a point is, the catalog's wrapper taken off, or `None`."""
+    from kanso.data.types import Funding
+
+    inner = getattr(point, "data", point)
+    return inner if isinstance(inner, Funding) else None
 
 
 def _range_of(point: object) -> tuple[float | None, float | None]:
@@ -1056,7 +1332,9 @@ def _add_run(
 ) -> None:
     """One homogeneous `add_data` call, unsorted."""
     first = run[0]
-    plain = type(first) in (bar_cls, quote_cls, trade_cls)
+    from nautilus_trader.model.data import OrderBookDelta
+
+    plain = type(first) in (bar_cls, quote_cls, trade_cls, OrderBookDelta)
     engine.add_data(
         list(run),
         client_id=None if plain else client_id_cls(CLIENT_ID),
@@ -1067,12 +1345,7 @@ def _add_run(
 # --- the extraction ----------------------------------------------------------
 
 
-def _extract(
-    request: RunRequest,
-    engine: Any,
-    stream: Sequence[Point],
-    groups: Sequence[Sequence[object]],
-) -> CardRun:
+def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
     """The one measured object: returns, equity, trades and fills with costs applied, and
     the book policy applied once at each period end."""
     model = VenueModel.model_validate(dict(request.venue_model))
@@ -1080,18 +1353,18 @@ def _extract(
     multipliers = {
         str(instrument.id): float(instrument.multiplier) for instrument in cache.instruments()
     }
-    spreads = _spreads(groups, model)
     positions = _positions(cache)
     events, owners = _fill_events(positions)
-    fills = tuple(_fill(event, multipliers, spreads, model) for event in events)
+    marks.price(events)
+    fills = tuple(_fill(event, multipliers, marks.half(event), model) for event in events)
     by_position: dict[int, list[Fill]] = {}
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
     schedules = {
         str(instrument.id): splits.schedule_of(instrument) for instrument in cache.instruments()
     }
-    trades = _trades(positions, by_position, multipliers, schedules)
-    curve = _equity(request, stream, fills, multipliers, _adjusted(positions))
+    curve = _equity(request, marks, fills, multipliers, _adjusted(positions))
+    trades = _trades(positions, by_position, multipliers, schedules, curve.funding)
     return CardRun(
         window=request.window,
         period=request.period,
@@ -1107,6 +1380,7 @@ def _extract(
         cushion=curve.cushion,
         carry=curve.carry,
         worst_ratio=curve.worst_ratio,
+        funding=curve.funding,
     )
 
 
@@ -1125,54 +1399,7 @@ class _Curve:
     cushion: tuple[float, ...] = ()
     carry: tuple[float, ...] = ()
     worst_ratio: tuple[float | None, ...] = ()
-
-
-def _spreads(
-    groups: Sequence[Sequence[object]],
-    model: VenueModel,
-) -> dict[str, tuple[tuple[int, ...], tuple[float, ...]]]:
-    """Each instrument's observed half-spread as a fraction of mid, by publication time.
-
-    Only built when the cost model takes its spread from quotes; a fixed spread is a
-    constant and needs no series. The half is what one side of a round trip pays.
-    """
-    if model.costs.spread != "quotes":
-        return {}
-    from nautilus_trader.model.data import QuoteTick
-
-    seen: dict[str, list[tuple[int, float]]] = {}
-    for group in groups:
-        for point in group:
-            if not isinstance(point, QuoteTick):
-                continue
-            bid, ask = float(point.bid_price), float(point.ask_price)
-            fraction = quote_half_spread(bid, ask)
-            seen.setdefault(str(point.instrument_id), []).append((int(point.ts_init), fraction))
-    return {
-        key: (tuple(ts for ts, _ in ordered), tuple(v for _, v in ordered))
-        for key, values in sorted(seen.items())
-        if (ordered := sorted(values))
-    }
-
-
-def _half_spread(
-    instrument_id: str,
-    ts_ns: int,
-    spreads: Mapping[str, tuple[tuple[int, ...], tuple[float, ...]]],
-    model: VenueModel,
-) -> float:
-    """The fraction of notional one side of the spread costs at this instant.
-
-    A fixed spread is a stated width and half of it is charged each way. A quoted spread
-    is the last one published for that instrument before the fill; where no quote has
-    been published yet, or none exists for the instrument at all, there is no observed
-    spread to charge and the fill bears none.
-    """
-    if model.costs.spread != "quotes":
-        return fixed_half_spread(model.costs.fixed_bps)
-    times, values = spreads.get(instrument_id, ((), ()))
-    index = bisect.bisect_right(times, ts_ns)
-    return 0.0 if index == 0 else values[index - 1]
+    funding: tuple[FundingPayment, ...] = ()
 
 
 def _positions(cache: Any) -> tuple[Any, ...]:
@@ -1219,23 +1446,25 @@ def _fill_events(positions: Sequence[Any]) -> tuple[tuple[Any, ...], tuple[int, 
 def _fill(
     event: Any,
     multipliers: Mapping[str, float],
-    spreads: Mapping[str, tuple[tuple[int, ...], tuple[float, ...]]],
+    half: float,
     model: VenueModel,
 ) -> Fill:
     """One execution, with the cost this venue model charges it, applied once.
 
     A fill the venue reports as a maker's pays the model's `maker_bps` when it states one;
     every other fill pays commission, slippage and half the spread, and the per-share
-    commission on each share when the model states one (`costs.fill_cost`).
+    commission on each share when the model states one; a sale pays the sell-side fees the
+    model states on top, maker or taker (`costs.fill_cost`).
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
     instrument_id = str(event.instrument_id)
     qty = float(event.last_qty)
     px = float(event.last_px)
-    notional = qty * px * multipliers.get(instrument_id, 1.0)
-    half = _half_spread(instrument_id, int(event.ts_event), spreads, model)
+    multiplier = multipliers.get(instrument_id, 1.0)
+    notional = qty * px * multiplier
     maker = event.liquidity_side == LiquiditySide.MAKER
+    side = order_side_to_str(event.order_side)
     costs = model.costs
     cost = fill_cost(
         notional,
@@ -1246,15 +1475,19 @@ def _fill(
         costs.maker_bps,
         costs.commission_per_share,
         maker=maker,
+        sell=side == "SELL",
+        sell_fee_bps=costs.sell_fee_bps,
+        sell_fee_per_share=costs.sell_fee_per_share,
     )
     return Fill(
         ts_ns=int(event.ts_event),
         instrument_id=instrument_id,
-        side=order_side_to_str(event.order_side),
+        side=side,
         qty=qty,
         px=px,
         cost=cost,
         maker=maker,
+        multiplier=multiplier,
     )
 
 
@@ -1263,8 +1496,10 @@ def _trades(
     by_position: Mapping[int, Sequence[Fill]],
     multipliers: Mapping[str, float],
     schedules: Mapping[str, Sequence[splits.Split]] | None = None,
+    funding: Sequence[FundingPayment] = (),
 ) -> tuple[Trade, ...]:
-    """Closed positions as trades, netted of the costs of the fills that made them.
+    """Closed positions as trades, netted of the costs of the fills that made them and of
+    the funding they paid.
 
     A position still open when the window closes is not a trade: its profit is in the
     equity curve as an unrealised mark, and it becomes a trade only when it closes.
@@ -1281,7 +1516,22 @@ def _trades(
     What a split paid out in lieu is in the profit, realised at the split. A position the
     payout left flat closed there, and the engine dated no close, so it is dated by the
     adjustment that closed it.
+
+    The trade carries the instrument's multiplier, as its fills do, so its opening value is
+    in the currency its profit is.
+
+    A funding payment belongs to the trade of its instrument held at its settlement:
+    opened before the instant and closed at or after it. Under netting one position of a
+    name is open at a time, and a fill at the instant is not held there (`_equity`) — so a
+    position opened at a settlement pays nothing there, and one closed at it still pays.
+    `cost` stays the fills' cost alone, so a cost model re-applied to the fills leaves the
+    funding where it was booked.
     """
+    paid_at: dict[str, tuple[list[int], list[float]]] = {}
+    for payment in funding:
+        times, amounts = paid_at.setdefault(payment.instrument_id, ([], []))
+        times.append(payment.ts_ns)
+        amounts.append(payment.paid)
     trades: list[Trade] = []
     for index, position in enumerate(positions):
         if not position.is_closed:
@@ -1290,22 +1540,30 @@ def _trades(
         cost = fsum(fill.cost for fill in fills)
         name = str(position.instrument_id)
         schedule = () if schedules is None else schedules.get(name, ())
-        book = splits.ledger(splits.moves_of(position, schedule), multipliers.get(name, 1.0))
+        multiplier = multipliers.get(name, 1.0)
+        book = splits.ledger(splits.moves_of(position, schedule), multiplier)
         opened = min(fills, key=lambda fill: fill.ts_ns) if fills else None
         closed = int(position.ts_closed) or max(
             (int(event.ts_event) for event in position.adjustments), default=0
         )
+        times, amounts = paid_at.get(name, ([], []))
+        opened_ns = int(position.ts_opened)
+        paid = fsum(
+            amounts[bisect.bisect_right(times, opened_ns) : bisect.bisect_right(times, closed)]
+        )
         trades.append(
             Trade(
-                opened_ns=int(position.ts_opened),
+                opened_ns=opened_ns,
                 closed_ns=closed,
                 instrument_id=name,
                 qty=book.peak if opened is None or opened.side == "BUY" else -book.peak,
                 avg_open=book.avg_open,
                 avg_close=book.avg_close,
-                pnl_net=book.realized - cost,
+                pnl_net=book.realized - cost - paid,
                 cost=cost,
                 fills=fills,
+                multiplier=multiplier,
+                funding=paid,
             )
         )
     return tuple(trades)
@@ -1341,7 +1599,7 @@ def _adjusted(positions: Sequence[Any]) -> tuple[tuple[int, str, float, float], 
 
 def _equity(
     request: RunRequest,
-    stream: Sequence[Point],
+    marks: Marks,
     fills: Sequence[Fill],
     multipliers: Mapping[str, float],
     adjustments: Sequence[tuple[int, str, float, float]] = (),
@@ -1362,6 +1620,25 @@ def _equity(
     measured on a one-for-ten reverse split, 190,450 against a true 99,950. What the split
     paid in lieu of the fraction it left goes into cash at the same instant, so across a
     split the curve moves only with the price.
+
+    **A perpetual's funding is booked here, once, at its settlement instant**
+    (`kanso.nautilus.costs.funding_payment`): the realised rate on the signed quantity held
+    then, marked at the instrument's last print at or before the instant — of several at
+    that instant, the greatest, as a period's mark is chosen — and times its multiplier,
+    taken out of cash. What is held at the instant is every fill stamped before it, and no
+    fill stamped at it — deliberately not the `<=` rule that books a period's fills up to
+    and including its end. The realised rate is public at the settlement: the sleeve is
+    handed it there, and the engine stamps the fill of an order sent in answer at that same
+    instant, so under `<=` a position opened because the rate was known would collect it
+    and one closed because of it would escape it. Which point of an instant an order
+    answered is recorded nowhere either path can read — a stage node stamps an order by its
+    live clock, not by the data — so no fill of the instant is held, a resting order placed
+    earlier that fills there included: what a settlement sees was decided before its rate
+    was public. A split adjustment at the instant is booked after the settlement for the
+    same reason. The payment is inside the return and the equity of the period holding the
+    instant, and each one is recorded (`CardRun.funding`) with what was held; a settlement
+    at which nothing was held pays and records nothing. A settlement in the warmup prefix is
+    not booked, since nothing is held before the open.
 
     A stream may begin before the window with the warmup prefix. No period ends inside it
     — the first period is the window's first — but its points are consumed for the marks,
@@ -1388,22 +1665,17 @@ def _equity(
     """
     opens, _ = request.bounds
     policy = policy_of(request.hyp.book)
-    period_ns = request.period_ns
     early = [fill for fill in fills if fill.ts_ns < opens]
     if early:
         raise ValidationError(
             f"fills: a fill at {early[0].ts_ns} precedes the window opening {opens}; the "
             "harness drops every order over the warmup prefix, so nothing may fill before it"
         )
-    last_in: dict[int, int] = {}
-    for ts, *_ in stream:
-        if ts < opens:
-            continue
-        last_in[(ts - opens) // period_ns] = ts
-    ends = tuple(last_in[index] for index in sorted(last_in))
-    marks: dict[str, float] = {}
-    lows: dict[str, float] = {}
-    highs: dict[str, float] = {}
+    periods = marks.periods()
+    settlements = tuple(item for item in marks.settlements() if item[0] >= opens)
+    paid: list[FundingPayment] = []
+    ends = tuple(fold.end for fold in periods)
+    marked_at: dict[str, float] = {key: price for key, (_, price) in marks.prefix.marks.items()}
     held: dict[str, float] = {}
     cash = request.capital
     cushion = request.cushion
@@ -1416,35 +1688,28 @@ def _equity(
     previous_end = request.settled_ns
     previous_equity = request.capital
     carried_from = request.carried_from_ns
-    point = 0
     fill = 0
     split = 0
-    for end in ends:
-        while point < len(stream) and stream[point][0] <= end:
-            ts, key, price, low, high = stream[point]
-            if price is not None:
-                marks[key] = price
-            if ts >= opens and low is not None and high is not None:
-                lows[key] = min(lows.get(key, low), low)
-                highs[key] = max(highs.get(key, high), high)
-            point += 1
-        while fill < len(fills) and fills[fill].ts_ns <= end:
-            made = fills[fill]
-            signed = made.qty if made.side == "BUY" else -made.qty
-            multiplier = multipliers.get(made.instrument_id, 1.0)
-            cash -= signed * made.px * multiplier + made.cost
-            held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
-            fill += 1
-        while split < len(adjustments) and adjustments[split][0] <= end:
-            _ts, key, change, paid = adjustments[split]
-            held[key] = held.get(key, 0.0) + change
-            cash += paid
-            split += 1
+    settled = 0
+    for fold in periods:
+        end = fold.end
+        marked_at.update({key: price for key, (_, price) in fold.marks.items()})
+        lows, highs = fold.lows, fold.highs
+        while settled < len(settlements) and settlements[settled][0] <= end:
+            ts, key, rate, mark = settlements[settled]
+            cash, fill, split = _booked_to(ts - 1, fills, adjustments, held, cash, fill, split)
+            qty = held.get(key, 0.0)
+            if qty:
+                payment = funding_payment(qty, mark, multipliers.get(key, 1.0), rate)
+                cash -= payment
+                paid.append(FundingPayment(ts, key, qty, rate, payment))
+            settled += 1
+        cash, fill, split = _booked_to(end, fills, adjustments, held, cash, fill, split)
         marked: list[float] = []
         adverse: list[float] = []
         for key in sorted(held):
             qty = held[key]
-            mark = marks.get(key, 0.0)
+            mark = marked_at.get(key, 0.0)
             multiplier = multipliers.get(key, 1.0)
             worth = qty * mark * multiplier
             marked.append(worth)
@@ -1477,8 +1742,6 @@ def _equity(
         equity.append(value)
         previous_equity = value
         previous_end = end
-        lows.clear()
-        highs.clear()
     return _Curve(
         ends=ends,
         returns=tuple(returns),
@@ -1487,7 +1750,33 @@ def _equity(
         cushion=tuple(cushions),
         carry=tuple(carries),
         worst_ratio=tuple(worsts),
+        funding=tuple(paid),
     )
+
+
+def _booked_to(
+    until: int,
+    fills: Sequence[Fill],
+    adjustments: Sequence[tuple[int, str, float, float]],
+    held: dict[str, float],
+    cash: float,
+    fill: int,
+    split: int,
+) -> tuple[float, int, int]:
+    """Book every fill and every split adjustment stamped at or before `until` into `held`
+    and cash, from the two cursors given; the cash and the cursors after them."""
+    while fill < len(fills) and fills[fill].ts_ns <= until:
+        made = fills[fill]
+        signed = made.qty if made.side == "BUY" else -made.qty
+        cash -= signed * made.px * made.multiplier + made.cost
+        held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
+        fill += 1
+    while split < len(adjustments) and adjustments[split][0] <= until:
+        _ts, key, change, paid = adjustments[split]
+        held[key] = held.get(key, 0.0) + change
+        cash += paid
+        split += 1
+    return cash, fill, split
 
 
 # --- the two entry points ----------------------------------------------------
@@ -1524,12 +1813,14 @@ def run_subprocess(
     the environment: the child is handed where an extension lives, never the catalog, and
     still inherits no credential.
 
-    The payload is written to `<workdir>/.card/`, the lane's own transfer directory, as two
-    pickles in sequence on one file — the extensions, then the request and its points — so
-    the points are streamed to disk once rather than held a second time as bytes. The
-    directory is emptied before the card and removed after it, so a lane killed mid-card
-    leaves at most one payload behind, and its next card reclaims it: a payload is the whole
-    window's points, hundreds of megabytes for a window of minute bars.
+    The payload is written to `<workdir>/.card/`, the lane's own transfer directory, as
+    pickles in sequence on one file — the extensions, the request and its instruments, then
+    one session's points at a time as the parent reads them — so no process holds more than
+    a session of the window: the parent lets each session go once it is on disk, and the
+    child takes them one at a time. The directory is emptied before the card and removed
+    after it, so a lane killed mid-card leaves at most one payload behind, and its next
+    card reclaims it: a payload is the whole window's points on disk, hundreds of megabytes
+    for a window of minute bars and gigabytes for one of ticks.
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -1541,26 +1832,77 @@ def run_subprocess(
             f"{request.hyp.windows.research.end}",
         )
     _refuse_if_interrupted()
-    instruments, groups = window_data(request, catalog_path)
-    # In the parent, where a refusal is a refusal: the child is a card, and an exception
-    # inside one is a crash the run records rather than a message the operator reads.
-    splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
     room = _card_room(workdir)
     try:
-        with (room / REQUEST_FILE).open("wb") as handle:
-            pickle.dump(
-                {"extensions": [list(source) for source in extensions]},
-                handle,
-                protocol=pickle.HIGHEST_PROTOCOL,
-            )
-            pickle.dump(
-                {"request": request.plain(), "instruments": instruments, "groups": groups},
-                handle,
-                protocol=pickle.HIGHEST_PROTOCOL,
-            )
+        _stage(request, catalog_path, room, extensions)
+        gc.collect()
         return _supervised(request, room, workdir)
     finally:
         shutil.rmtree(room, ignore_errors=True)
+
+
+def _stage(
+    request: RunRequest, catalog_path: Path, room: Path, extensions: Sequence[tuple[str, str]]
+) -> None:
+    """Read the window a session at a time and write each session's points as they are read.
+
+    Returns nothing on purpose. The points are the parent's largest allocation by a wide
+    margin — a year of five-second bars is gigabytes, and a month of one name's quote
+    changes and prints is ten — and the child holds them for the whole card, so neither
+    process ever holds more than a session of them: the parent reads one calendar day of
+    the delivered span, checks it, pickles it and lets it go, and the child unpickles them
+    one at a time (`main`, `execute_chunked`). Measured before this: a lane held 1.4 GB of
+    an eighteen-month five-second window beside a 2.7 GB card, six such lanes put a 16 GB
+    machine into swap, and a half-month of ticks did the same beside three.
+
+    The refusals a whole-window read made are made here, in the parent, where a refusal is
+    a refusal rather than a crash the run records: a split no definition schedules, an
+    overlay grain the catalog does not hold, and a window it holds nothing for.
+    """
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    hyp = request.hyp
+    catalog = ParquetDataCatalog(str(catalog_path))
+    held = _held(catalog, hyp)
+    instruments = tuple(held[name] for name in sorted(hyp.universe))
+    opens, closes = request.delivered
+    measured, _ = request.bounds
+    scope = _scope_days(catalog, hyp, opens, closes - 1)
+    loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
+    inside = False
+    with (room / REQUEST_FILE).open("wb") as handle:
+        pickle.dump(
+            {"extensions": [list(source) for source in extensions]},
+            handle,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        pickle.dump(
+            {"request": request.plain(), "instruments": instruments},
+            handle,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        for day_start in range(midnight_ns(day_of(opens)), closes, NS_PER_DAY):
+            start = max(opens, day_start)
+            end = min(closes, day_start + NS_PER_DAY) - 1
+            groups, counts = _window_points(request, catalog, held, scope, start, end)
+            for grain, count in counts.items():
+                loaded[grain] += count
+            if not groups:
+                continue
+            splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
+            inside = inside or any(
+                int(point.ts_init) >= measured  # type: ignore[attr-defined]
+                for point in chain.from_iterable(groups)
+            )
+            pickle.dump({"groups": groups}, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            del groups
+    _refuse_missing_grain(request, loaded)
+    if not inside:
+        raise PreconditionError(
+            f"data: the catalog holds nothing for {hyp.id} over "
+            f"{request.window[0]}..{request.window[1]}",
+            remedy="run `kanso data load` for the window, then take a snapshot",
+        )
 
 
 def _card_room(workdir: Path) -> Path:
@@ -1786,6 +2128,15 @@ def _empty(request: RunRequest) -> CardRun:
     )
 
 
+def _chunks(handle: Any) -> Iterator[tuple[tuple[object, ...], ...]]:
+    """Each session's groups as the parent pickled them, one at a time, until the file ends."""
+    while True:
+        try:
+            yield pickle.load(handle)["groups"]
+        except EOFError:
+            return
+
+
 def main(argv: Sequence[str]) -> int:
     """The child: read the request and its data, run it, and write the result back.
 
@@ -1801,11 +2152,13 @@ def main(argv: Sequence[str]) -> int:
     The third argument is the pid of the process that started the card, which it outlives
     by at most `PARENT_POLL_S` (`_end_with`).
 
-    The payload is two pickles in sequence on one file. The first names the workspace
-    extensions the parent imported, and they are imported here before the second — the
-    request and its points — is unpickled, because a point of an extension's custom type is
-    an instance of a class that exists only once its module has been imported, under the name
-    it was pickled by.
+    The payload is a sequence of pickles on one file. The first names the workspace
+    extensions the parent imported, and they are imported here before anything else is
+    unpickled, because a point of an extension's custom type is an instance of a class that
+    exists only once its module has been imported, under the name it was pickled by. The
+    second is the request and its instruments; every one after it is one session's points,
+    read one at a time as the run consumes them (`_chunks`), so the child holds a session
+    beside the marks and never the window.
     """
     from kanso.ext import reimport
 
@@ -1817,31 +2170,31 @@ def main(argv: Sequence[str]) -> int:
         handed = pickle.load(handle)
         reimport((str(directory), str(name)) for directory, name in handed["extensions"])
         payload = pickle.load(handle)
-    try:
-        result = execute(payload["request"], payload["instruments"], payload["groups"])
-    except SizingError as refused:
-        result_path.write_bytes(
-            pickle.dumps(
-                {
-                    "ok": True,
-                    "run": _empty(payload["request"]),
-                    "intents": (),
-                    "refused": refused.refusal.payload(),
-                }
+        try:
+            result = execute_chunked(payload["request"], payload["instruments"], _chunks(handle))
+        except SizingError as refused:
+            result_path.write_bytes(
+                pickle.dumps(
+                    {
+                        "ok": True,
+                        "run": _empty(payload["request"]),
+                        "intents": (),
+                        "refused": refused.refusal.payload(),
+                    }
+                )
             )
-        )
-        return 0
-    except Exception as failure:
-        result_path.write_bytes(
-            pickle.dumps(
-                {
-                    "ok": False,
-                    "traceback": _tail(traceback.format_exc()),
-                    "remedy": failure.remedy if isinstance(failure, KansoError) else None,
-                }
+            return 0
+        except Exception as failure:
+            result_path.write_bytes(
+                pickle.dumps(
+                    {
+                        "ok": False,
+                        "traceback": _tail(traceback.format_exc()),
+                        "remedy": failure.remedy if isinstance(failure, KansoError) else None,
+                    }
+                )
             )
-        )
-        return 1
+            return 1
     result_path.write_bytes(
         pickle.dumps({"ok": True, "run": result.run, "intents": result.intents})
     )

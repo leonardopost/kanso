@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given
 
 from kanso.errors import ApprovalError, Exit, PreconditionError, ValidationError
 from kanso.schemas import (
@@ -17,6 +18,7 @@ from kanso.schemas import (
     resolve_venue_model,
     single_currency,
 )
+from tests.schemas.strategies import CURRENCIES
 
 
 def test_the_shipped_defaults() -> None:
@@ -92,6 +94,29 @@ def test_the_limit_fill_rule_is_inherited_and_overridden_like_any_cost() -> None
     assert restated.costs.slippage_bps == 2.0
     with pytest.raises(ValidationError, match="limit_fill"):
         CostsOverride.model_validate({"limit_fill": "sometimes"})
+
+
+def test_a_latency_is_zero_by_default_and_inherited_like_any_cost() -> None:
+    """Zero when nobody states it; the broker, the venue entry and the hypothesis override it
+    in that order; a negative or infinite one is refused."""
+    assert resolve_venue_model("XNAS").costs.latency_ms == 0.0
+    stated = resolve_venue_model(
+        "XNAS",
+        declaration=VenueDeclaration(costs=CostsOverride(latency_ms=45)),
+        hypothesis_costs=CostsOverride(latency_ms=20),
+    )
+    assert stated.costs.latency_ms == 20.0
+    assert stated.origins.costs == "hypothesis"
+    for bad in (-1, float("inf")):
+        with pytest.raises(ValidationError):
+            CostsOverride(latency_ms=bad)
+
+
+def test_a_venue_model_recorded_before_the_latency_key_reads_as_no_delay() -> None:
+    document = resolve_venue_model("XNAS").model_dump()
+    del document["costs"]["latency_ms"]
+
+    assert VenueModel.model_validate(document).costs.latency_ms == 0.0
 
 
 def test_a_maker_rate_is_unstated_by_default_and_may_be_a_rebate() -> None:
@@ -210,3 +235,70 @@ def test_a_per_share_commission_is_zero_unless_stated_and_layers_like_the_rest()
     assert stated.origins.costs == "hypothesis"
     with pytest.raises(ValidationError):
         CostsOverride(commission_per_share=-0.01)
+
+
+def test_the_sell_side_fees_are_zero_unless_stated_and_layer_like_the_rest() -> None:
+    plain = resolve_venue_model("XNAS").costs
+    assert (plain.sell_fee_bps, plain.sell_fee_per_share) == (0.0, 0.0)
+    stated = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(sell_fee_bps=0.1)),
+        hypothesis_costs=CostsOverride(sell_fee_bps=0.206, sell_fee_per_share=0.000166),
+    )
+    assert stated.costs.sell_fee_bps == 0.206
+    assert stated.costs.sell_fee_per_share == 0.000166
+    with pytest.raises(ValidationError):
+        CostsOverride(sell_fee_bps=-0.1)
+
+
+def test_a_currency_code_is_any_code_the_engine_could_register() -> None:
+    """A crypto code is longer than three letters; a lowercase or a nine-character one is
+    nothing the engine registers under any name."""
+    assert VenueDeclaration(currency="USDT").currency == "USDT"
+    for bad in ("usdt", "ABCDEFGHI", "1USD", ""):
+        with pytest.raises(ValidationError, match="currency"):
+            VenueDeclaration(currency=bad)
+
+
+@given(CURRENCIES)
+def test_every_code_the_grammar_admits_resolves_and_round_trips(code: str) -> None:
+    model = resolve_venue_model("XNAS", config=VenueDeclaration(currency=code))
+
+    assert model.currency == code
+    assert VenueModel.model_validate(model.model_dump()) == model
+
+
+def test_the_configuration_sits_between_the_defaults_and_the_broker() -> None:
+    """`[research]` states an account and a currency for every venue; a broker's declaration
+    still wins over it, and the operator's `venues.<MIC>` entry wins over the broker."""
+    configured = resolve_venue_model("SIM", config=VenueDeclaration(currency="USDT"))
+    assert (configured.currency, configured.origins.currency) == ("USDT", "config")
+    assert configured.origins.account == "default"
+
+    declared = resolve_venue_model(
+        "SIM",
+        config=VenueDeclaration(currency="USDT", account="cash"),
+        declaration=VenueDeclaration(currency="USD"),
+    )
+    assert (declared.currency, declared.origins.currency) == ("USD", "broker")
+    assert (declared.account, declared.origins.account) == ("cash", "config")
+    assert declared.default_leverage is None
+
+    overridden = resolve_venue_model(
+        "SIM",
+        config=VenueDeclaration(currency="USDT"),
+        declaration=VenueDeclaration(currency="USD"),
+        override=VenueOverride(currency="USDT"),
+    )
+    assert (overridden.currency, overridden.origins.currency) == ("USDT", "venue_override")
+
+
+def test_the_configuration_layer_carries_no_cost() -> None:
+    """A cost stated on the configuration layer is not a layer: costs come from the broker,
+    the venue entry and the hypothesis, and from nowhere else."""
+    model = resolve_venue_model(
+        "SIM", config=VenueDeclaration(costs=CostsOverride(commission_bps=9.0))
+    )
+
+    assert model.costs.commission_bps == 0.0
+    assert model.origins.costs == "default"

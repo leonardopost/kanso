@@ -176,6 +176,36 @@ def test_two_lanes_reaching_for_the_same_head_at_once_do_not_both_get_it(
     assert ids(store) == []
 
 
+def test_a_lane_whose_take_removes_nothing_moves_on_without_claiming(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other lane takes the head after this lane found it unclaimed and before its
+    delete: the delete removes nothing, so this lane records no claim and takes the next."""
+    contested = classify(ws, store, DOCUMENT)
+    free = register(ws, store, "demo_two")
+    scheduler.enqueue(store, contested)
+    scheduler.enqueue(store, free)
+    looked = scheduler.claimed
+
+    def other_lane_takes_it_after_the_look(s: StateStore, hyp_id: str) -> bool:
+        held = looked(s, hyp_id)
+        monkeypatch.setattr(scheduler, "claimed", looked)
+        with StateStore(ws.path("state.db")) as other:
+            usable(other, ws.path("state.db"))
+            assert scheduler.dequeue(other, "l2") == contested
+        return held
+
+    monkeypatch.setattr(scheduler, "claimed", other_lane_takes_it_after_the_look)
+
+    assert scheduler.dequeue(store, "l1") == free
+    assert ids(store) == []
+    claims = store.events(kind=scheduler.CLAIMED)
+    assert [(event.subject, event.detail["lane"]) for event in claims] == [
+        (contested, "l2"),
+        (free, "l1"),
+    ]
+
+
 def test_a_host_that_composes_wakes_its_idle_attached_hypotheses(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -629,6 +659,48 @@ def test_a_claim_is_recorded_under_the_lane_that_made_it(ws: Workspace, store: S
     assert scheduler.claimed(store, hyp_id)
 
 
+def test_a_claimed_hypothesis_is_not_claimed_again_before_its_run_begins(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Between the claim and the run there is no run to see, and the claim has to be enough."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    # A row beside an open claim: what an older kanso's `queue add` left, and what a lane
+    # killed between its claim and its run leaves for `recover` to put right.
+    store.connection.execute(
+        "INSERT INTO queue (hyp_id, priority, enqueued_at) VALUES (?, ?, ?)",
+        (hyp_id, 0, "2024-03-01T00:00:00+00:00"),
+    )
+
+    assert scheduler.dequeue(store, "l2") is None
+    assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]
+    assert [e.detail["lane"] for e in store.events(kind=scheduler.CLAIMED, subject=hyp_id)] == [
+        "l1"
+    ]
+
+
+def test_queueing_a_hypothesis_a_lane_has_claimed_and_not_begun_is_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The claim is the window a second row would be claimed in; a run open is not, since
+    the queue is how an interactive run's hypothesis is handed to the daemon."""
+    claimed = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, claimed)
+    assert scheduler.dequeue(store, "l1") == claimed
+    running = register(ws, store, "demo_two")
+    scheduler.enqueue(store, running)
+    assert scheduler.dequeue(store, "l2") == running
+    open_run(store, running, lane="l2")
+
+    with pytest.raises(PreconditionError, match="already held"):
+        scheduler.enqueue(store, claimed)
+    scheduler.enqueue(store, running)
+
+    assert [item.hyp_id for item in scheduler.queued(store)] == [running]
+    assert scheduler.dequeue(store, "l3") is None
+
+
 def test_a_hypothesis_dropped_between_claim_and_run_is_put_back(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -692,6 +764,29 @@ def test_remove_reaches_a_hypothesis_a_lane_holds_and_its_failure_leaves_it_out(
     assert scheduler.put_back(store, hyp_id) is None
     assert scheduler.recover(store) == []
     assert ids(store) == []
+
+
+def test_a_failed_lane_does_not_put_back_a_hypothesis_another_lane_claimed_since(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Measured on a live workspace on 2026-09-29: a lane's baseline card ran past its budget
+    after the operator had taken the hypothesis out from under it, re-pinned it and queued it
+    again, and a second lane had claimed it; the first lane's failure put it back a second
+    time and a third lane began a run beside the second's. The claim on record is the second
+    lane's, so the first lane's put-back is not its to make."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    assert scheduler.remove(store, hyp_id) == "lane"
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l2") == hyp_id
+
+    assert scheduler.put_back(store, hyp_id, "l1") is None
+
+    assert ids(store) == []
+    assert scheduler.claimed(store, hyp_id)
+    assert scheduler.put_back(store, hyp_id, "l2") is not None, "the lane that holds it may"
+    assert ids(store) == [hyp_id]
 
 
 def test_recover_for_one_lane_puts_back_only_what_that_lane_held(

@@ -26,8 +26,8 @@ nothing about the package. A clash is not resolved, it is reported: `kanso ext s
 the id `shadowed`, `kanso doctor` grades the workspace `warn` for it, and the packaged
 definition is what the workspace uses. Both read one table of what ships —
 `kanso.ext.shipped`, asked of the registries themselves — in every kind a declaration may
-carry: the framework's own `sandbox` client and the loaders a packaged *adapter* provides
-(`massive_bars` and its siblings) included. `ext show` is the one of the two that says why
+carry: the framework's own `sandbox` client, the data adapters a broker's package exposes,
+and the loaders a packaged *adapter* provides (`massive_bars` and its siblings) included. `ext show` is the one of the two that says why
 an id is `absent`.
 
 **An extension that fails to import degrades the workspace; it does not stop it.** Extension
@@ -350,7 +350,7 @@ grain      1m · bar, house_signal
 and without it, refused by name — which is the message that sends you here:
 
 ```
-error: data_requirements: house_signal is not a data type this workspace knows; it knows bar, corporate_action, financial_statement, quote, trade
+error: data_requirements: house_signal is not a data type this workspace knows; it knows bar, book, corporate_action, financial_statement, funding, quote, trade
 remedy: require one of those, or install the extension that registers the type
 ```
 

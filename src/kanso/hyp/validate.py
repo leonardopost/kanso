@@ -27,7 +27,12 @@ document is parsed. Everything else needs the workspace, and that is this module
 * the venues those instruments trade on resolve to a complete cost model, and to one
   account currency. A spread taken from quotes needs quotes; a fixed spread needs its
   width; a universe spanning two account currencies would have a leg priced at a rate
-  nothing in the workspace records, so it is refused;
+  nothing in the workspace records, so it is refused — and so, for the same reason, is an
+  instrument that settles in a currency other than its venue's account currency;
+* a universe holding a perpetual requires `funding`. A held perpetual pays or is paid its
+  funding at every settlement, so a card not handed the realised rates measures a P&L the
+  contract never had. What makes an instrument a perpetual is its resolved definition — the
+  same one the settlement check reads — never its id;
 * when classification has been written, its construct is in the catalogue, its host is
   present exactly when the construct needs one and names a certified strategy, its
   parameters are ones that construct declares with values inside the sets it declares
@@ -42,7 +47,15 @@ they are reported together rather than one per attempt.
 
 NautilusTrader facts this module relies on (nautilus_trader 1.231.0): an `Instrument`
 carries its venue on `id.venue`, whose `value` is the venue code a venue model is
-resolved for.
+resolved for; `Instrument.get_settlement_currency()` answers the currency a trade in it
+settles in — a `CryptoPerpetual`'s stated `settlement_currency`, and the quote currency of
+every other class kanso builds, none of which is inverse; and `get_cost_currency()` answers
+the currency the engine books positions, PnL and margin in — the quote currency of every
+linear class, a perpetual's included — which its account manager converts to the account's
+base currency, deferring the balance update when it holds no rate between the two. A
+perpetual swap is built as `nautilus_trader.model.instruments.CryptoPerpetual`, the one
+class kanso builds for `instrument_class: swap`, whether a manual entry or a reference
+adapter supplied it.
 """
 
 from __future__ import annotations
@@ -63,6 +76,7 @@ from kanso.data.types import data_types
 from kanso.errors import ValidationError
 from kanso.hyp.scaffold import HYPOTHESES, hypothesis_file
 from kanso.nautilus import adapters
+from kanso.nautilus.venue import known_currency
 from kanso.schemas import (
     Benchmark,
     Book,
@@ -72,12 +86,14 @@ from kanso.schemas import (
     ObjectiveRef,
     Portfolio,
     StrategyFile,
+    VenueDeclaration,
     VenueModel,
     load_yaml,
     parse_yaml,
     resolve_venue_model,
     single_currency,
 )
+from kanso.schemas.venue import DEFAULT_ACCOUNT, DEFAULT_CURRENCY
 
 PERCENT: Final = 100.0
 
@@ -98,6 +114,9 @@ CARD_STAGE: Final = "card"
 
 QUOTE_TYPE: Final = "quote"
 """The data requirement a spread read from quotes needs."""
+
+FUNDING: Final = "funding"
+"""The data requirement a perpetual in the universe needs: its realised funding rates."""
 
 STRATEGIES: Final = "strategies"
 STRATEGY_FILE: Final = "strategy.yaml"
@@ -132,6 +151,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_data_requirements(ws, hyp)
     instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
     models = venue_models(ws, hyp, instruments)
+    _check_funding(hyp, instruments)
     _check_required(ws, hyp)
     _check_sizing(ws, hyp)
     _check_benchmark(hyp)
@@ -160,12 +180,18 @@ def venue_models(
 ) -> dict[str, VenueModel]:
     """The resolved trading model of every venue this universe trades on.
 
-    Each venue inherits the configured broker's declaration, then the operator's
-    `venues.<MIC>` override, then the hypothesis's own `costs`. A cost model that cannot
-    be completed — a spread from quotes the hypothesis does not require, or a fixed
-    spread with no width — and a universe spanning more than one account currency are
-    both refused here, because both would put a number on a card that nothing in the
-    workspace can account for.
+    Each venue inherits the account type and currency `[research]` states in `kanso.toml`,
+    then the configured broker's declaration, then the operator's `venues.<MIC>` override,
+    then the hypothesis's own `costs`. A `[research]` value that restates the shipped
+    default is not a layer: it leaves the field's origin at `default`, so a workspace that
+    never touched the two keys resolves the model it always did, byte for byte, and no card
+    anchor moves. A cost model that cannot be completed — a spread from quotes the
+    hypothesis does not require, or a fixed spread with no width — a universe spanning more
+    than one account currency, and an account currency the engine does not register are
+    all refused here, because each would put a number on a card that nothing in the
+    workspace can account for. So is an instrument that settles, or is booked, in a currency
+    other than its venue's account currency: its fills would be struck in a currency the
+    account holds none of, at a conversion rate nothing in the workspace records.
 
     The broker is named in `kanso.toml` and its declaration is asked of whichever adapter
     provides it, so this reads a broker's account type, currency and costs without naming
@@ -175,10 +201,16 @@ def venue_models(
     """
     overrides = _venue_overrides(ws)
     quotes = QUOTE_TYPE in hyp.data_requirements
-    broker = ws.config.research.broker
+    research = ws.config.research
+    broker = research.broker
+    config = VenueDeclaration(
+        account=None if research.account == DEFAULT_ACCOUNT else research.account,
+        currency=None if research.currency == DEFAULT_CURRENCY else research.currency,
+    )
     models = {
         venue: resolve_venue_model(
             venue,
+            config=config,
             broker=broker,
             declaration=adapters.venue_declaration(broker, venue),
             override=overrides.get(venue),
@@ -188,8 +220,87 @@ def venue_models(
         )
         for venue in sorted({_venue_of(held) for held in instruments.values()})
     }
+    for model in models.values():
+        known_currency(model.currency)
     single_currency(models)
+    _check_settlement(instruments, models)
     return models
+
+
+def _check_settlement(instruments: Mapping[str, Any], models: Mapping[str, VenueModel]) -> None:
+    """Every instrument settles in, and is booked in, the account currency of its venue.
+
+    Two engine currencies are compared with the account's, and both must equal it: the
+    settlement currency (a perpetual's stated one, every other class's quote currency) and
+    the cost currency the engine books positions, PnL and margin in and converts to the
+    account's base currency from (the quote currency of every linear class kanso builds).
+    A perpetual quoted in USDT and settled in USDC settles in one and is booked in the
+    other, so no account currency admits it. The check reads every resolved instrument of
+    the universe, a data leg as well as a traded one. A mismatch is refused naming the
+    instrument, both of its currencies where they differ, and what its venue's account
+    holds.
+    """
+    wrong: dict[str, tuple[str, str, str, str]] = {}
+    for held in instruments.values():
+        venue = _venue_of(held)
+        settles = str(held.get_settlement_currency().code)
+        books = str(held.get_cost_currency().code)
+        account = models[venue].currency
+        if settles != account or books != account:
+            wrong[str(held.id)] = (settles, books, venue, account)
+    if not wrong:
+        return
+    named = "; ".join(
+        f"{instrument} {_currencies(settles, books)}, and {venue}'s account currency is {account}"
+        for instrument, (settles, books, venue, account) in sorted(wrong.items())
+    )
+    instrument, (settles, books, venue, _) = sorted(wrong.items())[0]
+    if settles != books:
+        remedy = (
+            f"remove {instrument} from `universe` in hypothesis.yaml: no one account "
+            f"currency is both its settlement currency {settles} and its booked currency {books}"
+        )
+    else:
+        remedy = (
+            f"set venues.{venue}.currency to {settles} in portfolio.yaml, or [research] "
+            f"currency to {settles} in kanso.toml"
+        )
+    raise ValidationError(
+        f"universe: {named}; a hypothesis's fills settle and are booked in the account's "
+        "own currency",
+        remedy=remedy,
+    )
+
+
+def _check_funding(hyp: Hypothesis, instruments: Mapping[str, Any]) -> None:
+    """A universe holding a perpetual requires the `funding` data type.
+
+    A perpetual is recognised by its resolved definition, a `CryptoPerpetual`, never by the
+    spelling of its id. Every perpetual missing its funding is named together. The
+    requirement is the hypothesis's, and coverage asks it of the perpetuals alone
+    (`kanso.data.snapshot`), so a spot leg beside one needs no funding history.
+    """
+    from nautilus_trader.model.instruments import CryptoPerpetual
+
+    if FUNDING in hyp.data_requirements:
+        return
+    perpetuals = sorted(
+        str(held.id) for held in instruments.values() if isinstance(held, CryptoPerpetual)
+    )
+    if not perpetuals:
+        return
+    raise ValidationError(
+        f"data_requirements: {', '.join(perpetuals)} "
+        f"{'is a perpetual' if len(perpetuals) == 1 else 'are perpetuals'} and {FUNDING} is "
+        "not required; a perpetual's P&L is not honest without the funding it paid and was paid",
+        remedy=f"add {FUNDING} to data_requirements and load its realised funding history",
+    )
+
+
+def _currencies(settles: str, books: str) -> str:
+    if settles == books:
+        return f"settles in {settles}"
+    return f"settles in {settles} and is booked in {books}"
 
 
 def _venue_of(instrument: Any) -> str:

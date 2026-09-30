@@ -2,10 +2,10 @@
 
 Three market-data types are built in — `bar`, `quote` and `trade`, the engine's `Bar`,
 `QuoteTick` and `TradeTick` — and everything else is a **custom type**, registered
-under an id by `register_custom_type`. kanso ships one, `corporate_action`; a vendor
-adapter or a workspace extension registers its own the same way, and from that moment
-the id is admissible in a hypothesis's `data_requirements`, loadable by a loader,
-persistable in the catalog and selectable in a backtest by dotted path.
+under an id by `register_custom_type`. kanso ships two, `corporate_action` and
+`funding`; a vendor adapter or a workspace extension registers its own the same way, and
+from that moment the id is admissible in a hypothesis's `data_requirements`, loadable by
+a loader, persistable in the catalog and selectable in a backtest by dotted path.
 
 Registration is a process-wide fact, not a workspace one: the engine keys its
 serialisable-type registry by the bare class name, so a type is registered once per
@@ -32,15 +32,18 @@ import re
 from typing import Final
 
 from nautilus_trader.core.data import Data
-from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
 from kanso.data.types.corporate_action import KINDS, TYPE_ID, CorporateAction
+from kanso.data.types.funding import TYPE_ID as FUNDING
+from kanso.data.types.funding import Funding
 from kanso.errors import ValidationError
 
 __all__ = [
     "BUILTIN_TYPES",
     "KINDS",
     "CorporateAction",
+    "Funding",
     "custom_types",
     "data_types",
     "register_custom_type",
@@ -56,8 +59,10 @@ BUILTIN_TYPES: Final[dict[str, type]] = {
     "bar": Bar,
     "quote": QuoteTick,
     "trade": TradeTick,
+    "book": OrderBookDelta,
 }
-"""The three market-data types every workspace has without registering anything."""
+"""The four market-data types every workspace has without registering anything: a `book`
+point is one change to one level of an exchange's displayed book."""
 
 _CUSTOM: dict[str, type] = {}
 
@@ -186,3 +191,4 @@ def _name(value: object) -> str:
 
 
 register_custom_type(TYPE_ID, CorporateAction)
+register_custom_type(FUNDING, Funding)

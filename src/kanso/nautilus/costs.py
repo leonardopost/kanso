@@ -6,9 +6,18 @@ the spread are charged on every fill, once, by the runner's extraction
 rested on the book — one the venue reports as a maker's — pays the venue model's
 `maker_bps` instead of all three when the model states one: it filled at its own price, so
 it slipped nothing, and the spread is what it earns rather than pays. A negative rate is a
-rebate. A sleeve's harness needs the same number while it runs, to know what its account
+rebate. A sale pays the regulatory fee the model states on top, whoever the venue reports
+the fill as: `sell_fee_bps` of its notional and `sell_fee_per_share` on each share, the
+transaction fee and the trading activity fee an account passes through on sells alone.
+A sleeve's harness needs the same number while it runs, to know what its account
 holds, so the arithmetic lives here and both call it: the balance a strategy sizes against
 is the equity the runner strikes.
+
+A perpetual's funding is the third charge, and the only one that is neither a fill cost nor
+a period-end policy: at each settlement the holder pays the realised rate on the notional it
+holds then (`funding_payment`), so a long pays a positive rate and a short receives it. The
+runner books it once, in the extraction, at the settlement instant; the harness books the
+same amount when the settlement point is delivered, before the sleeve is handed it.
 
 The book policy a hypothesis declares is the same shape of promise at the period end. A
 monthly reset moves a surplus into a cushion and restores a deficit from it; a financing
@@ -47,6 +56,7 @@ __all__ = [
     "fill_cost",
     "fill_rate",
     "fixed_half_spread",
+    "funding_payment",
     "maintenance_ratio",
     "month_turned",
     "policy_of",
@@ -113,22 +123,41 @@ def fill_cost(
     commission_per_share: float,
     *,
     maker: bool,
+    sell: bool = False,
+    sell_fee_bps: float = 0.0,
+    sell_fee_per_share: float = 0.0,
 ) -> float:
     """What one fill costs in the account currency: `fill_rate` of its notional, plus the
-    per-share commission on each share whenever the fill pays commission at all.
+    per-share commission on each share whenever the fill pays commission at all, plus the
+    sell-side fees on a sale.
 
     A maker's fill under a stated maker rate pays that rate alone, per share included: the
     rate is the whole charge on that fill by contract, and a per-share-priced account states
     its maker net there — commission less the rebate. Every other fill pays the per-share
     commission on top of the three rates, so a cheap share pays more of its price than a
-    dear one, exactly as the account would charge it.
+    dear one, exactly as the account would charge it. A sale pays `sell_fee_bps` of its
+    notional and `sell_fee_per_share` on each share on top of all of that, maker or taker:
+    a regulatory fee is passed through on every sell, and no venue's maker rate covers it.
     """
     charged = notional * fill_rate(
         commission_bps, slippage_bps, half_spread, maker_bps, maker=maker
     )
+    if sell:
+        charged += notional * sell_fee_bps / BPS + qty * sell_fee_per_share
     if maker and maker_bps is not None:
         return charged
     return charged + qty * commission_per_share
+
+
+def funding_payment(signed_qty: float, mark: float, multiplier: float, rate: float) -> float:
+    """What one funding settlement takes from the holder, in the account currency.
+
+    The rate is the realised rate of the period that settled, a fraction of notional, and
+    the notional is signed: `qty x mark x multiplier`, a short's negative. So a long pays a
+    positive rate and is paid a negative one, and a short the reverse — a negative amount is
+    one the holder received. Nothing is held, nothing is paid.
+    """
+    return signed_qty * mark * multiplier * rate
 
 
 @dataclass(frozen=True)

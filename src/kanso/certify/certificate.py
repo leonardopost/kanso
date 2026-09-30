@@ -6,9 +6,13 @@ contradict a first is refused before anything runs — `refuse_repeat` is called
 four facts that identify a certification and nothing else, so a certification that will
 not be allowed to land costs no backtest.
 
-**Three refusals, one meaning.** The state store's primary key is the subject, the plan
-version and the engine version together, which is exactly what immutability forbids
-repeating: the same code, judged by the same plan, on the same engine. Moving to
+**Three refusals, one meaning.** The state store's primary key is the subject, the
+hypothesis file its run was pinned to, the plan version and the engine version together,
+which is exactly what immutability forbids repeating: the same code, under the same file,
+judged by the same plan, on the same engine. Re-pinning the file with `hyp add` makes the
+same bytes a new claim under a new name, because what was certified was those bytes under
+the file as it was. A certificate written before pins were recorded names none, and refuses
+a repeat under any pin, so nothing already recorded loses its immutability. Moving to
 a new engine changes the third of those, so re-certifying an unchanged commit under a new
 engine is a plain certification that writes a new file beside the old one rather than an
 impossibility. The second refusal is the file at the exact target name, which is never
@@ -41,8 +45,8 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 from kanso.certify.plan import certificates_dir
-from kanso.errors import PreconditionError
-from kanso.schemas import Certificate, write_yaml
+from kanso.errors import PreconditionError, ValidationError
+from kanso.schemas import Certificate, load_yaml, write_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
@@ -63,6 +67,7 @@ __all__ = [
 _COLUMNS: Final = (
     "hyp_id",
     "strategy_sha",
+    "hypothesis_sha",
     "plan_version",
     "nautilus_version",
     "venue_model",
@@ -82,13 +87,22 @@ _INSERT: Final = (
 )
 
 
-def filename(strategy_sha: str, n_trials: int, plan_version: int, nautilus_version: str) -> str:
-    """`<sha7>-<n_trials>-p<plan_version>-e<nautilus_version>.yaml`.
+def filename(
+    strategy_sha: str,
+    hypothesis_sha: str,
+    n_trials: int,
+    plan_version: int,
+    nautilus_version: str,
+) -> str:
+    """`<sha7>-h<pin7>-<n_trials>-p<plan_version>-e<nautilus_version>.yaml`.
 
-    Spelled from the four facts rather than from a certificate, so the target can be
+    Spelled from the five facts rather than from a certificate, so the target can be
     checked for existence before the certification that would fill it is run.
     """
-    return f"{strategy_sha[:7]}-{n_trials}-p{plan_version}-e{nautilus_version}.yaml"
+    return (
+        f"{strategy_sha[:7]}-h{hypothesis_sha[:7]}-{n_trials}-p{plan_version}"
+        f"-e{nautilus_version}.yaml"
+    )
 
 
 def certificate_file(ws: Workspace, certificate: Certificate) -> Path:
@@ -107,10 +121,11 @@ def judged(
     hyp_id: str,
     *,
     strategy_sha: str,
+    hypothesis_sha: str,
     plan_version: int | None,
     nautilus_version: str,
 ) -> bool:
-    """Whether these bytes already have a certificate under this plan and this engine.
+    """Whether these bytes, under this pin, already have a certificate under this plan and engine.
 
     Certifying them again is refused (`refuse_repeat`), so whoever decides whether to
     certify asks this first: a certificate the store records or one on disk, the same two
@@ -121,16 +136,20 @@ def judged(
     """
     query = (
         "SELECT 1 FROM certificates WHERE hyp_id = ? AND strategy_sha = ? AND nautilus_version = ?"
+        " AND (hypothesis_sha = ? OR hypothesis_sha = '')"
     )
-    params: tuple[object, ...] = (hyp_id, strategy_sha, nautilus_version)
+    params: tuple[object, ...] = (hyp_id, strategy_sha, nautilus_version, hypothesis_sha)
     if plan_version is not None:
         query += " AND plan_version = ?"
         params = (*params, plan_version)
     if store.connection.execute(query, params).fetchone() is not None:
         return True
     plan = "*" if plan_version is None else str(plan_version)
-    pattern = f"{strategy_sha[:7]}-*-p{plan}-e{nautilus_version}.yaml"
-    return any(path.is_file() for path in certificates_dir(ws, hyp_id).glob(pattern))
+    directory = certificates_dir(ws, hyp_id)
+    return (
+        _certified_on_disk(directory, strategy_sha, hypothesis_sha, plan, nautilus_version)
+        is not None
+    )
 
 
 def refuse_repeat(
@@ -139,6 +158,7 @@ def refuse_repeat(
     hyp_id: str,
     *,
     strategy_sha: str,
+    hypothesis_sha: str,
     n_trials: int,
     plan_version: int,
     nautilus_version: str,
@@ -146,8 +166,9 @@ def refuse_repeat(
     """Refuse a certification that would contradict one already recorded or on disk."""
     held = store.connection.execute(
         "SELECT created_at FROM certificates WHERE hyp_id = ? AND strategy_sha = ?"
-        " AND plan_version = ? AND nautilus_version = ?",
-        (hyp_id, strategy_sha, plan_version, nautilus_version),
+        " AND plan_version = ? AND nautilus_version = ?"
+        " AND (hypothesis_sha = ? OR hypothesis_sha = '')",
+        (hyp_id, strategy_sha, plan_version, nautilus_version, hypothesis_sha),
     ).fetchone()
     if held is not None:
         raise PreconditionError(
@@ -157,13 +178,17 @@ def refuse_repeat(
             remedy="research a better strategy, replan, or upgrade the engine",
         )
     directory = certificates_dir(ws, hyp_id)
-    target = directory / filename(strategy_sha, n_trials, plan_version, nautilus_version)
+    target = directory / filename(
+        strategy_sha, hypothesis_sha, n_trials, plan_version, nautilus_version
+    )
     if target.exists():
         raise PreconditionError(
             f"{target} already exists, and a certificate is never overwritten",
             remedy="move the existing file aside if it does not belong to this workspace",
         )
-    on_disk = _certified_on_disk(directory, strategy_sha, plan_version, nautilus_version)
+    on_disk = _certified_on_disk(
+        directory, strategy_sha, hypothesis_sha, plan_version, nautilus_version
+    )
     if on_disk is not None:
         raise PreconditionError(
             f"{on_disk.name} certifies {strategy_sha[:7]} under plan version {plan_version} "
@@ -175,18 +200,35 @@ def refuse_repeat(
 
 
 def _certified_on_disk(
-    directory: Path, strategy_sha: str, plan_version: int, nautilus_version: str
+    directory: Path,
+    strategy_sha: str,
+    hypothesis_sha: str,
+    plan_version: int | str,
+    nautilus_version: str,
 ) -> Path | None:
-    """A certificate file of this subject, plan and engine, whatever its trial count.
+    """A certificate file of this subject, pin, plan and engine, whatever its trial count.
 
-    The trial count is the one part of the filename that varies for the same certified
-    bytes, so it is matched with a wildcard: any `<sha7>-*-p<plan>-e<engine>.yaml` present
-    is the immutable certificate a repeat would contradict. A directory that does not exist
-    yet globs to nothing, so no separate guard is needed for it.
+    The trial count and the pin are the parts of the filename that vary for the same
+    certified bytes, so both are matched with one wildcard: any `<sha7>-*-p<plan>-e<engine>.yaml`
+    present is read for the pin it names, and it is the immutable certificate a repeat
+    would contradict when that pin is this one or when it names none — a certificate
+    written before pins were recorded, or a file that cannot be read as a certificate at
+    all. `plan_version` may be `"*"`. A directory that does not exist yet globs to
+    nothing, so no separate guard is needed for it.
     """
     pattern = f"{strategy_sha[:7]}-*-p{plan_version}-e{nautilus_version}.yaml"
-    matches = sorted(path for path in directory.glob(pattern) if path.is_file())
-    return matches[0] if matches else None
+    for path in sorted(path for path in directory.glob(pattern) if path.is_file()):
+        if _pin_named(path) in (None, hypothesis_sha):
+            return path
+    return None
+
+
+def _pin_named(path: Path) -> str | None:
+    """The pin a certificate file names, or `None` when it names none or cannot be read."""
+    try:
+        return load_yaml(Certificate, path).hypothesis_sha
+    except (ValidationError, OSError, UnicodeDecodeError):
+        return None
 
 
 def write(ws: Workspace, store: StateStore, certificate: Certificate, source: bytes) -> Path:
@@ -207,6 +249,7 @@ def write(ws: Workspace, store: StateStore, certificate: Certificate, source: by
         (
             certificate.hyp_id,
             certificate.strategy_sha,
+            certificate.hypothesis_sha or "",
             certificate.plan_version,
             certificate.nautilus_version,
             _dump(certificate.venue_model.model_dump(mode="json")),
@@ -249,6 +292,7 @@ def _certificate(row: Any) -> Certificate:
         {
             "hyp_id": row["hyp_id"],
             "strategy_sha": row["strategy_sha"],
+            "hypothesis_sha": row["hypothesis_sha"] or None,
             "nautilus_version": row["nautilus_version"],
             "venue_model": json.loads(str(row["venue_model"])),
             "snapshot_id": row["snapshot_id"],
