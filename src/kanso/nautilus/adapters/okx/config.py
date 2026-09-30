@@ -23,10 +23,9 @@ region to state, and `docs/backlog.md` records it.
 single flat rate the public-history loaders (a later change) will share. The engine's own
 HTTP client meters itself — its compiled module carries a global bucket `okx:global` and one
 bucket per endpoint, `okx:/api/v5/market/history-candles` among them — and takes no quota
-from its caller, so this key governs nothing the engine sends. The exchange publishes its
-limits per endpoint, in requests per two seconds; five a second is a deliberately
-conservative default rather than a measured ceiling, and the history endpoints' own limits
-are measured when the loaders that call them land.
+from its caller, so this key governs nothing the engine sends. Five a second is a
+deliberately conservative default rather than a measured ceiling, and the history
+endpoints' own limits are measured when the loaders that call them land.
 
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------

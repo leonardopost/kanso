@@ -28,7 +28,17 @@ process environment for any credential they are handed as `None`. That is a fall
 name kanso does not own, and a fallback is how a key exported for one tool ends up trading
 through another. So the client factory this package will gain follows one rule: it resolves
 all three of the client's own `KANSO_OKX_*` names, refuses when any is unset, passes every
-one of them to the engine explicitly, and never calls a `from_env` constructor.
+one of them to the engine explicitly, and never calls a `from_env` constructor, which reads
+those same three variables and, for a stream, its url from `OKX_WS_URL`.
+
+**The engine never chooses the stream's url either.** Also measured, and re-checked by
+`doctor`: `OKXWebSocketClient.with_credentials` handed `url=None` connects to
+`wss://ws.okx.com:8443/ws/v5/public`, the global host's public stream, whatever the
+credentials and whatever the region. So the factory passes the private url
+`get_okx_ws_url_private` gives for the account's environment (`DEMO` for `okx_demo`) and
+the region `[adapters.okx]` declares, and the business url `derive_okx_ws_url` derives
+from it, exactly as the engine's own execution client does, and never leaves either to
+the default.
 """
 
 from __future__ import annotations

@@ -13,9 +13,12 @@ Nothing here resolves a real credential or opens a socket: the package has no ne
 
 from __future__ import annotations
 
+import hashlib
 import os
+import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from hypothesis import given
@@ -34,7 +37,7 @@ from kanso.nautilus.adapters.okx import (
     Region,
     facts,
 )
-from kanso.nautilus.adapters.okx.config import DEFAULT_RATE_PER_SECOND, REGION_HOSTS, spec
+from kanso.nautilus.adapters.okx.config import DEFAULT_RATE_PER_SECOND, spec
 from kanso.nautilus.adapters.okx.venue import VENUE, declaration, instrument_id
 from kanso.schemas import resolve_venue_model
 from kanso.workspace import Workspace, init
@@ -210,29 +213,67 @@ def test_an_instrument_id_is_the_exchange_s_own_with_the_venue_appended() -> Non
 # --- the engine facts ------------------------------------------------------------
 
 
-def test_the_engine_facts_are_re_checked_through_the_registry_and_hold() -> None:
-    claims = [claim for claim, _ in facts.CLAIMS]
-    verified = {fact.claim: fact for fact in engine_facts.verify()}
+def test_each_engine_fact_holds_and_is_among_the_claims_doctor_re_checks() -> None:
+    """Checked one by one here; `tests/nautilus/test_facts.py` runs the whole set."""
+    every = [claim for claim, _ in engine_facts.claims()]
 
-    assert set(claims) <= set(verified)
-    assert all(verified[claim].holds for claim in claims), [verified[c] for c in claims]
-
-
-def test_the_region_hosts_are_the_engine_s() -> None:
-    assert REGION_HOSTS[Region.US] == "https://us.okx.com"
+    for claim, check in facts.CLAIMS:
+        holds, evidence = check()
+        assert holds, (claim, evidence)
+        assert claim in every
 
 
-def test_the_ambient_probe_puts_the_environment_back_exactly(
+def test_the_probe_s_child_sees_markers_and_never_the_parent_s_credentials() -> None:
+    parent = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/operator",
+        "OKX_API_KEY": "the-parents-own",
+        "OKX_WS_URL": "wss://elsewhere",
+        "KANSO_OKX_API_KEY": "kanso-s-own",
+        "UNRELATED": "x",
+    }
+
+    child = facts.probe_env(parent)
+
+    assert child == {
+        "PATH": "/usr/bin",
+        "HOME": "/home/operator",
+        **dict.fromkeys(facts.AMBIENT, facts.MARKER),
+    }
+
+
+def _fingerprint() -> str:
+    """The process environment as one digest, so a failure can never print a value."""
+    return hashlib.sha256(repr(sorted(os.environ.items())).encode()).hexdigest()
+
+
+def test_the_ambient_probe_runs_in_a_child_and_leaves_this_process_untouched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """One variable set and two unset, so both halves of the restore are exercised."""
-    first, *rest = facts.AMBIENT
-    monkeypatch.setenv(first, "was-set")
-    for name in rest:
-        monkeypatch.delenv(name, raising=False)
+    """The check launches `sys.executable` with the probe's environment and nothing else."""
+    launched: list[dict[str, str]] = []
+    real = subprocess.run
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        launched.append(dict(kwargs["env"]))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    before = _fingerprint()
 
     holds, _ = dict(facts.CLAIMS)[facts.CLAIMS[2][0]]()
 
     assert holds
-    assert os.environ[first] == "was-set"
-    assert all(name not in os.environ for name in rest)
+    assert _fingerprint() == before
+    (env,) = launched
+    assert set(env) <= {*facts.PROBE_ENV, *facts.AMBIENT}
+    assert all(env[name] == facts.MARKER for name in facts.AMBIENT)
+
+
+def test_a_probe_that_fails_is_a_claim_that_does_not_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(facts, "_PROBE", "raise SystemExit('engine gone')")
+
+    for _, check in facts.CLAIMS[2:4]:
+        holds, evidence = check()
+        assert not holds
+        assert "the probe exited 1" in evidence and "engine gone" in evidence

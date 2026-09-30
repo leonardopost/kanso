@@ -66,6 +66,19 @@ def test_a_stage_naming_the_demo_client_is_refused_by_the_wall_clock_rule(
     assert "simulated venue" in str(stages["paper"])
 
 
+def test_a_live_stage_naming_the_real_client_is_refused_by_the_same_rule(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """Real capital is confined to the live stage, and the live stage is no exception to
+    the clock: a bounded replay would fill a real account's orders in simulation."""
+    reconfigure(workspace, "live", exec=LIVE, data="okx", speed=1)
+
+    stages = payload(at(runner, workspace, "portfolio", "clients", "--json"))["stages"]
+
+    assert "runs on the wall clock" in str(stages["live"])
+    assert "simulated venue" in str(stages["live"])
+
+
 def test_doctor_with_no_table_and_no_keys_reports_okx_not_configured_and_passes(
     runner: CliRunner, workspace: Path
 ) -> None:

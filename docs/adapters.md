@@ -335,7 +335,9 @@ declaration with the last: that check belongs to the long-running stage node tha
 ### Configuration
 
 `[adapters.alpaca]` in `kanso.toml` is validated by the adapter's own model, which accepts
-these keys and no others. It holds no credential.
+these keys and no others, and `kanso doctor` reads it through that model whether or not
+the table is there — an unknown key or a value outside its range fails the `execution`
+check. It holds no credential.
 
 | key | default | what it does |
 |---|---|---|
@@ -420,7 +422,15 @@ its OKX HTTP client and its credentialed stream read `OKX_API_KEY`, `OKX_API_SEC
 `None`. So the rule the client factory will follow is fixed now: resolve all three of the
 client's own `KANSO_OKX_*` names, refuse if one is unset, hand every one to the engine
 explicitly, and never call a `from_env` constructor. `kanso doctor` re-checks the fallback
-among its engine facts, and setting the engine's own variables configures nothing.
+among its engine facts, in a child process whose environment holds the engine's three
+variables set to a marker and none of yours, so the check neither reads nor changes an
+`OKX_*` key you export for another tool; setting those variables configures nothing.
+
+The engine does not choose a stream's url for kanso either: its credentialed stream handed
+no url connects to `wss://ws.okx.com:8443/ws/v5/public`, the global host's public stream,
+whatever the account's region. The client factory will pass the private url for the
+account's environment and declared region, as the engine's own execution client does, and
+`kanso doctor` re-checks that default too.
 
 ### The two execution clients
 
@@ -480,7 +490,9 @@ account settled in `USDT`, `commission_bps: 5.0` on a fill that takes liquidity 
 `maker_bps: 2.0` on one that rested — and nothing else. Slippage and the spread fall to
 kanso's shipped defaults, so a hypothesis on bars alone still states `spread: fixed_bps`
 and its width; with neither quotes nor a width the venue model is refused rather than
-costed at a spread of zero.
+costed at a spread of zero. The rates are charged once, by the runner, like every venue's:
+the instrument provider will hand kanso instruments whose own maker and taker rates are
+zero, so the simulated venue charges nothing on top.
 
 The rates are the exchange's published Regular (Lv1) perpetual schedule, and were measured
 on the operator's account on 2026-09-30 with `GET /api/v5/account/trade-fee?instType=SWAP`:

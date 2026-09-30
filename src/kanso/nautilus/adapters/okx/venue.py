@@ -23,6 +23,14 @@ schedule and the measurement above, and an account on another tier states its ow
 under `venues.OKX.costs` in `portfolio.yaml` (origin `venue_override`), exactly as an
 operator stresses any venue's costs.
 
+**The rates are charged once, by the runner, and never by the engine.** Costs are
+deducted per fill in the extraction and nowhere else, and the simulated venue charges
+nothing only because kanso's resolved instruments carry maker and taker rates of zero. So
+the instrument provider this package will gain (a later change) must set `maker_fee` and
+`taker_fee` to zero on every instrument it hands kanso, whatever rates the engine's own OKX
+provider attached — an instrument that arrived with the rates declared here would be
+charged them by the venue and again by the runner, and the second charge is silent.
+
 **What is not declared.** No slippage and no spread. They fall to kanso's shipped
 defaults, exactly as the equity broker's declaration leaves them, so a hypothesis on bars
 alone must still state a spread width — with no quotes and no `fixed_bps` the venue model
