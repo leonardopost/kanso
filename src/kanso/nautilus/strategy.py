@@ -458,15 +458,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         bps += float(costs.get("sell_fee_bps") or 0.0) / 2.0
         return bps / BASIS_POINT
 
-    def cost_rate_at(self, price: float) -> float:
+    def cost_rate_at(self, price: float, multiplier: float = 1.0) -> float:
         """`cost_rate` at a price: the per-share commission, where the model states one, and
         half the per-share sell fee are fractions of notional only once the price is known,
-        and a dearer share pays less."""
+        and a dearer share pays less. On a multiplied instrument per share means per
+        contract, and one contract's notional is `price x multiplier`, so the fraction is
+        the charge over that."""
         per_share = float(self._charges.get("commission_per_share") or 0.0)
         per_share += float(self._charges.get("sell_fee_per_share") or 0.0) / 2.0
         if per_share <= 0.0 or price <= 0.0:
             return self.cost_rate
-        return self.cost_rate + per_share / price
+        return self.cost_rate + per_share / (price * multiplier)
 
     @property
     def max_notional(self) -> float:
@@ -646,8 +648,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             worth[key] = worth.get(key, 0.0) + self._worth(position)
         for event in later:
             key = event.instrument_id.value
-            instrument = self.cache.instrument(event.instrument_id)
-            multiplier = 1.0 if instrument is None else float(instrument.multiplier)
+            multiplier = self._multiplier_of(event.instrument_id)
             qty = float(event.last_qty)
             signed = qty if event.order_side == OrderSide.BUY else -qty
             price = self._print_now(key)
@@ -1209,8 +1210,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             price = self._last_print.get(key)
             if price is None or price <= 0:
                 return None
+            multiplier = float(instrument.multiplier)
             raw = full_book_quantity(
-                budget, price, float(instrument.price_increment), self.cost_rate_at(price)
+                budget,
+                price * multiplier,
+                float(instrument.price_increment) * multiplier,
+                self.cost_rate_at(price, multiplier),
             )
             quantity = self._quantise(instrument, raw)
             if quantity is None:
@@ -1333,10 +1338,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         room = self._headroom(resolved_id, reference)
         if room <= 0:
             return None
-        wanted = room if qty is None else abs(qty) * reference
+        unit = reference * float(instrument.multiplier)  # one contract's notional
+        wanted = room if qty is None else abs(qty) * unit
         if notional is not None:
             wanted = min(wanted, abs(notional))
-        raw = min(wanted, room) / reference
+        raw = min(wanted, room) / unit
         ctx = self._context(
             resolved_id, resolved_side, raw, price, "LIMIT" if price is not None else "MARKET"
         )
@@ -1440,11 +1446,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         reference = self._last_print.get(key)
         if reference is None or reference <= 0:
             return None
+        multiplier = float(instrument.multiplier)  # type: ignore[attr-defined]
         raw = full_book_quantity(
             self.budget,
-            reference,
-            float(instrument.price_increment),  # type: ignore[attr-defined]
-            self.cost_rate_at(reference),
+            reference * multiplier,
+            float(instrument.price_increment) * multiplier,  # type: ignore[attr-defined]
+            self.cost_rate_at(reference, multiplier),
         )
         ctx = self._context(instrument_id, side, raw, None, "MARKET")
         self._entry_answers = self._ask_overlays(ctx)
@@ -1539,13 +1546,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         intended = self._holdings()
         resting = self._resting(intended)
         key = instrument_id.value
-        held = abs(intended.get(key, 0.0)) * reference + resting.get(key, 0.0)
+        held = abs(intended.get(key, 0.0)) * reference * self._multiplier_of(instrument_id)
+        held += resting.get(key, 0.0)
         gross = self._gross_intended(intended) + sum(resting.values())
         room = min(self.max_notional - held, self.gross_limit - gross)
         return room / self._reserve(key)
 
     def _gross_intended(self, intended: Mapping[str, float]) -> float:
-        """What this sleeve will hold, marked at the last price seen and at cost where none was.
+        """What this sleeve will hold, marked at the last price seen and at cost where none
+        was, each name's quantity times its price times its contract multiplier.
 
         The fallback is the position's own split-aware cost basis rather than
         `Position.avg_px_open`, which a corporate action leaves quoted in shares the
@@ -1569,7 +1578,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                         splits.moves_of(position, tuple(self._restated.get(name, ())))
                     ).basis
                 )
-            total += abs(quantity) * price
+            total += abs(quantity) * price * self._multiplier_of(name)
         return total
 
     def _restating(self, key: str, printed_ns: int) -> float:
@@ -1606,7 +1615,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         per share included at the last price, slippage and the whole spread each way — the
         stated width, or the last quoted one."""
         price = self._last_print.get(key)
-        rate = self.cost_rate_at(price) if price else self.cost_rate
+        rate = self.cost_rate_at(price, self._multiplier_of(key)) if price else self.cost_rate
         if self._charges.get("spread") == "quotes":
             _, values = self._quoted.get(key, ([], []))
             if values:
@@ -1632,7 +1641,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             grows = abs(now + (leaves if order.side == OrderSide.BUY else -leaves)) - abs(now)
             if grows > 0.0:
                 price = _order_price(order) or self._price_now(key) or 0.0
-                added[key] = added.get(key, 0.0) + grows * price
+                added[key] = added.get(key, 0.0) + grows * price * self._multiplier_of(key)
         return added
 
     def _current(self, order: Any) -> Any:
@@ -1691,8 +1700,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         for, and what the runner charges it — commission, per share included where the model
         states one, slippage and half the spread, or a maker's own rate where the venue model
         states one, which a rebate makes negative."""
-        instrument = self.cache.instrument(event.instrument_id)
-        multiplier = 1.0 if instrument is None else float(instrument.multiplier)
+        multiplier = self._multiplier_of(event.instrument_id)
         qty, px = float(event.last_qty), float(event.last_px)
         signed = qty if event.order_side == OrderSide.BUY else -qty
         cost = fill_cost(
@@ -1726,13 +1734,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         loss in the handlers between the split and the held leg's next print. A position
         the sleeve has seen no price for is marked at its own split-aware cost.
         """
-        instrument = self.cache.instrument(position.instrument_id)
-        multiplier = 1.0 if instrument is None else float(instrument.multiplier)
         price = self._print_now(position.instrument_id.value)
         if price is None:
             applied = tuple(self._restated.get(position.instrument_id.value, ()))
             price = splits.ledger(splits.moves_of(position, applied)).basis
-        return float(position.signed_qty) * price * multiplier
+        return float(position.signed_qty) * price * self._multiplier_of(position.instrument_id)
+
+    def _multiplier_of(self, instrument_id: InstrumentId | str) -> float:
+        """The contract multiplier a quantity at a price is scaled by to be a notional, read
+        from the cached instrument: the contract size of a future or an option, one for a
+        share, and one when the cache holds no definition. Under nautilus_trader 1.231.0
+        every instrument class carries `multiplier` as a `Quantity`, `Equity` fixing it at
+        one (`kanso.nautilus.facts`)."""
+        instrument = self.cache.instrument(self._instrument_id(instrument_id))
+        return 1.0 if instrument is None else float(instrument.multiplier)
 
     def _opening(
         self, instrument_id: InstrumentId, side: OrderSide, quantity: float, price: float
@@ -1741,13 +1756,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The closed part frees its own room before the opened part takes any, so a leg that
         crosses zero is funded like an exit followed by an entry. The room is the reserved
-        one `submit_entry` sizes to, in notional.
+        one `submit_entry` sizes to, in notional — price times multiplier per contract.
         """
         now = self.held(instrument_id)
         signed = quantity if side == OrderSide.BUY else -quantity
         closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
         room = self._headroom(instrument_id, price)
-        room += closing * price / self._reserve(instrument_id.value)
+        unit = price * self._multiplier_of(instrument_id)
+        room += closing * unit / self._reserve(instrument_id.value)
         return closing, quantity - closing, room
 
     def _funded(
@@ -1758,7 +1774,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         closing, opening, room = self._opening(instrument_id, side, quantity, price)
         if opening <= 0.0:
             return quantity
-        return closing + min(opening, max(0.0, room) / price)
+        unit = price * self._multiplier_of(instrument_id)
+        return closing + min(opening, max(0.0, room) / unit)
 
     def _check_funded(self, orders: Sequence[Any]) -> None:
         """Refuse entries built by hand that the book cannot fund.
@@ -1809,8 +1826,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     "shown to fit the book; place it with submit_entry, which places nothing "
                     "until a price has been seen",
                 )
-            free += closing * price
-            opening = (quantity - closing) * price
+            unit = price * self._multiplier_of(key)  # one contract's notional
+            free += closing * unit
+            opening = (quantity - closing) * unit
             if opening > free + 1e-6:
                 self._refuse(
                     UNFUNDED_ORDER,

@@ -315,7 +315,10 @@ sizing:                            # scope: adding or changing it clears `best`
 
 Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty` or
 `price`; `self.held(id)` is the position reader; a flip is `submit_exit(old)` then
-`submit_entry(new, side)` in one handler. Without the key, `submit_entry(id, side,
+`submit_entry(new, side)` in one handler. The budget is filled in whole lots of the
+instrument, and on a multiplied instrument — a future, an option — the price and the tick it
+is divided by are one contract's, `price x multiplier`, as is every notional the harness
+sizes, reserves or reads back on either path. Without the key, `submit_entry(id, side,
 notional=…)` sizes to the smaller of what was asked and what the risk limits leave — read on the smaller
 of the capital and the balance the sleeve has left, so an account that has lost money cannot
 borrow to keep its size, and one that has made money does not grow past its capital — and on
@@ -550,7 +553,8 @@ A per-share-priced account charges a cheap share more of its price than a dear o
 is 5.5 bp of a $10 share and 0.2 bp of a $300 one — and a flat rate in basis points cannot say
 so over a universe that spans both. The per-share commission is charged on every share of a
 fill that pays commission at all: a taker's, and a maker's under a model that states no
-`maker_bps`. A maker's fill under a stated `maker_bps` still pays that rate alone, because the
+`maker_bps`. Per share means per contract on a multiplied instrument, whose notional is the
+price times the contract multiplier, and so does `sell_fee_per_share` below. A maker's fill under a stated `maker_bps` still pays that rate alone, because the
 rate is by contract the whole charge on that fill; a per-share-priced account states its maker
 net there, commission less the rebate. It is applied where every cost is, once, in the
 runner's extraction; `self.balance` books the same; what a sleeve reserves when it sizes
