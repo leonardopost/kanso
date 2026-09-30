@@ -3,6 +3,24 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## v0.13.0 — 2026-09-30
+
+- **Cards run one calendar day at a time.** The parent stages a card's window per session and the child folds each chunk as it passes — period ends, last prices, lows and highs, quoted half-spreads — running the engine in streaming mode with its data cleared between chunks. The same ten-session tick card peaked at 0.86 GB instead of 2.15 GB with identical fills and intents (`docs/backlog.md` row 95 closed).
+- **`book`: level-two order-book changes as a built-in data type.** Loaded from files with `ts_event`, `action`, `side`, `price` and `size` (`order_id`, `flags`, `sequence` optional), required by a hypothesis at tick resolution, delivered to the sleeve through `on_order_book_deltas`; when a hypothesis holds the book both simulated venues run `L2_MBP` with `trade_execution` and `queue_position`, so an order that joins a level waits behind the size shown ahead of it (row 96 closed).
+- **`kanso data load --supersedes <dataset_id>`.** The one way a pinned mistake is corrected: the successor takes the place of the pinned dataset it names, whose files go, and a snapshot that named it no longer supports a certification (row 97 closed).
+- **`costs.sell_fee_bps` and `costs.sell_fee_per_share`: the sell-side fees.** Charged on every sale, maker or taker — the SEC transaction fee per notional and the FINRA activity fee per share — reserved at half per side, honoured by `cost_scenario` and `cost_stress`.
+- **A hypothesis's cost model is part of its scope.** `hyp add` clears the best when the costs move, as it does for the windows and the universe; rows pinned before this read as unchanged.
+- **`fixed_params` on a sleeve's `Config`.** Names the numeric fields the plateau gate leaves alone — a state selector, a clock constant — refused unless they are numeric fields of the Config.
+- **`deflated_contribution` uses a robust dispersion.** The trial spread is 1.4826 × the median absolute deviation, recorded as `trial_spread_bps`, so one ruinous trial no longer deflates every other.
+- **A certificate is of the hypothesis as its run pinned it.** Certificates carry `hypothesis_sha` in the store (migration 0009), the file name (`<sha7>-h<pin7>-<n>-p<plan>-e<engine>.yaml`) and the repeat refusal; a stall reads the pin off the stalled run.
+- **A hypothesis a lane holds is neither claimed again nor queued again.** The window between a claim and its run's first record is closed; `queue add` refuses a hypothesis held by a lane whose run is about to begin.
+- **The research path no longer throttles order submission.** The engine's default risk limit of a hundred orders a second denied the hundred-and-first inside one second of data time on the card path and not on the node path; both now run without the limit, and `kanso replay parity` holds through a flicker of more than a hundred orders a second.
+- Two engine facts in `kanso doctor`: a print fills a resting limit by its own size, and a joining order under `queue_position` waits for the size ahead of it.
+- `docs/backlog.md` rows 98 (a taker's fill at tick resolution pays half a spread the engine already crossed) and 99 (a book-only hypothesis states a fixed spread).
+- **`costs.latency_ms`: how long the simulated venue takes to see an order.** Every insert, update and cancel reaches the book that many milliseconds after the sleeve sent it, on both code paths, and the book carries on in between; zero, the default, configures no model. Measured on the honest AMD book lane: a rule that re-posts on every touch move made +10.7 bp a session at 0 ms and nothing at any real delay.
+- **A failed lane puts back only the hypothesis it holds.** A claim recorded under another lane is that lane's to answer for, so a hypothesis re-pinned and claimed elsewhere while the first lane's card ran is no longer queued a second time.
+- The `kanso-data` skill names the `book` type and its columns; the `hypothesis.yaml` template names `fixed_params`, `sell_fee_bps` and `sell_fee_per_share`.
+
 ## v0.12.1 — 2026-09-28
 
 - **A lane releases the window before it supervises the card.** The parent reads the research window, writes it to the card's payload and, until now, kept the points alive in its own frame for as long as the child ran — a second copy of the whole window beside the card's own. Measured on an eighteen-month five-second window: 1.4 GB held per lane beside a 2.7 GB card, and six such lanes put a 16 GB host into swap, where the largest baseline could not finish inside its budget. The points are now dropped once the payload is on disk, so a lane's footprint during a card is the card's; `mem_per_lane_gb` describes the card alone.
