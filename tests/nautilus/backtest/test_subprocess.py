@@ -396,7 +396,10 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     """Measured with real processes: a lane killed outright takes its card with it.
 
     The card leads its own session, so the kill never reaches it; left to itself this one
-    would spend far longer than the wait below in `on_start` alone.
+    would spend far longer than the wait below in `on_start` alone. The payload is staged
+    as the parent stages it — the header, the request, then the session's points as their
+    own record — because a card handed no session runs nothing and ends at once, which
+    made this check a race against the child's start-up.
     """
     import pickle
     import signal
@@ -411,9 +414,8 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     handed = tmp_path / "request.pkl"
     with handed.open("wb") as handle:
         pickle.dump({"extensions": []}, handle)
-        pickle.dump(
-            {"request": request.plain(), "instruments": instruments, "groups": groups}, handle
-        )
+        pickle.dump({"request": request.plain(), "instruments": instruments}, handle)
+        pickle.dump({"groups": groups}, handle)  # one session, as the parent stages it
     starts_a_card = (
         "import os, subprocess, sys, time\n"
         f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r}, {str(handed)!r},"

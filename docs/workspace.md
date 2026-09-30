@@ -609,6 +609,32 @@ two versions certified under different rules cannot share a stage venue, which i
 exchange: the stage's node refuses to build it (exit 2), naming
 `venues.<MIC>.costs.limit_fill`.
 
+`costs.latency_ms` is the other key that is not a charge: how long the simulated venue
+takes to see an order.
+
+```yaml
+costs:
+  latency_ms: 20                   # zero unless stated: no delay, no model
+```
+
+Every order command — an insert, an update, a cancel — reaches the venue's book that many
+milliseconds after the sleeve sent it, on both code paths alike, and the book carries on in
+between: a print that would have filled the order in that interval finds it not there yet,
+and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
+the first point of data after its delay has passed, and only after matching that point, so
+the delay a run models is never shorter than the one stated and at tick resolution
+exceeds it by one point. It models the round trip from
+the strategy to the exchange's book through the account and route it will trade on, and it
+is measured there, on real orders, rather than assumed. State the whole round trip: a feed
+that reaches the strategy late and an order that reaches the book late add up, and a rule
+that reacts to a point and posts lands the same instant either way, so one number carries
+both. Availability (`ts_init`, `docs/concepts.md`) is a property of the data, when it became
+public, never of the route that carries it to you. Zero, the
+default, configures no latency model at all, so a venue model that states none is built
+exactly as it was before the key existed. Like every cost it is inherited — a broker's
+declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the
+hypothesis's scope, so a re-pin that changes it starts the search again.
+
 **A print fills a resting limit by its own size**, and no more: a buy of 320 met by four
 sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per print, and met
 by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine fact). So the

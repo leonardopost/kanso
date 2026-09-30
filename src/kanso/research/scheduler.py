@@ -311,14 +311,18 @@ def remove(store: StateStore, hyp_id: str) -> str:
     return str(detail["from"])
 
 
-def put_back(store: StateStore, hyp_id: str) -> QueueItem | None:
+def put_back(store: StateStore, hyp_id: str, lane: str | None = None) -> QueueItem | None:
     """Return a failed lane's hypothesis to the queue, or say why not with `None`.
 
     Beside the stalled ones when its run is still open, behind them when the lane held it
     without one — a baseline that would not run, or a stall whose certification could not.
     Nothing comes back that was retired, or that the operator took out of the queue while
     the lane held it: the lane's failure is not a reason to overrule either, and a retire
-    closes the claim so that `hyp resume` does not revive it.
+    closes the claim so that `hyp resume` does not revive it. Nor does anything come back
+    that another lane holds by now: with `lane`, a claim recorded under a different lane is
+    that lane's to answer for — the operator took the hypothesis out from under this one,
+    added it again and a second lane claimed it while this lane's card was still running,
+    and a return here would have the two lanes run it at once.
     """
     if _status(store, hyp_id) in DEAD:
         _release(store, hyp_id, "retired")
@@ -326,6 +330,9 @@ def put_back(store: StateStore, hyp_id: str) -> QueueItem | None:
     if active_run(store, hyp_id) is not None:
         return requeue(store, hyp_id, STALL_PRIORITY)
     if claimed(store, hyp_id):
+        passage = last_passage(store, hyp_id)
+        if lane is not None and passage is not None and passage[1].get("lane") != lane:
+            return None
         return on_baseline_failed(store, hyp_id)
     return None
 

@@ -94,6 +94,29 @@ def test_the_limit_fill_rule_is_inherited_and_overridden_like_any_cost() -> None
         CostsOverride.model_validate({"limit_fill": "sometimes"})
 
 
+def test_a_latency_is_zero_by_default_and_inherited_like_any_cost() -> None:
+    """Zero when nobody states it; the broker, the venue entry and the hypothesis override it
+    in that order; a negative or infinite one is refused."""
+    assert resolve_venue_model("XNAS").costs.latency_ms == 0.0
+    stated = resolve_venue_model(
+        "XNAS",
+        declaration=VenueDeclaration(costs=CostsOverride(latency_ms=45)),
+        hypothesis_costs=CostsOverride(latency_ms=20),
+    )
+    assert stated.costs.latency_ms == 20.0
+    assert stated.origins.costs == "hypothesis"
+    for bad in (-1, float("inf")):
+        with pytest.raises(ValidationError):
+            CostsOverride(latency_ms=bad)
+
+
+def test_a_venue_model_recorded_before_the_latency_key_reads_as_no_delay() -> None:
+    document = resolve_venue_model("XNAS").model_dump()
+    del document["costs"]["latency_ms"]
+
+    assert VenueModel.model_validate(document).costs.latency_ms == 0.0
+
+
 def test_a_maker_rate_is_unstated_by_default_and_may_be_a_rebate() -> None:
     """`None` charges a resting fill like any other; zero is a maker paying nothing."""
     assert resolve_venue_model("XNAS").costs.maker_bps is None

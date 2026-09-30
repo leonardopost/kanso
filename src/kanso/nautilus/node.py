@@ -468,7 +468,7 @@ def run(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
-        sandbox.attach(kernel, node.venues(), points)
+        venues = sandbox.attach(kernel, node.venues(), points)
         strategies = _components(built, node.placements)
         for strategy, request in zip(strategies, requests, strict=True):
             arm(strategy, points)
@@ -476,7 +476,7 @@ def run(
             if request.prefix is not None:
                 warm(strategy, opens_ns)
             backtest.booked(strategy, request)
-        books = loop.run_until_complete(_drive(built, client, strategies, halt, points))
+        books = loop.run_until_complete(_drive(built, client, strategies, halt, points, venues))
         realised = tuple(
             _realised(placed, request, kernel, groups, books, window.instruments)
             for placed, request, groups in zip(
@@ -679,6 +679,7 @@ async def _drive(
     strategies: Sequence[Any],
     halt: Halt,
     points: Sequence[Any],
+    venues: Sequence[sandbox.SimulatedVenue] = (),
 ) -> dict[tuple[str, str], Book]:
     """Start the node, feed it the window, take the book, flatten it and stop.
 
@@ -693,6 +694,9 @@ async def _drive(
     books = _books(built.kernel, strategies, points)
     if halt.reason is None:
         _flatten(strategies)
+        await client.settle()
+        for venue in venues:
+            venue.advance_past_latency()
         await client.settle()
     else:
         await _halted(built)

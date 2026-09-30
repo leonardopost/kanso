@@ -736,6 +736,29 @@ def test_remove_reaches_a_hypothesis_a_lane_holds_and_its_failure_leaves_it_out(
     assert ids(store) == []
 
 
+def test_a_failed_lane_does_not_put_back_a_hypothesis_another_lane_claimed_since(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Measured on a live workspace on 2026-09-29: a lane's baseline card ran past its budget
+    after the operator had taken the hypothesis out from under it, re-pinned it and queued it
+    again, and a second lane had claimed it; the first lane's failure put it back a second
+    time and a third lane began a run beside the second's. The claim on record is the second
+    lane's, so the first lane's put-back is not its to make."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    assert scheduler.remove(store, hyp_id) == "lane"
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l2") == hyp_id
+
+    assert scheduler.put_back(store, hyp_id, "l1") is None
+
+    assert ids(store) == []
+    assert scheduler.claimed(store, hyp_id)
+    assert scheduler.put_back(store, hyp_id, "l2") is not None, "the lane that holds it may"
+    assert ids(store) == [hyp_id]
+
+
 def test_recover_for_one_lane_puts_back_only_what_that_lane_held(
     ws: Workspace, store: StateStore
 ) -> None:
