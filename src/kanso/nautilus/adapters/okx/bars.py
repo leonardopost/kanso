@@ -17,9 +17,21 @@ the definition's size precision, and a row whose `confirm` is not `"1"` is dropp
 that opened strictly before `X`, `before=Y` those that opened strictly after `Y`, and the two
 together the newest `limit` of the candles between them. `limit` is honoured to 300 and a
 larger one answers 300. So a UTC day's bars — closes in `[D, D+1)`, opens in
-`[D - size, D+1 - size)` — are asked for as `after = D+1 - size`, `before = D - size - 1`,
-and walked back page by page, each page's oldest open becoming the next `after`, until a
-page comes back empty; they are yielded oldest first, one day in memory at a time.
+`[D - size, D+1 - size)` — are asked for within `after = D+1 - size`, `before = D - size - 1`.
+
+**A day is asked for in page-sized slices, several at once.** Measured on 2026-09-30, a page
+of 300 answered in 0.4 to 0.8 s, so one page after another ran at about 1.3 requests a
+second, well under the table's quota. Pages are addressed by time, so the day's opens are cut
+into slices of 300 candles back from its end — `after = D+1 - size - k x 300 x size` — and
+every slice is asked for under the day's own `before`, with up to `rate_per_second` of them
+in flight (never more than `IN_FLIGHT`) and the client's quota holding the rate. A slice's
+page is its 300 candles when none is missing and, when some are, every candle of the slice
+and older ones of the day besides. A page that holds nothing as old as the slice's oldest
+open is walked on from its own oldest open, as a whole day once was, until a page reaches
+the slice's oldest open or comes back empty; so the day holds every candle the endpoint
+serves between its bounds, however the slices fall and whatever a page holds. The candles
+are yielded oldest first, one day at a time, with no more than one slice beyond those in
+flight fetched ahead of the day being yielded.
 
 **The bar sizes are the endpoint's, spelled its way.** It answers code `51000`, "Parameter
 bar error", for a size it does not serve (`2s`, `10s`, `4m`, `1h` in lower case, `3H`, `8H`,
@@ -37,13 +49,18 @@ found by bisection between it and today, a handful of requests, and named.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections import deque
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import date
+from itertools import groupby, islice
 from typing import Any, ClassVar, Final
 
 from kanso.data.loaders.points import bar_type, instrument_id, make_bar
 from kanso.errors import ValidationError
+from kanso.nautilus.adapters.okx.config import table
 from kanso.nautilus.adapters.okx.history import (
     DAY,
     NS_PER_MS,
@@ -59,12 +76,17 @@ from kanso.nautilus.adapters.okx.reference import PublicClient
 from kanso.nautilus.adapters.okx.venue import VENUE
 from kanso.schemas.duration import parse_duration
 
-__all__ = ["BAR_SIZES", "CANDLES", "PAGE", "OkxBarsLoader", "build_bar"]
+__all__ = ["BAR_SIZES", "CANDLES", "IN_FLIGHT", "PAGE", "OkxBarsLoader", "build_bar"]
 
 CANDLES: Final = "/api/v5/market/history-candles"
 
 PAGE: Final = 300
 """Candles per page: the most the endpoint answers, whatever `limit` asks for."""
+
+IN_FLIGHT: Final = 20
+"""The most page requests in flight at once, whatever the table's rate: the exchange documents
+this endpoint as admitting 20 requests in two seconds from one address, so more than that in
+flight could only be throttled."""
 
 BAR_SIZES: Final[dict[str, str]] = {
     "1s": "1s",
@@ -186,30 +208,57 @@ class OkxBarsLoader(HistoryLoader):
     def points(
         self, client: PublicClient, series: Series, span: tuple[date, date]
     ) -> Iterator[Any]:
-        """Each day's closed candles, oldest first, one day in memory at a time; a candle that
-        does not close inside its day is dropped, whatever the bounds should have kept out."""
+        """Each day's closed candles, oldest first, one day at a time, its slices asked for
+        up to `rate_per_second` at once and never more than `IN_FLIGHT`; a candle that does not
+        close inside its day is dropped, whatever the bounds should have kept out."""
         step = self._step(series)
-        for day in days(span):
-            lower = day_ms(day) - step
-            after_day = day_ms(day + DAY) - step
-            found: dict[int, Sequence[Any]] = {}
-            after = after_day
-            while True:
-                rows = self._page(client, series, after=after, before=lower - 1)
-                opened = [int(row[TS]) for row in rows]
-                if not rows or min(opened) >= after:
-                    break
-                found.update(zip(opened, rows, strict=True))
-                after = min(opened)
-            for key in sorted(found):
-                point = build_bar(series, found[key]) if lower <= key < after_day else None
-                if point is not None:
-                    yield point
+        slices = (
+            (day, after)
+            for day in days(span)
+            for after in range(day_ms(day + DAY) - step, day_ms(day) - step, -PAGE * step)
+        )
+
+        def fetched(one: tuple[date, int]) -> tuple[date, list[tuple[int, Sequence[Any]]]]:
+            return one[0], self._slice(client, series, *one)
+
+        width = min(table(self.workspace).rate_per_second, IN_FLIGHT)
+        with closing(_ahead(fetched, slices, width)) as pages:
+            for day, parts in groupby(pages, key=lambda page: page[0]):
+                lower, after_day = day_ms(day) - step, day_ms(day + DAY) - step
+                found = {key: row for _, rows in parts for key, row in rows}
+                for key in sorted(found):
+                    point = build_bar(series, found[key]) if lower <= key < after_day else None
+                    if point is not None:
+                        yield point
 
     # --- internals ------------------------------------------------------------
 
     def _step(self, series: Series) -> int:
         return int(parse_duration(str(series.resolution), "resolution").total_seconds() * 1000)
+
+    def _slice(
+        self, client: PublicClient, series: Series, day: date, after: int
+    ) -> list[tuple[int, Sequence[Any]]]:
+        """The candles of the day opened in `[after - PAGE x size, after)`, keyed by their open,
+        and whatever older ones of the day the pages that held them carried.
+
+        One page, unless it holds nothing as old as the slice's oldest open: then the slice is
+        walked back from the page's own oldest open until a page reaches the slice's oldest
+        open, comes back empty, or holds nothing older than it was asked for.
+        """
+        step = self._step(series)
+        lower = day_ms(day) - step
+        floor = max(lower, after - PAGE * step)
+        found: list[tuple[int, Sequence[Any]]] = []
+        while True:
+            rows = self._page(client, series, after=after, before=lower - 1)
+            opened = [int(row[TS]) for row in rows]
+            if not rows or min(opened) >= after:
+                return found
+            found.extend(zip(opened, rows, strict=True))
+            if min(opened) <= floor:
+                return found
+            after = min(opened)
 
     def _served(self, client: PublicClient, series: Series, day: date) -> bool:
         """Whether a candle closing at or before `day` 00:00 UTC is served."""
@@ -234,3 +283,24 @@ class OkxBarsLoader(HistoryLoader):
             params["before"] = str(before)
         rows = answered(client, CANDLES, params, self.pause)
         return tuple(row for row in rows if isinstance(row, list))
+
+
+def _ahead[T, R](fetch: Callable[[T], R], items: Iterable[T], width: int) -> Generator[R]:
+    """`fetch` of each item, in the items' order, with up to `width` of them running at once.
+
+    One more item is handed to the pool as each result is taken, so a thread is never idle
+    while the caller works on a result, and nothing is fetched further ahead than that. A
+    fetch that raises raises here, in its turn; closing the iterator early cancels what has
+    not started and waits for what has, so no request outlives the load that asked for it.
+    """
+    queue = iter(items)
+    with ThreadPoolExecutor(max_workers=width, thread_name_prefix="okx-bars") as pool:
+        pending: deque[Future[R]] = deque(pool.submit(fetch, item) for item in islice(queue, width))
+        try:
+            while pending:
+                oldest = pending.popleft()
+                pending.extend(pool.submit(fetch, item) for item in islice(queue, 1))
+                yield oldest.result()
+        finally:
+            for future in pending:
+                future.cancel()

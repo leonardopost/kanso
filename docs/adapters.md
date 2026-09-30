@@ -476,7 +476,7 @@ credential.
 | key | default | what it does |
 |---|---|---|
 | `region` | *none* | `global`, `eea` or `us`, in any case; the regional host that accepts the account's key |
-| `rate_per_second` | `5` | the flat quota kanso's own public requests to the API share — the reference's and the public-history loaders'; `1` to `1000` |
+| `rate_per_second` | `5` | the flat quota kanso's own public requests to the API share — the reference's and the public-history loaders', however many are in flight; `1` to `1000` |
 
 `rate_per_second` governs kanso's own requests only. The engine's own clients meter
 themselves — its compiled client carries a global rate-limit bucket and one per endpoint —
@@ -618,8 +618,10 @@ source stops, and the manifest records the span actually served. Every dataset i
 settles, so `ts_init` equals `ts_event` and no publication rule is involved.
 
 **Throttles are waited out; nothing else is.** An answer of HTTP 429, code `50011`, is asked
-again after 2, 4, 6 and 8 seconds; a fifth stops the command (exit 1), as does any other
-answer that is not the API's success, with a remedy to re-run or lower `rate_per_second`.
+again after 2, 4, 6 and 8 seconds — each request on its own, so a page throttled while others
+are in flight waits out its own throttle — and a fifth stops the command (exit 1), as does
+any other answer that is not the API's success, with a remedy to re-run or lower
+`rate_per_second`.
 
 #### `okx_bars`
 
@@ -629,8 +631,24 @@ instant it **opened**. The bar is stamped at its close, `ts + size`, as both `ts
 `volCcy` 14.3997 BTC at a contract of 0.01 BTC); and the candle still forming — the newest
 row, `confirm` `"0"` — is dropped. Rows come newest first, 300 to a page whatever `limit`
 asks, and `after` and `before` are both exclusive (`after=X` answers the candles that opened
-before `X`); a day is walked back page by page to an empty page and yielded oldest first,
-one day in memory at a time.
+before `X`).
+
+**A day's pages are asked for together.** Measured on 2026-09-30 against `us.okx.com`, a
+page of 300 candles answered in 0.4 to 0.8 seconds, so pages asked for one after another ran
+at about 1.3 requests a second: a three-month load of `5s` bars, 95 days of 58 pages, took
+about 75 minutes a swap. Pages are addressed by time, so a day is cut into slices of 300
+candles back from its end, each asked for within the day's own bounds, and up to
+`rate_per_second` of them are in flight at once — never more than 20, the most the exchange
+documents this endpoint admitting from one address in two seconds — with the table's quota
+holding the rate. At the default of five a second, a day of `5s` bars is 58 requests paced
+by the quota rather than by the endpoint's answer time: driven through the engine's client
+against a loopback stand-in for the endpoint answering each page in 0.4 to 0.8 seconds, one
+day of `5s` bars took 36.0 seconds in 59 requests one after another and 11.5 seconds in 58
+together — 5.03 a second, never more than 10 in one second or 15 in two — with the same
+17,280 bars; at `rate_per_second = 2` the same day took 29.0 seconds, 2.00 a second. A slice
+whose page holds nothing as old as the slice's first candle is walked on from the page's
+oldest candle, so a day with candles missing, or a page shorter than 300, yields exactly the
+bars a walk one page at a time would. The bars are yielded oldest first, one day at a time.
 
 The sizes are the endpoint's, in the spelling whose candles open on UTC — its `6H`, `12H`,
 `1D` and `1W` open on Hong Kong time, `1D` at 16:00 UTC — and any other size is refused
