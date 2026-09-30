@@ -33,7 +33,7 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.processes import children, ends, running
 
-from .conftest import DOCUMENT, classify, document
+from .conftest import DOCUMENT, RESEARCH, classify, document
 from .mocked import ALIGNED, SEED, proposal, scripted, write_script
 from .test_scheduler import open_run
 
@@ -244,6 +244,76 @@ def test_a_hypothesis_taken_out_while_a_lane_held_it_does_not_come_back_when_it_
     assert daemon.worker(ws, "l1") == 0
     assert scheduler.queued(store) == []
     assert daemon.LANE_FAILED in [event.kind for event in store.events(subject=hyp_id)]
+
+
+SLOW_READ_S = 0.2
+"""What the slow catalog below spends on each session's bars."""
+
+REMOVED_ON = 3
+"""The read of the baseline's window during which the operator runs `queue remove`."""
+
+
+def test_a_removal_during_the_window_load_frees_the_lane_at_the_next_read(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lane lets go at the next catalog read and takes the next hypothesis at once.
+
+    Measured 2026-09-30 on 0.13.1.dev1: four lanes whose claims `queue remove` took back
+    went on reading their research windows at 93% of a core for nineteen minutes while
+    twenty hypotheses waited, because a lane asked after its claim only once the whole
+    window was read and the baseline had run on it. Here the catalog serves the baseline's
+    window a session a read, slowly, and the removal lands during the third read: no
+    fourth is made, no card is started, nothing is recorded as a failure, and the lane
+    claims the next hypothesis without the back-off a failure costs.
+    """
+    from nautilus_trader.model.data import Bar
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    held = classify(ws, store, DOCUMENT)
+    waiting = classify(ws, store, document(id="demo_two"))
+    scheduler.enqueue(store, held, priority=1)
+    scheduler.enqueue(store, waiting)
+    sessions = (RESEARCH[1] - RESEARCH[0]).days + 1
+    query = ParquetDataCatalog.query
+    reads: list[float] = []
+    removed: list[float] = []
+
+    def slow(catalog: Any, data_cls: type, *args: Any, **kwargs: Any) -> Any:
+        if data_cls is Bar:
+            reads.append(time.monotonic())
+            if len(reads) == REMOVED_ON:
+                with StateStore(ws.path("state.db")) as operator:
+                    assert scheduler.remove(operator, held) == "lane"
+                removed.append(time.monotonic())
+            time.sleep(SLOW_READ_S)
+        return query(catalog, data_cls, *args, **kwargs)
+
+    drive = research_driver.run
+    driven: list[tuple[str, float]] = []
+
+    def driving(opened_ws: Workspace, opened: StateStore, subject: str, **kwargs: Any) -> Any:
+        driven.append((subject, time.monotonic()))
+        if subject == waiting:
+            daemon.request_stop()  # the lane took the next one, which is all this test asks
+            return SimpleNamespace(ended=False)
+        return drive(opened_ws, opened, subject, **kwargs)
+
+    waited: list[float] = []
+    monkeypatch.setattr(ParquetDataCatalog, "query", slow)
+    monkeypatch.setattr(research_driver, "run", driving)
+    monkeypatch.setattr(daemon, "_wait", waited.append)
+
+    assert daemon.worker(ws, "l1") == 0
+
+    assert len(reads) == REMOVED_ON, "no session is read after the one the removal landed in"
+    assert [subject for subject, _ in driven] == [held, waiting]
+    assert driven[-1][1] - removed[0] < SLOW_READ_S * (sessions - REMOVED_ON)
+    assert waited == [], "a removal is the operator's word, not a failure to back off from"
+    kinds = [event.kind for event in store.events(subject=held)]
+    assert daemon.LANE_FAILED not in kinds and research_loop.BASELINE_FAILED not in kinds
+    assert records.active(store, held) is None and records.cards_of(store, held) == []
+    assert not lanes.lane_dir(ws, "l1", held).exists()
+    assert scheduler.queued(store) == [] and scheduler.claimed(store, waiting)
 
 
 def test_a_hypothesis_retired_while_a_lane_held_it_stays_out_and_the_lane_lives(

@@ -863,12 +863,14 @@ def test_a_removal_that_lands_during_the_baseline_is_honoured_before_the_run_exi
 
     monkeypatch.setattr(research_loop, "_baseline", removing)
 
-    with pytest.raises(PreconditionError, match="taken out of the queue"):
+    with pytest.raises(research_loop.TakenError, match="taken out of the queue"):
         driver.run(ws, store, prepared_hyp, cards=1, lane="l1")
 
     assert records.active(store, prepared_hyp) is None
     assert not lanes.lane_dir(ws, "l1", prepared_hyp).exists()
     assert records.cards_of(store, prepared_hyp) == []
+    kinds = [event.kind for event in store.events(subject=prepared_hyp)]
+    assert research_loop.BASELINE_FAILED not in kinds, "the operator's word, not a failure"
 
 
 def test_two_lanes_never_touch_each_other_s_files(ws: Workspace, store: StateStore) -> None:

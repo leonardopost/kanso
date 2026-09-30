@@ -19,7 +19,7 @@ from kanso.data import snapshot
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
 from kanso.nautilus import backtest
-from kanso.research import loop, passages, records, scheduler
+from kanso.research import lanes, loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
 from kanso.schemas import Hypothesis, RunRecord
 from kanso.state import StateStore
@@ -1208,3 +1208,57 @@ def test_an_objective_that_measures_no_benchmark_runs_no_hold(
 
     assert loop._benchmark_run(setup, snapshot_id="a" * 64, cache=cache) is None  # type: ignore[arg-type]
     assert cache == {}
+
+
+# --- a removal while the run is being begun -------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("doc", "entered"),
+    [
+        (document(warmup={"sessions": 3}), "warmup_prefix"),
+        (HELD, "benchmark"),
+        (DOCUMENT, "_stage"),
+    ],
+    ids=["warmup", "benchmark", "baseline"],
+)
+def test_a_removal_is_honoured_at_the_next_read_of_whatever_begin_is_reading(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    doc: dict[str, object],
+    entered: str,
+) -> None:
+    """The warmup's sessions, the benchmark's hold and the baseline's window are all read in
+    the lane's own process before the run exists. A removal that lands as one of them
+    begins is honoured at its first read: nothing of it is read, and the begin leaves no
+    lane directory and no `baseline_failed`, because no baseline failed."""
+    from nautilus_trader.model.data import Bar
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    hyp_id = classify(ws, store, doc)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    real = getattr(backtest, entered)
+    query = ParquetDataCatalog.query
+    read: list[bool] = []
+
+    def removing(*args: object, **kwargs: object) -> object:
+        assert scheduler.remove(store, hyp_id) == "lane"
+        return real(*args, **kwargs)
+
+    def counted(catalog: object, data_cls: type, *args: object, **kwargs: object) -> object:
+        if data_cls is Bar:
+            read.append(passages.taken(store, hyp_id, "l1"))
+        return query(catalog, data_cls, *args, **kwargs)
+
+    monkeypatch.setattr(backtest, entered, removing)
+    monkeypatch.setattr(ParquetDataCatalog, "query", counted)
+
+    with pytest.raises(loop.TakenError, match="taken out of the queue while lane l1 held it"):
+        loop.begin(ws, store, hyp_id, lane="l1")
+
+    assert True not in read, "no bar is read once the hypothesis is taken"
+    assert records.active(store, hyp_id) is None
+    assert not lanes.lane_dir(ws, "l1", hyp_id).exists()
+    assert loop.BASELINE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
