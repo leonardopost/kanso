@@ -13,13 +13,25 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from nautilus_trader.model.data import OrderBookDelta
+from nautilus_trader.model.enums import BookAction, OrderSide
+from nautilus_trader.model.identifiers import InstrumentId, Symbol
 
 from kanso.criteria.gates import max_hold
+from kanso.criteria.run import midnight_ns
+from kanso.data.loaders.points import make_delta
 from kanso.data.loaders.synthetic import SyntheticLoader
 from kanso.nautilus.backtest import execute
 from kanso.schemas import Hypothesis
 from tests.criteria.builders import context
-from tests.nautilus.backtest.conftest import RESEARCH, SYMBOL, VENUE, hypothesis, instrument
+from tests.nautilus.backtest.conftest import (
+    RESEARCH,
+    SYMBOL,
+    VENUE,
+    _venue,
+    hypothesis,
+    instrument,
+)
 
 SESSIONS = (date(2024, 1, 2), date(2024, 1, 3))
 """Two sessions, so a position stranded by the race is held across the night."""
@@ -220,6 +232,57 @@ class Strategy(KansoStrategy):
             self.submit_entry(instrument_id, "SELL", qty=100)
 '''
 )
+
+
+BOOK_ONLY = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Holds the book and nothing else: buys at the offer on its second change, rests an
+    exit far above it on its fifth, and on its thirtieth cancels it and exits at market
+    once, never asking again."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_order_book_deltas(self, deltas):
+        instrument_id = deltas.instrument_id
+        self.seen += 1
+        if self.seen == 2:
+            self.submit_entry(instrument_id, "BUY", qty=100, price=10.02)
+        elif self.seen == 5:
+            self.submit_exit(instrument_id, price=20.00)
+        elif self.seen == 30:
+            self.cancel_all_orders(instrument_id)
+            self.submit_exit(instrument_id)
+'''
+)
+
+BOOK_OPEN_NS = 14 * 3_600 * 1_000_000_000
+"""Where the book below opens, from midnight UTC of its session."""
+
+
+def book(day: date) -> list[OrderBookDelta]:
+    """A book of 500 bid at 10.00 and 500 offered at 10.02, then a change to the offer's size
+    every second for eighty seconds, so a sleeve that holds only the book has a point to act
+    on each second."""
+    base = midnight_ns(day) + BOOK_OPEN_NS
+    ident = InstrumentId(Symbol(SYMBOL), _venue())
+    changes = [
+        make_delta(ident, BookAction.ADD, OrderSide.BUY, 1_000, 500, 1, 2, 0, base, base),
+        make_delta(ident, BookAction.ADD, OrderSide.SELL, 1_002, 500, 2, 2, 0, base, base),
+    ]
+    for second in range(1, 80):
+        ts = base + second * 1_000_000_000
+        changes.append(
+            make_delta(
+                ident, BookAction.UPDATE, OrderSide.SELL, 1_002, 500 + second, 2, 2, 0, ts, ts
+            )
+        )
+    return changes
 
 
 def taken_back(cancel: str, *, priced: bool = False) -> bytes:
@@ -440,3 +503,28 @@ def test_an_exit_cancelled_in_flight_still_counts_until_its_cancel_lands(
         ("SELL", 100.0),
     ]
     assert never_short(run.fills[:2]) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_exit_owed_to_a_sleeve_that_holds_only_the_book_is_still_paid(
+    request_for, latency_ms: float
+) -> None:
+    """A book change reaches the author's `on_order_book_deltas` and no other handler, so
+    the owed exit must be asked for again after that handler too. Under a latency the
+    market exit asked for once after the cancel is sized to nothing and owed; it goes out
+    on a later book change and the sleeve is flat within the session. This guards the owed
+    exit on book points: paid only after bars, quotes, trades and custom data, it was never
+    sent, and the 100 shares were held to the end of the window. origin/main passes,
+    because it did not count working exits at all."""
+    document = hypothesis().model_dump(mode="json")
+    document.update(resolution="tick", data_requirements=["book"])
+    document["costs"] = chasing_costs(latency_ms)
+    hyp = Hypothesis.model_validate(document)
+    day = RESEARCH[0]
+    request = request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=hyp)
+    result = execute(request, [instrument()], [tuple(book(day))])
+    assert not result.crashed, result.traceback_tail
+    fills = result.run.fills
+    assert [(fill.side, fill.qty) for fill in fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    base = midnight_ns(day) + BOOK_OPEN_NS
+    assert all(fill.ts_ns - base < 80 * 1_000_000_000 for fill in fills)

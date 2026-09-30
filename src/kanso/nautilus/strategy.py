@@ -56,9 +56,9 @@ shrinks the absolute net position is an exit, anything else is an entry.
 
 Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor`
 methods are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`,
-`handle_trade_tick`, `handle_data`, `submit_order`, `submit_order_list`, `cancel_order`,
-`cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all take precedence when the
-engine calls them; `Trader` starts actors before
+`handle_trade_tick`, `handle_order_book_deltas`, `handle_data`, `submit_order`,
+`submit_order_list`, `cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and
+`_stop` all take precedence when the engine calls them; `Trader` starts actors before
 strategies, so a modifier is registered before its host runs; `close_position` and
 `close_all_positions` route through `submit_order`; `portfolio.net_position(instrument_id)`
 returns a signed `Decimal`; an order whose cancel was sent is not `is_closed` and can
@@ -823,6 +823,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         self._dispatch_trade(tick)
         self._consult_due()
+
+    def handle_order_book_deltas(self, deltas: object, historical: bool = False) -> None:
+        """Hand a change to the book to the author, then ask again for any exit still owed.
+
+        A book change reaches `on_order_book_deltas` and no other handler here, so a sleeve
+        that holds only the book would otherwise never be asked again for an exit a cancel
+        in flight held back, and would hold the position to the end of the window. In
+        nautilus_trader 1.231.0 `Actor.handle_order_book_deltas` is `cpdef`, hands the
+        deltas to `on_order_book_deltas` only while the component is running, and hands
+        historical ones to `handle_historical_data` instead.
+        """
+        super().handle_order_book_deltas(deltas, historical)
+        if not historical and self.is_running and not self._warming():
+            self._pay_owed()
 
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):

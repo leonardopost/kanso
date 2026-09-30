@@ -196,6 +196,31 @@ def test_the_two_paths_pay_an_exit_a_cancel_in_flight_held_back_alike(latency_ms
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_pay_an_exit_owed_on_book_points_alike(latency_ms: float) -> None:
+    """A sleeve that holds only the book is asked again for its owed exit after its own
+    `on_order_book_deltas` on both paths, at the same change, so the two agree order for
+    order and fill for fill and both end flat."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, book, chasing_costs
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=BOOK_ONLY, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model), [instrument()], [tuple(book(FORWARD[0]))]
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_the_two_paths_pay_a_stop_a_take_profit_in_flight_cut_alike(latency_ms: float) -> None:
     """A stop sent behind the sleeve's own take-profit still in flight is cut to nothing and
     owed; once the venue holds the take-profit open the owed stop cancels it and takes the
