@@ -353,7 +353,8 @@ after the stop has closed. Under a latency the cancelled orders can still fill u
 cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
 below); an order of the sleeve's still in flight to the venue is not cancelled and counts,
 and what it cuts from an exit at market is owed at any latency, and paid once the venue holds
-that order open and the owed exit has cancelled it. An attached exit rule closes through the
+that order open and the owed exit has cancelled it. A resting order whose cancel the venue
+refused is cancelled again. An attached exit rule closes through the
 same market exit. `self.held(id)` applies the
 sleeve's market orders in flight and no limit or stop order, so a sleeve whose exit rests at
 the ask reads the whole position there until the exit fills; an exit sized from it is cut to
@@ -689,9 +690,14 @@ counted the ones still working: a rule that followed the ask with its exit on ev
 the book bought 50 shares in one session at 20 ms, sold 92, and was left short 42 to the
 session's end, and every card of its lane at 20 ms held a position for close to a day. With
 no latency stated a cancel lands before anything further is matched, so an order the venue
-held open when its cancel was sent is not counted; one cancelled while still in flight is,
-because the venue takes the order before the cancel that follows it and a marketable one
-fills there. Zero, the
+held open when its cancel was sent is not counted. **A cancel for an order the venue does not
+hold yet is held back until it does**, on every path, whatever the latency — `cancel_order`,
+`cancel_orders` and `cancel_all_orders` alike. A node would send it ahead of the order,
+which the venue would then rest uncancelled, and a backtest behind it, so kanso sends it at
+the first point at which the venue holds the order open, before the strategy's handler for
+that point, and counts the order as working until the cancel lands: a marketable one fills
+when the venue takes it, and a resting one can fill on any point matched before its cancel
+lands — with no latency stated, the first point after the one it was sent on. Zero, the
 default, configures no latency model at all, so a venue model that states none is built
 exactly as it was before the key existed. Like every cost it is inherited — a broker's
 declaration, then `venues.<MIC>.costs`, then the hypothesis — and it is part of the

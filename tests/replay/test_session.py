@@ -250,6 +250,51 @@ def test_the_two_paths_pay_a_stop_a_take_profit_in_flight_cut_alike(latency_ms: 
     assert never_short(engine.run.fills) == (100.0, 100.0, 0.0)
 
 
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize(
+    "cancel",
+    [
+        "self.cancel_order(order)",
+        "self.cancel_orders([order])",
+        "self.cancel_all_orders(instrument_id)",
+    ],
+)
+def test_the_two_paths_cancel_an_exit_still_in_flight_alike(cancel: str, latency_ms: float) -> None:
+    """A resting exit cancelled in the handler that sent it, while the venue does not yet
+    hold it, beside an exit at market. The node's live engines would lose a cancel sent
+    then, or skip the order, and the backtest would land it; kanso holds the cancel back on
+    both paths until the venue holds the order open, so the two agree order for order and
+    fill for fill, and the market exit it cut is paid at the same point on both."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CANCELLED_IN_FLIGHT,
+        chasing_costs,
+        points,
+    )
+
+    source = CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancel.encode()).replace(
+        b"round(float(tick.bid_price) - 0.05, 2)", b"round(float(tick.ask_price) * 1.5, 2)"
+    )
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+        ("SELL", 100.0),
+    ]
+
+
 def test_the_two_paths_hold_cancels_in_flight_alike_through_a_flicker() -> None:
     """A re-posting sleeve under latency has cancels and inserts in flight at once; both
     paths land each at the first point after its delay, so neither path fills or denies an

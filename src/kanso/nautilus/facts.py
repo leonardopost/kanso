@@ -262,11 +262,16 @@ fill the order in between; with none, the backtest drains the commands a handler
 it matches the next point, and the cancel always lands first. Measured, a buy resting at 9.50
 and cancelled a minute before a print at 9.49: filled whole under a 30-second latency,
 cancelled unfilled under none — which is why `submit_exit` counts an order the venue held
-open when its cancel was sent as working exactly when the venue model states a latency. An
-order cancelled while still in flight is another matter: the venue takes it before the cancel
-that follows it, and a marketable one fills whatever the latency — measured, a buy at 10.50
-against prints at 10.00, submitted and cancelled in one handler with none, filled whole — so
-it counts until its cancel lands either way. The engine's own guard is the
+open when its cancel was sent as working exactly when the venue model states a latency. All
+of this is measured on the backtest engine, and kanso relies on it for an order the venue
+holds open only, because a cancel sent for an order still on its way to the venue does
+different things on the two code paths. The backtest has already handed such an order to
+the venue (`SUBMITTED`), which takes it and then the cancel; a node still holds it
+`INITIALIZED`, its submit waiting in the live risk engine's queue while the cancel goes
+straight to the live execution engine's, so the cancel reaches the venue first and is lost,
+and the order rests (read in `live/risk_engine.py` and `execution/manager.pyx`). So
+`KansoStrategy` never sends one: it holds the cancel back until the venue holds the order
+open, and counts the order as working until then. The engine's own guard is the
 `reduce_only` flag, and the simulated venue honours it: `close_position` sets it by default,
 a reduce-only order the position has no room left for is rejected rather than opening
 the other side, and its matching engine trims a reduce-only fill to the quantity still open
@@ -278,10 +283,11 @@ flag, and one strategy class runs on every path; and on any fill the simulated v
 every resting standalone reduce-only order to the whole position (`backtest/engine.pyx`),
 so a partial exit — 50 of 100 — marked reduce-only would be grown or shrunk behind the
 author's back and fill differently even with no latency. `cancel_all_orders` marks an order
-open at the venue `PENDING_CANCEL` at once, sends the cancel for one still in flight without
-marking it, and — read in `trading/strategy.pyx` rather than measured — leaves one not yet
-sent; that is what `KansoStrategy.cancel_all_orders` mirrors when it notes the orders it
-cancelled.
+open at the venue `PENDING_CANCEL` at once, which is what `KansoStrategy.cancel_all_orders`
+mirrors when it notes the orders it cancelled; on the backtest it also sends the cancel for
+one still in flight without marking it, and — read in `trading/strategy.pyx` rather than
+measured — leaves one a node has not yet sent, so kanso hands it the orders only when the
+venue holds every one of them open, and cancels them one by one otherwise.
 
 Risk configuration
 ------------------
@@ -940,72 +946,11 @@ def _check_a_cancel_in_flight_leaves_the_order_to_fill() -> tuple[bool, str]:
     )
 
 
-def _check_an_order_cancelled_in_flight_is_taken_before_its_cancel() -> tuple[bool, str]:
-    """Why `submit_exit` counts an order cancelled while in flight even with no latency: the
-    venue takes the order before the cancel that follows it, so a marketable one fills."""
-    from nautilus_trader.backtest.engine import BacktestEngine
-    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
-    from nautilus_trader.model.currencies import USD
-    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
-    from nautilus_trader.model.identifiers import Venue
-    from nautilus_trader.model.objects import Money, Price, Quantity
-    from nautilus_trader.trading.strategy import Strategy
-
-    equity: Any = _sample_equity()
-
-    class Probe(Strategy):  # type: ignore[misc]
-        def __init__(self) -> None:
-            super().__init__()
-            self.seen = 0
-            self.order: Any = None
-            self.sent = ""
-
-        def on_start(self) -> None:
-            self.subscribe_trade_ticks(equity.id)
-
-        def on_trade_tick(self, tick: object) -> None:
-            self.seen += 1
-            if self.seen == 2:
-                self.order = self.order_factory.limit(
-                    equity.id, OrderSide.BUY, Quantity.from_int(10), Price(10.5, 2)
-                )
-                self.submit_order(self.order)
-                self.sent = order_status_to_str(self.order.status)
-                self.cancel_order(self.order)
-
-    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
-    try:
-        engine.add_venue(
-            venue=Venue("XNAS"),
-            oms_type=OmsType.NETTING,
-            account_type=AccountType.MARGIN,
-            base_currency=USD,
-            starting_balances=[Money(1_000_000, USD)],
-        )
-        engine.add_instrument(equity)
-        engine.add_data(_limit_points("trade", 10.0, 10.0))
-        probe = Probe()
-        engine.add_strategy(probe)
-        engine.run()
-        seen = (
-            probe.sent,
-            order_status_to_str(probe.order.status),
-            float(probe.order.filled_qty),
-        )
-    finally:
-        engine.dispose()
-    return seen == ("SUBMITTED", "FILLED", 10.0), (
-        "a buy limit at 10.50 against prints at 10.00, submitted and cancelled in the same "
-        f"handler with no latency, read (status once sent, final status, filled) = {seen}: "
-        "the venue takes the order before the cancel that follows it, and a marketable one "
-        "fills there"
-    )
-
-
 def _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight() -> tuple[bool, str]:
     """What `KansoStrategy.cancel_all_orders` mirrors when it notes the orders it cancelled:
-    the engine marks an order open at the venue `PENDING_CANCEL` at once, leaves one still in
-    flight as it is, and cancels both."""
+    the engine marks an order open at the venue `PENDING_CANCEL` at once. On the backtest it
+    also cancels one still in flight, left as it is, which is why kanso hands it the orders
+    only when the venue holds every one of them open."""
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
     from nautilus_trader.model.currencies import USD
@@ -2831,11 +2776,6 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "an order whose cancel was sent is not closed until the cancel lands, and under a "
         "latency the market can fill it first",
         _check_a_cancel_in_flight_leaves_the_order_to_fill,
-    ),
-    (
-        "an order cancelled while still in flight is taken by the venue before its cancel, "
-        "so a marketable one fills even with no latency",
-        _check_an_order_cancelled_in_flight_is_taken_before_its_cancel,
     ),
     (
         "close_position sends a reduce-only order, which the simulated venue trims to what "
