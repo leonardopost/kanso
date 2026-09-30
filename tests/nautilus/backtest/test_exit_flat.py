@@ -234,6 +234,34 @@ class Strategy(KansoStrategy):
 )
 
 
+CANCELLED_OPEN = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys once, rests an exit above the market on its twenty-eighth quote, and on its
+    thirtieth, with the venue holding that exit open, cancels it and exits at market once."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.resting = None
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 28:
+            self.resting = self.submit_exit(instrument_id, price=PRICE)
+        elif self.seen == 30:
+            order = self.resting
+            CANCEL
+            self.submit_exit(instrument_id)
+'''
+)
+
 BOOK_ONLY = (
     HEAD
     + b'''

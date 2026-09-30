@@ -442,6 +442,7 @@ def test_every_order_command_is_the_exchanges_to_answer(kernel: Any) -> None:
     client.modify_order("c")
     client.cancel_order("d")
     client.cancel_all_orders("e")
+    client.batch_cancel_orders("f")
 
     assert seen == [
         "submit_order(a)",
@@ -449,6 +450,7 @@ def test_every_order_command_is_the_exchanges_to_answer(kernel: Any) -> None:
         "modify_order(c)",
         "cancel_order(d)",
         "cancel_all_orders(e)",
+        "batch_cancel_orders(f)",
     ]
 
 
