@@ -391,10 +391,12 @@ def test_the_operator_s_override_applies_over_what_the_exchange_lists(
 def test_it_validates_on_a_usdt_account(
     ws: Workspace, replay: Replay, key: str, value: str
 ) -> None:
-    """`[research] currency = "USDT"`, or the broker whose venue declares a USDT account."""
+    """`[research] currency = "USDT"`, or the broker whose venue declares a USDT account; a
+    perpetual's hypothesis requires its funding."""
     account = research(ws, key, value)
+    requirements = [*DOCUMENT["data_requirements"], "funding"]
     path = write_hypothesis(
-        account, {**DOCUMENT, "universe": [BTC], "data_requirements": ["bar", "funding"]}
+        account, {**DOCUMENT, "universe": [BTC], "data_requirements": requirements}
     )
 
     assert hyp.validate(account, path).universe == [BTC]

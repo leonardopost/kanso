@@ -56,11 +56,29 @@ shrinks the absolute net position is an exit, anything else is an entry.
 
 Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor`
 methods are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`,
-`handle_trade_tick`, `handle_data`, `submit_order`, `submit_order_list`, `_start` and
+`handle_trade_tick`, `handle_order_book_deltas`, `handle_data`, `submit_order`,
+`submit_order_list`, `cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and
 `_stop` all take precedence when the engine calls them; `Trader` starts actors before
 strategies, so a modifier is registered before its host runs; `close_position` and
 `close_all_positions` route through `submit_order`; `portfolio.net_position(instrument_id)`
-returns a signed `Decimal`; `StrategyConfig` and `ActorConfig` are frozen msgspec structs
+returns a signed `Decimal`; an order whose cancel was sent is not `is_closed` and can
+still fill until the cancel lands — under a latency model after the next point is matched,
+with none before it (`kanso.nautilus.facts` measures both on the backtest engine, and the
+replay tests hold the node to the same fills); `cancel_all_orders` marks every order open at
+the venue `PENDING_CANCEL` at once and cancels one in flight to it as well
+(`kanso.nautilus.facts` measures it on the backtest engine), and skips one still
+`INITIALIZED` (read in `trading/strategy.pyx`), which on the backtest engine an order handed
+to `submit_order` never is when the call returns; a cancel sent for an
+order a node has not yet handed to the venue reaches the venue before the order, where it is
+lost and the order rests (read in `live/risk_engine.py`, `execution/manager.pyx` and
+`trading/strategy.pyx`), which is why kanso holds such a cancel back until the node has
+handed the order over (`KansoStrategy._hold_cancel`); `Strategy.cancel_orders` sends a
+`BatchCancelOrders` and refuses one whose orders are in more than one instrument, or that
+holds an emulated order after its first, after marking the orders before it
+`PENDING_CANCEL` (read in `trading/strategy.pyx`); the order emulator takes an emulated
+order out and marks it pending cancel locally before `cancel_order` returns (read in
+`execution/emulator.pyx`, measured on both paths by the exit and replay tests);
+`StrategyConfig` and `ActorConfig` are frozen msgspec structs
 whose subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls`
 here is kanso's own attribute, honoured by kanso's loader alone.
 """
@@ -92,6 +110,7 @@ from nautilus_trader.model.enums import (
     BookType,
     LiquiditySide,
     OrderSide,
+    OrderStatus,
     OrderType,
     PriceType,
     order_side_to_str,
@@ -110,6 +129,7 @@ from kanso.nautilus.costs import (
     carry,
     fill_cost,
     fixed_half_spread,
+    funding_payment,
     month_turned,
     quote_half_spread,
     reset,
@@ -228,6 +248,11 @@ class KansoConfig(StrategyConfig, frozen=True):
     sizing_budget: float = 0.0
     """The budget every order is sized to when the hypothesis declares `sizing`; zero
     is free sizing, where the author chooses a size within the risk limits."""
+    books_funding: bool = False
+    """Whether the balance books each funding settlement it is handed, as the runner's
+    extraction does. The runner and a stage node on a simulated venue set it, because the
+    simulated account settles no funding; an account a broker keeps settles its own, and a
+    sleeve on one leaves it off. Either way the strategy's `on_data` is handed the point."""
     fixed_params: tuple[str, ...] = ()
     """The numeric fields of an author's own configuration that are not knobs — a selector
     among rules, a clock constant, a size the hypothesis sets — so the `param_plateau` gate
@@ -343,6 +368,50 @@ def _maker_bps(charges: Mapping[str, Any]) -> float | None:
     return None if stated is None else float(stated)
 
 
+def _leaves(orders: Sequence[Any]) -> Decimal:
+    """What a set of orders can still fill between them."""
+    return sum((order.leaves_qty.as_decimal() for order in orders), Decimal(0))
+
+
+_SETTLED = frozenset((OrderStatus.ACCEPTED, OrderStatus.TRIGGERED, OrderStatus.PARTIALLY_FILLED))
+"""The statuses of an order the venue holds open with nothing of the sleeve's to answer."""
+
+
+def _held_open(order: Any) -> bool:
+    """Whether the venue holds an order open and settled: it has taken the order, not closed
+    it, and has no cancel or modify of it still to answer.
+
+    In nautilus_trader 1.231.0 `Order.is_open` does not say so. It counts `PENDING_UPDATE`
+    and `PENDING_CANCEL`, which a modify or a cancel applies to an order the venue has not
+    taken yet (from `SUBMITTED` on the backtest engine), and it is false for an order with
+    an emulation trigger (`Order.is_open_c` in `model/orders/base.pyx`). So kanso reads
+    whether the venue has taken it from `venue_order_id`, which `Order.apply` sets only from
+    the venue's own acceptance or a fill (an update only replaces one already set), and never
+    on submission, a modify or a cancel, on both paths; and whether it is settled from its
+    status, `ACCEPTED`, `TRIGGERED` or `PARTIALLY_FILLED`. An order the venue took whose
+    modify is still in flight (`PENDING_UPDATE`) is not held open: on a node
+    `Strategy.modify_order` goes through the live risk engine's queue and `cancel_order`
+    straight to the live execution engine's (`trading/strategy.pyx`), so a cancel sent
+    behind the modify would overtake it, where the backtest engine lands the modify first
+    and fills it if it is marketable; an exit at market cancels it later instead, with no
+    latency stated as the venue answers the modify, and under one on the next point, before
+    the sleeve's handler, whether or not the modify has been answered by then — the modify
+    was stamped first, so the cancel still lands behind it (`_modifying`,
+    `KansoStrategy._cancel_behind_modify`, `KansoStrategy._send_behind_modify`,
+    `KansoStrategy._answered`). Measured on both paths by
+    the exit and replay tests, an order modified in flight, cancelled or not, and an order
+    the venue holds modified in the handler that exits at market, among them.
+    """
+    return bool(order.venue_order_id is not None and order.status in _SETTLED)
+
+
+def _modifying(order: Any) -> bool:
+    """Whether the venue holds an order whose modify it has not answered yet: it has taken
+    the order (`venue_order_id`, as `_held_open` reads it) and the order is
+    `PENDING_UPDATE`."""
+    return bool(order.venue_order_id is not None and order.status == OrderStatus.PENDING_UPDATE)
+
+
 def _order_price(order: object) -> float | None:
     price = getattr(order, "price", None)
     return None if price is None else float(price)
@@ -383,6 +452,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._clip_orders: dict[str, list[object]] = {}
         self._sizing_call = False
         self._built = False
+        self._owed: dict[tuple[str, OrderSide], tuple[float | None, float | None, bool]] = {}
+        self._cancels: dict[object, bool] = {}
+        self._unsent: dict[object, tuple[Any, Any, dict[str, object] | None]] = {}
+        self._behind_modify: dict[object, Any] = {}
+        self._awaiting: set[object] = set()
         self._charges = _charges(resolved)
         self._cash = resolved.capital
         self._ledger: list[list[Any]] = []
@@ -401,6 +475,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._carried_from_ns = 0
         self._period_index: int | None = None
         self._period_last_ns = 0
+        self._mark_at: dict[str, tuple[int, float]] = {}
+        self._settling: list[tuple[int, str, float, float]] = []
+        self._filled: list[tuple[int, str, float]] = []
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -534,13 +611,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return self._last_price.get(str(instrument_id))
 
     def held(self, instrument_id: InstrumentId | str) -> float:
-        """This sleeve's own signed position in an instrument, unfilled orders applied.
+        """This sleeve's own signed position in an instrument, its market orders in flight
+        applied.
 
         The reader a strategy sizes and flips by, on both paths: the venue's net position
         less what the attached overlays hold as clips in the same name, plus what the
-        sleeve's own market orders in flight will add. An exit submitted in this handler
-        already reads as gone, which is what lets the entry that follows it size to the
-        room the exit frees.
+        sleeve's own market orders not yet filled will add. An exit at market submitted in
+        this handler already reads as gone, which is what lets the entry that follows it
+        size to the room the exit frees. A limit or stop order is not applied, whether it
+        rests at the venue or is still in flight to it: a sleeve whose exit rests at the ask
+        reads the whole position until the exit fills. `submit_exit` is what counts the
+        exits still working, so an exit sized from this reader never closes more than they
+        leave.
         """
         return self._own_intended(str(instrument_id))
 
@@ -571,6 +653,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         anything else is done with it (`_turn`). So a balance read at a period's last point
         is the equity struck there before that end's carry and transfer, and one read at
         any later point has them.
+
+        With `books_funding` it is also net of every funding settlement it has been handed
+        (`_fund`), booked when the point is delivered, before `on_data` sees it, on what the
+        runner counts as held there: every fill stamped before the instant and none stamped
+        at it, so an order placed in answer to the settlement changes nothing it settled.
+        One thing the runner uses at that instant can only be known after the point: a print
+        of the instant delivered after it, which moves the mark. The first point of a later
+        instant settles the difference before anything else is done with it, so from then on
+        the two agree.
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
@@ -592,8 +683,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         after its end are the ones the venue just matched against this point. Periods are
         cut as the runner cuts them — from `_anchor_ns`, `_period_ns` long, ending at the
         last point inside — and nothing turns over a warmup prefix, which the runner
-        measures in no period.
+        measures in no period. A funding settlement booked at an earlier instant is settled
+        first (`_refund`), so the period closes on the book the runner closes it on.
         """
+        if self._settling and ts_ns > self._settling[0][0]:
+            self._refund()
+        if self._filled:
+            self._filled = [filled for filled in self._filled if filled[0] >= ts_ns]
         if self._policy is None or ts_ns < self._anchor_ns or ts_ns < self._trading_from_ns:
             return
         index = (ts_ns - self._anchor_ns) // self._period_ns
@@ -633,6 +729,80 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             moved, self._cushion = reset(value - charged, self.capital, self._cushion)
             self._cash += moved
         self._settled_ns = end
+
+    def _fund(self, data: object) -> None:
+        """Book one funding settlement into cash as the runner books it (`_equity`).
+
+        The rate on what this sleeve held before the instant — every fill the venue matched
+        at it so far is booked and taken back out (`_since`), as the runner leaves it out —
+        marked at the last print at or before it, the greatest of an instant's, as the
+        runner picks, and times the multiplier. A print of the instant that follows the point
+        is settled by `_refund`.
+        """
+        from kanso.data.types import Funding
+
+        if not isinstance(data, Funding):
+            return
+        key = data.instrument_id.value
+        ts = int(data.ts_init)
+        rate = float(data.rate)
+        self._settle()
+        paid = self._funding_due(key, rate, self._holding(key, self._since(ts)))
+        self._cash -= paid
+        self._settling.append((ts, key, rate, paid))
+
+    def _refund(self) -> None:
+        """Settle the instant's funding again on everything the instant held, now it is over.
+
+        Called by the first point of a later instant before it moves a price: the holdings
+        are taken back to what was held before the settlement instant — every fill stamped
+        at it or after it is taken out, as `_book_at` takes out the fills after a period's
+        end — and each payment is struck again at the instant's final mark and the difference
+        booked, so what was booked is what the runner books.
+        """
+        instant = self._settling[0][0]
+        later = [
+            (event.instrument_id.value, self._signed(event))
+            for event in self._settle(until_ns=instant - 1)
+        ]
+        taken = [*later, *self._since(instant)]
+        for _ts, key, rate, booked in self._settling:
+            self._cash -= self._funding_due(key, rate, self._holding(key, taken)) - booked
+        self._settling.clear()
+
+    def _since(self, instant: int) -> list[tuple[str, float]]:
+        """The fills this sleeve has booked that the venue stamped at or after `instant`, as
+        `(instrument, signed quantity)`: what a settlement there does not see. Kept from the
+        booking (`_settle`) until a later instant is delivered, because a fill of the
+        instant may have been booked — by a read of the balance — before its settlement
+        point arrived."""
+        return [(key, signed) for ts, key, signed in self._filled if ts >= instant]
+
+    def _funding_due(self, key: str, rate: float, qty: float) -> float:
+        """What a settlement at `rate` takes from `qty` held of `key`, at its last print."""
+        mark = self._mark_at.get(key)
+        return funding_payment(
+            qty, 0.0 if mark is None else mark[1], self._multiplier_of(key), rate
+        )
+
+    def _holding(self, key: str, taken: Sequence[tuple[str, float]] = ()) -> float:
+        """This sleeve's signed quantity of `key`, with the fills in `taken` —
+        `(instrument, signed quantity)` — taken back out."""
+        qty = fsum(
+            float(position.signed_qty)
+            for position in self.cache.positions_open(strategy_id=self.id)
+            if position.instrument_id.value == key
+        )
+        for name, signed in taken:
+            if name == key:
+                qty -= signed
+        return qty
+
+    @staticmethod
+    def _signed(event: Any) -> float:
+        """A fill's quantity, negative for a sale."""
+        filled = float(event.last_qty)
+        return filled if event.order_side == OrderSide.BUY else -filled
 
     def _book_at(self, end: int) -> tuple[float, float]:
         """The book's equity and gross at `end`, as the runner strikes them.
@@ -676,7 +846,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         and the market-wide ones the runner loaded — reach the author's `on_data` as that
         type, at the instant each became public: a `corporate_action` arrives as a
         `CorporateAction`, with `kind`, `ratio`, `cash`, `currency` and `ex_date_ns`, and a
-        `funding` as a `Funding`, with the realised `rate` of the period that settled. The
+        `funding` as a `Funding`, with the realised `rate` of the period that settled — which,
+        under `books_funding`, the balance has already booked when `on_data` sees it. The
         harness subscribes because the author cannot: a researched `strategy.py` may not
         import `kanso.data`, and the class is the one thing a subscription needs.
         """
@@ -749,7 +920,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._turn(int(bar.ts_init))
         self._delivered_ns = int(bar.ts_init)
         key = bar.bar_type.instrument_id.value
-        self._printed(key, float(bar.close), int(bar.ts_event))
+        self._printed(key, float(bar.close), int(bar.ts_event), int(bar.ts_init))
         if not self._is_extra_bar(bar):
             self._last_bar[key] = bar
             self._observe_price(key, float(bar.close), int(bar.ts_event))
@@ -772,7 +943,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         key = tick.instrument_id.value
         self._last_quote[key] = tick
         mid = (float(tick.bid_price) + float(tick.ask_price)) / 2.0
-        self._printed(key, mid, int(tick.ts_event))
+        self._printed(key, mid, int(tick.ts_event), int(tick.ts_init))
         self._observe_price(key, mid, int(tick.ts_event))
         if self._charges.get("spread") == "quotes":
             times, values = self._quoted.setdefault(key, ([], []))
@@ -797,13 +968,32 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
         self._last_trade[key] = tick
-        self._printed(key, float(tick.price), int(tick.ts_event))
+        self._printed(key, float(tick.price), int(tick.ts_event), int(tick.ts_init))
         self._observe_price(key, float(tick.price), int(tick.ts_event))
         if self._held():
             self._pending.append(tick)
             return
         self._dispatch_trade(tick)
         self._consult_due()
+
+    def handle_order_book_deltas(self, deltas: object, historical: bool = False) -> None:
+        """Hand a change to the book to the author, then ask again for any exit still owed.
+
+        A book change reaches `on_order_book_deltas` and no other handler here, so a sleeve
+        that holds only the book would otherwise never be asked again for an exit a cancel
+        in flight held back, and would hold the position to the end of the window. In
+        nautilus_trader 1.231.0 `Actor.handle_order_book_deltas` is `cpdef`, hands the
+        deltas to `on_order_book_deltas` only while the component is running, and hands
+        historical ones to `handle_historical_data` instead (read in `common/actor.pyx`; the
+        replay tests measure the owed exit it pays on both paths, the backtest engine and
+        the node).
+        """
+        live = not historical and self.is_running and not self._warming()
+        if live:
+            self._send_behind_modify()
+        super().handle_order_book_deltas(deltas, historical)
+        if live:
+            self._pay_owed()
 
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):
@@ -818,6 +1008,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 return
             self._turn(ts_init)
             self._delivered_ns = ts_init
+        if self._cfg.books_funding:
+            self._fund(data)
         self._note_scope(data)
         if self._held():
             self._pending.append(data)
@@ -874,21 +1066,27 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self._is_extra_bar(bar):
             self._overlay_due = (instrument_id, bar, float(bar.close))
             return
+        self._send_behind_modify()
         super().handle_bar(bar, False)
+        self._pay_owed()
         self._consult_exit(instrument_id)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
     def _dispatch_quote(self, tick: QuoteTick) -> None:
         self._data_time = int(tick.ts_event)
+        self._send_behind_modify()
         super().handle_quote_tick(tick, False)
+        self._pay_owed()
         self._consult_exit(tick.instrument_id)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (tick.instrument_id, None, None)
 
     def _dispatch_trade(self, tick: TradeTick) -> None:
         self._data_time = int(tick.ts_event)
+        self._send_behind_modify()
         super().handle_trade_tick(tick, False)
+        self._pay_owed()
         self._consult_exit(tick.instrument_id)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (tick.instrument_id, None, None)
@@ -897,16 +1095,23 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instrument_id = getattr(data, "instrument_id", None)
         key = None if instrument_id is None else str(instrument_id)
         self._observe(key, int(getattr(data, "ts_event", self._data_time)), None)
+        self._send_behind_modify()
         super().handle_data(data)
+        self._pay_owed()
         if instrument_id is not None:
             self._consult_exit(instrument_id)
             if not self._cfg.extra_resolutions:
                 self._overlay_due = (instrument_id, None, None)
 
-    def _printed(self, key: str, price: float, ts_event: int) -> None:
-        """Keep the last price an instrument printed at, and when, for marking what it holds."""
+    def _printed(self, key: str, price: float, ts_event: int, ts_init: int) -> None:
+        """Keep the last price an instrument printed at, and when, for marking what it holds;
+        and the mark a funding settlement is struck at, chosen as the runner chooses it — the
+        latest by availability, and of one instant's, the greatest."""
         self._last_print[key] = price
         self._print_ns[key] = ts_event
+        held = self._mark_at.get(key)
+        if held is None or ts_init > held[0] or (ts_init == held[0] and price > held[1]):
+            self._mark_at[key] = (ts_init, price)
 
     def _observe_price(self, key: str | None, price: float | None, ts_event: int) -> None:
         if key is not None and price is not None:
@@ -1364,7 +1569,59 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         qty: float | None = None,
         price: float | None = None,
     ) -> object | None:
-        """Reduce a position, never past flat. Returns the order, or `None` when flat.
+        """Reduce a position, never past flat, counting the exits still working.
+
+        The quantity is the smaller of what was asked for and what is left to close: the
+        net position less the unfilled quantity of every order of this sleeve's on the
+        closing side that the venue has not closed — resting, in flight to it, or, under a
+        stated latency, waiting on a cancel that has not landed (`_working`). So an exit that
+        replaces one whose cancel is still in flight is sized to what the old one cannot also
+        take, and the two cannot both fill past flat. Every such order counts in full, an
+        exit or not: a stop that would reverse the position, or both legs of a bracket only
+        one of which can fill, leave that much less to close. The stop-loss and take-profit
+        of a bracket whose entry has filled nothing do not count, since they can fill only
+        after it and close what it opens; once it has filled any of it they count in full
+        (`_not_yet_live`).
+
+        An exit at market cancels this sleeve's own limit or stop orders resting at the
+        venue on the closing side when they would leave it less than asked. With no latency
+        stated those cancels land before anything further is matched and the whole of what
+        was asked goes at market. Under a stated latency the cancelled orders can still fill
+        until their cancels land, so the exit is cut to what they leave, and the rest is
+        owed. An order still in flight to the venue is not cancelled and counts, and what it
+        cuts from an exit at market is owed as well; once the venue holds it open, the owed
+        exit cancels it like any other. So is an order the sleeve itself cancelled while it
+        was still on its way to the venue: the venue takes it before the cancel, on both
+        paths (`_hold_cancel`). An order the venue holds whose modify it has not answered
+        yet counts too, and is not cancelled in the handler that sent the modify, where on a
+        node the cancel would overtake it (`_cancel_behind_modify`): with no latency stated
+        it is cancelled as the venue answers the modify, and under one on the next point,
+        before the sleeve's handler, whether or not the modify has been answered by then,
+        the cancel landing behind the modify that was stamped before it
+        (`_send_behind_modify`). What it cut is owed and paid as for any cancelled order.
+        With no latency stated the venue answers an order in flight, and a modify, before
+        the next point, and an exit at market owed behind either is paid in the instant it
+        was asked for (`_answered`), so one asked for on a session's last point or the
+        window's is not carried past it. A resting order whose cancel the venue refused is
+        cancelled again. An order the engine's order emulator holds has not reached the
+        venue: it counts until it is cancelled, an exit at market cancels it with the
+        resting ones, and its cancel takes it out at once, at any latency (`_working`).
+
+        What is owed is not dropped. When a cancel still in flight leaves less than asked,
+        and whenever an exit at market is left less than asked, the exit is asked for again,
+        with what is still owed at the price given, at every later point once the author's
+        handler for it has run — each time sized to what is left then — until it goes out
+        whole. It is forgotten when the position is flat or has changed sides and when this
+        sleeve asks for another exit in the name. A cancel on that side takes back only an
+        owed exit that has a price: an exit at market stands for an order the venue would
+        have taken before any cancel that followed it. An exit an attached exit rule asked
+        for is forgotten only when the position is flat, whatever its host sends or cancels.
+        An owed exit with a price is asked for at that price on the next session's points
+        too, if the position is still open there; it never goes past flat, but the price
+        may be the last session's.
+
+        Returns the order, or `None` when flat or when the orders still working already
+        close what was asked, including when what is left is owed.
 
         Exits are neither filtered nor scaled: a construct that shrinks an exit would leave
         exposure behind that nothing in the hypothesis accounts for.
@@ -1378,16 +1635,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         if self.sized:
             return self._sized_exit(instrument, resolved_id, qty, price)
-        net = float(self.portfolio.net_position(resolved_id))
-        if net == 0.0:
-            return None
-        target = abs(net) if qty is None else min(abs(qty), abs(net))
-        quantity = self._quantise(instrument, target)
-        if quantity is None:
-            return None
-        side = OrderSide.SELL if net > 0 else OrderSide.BUY
-        order = self._order(instrument, side, quantity, price)
-        return self._submitted(order)
+        net = Decimal(self.portfolio.net_position(resolved_id))
+        return self._close(instrument, resolved_id, net, qty, price, clips=True)
 
     def _sized_entry(
         self,
@@ -1490,7 +1739,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         qty: float | None,
         price: float | None,
     ) -> object | None:
-        """The whole of this sleeve's own position, at market, leaving any clip alone."""
+        """The whole of this sleeve's own position at market, leaving any clip alone, less
+        what its own exits still working will close."""
         key = instrument_id.value
         if qty is not None or price is not None:
             given = ", ".join(
@@ -1507,17 +1757,422 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         if self._own_intended(key) == 0:
             return None
-        filled = self._own_filled(key)
-        quantity = self._quantise(instrument, abs(filled))
-        if quantity is None:
-            return None
-        side = OrderSide.SELL if filled > 0 else OrderSide.BUY
-        order = self._order(instrument, side, quantity, None)
+        filled = Decimal(repr(self._own_filled(key)))
         self._sizing_call = True
         try:
-            return self._submitted(order)
+            return self._close(instrument, instrument_id, filled, None, None, clips=False)
         finally:
             self._sizing_call = False
+
+    def _close(
+        self,
+        instrument: object,
+        instrument_id: InstrumentId,
+        net: Decimal,
+        qty: float | None,
+        price: float | None,
+        *,
+        clips: bool,
+    ) -> object | None:
+        """Close up to `qty` of a signed position of `net`, less what this sleeve's orders
+        still working on the closing side will close (`submit_exit` states the rule)."""
+        key = instrument_id.value
+        self._forget(key, OrderSide.NO_ORDER_SIDE, ruled=self._exiting)
+        if net == 0:
+            return None
+        side = OrderSide.SELL if net > 0 else OrderSide.BUY
+        asked = float(abs(net)) if qty is None else min(abs(qty), float(abs(net)))
+        working = self._working(key, side, clips=clips)
+        if price is None and float(abs(net) - _leaves(working)) < asked:
+            for order in working:
+                if order.order_type == OrderType.MARKET:
+                    continue
+                if _modifying(order):
+                    self._cancel_behind_modify(order)
+                elif _held_open(order) or order.is_emulated:
+                    self.cancel_order(order)
+            working = self._working(key, side, clips=clips)
+        quantity = self._quantise(instrument, min(asked, float(abs(net) - _leaves(working))))
+        sent = 0.0 if quantity is None else float(quantity)
+        whole = self._quantise(instrument, asked)
+        short = 0.0 if whole is None else float(whole) - sent
+        if short > 0 and (
+            price is None or any(order.client_order_id in self._cancels for order in working)
+        ):
+            owed = (None if qty is None else short, price, self._exiting)
+            self._owed.setdefault((key, side), owed)
+            if price is None and self._instant():
+                self._awaiting.update(
+                    order.client_order_id
+                    for order in working
+                    if order.order_type != OrderType.MARKET
+                )
+        if quantity is None:
+            return None
+        return self._submitted(self._order(instrument, side, quantity, price))
+
+    def _cancel_behind_modify(self, order: Any) -> None:
+        """Hold back an exit at market's cancel of an order the venue holds whose modify is
+        still in flight, until the venue answers the modify with no latency stated
+        (`_answered`), and until the next point under one (`_send_behind_modify`).
+
+        On a node `Strategy.modify_order` goes through the live risk engine's queue and
+        `cancel_order` straight to the live execution engine's (`trading/strategy.pyx` of
+        nautilus_trader 1.231.0), so a cancel sent in the handler that sent the modify
+        overtakes it, where the backtest engine lands the modify first. Both queues drain
+        before the node's next point is released, so a cancel sent then reaches the venue
+        behind the modify on both paths; under a latency it is stamped with that point's
+        instant, after the modify's, and lands behind it there too.
+        The order counts as working until the cancel lands (`_cancelling`, read then).
+        """
+        self._behind_modify[order.client_order_id] = order
+
+    def _send_behind_modify(self) -> None:
+        """Send the cancels `_cancel_behind_modify` held back, before the author's handler
+        for this point, which could put the order back in flight with a modify of its own.
+
+        Under a stated latency it is sent here whether or not the venue has answered the
+        modify by then, not when it answers. When the latency is shorter than the gap
+        between points the backtest engine answers the modify in the drain after the next
+        point's handlers and the node in the drain before the point after that
+        (`SimulatedVenue.on_data`), so a cancel sent on the answer would be stamped a point
+        later on the node; when it is not shorter, later still. Either way neither path has
+        answered the latest modify when the cancel is sent here. The order reads
+        `PENDING_UPDATE` unless the answer to an earlier modify has landed since and
+        returned it to `ACCEPTED`, as it has for a sleeve that modifies on every point. The
+        cancel is stamped after every modify and delayed by the same latency, so it lands
+        behind them on both paths. With no latency stated both answer the modify in the
+        drain after the point's handlers, and `_answered` sends the cancel then; one it has
+        not sent by the next point is sent here. Measured on both paths by the exit and
+        replay tests, among them a sleeve that modifies its exit on every quote, at 20 and
+        at 2500 ms with the status seen here, and a modify followed by an exit at market at
+        20 ms. (At 2500 ms that sleeve modifies an order the venue has not taken yet, whose
+        cancel goes out as it is taken, not from here.)
+        """
+        held, self._behind_modify = self._behind_modify, {}
+        for order in held.values():
+            current = self._current(order)
+            if not current.is_closed and not current.is_pending_cancel:
+                self._cancelling(current)
+                super().cancel_order(current)
+
+    def _pay_owed(self, only: tuple[str, OrderSide] | None = None) -> None:
+        """Ask again for every exit still owed, on the side of the position it was owed on,
+        or with `only` for the one owed on that side of that name.
+
+        Run after the author's handler for a point and before the exit rules, so a sleeve
+        that asks again on that point replaces what it was owed rather than adding to it,
+        and an exit rule's own exit is asked for as the rule's, which its host cannot take
+        back.
+        """
+        for (key, side), (qty, price, ruled) in list(self._owed.items()):
+            if only is not None and (key, side) != only:
+                continue
+            net = (
+                self._own_filled(key)
+                if self.sized
+                else float(self.portfolio.net_position(InstrumentId.from_str(key)))
+            )
+            if net == 0 or (OrderSide.SELL if net > 0 else OrderSide.BUY) != side:
+                del self._owed[(key, side)]
+                continue
+            exiting, self._exiting = self._exiting, ruled
+            try:
+                self.submit_exit(key, qty=qty, price=price)
+            finally:
+                self._exiting = exiting
+
+    def _forget(
+        self, key: str, side: OrderSide, *, ruled: bool = False, priced_only: bool = False
+    ) -> None:
+        """Drop the exit owed on one side of a name, or on both for `NO_ORDER_SIDE`; one an
+        exit rule is owed only when `ruled`, and one at market not when `priced_only`."""
+        for owed in (OrderSide.BUY, OrderSide.SELL):
+            held = self._owed.get((key, owed))
+            if (
+                side in (OrderSide.NO_ORDER_SIDE, owed)
+                and held is not None
+                and (ruled or not held[2])
+                and not (priced_only and held[1] is None)
+            ):
+                del self._owed[(key, owed)]
+
+    def cancel_order(
+        self,
+        order: Any,
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """Cancel an order, and forget the exit at a price owed on its side of the name: a
+        sleeve that cancels an order on the closing side has taken back the limit it asked
+        for. An exit at market owed there is kept, as the market order it stands for would
+        have been taken by the venue before the cancel that followed it.
+
+        A cancel for an order not yet handed to the venue is held back and sent once it has
+        been (`_hold_cancel`)."""
+        self._forget(order.instrument_id.value, order.side, priced_only=True)
+        if not self._hold_cancel(order, client_id, params):
+            self._cancelling(order)
+            super().cancel_order(order, client_id, params)
+
+    def cancel_orders(
+        self,
+        orders: list[Any],
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """Cancel orders, forgetting the exits at a price owed on their sides and holding
+        back the cancel for any not yet handed to the venue, as `cancel_order` does.
+
+        An order the engine's order emulator holds is cancelled on its own, through the
+        engine's `cancel_order`, which routes it to the emulator; the rest go to the engine's
+        own `cancel_orders` one batch per instrument. The engine refuses a batch that mixes
+        instruments, or holds an emulated order after its first, after it has already marked
+        the orders before it `PENDING_CANCEL`, and sends nothing, so those would rest while
+        they read as cancelled (read in `trading/strategy.pyx` of nautilus_trader 1.231.0,
+        which applies to both paths, the backtest engine and the node; the emulated case is
+        measured on both by the exit and replay tests). An empty list is handed on as it is,
+        for the engine to refuse.
+        """
+        batches: dict[object, list[Any]] = {}
+        for order in orders:
+            self._forget(order.instrument_id.value, order.side, priced_only=True)
+            if self._hold_cancel(order, client_id, params):
+                continue
+            self._cancelling(order)
+            if self._current(order).is_emulated:
+                super().cancel_order(order, client_id, params)
+            else:
+                batches.setdefault(order.instrument_id, []).append(order)
+        if not orders:
+            super().cancel_orders(orders, client_id, params)
+        for batch in batches.values():
+            super().cancel_orders(batch, client_id, params)
+
+    def cancel_all_orders(
+        self,
+        instrument_id: InstrumentId,
+        order_side: OrderSide = OrderSide.NO_ORDER_SIDE,
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """Cancel this sleeve's orders in a name, forgetting the exits at a price owed on
+        those sides as `cancel_order` does.
+
+        When every one of them has been handed to the venue, the engine's own
+        `cancel_all_orders` cancels them, those open at the venue and those in flight to it,
+        marking each open one `PENDING_CANCEL` at once (`kanso.nautilus.facts` measures it on
+        the backtest engine). When any has not been handed over yet, each is cancelled on its
+        own through `cancel_order` instead, so the cancel for that one is held back as it is
+        there: the engine's own skips an order still `INITIALIZED` (read in
+        `trading/strategy.pyx` of nautilus_trader 1.231.0), which on the backtest engine an
+        order handed to `submit_order` never is by the time the call returns (`_hold_cancel`
+        names the exceptions).
+        """
+        orders = [
+            order
+            for order in (self._current(entry[0]) for entry in self._ledger)
+            if order.instrument_id == instrument_id
+            and order_side in (OrderSide.NO_ORDER_SIDE, order.side)
+            and not order.is_closed
+        ]
+        self._forget(instrument_id.value, order_side, priced_only=True)
+        if any(order.status == OrderStatus.INITIALIZED for order in orders):
+            for order in orders:
+                self.cancel_order(order, client_id, params)
+            return
+        for order in orders:
+            self._cancelling(order)
+        super().cancel_all_orders(instrument_id, order_side, client_id, params)
+
+    def _hold_cancel(self, order: Any, client_id: Any, params: dict[str, object] | None) -> bool:
+        """Hold back the cancel for an order not yet handed to the venue, and say so.
+
+        On the backtest engine `submit_order` hands the order to the venue before it returns
+        (`SUBMITTED`), so a cancel sent after it reaches the venue behind the order: the
+        venue takes the order, filling it if it is marketable, and then the cancel — with no
+        latency stated before it matches anything further, under one both at the same
+        instant, the order first. A node has not handed it over yet. The order is still
+        `INITIALIZED` while its submit waits in the live risk engine's queue, and a cancel
+        sent then goes straight to the live execution engine's, so it reaches the venue
+        first, for an order it does not know, and the order then rests uncancelled (read in
+        `live/risk_engine.py`, `execution/manager.pyx` and `trading/strategy.pyx` of
+        nautilus_trader 1.231.0). So kanso holds such a cancel back, counts the order as
+        working, and sends the cancel from `handle_event` when the node reports the order
+        `SUBMITTED` — inside the call that hands it to the venue, before the venue has
+        matched it, which reaches the venue behind the order as on the backtest engine. The
+        replay tests measure it on both paths. An order the node closes first, by denying
+        it, is never cancelled.
+
+        On the backtest engine an order handed to `submit_order` is past `INITIALIZED` when
+        the call returns, so a cancel is held back there only for an order the engine itself
+        has not submitted yet: the child of an emulated one-triggers-other list, which the
+        order emulator keeps back until its parent fills (`OrderEmulator
+        ._handle_submit_order_list` in `execution/emulator.pyx`, read, not measured), or an
+        order never submitted at all. Its cancel is sent once the order leaves `INITIALIZED`.
+        """
+        current = self._current(order)
+        if current.status != OrderStatus.INITIALIZED:
+            return False
+        self._cancelling(current)
+        self._unsent[current.client_order_id] = (current, client_id, params)
+        return True
+
+    def handle_event(self, event: Any) -> None:
+        """Hand an event to the engine's own handling, then send a cancel held back for the
+        order it is about once the node has handed that order to the venue (`_hold_cancel`).
+
+        In nautilus_trader 1.231.0 the node's simulated venue reports an order `SUBMITTED`
+        from inside the call that hands it to the exchange, before the exchange matches it,
+        and the event reaches `Strategy.handle_event` in that same call, since kanso's relay
+        delivers the venue's events to the execution engine's synchronous handler
+        (`kanso.nautilus.sandbox`). A cancel sent here goes to the live execution engine's
+        queue, which the replay feed drains before it releases the next point
+        (`kanso.nautilus.replay_client`); under a latency it is stamped with the same
+        instant as the order and lands right behind it (`SimulatedVenue._send`). Measured on
+        both paths by the replay tests.
+        """
+        super().handle_event(event)
+        client_order_id = getattr(event, "client_order_id", None)
+        held = self._unsent.get(client_order_id)
+        if held is not None and self._current(held[0]).status != OrderStatus.INITIALIZED:
+            order, client_id, params = held
+            current = self._current(order)
+            del self._unsent[current.client_order_id]
+            if not current.is_closed:
+                super().cancel_order(current, client_id, params)
+        if client_order_id in self._awaiting:
+            self._answered(client_order_id)
+
+    def _answered(self, client_order_id: object) -> None:
+        """With no latency stated, move an exit at market owed behind an order on along as
+        the venue answers that order, so the exit is paid in the instant it was asked for.
+
+        An exit at market is cut by what an order the venue has not settled can still close:
+        one still in flight to it, one it holds whose modify it has not answered yet, one the
+        sleeve cancelled while it was in flight (`_close` notes each in `_awaiting`). With no
+        latency stated the venue answers such an order before the next point, on both paths —
+        the backtest engine in the drain after the point's handlers, which takes the commands
+        sent from inside it too (`SimulatedExchange._drain_commands` in `backtest/engine.pyx`
+        of nautilus_trader 1.231.0), and the node in the drain the replay feed waits on before
+        it releases the next point (`kanso.nautilus.replay_client`). So each answer is acted on
+        where it lands: once the venue has taken the order, or answered its modify, it is
+        cancelled, the cancel sent behind the modify; once it is closed — cancelled, filled,
+        or refused — the owed exit is asked for again, sized to what is left then. The exit is
+        never paid on the answer itself, as the venue matches an order it has just taken, or
+        just modified, right after it says so, and one it fills there closes what it fills.
+        What the next point would pay instead is paid at the instant of the point it was
+        asked on, so an exit asked for on a session's last point, or the window's, is not
+        carried to the next one. Under a stated latency the answers land at later instants
+        and the owed exit is paid on the next point, as before. Measured on both paths by
+        the exit and replay tests.
+        """
+        order = self.cache.order(client_order_id)
+        name = (order.instrument_id.value, order.side)
+        if order.is_closed:
+            self._awaiting.discard(client_order_id)
+            self._behind_modify.pop(client_order_id, None)
+            self._pay_owed(name)
+            return
+        if client_order_id in self._behind_modify:
+            if not _modifying(order):
+                del self._behind_modify[client_order_id]
+                if not order.is_pending_cancel:
+                    self._cancelling(order)
+                    super().cancel_order(order)
+            return
+        owed = self._owed.get(name)
+        if owed is None or owed[1] is not None:
+            self._awaiting.discard(client_order_id)
+        elif _held_open(order) and client_order_id not in self._cancels:
+            self.cancel_order(order)
+
+    def _instant(self) -> bool:
+        """Whether no latency is stated, so the venue answers a command before it matches
+        anything further."""
+        return float(self._charges.get("latency_ms") or 0.0) <= 0.0
+
+    def _cancelling(self, order: Any) -> None:
+        """Note that a cancel was sent or held back for an order, and whether the venue held
+        it open when the cancel was sent.
+
+        An order stays working until its cancel lands (`_working`). With no latency stated
+        one the venue held open is spent the moment its cancel is sent, since the cancel
+        lands before anything further is matched; one still on its way to the venue is not,
+        because the venue takes it before the cancel, and a marketable one fills there.
+
+        Whether the venue held it open is `_held_open`, read before the cancel is applied.
+        One the venue held open was flagged by its first cancel, and one whose cancel was
+        rejected returns to the status it had before (`Order.apply` on
+        `OrderCancelRejected` in nautilus_trader 1.231.0), so the next cancel reads it
+        afresh. Measured on the backtest engine and on the node by the exit and replay tests.
+        """
+        current = self._current(order)
+        if current.is_closed:
+            return
+        key = current.client_order_id
+        self._cancels[key] = self._cancels.get(key, False) or _held_open(current)
+
+    def _working(self, key: str, side: OrderSide, *, clips: bool) -> list[Any]:
+        """This sleeve's own orders on one side of a name that can still fill: every one the
+        venue has not closed, resting or in flight to it.
+
+        An order whose cancel has been sent is still working until the cancel lands. Under a
+        stated `latency_ms` the cancel reaches the book after the next point has been
+        matched, so the order can fill in between and is counted. With no latency stated the
+        venue lands a cancel sent in a handler before it matches anything further, on both
+        code paths, so an order it held open when the cancel was sent, and that still waits
+        on it, is spent and is not counted; one still on its way to the venue when the cancel
+        was sent is counted until the cancel lands, since the venue takes the order first and
+        a marketable one fills there.
+
+        An order the engine's order emulator holds has not reached the venue and counts
+        until it is cancelled. Its cancel is spent the moment it is sent, at any latency: in
+        nautilus_trader 1.231.0 the emulator takes the order out of its matching core and
+        marks it pending cancel locally before `cancel_order` returns (`OrderEmulator
+        ._cancel_order` in `execution/emulator.pyx`), on both paths. The `OrderCanceled` it
+        generates reaches the order at once on the backtest engine and on the node only once
+        the live execution engine's queue drains, so kanso reads the engine's local mark
+        (`Cache.is_order_pending_cancel_local`), which both set at once. Measured on both
+        paths by the exit and replay tests.
+
+        `clips` counts the attached overlays' clips as well, for a reading of the whole net
+        position rather than the sleeve's own share of it.
+        """
+        instant = self._instant()
+        working = []
+        for entry in self._ledger:
+            order = self._current(entry[0])
+            if (
+                order.is_closed
+                or self.cache.is_order_pending_cancel_local(order.client_order_id)
+                or order.side != side
+                or order.instrument_id.value != key
+                or (
+                    instant
+                    and order.is_pending_cancel
+                    and self._cancels.get(order.client_order_id, False)
+                )
+                or (not clips and self._is_clip(entry[0]))
+                or self._not_yet_live(order)
+            ):
+                continue
+            working.append(order)
+        return working
+
+    def _not_yet_live(self, order: Any) -> bool:
+        """Whether an order is a contingent child, such as a bracket's stop-loss or
+        take-profit, whose parent has filled nothing: it can fill only once the parent has,
+        and then closes what the parent opened, so until then it leaves the position as it
+        is. In nautilus_trader 1.231.0 the venue keeps such a child `SUBMITTED` with no venue
+        order id, and the order emulator keeps it `INITIALIZED`, until the parent fills, so
+        neither an exit at market nor anything else has a child to cancel. Measured on both
+        paths by the exit and replay tests, a bracket held by the venue and one held by the
+        emulator."""
+        if order.parent_order_id is None:
+            return False
+        parent = self.cache.order(order.parent_order_id)
+        return parent is not None and parent.filled_qty.as_decimal() == 0
 
     def _submitted(self, order: object) -> object | None:
         placed = len(self._intents)
@@ -1685,10 +2340,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                         continue
                     self._booked.add(event.id)
                     self._cash -= self._paid(event)
+                    if self._cfg.books_funding:
+                        self._filled.append(
+                            (int(event.ts_event), event.instrument_id.value, self._signed(event))
+                        )
                 if not held_back:
                     entry[1] = count
             if held_back or not order.is_closed:
                 waiting.append(entry)
+            else:
+                self._cancels.pop(order.client_order_id, None)
         self._ledger = waiting
         for name, (times, values) in self._quoted.items():
             if key is None or name == key:
@@ -1952,7 +2613,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         that is a network round trip. Without this the rule would place a second exit on
         the next tick, and a third on the one after, until the first filled, and the
         position would flip to the other side. A resting limit order is deliberately not
-        counted — a take-profit at an unreachable price must not be able to block a stop.
+        counted — a take-profit at an unreachable price must not be able to block a stop; an
+        exit at market cancels it instead (`submit_exit`).
         """
         return any(
             order.instrument_id == instrument_id and order.side == side  # type: ignore[attr-defined]
@@ -1960,6 +2622,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
 
     def _consult_exit(self, instrument_id: InstrumentId) -> None:
+        """Ask the attached exit rules whether to close the position, and close it if one does.
+
+        A rule that closes sends the whole position at market through `submit_exit`, which
+        cancels the sleeve's own resting orders on the closing side first — a take-profit
+        above the market, an exit following the ask. With no latency stated the cancels land
+        before anything further is matched and the whole position goes; under a stated
+        latency the cancelled orders can still fill until their cancels land, so the close
+        is what they leave, and the rest is owed and sent once they have landed, whether or
+        not the rule says so again.
+        """
         # The warming guard is unreachable on a flat start — no position exists in the
         # prefix — and stands for a run that carries or restores a book across the open.
         if self._exiting or not self.is_running or self._warming():

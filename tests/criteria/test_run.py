@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from kanso.criteria import CardRun
+from kanso.criteria import CardRun, FundingPayment
 from kanso.criteria.run import NS_PER_DAY, day_of, midnight_ns
 from kanso.errors import ValidationError
 from tests.criteria.builders import at, build_run, fill, trade
@@ -162,3 +162,21 @@ def test_a_fold_carries_only_the_book_series_inside_it() -> None:
     assert (first.carry, second.carry) == ((1.0, 2.0), (3.0, 4.0))
     assert (first.worst_ratio, second.worst_ratio) == ((None, 0.9), (0.8, None))
     assert build_run((0.0, 0.0)).folds(2)[0].cushion == ()
+
+
+def test_a_fold_carries_only_the_funding_settled_inside_it() -> None:
+    run = build_run((0.0, 0.0, 0.0, 0.0))
+    paid = tuple(
+        FundingPayment(ts_ns=at(day, 8), instrument_id="DEMO", qty=1.0, rate=0.0001, paid=0.01)
+        for day in (run.window[0], run.window[0] + timedelta(days=2))
+    )
+    funded = replace(run, funding=paid)
+
+    first, second = funded.folds(2)
+
+    assert (first.funding, second.funding) == ((paid[0],), (paid[1],))
+    assert run.funding == ()
+
+
+def test_a_trade_that_paid_no_funding_says_so() -> None:
+    assert trade(date(2024, 1, 1), 10.0).funding == 0.0

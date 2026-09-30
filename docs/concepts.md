@@ -477,14 +477,48 @@ is — so it is built linear and an inverse one is refused. It settles and is bo
 account currency of its venue — its `settlement_currency` and its quote currency must both be
 that code, which `hyp validate` checks — and it is charged exactly what any other fill is:
 the venue model's costs, once, by the runner, with its own maker and taker rates held at
-zero. Two things a real perpetual carries are not modelled yet. Funding — the periodic
-payment between longs and shorts — is delivered and not booked: a hypothesis holding a
-perpetual must require the `funding` type, and in a card its sleeve is handed each realised
-settlement in `on_data`, but the runner books funding in a later release, so a held
-perpetual's card earns and pays none of it today. On the node — paper and live — no source
-feeds funding yet, so a deployed sleeve is handed none. And neither margin nor liquidation is
-simulated: what bounds a perpetual book is the sleeve's room, `max_leverage` and the
-`maintenance_margin` gate (`docs/backlog.md`).
+zero.
+
+**A perpetual's funding is booked once, by the runner, beside every other cost.** A
+hypothesis holding a perpetual must require the `funding` type, and at each settlement the
+extraction takes `qty x mark x multiplier x rate` out of cash: the realised rate of the
+period that settled, on the signed quantity held at the settlement instant, marked at the
+instrument's last print at or before that instant — of several prints at the instant, the
+greatest, exactly as a period's mark is chosen. A long pays a positive rate and a short
+receives it; a negative rate reverses both. What is held is every fill stamped before the
+instant and no fill stamped at it. That is deliberately not the `<=` rule that books a
+period's fills up to and including its end: the rate is public at the settlement — the
+sleeve is handed it there — and the engine stamps the fill of an order sent in answer at
+that same instant, so under `<=` a position opened because the rate was known would collect
+it and one closed because of it would escape it. Which point of an instant an order answered
+is recorded nowhere both code paths can read — a stage node stamps its orders by its live
+clock, not by the data — so the line is drawn at the instant: a position opened by a fill at
+08:00 pays nothing at 08:00, whether its order was sent in answer to the settlement or
+rested from 07:00, and one closed by a fill at 08:00 still pays it. What a settlement sees
+was decided before its rate was public. The payment is inside the return and the equity of
+the period that holds the instant, and the run records each one in `funding` — the instant,
+the instrument, the quantity held, the rate and what was paid, negative when it was
+received; a settlement at which nothing was held pays and records nothing, and one in the
+warmup prefix is never booked. A closed trade carries what it paid over its life in
+`funding`: every settlement of its instrument after its opening fill, up to and including
+its close. Its `pnl_net` is net of that and its `cost` is not, so a Sharpe, an edge and a
+net edge all read one post-funding number, while `cost_stress` and `cost_scenario`, which
+re-price the recorded fills, leave funding exactly as it was booked. The sleeve's `balance`
+books the same amount when the settlement point is delivered, before `on_data` is handed it,
+so a balance read there is the equity the runner strikes at that instant, on the same
+holdings: an order placed in answer to the settlement changes nothing it settled, in the
+balance as in the card. One thing the runner uses at the instant arrives only after the
+point — a print of the instant that follows it, which moves the mark — and the first point
+of a later instant settles the difference into the balance before anything else is done with
+it. A stage node books funding into its sleeves the same way, because its venue is simulated
+and settles none; an account a broker keeps settles its own, and a sleeve on one would not
+book it (`docs/backlog.md` row 15). A stage replays the catalog, so a deployed sleeve is
+handed and pays the settlements the catalog holds for its window — loaded from a file, or
+fetched by the OKX package's `okx_funding` loader, which serves the exchange's settled rates
+for its last three months (`docs/adapters.md`) — and a held perpetual pays nothing past the
+last settlement loaded (row 107). And
+neither margin nor liquidation is simulated: what bounds a perpetual book is the sleeve's
+room, `max_leverage` and the `maintenance_margin` gate (`docs/backlog.md`).
 
 Every held period is judged rather than an average of them, because a size instruction is
 broken by one period that breaks it. For a construct attached to a host, the host's quantity is
@@ -1004,7 +1038,8 @@ commission, a flat rate, a maker rate, a fixed width — through the runner's ow
 arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
 objective on the re-priced run and holds it to `min_metric`: the same fills under the
 schedule of another account, without a second backtest, and the card's own schedule
-reproduces the card's own costs on any instrument.
+reproduces the card's own costs on any instrument. Neither gate touches a perpetual's
+funding, which is a payment on what was held rather than a cost of trading it.
 
 ## The strategy version
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
-from kanso.criteria.run import NS_PER_DAY, midnight_ns
+from kanso.criteria.run import NS_PER_DAY, FundingPayment, midnight_ns
 from kanso.monitor import combined, tenure
 from kanso.monitor.realised import combined_benchmark
 from kanso.portfolio.records import StageResult
@@ -85,6 +85,26 @@ def test_trades_and_fills_are_joined_in_time_order() -> None:
     assert joined is not None
     assert [fill.ts_ns for fill in joined.fills] == sorted(fill.ts_ns for fill in joined.fills)
     assert len(joined.fills) == 2
+
+
+def test_the_funding_of_every_window_is_joined_in_time_order() -> None:
+    def paid(day: date) -> FundingPayment:
+        return FundingPayment(
+            ts_ns=midnight_ns(day) + 8 * 3_600 * 1_000_000_000,
+            instrument_id="DEMO.XNAS",
+            qty=10.0,
+            rate=0.0001,
+            paid=0.1,
+        )
+
+    early = replace(result((10.0,)), run=replace(result((10.0,)).run, funding=(paid(START),)))
+    late = result((10.0,), start=SECOND_DAY)
+    late = replace(late, run=replace(late.run, funding=(paid(SECOND_DAY),)))
+
+    joined = combined([early, late])
+
+    assert joined is not None
+    assert joined.funding == (paid(START), paid(SECOND_DAY))
 
 
 def test_a_tenure_reads_its_clock_from_the_stage_when_there_is_one() -> None:

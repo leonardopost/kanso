@@ -108,3 +108,5 @@ def test_the_data_skill_names_funding_as_realised_and_required_of_a_perpetual() 
     assert "the **realised** rate of the period that settled" in text
     assert "must list `funding` in `data_requirements`" in text
     assert "a spot leg beside it is asked for none" in text
+    assert "the runner books each settlement on what the card held before it" in text
+    assert "`types: [bar, funding]`" in text

@@ -683,7 +683,7 @@ day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, took `kanso data load`
 seconds in two runs on 2026-09-30, the first at a peak of 1.8 GB resident, where the loader
 alone, with no write path, streamed it in 62 seconds at 207 MB; so a backfill chunk of a
 liquid swap's prints holds about thirty times that.
-Load a liquid swap's trades one day to a spec (backlog entry 106).
+Load a liquid swap's trades one day to a spec (backlog entry 109).
 
 #### `okx_funding`
 
