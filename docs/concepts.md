@@ -1073,6 +1073,25 @@ certification hold beside the certification run and the research hold beside the
 run. `param_plateau` moves the subject's parameters and re-runs the subject alone: the hold
 it is differenced against stays the one it was measured against.
 
+`param_plateau` is defined around an edge and nowhere else. Its floor is a fraction of the
+unperturbed objective, and a fraction of a loss lies above the loss: at −10 and a
+`keep_fraction` of a half the floor is −5, so a perturbation that changed nothing would read
+as failing to keep half of the result, and one that merely lost less would pass. An
+unperturbed objective at or below zero therefore fails the gate before any parameter is
+moved, with the `reason` in its evidence and `n_backtests` at zero. It fails rather than
+skips because its context is whole and it is the subject that lacks the property: a plateau
+around a loss is a robust loss, not evidence of robustness, and a skip is a pass. The runner
+spares the same backtests once `embargoed_window` has failed. The plateau is judged after
+every other cert gate, and when the window gate judged the subject and refused it, the
+plateau is recorded as skipped with the reason and no perturbation is run — the gates are
+evidence for a pass, and a certificate whose window failed cannot pass — while the
+certificate lists its gates in the plan's order as before. A window gate that judged nothing
+spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
+percentile of the resampled drawdown against `risk_limits.max_drawdown_pct`, and the
+ninety-percent band of the resampled objective, which must reach above zero — a band that
+lies at or below zero says the population of trades carries no edge in whatever order it
+arrives, and a drawdown inside the limit does not make that a pass.
+
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
