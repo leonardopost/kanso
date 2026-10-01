@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 import pytest
+import yaml
 
 from kanso import hyp
 from kanso.config import CONFIG_NAME, load_config
@@ -18,9 +19,11 @@ from kanso.errors import Exit, KansoError, ValidationError
 from kanso.hyp.validate import venue_models
 from kanso.workspace import Workspace
 from tests.hyp.conftest import (
+    DEMO_ENTRY,
     DOCUMENT,
     FILTER_CLASSIFICATION,
     HOST_ID,
+    PERP_ENTRY,
     SLEEVE_CLASSIFICATION,
     document,
     write_hypothesis,
@@ -304,6 +307,122 @@ def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> 
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
 
 
+# -- the currency each instrument settles in ---------------------------------------
+
+
+def test_an_equity_quoted_in_another_currency_than_its_venue_s_account_is_refused(
+    ws: Workspace,
+) -> None:
+    """The row the backlog kept open: a EUR leg on a USD account fills in EUR, and the
+    engine's conversion error is lost to a logger kanso builds bypassed."""
+    write_instruments(ws, "DEMO", "BUND")
+
+    failure = refused(ws, document(universe=["DEMO", "BUND"]))
+
+    assert failure.message == (
+        "universe: BUND.XETR settles in EUR, and XETR's account currency is USD; a "
+        "hypothesis's fills settle and are booked in the account's own currency"
+    )
+    assert failure.remedy == (
+        "set venues.XETR.currency to EUR in portfolio.yaml, or [research] currency to EUR in "
+        "kanso.toml"
+    )
+
+
+@pytest.mark.parametrize("account", ["USDT", "USDC"])
+def test_a_perpetual_settled_in_another_stablecoin_than_its_quote_fits_no_account(
+    ws: Workspace, account: str
+) -> None:
+    """USDC and USDT are two codes: the engine calls the pair no quanto, settles the
+    contract in USDC and books its positions, PnL and margin in USDT, the quote currency.
+    A USDT account would be paid in USDC; a USDC account would be booked in USDT and find no
+    USDT/USDC rate to convert at, so the balance update is deferred. No account holds both."""
+    write_instruments(ws, "DEMO", "USDC_PERP")
+
+    failure = refused(configured(ws, currency=account), document(universe=["USDC_PERP"]))
+
+    assert failure.message == (
+        "universe: BTC-USDT-USDC.SIM settles in USDC and is booked in USDT, and SIM's "
+        f"account currency is {account}; a hypothesis's fills settle and are booked in the "
+        "account's own currency"
+    )
+    assert failure.remedy == (
+        "remove BTC-USDT-USDC.SIM from `universe` in hypothesis.yaml: no one account currency "
+        "is both its settlement currency USDC and its booked currency USDT"
+    )
+
+
+def test_a_perpetual_settled_in_the_account_s_currency_is_admissible(ws: Workspace) -> None:
+    write_instruments(ws, "DEMO", "PERP")
+
+    parsed = accepted(
+        configured(ws, currency="USDT"),
+        document(universe=["PERP"], data_requirements=["bar", "funding"]),
+    )
+
+    assert parsed.universe == ["PERP"]
+
+
+# -- a perpetual's funding ----------------------------------------------------------
+
+
+def test_a_perpetual_without_its_funding_is_refused(ws: Workspace) -> None:
+    """A held perpetual pays or is paid funding every settlement; a card that is not handed
+    it measures a P&L the contract never had."""
+    write_instruments(ws, "DEMO", "PERP")
+
+    failure = refused(configured(ws, currency="USDT"), document(universe=["PERP"]))
+
+    assert failure.message == (
+        "data_requirements: BTCUSDT-PERP.SIM is a perpetual and funding is not required; "
+        "a perpetual's P&L is not honest without the funding it paid and was paid"
+    )
+    assert failure.remedy == (
+        "add funding to data_requirements and load its realised funding history"
+    )
+
+
+def test_every_perpetual_missing_its_funding_is_named_together(ws: Workspace) -> None:
+    ws.path("instruments.yaml").write_text(
+        yaml.safe_dump(
+            {"PERP": PERP_ENTRY, "ETH": {**PERP_ENTRY, "nautilus_id": "ETHUSDT-PERP.SIM"}}
+        ),
+        encoding="utf-8",
+    )
+
+    failure = refused(configured(ws, currency="USDT"), document(universe=["PERP", "ETH"]))
+
+    assert failure.message.startswith(
+        "data_requirements: BTCUSDT-PERP.SIM, ETHUSDT-PERP.SIM are perpetuals and funding is "
+        "not required"
+    )
+
+
+def test_a_perpetual_is_known_by_its_definition_not_its_name(ws: Workspace) -> None:
+    """An id that reads like a perpetual is an equity when its definition is one, and a
+    perpetual filed under a plain id is still a perpetual."""
+    ws.path("instruments.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "DEMO-PERP": {**DEMO_ENTRY, "nautilus_id": "DEMO-PERP.SIM"},
+                "COIN": PERP_ENTRY,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert accepted(ws, document(universe=["DEMO-PERP"])).universe == ["DEMO-PERP"]
+    failure = refused(configured(ws, currency="USDT"), document(universe=["COIN"]))
+    assert failure.message.startswith("data_requirements: BTCUSDT-PERP.SIM is a perpetual")
+
+
+def test_a_usd_instrument_on_a_usdt_account_is_refused(ws: Workspace) -> None:
+    """The demo's instrument under an account the workspace moved to USDT."""
+    failure = refused(configured(ws, currency="USDT"), DOCUMENT)
+
+    assert failure.message.startswith("universe: DEMO.SIM settles in USD, and SIM's account ")
+
+
 # -- the account and currency `[research]` states -------------------------------------
 
 
@@ -359,7 +478,11 @@ def test_a_template_workspace_resolves_the_model_it_did_before_the_configuration
 
 
 def test_a_configured_currency_the_engine_registers_reaches_the_card(ws: Workspace) -> None:
-    (model,) = resolved(configured(ws, currency="USDT"), DOCUMENT).values()
+    write_instruments(ws, "DEMO", "PERP")
+    (model,) = resolved(
+        configured(ws, currency="USDT"),
+        document(universe=["PERP"], data_requirements=["bar", "funding"]),
+    ).values()
 
     assert model["currency"] == "USDT"
     assert model["origins"]["currency"] == "config"

@@ -398,11 +398,12 @@ polling rather than by an order stream, which is recorded there too.
 ## The OKX adapter
 
 A crypto exchange, for perpetual swaps, in two accounts: a demo-trading one and a real one.
-In this version the package is **declarations only** — the two execution clients, the data
-client id, the six credential names, `[adapters.okx]` and the venue model — and holds no
-network code: nothing it ships can open a socket, and `kanso doctor` with its table set
-makes no request of it. The clients, the instrument provider and the public-history loaders
-arrive in later versions on top of what is declared here.
+In this version the package holds the broker's **declarations** — the two execution clients,
+the data client id, the six credential names, `[adapters.okx]` and the venue model — and the
+exchange's **public data**, a data adapter with id `okx` that resolves a listed swap into an
+instrument and loads its bars, trade prints and realised funding into the catalog, with no
+credential at all. The execution clients arrive in a later version on top of what is
+declared here; nothing the package ships can place an order.
 
 ### Credentials
 
@@ -475,12 +476,227 @@ credential.
 | key | default | what it does |
 |---|---|---|
 | `region` | *none* | `global`, `eea` or `us`, in any case; the regional host that accepts the account's key |
-| `rate_per_second` | `5` | the flat quota the public-history loaders will share; `1` to `1000` |
+| `rate_per_second` | `5` | the flat quota kanso's own public requests share — the reference's and the public-history loaders'; `1` to `1000` |
 
-`rate_per_second` governs kanso's own loaders only. The engine's own clients meter
+`rate_per_second` governs kanso's own requests only. The engine's own clients meter
 themselves — its compiled client carries a global rate-limit bucket and one per endpoint —
 and take no quota from their caller. Five a second is a conservative default, not a
-measured ceiling.
+measured ceiling. One endpoint is metered on a quota of its own whatever the table's rate: the
+trade-archive listing, at one request a second after a two-second pause (below).
+
+### The public reference
+
+`[data] reference = "okx"` resolves the exchange's perpetual swaps, by the exchange's own
+`instId` with the venue appended — `BTC-USDT-SWAP.OKX`, or the bare `BTC-USDT-SWAP` — into
+the engine's `CryptoPerpetual`:
+
+```toml
+[adapters.okx]
+region = "us"
+
+[data]
+reference = "okx"
+```
+
+```
+$ kanso data instruments resolve BTC-USDT-SWAP.OKX ETH-USDT-SWAP.OKX --as-of 2026-10-01
+```
+
+It reads one public endpoint, `GET /api/v5/public/instruments?instType=SWAP&instId=…`, one
+id per request, and **sends no credential**: no key, secret or passphrase, and no header but
+a `User-Agent` — the exchange's edge refuses the Python standard library's default one with
+HTTP 403 `error code: 1010`. So the adapter has no variable to be enabled by; it is enabled
+by its table. A workspace with no `[adapters.okx]` makes no request of the exchange — `kanso
+data adapters --check` and `kanso doctor --check-adapters` pass it by as unconfigured — and
+one naming `okx` as its reference with no `region` is refused before anything is sent. The
+host is the one the engine maps the region to; every regional host answered the listing on
+2026-09-30, and the recordings the suite replays were made on `us.okx.com`. With the table
+present and a `region` stated, `--check` makes one request, the unnarrowed swap listing, and
+reports how many live linear swaps it lists. It never reports the exchange as "did not
+authenticate", because nothing it sends could fail to: a host that does not answer the listing
+— the edge's 403, a throttle, a gateway error, a refused connection — is the probe's failure.
+`kanso data adapters --check` stops with exit 1 and that error, and `kanso doctor
+--check-adapters` grades its `adapters` check `fail` with the same message; both carry a
+network remedy — re-run, lower `rate_per_second`, or check the exchange's status page. A table that states no `region` — valid for the
+broker, which refuses it only when a client opens — gives the reference no host, so it counts
+as unconfigured: both probes pass it by without a request and go on to every other adapter.
+
+What the listing's row becomes, measured on `BTC-USDT-SWAP` and `ETH-USDT-SWAP`:
+
+| row field | definition field | `BTC-USDT-SWAP` on 2026-10-01 |
+|---|---|---|
+| `ctValCcy` | `base_currency` | `BTC` |
+| second half of `uly` | `quote_currency` | `USDT` |
+| `settleCcy` | `settlement_currency` | `USDT` |
+| `ctVal` x `ctMult` | `multiplier` — the contract's size in the base currency | `0.01` |
+| `tickSz` | `price_increment`, and `price_precision` from it | `0.1` |
+| `lotSz` | `size_increment` and `lot_size` | `0.01` |
+| `minSz` | `min_quantity` | `0.01` |
+| `listTime` | the day it listed | 2019-11-12 |
+
+A swap's row leaves `baseCcy` and `quoteCcy` empty, which is why the currencies are read from
+`ctValCcy` and `uly`. **The definition's `maker_fee` and `taker_fee` are zero, stated as zero
+by the adapter:** the listing carries no rate, and the runner charges commission once, from
+the venue model below; a rate on the instrument would be charged again by the simulated venue
+on every fill. Each id is refused by name (exit 3), and every refusal is reported together:
+
+- an **inverse** contract (`ctType` `inverse`, such as `BTC-USD-SWAP`, margined and settled
+  in the coin) — kanso trades linear perpetuals;
+- a contract whose `state` is not `live` — suspended, or not yet open;
+- an id asked for as of a day before its `listTime`, which is *listed after* that day;
+- an id the exchange does not list (it answers code `51001` and no rows), or one it rejects
+  as malformed (HTTP 400, code `51000` — its ids are in capitals);
+- an id on another venue than `OKX`.
+
+An answer that is not the API's own — a throttle, a gateway error, the edge's 403, a code
+`51000` under HTTP 200, which the exchange was once seen to answer transiently for a valid id
+— and a request that reached no answer at all stop the command (exit 1) rather than marking an
+id, because nothing about the id was established.
+
+The listing is today's. A contract the exchange has delisted is not in it and is unknown, and
+a definition resolved as of an earlier day carries the terms the exchange lists today, dated
+the day it was resolved as of. The entry kanso writes records `instrument_class: swap` and
+`sources: {okx: BTC-USDT-SWAP}`; an `override` you add to it is applied over what the
+exchange lists. A perpetual settles and is booked in USDT, so it validates on a USDT account:
+`[research] currency = "USDT"`, or `[research] broker = "okx"`, whose venue `OKX` declares
+one.
+
+### The public history
+
+Three loaders read the exchange's public history into the catalog. They send no credential —
+the same client as the reference, a `User-Agent` and nothing else, on the table's host and
+quota — so, like the reference, they are enabled by `[adapters.okx]` with a `region`, and a
+workspace without the table makes no request. `kanso data adapters` lists their ids under
+`okx`; listing them builds none.
+
+| loader | type | reads | horizon, measured on 2026-09-30 |
+|---|---|---|---|
+| `okx_bars` | `bar` | `GET /api/v5/market/history-candles` | by bar size: `1m` reached back past 2021-01-01; `1s` reached 2026-03-14 and not 2026-03-01, a window that moves with the calendar |
+| `okx_trades` | `trade` | the daily trade archives `GET /api/v5/public/market-data-history?module=1` lists, fetched from the exchange's file host | `BTC-USDT-SWAP`'s reach through 2022 and none is listed for 2021; the newest UTC day served is two behind today |
+| `okx_funding` | `funding` | `GET /api/v5/public/funding-rate-history` | about three months: `BTC-USDT-SWAP`'s oldest settlement was 2026-06-29 08:00 UTC |
+
+A spec names the exchange's swaps and a range of UTC days of `ts_event`; the venue is the
+exchange's, so it states none, and an id on another venue is refused:
+
+```yaml
+loader: okx_bars
+instruments: [BTC-USDT-SWAP]     # the exchange's instId, or BTC-USDT-SWAP.OKX
+start: 2026-09-28
+end: 2026-09-28
+resolution: 1m                   # okx_bars only; okx_trades and okx_funding refuse one
+```
+
+```
+$ kanso data instruments resolve BTC-USDT-SWAP.OKX --as-of 2026-09-30
+$ kanso data load --loader okx_bars --spec bars.yaml
+```
+
+**Resolve first.** Prices and sizes are read at the precision of the `CryptoPerpetual` the
+catalog holds for the id, so an id not yet resolved is refused (exit 2) before any request,
+naming the `kanso data instruments resolve` that fixes it. The precisions are recorded in the
+dataset's request parameters — `inst_id`, `price_precision`, `size_precision` and the `host`
+it was read from — which is where `data sync` reads them. A served number the precision
+cannot hold exactly is refused (exit 3), never rounded: a contract's tick is re-set from
+time to time, and a price rounded onto today's tick is one the exchange never printed; state
+the precision it had in the entry's `override` and resolve again. **Sizes are in
+contracts** — the unit the definition's lot is stated in, and the one kanso's notional
+`qty x px x multiplier` reads.
+
+**A range is served in full or refused by name** (exit 3). A range reaching before an
+endpoint's horizon is refused naming the horizon and the `start` to write — it is never
+loaded as an empty market — and one reaching into a UTC day that has not ended is refused
+naming the last day that has. `data sync`, which extends a series to today, stops where the
+source stops, and the manifest records the span actually served. Every dataset is
+`realtime`: a bar is public at its close, a print when it prints and a funding payment when it
+settles, so `ts_init` equals `ts_event` and no publication rule is involved.
+
+**Throttles are waited out; nothing else is.** An answer of HTTP 429, code `50011`, is asked
+again after 2, 4, 6 and 8 seconds; a fifth stops the command (exit 1), as does any other
+answer that is not the API's success, with a remedy to re-run or lower `rate_per_second`.
+
+#### `okx_bars`
+
+A candle is `[ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]`, `ts` the millisecond
+instant it **opened**. The bar is stamped at its close, `ts + size`, as both `ts_event` and
+`ts_init`; its volume is `vol`, in contracts (on `BTC-USDT-SWAP`, `vol` 1439.97 beside
+`volCcy` 14.3997 BTC at a contract of 0.01 BTC); and the candle still forming — the newest
+row, `confirm` `"0"` — is dropped. Rows come newest first, 300 to a page whatever `limit`
+asks, and `after` and `before` are both exclusive (`after=X` answers the candles that opened
+before `X`); a day is walked back page by page to an empty page and yielded oldest first,
+one day in memory at a time.
+
+The sizes are the endpoint's, in the spelling whose candles open on UTC — its `6H`, `12H`,
+`1D` and `1W` open on Hong Kong time, `1D` at 16:00 UTC — and any other size is refused
+before a request (the endpoint itself answers code `51000`, "Parameter bar error", for `2s`,
+`10s`, `4m`, `3H`, `8H`, `2W` and `1h` in lower case):
+
+| `resolution` | `1s` `5s` `15s` `30s` | `1m` `2m` `3m` `5m` `15m` `30m` | `1h` `2h` `4h` | `6h` `12h` | `1d` | `1w` |
+|---|---|---|---|---|---|---|
+| asked as | the same | the same | `1H` `2H` `4H` | `6Hutc` `12Hutc` | `1Dutc` | `1Wutc` |
+
+A day holds the bars that close in it, so a `1w` bar, which opens and closes at Monday 00:00
+UTC, belongs to a Monday: a `1w` spec whose range holds no Monday yields no bar and is refused
+as a series the source served no points for, although the source holds it.
+
+The horizon is found with requests of one row: day `D` is served when a candle closing at or
+before `D` 00:00 is, and when a range's first day is not, the first day that is is found by
+bisection up to today — a handful of requests — and named in the refusal.
+
+#### `okx_trades`
+
+The REST endpoint for past prints answers 100 a request and about 80 days back, and a day of
+`BTC-USDT-SWAP` was 3.56 million prints on 2026-09-28, so this loader reads the **daily archives** the
+exchange publishes instead: one zip a day, listed with a URL on the exchange's file host.
+
+- **An archive's day is the exchange's, UTC+8.** The archive named `2023-01-01` holds the
+  prints from 2022-12-31 15:59:41 UTC to 2023-01-01 15:59:51 UTC, and consecutive archives
+  continue each other's trade ids. So a UTC day `D` is served by two archives, `D`'s and
+  `D+1`'s, and only when both are listed — a day with one of them would be a third short. A
+  range with a day that is not is refused naming the days and the archives they need. The
+  archive is not listed as its day ends, and when it is was not measured: the archive of
+  2026-09-30, whose day ended at 16:00 UTC, was still unlisted at 16:01, 16:52 and 17:03 UTC
+  that day, when the newest listed was 2026-09-29's, so the last UTC day served was
+  2026-09-28.
+- **The file.** One CSV, oldest print first, read by column name: the header was
+  `instrument_name,trade_id,side,price,size,created_time` through 2023 and gained `source` by
+  2026. `size` is in contracts — on `USDC-USDT-SWAP`, a contract of 10 USDC, trade 3031605
+  reads `9.0` in the archive and `sz` 9 from the REST endpoint — `side` is the taker's, and
+  `created_time` the print's millisecond instant. A print becomes a `TradeTick` with the
+  exchange's trade id, the taker's side as its aggressor, and `ts_event` = `ts_init` = the
+  instant it printed. Every print is kept, whatever its `source`.
+- **The listing** answers at most ten days a request (HTTP 400, code `50076`, for eleven)
+  and throttles hard: it answered 429 to every second request sent half a second apart, to
+  three of eight sent a second apart, and to none of six sent two seconds apart. So every
+  listing request is sent after a pause of two seconds, on top of its own quota of one
+  request a second — the slowest the engine's quota states, and a quota that admits a burst
+  as large as its rate — and a 429 it draws all the same is waited out.
+- **The archives are kept** in the catalog's adapter cache, `catalog/.cache/okx/trades/`,
+  because a day reads two of them and a backfill reads each twice; each is written only once
+  it has arrived whole and passes the zip's own CRC. They are public and re-fetchable, so
+  deleting the directory costs a download and nothing else. A `BTC-USDT-SWAP` archive was 6
+  to 18 MB a day in late September 2026 and about 1 MB in January 2023.
+
+The loader reads one archive at a time, but every path that writes a dataset — `kanso data
+load`, `data backfill` and `data sync` — gathers all the points it will write before writing
+any of them: `load` its whole span, `backfill` and `sync` each 30-day chunk whole. That one
+day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, took `kanso data load` 82 and 87
+seconds in two runs on 2026-09-30, the first at a peak of 1.8 GB resident, where the loader
+alone, with no write path, streamed it in 62 seconds at 207 MB; so a backfill chunk of a
+liquid swap's prints holds about thirty times that.
+Load a liquid swap's trades one day to a spec (backlog entry 109).
+
+#### `okx_funding`
+
+A row is `{fundingRate, realizedRate, fundingTime, method, formulaType, instId, instType}`.
+**`realizedRate` is the payment** — the rate the settlement at `fundingTime` actually paid —
+and it is what becomes `Funding.rate`; `fundingRate`, the rate published for the period, is
+never read, and a row with no finite `realizedRate` is refused rather than filled from it.
+The two agreed on all 281 rows of `BTC-USDT-SWAP` served on 2026-09-30. The point is stamped
+at the settlement, `ts_event` = `ts_init` = `fundingTime`; the endpoint lists settled
+periods only. Pages of 400, newest first, `after` and `before` exclusive; the horizon is
+measured by walking the history back to an empty page — two requests for a swap settling
+every eight hours — and the first whole UTC day served is the oldest settlement's day when
+it fell at midnight, the next day otherwise.
 
 ### The venue it declares
 
@@ -491,8 +707,8 @@ account settled in `USDT`, `commission_bps: 5.0` on a fill that takes liquidity 
 kanso's shipped defaults, so a hypothesis on bars alone still states `spread: fixed_bps`
 and its width; with neither quotes nor a width the venue model is refused rather than
 costed at a spread of zero. The rates are charged once, by the runner, like every venue's:
-the instrument provider will hand kanso instruments whose own maker and taker rates are
-zero, so the simulated venue charges nothing on top.
+the public reference hands kanso instruments whose own maker and taker rates are zero, so the
+simulated venue charges nothing on top.
 
 The rates are the exchange's published Regular (Lv1) perpetual schedule, and were measured
 on the operator's account on 2026-09-30 with `GET /api/v5/account/trade-fee?instType=SWAP`:
@@ -507,12 +723,18 @@ connects.
 
 ## Writing your own
 
-A **data adapter** is a package exposing a module-level `ADAPTER` with `id`, `kind`,
-`capabilities`, `credentials`, and the methods the registry calls: `client(ws)`,
-`configured(ws)`, `credential_origins(ws)`, `quota(ws)`, `loaders(ws)`, `provider(ws)` — a
-`kanso.data.instruments.InstrumentProvider`, or `None` — and `survey(ws)`. A workspace
-extension declares its ids in `PROVIDES["adapters"]` and exposes them in an `ADAPTERS`
-mapping, exactly as it declares loaders.
+A **data adapter** is a package exposing a module-level `ADAPTER` with `id`, `kind`
+(`data` or `reference`), `capabilities`, `credentials`, and the methods the registry calls:
+`client(ws)`, `configured(ws)`, `credential_origins(ws)`, `quota(ws)`, `loaders(ws)`,
+`provider(ws)` — a `kanso.data.instruments.InstrumentProvider`, or `None` — and `survey(ws)`.
+There is one package per outside party: a pure data vendor's lives under `data/adapters/`,
+and a broker whose public history or reference data kanso reads keeps those in its own
+package under `nautilus/adapters/`, exposed as the same `ADAPTER` beside its `BROKER`. The
+data registry finds both — the vendor packages first, then the broker packages, a vendor's
+id winning a clash — so `kanso data adapters`, the loaders and the instrument providers
+reach a broker-side adapter exactly as they reach a vendor's. A workspace extension declares
+its ids in `PROVIDES["adapters"]` and exposes them in an `ADAPTERS` mapping, exactly as it
+declares loaders; an id that ships from either directory wins over it.
 
 A **broker adapter** is a package under `nautilus/adapters/` exposing a module-level `BROKER`
 with `id`, `kind`, `exec_clients` (each an `ExecutionClientSpec` declaring `capital` and

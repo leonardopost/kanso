@@ -19,13 +19,15 @@ default, and a client (a later change) refuses to open until the table states on
 engine region maps to `app.okx.com` or `my.okx.com`; an account served only there has no
 region to state, and `docs/backlog.md` records it.
 
-**The quota is kanso's own loaders', not the engine's clients'.** `rate_per_second` is the
-single flat rate the public-history loaders (a later change) will share. The engine's own
-HTTP client meters itself — its compiled module carries a global bucket `okx:global` and one
-bucket per endpoint, `okx:/api/v5/market/history-candles` among them — and takes no quota
-from its caller, so this key governs nothing the engine sends. Five a second is a
-deliberately conservative default rather than a measured ceiling, and the history
-endpoints' own limits are measured when the loaders that call them land.
+**The quota is kanso's own requests', not the engine's clients'.** `rate_per_second` is the
+single flat rate kanso's own public requests share — the reference provider's and the
+public-history loaders'. The engine's own HTTP client meters itself — its
+compiled module carries a global bucket `okx:global` and one bucket per endpoint,
+`okx:/api/v5/market/history-candles` among them — and takes no quota from its caller, so
+this key governs nothing the engine sends. Five a second is a deliberately conservative
+default rather than a measured ceiling: the instruments endpoint is asked one id per
+request, and the one history endpoint measured to throttle below it, the archive listing,
+is metered on a quota of its own (`reference.KEYED_QUOTAS`).
 
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
@@ -44,7 +46,7 @@ Only the `us` REST host was measured against an account; the rest are the engine
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import Field, field_validator
 
@@ -53,11 +55,15 @@ from kanso.errors import PreconditionError
 from kanso.schemas import ExecutionClientSpec
 from kanso.schemas.base import KansoModel
 
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from kanso.workspace import Workspace
+
 __all__ = [
     "CLIENTS",
     "DEFAULT_RATE_PER_SECOND",
     "DEMO",
     "DEMO_CLIENT",
+    "ID",
     "LIVE",
     "LIVE_CLIENT",
     "PASSPHRASE_PURPOSE",
@@ -67,7 +73,12 @@ __all__ = [
     "Region",
     "credential_names",
     "spec",
+    "table",
 ]
+
+ID: Final = "okx"
+"""The id this package is registered and configured under: `[adapters.okx]`. The broker and
+the public reference answer to the same id, because they are one party with one table."""
 
 DEMO_CLIENT: Final = "okx_demo"
 LIVE_CLIENT: Final = "okx"
@@ -90,7 +101,8 @@ PASSPHRASE_PURPOSE: Final = "PASSPHRASE"
 default. The exchange signs every private request with all three."""
 
 DEFAULT_RATE_PER_SECOND: Final = 5
-"""The loaders' default quota: conservative, not measured; `rate_per_second` overrides it."""
+"""The default quota of kanso's own public requests: conservative, not measured;
+`rate_per_second` overrides it."""
 
 
 class Region(StrEnum):
@@ -173,3 +185,8 @@ class OkxConfig(KansoModel):
                 "in kanso.toml, naming the host that accepts the account's key",
             )
         return self.region
+
+
+def table(ws: Workspace) -> OkxConfig:
+    """The workspace's `[adapters.okx]` table, validated; its defaults when it is absent."""
+    return OkxConfig.model_validate(ws.config.adapters.get(ID, {}))

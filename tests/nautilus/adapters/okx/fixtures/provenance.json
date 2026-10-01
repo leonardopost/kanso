@@ -1,0 +1,66 @@
+{
+  "source": "OKX public REST API, GET /api/v5/public/instruments",
+  "authentication": "none: a public endpoint, requested with no credential header of any kind",
+  "user_agent": "kanso/0.13.0",
+  "recorded_with": "curl, from the operator's machine, unless a file says otherwise",
+  "files": {
+    "swap_page.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T14:03:12Z",
+      "body": "trimmed: 3 of the 494 rows the page carried, kept in the order served; no row's fields were edited"
+    },
+    "swap_BTC-USDT-SWAP.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=BTC-USDT-SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T14:03:12Z",
+      "body": "verbatim"
+    },
+    "swap_ETH-USDT-SWAP.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=ETH-USDT-SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T14:03:12Z",
+      "body": "verbatim"
+    },
+    "swap_BTC-USD-SWAP.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=BTC-USD-SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T14:03:12Z",
+      "body": "verbatim"
+    },
+    "swap_unknown.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=NOPE-USDT-SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T14:03:13Z",
+      "body": "verbatim"
+    },
+    "swap_malformed.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=btc-usdt-swap",
+      "host": "us.okx.com",
+      "status": 400,
+      "recorded_at": "2026-09-30T14:03:13Z",
+      "body": "verbatim"
+    },
+    "refused_user_agent.txt": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=BTC-USDT-SWAP",
+      "host": "us.okx.com",
+      "status": 403,
+      "recorded_at": "2026-09-30T14:07:12Z",
+      "body": "verbatim",
+      "user_agent": "Python-urllib/3.9, the standard library's default: the exchange's edge refuses it before the API answers",
+      "recorded_with": "the Python 3.9 standard library's urllib.request.urlopen, no header set"
+    },
+    "swap_USDC-USDT-SWAP.json": {
+      "url": "https://us.okx.com/api/v5/public/instruments?instType=SWAP&instId=USDC-USDT-SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T16:24:15Z",
+      "body": "verbatim"
+    }
+  }
+}

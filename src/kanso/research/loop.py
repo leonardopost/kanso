@@ -314,13 +314,14 @@ class Setup:
         holds it for its life, and a load that rewrites a day inside a span whose ends do
         not move is a pin gone stale rather than a second reading.
 
-        Nothing else `[research]` declares reaches a card's number. `annualisation`,
-        `account` and `currency` look as though they would and do not: this package reads
-        none of the three anywhere, which
+        `[research] account` and `currency` reach a card's number as a layer of the venue
+        model — `hyp.validate.venue_models` resolves them beneath the broker's declaration
+        and the operator's `venues.<MIC>` override — so the venue model digested above
+        carries them. Nothing else `[research]` declares reaches it. `annualisation` looks
+        as though it would and does not: no objective is passed one, which
         `tests/research/test_loop.py::test_the_settings_the_digest_leaves_out_move_no_number`
-        measures by running the same card under all three changed and reading back the
-        same metric. Wiring one of them is what makes that test fail, and it belongs here
-        on the same day.
+        measures by changing it and reading back the same metric. Wiring it is what makes
+        that test fail, and it belongs here on the same day.
         """
         digest = sha256()
         measured: tuple[object, ...] = (

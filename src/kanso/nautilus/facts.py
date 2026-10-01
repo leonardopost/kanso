@@ -105,10 +105,10 @@ child is handed its parent's extensions for (`kanso.ext.reimport`).
 
 Instruments
 -----------
-The five classes kanso resolves are `Equity`, `OptionContract`,
-`FuturesContract`, `CurrencyPair` and `IndexInstrument`. Their constructors are
-Cython and positional-or-keyword with no introspectable signature; the required
-fields, established by construction, are:
+The six classes kanso resolves are `Equity`, `OptionContract`,
+`FuturesContract`, `CurrencyPair`, `IndexInstrument` and `CryptoPerpetual`.
+Their constructors are Cython and positional-or-keyword with no introspectable
+signature; the required fields, established by construction, are:
 
 * `Equity`: `instrument_id`, `raw_symbol`, `currency`, `price_precision`,
   `price_increment`, `lot_size`, `ts_event`, `ts_init`.
@@ -125,12 +125,44 @@ fields, established by construction, are:
 * `IndexInstrument`: `instrument_id`, `raw_symbol`, `currency`,
   `price_precision`, `size_precision`, `price_increment`, `size_increment`,
   `ts_event`, `ts_init`.
+* `CryptoPerpetual`: `instrument_id`, `raw_symbol`, `base_currency`,
+  `quote_currency`, `settlement_currency`, `is_inverse`, `price_precision`,
+  `size_precision`, `price_increment`, `size_increment`, `ts_event`, `ts_init`.
 
-Omitting a required field raises `TypeError`. Tick size, lot size and
-multiplier are constructor inputs with no engine defaults, which is why they
-must come from a convention table rather than from a vendor. `Equity` takes no
-multiplier and carries `Quantity(1)`, so a share's notional is its quantity at
-its price; every other class carries the one it was built with.
+Omitting a required field raises `TypeError`. Tick size is a constructor input
+with no engine default. Lot size and multiplier have none on `Equity`,
+`FuturesContract` and `OptionContract`; `CurrencyPair` defaults `multiplier` to
+`Quantity(1)` and `lot_size` to `None`, `IndexInstrument` fixes `multiplier` at
+1, and `CryptoPerpetual` defaults both to `Quantity(1)`. kanso requires the
+perpetual's anyway, because a contract value of one is a claim about the
+contract. So they come from the convention table or the reference provider's
+measured definition, never guessed. `Equity`
+takes no multiplier and carries `Quantity(1)`, so a share's notional is its
+quantity at its price; every other class carries the one it was built with.
+`CryptoPerpetual` fixes its asset class to `CRYPTOCURRENCY` and its instrument
+class to `SWAP`, and its `to_dict` carries no `asset_class` key.
+
+Every class carries `maker_fee` and `taker_fee`, zero unless given, and
+`MakerTakerFeeModel.get_commission` charges a fill its notional times the
+instrument's maker or taker rate, in the quote currency: measured on a
+perpetual of multiplier 0.01, ten contracts at 60,000 pay 3 USDT at a taker
+rate of 0.0005 and nothing at zero. That model is the one `BacktestEngine`
+substitutes for a venue given none, so kanso's definitions keep both rates at
+zero and the runner's cost model is the only charge. `margin_init` and
+`margin_maint` stay overridable; the engine's liquidation path computes from
+them.
+
+`Instrument.get_settlement_currency()` answers the currency a trade settles
+in: a `CryptoPerpetual`'s stated `settlement_currency`, and the quote currency
+of every other class kanso builds (none of them inverse).
+`Instrument.get_cost_currency()` answers the currency positions, PnL and margin
+are booked in — the quote currency of every linear class, a perpetual's
+included — and the account manager converts from it to the account's base
+currency, deferring the balance update (logged at debug only) when the cache
+holds no rate between them. A USDC-settled perpetual quoted in USDT answers
+USDC to the first and USDT to the second, and is not quanto, because the engine
+treats the two as USD equivalents: it settles in one currency and is booked in
+the other, so `hyp validate` requires both to be the account's.
 
 `nautilus_trader.common.providers.InstrumentProvider` is not the interface
 kanso needs: `load(instrument_id, filters)` takes an already fully qualified
@@ -252,6 +284,42 @@ at 9.50 against a print at 9.49: a seller's print, or one with no aggressor, fil
 9.50; a buyer's never does, at any probability. A bar's own prints carry no such label —
 the engine walks them as book updates — so this bites only on trade data, which is why
 a trade file that records no side is loaded as `NO_AGGRESSOR` and never given one.
+
+**An order whose cancel was sent is working until the cancel lands.** `Strategy.cancel_order`
+and `cancel_all_orders` apply `OrderPendingCancel` to the order before the command leaves
+the strategy, so it reads `PENDING_CANCEL` and not `is_closed` at once, and the order state
+machine lets a pending-cancel order fill. Under a latency model the cancel reaches the book
+only at the first point after its delay, once that point has been matched, so the market can
+fill the order in between; with none, the backtest drains the commands a handler sent before
+it matches the next point, and the cancel always lands first. Measured, a buy resting at 9.50
+and cancelled a minute before a print at 9.49: filled whole under a 30-second latency,
+cancelled unfilled under none — which is why `submit_exit` counts an order the venue held
+open when its cancel was sent as working exactly when the venue model states a latency. All
+of this is measured on the backtest engine. A cancel sent for an order still on its way to
+the venue does different things on the two code paths. The backtest has already handed such
+an order to the venue (`SUBMITTED`), which takes it and then the cancel; a node may still
+hold it `INITIALIZED`, its submit waiting in the live risk engine's queue while the cancel
+goes straight to the live execution engine's, so the cancel reaches the venue first and is
+lost, and the order rests (read in `live/risk_engine.py` and `execution/manager.pyx`). So
+`KansoStrategy` never sends a cancel for an `INITIALIZED` order: it holds it back until the
+node reports the order `SUBMITTED`, and counts the order as working until the cancel lands;
+the replay tests measure that the two paths then fill alike. The engine's own guard is the
+`reduce_only` flag, and the simulated venue honours it: `close_position` sets it by default,
+a reduce-only order the position has no room left for is rejected rather than opening
+the other side, and its matching engine trims a reduce-only fill to the quantity still open
+— measured, a long of 10 sold at market and closed in the same handler ends flat with the
+close rejected, and one sold 4 and closed ends flat with the close cut to 6 and filled —
+which is what keeps a node's flatten from racing an exit still in flight. `submit_exit` does
+not set it, for two reasons: the shipped broker adapter refuses any order that carries the
+flag, and one strategy class runs on every path; and on any fill the simulated venue resizes
+every resting standalone reduce-only order to the whole position (`backtest/engine.pyx`),
+so a partial exit — 50 of 100 — marked reduce-only would be grown or shrunk behind the
+author's back and fill differently even with no latency. `cancel_all_orders` marks an order
+open at the venue `PENDING_CANCEL` at once, which is what `KansoStrategy.cancel_all_orders`
+mirrors when it notes the orders it cancelled; on the backtest it also sends the cancel for
+one still in flight without marking it, and — read in `trading/strategy.pyx` rather than
+measured — leaves one a node has not yet sent, so kanso hands it the orders only when none
+is still `INITIALIZED`, and cancels them one by one otherwise.
 
 Risk configuration
 ------------------
@@ -834,6 +902,231 @@ def _check_a_touched_limit_is_the_fill_models_to_fill() -> tuple[bool, str]:
         + "; ".join(seen)
         + ". A limit the market only reaches is the fill model's to fill, and one it goes "
         "beyond fills at its own price as a maker whatever the model says"
+    )
+
+
+def _probe_cancel_in_flight(latency_ns: int) -> tuple[str, bool, str, float]:
+    """A buy resting at 9.50, cancelled at minute three; a seller's print at 9.49 at minute
+    four. Returns the order's status and `is_closed` just after the cancel was sent, and its
+    status and filled quantity at the end."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.order: Any = None
+            self.sent: tuple[str, bool] = ("", True)
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.order = self.order_factory.limit(
+                    equity.id, OrderSide.BUY, Quantity.from_int(10), Price(9.5, 2)
+                )
+                self.submit_order(self.order)
+            elif self.seen == 3:
+                self.cancel_order(self.order)
+                self.sent = (order_status_to_str(self.order.status), bool(self.order.is_closed))
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0, 9.49, 10.0))
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        order = probe.order
+        return (
+            *probe.sent,
+            order_status_to_str(order.status),
+            float(order.filled_qty),
+        )
+    finally:
+        engine.dispose()
+
+
+def _check_a_cancel_in_flight_leaves_the_order_to_fill() -> tuple[bool, str]:
+    """`submit_exit`'s premise: an order whose cancel was sent is working until the cancel
+    lands — under a latency it fills if the market reaches it first; with none it cannot."""
+    slow = _probe_cancel_in_flight(_MINUTE_NS // 2)
+    instant = _probe_cancel_in_flight(0)
+    holds = slow == ("PENDING_CANCEL", False, "FILLED", 10.0) and instant == (
+        "PENDING_CANCEL",
+        False,
+        "CANCELED",
+        0.0,
+    )
+    return holds, (
+        "a buy resting at 9.50 and cancelled a minute before a print at 9.49 read (status "
+        f"after the cancel, is_closed, final status, filled) {slow} with a 30-second latency "
+        f"and {instant} with none: the cancel is applied as PENDING_CANCEL before it leaves "
+        "the strategy, the order is not closed until it lands, a latency lets the market "
+        "fill it in between, and with no latency it lands before the next point is matched"
+    )
+
+
+def _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight() -> tuple[bool, str]:
+    """What `KansoStrategy.cancel_all_orders` mirrors when it notes the orders it cancelled:
+    the engine marks an order open at the venue `PENDING_CANCEL` at once. On the backtest it
+    also cancels one still in flight, left as it is; one a node has not yet sent it skips,
+    which is why kanso hands it the orders only when none is still `INITIALIZED`."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.orders: list[Any] = []
+            self.sent: tuple[str, ...] = ()
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen in (1, 2):
+                order = self.order_factory.limit(
+                    equity.id, OrderSide.BUY, Quantity.from_int(10), Price(9.0, 2)
+                )
+                self.orders.append(order)
+                self.submit_order(order)
+            if self.seen == 2:
+                self.cancel_all_orders(equity.id)
+                self.sent = tuple(order_status_to_str(order.status) for order in self.orders)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0))
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        seen = (*probe.sent, *(order_status_to_str(order.status) for order in probe.orders))
+    finally:
+        engine.dispose()
+    return seen == ("PENDING_CANCEL", "SUBMITTED", "CANCELED", "CANCELED"), (
+        "a buy resting at 9.00, and a second sent in the handler that then called "
+        f"cancel_all_orders, read (resting, in flight, once cancelled; then both at the end) = "
+        f"{seen}: the engine marks the resting order pending cancel at once, leaves the one "
+        "in flight as it is, and cancels both"
+    )
+
+
+def _probe_close_after_a_sale(sold: int) -> tuple[bool, str, float, float, float]:
+    """A long of 10; then, in one handler, a sale of `sold` at market and `close_position`.
+    Returns the close's (is_reduce_only, status, quantity, filled) and the net position at
+    the end."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(10))
+                )
+            elif self.seen == 3:
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.SELL, Quantity.from_int(sold))
+                )
+                (position,) = self.cache.positions_open(strategy_id=self.id)
+                self.close_position(position)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0, 10.0))
+        engine.add_strategy(Probe())
+        engine.run()
+        close = engine.cache.orders(side=OrderSide.SELL)[-1]
+        return (
+            bool(close.is_reduce_only),
+            order_status_to_str(close.status),
+            float(close.quantity),
+            float(close.filled_qty),
+            float(engine.portfolio.net_position(equity.id)),
+        )
+    finally:
+        engine.dispose()
+
+
+def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tuple[bool, str]:
+    """The node flatten's premise: `close_position` sends a reduce-only order, and the
+    simulated venue refuses it once another sale has already closed the position, and trims
+    it to what is left when another sale has closed part of it."""
+    closed = _probe_close_after_a_sale(10)
+    part = _probe_close_after_a_sale(4)
+    holds = closed == (True, "REJECTED", 10.0, 0.0, 0.0) and part == (
+        True,
+        "FILLED",
+        6.0,
+        6.0,
+        0.0,
+    )
+    return holds, (
+        "a long of 10, then in one handler a sale at market and close_position: (close is "
+        f"reduce-only, its status, quantity, filled, net position) = {closed} after a sale "
+        f"of 10 and {part} after a sale of 4. The close carries reduce_only by default, and "
+        "the venue refuses a reduce-only order the position no longer has room for and "
+        "trims one to the quantity still open, rather than open the other side"
     )
 
 
@@ -1450,10 +1743,53 @@ def _check_custom_data_pickles_its_payload_by_reference() -> tuple[bool, str]:
 # --- instruments -------------------------------------------------------------
 
 
+def _sample_perpetual(**fields: Any) -> Any:
+    """A linear BTC perpetual quoted and settled in USDT, built from exactly the fields
+    the engine requires plus whatever `fields` adds or replaces."""
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol
+    from nautilus_trader.model.instruments import CryptoPerpetual
+    from nautilus_trader.model.objects import Currency, Price, Quantity
+
+    usdt = Currency.from_str("USDT")
+    required: dict[str, Any] = {
+        "instrument_id": InstrumentId.from_str("BTCUSDT-PERP.SIM"),
+        "raw_symbol": Symbol("BTCUSDT-PERP"),
+        "base_currency": Currency.from_str("BTC"),
+        "quote_currency": usdt,
+        "settlement_currency": usdt,
+        "is_inverse": False,
+        "price_precision": 1,
+        "size_precision": 0,
+        "price_increment": Price.from_str("0.1"),
+        "size_increment": Quantity.from_int(1),
+        "ts_event": 0,
+        "ts_init": 0,
+    }
+    return CryptoPerpetual(**{**required, **fields})
+
+
+PERPETUAL_REQUIRED = (
+    "instrument_id",
+    "raw_symbol",
+    "base_currency",
+    "quote_currency",
+    "settlement_currency",
+    "is_inverse",
+    "price_precision",
+    "size_precision",
+    "price_increment",
+    "size_increment",
+    "ts_event",
+    "ts_init",
+)
+"""What `CryptoPerpetual` refuses to construct without, measured one omission at a time."""
+
+
 def _check_instrument_classes() -> tuple[bool, str]:
     from nautilus_trader.model.enums import AssetClass, OptionKind
     from nautilus_trader.model.identifiers import InstrumentId, Symbol
     from nautilus_trader.model.instruments import (
+        CryptoPerpetual,
         CurrencyPair,
         Equity,
         FuturesContract,
@@ -1521,6 +1857,7 @@ def _check_instrument_classes() -> tuple[bool, str]:
             ts_event=0,
             ts_init=0,
         ),
+        _sample_perpetual(multiplier=Quantity.from_str("0.01"), lot_size=Quantity.from_int(1)),
     ]
     missing_field = _raises(
         lambda: Equity(
@@ -1534,10 +1871,153 @@ def _check_instrument_classes() -> tuple[bool, str]:
         )
     )
     share = built[0].multiplier
-    holds = len(built) == 5 and missing_field is not None and share == Quantity.from_int(1)
+    bare: Any = _sample_perpetual()
+    fields = _perpetual_fields(bare)
+    unbuilt = {field: _without(CryptoPerpetual, fields, field) for field in PERPETUAL_REQUIRED}
+    defaulted = (str(bare.multiplier), str(bare.lot_size))
+    perpetual = CryptoPerpetual.to_dict(bare)
+    holds = (
+        len(built) == 6
+        and missing_field is not None
+        and share == Quantity.from_int(1)
+        and all(unbuilt.values())
+        and defaulted == ("1", "1")
+        and "asset_class" not in perpetual
+        and bare.asset_class == AssetClass.CRYPTOCURRENCY
+        and bare.instrument_class.name == "SWAP"
+    )
     return holds, (
         f"constructed {[type(i).__name__ for i in built]}; "
-        f"Equity.multiplier = {share}; Equity without lot_size -> {missing_field}"
+        f"Equity.multiplier = {share}; Equity without lot_size -> {missing_field}; "
+        f"CryptoPerpetual refuses to construct without each of {sorted(unbuilt)} "
+        f"({sum(1 for refused in unbuilt.values() if refused)} of {len(unbuilt)} refused); "
+        f"built without multiplier and lot_size it carries {defaulted[0]} and {defaulted[1]}; "
+        f"its asset class is {bare.asset_class.name}, its instrument class "
+        f"{bare.instrument_class.name}, and to_dict carries "
+        f"{'no' if 'asset_class' not in perpetual else 'an'} asset_class key"
+    )
+
+
+def _without(cls: Any, fields: dict[str, Any], omitted: str) -> str | None:
+    """What constructing `cls` from `fields` less one of them raises, or `None`."""
+    return _raises(lambda: cls(**{name: v for name, v in fields.items() if name != omitted}))
+
+
+def _perpetual_fields(perpetual: Any) -> dict[str, Any]:
+    """The required constructor fields of a built perpetual, read back off its attributes."""
+    return {
+        "instrument_id": perpetual.id,
+        "raw_symbol": perpetual.raw_symbol,
+        "base_currency": perpetual.base_currency,
+        "quote_currency": perpetual.quote_currency,
+        "settlement_currency": perpetual.settlement_currency,
+        "is_inverse": perpetual.is_inverse,
+        "price_precision": perpetual.price_precision,
+        "size_precision": perpetual.size_precision,
+        "price_increment": perpetual.price_increment,
+        "size_increment": perpetual.size_increment,
+        "ts_event": perpetual.ts_event,
+        "ts_init": perpetual.ts_init,
+    }
+
+
+def _check_fee_model_charges_the_instrument_rates() -> tuple[bool, str]:
+    """What a non-zero maker or taker rate on a definition would cost every fill."""
+    from decimal import Decimal
+
+    from nautilus_trader.backtest.models import MakerTakerFeeModel
+    from nautilus_trader.common.component import TestClock
+    from nautilus_trader.common.factories import OrderFactory
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.enums import LiquiditySide, OrderSide, OrderType
+    from nautilus_trader.model.events import OrderAccepted, OrderFilled, OrderSubmitted
+    from nautilus_trader.model.identifiers import (
+        AccountId,
+        StrategyId,
+        TradeId,
+        TraderId,
+        VenueOrderId,
+    )
+    from nautilus_trader.model.objects import Money, Price, Quantity
+
+    factory = OrderFactory(
+        trader_id=TraderId("T-1"), strategy_id=StrategyId("S-1"), clock=TestClock()
+    )
+    account = AccountId("SIM-001")
+    price, quantity = Price.from_str("60000.0"), Quantity.from_int(10)
+
+    def charge(instrument: Any, side: LiquiditySide) -> Money:
+        order = factory.market(instrument.id, OrderSide.BUY, quantity)
+        ids = {
+            "trader_id": order.trader_id,
+            "strategy_id": order.strategy_id,
+            "instrument_id": order.instrument_id,
+            "client_order_id": order.client_order_id,
+            "account_id": account,
+            "event_id": UUID4(),
+            "ts_event": 0,
+            "ts_init": 0,
+        }
+        order.apply(OrderSubmitted(**ids))
+        order.apply(OrderAccepted(venue_order_id=VenueOrderId("V-1"), **ids))
+        order.apply(
+            OrderFilled(
+                **{**ids, "event_id": UUID4()},
+                venue_order_id=VenueOrderId("V-1"),
+                trade_id=TradeId("F-1"),
+                position_id=None,
+                order_side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                last_qty=quantity,
+                last_px=price,
+                currency=instrument.quote_currency,
+                commission=Money(0, instrument.quote_currency),
+                liquidity_side=side,
+            )
+        )
+        charged: Money = MakerTakerFeeModel().get_commission(order, quantity, price, instrument)
+        return charged
+
+    contract = Quantity.from_str("0.01")
+    taker = charge(
+        _sample_perpetual(multiplier=contract, taker_fee=Decimal("0.0005")), LiquiditySide.TAKER
+    )
+    maker = charge(
+        _sample_perpetual(multiplier=contract, maker_fee=Decimal("0.0002")), LiquiditySide.MAKER
+    )
+    free = charge(_sample_perpetual(multiplier=contract), LiquiditySide.TAKER)
+    holds = (taker.as_decimal(), maker.as_decimal(), free.as_decimal()) == (
+        Decimal(3),
+        Decimal("1.2"),
+        Decimal(0),
+    )
+    return holds, (
+        f"ten contracts of multiplier 0.01 at 60,000 were charged {taker} at a taker rate of "
+        f"0.0005, {maker} at a maker rate of 0.0002 and {free} at rates of zero: the fee "
+        "model charges the instrument's own rate on the notional, so a kanso definition "
+        "keeps both rates at zero"
+    )
+
+
+def _check_settlement_currency() -> tuple[bool, str]:
+    """The two currencies `hyp validate` compares with a venue's account currency."""
+    from nautilus_trader.model.objects import Currency
+
+    usdc = _sample_perpetual(settlement_currency=Currency.from_str("USDC"))
+    same = _sample_perpetual()
+    equity: Any = _sample_equity()
+    answered = tuple(
+        (held.get_settlement_currency().code, held.get_cost_currency().code)
+        for held in (usdc, same, equity)
+    )
+    holds = answered == (("USDC", "USDT"), ("USDT", "USDT"), ("USD", "USD")) and not (
+        usdc.is_quanto
+    )
+    return holds, (
+        f"a USDT-quoted perpetual settled in USDC settles in {answered[0][0]} and is booked "
+        f"in {answered[0][1]} (quanto: {usdc.is_quanto}), one settled in USDT settles and is "
+        f"booked in {answered[1][0]}/{answered[1][1]}, and a USD equity in "
+        f"{answered[2][0]}/{answered[2][1]}, its quote currency"
     )
 
 
@@ -2402,8 +2882,18 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_custom_data_pickles_its_payload_by_reference,
     ),
     (
-        "the five instrument classes construct from the fields kanso must supply",
+        "the six instrument classes construct from the fields kanso must supply",
         _check_instrument_classes,
+    ),
+    (
+        "MakerTakerFeeModel charges a fill the instrument's maker or taker rate on its notional",
+        _check_fee_model_charges_the_instrument_rates,
+    ),
+    (
+        "get_settlement_currency answers a perpetual's settlement currency and every other "
+        "class's quote currency; get_cost_currency, which the account manager books and "
+        "converts from, answers the quote currency of every class",
+        _check_settlement_currency,
     ),
     (
         "the engine's InstrumentProvider requires a fully qualified InstrumentId and is "
@@ -2518,6 +3008,21 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "closing a position costs the same whatever was closed before it",
         _check_close_cost_is_flat,
+    ),
+    (
+        "an order whose cancel was sent is not closed until the cancel lands, and under a "
+        "latency the market can fill it first",
+        _check_a_cancel_in_flight_leaves_the_order_to_fill,
+    ),
+    (
+        "close_position sends a reduce-only order, which the simulated venue trims to what "
+        "is left of the position and refuses once the position is already closed",
+        _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position,
+    ),
+    (
+        "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
+        "flight as it is, and cancels both",
+        _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight,
     ),
 )
 

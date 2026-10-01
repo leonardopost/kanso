@@ -98,3 +98,15 @@ def test_the_data_skill_says_what_answered_empty_means() -> None:
     assert "(`empty`, counted as coverage)" in step
     assert "A gap is what `kanso data backfill` asks for again" in step
     assert "a weekday under `empty` that the venue traded" in step
+
+
+def test_the_data_skill_names_funding_as_realised_and_required_of_a_perpetual() -> None:
+    """An agent loading a perpetual's history reaches for whatever rate a feed publishes; the
+    skill is where it learns the predicted one is not funding, and that validation needs it."""
+    text = skill(PACKAGED, "kanso-data")
+    assert "| funding |" in text
+    assert "the **realised** rate of the period that settled" in text
+    assert "must list `funding` in `data_requirements`" in text
+    assert "a spot leg beside it is asked for none" in text
+    assert "the runner books each settlement on what the card held before it" in text
+    assert "`types: [bar, funding]`" in text

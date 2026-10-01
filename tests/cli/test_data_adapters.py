@@ -32,8 +32,12 @@ from typer.testing import CliRunner
 from kanso.data.adapters.massive import ACCESS_KEY_ID, API_KEY, SECRET_KEY
 from kanso.data.adapters.massive.client import Response
 from kanso.errors import Exit
+from kanso.nautilus import adapters as brokers
+from kanso.nautilus.adapters.okx import reference as okx_reference
 
+from ..data.adapters.brokered import expose
 from ..data.adapters.massive import Replay, refused, served
+from ..nautilus.adapters.okx.recorded import Replay as OkxReplay
 from . import massive_wire
 from .conftest import at, payload
 from .massive_wire import FUTURE, KEY, OPTION
@@ -49,11 +53,27 @@ def test_the_loaders_the_manual_provider_and_the_adapter_are_what_is_registered(
     assert result.exit_code == Exit.OK
     document = payload(result)
     by_id = {item["id"]: item for item in document["adapters"]}
-    assert set(by_id) == {"synthetic", "csv_parquet", "manual", "massive"}
+    assert set(by_id) == {"synthetic", "csv_parquet", "manual", "massive", "okx"}
     assert by_id["synthetic"]["kind"] == "data"
     assert by_id["manual"]["kind"] == "reference"
     assert by_id["massive"]["kind"] == "data"
     assert by_id["massive"]["provider"] == "builtin"
+
+
+def test_the_exchange_s_public_reference_is_listed_needing_no_credential(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """A broker's package ships its public reference and history loaders: a data adapter
+    with no key to set, configured by its table, so a fresh workspace lists it unconfigured,
+    with its three loader ids, and says nothing."""
+    document = payload(at(runner, workspace, "data", "adapters", "--json"))
+
+    okx = next(item for item in document["adapters"] if item["id"] == "okx")
+    assert (okx["kind"], okx["provider"]) == ("data", "builtin")
+    assert (okx["credentials"], okx["credential_origins"]) == ([], {})
+    assert okx["capabilities"] == ["reference", "bars", "trades", "funding"]
+    assert (okx["quota"], okx["loaders"]) == ("5/s", ["okx_bars", "okx_funding", "okx_trades"])
+    assert not [note for note in document["notes"] if "okx" in note]
 
 
 def test_a_loader_that_needs_nothing_resolves_and_an_adapter_that_needs_three_does_not(
@@ -135,6 +155,29 @@ def test_check_makes_no_network_call_when_nothing_is_configured(
     assert any("made no network call" in note for note in document["notes"])
 
 
+def test_check_stops_on_a_public_host_that_does_not_answer_and_blames_no_credential(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recorded: the exchange's edge refusing a request, 403 `error code: 1010`. The OKX
+    reference sends no credential, so its host not answering is the command's failure,
+    never a key that did not authenticate."""
+    refusing = OkxReplay(answers={None: "refused_user_agent.txt"})
+    monkeypatch.setattr(okx_reference, "pyo3_transport", lambda rate, **_: refusing)
+    config = workspace / "kanso.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + '\n[adapters.okx]\nregion = "us"\n',
+        encoding="utf-8",
+    )
+
+    result = at(runner, workspace, "data", "adapters", "--check", "--json")
+
+    assert result.exit_code == Exit.ERROR
+    document = payload(result)
+    assert "did not answer" in document["error"] and "authenticate" not in document["error"]
+    assert "rate_per_second" in document["remedy"] and "credential" not in document["remedy"]
+    assert len(refusing.asked) == 1
+
+
 def test_a_configured_table_nothing_provides_is_named(runner: CliRunner, workspace: Path) -> None:
     config = workspace / "kanso.toml"
     config.write_text(
@@ -146,6 +189,41 @@ def test_a_configured_table_nothing_provides_is_named(runner: CliRunner, workspa
 
     unprovided = [note for note in document["notes"] if "nothing here provides" in note]
     assert unprovided == ["kanso.toml configures acme, which nothing here provides"]
+
+
+def test_a_broker_s_table_is_configuration_not_an_orphan(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """A broker is configured through the same `[adapters.<id>]` table as a data adapter.
+
+    It lives in the broker registry, which `doctor` already consults; a note calling its
+    table something nothing provides would invite an operator to delete a live broker's
+    configuration.
+    """
+    broker_id = sorted(brokers.packaged())[0]
+    config = workspace / "kanso.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + f"\n[adapters.{broker_id}]\n",
+        encoding="utf-8",
+    )
+
+    document = payload(at(runner, workspace, "data", "adapters", "--json"))
+
+    assert [note for note in document["notes"] if "nothing here provides" in note] == []
+
+
+def test_a_data_adapter_a_broker_package_exposes_is_listed_as_built_in(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A broker's package ships with kanso, and so does the adapter it carries."""
+    expose(monkeypatch, tmp_path / "brokers", "tidebroker", "tide", kind="reference")
+
+    document = payload(at(runner, workspace, "data", "adapters", "--json"))
+
+    by_id = {item["id"]: item for item in document["adapters"]}
+    assert by_id["tide"]["provider"] == "builtin"
+    assert by_id["tide"]["kind"] == "reference"
+    assert by_id["tide"]["loaders"] == ["tide_bars"]
 
 
 def test_an_extension_s_loader_is_registered_beside_the_built_in_ones(

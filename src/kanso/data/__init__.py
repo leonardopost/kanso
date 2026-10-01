@@ -13,12 +13,13 @@ from __future__ import annotations
 
 from kanso.data.loader import DatasetRef, Loader, get_loader, loaders
 from kanso.data.registry import Adapter, Reach, Survey
-from kanso.data.types import CorporateAction, data_types, register_custom_type
+from kanso.data.types import CorporateAction, Funding, data_types, register_custom_type
 
 __all__ = [
     "Adapter",
     "CorporateAction",
     "DatasetRef",
+    "Funding",
     "Loader",
     "Reach",
     "Survey",

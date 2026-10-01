@@ -15,7 +15,9 @@ of a fill that pays commission (`kanso.nautilus.costs.fill_cost`). One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
-maker's.
+maker's. A perpetual's funding is booked here too, once, at each settlement, on what was held
+then (`_equity`) — never by the venue — and the runner configures the sleeve to book the same
+amount into the balance it sizes from (`books_funding`).
 
 **The window is a refusal, not a parameter.** A request may name only a window the
 hypothesis declares, and the card path — `run_subprocess` — accepts only the research
@@ -107,7 +109,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
-from kanso.criteria import CardRun, Fill, Trade
+from kanso.criteria import CardRun, Fill, FundingPayment, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
@@ -115,6 +117,7 @@ from kanso.nautilus.costs import (
     carry,
     fill_cost,
     fixed_half_spread,
+    funding_payment,
     maintenance_ratio,
     month_turned,
     policy_of,
@@ -819,6 +822,9 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
             max_leverage=hyp.risk_limits.max_leverage,
             venue_model=dict(request.venue_model),
+            # The venue a run fills against is simulated and settles no funding, so the
+            # sleeve's balance books it as this extraction does.
+            books_funding=True,
             **dict(request.overrides),
         )
     except ValueError as exc:
@@ -973,8 +979,7 @@ def execute_chunked(
         for groups in chunks:
             splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
             points = _ordered(groups)
-            for point in points:
-                marks.feed(point)
+            marks.take(points)
             if not points:
                 continue
             strategy._hold_until_cross_section = any(is_marker(point) for point in points)
@@ -1076,6 +1081,21 @@ class Marks:
     The quoted spreads are kept per chunk: `price` charges every fill not yet priced with
     the last quote at or before it, from this chunk's quotes or the last quote the previous
     chunk left, and `next_chunk` lets the chunk's series go.
+
+    A funding point is a settlement (`settlements`): its instant, its instrument, its rate,
+    and the mark its payment is struck at — the instrument's last print at or before the
+    instant, the greatest of several at one instant, exactly as a period's mark is chosen.
+    A print is credited to the first settlement of its name at or after it, and the mark of
+    each settlement is the latest credited at or before it, so nothing beyond one print per
+    settlement is held. That needs the settlements a print belongs to known before the
+    print arrives, which is what `take` arranges: a chunk's settlements are folded before
+    its prints, and a chunk is a slice of time, so a print a later chunk's settlement
+    reaches back to is one print per name, carried. It also needs each name's settlements
+    folded in time order — a later one folded first would take the carried print from an
+    earlier one — which both callers give it: the catalog serves a name's funding as one
+    time-sorted series, and chunks are cut in time. A settlement of a name that has not
+    printed by then is marked at nothing, and nothing can be held at it, since a fill
+    needs a price.
     """
 
     def __init__(self, request: RunRequest, model: VenueModel) -> None:
@@ -1092,6 +1112,19 @@ class Marks:
         self._series: dict[str, list[tuple[int, float]]] = {}
         self._last_quote: dict[str, tuple[int, float]] = {}
         self._halves: dict[str, float] = {}
+        self._settled: list[tuple[int, str, float]] = []
+        self._instants: dict[str, list[int]] = {}
+        self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
+
+    def take(self, points: Iterable[object]) -> None:
+        """Fold a chunk of points, its funding settlements first (see the class)."""
+        held = tuple(points)
+        for point in held:
+            if _funding_of(point) is not None:
+                self.feed(point)
+        for point in held:
+            if _funding_of(point) is None:
+                self.feed(point)
 
     def feed(self, point: object) -> None:
         """Fold one point: its instant, its mark, its range and, for a quote, its spread."""
@@ -1109,7 +1142,11 @@ class Marks:
                 remedy="load the window the run asked for and nothing else",
             )
         low, high = _range_of(point)
-        self.fold(ts, _instrument_of(point) or "", _price_of(point), low, high)
+        key = _instrument_of(point) or ""
+        self.fold(ts, key, _price_of(point), low, high)
+        funding = _funding_of(point)
+        if funding is not None:
+            self.settle(ts, key, float(funding.rate))
         if self.quotes and isinstance(point, QuoteTick):
             half = quote_half_spread(float(point.bid_price), float(point.ask_price))
             self._series.setdefault(str(point.instrument_id), []).append((ts, half))
@@ -1128,6 +1165,37 @@ class Marks:
                 target.highs[key] = max(target.highs.get(key, high), high)
         if price is not None:
             target.mark(key, ts, price)
+            self._credit(key, ts, price)
+
+    def settle(self, ts: int, key: str, rate: float) -> None:
+        """Record one funding settlement: `rate` on what `key` holds at `ts`."""
+        self._settled.append((ts, key, rate))
+        instants = self._instants.setdefault(key, [])
+        if ts not in instants:
+            bisect.insort(instants, ts)
+        carried = self._credited.pop((key, None), None)
+        if carried is not None:
+            self._credit(key, *carried)
+
+    def _credit(self, key: str, ts: int, price: float) -> None:
+        """Credit a print to the first settlement of its name at or after it, or carry it."""
+        instants = self._instants.get(key, ())
+        index = bisect.bisect_left(instants, ts)
+        slot = (key, instants[index] if index < len(instants) else None)
+        held = self._credited.get(slot)
+        if held is None or ts > held[0] or (ts == held[0] and price > held[1]):
+            self._credited[slot] = (ts, price)
+
+    def settlements(self) -> tuple[tuple[int, str, float, float], ...]:
+        """Every funding settlement folded, as `(ts, instrument, rate, mark)` in time order;
+        the mark is nothing for a name that has not printed by then."""
+        marked: dict[tuple[str, int], float] = {}
+        for key, instants in self._instants.items():
+            last: tuple[int, float] | None = None
+            for instant in instants:
+                last = self._credited.get((key, instant), last)
+                marked[(key, instant)] = 0.0 if last is None else last[1]
+        return tuple(sorted((ts, key, rate, marked[(key, ts)]) for ts, key, rate in self._settled))
 
     def check(self) -> None:
         """The refusal for a window the catalog holds nothing for; a prefix alone is no run."""
@@ -1218,8 +1286,7 @@ def checked(
     """
     splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
     marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
-    for point in chain.from_iterable(groups):
-        marks.feed(point)
+    marks.take(chain.from_iterable(groups))
     marks.check()
     return marks
 
@@ -1235,6 +1302,14 @@ def _price_of(point: object) -> float | None:
     if isinstance(point, TradeTick):
         return float(point.price)
     return None
+
+
+def _funding_of(point: object) -> Any:
+    """The funding settlement a point is, the catalog's wrapper taken off, or `None`."""
+    from kanso.data.types import Funding
+
+    inner = getattr(point, "data", point)
+    return inner if isinstance(inner, Funding) else None
 
 
 def _range_of(point: object) -> tuple[float | None, float | None]:
@@ -1323,8 +1398,8 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
     schedules = {
         str(instrument.id): splits.schedule_of(instrument) for instrument in cache.instruments()
     }
-    trades = _trades(positions, by_position, multipliers, schedules)
     curve = _equity(request, marks, fills, multipliers, _adjusted(positions))
+    trades = _trades(positions, by_position, multipliers, schedules, curve.funding)
     return CardRun(
         window=request.window,
         period=request.period,
@@ -1340,6 +1415,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
         cushion=curve.cushion,
         carry=curve.carry,
         worst_ratio=curve.worst_ratio,
+        funding=curve.funding,
     )
 
 
@@ -1358,6 +1434,7 @@ class _Curve:
     cushion: tuple[float, ...] = ()
     carry: tuple[float, ...] = ()
     worst_ratio: tuple[float | None, ...] = ()
+    funding: tuple[FundingPayment, ...] = ()
 
 
 def _positions(cache: Any) -> tuple[Any, ...]:
@@ -1454,8 +1531,10 @@ def _trades(
     by_position: Mapping[int, Sequence[Fill]],
     multipliers: Mapping[str, float],
     schedules: Mapping[str, Sequence[splits.Split]] | None = None,
+    funding: Sequence[FundingPayment] = (),
 ) -> tuple[Trade, ...]:
-    """Closed positions as trades, netted of the costs of the fills that made them.
+    """Closed positions as trades, netted of the costs of the fills that made them and of
+    the funding they paid.
 
     A position still open when the window closes is not a trade: its profit is in the
     equity curve as an unrealised mark, and it becomes a trade only when it closes.
@@ -1475,7 +1554,19 @@ def _trades(
 
     The trade carries the instrument's multiplier, as its fills do, so its opening value is
     in the currency its profit is.
+
+    A funding payment belongs to the trade of its instrument held at its settlement:
+    opened before the instant and closed at or after it. Under netting one position of a
+    name is open at a time, and a fill at the instant is not held there (`_equity`) — so a
+    position opened at a settlement pays nothing there, and one closed at it still pays.
+    `cost` stays the fills' cost alone, so a cost model re-applied to the fills leaves the
+    funding where it was booked.
     """
+    paid_at: dict[str, tuple[list[int], list[float]]] = {}
+    for payment in funding:
+        times, amounts = paid_at.setdefault(payment.instrument_id, ([], []))
+        times.append(payment.ts_ns)
+        amounts.append(payment.paid)
     trades: list[Trade] = []
     for index, position in enumerate(positions):
         if not position.is_closed:
@@ -1490,18 +1581,24 @@ def _trades(
         closed = int(position.ts_closed) or max(
             (int(event.ts_event) for event in position.adjustments), default=0
         )
+        times, amounts = paid_at.get(name, ([], []))
+        opened_ns = int(position.ts_opened)
+        paid = fsum(
+            amounts[bisect.bisect_right(times, opened_ns) : bisect.bisect_right(times, closed)]
+        )
         trades.append(
             Trade(
-                opened_ns=int(position.ts_opened),
+                opened_ns=opened_ns,
                 closed_ns=closed,
                 instrument_id=name,
                 qty=book.peak if opened is None or opened.side == "BUY" else -book.peak,
                 avg_open=book.avg_open,
                 avg_close=book.avg_close,
-                pnl_net=book.realized - cost,
+                pnl_net=book.realized - cost - paid,
                 cost=cost,
                 fills=fills,
                 multiplier=multiplier,
+                funding=paid,
             )
         )
     return tuple(trades)
@@ -1559,6 +1656,25 @@ def _equity(
     paid in lieu of the fraction it left goes into cash at the same instant, so across a
     split the curve moves only with the price.
 
+    **A perpetual's funding is booked here, once, at its settlement instant**
+    (`kanso.nautilus.costs.funding_payment`): the realised rate on the signed quantity held
+    then, marked at the instrument's last print at or before the instant — of several at
+    that instant, the greatest, as a period's mark is chosen — and times its multiplier,
+    taken out of cash. What is held at the instant is every fill stamped before it, and no
+    fill stamped at it — deliberately not the `<=` rule that books a period's fills up to
+    and including its end. The realised rate is public at the settlement: the sleeve is
+    handed it there, and the engine stamps the fill of an order sent in answer at that same
+    instant, so under `<=` a position opened because the rate was known would collect it
+    and one closed because of it would escape it. Which point of an instant an order
+    answered is recorded nowhere either path can read — a stage node stamps an order by its
+    live clock, not by the data — so no fill of the instant is held, a resting order placed
+    earlier that fills there included: what a settlement sees was decided before its rate
+    was public. A split adjustment at the instant is booked after the settlement for the
+    same reason. The payment is inside the return and the equity of the period holding the
+    instant, and each one is recorded (`CardRun.funding`) with what was held; a settlement
+    at which nothing was held pays and records nothing. A settlement in the warmup prefix is
+    not booked, since nothing is held before the open.
+
     A stream may begin before the window with the warmup prefix. No period ends inside it
     — the first period is the window's first — but its points are consumed for the marks,
     so a name that last printed in the prefix is marked at that print in the first period
@@ -1591,6 +1707,8 @@ def _equity(
             "harness drops every order over the warmup prefix, so nothing may fill before it"
         )
     periods = marks.periods()
+    settlements = tuple(item for item in marks.settlements() if item[0] >= opens)
+    paid: list[FundingPayment] = []
     ends = tuple(fold.end for fold in periods)
     marked_at: dict[str, float] = {key: price for key, (_, price) in marks.prefix.marks.items()}
     held: dict[str, float] = {}
@@ -1607,21 +1725,21 @@ def _equity(
     carried_from = request.carried_from_ns
     fill = 0
     split = 0
+    settled = 0
     for fold in periods:
         end = fold.end
         marked_at.update({key: price for key, (_, price) in fold.marks.items()})
         lows, highs = fold.lows, fold.highs
-        while fill < len(fills) and fills[fill].ts_ns <= end:
-            made = fills[fill]
-            signed = made.qty if made.side == "BUY" else -made.qty
-            cash -= signed * made.px * made.multiplier + made.cost
-            held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
-            fill += 1
-        while split < len(adjustments) and adjustments[split][0] <= end:
-            _ts, key, change, paid = adjustments[split]
-            held[key] = held.get(key, 0.0) + change
-            cash += paid
-            split += 1
+        while settled < len(settlements) and settlements[settled][0] <= end:
+            ts, key, rate, mark = settlements[settled]
+            cash, fill, split = _booked_to(ts - 1, fills, adjustments, held, cash, fill, split)
+            qty = held.get(key, 0.0)
+            if qty:
+                payment = funding_payment(qty, mark, multipliers.get(key, 1.0), rate)
+                cash -= payment
+                paid.append(FundingPayment(ts, key, qty, rate, payment))
+            settled += 1
+        cash, fill, split = _booked_to(end, fills, adjustments, held, cash, fill, split)
         marked: list[float] = []
         adverse: list[float] = []
         for key in sorted(held):
@@ -1667,7 +1785,33 @@ def _equity(
         cushion=tuple(cushions),
         carry=tuple(carries),
         worst_ratio=tuple(worsts),
+        funding=tuple(paid),
     )
+
+
+def _booked_to(
+    until: int,
+    fills: Sequence[Fill],
+    adjustments: Sequence[tuple[int, str, float, float]],
+    held: dict[str, float],
+    cash: float,
+    fill: int,
+    split: int,
+) -> tuple[float, int, int]:
+    """Book every fill and every split adjustment stamped at or before `until` into `held`
+    and cash, from the two cursors given; the cash and the cursors after them."""
+    while fill < len(fills) and fills[fill].ts_ns <= until:
+        made = fills[fill]
+        signed = made.qty if made.side == "BUY" else -made.qty
+        cash -= signed * made.px * made.multiplier + made.cost
+        held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
+        fill += 1
+    while split < len(adjustments) and adjustments[split][0] <= until:
+        _ts, key, change, paid = adjustments[split]
+        held[key] = held.get(key, 0.0) + change
+        cash += paid
+        split += 1
+    return cash, fill, split
 
 
 # --- the two entry points ----------------------------------------------------

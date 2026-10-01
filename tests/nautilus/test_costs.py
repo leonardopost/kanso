@@ -19,6 +19,7 @@ from kanso.nautilus.costs import (
     carry,
     fill_cost,
     fill_rate,
+    funding_payment,
     maintenance_ratio,
     month_turned,
     policy_of,
@@ -28,6 +29,24 @@ from kanso.nautilus.costs import (
 from kanso.schemas import Book
 
 CAPITAL = 100_000.0
+
+
+# --- funding ---------------------------------------------------------------------
+
+
+def test_a_long_pays_a_positive_rate_on_its_multiplied_notional() -> None:
+    """Ten contracts of 0.01 BTC at 40,000 is 4,000 of notional; one basis point is 0.40."""
+    assert funding_payment(10.0, 40_000.0, 0.01, 0.0001) == pytest.approx(0.4)
+
+
+def test_a_short_receives_a_positive_rate_and_pays_a_negative_one() -> None:
+    assert funding_payment(-10.0, 40_000.0, 0.01, 0.0001) == pytest.approx(-0.4)
+    assert funding_payment(-10.0, 40_000.0, 0.01, -0.0001) == pytest.approx(0.4)
+    assert funding_payment(10.0, 40_000.0, 0.01, -0.0001) == pytest.approx(-0.4)
+
+
+def test_nothing_held_pays_nothing() -> None:
+    assert funding_payment(0.0, 40_000.0, 0.01, 0.0003) == 0.0
 
 
 # --- the reset ------------------------------------------------------------------

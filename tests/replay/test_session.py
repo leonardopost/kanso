@@ -18,7 +18,7 @@ from nautilus_trader.model.data import CustomData, DataType
 from nautilus_trader.model.identifiers import ClientId, InstrumentId
 
 from kanso.criteria.run import midnight_ns
-from kanso.data.types import CorporateAction
+from kanso.data.types import CorporateAction, Funding
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
 from kanso.nautilus.cross_section import is_marker
@@ -135,6 +135,532 @@ def test_the_two_paths_see_an_order_late_by_the_same_latency() -> None:
     assert [(fill.ts_ns - base) // SECOND_NS for fill in engine.run.fills] == [4, 5, 6]
     assert [(fill.ts_ns - base) // SECOND_NS for fill in node.run.fills] == [4, 5, 6]
     assert node.intents == engine.intents
+
+
+def test_the_two_paths_size_an_exit_that_chases_the_ask_alike_under_a_latency() -> None:
+    """An exit that replaces one whose cancel is still in flight is sized to what the old one
+    cannot also take on both paths, so the two agree order for order and fill for fill, and
+    neither sells a share it did not buy."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CHASING,
+        chasing_costs,
+        never_short,
+        points,
+    )
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(20.0),
+    )
+    request = request_for(source=CHASING, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(20.0)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    bought, sold, lowest = never_short(engine.run.fills)
+    assert (bought, sold, lowest) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_pay_an_exit_a_cancel_in_flight_held_back_alike(latency_ms: float) -> None:
+    """An exit asked for once while the order it replaces is waiting on its cancel is owed
+    and sent once the cancel has landed, at the same point on both paths, so the two agree
+    order for order and fill for fill and both end the session flat."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        MARKET_AFTER_CANCEL,
+        chasing_costs,
+        never_short,
+        points,
+    )
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=MARKET_AFTER_CANCEL, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert never_short(engine.run.fills) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_pay_an_exit_owed_on_book_points_alike(latency_ms: float) -> None:
+    """A sleeve that holds only the book is asked again for its owed exit after its own
+    `on_order_book_deltas` on both paths, at the same change, so the two agree order for
+    order and fill for fill and both end flat."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, book, chasing_costs
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=BOOK_ONLY, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model), [instrument()], [tuple(book(FORWARD[0]))]
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_pay_a_stop_a_take_profit_in_flight_cut_alike(latency_ms: float) -> None:
+    """A stop sent behind the sleeve's own take-profit still in flight is cut to nothing and
+    owed; once the venue holds the take-profit open the owed stop cancels it and takes the
+    position, at the same point on both paths, so the two agree order for order and fill
+    for fill and both end the session flat."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        chasing_costs,
+        never_short,
+        points,
+        tp_in_flight_then_stop,
+    )
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=tp_in_flight_then_stop(0), hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert never_short(engine.run.fills) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize(
+    "cancel",
+    [
+        "self.cancel_order(order)",
+        "self.cancel_orders([order])",
+        "self.cancel_all_orders(instrument_id)",
+    ],
+)
+def test_the_two_paths_cancel_an_exit_still_in_flight_alike(cancel: str, latency_ms: float) -> None:
+    """A resting exit cancelled in the handler that sent it, while the venue does not yet
+    hold it, beside an exit at market. The node's live engines would lose a cancel sent
+    then, or skip the order, and the backtest would land it behind the order; kanso holds
+    the cancel back on the node until it has handed the order to the venue, so the two
+    agree order for order and fill for fill, and the market exit it cut is paid at the same
+    point on both."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CANCELLED_IN_FLIGHT,
+        chasing_costs,
+        points,
+    )
+
+    source = CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancel.encode()).replace(
+        b"round(float(tick.bid_price) - 0.05, 2)", b"round(float(tick.ask_price) * 1.5, 2)"
+    )
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+        ("SELL", 100.0),
+    ]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize(
+    "cancels",
+    [
+        "self.cancel_order(order); self.cancel_order(order)",
+        "self.cancel_order(order); self.cancel_all_orders(instrument_id)",
+        "self.cancel_orders([order]); self.cancel_order(order)",
+        "from nautilus_trader.model.objects import Price; "
+        "self.modify_order(order, price=Price(round(float(tick.bid_price) - 0.04, 2), 2)); "
+        "self.cancel_order(order)",
+    ],
+)
+def test_the_two_paths_cancel_an_exit_still_in_flight_twice_alike(
+    cancels: str, latency_ms: float
+) -> None:
+    """A marketable exit cancelled twice in the handler that sent it, or modified and then
+    cancelled, while the venue does not yet hold it, beside an exit at market. On the
+    backtest the first command leaves the order pending cancel or pending update, which the
+    engine reports as open; the cancel after it must not read that as an order the venue
+    held open, or the backtest drops it as spent, sends the market exit at full size and
+    goes short where the node, whose order is still unsent, does not. Both paths cut the
+    market exit, agree order for order and fill for fill, and are flat before the sleeve
+    sells short on its own."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CANCELLED_IN_FLIGHT,
+        chasing_costs,
+        never_short,
+        points,
+    )
+
+    source = CANCELLED_IN_FLIGHT.replace(b"CANCEL", cancels.encode())
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert never_short(engine.run.fills[:2]) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_leave_an_exit_modified_in_flight_alike(latency_ms: float) -> None:
+    """A marketable exit modified in the handler that sent it, while the venue does not
+    yet hold it, beside an exit at market. On the backtest the modify leaves it pending
+    update, which the engine reports as open; the exit at market must not cancel it as a
+    resting order and count it spent, or the backtest sends the market exit whole and goes
+    short where the node, whose order is still unsent, does not. Both paths leave it to
+    fill, agree order for order and fill for fill, and match the three fills the sleeve
+    asks for."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CANCELLED_IN_FLIGHT,
+        MODIFIED,
+        chasing_costs,
+        points,
+    )
+
+    source = CANCELLED_IN_FLIGHT.replace(b"CANCEL", MODIFIED.encode())
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+        ("SELL", 100.0),
+    ]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("source", ["EMULATED_STOP", "BATCH_WITH_EMULATED"])
+def test_the_two_paths_cancel_an_order_the_emulator_holds_alike(
+    source: str, latency_ms: float
+) -> None:
+    """An order held by the engine's order emulator, cancelled by an exit at market or in a
+    batch beside a resting exit, is taken out by the emulator at once on both paths — though
+    on the node its cancelled event reaches the order only once the live execution engine's
+    queue drains — so the two agree order for order and fill for fill, and neither holds the
+    position to the end of the window or goes past flat."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    request = request_for(source=getattr(test_exit_flat, source), hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model), [instrument()], test_exit_flat.points(sessions)
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("source", "latency_ms"),
+    [
+        (source, latency_ms)
+        for source in ("MODIFIED_OPEN", "bracket:plain", "bracket:emulated")
+        for latency_ms in (0.0, 20.0)
+    ]
+    + [("MODIFIED_OPEN", 2500.0)],
+)
+def test_the_two_paths_size_an_exit_at_market_beside_orders_not_yet_live_alike(
+    source: str, latency_ms: float
+) -> None:
+    """An exit at market beside an order the venue holds whose modify is still in flight, or
+    beside the exits of a bracket whose entry has not filled. The first is not cancelled —
+    on a node the cancel would overtake the modify, which the backtest lands first — and
+    counts until the modify lands; the second do not count, since they can fill only after
+    the entry. So the two paths agree order for order and fill for fill, and neither holds
+    the position to the end of the window or goes past flat — at 2500 ms too, longer than
+    the gap between points, where the cancel goes out as the venue takes the order, on the
+    next point with the modify still unanswered, and lands behind it all the same. Measured
+    on the round before this test: with the modified order cancelled and counted spent, at
+    0 ms the backtest went short 100 and the node did not, and at 20 ms the node sent an
+    owed exit the backtest never did; with the bracket's exits counted, both paths sold 80
+    of 100 and held the rest to the end of the window."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    if source.startswith("bracket:"):
+        body = test_exit_flat.BRACKETS[source.split(":")[1]]
+        code = test_exit_flat.BRACKET_UNFILLED.replace(b"EMULATION", body)
+    else:
+        code = getattr(test_exit_flat, source)
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    request = request_for(source=code, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model), [instrument()], test_exit_flat.points(sessions)
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0, 2500.0])
+def test_the_two_paths_pay_an_exit_behind_a_modify_sent_on_every_point_alike(
+    latency_ms: float,
+) -> None:
+    """An exit at market beside a resting exit the sleeve modifies on every quote, with no
+    print between quotes to pay the owed exit on. The cancel it holds back is sent at 0 ms
+    as the venue answers the modify, and under a latency on the next quote, answered or not
+    (at 20 ms and at 2500 ms alike it is not, the quotes being a second apart); the modify
+    was stamped first, so the cancel lands behind it on both paths, where a cancel sent at
+    once would overtake the modify on a node, and the owed exit is paid at the same quote on
+    both. So the two agree order for order and fill for fill and both are flat.
+    Measured on the round before this test: neither path cancelled the order, the market exit
+    was owed at every quote and never paid, and both held the position to the end."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    request = request_for(source=test_exit_flat.MODIFIED_EVERY_QUOTE, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        test_exit_flat.quotes_only(test_exit_flat.points(sessions)),
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+    ]
+
+
+@pytest.mark.parametrize("latency_ms", [20.0, 2500.0])
+def test_a_cancel_held_behind_a_modify_every_point_goes_out_before_the_latest_is_answered(
+    latency_ms: float,
+) -> None:
+    """Under a latency, the cancel an exit at market holds behind a modify goes out on the
+    next quote before either path has answered the latest modify, shorter than the second
+    between quotes or not; and for a sleeve that modifies on every quote the order then reads
+    `ACCEPTED`, not `PENDING_UPDATE`, the answer to an earlier modify having landed since.
+    Both paths stay flat and agree. Measured on the round before this test: a docstring said
+    the order read `PENDING_UPDATE` there at 2500 ms, and on both paths it read `ACCEPTED`."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote"],
+        costs=test_exit_flat.chasing_costs(latency_ms),
+    )
+    source = test_exit_flat.MODIFIED_EVERY_QUOTE + test_exit_flat.SEEN_AT_SEND
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        test_exit_flat.quotes_only(test_exit_flat.points(sessions)),
+    )
+
+    assert not engine.crashed, engine.traceback_tail
+    assert not node.crashed, node.traceback_tail
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert test_exit_flat.never_short(engine.run.fills) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("last", ["session", "window"])
+@pytest.mark.parametrize("unsettled", ["modified", "in_flight"])
+def test_the_two_paths_pay_an_exit_asked_for_on_a_last_point_on_it_alike(
+    unsettled: str, last: str
+) -> None:
+    """With no latency stated, an exit at market cut by an order the venue has not settled —
+    one whose modify it has not answered, or one still on its way to it — is paid as the
+    venue answers that order, which both paths do before the next point. Asked for on a
+    session's last quote or the window's, both paths sell the 100 at that quote and agree
+    order for order and fill for fill. Measured on the round before this test: both paid it
+    on the next session's first quote, and at the window's last quote never."""
+    from tests.nautilus.backtest import test_exit_flat
+
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    quote, instant = test_exit_flat.last_quotes(sessions)[last]
+    source = test_exit_flat.exiting_on(test_exit_flat.UNSETTLED[unsettled], quote)
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote"],
+        costs=test_exit_flat.chasing_costs(0.0),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(0.0)}  # type: ignore[dict-item]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        test_exit_flat.quotes_only(test_exit_flat.points(sessions)),
+    )
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [
+        ("BUY", 100.0),
+        ("SELL", 100.0),
+    ]
+    assert engine.run.fills[1].ts_ns == instant
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("price", ["round(float(tick.ask_price) + 0.03, 2)", "99.0"])
+@pytest.mark.parametrize(
+    "cancel",
+    [
+        "self.cancel_order(order)",
+        "self.cancel_orders([order])",
+        "self.cancel_all_orders(instrument_id)",
+    ],
+)
+def test_the_two_paths_cancel_an_exit_the_venue_holds_open_alike(
+    cancel: str, price: str, latency_ms: float
+) -> None:
+    """A resting exit the venue holds open, cancelled beside an exit at market, is cancelled
+    on both paths by every one of the three calls, so the two agree order for order and fill
+    for fill and neither goes past flat. Measured before the node's venue took a batch of
+    cancels: `cancel_orders` was lost there, the exit went on resting, and at 0 ms it filled
+    after the market exit and left the node short 100, while at 20 ms the node counted it as
+    waiting on its cancel and never sold the position the backtest closed."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        CANCELLED_OPEN,
+        chasing_costs,
+        never_short,
+        points,
+    )
+
+    source = CANCELLED_OPEN.replace(b"CANCEL", cancel.encode()).replace(b"PRICE", price.encode())
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert never_short(node.run.fills) == (100.0, 100.0, 0.0)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize(
+    "cancel",
+    [
+        "self.cancel_order(order)",
+        "self.cancel_orders([order])",
+        "self.cancel_all_orders(instrument_id)",
+    ],
+)
+def test_the_two_paths_cancel_an_order_in_the_handler_that_sent_it_alike(
+    cancel: str, latency_ms: float
+) -> None:
+    """An order cancelled in the handler that sent it lands at the venue ahead of its cancel
+    on both paths: the node holds the cancel until it has handed the order to the venue,
+    then sends it, so the two agree fill for fill, and with no latency stated the order is
+    cancelled before anything further is matched and never fills."""
+    from tests.nautilus.backtest.test_exit_flat import (
+        SENT_AND_CANCELLED,
+        chasing_costs,
+        points,
+    )
+
+    source = SENT_AND_CANCELLED.replace(b"CANCEL", cancel.encode())
+    sessions = (date(2024, 3, 4), date(2024, 3, 5))
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=source, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], points(sessions))
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    if latency_ms == 0.0:
+        assert [(fill.side, fill.qty) for fill in node.run.fills] == [("BUY", 100.0)]
 
 
 def test_the_two_paths_hold_cancels_in_flight_alike_through_a_flicker() -> None:
@@ -277,6 +803,51 @@ def test_a_custom_requirement_reaches_the_sleeve_without_a_subscription_of_its_o
 
     assert node.intents == engine.intents
     assert [(order[2], order[3]) for order in engine.intents] == [("BUY", 24.0), ("BUY", 26.0)]
+
+
+FUNDED_SIZER = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Holds the perpetual from its fifth bar, and at every settlement adds a size read off
+    the last digits of the balance, which moves with every payment the harness books."""
+
+    config_cls = KansoConfig
+
+    def on_start(self) -> None:
+        self.bars = 0
+
+    def on_bar(self, bar) -> None:
+        self.bars += 1
+        if self.bars == 5:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=10)
+
+    def on_data(self, data) -> None:
+        if self.bars >= 5:
+            self.submit_entry(data.instrument_id, "BUY", qty=1 + int(self.balance * 1000) % 7)
+'''
+
+
+def test_the_two_paths_fund_a_held_perpetual_alike() -> None:
+    """Both paths book every settlement into the balance before the sleeve is handed it,
+    and both extractions book it once: the intents sized off that balance, the payments
+    and the equity curve are the same on the node as in the engine."""
+    from tests.nautilus.backtest.conftest import perpetual
+    from tests.nautilus.backtest.test_funding import generated, perp_hypothesis, perp_request
+
+    points = generated("1h")
+    groups = [
+        tuple(point for point in points if not isinstance(point, Funding)),
+        tuple(CustomData(DataType(Funding), p) for p in points if isinstance(p, Funding)),
+    ]
+
+    node, engine = both(perp_request(perp_hypothesis("1h"), FUNDED_SIZER), [perpetual()], groups)
+
+    assert len(engine.run.funding) == 3 * 4  # every settlement of the four sessions
+    assert node.intents == engine.intents
+    assert node.run.funding == engine.run.funding
+    assert node.run.equity == engine.run.equity
 
 
 RESTING_BUY = b'''
