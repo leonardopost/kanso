@@ -84,20 +84,37 @@ def test_show_reads_state_so_it_refuses_a_database_behind_the_schema(
 
 
 def reasked(runner: CliRunner, root: Path) -> Path:
-    """Backfill the chunked workspace once more, which asks for exactly its two gaps."""
+    """Backfill the chunked workspace once more, which asks for exactly its gaps."""
     spec = root / "data.yaml"
     result = at(runner, root, "data", "backfill", "--loader", "synthetic", "--spec", spec)
     assert result.exit_code == Exit.OK, result.stdout
     return root
 
 
-def test_show_lists_under_empty_what_a_source_answered_empty_between_two_spans(
+def test_show_joins_an_equitys_chunks_across_the_weekends_between_them(
     runner: CliRunner, chunked: Path
 ) -> None:
-    [before] = payload(at(runner, chunked, "data", "show", "--json"))["series"]
+    """The chunks' own spans break at two weekends, and no session is missing from either."""
+    document = payload(at(runner, chunked, "data", "show", "--json"))
+
+    [series] = document["series"]
+    assert series["spans"] == [["2024-01-02", "2024-06-28"]]
+    assert (series["empty"], series["gaps"]) == ([], [])
+    assert document["datasets"] == 6
+    assert [dataset["span"][1] for dataset in series["datasets"]][1:3] == [
+        "2024-03-01",
+        "2024-03-29",
+    ]
+
+
+def test_show_lists_under_empty_what_a_source_answered_empty_inside_a_gap(
+    runner: CliRunner, chunked_undefined: Path
+) -> None:
+    """With no calendar to read, the weekends are gaps, and answering them closes nothing."""
+    [before] = payload(at(runner, chunked_undefined, "data", "show", "--json"))["series"]
     assert (before["empty"], before["gaps"]) == ([], CHUNK_EDGES)
 
-    result = at(runner, reasked(runner, chunked), "data", "show", "--json")
+    result = at(runner, reasked(runner, chunked_undefined), "data", "show", "--json")
 
     assert result.exit_code == Exit.OK
     document = payload(result)
@@ -109,22 +126,23 @@ def test_show_lists_under_empty_what_a_source_answered_empty_between_two_spans(
         ["2024-04-01", "2024-06-28"],
     ]
     assert series["empty"] == CHUNK_EDGES
-    assert series["gaps"] == []
+    assert series["gaps"] == CHUNK_EDGES
     assert document["datasets"] == 6
 
 
 def test_show_prints_each_range_answered_empty_on_a_line_of_its_own(
-    runner: CliRunner, chunked: Path
+    runner: CliRunner, chunked_undefined: Path
 ) -> None:
-    assert "gap 2024-03-02..2024-03-03" in at(runner, chunked, "data", "show").stdout
+    assert "gap 2024-03-02..2024-03-03" in at(runner, chunked_undefined, "data", "show").stdout
 
-    result = at(runner, reasked(runner, chunked), "data", "show")
+    result = at(runner, reasked(runner, chunked_undefined), "data", "show")
 
     assert result.exit_code == Exit.OK
     lines = [line.strip() for line in result.stdout.splitlines()]
     assert "answered empty 2024-03-02..2024-03-03" in lines
     assert "answered empty 2024-03-30..2024-03-31" in lines
-    assert not any(line.startswith("gap ") for line in lines)
+    assert "gap 2024-03-02..2024-03-03" in lines
+    assert "gap 2024-03-30..2024-03-31" in lines
 
 
 def test_snapshot_freezes_what_is_held_and_records_it(runner: CliRunner, loaded: Path) -> None:

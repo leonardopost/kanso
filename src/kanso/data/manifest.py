@@ -12,25 +12,22 @@ for. A source may return less than the requested range with a success status and
 warning; recording the request would claim coverage the dataset lacks, and snapshots are
 pinned by coverage. `shortfall` renders the difference so a caller can surface it.
 
-Coverage is counted in whole UTC days, and it counts one fact besides what was served: the
-days **between two served spans of one series** that the source was asked for and answered
-with nothing. A chunked fetch whose edge falls on a weekend or a market holiday serves up
-to the last session before the edge and from the first after it, so the served spans of
-two adjacent chunks sit one to three days apart although no day the market traded is
-missing. kanso holds no trading calendar and adds none, so it counts the source's own
-answer instead: `data backfill` and `data sync` record every chunk a source answered empty
-in the event log (`EMPTY_CHUNK`, filed under `series_subject`), and backfill asks again for
-exactly the days of every hole, so a hole of closed days alone is answered on the next
-pass. `answered` is the rule, and the one implementation both `data show` and a snapshot's
-coverage use. An answer closes a hole only **inside** a series — never before its first
-served day or after its last, where a range answered empty is a day before the instrument
-listed, or beyond the source's floor, and is not coverage — and only day by day: the days
-of a hole nobody answered stay a hole. The requested span is still never coverage, so a
-truncated answer — a chunk that served data and stopped early — leaves its missing days a
-hole until a backfill asks for exactly those days and the source answers them empty, or
-serves them. What this cannot see is a trading day the source itself holds nothing for:
-asked alone, it is indistinguishable from a closed day without a calendar, so it is counted
-as answered, and `data show` lists every such range so an operator can see it.
+Coverage is counted in whole UTC days, off the served spans alone, and it counts only the
+days a market opened. A day the instrument's market was closed — a weekend, a holiday, a
+day closed by order, as `kanso.data.closures` holds them — is not a hole: nothing could
+have been served on it, so two spans with only closed days between them are one, and a
+window may begin or end on a closed day beyond the span beside it. That is what keeps a
+chunked fetch whose edge falls on a weekend or a holiday — served to the last session
+before the edge and from the first after it — from splitting a series no session is
+missing from. A day the market opened that no span holds is a hole wherever it falls and
+however the datasets around it came to be written, and nothing a source says closes one.
+`data backfill` and `data sync` record every chunk a source answered empty in the event
+log (`EMPTY_CHUNK`, filed under `series_subject`), and a range answered empty on days the
+market opened is a hole the source did not fill when asked: `answered` finds those ranges,
+so `data show` can say why a hole persists and a backfill does not ask for them twice, and
+they are never coverage — an empty answer reads the same whether the market shut or the
+source lost the day, and only the calendar tells which. The requested span is never
+coverage either: the difference between it and what was served is what `shortfall` states.
 
 Because the id carries the span's end but not its start, re-loading the same series to
 the same end reuses the id and is therefore a replacement rather than a duplicate, while
@@ -53,6 +50,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import Field, model_validator
 
+from kanso.data.closures import Closed, never
 from kanso.errors import PreconditionError, ValidationError
 from kanso.schemas.base import NonEmpty, Sha256, Versioned
 from kanso.schemas.yamlio import load_yaml, write_yaml
@@ -65,8 +63,9 @@ EMPTY_CHUNK: Final = "data_chunk_empty"
 """The event kind recording a range a source was asked for and answered with nothing.
 
 `data backfill` and `data sync` append one per empty chunk, filed under the series and
-never the dataset, with the range as `{"start": ..., "end": ...}`; the range is asked
-once, and between two served spans it is coverage."""
+never the dataset, with the range as `{"start": ..., "end": ...}`. The range is asked once,
+and it is never coverage: what an answer says is what the source holds, not whether the
+market opened."""
 
 CATALOG_DIR: Final = "catalog"
 """The store's directory in the workspace."""
@@ -264,30 +263,63 @@ def overlaps(left: tuple[date, date], right: tuple[date, date]) -> bool:
     return left[0] <= right[1] and right[0] <= left[1]
 
 
-def merge(spans: list[tuple[date, date]]) -> list[tuple[date, date]]:
+def merge(spans: list[tuple[date, date]], closed: Closed = never) -> list[tuple[date, date]]:
     """The spans merged into the fewest that cover the same days.
 
-    Two spans join when they overlap or when one begins the day after the other ends:
-    coverage is counted in whole days, so back-to-back days leave no hole between them.
+    Two spans join when they overlap, when one begins the day after the other ends, or when
+    the market was `closed` on every day between them: coverage is counted in whole days,
+    so back-to-back days leave no hole between them, and neither do days nothing could have
+    been served on. A merged span still begins and ends on days that were served; the
+    closed days it reaches across are inside it and never added at its ends.
     """
     ordered = sorted(spans)
     merged: list[tuple[date, date]] = []
     for span in ordered:
-        if merged and span[0] <= merged[-1][1] + timedelta(days=1):
+        if merged and _shut(merged[-1][1].toordinal() + 1, span[0].toordinal(), closed):
             merged[-1] = (merged[-1][0], max(merged[-1][1], span[1]))
         else:
             merged.append(span)
     return merged
 
 
-def contains(spans: list[tuple[date, date]], window: tuple[date, date]) -> bool:
-    """True when the union of `spans` contains every day of `window`."""
-    return any(span[0] <= window[0] and window[1] <= span[1] for span in merge(spans))
+def contains(
+    spans: list[tuple[date, date]], window: tuple[date, date], closed: Closed = never
+) -> bool:
+    """True when the union of `spans` contains every day of `window` the market opened.
+
+    A closed day belongs to the span beside it: a window may begin on a holiday before a
+    span's first day, or end on the weekend after its last, because nothing could be served
+    on either, while a day the market opened outside every span is a hole. With no spans
+    there is nothing for a closed day to belong to, and nothing is contained.
+    """
+    return any(
+        _shut(window[0].toordinal(), span[0].toordinal(), closed)
+        and _shut(span[1].toordinal() + 1, window[1].toordinal() + 1, closed)
+        for span in merge(spans, closed)
+    )
 
 
-def holes(spans: Sequence[tuple[date, date]]) -> list[tuple[date, date]]:
-    """The days between the first and the last day of `spans` that none of them covers."""
-    merged = merge(list(spans))
+def closed_throughout(span: tuple[date, date], closed: Closed) -> bool:
+    """True when the market was closed on every day of `span`: nothing in it to serve."""
+    return _shut(span[0].toordinal(), span[1].toordinal() + 1, closed)
+
+
+def _shut(start: int, stop: int, closed: Closed) -> bool:
+    """True when every day from ordinal `start` up to `stop`, not including it, is closed.
+
+    Vacuously true when there is no such day. Counted in ordinals so the day after the last
+    representable date is never computed, and stopped at the first day the market opened.
+    """
+    return all(closed(date.fromordinal(day)) for day in range(start, stop))
+
+
+def holes(spans: Sequence[tuple[date, date]], closed: Closed = never) -> list[tuple[date, date]]:
+    """The days between the first and the last day of `spans` that none of them covers.
+
+    Each holds a day the market opened: spans with only `closed` days between them are one,
+    so no hole is made of closed days alone.
+    """
+    merged = merge(list(spans), closed)
     return [
         (left[1] + timedelta(days=1), right[0] - timedelta(days=1))
         for left, right in zip(merged, merged[1:], strict=False)
@@ -295,31 +327,42 @@ def holes(spans: Sequence[tuple[date, date]]) -> list[tuple[date, date]]:
 
 
 def answered(
-    served: Sequence[tuple[date, date]], empty: Iterable[tuple[date, date]]
+    served: Sequence[tuple[date, date]],
+    empty: Iterable[tuple[date, date]],
+    closed: Closed = never,
 ) -> list[tuple[date, date]]:
-    """The days between two `served` spans of one series that a source answered empty.
+    """The parts of the holes between `served` spans that a source answered empty.
 
     `served` is what a series' datasets served and `empty` every range its source was
-    asked for and answered with nothing, wherever it falls. Only the days of a hole count:
-    an answer before the first served day or after the last extends nothing, a day that
-    was served is served whatever else was said of it, and a hole's days that no answer
-    names stay a hole. What comes back is merged and in order, and it is what coverage
-    adds to the served spans — `covered` — and what `data show` lists as answered empty.
+    asked for and answered with nothing, wherever it falls. Only a hole's days are named —
+    never a day before the first served day or after the last, never a day that was served,
+    and never a stretch of `closed` days, which is no hole — so every range here lies in a
+    hole that holds a day the market opened, and the answer is why it persists: the source
+    says it holds nothing there. It is what `data show` lists as answered empty, and never
+    coverage. What comes back is merged and in order.
     """
     asked = merge(list(empty))
     return [
         (max(hole[0], start), min(hole[1], end))
-        for hole in holes(served)
+        for hole in holes(served, closed)
         for start, end in asked
         if overlaps(hole, (start, end))
     ]
 
 
-def covered(
-    served: Sequence[tuple[date, date]], empty: Iterable[tuple[date, date]]
+def settled(
+    served: Sequence[tuple[date, date]],
+    empty: Iterable[tuple[date, date]],
+    closed: Closed = never,
 ) -> list[tuple[date, date]]:
-    """The spans coverage counts: what was served, joined across the days answered empty."""
-    return merge([*served, *answered(served, empty)])
+    """The spans a backfill has nothing left to ask a source for.
+
+    What was served, joined across the days the market was `closed` and the days the
+    source already answered empty. It is the plan a backfill asks by, so no range is asked
+    for twice, and it is not coverage: a day answered empty on which the market opened is
+    still a hole there.
+    """
+    return merge([*served, *answered(served, empty, closed)], closed)
 
 
 def series_subject(filed_under: tuple[str, str, str | None]) -> str:

@@ -125,20 +125,23 @@ def test_both_pages_say_the_run_s_base_is_never_judged() -> None:
     assert "`judged: false`" in alignment
 
 
-def test_the_pages_say_an_empty_answer_between_two_served_spans_is_coverage() -> None:
-    """A chunk edge on a weekend split a series with no session missing, while the pages
-    said coverage was the served spans and `data show` listed the weekend as a gap."""
+def test_the_pages_say_a_closed_day_is_no_hole_and_an_answer_closes_nothing() -> None:
+    """A chunk edge on a weekend split a series with no session missing, and the rule that
+    first joined it counted an empty answer as coverage, a trading day the source lost
+    included. The pages state the rule that replaced it: the market's calendar closes a
+    day, and nothing a source says does."""
     row = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso data show")
     )
-    assert "**answered empty**" in row
-    assert "An answered-empty range is coverage and a gap is not" in row
+    assert "so every gap holds a day the market opened" in row
+    assert "it is why the gap persists, and it closes nothing" in row
     concepts = prose(section(page("concepts.md"), "Snapshot"))
-    assert "and from one thing more: the days between two served spans" in concepts
-    assert "a weekday the source holds nothing for and a holiday" in concepts
+    assert "A day the market was closed is not a hole" in concepts
+    assert "`kanso.data.closures`" in concepts
+    assert "nothing a source says closes one" in concepts
     workspace = page("workspace.md")
-    assert "Coverage counts one fact the manifests do not hold" in prose(workspace)
-    assert "answered empty 2024-03-02..2024-03-03" in workspace
+    assert "Coverage counts only the days a market opened" in prose(workspace)
+    assert "DEMO.SIM bar 1m · 2024-01-02..2024-04-30 · 33540 rows" in workspace
 
 
 def test_the_workspace_page_lists_every_section_the_parser_declares() -> None:

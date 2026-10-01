@@ -10,6 +10,7 @@ from datetime import date
 
 import pytest
 
+from kanso.data.closures import US_EQUITY, never
 from kanso.data.commands import CHUNK_DAYS, Series, chunked, missing
 from kanso.data.manifest import Manifest
 
@@ -84,6 +85,27 @@ def test_back_to_back_spans_leave_no_hole_between_them() -> None:
     assert missing(held, span("2024-01-01", "2024-01-31")) == []
 
 
+def test_a_stretch_the_market_was_closed_throughout_is_not_missing() -> None:
+    """New Year's Day before what is held, and a long weekend inside it, hold nothing to fetch."""
+    held = [span("2024-01-02", "2024-01-12"), span("2024-01-16", "2024-01-31")]
+    want = span("2024-01-01", "2024-01-31")
+
+    assert missing(held, want, US_EQUITY.closed) == []
+    assert missing(held, want) == [
+        span("2024-01-01", "2024-01-01"),
+        span("2024-01-13", "2024-01-15"),
+    ]
+
+
+def test_a_stretch_holding_one_session_is_missing_whole() -> None:
+    """The Friday before the long weekend traded, so the stretch is asked for end to end."""
+    held = [span("2024-01-02", "2024-01-11"), span("2024-01-16", "2024-01-31")]
+
+    assert missing(held, span("2024-01-02", "2024-01-31"), US_EQUITY.closed) == [
+        span("2024-01-12", "2024-01-15")
+    ]
+
+
 def manifest(**changes: object) -> Manifest:
     fields: dict[str, object] = {
         "schema": 1,
@@ -117,11 +139,12 @@ def test_a_series_reports_the_holes_between_its_datasets() -> None:
     assert series.rows == 44
 
 
-def test_a_series_reports_what_its_source_answered_empty_apart_from_its_gaps() -> None:
-    """Served to Friday the 5th and from Tuesday the 16th, with two of the holes asked.
+def test_a_series_reports_within_its_gaps_what_its_source_answered_empty() -> None:
+    """Served to Friday the 5th and from Tuesday the 16th, with two stretches of the hole asked.
 
-    The weekend and the holiday weekend were answered empty; the week between them was
-    never asked, so it stays the one gap, and the served spans are what they were.
+    The weekend and the holiday weekend were answered empty and the week between them was
+    never asked. The answers close nothing: the hole is one gap, and `empty` names the part
+    of it the source was asked for, which a backfill does not ask for again.
     """
     early = manifest(
         dataset_id="DEMO.SIM-bar-1d-raw-20240105", span=span("2024-01-01", "2024-01-05")
@@ -131,25 +154,45 @@ def test_a_series_reports_what_its_source_answered_empty_apart_from_its_gaps() -
     )
     answers = (span("2024-01-06", "2024-01-07"), span("2024-01-13", "2024-01-15"))
 
-    series = Series("DEMO.SIM", "bar", "1d", (early, late), answers=answers)
+    for closed in (never, US_EQUITY.closed):
+        series = Series("DEMO.SIM", "bar", "1d", (early, late), answers=answers, closed=closed)
 
-    assert series.spans == [span("2024-01-01", "2024-01-05"), span("2024-01-16", "2024-01-31")]
-    assert series.empty == list(answers)
-    assert series.gaps == [span("2024-01-08", "2024-01-12")]
-    assert series.coverage == [span("2024-01-01", "2024-01-07"), span("2024-01-13", "2024-01-31")]
-    document = series.payload()
-    assert document["spans"] == [["2024-01-01", "2024-01-05"], ["2024-01-16", "2024-01-31"]]
-    assert document["empty"] == [["2024-01-06", "2024-01-07"], ["2024-01-13", "2024-01-15"]]
-    assert document["gaps"] == [["2024-01-08", "2024-01-12"]]
+        assert series.spans == [span("2024-01-01", "2024-01-05"), span("2024-01-16", "2024-01-31")]
+        assert series.gaps == [span("2024-01-06", "2024-01-15")]
+        assert series.empty == list(answers)
+        assert series.settled == [
+            span("2024-01-01", "2024-01-07"),
+            span("2024-01-13", "2024-01-31"),
+        ]
+        document = series.payload()
+        assert document["gaps"] == [["2024-01-06", "2024-01-15"]]
+        assert document["empty"] == [["2024-01-06", "2024-01-07"], ["2024-01-13", "2024-01-15"]]
+
+
+def test_a_series_is_read_on_its_markets_closures() -> None:
+    """Two chunks a long weekend apart are one span to an equity and two to a calendarless one."""
+    early = manifest(
+        dataset_id="DEMO.SIM-bar-1d-raw-20240112", span=span("2024-01-02", "2024-01-12")
+    )
+    late = manifest(
+        dataset_id="DEMO.SIM-bar-1d-raw-20240131", span=span("2024-01-16", "2024-01-31")
+    )
+
+    equity = Series("DEMO.SIM", "bar", "1d", (early, late), closed=US_EQUITY.closed)
+    calendarless = Series("DEMO.SIM", "bar", "1d", (early, late))
+
+    assert equity.spans == [span("2024-01-02", "2024-01-31")]
+    assert equity.gaps == equity.empty == []
+    assert calendarless.gaps == [span("2024-01-13", "2024-01-15")]
 
 
 def test_one_load_is_one_span_whatever_its_source_answered_around_it() -> None:
-    """A single load has no hole to close, so no answer outside it is ever counted."""
+    """A single load has no hole, so no answer outside it names a day of one."""
     answers = (span("2023-12-30", "2023-12-31"), span("2024-02-01", "2024-02-04"))
 
     series = Series("DEMO.SIM", "bar", "1d", (manifest(),), answers=answers)
 
-    assert series.spans == series.coverage == [span("2024-01-01", "2024-01-31")]
+    assert series.spans == series.settled == [span("2024-01-01", "2024-01-31")]
     assert series.empty == []
     assert series.gaps == []
 

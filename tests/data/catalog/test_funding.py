@@ -146,7 +146,7 @@ def test_a_snapshot_pins_a_funding_dataset_and_covers_with_it(ws: FakeWorkspace)
 
     assert funding.manifest.dataset_id in taken.datasets
     assert snap.pinned_datasets(ws) >= {funding.manifest.dataset_id}
-    found = snap.covering(ws, [PERP], ["bar", "funding"], "1d", WINDOWS, store=None)
+    found = snap.covering(ws, [PERP], ["bar", "funding"], "1d", WINDOWS)
     assert found is not None and found.snapshot_id == taken.snapshot_id
 
 
@@ -155,7 +155,7 @@ def test_a_perpetual_without_its_funding_is_not_covered(ws: FakeWorkspace) -> No
     load_bars(ws, PERP)
     snap.freeze(ws)
 
-    assert snap.covering(ws, [PERP], ["bar", "funding"], "1d", WINDOWS, store=None) is None
+    assert snap.covering(ws, [PERP], ["bar", "funding"], "1d", WINDOWS) is None
 
 
 def test_funding_is_asked_of_the_perpetuals_alone(ws: FakeWorkspace) -> None:
@@ -170,7 +170,7 @@ def test_funding_is_asked_of_the_perpetuals_alone(ws: FakeWorkspace) -> None:
 
     taken = snap.freeze(ws)
 
-    found = snap.covering(ws, [SPOT, PERP], ["bar", "funding"], "1d", WINDOWS, store=None)
+    found = snap.covering(ws, [SPOT, PERP], ["bar", "funding"], "1d", WINDOWS)
     assert found is not None and found.snapshot_id == taken.snapshot_id
 
 
@@ -180,4 +180,4 @@ def test_a_spot_leg_is_still_asked_for_every_other_type(ws: FakeWorkspace) -> No
     cat.write(ws, settlements(), ref=funding_ref(), source="csv_parquet")
     snap.freeze(ws)
 
-    assert snap.covering(ws, [SPOT, PERP], ["bar", "funding"], "1d", WINDOWS, store=None) is None
+    assert snap.covering(ws, [SPOT, PERP], ["bar", "funding"], "1d", WINDOWS) is None

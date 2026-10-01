@@ -6,29 +6,29 @@ renders these records as one JSON object or as a few terse lines.
 
 Three verbs write data and they share one mechanism. `load` writes exactly the range its
 spec names. `backfill` walks history from the source's floor forward to what is already
-held, and asks again for exactly the days of every gap inside it that `show` reports;
-`sync` walks from each series' served end towards now, or from a named dataset's, which
-is how the dataset in front of a gap is extended on purpose. Both are chunked, and the
-manifest each chunk writes is its checkpoint: an interrupted run resumes at the first
-chunk with no manifest, and a repeated run finds nothing missing and fetches nothing. A
-chunk a source serves nothing for leaves no manifest, so it is recorded in the event log
-instead and is not asked for twice.
+held, and asks again for exactly the days of every gap inside it that `show` reports and
+the source has not already answered empty; `sync` walks from each series' served end
+towards now, or from a named dataset's, which is how the dataset in front of a gap is
+extended on purpose. Both are chunked, and the manifest each chunk writes is its
+checkpoint: an interrupted run resumes at the first chunk with no manifest, and a repeated
+run finds nothing missing and fetches nothing. A chunk a source serves nothing for leaves
+no manifest, so it is recorded in the event log instead and is not asked for twice.
 
 A dataset a snapshot pins is immutable, which the catalog enforces at the write. Backfill
 and sync never rewrite one: a backfilled chunk covers days no held dataset covers, and a
 sync writes a successor dataset recording `supersedes`.
 
-Coverage is what was served, and between two served spans of one series, what the source
-was asked for and answered with nothing. Every span here is the span a loader's points
-actually covered, never the span that was asked for, and the difference is reported rather
-than smoothed over. The empty answer is the one fact coverage takes from the event log: a
-chunk edge that falls on a weekend or a holiday leaves the served spans on either side a
-few days apart, and kanso keeps no calendar to call those days closed, so it counts the
-source's own answer for exactly those days. `kanso.data.manifest` states the rule — inside
-a series only, day by day, a truncated answer's missing days a hole until they are asked
-again — and its one blind spot: a trading day the source holds nothing for, asked alone,
-reads as closed. So `show` reports the served spans, every range answered empty between
-them, and the gaps, and a gap backfill asked for and was answered empty is no longer one.
+Coverage is what was served, read on the days the instrument's market opened. Every span
+here is the span a loader's points actually covered, never the span that was asked for,
+and the difference is reported rather than smoothed over. Chunks are cut in calendar days,
+so a chunk that ends on a Sunday serves to Friday or Saturday and the next one from
+Monday, and the days between are days no source serves: each series is read on the
+closures `kanso.data.closures` files the store's definition of its instrument under, so
+such days neither split it in `show` nor are fetched by `backfill`. A day the market
+opened that nothing serves is a gap however it arose, and an empty answer never closes
+one — a chunk the source served nothing for on trading days is a hole, which `show` lists
+under `empty` as well as among the gaps, so the operator reads why it persists, and which
+backfill does not ask for again. `kanso.data.manifest` states the rule.
 """
 
 from __future__ import annotations
@@ -45,21 +45,23 @@ from typing import TYPE_CHECKING, Any, Final
 import yaml
 
 from kanso import ext
-from kanso.data import catalog, registry
+from kanso.data import catalog, closures, registry
 from kanso.data import instruments as reference
 from kanso.data import snapshot as snapshots
+from kanso.data.closures import Closed
 from kanso.data.loader import DatasetRef, Loader, loaders
 from kanso.data.manifest import (
     EMPTY_CHUNK,
     Manifest,
     answered,
     answered_empty,
-    covered,
+    closed_throughout,
     data_path,
     holes,
     manifests,
     merge,
     series_subject,
+    settled,
 )
 from kanso.data.snapshot import Snapshot
 from kanso.errors import PreconditionError, ValidationError
@@ -90,11 +92,13 @@ class Series:
     """Every dataset the store holds for one instrument, type and resolution.
 
     A series is what coverage is asked of: `research begin` pins a snapshot when a
-    series' covered spans contain its windows. Every day from the first served to the last
-    is exactly one of three things, and they are what `data show` exists to report:
-    served (`spans`), asked for and answered empty (`empty`), or a hole (`gaps`).
-    `answers` is every range the series' source answered empty, wherever it fell, as the
-    event log recorded it; only the part of it between two served spans is ever counted.
+    series' spans contain its windows. Every day from the first served to the last is in
+    exactly one of the two things `data show` exists to report: a span (`spans`), served or
+    closed between two served days, or a gap (`gaps`), a stretch holding a day the market
+    opened that nothing serves. A gap's days the source was asked for and answered empty
+    are also `empty`, which says why the gap persists and closes nothing. `closed` is the
+    instrument's market's closures, read exactly as coverage reads them; `answers` is every
+    range the series' source answered empty, wherever it fell, as the event log recorded it.
     """
 
     instrument: str
@@ -102,30 +106,34 @@ class Series:
     resolution: str | None
     datasets: tuple[Manifest, ...]
     answers: tuple[tuple[date, date], ...] = ()
+    closed: Closed = closures.never
 
     @property
     def spans(self) -> list[tuple[date, date]]:
-        """The served spans, merged into the fewest that cover the same days."""
-        return merge([manifest.span for manifest in self.datasets])
+        """The served spans, merged into the fewest that cover the same days.
+
+        Spans with only closed days between them are one span, which is how a series
+        backfilled in chunks reads as one when no day the market opened is missing.
+        """
+        return merge([manifest.span for manifest in self.datasets], self.closed)
 
     @property
     def empty(self) -> list[tuple[date, date]]:
-        """The days between two served spans that the source answered empty when asked."""
-        return answered(self.spans, self.answers)
+        """The days of the gaps that the source answered empty when asked."""
+        return answered(self.spans, self.answers, self.closed)
 
     @property
-    def coverage(self) -> list[tuple[date, date]]:
-        """The spans coverage counts: the served ones, joined across the `empty` days."""
-        return covered(self.spans, self.answers)
+    def settled(self) -> list[tuple[date, date]]:
+        """What a backfill has nothing left to ask for: the spans, joined across `empty`."""
+        return settled(self.spans, self.answers, self.closed)
 
     @property
     def gaps(self) -> list[tuple[date, date]]:
         """The days between the first and the last served day that coverage does not count.
 
-        Nothing serves them and no answer closes them, so they are what a backfill asks for
-        again.
+        Each holds a day the market opened that nothing serves, answered empty or not.
         """
-        return holes(self.coverage)
+        return holes(self.spans, self.closed)
 
     @property
     def rows(self) -> int:
@@ -149,12 +157,15 @@ def series(ws: Workspace, store: StateStore) -> list[Series]:
     """Every series the store holds, in instrument, type and resolution order.
 
     Each carries the ranges its source answered empty, as the event log in `store` holds
-    them.
+    them, and is read on the closures of the definition the store holds for its
+    instrument; one the store does not define is read with every day open, as coverage
+    would read it.
     """
     answers = answered_empty(store)
     grouped: dict[tuple[str, str, str | None], list[Manifest]] = {}
     for manifest in manifests(ws).values():
         grouped.setdefault(manifest.filed_under, []).append(manifest)
+    closed = _closures(ws) if grouped else {}
     return [
         Series(
             instrument=key[0],
@@ -162,11 +173,17 @@ def series(ws: Workspace, store: StateStore) -> list[Series]:
             resolution=key[2],
             datasets=tuple(sorted(found, key=lambda m: (m.span, m.dataset_id))),
             answers=tuple(answers.get(series_subject(key), ())),
+            closed=closed.get(key[0], closures.never),
         )
         for key, found in sorted(
             grouped.items(), key=lambda item: (item[0][0], item[0][1], item[0][2] or "")
         )
     ]
+
+
+def _closures(ws: Workspace) -> dict[str, Closed]:
+    """The closures of every instrument the store defines, read off the definition a run uses."""
+    return closures.by_instrument(reference.current_definitions(ws).values())
 
 
 def _dataset_payload(manifest: Manifest) -> dict[str, Any]:
@@ -373,11 +390,19 @@ def chunked(span: tuple[date, date], size: int = CHUNK_DAYS) -> list[Chunk]:
     return out
 
 
-def missing(held: Sequence[tuple[date, date]], want: tuple[date, date]) -> list[tuple[date, date]]:
-    """The days of `want` that no span in `held` covers, in order."""
+def missing(
+    held: Sequence[tuple[date, date]],
+    want: tuple[date, date],
+    closed: Closed = closures.never,
+) -> list[tuple[date, date]]:
+    """The days of `want` that no span in `held` covers, in order.
+
+    Spans join across the days the market was `closed`, and a stretch on which it opened on
+    no day is not missing: there is nothing in it for a source to serve.
+    """
     out: list[tuple[date, date]] = []
     cursor = want[0]
-    for start, end in merge(list(held)):
+    for start, end in merge(list(held), closed):
         if end < cursor:
             continue
         if start > want[1]:
@@ -387,7 +412,7 @@ def missing(held: Sequence[tuple[date, date]], want: tuple[date, date]) -> list[
         cursor = max(cursor, end + DAY)
     if cursor <= want[1]:
         out.append((cursor, want[1]))
-    return out
+    return [stretch for stretch in out if not closed_throughout(stretch, closed)]
 
 
 def bytes_per_row(ws: Workspace) -> float | None:
@@ -502,15 +527,18 @@ def backfill(
     floor, to the earliest day already held, or to `end`. Reaching the floor is a normal
     outcome and is reported, never an error. Every chunk that writes leaves a manifest, so
     an interrupted backfill resumes at the first chunk with none and a repeated one finds
-    nothing missing. A gap is asked for again day for day, and a day between two served
-    spans that the source already answered empty is not missing, so it is never planned —
-    a dry run included.
+    nothing missing. A gap is asked for again day for day, except the days of it the source
+    already answered empty, which are not asked for twice — a dry run included. Each series
+    is read on the closures coverage reads it on, so a day the market was closed is never
+    missing and never asked for, which is what joins the chunks' own spans across the
+    weekends and holidays their edges meet.
     """
     document = read_spec(spec)
     _declared(document, loader_id, spec)
     loader = loader_for(ws, loader_id)
     held = manifests(ws)
     answers = answered_empty(store)
+    calendars = _closures(ws)
     fetches: list[Fetch] = []
     clamps: list[str] = []
     notes: list[str] = []
@@ -523,6 +551,7 @@ def backfill(
             *key,
             datasets=tuple(m for m in held.values() if m.filed_under == key),
             answers=tuple(answers.get(series_subject(key), ())),
+            closed=calendars.get(ref.instrument, closures.never),
         )
         wanted_start = floor if start is None else max(start, floor)
         if start is not None and start < floor:
@@ -535,8 +564,8 @@ def backfill(
         window = ref.window((wanted_start, wanted_end)) if wanted_start <= wanted_end else None
         targets: list[tuple[date, date]] = []
         if window is not None:
-            targets += missing(mine.coverage, window)
-        for gap in mine.gaps:
+            targets += missing(mine.settled, window, mine.closed)
+        for gap in holes(mine.settled, mine.closed):
             clipped = ref.window(gap)
             if clipped is not None:
                 targets.append(clipped)

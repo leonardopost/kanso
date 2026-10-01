@@ -60,6 +60,12 @@ Anything found in use without a checkout goes to the issue tracker with `kanso d
 - `nautilus_trader` range: bump in a minor release only after the demo e2e and the parity
   tests pass on the new version; note wheel/OS constraints in the changelog. Strategy
   versions pin the engine they were certified under; operators re-certify to move.
+- The US equity closures coverage reads, `kanso.data.closures.US_EQUITY`, are stated to a
+  date, its `last`, and past it every day reads as open again, so a chunked series refuses
+  at every weekend its chunks' edges meet. Extend the table before that date comes within a
+  year: the closures the exchanges have published and any day closed by order, from the two
+  requests `tests/data/catalog/fixtures/us_equity_sessions.txt` records, re-recorded with
+  them rather than edited, so the suite holds the table to the source day by day.
 - Schema changes ship with a migration `src/kanso/state/migrations/NNNN_name.sql`, numbered
   after the newest; the package's schema version follows from the newest migration file and
   nothing is bumped by hand. `tests/state` applies every migration after version 2 over

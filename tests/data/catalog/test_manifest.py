@@ -7,15 +7,22 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from kanso.data import manifest as m
+from kanso.data.closures import US_EQUITY, never
 from kanso.errors import Exit, PreconditionError, ValidationError
 from tests.data.catalog.conftest import FakeWorkspace
 
 JAN = date(2024, 1, 1)
 CHECKSUM = "a" * 64
+
+US = US_EQUITY.closed
+"""The US equity market's closures: weekends, holidays and days closed by order."""
+
+ON_FILE = st.dates(min_value=US_EQUITY.first, max_value=US_EQUITY.last)
+"""A day the calendar states a fact about, one way or the other."""
 
 
 def a_manifest(**overrides: object) -> m.Manifest:
@@ -162,7 +169,7 @@ def test_merge_never_loses_a_day(spans: list[tuple[date, date]]) -> None:
         assert m.contains(merged, span)
 
 
-# --- what an empty answer adds to coverage -----------------------------------------
+# --- closed days, and what an empty answer is and is not ----------------------------
 
 
 def jan(day: int) -> date:
@@ -170,34 +177,119 @@ def jan(day: int) -> date:
     return date(2024, 1, day)
 
 
-def test_a_weekend_answered_empty_between_two_served_spans_is_coverage() -> None:
-    """A chunk edge on a Saturday: Friday served, Monday served, the weekend asked alone."""
+def test_merge_joins_spans_across_a_weekend_and_a_holiday() -> None:
+    """One chunk served to Friday and the next from Tuesday, with a Monday holiday between."""
+    spans = [(jan(2), jan(12)), (jan(16), jan(31))]
+
+    assert m.merge(spans, US) == [(jan(2), jan(31))]
+    assert m.merge(spans) == spans
+
+
+def test_a_span_ending_on_a_saturday_joins_one_beginning_on_the_monday() -> None:
+    """A Friday's post-market is stamped Saturday in UTC, so the Sunday alone lies between."""
+    spans = [(date(2021, 1, 19), date(2021, 4, 17)), (date(2021, 4, 19), date(2021, 7, 16))]
+
+    assert m.merge(spans, US) == [(date(2021, 1, 19), date(2021, 7, 16))]
+
+
+def test_merge_never_joins_across_a_day_the_market_opened() -> None:
+    """The Friday before the long weekend traded, so a span ending on the Thursday is short."""
+    spans = [(jan(2), jan(11)), (jan(16), jan(31))]
+
+    assert m.merge(spans, US) == spans
+    assert m.holes(spans, US) == [(jan(12), jan(15))]
+    assert m.contains(spans, (jan(2), jan(11)), US)
+    assert not m.contains(spans, (jan(2), jan(16)), US)
+
+
+def test_a_window_may_begin_and_end_on_days_nothing_could_serve() -> None:
+    """New Year's Day before the span, Good Friday and its weekend after it."""
+    spans = [(jan(2), date(2024, 3, 28))]
+    window = (jan(1), date(2024, 3, 31))
+
+    assert m.contains(spans, window, US)
+    assert not m.contains(spans, window)
+
+
+def test_a_window_reaching_a_day_the_market_opened_is_not_contained() -> None:
+    spans = [(jan(2), date(2024, 3, 28))]
+
+    assert not m.contains(spans, (date(2023, 12, 29), date(2024, 3, 28)), US)
+    assert not m.contains(spans, (jan(2), date(2024, 4, 1)), US)
+
+
+def test_closed_days_belong_to_the_span_beside_them_and_to_nothing_else() -> None:
+    held = [(jan(2), jan(12))]
+    long_weekend = (jan(13), jan(15))
+    a_later_one = (date(2024, 2, 17), date(2024, 2, 19))
+
+    assert m.contains(held, long_weekend, US)
+    assert not m.contains(held, a_later_one, US)
+    assert not m.contains([], long_weekend, US)
+
+
+def test_closed_throughout_is_true_only_of_a_stretch_with_no_session() -> None:
+    assert m.closed_throughout((jan(13), jan(15)), US)
+    assert not m.closed_throughout((jan(12), jan(15)), US)
+    assert not m.closed_throughout((jan(13), jan(15)), never)
+
+
+def test_a_span_at_the_last_representable_day_merges_without_overflow() -> None:
+    assert m.merge([(date.max, date.max), (date.max, date.max)]) == [(date.max, date.max)]
+    assert m.contains([(date.min, date.max)], (date.min, date.max), US)
+
+
+def test_a_weekend_answered_empty_is_settled_and_is_never_coverage() -> None:
+    """A chunk edge on a Saturday: Friday served, Monday served, the weekend asked alone.
+
+    The answer settles the weekend for a backfill, which does not ask for it twice, and
+    covers nothing: the calendar is what says a weekend is no hole.
+    """
     served = [(jan(1), jan(5)), (jan(8), jan(19))]
+    answers = [(jan(6), jan(7))]
 
     assert m.holes(served) == [(jan(6), jan(7))]
-    assert not m.contains(m.covered(served, []), (jan(3), jan(10)))
-    assert m.answered(served, [(jan(6), jan(7))]) == [(jan(6), jan(7))]
-    assert m.covered(served, [(jan(6), jan(7))]) == [(jan(1), jan(19))]
-    assert m.contains(m.covered(served, [(jan(6), jan(7))]), (jan(3), jan(10)))
+    assert m.answered(served, answers) == [(jan(6), jan(7))]
+    assert m.settled(served, answers) == [(jan(1), jan(19))]
+    assert not m.contains(served, (jan(3), jan(10)))
+    assert m.contains(served, (jan(3), jan(10)), US)
+    assert m.holes(served, US) == []
+    assert m.answered(served, answers, US) == []
 
 
-def test_a_holiday_weekend_closes_only_on_the_days_an_answer_names() -> None:
-    """Saturday to the Monday holiday, asked in two pieces, one of which was never answered."""
+def test_trading_days_answered_empty_stay_a_hole() -> None:
+    """A source that lost a week: asked, answered empty, and still no coverage."""
+    served = [(jan(1), jan(5)), (jan(16), jan(19))]
+    lost = [(jan(6), jan(15))]
+
+    assert m.holes(served, US) == [(jan(6), jan(15))]
+    assert m.answered(served, lost, US) == [(jan(6), jan(15))]
+    assert m.settled(served, lost, US) == [(jan(1), jan(19))]
+    assert not m.contains(served, (jan(3), jan(17)), US)
+
+
+def test_a_holiday_weekend_is_settled_only_on_the_days_an_answer_names() -> None:
+    """Saturday to the Monday holiday, asked in two pieces, one of which was never answered.
+
+    With no calendar the unanswered day is still to be asked for; on the market's own
+    calendar the whole stretch is closed, so none of it is a hole to begin with.
+    """
     served = [(jan(1), jan(12)), (jan(16), jan(19))]
     answers = [(jan(13), jan(14))]
 
     assert m.answered(served, answers) == [(jan(13), jan(14))]
-    assert m.holes(m.covered(served, answers)) == [(jan(15), jan(15))]
-    assert m.holes(m.covered(served, [*answers, (jan(15), jan(15))])) == []
+    assert m.holes(m.settled(served, answers)) == [(jan(15), jan(15))]
+    assert m.holes(m.settled(served, [*answers, (jan(15), jan(15))])) == []
+    assert m.holes(served, US) == []
 
 
-def test_an_answer_before_the_first_served_day_or_after_the_last_extends_nothing() -> None:
-    """Asked before the instrument listed, or past where the source ends: not coverage."""
+def test_an_answer_before_the_first_served_day_or_after_the_last_settles_nothing() -> None:
+    """Asked before the instrument listed, or past where the source ends."""
     served = [(jan(3), jan(10))]
     answers = [(jan(1), jan(2)), (jan(11), jan(20))]
 
     assert m.answered(served, answers) == []
-    assert m.covered(served, answers) == served
+    assert m.settled(served, answers) == served
 
 
 def test_an_answer_over_served_days_counts_only_the_hole_it_reaches() -> None:
@@ -213,27 +305,58 @@ QUARTER = st.dates(min_value=date(2024, 1, 1), max_value=date(2024, 3, 31))
     served=st.lists(st.tuples(QUARTER, QUARTER), min_size=1, max_size=6),
     answers=st.lists(st.tuples(QUARTER, QUARTER), max_size=6),
 )
-def test_every_day_from_the_first_served_to_the_last_is_served_answered_or_a_hole(
+def test_every_day_from_the_first_served_to_the_last_is_a_span_or_a_hole(
     served: list[tuple[date, date]], answers: list[tuple[date, date]]
 ) -> None:
-    """The three things `data show` reports never overlap and never leave a day out."""
+    """What `data show` reports never overlaps, leaves no day out, and hides no session.
+
+    A day is inside a span — served, or closed between two served ones — or in a gap,
+    never both; every gap holds a day the market opened; and `empty` is exactly the
+    gaps' days some answer names, so an answer never takes a day out of a gap.
+    """
     served = [(min(a, b), max(a, b)) for a, b in served]
     answers = [(min(a, b), max(a, b)) for a, b in answers]
-    spans = m.merge(served)
-    empty = m.answered(served, answers)
-    gaps = m.holes(m.covered(served, answers))
+    spans = m.merge(served, US)
+    empty = m.answered(served, answers, US)
+    gaps = m.holes(served, US)
 
     def within(day: date, ranges: list[tuple[date, date]]) -> bool:
         return any(start <= day <= end for start, end in ranges)
 
     assert empty == m.merge(empty)
-    assert all(spans[0][0] < start and end < spans[-1][1] for start, end in empty + gaps)
+    assert all(spans[0][0] < start and end < spans[-1][1] for start, end in gaps)
+    assert all(not m.closed_throughout(gap, US) for gap in gaps)
     day = spans[0][0]
     while day <= spans[-1][1]:
-        kinds = [within(day, spans), within(day, empty), within(day, gaps)]
-        assert kinds.count(True) == 1, day
-        assert kinds[1] == (within(day, answers) and not kinds[0]), day
+        assert within(day, spans) != within(day, gaps), day
+        assert within(day, empty) == (within(day, gaps) and within(day, answers)), day
         day += timedelta(days=1)
+
+
+@given(a=ON_FILE, b=ON_FILE, start=ON_FILE, end=ON_FILE)
+def test_one_span_reads_as_it_always_did_to_a_window_whose_ends_are_sessions(
+    a: date, b: date, start: date, end: date
+) -> None:
+    """A single dataset's coverage moves only where a window begins or ends on a closed day."""
+    assume(not US(start) and not US(end))
+    span = (min(a, b), max(a, b))
+    window = (min(start, end), max(start, end))
+
+    assert m.contains([span], window, US) == m.contains([span], window)
+
+
+@given(spans=st.lists(st.tuples(ON_FILE, ON_FILE), min_size=1, max_size=6))
+def test_merging_on_a_calendar_loses_no_day_and_hides_no_session(
+    spans: list[tuple[date, date]],
+) -> None:
+    ordered = [(min(a, b), max(a, b)) for a, b in spans]
+    merged = m.merge(ordered, US)
+
+    assert merged == sorted(merged)
+    assert all(m.contains(merged, span, US) for span in ordered)
+    for left, right in zip(merged, merged[1:], strict=False):
+        between = [left[1] + timedelta(days=n) for n in range(1, (right[0] - left[1]).days)]
+        assert any(not US(day) for day in between)
 
 
 def test_empty_answers_are_read_back_under_the_series_they_were_filed_under(
