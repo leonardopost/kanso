@@ -151,5 +151,5 @@ class OkxFundingLoader(HistoryLoader):
             params["after"] = str(after)
         if before is not None:
             params["before"] = str(before)
-        data = answered(client, FUNDING, params, self.pause)
+        data = answered(client, FUNDING, params)
         return [row for row in data if isinstance(row, Mapping) and SETTLED in row]

@@ -198,7 +198,9 @@ is in the snapshot for the same reason as the data — a tick size reassigned ne
 not silently rewrite a card that was measured under the old one — and it is read back where
 a run is pinned. The store is resolved before it is frozen: a snapshot over instrument data
 is refused while the store holds no definition, since the checksum of nothing pins nothing a
-run could use.
+run could use. A run reads its definitions back from the store and nowhere else: `research
+begin` and every card build the venue model from what the store holds, so a run asks no
+reference adapter about an instrument its snapshot pins, however many lanes begin at once.
 
 **Covers** is counted in whole UTC days, from the spans the datasets **served** — never from
 what was asked of the source — on the days the instrument's market opened. A chunked

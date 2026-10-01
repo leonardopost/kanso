@@ -523,7 +523,8 @@ host is the one the engine maps the region to; every regional host answered the 
 present and a `region` stated, `--check` makes one request, the unnarrowed swap listing, and
 reports how many live linear swaps it lists. It never reports the exchange as "did not
 authenticate", because nothing it sends could fail to: a host that does not answer the listing
-— the edge's 403, a throttle, a gateway error, a refused connection — is the probe's failure.
+— the edge's 403, a throttle that does not lift, a gateway error, a refused connection — is
+the probe's failure.
 `kanso data adapters --check` stops with exit 1 and that error, and `kanso doctor
 --check-adapters` grades its `adapters` check `fail` with the same message; both carry a
 network remedy — re-run, lower `rate_per_second`, or check the exchange's status page. A table that states no `region` — valid for the
@@ -557,10 +558,16 @@ on every fill. Each id is refused by name (exit 3), and every refusal is reporte
   as malformed (HTTP 400, code `51000` — its ids are in capitals);
 - an id on another venue than `OKX`.
 
-An answer that is not the API's own — a throttle, a gateway error, the edge's 403, a code
-`51000` under HTTP 200, which the exchange was once seen to answer transiently for a valid id
-— and a request that reached no answer at all stop the command (exit 1) rather than marking an
-id, because nothing about the id was established.
+A throttle — HTTP 429, code `50011`, `Too Many Requests`, which the listing answered on
+2026-10-01 to four of five lanes asking it within one second — is asked again after 2, 4, 6
+and 8 seconds, the same wait the public history takes (below). A throttle that does not lift
+by the fifth attempt, any other answer that is not the API's own — a gateway error, the
+edge's 403, a code `51000` under HTTP 200, which the exchange was once seen to answer
+transiently for a valid id — and a request that reached no answer at all stop the command
+(exit 1) rather than marking an id, because nothing about the id was established.
+`rate_per_second` holds one process to its rate, and every lane is a process of its own,
+which is why a research run asks the reference nothing about an instrument the store holds
+(`docs/workspace.md`, `instruments.yaml`).
 
 The listing is today's. A contract the exchange has delisted is not in it and is unknown, and
 a definition resolved as of an earlier day carries the terms the exchange lists today, dated
@@ -621,9 +628,9 @@ settles, so `ts_init` equals `ts_event` and no publication rule is involved.
 
 **Throttles are waited out; nothing else is.** An answer of HTTP 429, code `50011`, is asked
 again after 2, 4, 6 and 8 seconds — each request on its own, so a page throttled while others
-are in flight waits out its own throttle — and a fifth stops the command (exit 1), as does
-any other answer that is not the API's success, with a remedy to re-run or lower
-`rate_per_second`.
+are in flight waits out its own throttle, by the same client the reference asks through —
+and a fifth stops the command (exit 1), as does any other answer that is not the API's
+success, with a remedy to re-run or lower `rate_per_second`.
 
 #### `okx_bars`
 

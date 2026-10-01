@@ -89,7 +89,7 @@ from kanso.criteria.context import verdict
 from kanso.criteria.gates import strategy_integrity
 from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
-from kanso.data.instruments import resolve_universe
+from kanso.data.instruments import run_definitions
 from kanso.data.manifest import catalog_path
 from kanso.data.snapshot import covering
 from kanso.env import read as read_envelope
@@ -421,10 +421,12 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     `version` is the host version the run is pinned to, so every card of a run differences
     against the same host however often the host is re-certified while the run is open.
 
-    The universe is resolved for the venue model and recorded nowhere: the card is priced
-    under the definitions the store holds, which its snapshot pins, and a definition
-    written here would move the store under that pin without changing what the card runs
-    against. Only `kanso data instruments resolve` writes the store.
+    The venue model is built from the definitions the card is priced under — the ones the
+    store holds, which its snapshot pins — so neither a run's start nor any of its cards
+    asks a reference adapter about an instrument the store defines: lanes starting together
+    would otherwise each ask the vendor for every instrument at once, and be throttled out
+    of their runs. Nothing is recorded, because a definition written here would move the
+    store under that pin; only `kanso data instruments resolve` writes the store.
     """
     ref = hyp.construct
     if ref is None:
@@ -435,7 +437,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     extensions = ext.imported(ws)
     impl = construct_for(ref.id, ws)
     harness = impl.harness(hyp, _host(ws, hyp), version=version)
-    instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
+    instruments = run_definitions(ws, hyp.universe, hyp.windows.research.start)
     model = _one_venue_model(venue_models(ws, hyp, instruments))
     research = ws.config.research
     host_source: bytes | None = None

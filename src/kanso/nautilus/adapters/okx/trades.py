@@ -165,7 +165,6 @@ def listed(
                 "begin": str(day_ms(begin) - _offset_ms()),
                 "end": str(day_ms(end) - _offset_ms()),
             },
-            pause,
         )
         for archive in _archives(data):
             if first <= archive.day <= last:
