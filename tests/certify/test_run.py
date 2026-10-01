@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 import yaml
-from nautilus_trader.model.data import QuoteTick
+from nautilus_trader.model.data import Bar, BarType, QuoteTick
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 
@@ -1125,7 +1125,72 @@ def test_the_instrument_a_point_belongs_to_is_read_off_the_point() -> None:
 
 
 def test_only_bars_carry_the_volume_a_capacity_gate_reads() -> None:
-    assert run._daily_volume([(a_quote(),)]) == {}, "a quote is not a day's traded notional"
+    assert run._daily_volume([(a_quote(),)], ()) == {}, "a quote is not a day's traded notional"
+
+
+def a_manual(nautilus_id: str, override: dict[str, str], asset_class: str = "EQUITY") -> Any:
+    """One manual entry resolved into the engine's definition, as `instruments.yaml` would be."""
+    from kanso.data import instruments
+    from kanso.schemas import InstrumentsFile
+
+    entry = InstrumentsFile.model_validate(
+        {
+            nautilus_id: {
+                "nautilus_id": nautilus_id,
+                "asset_class": asset_class,
+                "manual": True,
+                "corporate_actions": "none",
+                "override": override,
+            }
+        }
+    )[nautilus_id]
+    return instruments.build(entry, instruments.conventions_for(entry, date(2024, 1, 2)))
+
+
+def a_bar_of(instrument: Any, volume: int, close: str) -> Bar:
+    """One daily bar of the instrument that traded `volume` of its unit at `close`."""
+    return Bar(
+        BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL"),
+        Price.from_str(close),
+        Price.from_str(close),
+        Price.from_str(close),
+        Price.from_str(close),
+        Quantity.from_int(volume),
+        ts_event=midnight_ns(date(2024, 1, 2)),
+        ts_init=midnight_ns(date(2024, 1, 2)),
+    )
+
+
+def test_a_day_s_volume_is_notional_in_contracts_and_in_shares_alike() -> None:
+    """A bar's volume counts the instrument's unit — contracts for a perpetual, shares for a
+    share — and a fill's notional is `qty x px x multiplier`, so the day's volume a fill is
+    held to is `volume x close x multiplier` of the same definition. A share's multiplier is
+    one and its numbers do not move."""
+    perpetual = a_manual(
+        "BTCUSDT-PERP.SIM",
+        {
+            "instrument_class": "swap",
+            "base_currency": "BTC",
+            "quote_currency": "USDT",
+            "settlement_currency": "USDT",
+            "multiplier": "0.01",
+            "price_increment": "0.1",
+            "size_increment": "1",
+            "lot_size": "1",
+        },
+        asset_class="CRYPTOCURRENCY",
+    )
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    assert type(perpetual).__name__ == "CryptoPerpetual" and float(perpetual.multiplier) == 0.01
+    assert float(share.multiplier) == 1.0
+    traded = [(a_bar_of(perpetual, 1_000, "40000.0"), a_bar_of(share, 1_000, "40000.00"))]
+
+    volume = run._daily_volume(traded, (perpetual, share))
+
+    assert volume == {
+        "BTCUSDT-PERP.SIM": [1_000 * 40_000.0 * 0.01],
+        "OTHER.XNAS": [1_000 * 40_000.0],
+    }, "a thousand contracts of a hundredth of a coin are ten coins, not a thousand"
 
 
 def test_a_data_class_whose_instant_comes_from_the_source_documents_no_delay(
