@@ -128,6 +128,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
 | declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
+| bind a name the strategy's base class owns in `strategy.py` — `self._close = 3`, `def _fund(...)`, `size = 10` in the class body | 3 · at `hyp validate`, naming the name and the line; a warning in `doctor`'s `base names`; the baseline refused at `research begin` (2), and any card that carries it a `discard` by `strategy_integrity` |
 | name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
@@ -405,8 +406,9 @@ exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
 equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
-that names a size knob, builds an order by hand, reads `self.portfolio` or overrides a
-harness method, with the line and what to write instead; what the scan cannot see — a second
+that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
+not — one that overrides a harness method or binds any other name its base class owns
+(`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
 the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
 instrument, the instant and the book held. `position_size` under the rule judges entry fills

@@ -8,7 +8,7 @@ something other than `strategy.py`. Each of those is denied here, statically, be
 anything runs — a card that fails this check is discarded with no backtest at all, so code
 that violates the embargo never executes.
 
-Three rules, in the order they are checked:
+Four rules, in the order they are checked:
 
 **Imports** are matched by their full dotted path against an allow-list of exact leaves,
 never package roots. The engine's model, trading and indicator packages are open; of its
@@ -57,11 +57,23 @@ than capped after one: the `notional`, `qty` and `price` keywords of `submit_ent
 `submit_exit` (and a `**` that could carry them), the attributes that build, change or
 cancel an order by hand — `submit_order`, `order_factory`, `close_position`, `modify_order`
 and their kin — and `portfolio`, whose net position counts an attached overlay's clips as
-the host's; `self.held(id)` is the reader. A `def` that overrides a harness or engine
-method is refused too, because an override is a size knob no attribute scan can see. A
-sized overlay may name `Clip` and not `Hedge`, `hedges=` or `scale=`; an overlay without
-a budget may name `Hedge` and not `Clip` or `clips=`. Every denial says why and what to
-write instead, because the proposer is a model and a refusal it cannot act on is a loop.
+the host's; `self.held(id)` is the reader. A sized overlay may name `Clip` and not
+`Hedge`, `hedges=` or `scale=`; an overlay without a budget may name `Hedge` and not `Clip`
+or `clips=`. Every denial says why and what to write instead, because the proposer is a
+model and a refusal it cannot act on is a loop.
+
+**The base's names** belong to the base. A class whose instances are a `KansoStrategy` or a
+`KansoModifier` — it names one among its bases, through an alias, a module or a class of the
+file that does, or it is a class of the file such a class names — may not bind a name that
+base owns: not by `def`, not by assigning it in the class body, and not by assigning it on
+the instance a method receives (`self._close = 3`). Python raises nothing for any of them;
+the harness simply reaches the author's value where it expects its own, and the card crashes
+at the first exit, or sizes, gates or books differently, with a traceback that names the
+harness rather than the line. Under a sizing rule an override is also a size knob no
+attribute scan can see. What the base owns is read from the installed classes when the scan
+runs, never kept as a list: everything `dir` shows of it, the engine's names beneath
+included, and every attribute kanso's own classes set on `self`. What it leaves to its
+author is `AUTHORED`, the dunders and the engine's `on_*` handlers.
 
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
@@ -72,10 +84,12 @@ researcher did not.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable, Mapping
+import inspect
+from collections.abc import Iterable, Iterator, Mapping
+from functools import cache
 from hashlib import sha256
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 ALLOWED_IMPORTS: Final = frozenset(
     {
@@ -295,6 +309,12 @@ FREE_OVERLAY_KEYWORDS: Final = frozenset({"clips"})
 OWN_HOOKS: Final = frozenset({"evaluate", "on_data"})
 """The modifier hooks an author writes; every other harness name is the harness's."""
 
+AUTHORED: Final = frozenset({"config_cls", "construct", *OWN_HOOKS})
+"""What a base class leaves its subclass to bind: the config class kanso builds it with,
+the construct a modifier is, and a modifier's two hooks. The dunders and the engine's
+`on_*` handlers are the author's too, because the harness hooks the engine through
+`handle_*` and names of its own."""
+
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
 
@@ -373,7 +393,10 @@ def scan(
         tree = ast.parse(source, filename=origin)
     except SyntaxError as exc:
         return [f"{origin}: does not parse: {exc.msg} at line {exc.lineno}"]
-    problems: list[str] = list(_sizing_problems(tree, sized=sized, construct=construct))
+    problems: list[str] = [
+        *_sizing_problems(tree, sized=sized, construct=construct),
+        *(clash.problem for clash in _clashes(tree)),
+    ]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             problems.extend(_visit_import(node))
@@ -439,13 +462,6 @@ def _sizing_problems(tree: ast.AST, *, sized: bool, construct: str | None) -> It
                         f"{_names_helper(node.func)}(instrument_id"
                         + (", side)" if _names_helper(node.func) == "submit_entry" else ")")
                     )
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and (
-            node.name in _harness_names(overlay)
-        ):
-            yield (
-                f"line {node.lineno}: def '{node.name}' overrides a harness method, which "
-                f"under sizing is a size knob nothing else can see; rename it"
-            )
 
 
 def _vocabulary_problems(
@@ -483,20 +499,160 @@ def _names_helper(func: ast.expr) -> str | None:
     return None
 
 
-def _harness_names(overlay: bool) -> frozenset[str]:
-    """Every method of the harness base a sized source may not override.
+class Clash(NamedTuple):
+    """One binding of a name a harness base owns, where it is and how it was made."""
 
-    Read from the classes themselves rather than kept as a list, so a helper added to the
-    harness is protected without anyone remembering to name it. The engine's `on_*` hooks
-    and a modifier's two hooks are what an author writes.
+    line: int
+    name: str
+    base: str
+    how: str
+
+    @property
+    def problem(self) -> str:
+        """The refusal, as the proposer reads it."""
+        return (
+            f"line {self.line}: '{self.name}' belongs to {self.base}, and {self.how} replaces "
+            "it, so the harness would reach yours where it expects its own; rename yours — "
+            f"{self.base} owns every name it defines or sets, underscored or not"
+        )
+
+
+def clashes(source: str) -> list[Clash]:
+    """Every binding in `source` of a name its harness base owns, in file order.
+
+    A file that does not parse binds nothing this can find; `scan` is what reports it.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    return _clashes(tree)
+
+
+def _clashes(tree: ast.Module) -> list[Clash]:
+    found = [
+        Clash(line, name, base.__name__, how)
+        for node, base in _harness_classes(tree)
+        for line, name, how in _bindings(node)
+        if name in owned(base)
+    ]
+    return sorted(set(found), key=lambda clash: (clash.line, found.index(clash)))
+
+
+@cache
+def owned(base: type) -> frozenset[str]:
+    """Every name `base` owns, read from the installed class rather than kept as a list.
+
+    What `dir` shows of it — its methods, properties and class attributes, and every name
+    the engine's classes beneath it expose — and every attribute a kanso class of its MRO
+    sets on `self`, read from that class's source, because an instance attribute is in no
+    class's `dir`. Less what the base leaves its author: `AUTHORED`, the dunders and the
+    engine's `on_*` handlers.
+    """
+    names = set(dir(base))
+    for klass in base.__mro__:
+        if klass.__module__.partition(".")[0] == "kanso":
+            tree = ast.parse(inspect.getsource(klass))
+            names.update(store.attr for store in _stores(tree, "self"))
+    return frozenset(
+        name
+        for name in names
+        if name not in AUTHORED
+        and not name.startswith("on_")
+        and not (name.startswith("__") and name.endswith("__"))
+    )
+
+
+def _stores(node: ast.AST, owner: str) -> Iterator[ast.Attribute]:
+    """Every attribute bound on the object `owner` names, anywhere under `node`."""
+    return (
+        child
+        for child in ast.walk(node)
+        if isinstance(child, ast.Attribute)
+        and isinstance(child.ctx, ast.Store)
+        and isinstance(child.value, ast.Name)
+        and child.value.id == owner
+    )
+
+
+def _harness_classes(tree: ast.Module) -> list[tuple[ast.ClassDef, type]]:
+    """Every class of the file whose methods end up on a harness base's subclass, with that base.
+
+    A class reaches a base by naming it among its bases — as itself, through an import
+    alias or as a module's attribute — or by naming a class of the file that reaches one;
+    every class of the file in that line, a mixin included, is held to the same base.
     """
     from kanso.nautilus.strategy import KansoModifier, KansoStrategy
 
-    base = KansoModifier if overlay else KansoStrategy
-    return frozenset(
-        name
-        for name in dir(base)
-        if not name.startswith("on_") and not name.startswith("__") and name not in OWN_HOOKS
+    harness = {base.__name__: base for base in (KansoStrategy, KansoModifier)}
+    aliases = {
+        alias.asname: alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.asname is not None
+    }
+    local = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+
+    def named(node: ast.ClassDef) -> list[str]:
+        return [
+            aliases.get(expr.id, expr.id) if isinstance(expr, ast.Name) else expr.attr
+            for expr in node.bases
+            if isinstance(expr, ast.Name | ast.Attribute)
+        ]
+
+    def lineage(name: str, seen: frozenset[str]) -> set[str]:
+        found = {name}
+        for base in named(local[name]):
+            if base in local and base not in seen:
+                found |= lineage(base, seen | {name})
+        return found
+
+    held: dict[str, set[type]] = {name: set() for name in local}
+    for name in local:
+        members = lineage(name, frozenset())
+        bases = {
+            harness[base] for member in members for base in named(local[member]) if base in harness
+        }
+        for member in members:
+            held[member] |= bases
+    return [
+        (node, base)
+        for name, node in local.items()
+        for base in sorted(held[name], key=lambda base: base.__name__)
+    ]
+
+
+def _bindings(node: ast.ClassDef) -> Iterator[tuple[int, str, str]]:
+    """`(line, name, how)` for every name the class binds on itself or on its instances."""
+    for statement in node.body:
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+            yield statement.lineno, statement.name, f"'def {statement.name}'"
+            positional = [*statement.args.posonlyargs, *statement.args.args]
+            if positional and not _static(statement):
+                owner = positional[0].arg
+                for store in _stores(statement, owner):
+                    yield store.lineno, store.attr, f"binding '{owner}.{store.attr}'"
+            continue
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+        elif isinstance(statement, ast.AugAssign) or (
+            isinstance(statement, ast.AnnAssign) and statement.value is not None
+        ):
+            targets = [statement.target]
+        else:
+            continue
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store):
+                    yield name.lineno, name.id, f"binding '{name.id}' on the class"
+
+
+def _static(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the method is a `staticmethod`, whose first parameter is not the instance."""
+    return any(
+        isinstance(decorator, ast.Name) and decorator.id == "staticmethod"
+        for decorator in node.decorator_list
     )
 
 

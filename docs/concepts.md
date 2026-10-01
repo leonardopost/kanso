@@ -441,7 +441,7 @@ already over. There are eight.
 
 | gate | what it refuses |
 |---|---|
-| `strategy_integrity` | a file that reads what the embargo hides, or imports outside the allow-list |
+| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, or binds a name its base class owns |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
@@ -572,9 +572,9 @@ The harness settles a period on a point delivered to the sleeve itself, so a gro
 the sleeve never subscribes to that holds a period's only point moves the runner's period end
 and not the harness's, and `balance` lags one period until the sleeve is handed a point.
 `bootstrap` resamples closed trades' net P&L, which holds neither the carry nor a transfer, so
-its `mdd_p95` understates the drawdown a levered book recorded. And the attribute reads of
-the harness's period close are denied, but an unsized `strategy.py` defining a method of the
-same name is not refused: it moves `balance`, never the arithmetic the card is struck with.
+its `mdd_p95` understates the drawdown a levered book recorded. The harness's period close is
+out of reach both ways: its attribute reads are denied, and a `strategy.py` that defines a
+method of the same name binds a name the base owns, which the same gate refuses, sized or not.
 
 **Under a `sizing` rule the floor is not a gate at all.** `sizing: {mode: full_book, budget: N}`
 in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry
@@ -789,6 +789,40 @@ position's opening basis** — the account, `avg_px_open`, `peak_qty`, `realized
 the share count the position opened in, so after a split it is a price per share that no
 longer exists. kanso's own extraction reads none of them, and `program.md` lists them for
 the author.
+
+**A name the base class owns is the harness's.** `KansoStrategy` keeps its machinery on
+names a strategy could as well have chosen — `_close` places the sleeve's exits, `_fund`
+and `_refund` book funding, `_last_price` holds the last prices, `size` scales an entry by
+the attached overlays — and
+Python lets a subclass bind any of them without a word. `self._close = 3` in `on_start`
+replaces the exit method with an int, and the card runs until its first exit, where it
+crashes inside `submit_exit` with a traceback that names the harness and not the line that
+did it. So the gate refuses a class whose instances are a `KansoStrategy` or a
+`KansoModifier` — one that names either among its bases, through an alias, a module or a
+class of the file that does, and any class of the file such a class names, a mixin
+included — when it binds a name that base owns: by `def`, by assignment in the class body,
+or by assignment on the instance a method receives. The refusal names the name, the base
+and the line. What the base owns is read from the installed classes whenever the gate runs,
+never kept as a list: every name `dir()` shows of it, the engine's beneath it included, and
+every attribute kanso's own classes set on `self`. What it leaves to the author is
+`config_cls`, a modifier's `construct`, `evaluate` and `on_data`, the engine's `on_*`
+handlers and the dunders. The rule is the same sized or not; under a sizing rule an
+override is also a size knob no attribute scan could see. A binding made through another
+object — a module-level function handed the strategy — is not one the scan follows.
+
+```
+$ kanso research card demo_mr --desc "keep the close column index on self._close"
+card       38fe6bc · discard · keep the close column index on self._close
+metric     0.000000 ± 0.000000 · 0 trade(s)
+cost       0.0s · 0.00 GB · trial 2
+best       none yet
+           strategy_integrity: fail — n_problems=1, problems=["line 16: '_close' belongs to KansoStrategy, and binding 'self._close' replaces it, so the harness would reach yours where it expects its own; rename yours — KansoStrategy owns every name it defines or sets, underscored or not"]
+```
+
+The same refusal reaches an operator before any run: `kanso hyp validate` refuses a
+`hypotheses/<id>/strategy.py` that binds one (exit 3), `research begin` refuses a baseline
+that does with the line named, and `kanso doctor`'s `base names` check lists every
+hypothesis whose file does.
 
 ## Delivery
 

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
 from kanso.criteria.integrity import (
+    AUTHORED,
     DENIED_BOOK,
     DENIED_BUILTINS,
     DENIED_CLOCK,
@@ -18,10 +20,13 @@ from kanso.criteria.integrity import (
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
     check,
+    clashes,
     import_allowed,
+    owned,
     scan,
     scope,
 )
+from kanso.nautilus.strategy import KansoModifier, KansoStrategy
 from kanso.workspace import PACKAGE_ROOT
 
 ALLOWED_SOURCES = [
@@ -374,14 +379,16 @@ def test_the_size_knobs_are_allowed_under_free_sizing() -> None:
     assert scan(SIZED_SLEEVE, sized=False, construct="sleeve") == []
 
 
-def test_an_override_of_a_harness_method_is_refused_under_sizing() -> None:
-    source = "class Strategy:\n    def _quantise(self, instrument, raw):\n        return raw * 2\n"
-    (problem,) = scan(source, sized=True)
+def test_an_override_of_a_harness_method_is_refused_sized_or_not() -> None:
+    """Under a sizing rule an override is a size knob no attribute scan can see; without one
+    it is still the harness's method, so the refusal is the same either way."""
+    source = f"{SLEEVE_HEAD}    def _quantise(self, instrument, raw):\n        return raw * 2\n"
 
-    assert problem.startswith("line 2: def '_quantise' overrides a harness method")
-    assert scan(source) == []
-    assert scan("class Strategy:\n    def on_bar(self, bar):\n        pass\n", sized=True) == []
-    assert scan("class Strategy:\n    def _signal(self):\n        pass\n", sized=True) == []
+    for sized in (True, False):
+        (problem,) = scan(source, sized=sized)
+        assert problem.startswith("line 3: '_quantise' belongs to KansoStrategy")
+    assert scan(f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        pass\n", sized=True) == []
+    assert scan(f"{SLEEVE_HEAD}    def _signal(self):\n        pass\n", sized=True) == []
 
 
 def test_hedge_is_refused_for_a_sized_overlay_and_clip_for_a_free_one() -> None:
@@ -413,14 +420,14 @@ def test_hedge_is_refused_for_a_sized_overlay_and_clip_for_a_free_one() -> None:
 
 def test_a_sized_overlay_may_write_its_two_hooks_and_nothing_of_the_harness() -> None:
     hooks = (
-        "class Modifier:\n    def evaluate(self, ctx):\n        pass\n"
+        f"{MODIFIER_HEAD}    def evaluate(self, ctx):\n        pass\n"
         "    def on_data(self, ctx):\n        pass\n"
     )
     assert scan(hooks, sized=True, construct="overlay") == []
     (problem,) = scan(
-        "class Modifier:\n    def _start(self):\n        pass\n", sized=True, construct="overlay"
+        f"{MODIFIER_HEAD}    def _start(self):\n        pass\n", sized=True, construct="overlay"
     )
-    assert "overrides a harness method" in problem
+    assert problem.startswith("line 3: '_start' belongs to KansoModifier")
 
 
 def test_a_filter_is_held_to_no_sizing_vocabulary() -> None:
@@ -437,3 +444,205 @@ def test_the_overlay_vocabulary_is_refused_as_an_attribute_and_a_bare_call_is_se
         "keyword 'qty=' is denied under sizing" in bare
         and "submit_entry(instrument_id, side)" in bare
     )
+
+
+# --- the names the base class owns ----------------------------------------------------
+
+
+SLEEVE_HEAD = "from kanso.nautilus.strategy import KansoStrategy\nclass Strategy(KansoStrategy):\n"
+MODIFIER_HEAD = (
+    "from kanso.nautilus.strategy import KansoModifier\nclass Modifier(KansoModifier):\n"
+)
+
+SHADOWING = """from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+CLOSE = 3
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self._close = CLOSE
+"""
+"""The shape that crashed at its first exit: the column index of a close, stored under the
+name of the harness's own exit method."""
+
+
+def test_assigning_a_name_the_sleeve_base_owns_names_the_name_the_line_and_the_base() -> None:
+    (problem,) = scan(SHADOWING)
+
+    assert problem.startswith(
+        "line 14: '_close' belongs to KansoStrategy, and binding 'self._close' replaces it"
+    )
+    assert "rename yours" in problem
+    assert "underscored or not" in problem
+
+
+@pytest.mark.parametrize(
+    ("body", "line", "name", "how"),
+    [
+        ("    def _close(self, instrument_id):\n        pass\n", 3, "_close", "'def _close'"),
+        ("    _fund = None\n", 3, "_fund", "binding '_fund' on the class"),
+        ("    _refund: int = 0\n", 3, "_refund", "binding '_refund' on the class"),
+        ("    def on_start(self):\n        self._last_price = {}\n", 4, "_last_price", None),
+        ("    def on_start(self):\n        self._cfg: dict = {}\n", 4, "_cfg", None),
+        ("    def on_start(self):\n        self.size = 10\n", 4, "size", None),
+        ("    def on_bar(self, bar):\n        self._refund += 1\n", 4, "_refund", None),
+        ("    def on_start(self):\n        self.a, self._held = 1, 2\n", 4, "_held", None),
+        ("    def on_start(me):\n        me._fund = 0\n", 4, "_fund", "binding 'me._fund'"),
+        (
+            "    def on_start(self):\n        def later():\n            self._close = 0\n",
+            5,
+            "_close",
+            None,
+        ),
+        ("    @property\n    def balance(self):\n        return 1.0\n", 4, "balance", None),
+    ],
+)
+def test_every_way_of_binding_a_sleeve_name_is_refused(
+    body: str, line: int, name: str, how: str | None
+) -> None:
+    (problem,) = scan(SLEEVE_HEAD + body)
+
+    assert problem.startswith(f"line {line}: '{name}' belongs to KansoStrategy")
+    if how is not None:
+        assert f"and {how} replaces it" in problem
+
+
+def test_what_the_base_leaves_to_its_author_is_not_a_clash() -> None:
+    sleeve = (
+        "from kanso.nautilus.strategy import KansoConfig, KansoStrategy\n"
+        "class Config(KansoConfig):\n"
+        "    lookback: int = 20\n"
+        "class Strategy(KansoStrategy):\n"
+        "    config_cls = Config\n"
+        "    def __init__(self, config=None):\n"
+        "        super().__init__(config)\n"
+        "        self.closes = []\n"
+        "    def on_start(self):\n"
+        "        self.bought = False\n"
+        "    def on_order_filled(self, event):\n"
+        "        self._signal = None\n"
+        "    def __repr__(self):\n"
+        "        return 'mine'\n"
+        "    def _enter(self):\n"
+        "        return self.submit_entry(self.universe[0], 'BUY')\n"
+    )
+    modifier = (
+        f"{MODIFIER_HEAD}"
+        "    construct = 'filter'\n"
+        "    config_cls = None\n"
+        "    def evaluate(self, ctx):\n"
+        "        self._close = 1\n"
+        "    def on_data(self, ctx):\n"
+        "        pass\n"
+    )
+
+    assert scan(sleeve) == []
+    assert scan(modifier) == []
+
+
+def test_a_modifier_is_held_to_the_names_its_own_base_owns() -> None:
+    (problem,) = scan(f"{MODIFIER_HEAD}    def on_start(self):\n        self._cfg = 1\n")
+
+    assert problem.startswith("line 4: '_cfg' belongs to KansoModifier")
+
+
+def test_a_class_that_is_not_the_harness_s_binds_what_it_likes() -> None:
+    source = (
+        "class Leg:\n"
+        "    def __init__(self):\n"
+        "        self._close = 0.0\n"
+        "    def _fund(self):\n"
+        "        pass\n"
+        f"{SLEEVE_HEAD}"
+        "    def on_start(self):\n"
+        "        self.leg = Leg()\n"
+        "        self.leg._close = 1.0\n"
+    )
+
+    assert scan(source) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from kanso.nautilus.strategy import KansoStrategy as Base\n"
+        "class Strategy(Base):\n    _close = 1\n",
+        "import kanso.nautilus.strategy as ks\nclass Strategy(ks.KansoStrategy):\n    _close = 1\n",
+        "from kanso.nautilus.strategy import KansoStrategy\n"
+        "class Common(KansoStrategy):\n    pass\n"
+        "class Strategy(Common):\n    _close = 1\n",
+        "from kanso.nautilus.strategy import KansoStrategy\n"
+        "class Mixin:\n    _close = 1\n"
+        "class Strategy(Mixin, KansoStrategy):\n    pass\n",
+    ],
+    ids=["alias", "module attribute", "a base of its own", "a mixin"],
+)
+def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> None:
+    (problem,) = scan(source)
+
+    assert "'_close' belongs to KansoStrategy" in problem
+
+
+def test_a_file_that_does_not_parse_has_no_clash_to_name_and_scan_says_why() -> None:
+    source = f"{SLEEVE_HEAD}    def on_start(self:\n        self._close = 3\n"
+
+    assert clashes(source) == []
+    (problem,) = scan(source)
+    assert "does not parse" in problem
+
+
+def test_a_bare_annotation_binds_nothing_and_a_static_helper_has_no_self() -> None:
+    source = (
+        f"{SLEEVE_HEAD}    _close: int\n"
+        "    @staticmethod\n    def helper(leg):\n        leg._close = 1\n"
+        "    @staticmethod\n    def nothing():\n        pass\n"
+    )
+
+    assert scan(source) == []
+
+
+def test_the_owned_names_are_read_from_the_installed_class(monkeypatch) -> None:
+    """Nobody lists them: a name the harness gains is owned the moment it exists."""
+    instance = KansoStrategy()
+    assert set(vars(instance)) <= owned(KansoStrategy)
+    assert {"_close", "_fund", "_refund", "_last_price", "submit_exit"} <= owned(KansoStrategy)
+    assert "_close" not in owned(KansoModifier)
+
+    monkeypatch.setattr(KansoStrategy, "_brand_new", lambda self: None, raising=False)
+    owned.cache_clear()
+    try:
+        (problem,) = scan(f"{SLEEVE_HEAD}    def on_start(self):\n        self._brand_new = 1\n")
+    finally:
+        monkeypatch.undo()
+        owned.cache_clear()
+    assert "'_brand_new' belongs to KansoStrategy" in problem
+
+
+def test_the_harness_keeps_its_own_machinery_off_the_names_an_author_writes() -> None:
+    """The engine's `on_*` handlers are the author's because the harness hooks the engine
+    through `handle_*` and names of its own; a handler it defined itself would be one an
+    author could silently replace."""
+    for base in (KansoStrategy, KansoModifier):
+        defined = {name for name in vars(base) if name.startswith("on_")}
+        assert defined <= AUTHORED, defined
+        assert not (owned(base) & AUTHORED)
+
+
+def test_the_program_template_names_what_the_rule_refuses_and_what_it_leaves() -> None:
+    """`program.md` tells a proposer which names are the base's by example; each must be one
+    the scan refuses, and the name it offers instead one the scan leaves alone."""
+    program = (PACKAGE_ROOT / "templates" / "program.md").read_text(encoding="utf-8")
+    (bullet,) = (line for line in program.splitlines() if "Names the base class owns" in line)
+    examples = re.findall(r"`(\w+)`", bullet.split("underscored or not — ")[1].split(" among")[0])
+
+    assert len(examples) >= 5
+    assert set(examples) <= owned(KansoStrategy)
+    assert "`self._close_col`, not `self._close`" in bullet
+    assert "_close_col" not in owned(KansoStrategy)
