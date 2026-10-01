@@ -1380,14 +1380,23 @@ def _add_run(
 # --- the extraction ----------------------------------------------------------
 
 
+def multipliers_of(instruments: Iterable[Any]) -> dict[str, float]:
+    """Each resolved definition's contract multiplier, by instrument id.
+
+    The one table every notional kanso strikes is read from: a fill's `qty x px x
+    multiplier` in the extraction below, and the day's traded volume a certification holds
+    that fill to (`kanso.certify.run._daily_volume`), so a contract and a share are compared
+    in the same unit whichever the bar counted.
+    """
+    return {str(instrument.id): float(instrument.multiplier) for instrument in instruments}
+
+
 def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
     """The one measured object: returns, equity, trades and fills with costs applied, and
     the book policy applied once at each period end."""
     model = VenueModel.model_validate(dict(request.venue_model))
     cache = engine.cache
-    multipliers = {
-        str(instrument.id): float(instrument.multiplier) for instrument in cache.instruments()
-    }
+    multipliers = multipliers_of(cache.instruments())
     positions = _positions(cache)
     events, owners = _fill_events(positions)
     marks.price(events)

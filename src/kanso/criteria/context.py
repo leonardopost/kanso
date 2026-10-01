@@ -81,7 +81,9 @@ class GateContext:
     * `datasets` are the pinned snapshot's datasets with their observed and documented
       publication delays;
     * `daily_volume` maps an instrument id to its daily traded notional in the run's
-      currency, oldest first, so a participation limit has something to be a share of;
+      currency — each bar's volume, in the instrument's own unit, times its close times
+      the instrument's multiplier, so a day's contracts and a day's fills are the same kind
+      of number — oldest first, so a participation limit has something to be a share of;
     * `tunable` are the subject's own numeric parameters at the values it ran with, and
       `rerun` runs it again over `window` with some of them replaced — the pair a
       perturbation gate needs, and the one thing here that costs a backtest to use.

@@ -217,7 +217,9 @@ class Measured:
 
     The resolved instruments and the window's points are kept because a gate that
     perturbs a parameter runs the certification window again, and re-reading the catalog
-    per perturbation would make a cheap arithmetic question an expensive one.
+    per perturbation would make a cheap arithmetic question an expensive one; the
+    instruments also carry the multiplier each day's volume is struck with, as every fill
+    of the runs was.
     """
 
     certification: CardRun
@@ -689,18 +691,33 @@ def _required_lag(manifest: Manifest) -> float:
     return rule.lag.total_seconds()
 
 
-def _daily_volume(groups: Sequence[Sequence[object]]) -> dict[str, list[float]]:
-    """Each instrument's daily traded notional over the window, oldest first."""
+def _daily_volume(
+    groups: Sequence[Sequence[object]], instruments: Sequence[object]
+) -> dict[str, list[float]]:
+    """Each instrument's daily traded notional over the window, oldest first.
+
+    A bar's volume counts the instrument's own unit — shares for a share, contracts for a
+    perpetual or a future — and the runner strikes a fill's notional as `qty x px x
+    multiplier`, so a day's volume is `volume x close x multiplier` of the resolved
+    definition the window was run with, read from the same table the extraction reads
+    (`backtest.multipliers_of`). A share's multiplier is one; a contract of a thousand DOGE
+    is a thousand times the capacity its contract count says, and one of a hundredth of a
+    coin a hundredth of it.
+    """
     from nautilus_trader.model.data import Bar
 
+    multipliers = backtest.multipliers_of(instruments)
     per_day: dict[str, dict[date, float]] = {}
     for group in groups:
         for point in group:
             if not isinstance(point, Bar):
                 continue
-            days = per_day.setdefault(str(point.bar_type.instrument_id), {})
+            name = str(point.bar_type.instrument_id)
+            days = per_day.setdefault(name, {})
             day = day_of(int(point.ts_event))
-            days[day] = days.get(day, 0.0) + float(point.volume) * float(point.close)
+            days[day] = days.get(day, 0.0) + (
+                float(point.volume) * float(point.close) * multipliers.get(name, 1.0)
+            )
     return {name: [days[day] for day in sorted(days)] for name, days in per_day.items()}
 
 
@@ -784,7 +801,7 @@ def _judge(
     metrics = records.trial_metrics(store, subject.hyp.id)
     judged = _window_only(measured.groups, midnight_ns(subject.certification[0]))
     facts = _dataset_facts(ws, snapshot, judged)
-    volume = _daily_volume(judged)
+    volume = _daily_volume(judged, measured.instruments)
     parameters = _tunable(subject)
 
     def rerun(overrides: Mapping[str, float]) -> CardRun:
