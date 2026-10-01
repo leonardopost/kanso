@@ -11,13 +11,17 @@ give — a damaged zip, a row the engine refuses — it builds it in the test an
 from __future__ import annotations
 
 import json
+import threading
 import zipfile
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from nautilus_trader.model.data import Bar, TradeTick
 from nautilus_trader.model.enums import AggressorSide
 
@@ -28,8 +32,15 @@ from kanso.data.loader import Loader, utc_day
 from kanso.data.manifest import cache_path
 from kanso.data.types import Funding
 from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
-from kanso.nautilus.adapters.okx import history, reference, trades
-from kanso.nautilus.adapters.okx.bars import BAR_SIZES, CANDLES, OkxBarsLoader, build_bar
+from kanso.nautilus.adapters.okx import bars, history, reference, trades
+from kanso.nautilus.adapters.okx.bars import (
+    BAR_SIZES,
+    CANDLES,
+    IN_FLIGHT,
+    PAGE,
+    OkxBarsLoader,
+    build_bar,
+)
 from kanso.nautilus.adapters.okx.funding import FUNDING, OkxFundingLoader, build_funding
 from kanso.nautilus.adapters.okx.history import HistoryLoader, Series, runs, units
 from kanso.nautilus.adapters.okx.reference import ARCHIVES, Response
@@ -144,8 +155,20 @@ def test_a_day_of_minute_bars_is_every_closed_candle_stamped_at_its_close(ws: Wo
     assert all(point.ts_init == point.ts_event for point in points)
     assert [point.ts_event for point in points] == sorted(point.ts_event for point in points)
     assert str(points[0].bar_type) == "USDC-USDT-SWAP.OKX-1-MINUTE-LAST-EXTERNAL"
-    # one probe of the window's first day, then five pages walked back and an empty sixth
-    assert [params.get("limit") for _, params in replay.asked] == ["1"] + ["300"] * 6
+    # one probe of the window's first day, then the day's five page-sized slices at once,
+    # each asked within the day's own bounds, and nothing asked below its first candle
+    probe, *pages = replay.asked
+    assert probe[1]["limit"] == "1"
+    assert sorted(int(params["after"]) for _, params in pages) == [
+        1790567940000,
+        1790585940000,
+        1790603940000,
+        1790621940000,
+        1790639940000,
+    ]
+    assert {(params["limit"], params["before"]) for _, params in pages} == {
+        ("300", "1790553539999")
+    }
     assert all(url == f"{US}{CANDLES}" for url, _ in replay.asked)
 
 
@@ -255,6 +278,273 @@ def test_a_page_the_endpoint_repeats_ends_the_walk(ws: Workspace) -> None:
 
     assert len(points) == len(body(name)["data"])
     assert later == []  # every candle of that page closes on the 28th, so none is the 29th's
+
+
+# --- a day's pages in flight together ------------------------------------------------
+
+RECORDED_DAY = date(2026, 9, 28)
+MINUTES = Series("USDC-USDT-SWAP", 6, 0, US, "1m")
+PAGES = sorted(
+    name
+    for name, entry in HISTORY_PROVENANCE["files"].items()
+    if entry["params"].get("instId") == "USDC-USDT-SWAP" and entry["params"].get("bar") == "1m"
+)
+"""Every candle request recorded of USDC-USDT-SWAP's minute bars: the probe of 2026-09-28, its
+five pages walked back from the day's end, and the empty page asked below its first candle."""
+
+ROWS = sorted(
+    (row for name in PAGES for row in body(name)["data"] if len(body(name)["data"]) > 1),
+    key=lambda row: -int(row[0]),
+)
+"""The day's 1,440 candles as the exchange served them, newest first."""
+
+
+@dataclass
+class Candles:
+    """A stand-in for the candle endpoint over the rows the exchange served for 2026-09-28,
+    answering any request as the endpoint was measured to: the rows opened strictly between
+    `before` and `after`, newest first, `limit` of them and never more than 300. It answers
+    every candle request recorded for that day as the exchange did (checked below). `missing`
+    takes rows out and `cap` serves shorter pages — built in the test: the exchange was not
+    seen doing either."""
+
+    missing: frozenset[int] = frozenset()
+    cap: int = PAGE
+
+    def __call__(self, url: str, params: dict[str, str]) -> Response:
+        after, before = int(params.get("after", 2**63)), int(params.get("before", -1))
+        rows = [
+            row for row in ROWS if before < int(row[0]) < after and int(row[0]) not in self.missing
+        ]
+        served = rows[: min(int(params["limit"]), PAGE, self.cap)]
+        return Response(200, json.dumps({"code": "0", "msg": "", "data": served}).encode())
+
+
+@dataclass
+class Gate:
+    """A transport holding each of the first `width` requests until all of them have been
+    sent, so a loader with fewer in flight never gets past its first; `peak` is the most that
+    were ever in flight at once."""
+
+    inner: Any
+    width: int
+    peak: int = 0
+    flight: int = 0
+    sent: int = 0
+    turn: threading.Condition = field(default_factory=threading.Condition)
+
+    def __call__(self, url: str, params: dict[str, str]) -> Response:
+        with self.turn:
+            self.flight += 1
+            self.sent += 1
+            self.peak = max(self.peak, self.flight)
+            self.turn.notify_all()
+            if not self.turn.wait_for(lambda: self.sent >= self.width, timeout=10):
+                raise TimeoutError(f"{self.flight} in flight after 10 s, held for {self.width}")
+        try:
+            return self.inner(url, params)
+        finally:
+            with self.turn:
+                self.flight -= 1
+
+
+def walked(loader: OkxBarsLoader, series: Series, day: date) -> list[Bar]:
+    """A day's bars as `okx_bars` found them one page at a time: back from the day's end,
+    each page's oldest candle the next `after`, until a page came back empty."""
+    step = loader._step(series)
+    lower, after_day = history.day_ms(day) - step, history.day_ms(day + history.DAY) - step
+    found: dict[int, Any] = {}
+    after = after_day
+    while True:
+        rows = loader._page(loader.client(), series, after=after, before=lower - 1)
+        opened = [int(row[0]) for row in rows]
+        if not rows or min(opened) >= after:
+            break
+        found.update(zip(opened, rows, strict=True))
+        after = min(opened)
+    kept = (build_bar(series, found[key]) for key in sorted(found) if lower <= key < after_day)
+    return [bar for bar in kept if bar is not None]
+
+
+def as_served(bars: list[Bar]) -> list[dict[str, Any]]:
+    return [Bar.to_dict(bar) for bar in bars]
+
+
+def on_rate(ws: Workspace, rate: int) -> Workspace:
+    """The same workspace with `[adapters.okx] rate_per_second` set to `rate`."""
+    path = ws.path(CONFIG_NAME)
+    text = path.read_text(encoding="utf-8").replace(
+        'region = "us"\n', f'region = "us"\nrate_per_second = {rate}\n'
+    )
+    path.write_text(text, encoding="utf-8")
+    return Workspace(root=ws.root, config=load_config(path))
+
+
+def in_flight() -> list[threading.Thread]:
+    return [one for one in threading.enumerate() if one.name.startswith("okx-bars")]
+
+
+def test_the_stand_in_answers_every_recorded_request_as_the_exchange_did() -> None:
+    """Its evidence: the probe, the five pages and the empty page below the day's first
+    candle, each answered with exactly the rows the exchange served for it."""
+    assert len(PAGES) == 7 and len(ROWS) == 1440
+
+    for name in PAGES:
+        entry = HISTORY_PROVENANCE["files"][name]
+        served = json.loads(Candles()(entry["url"], entry["params"]).body)["data"]
+        assert served == body(name)["data"], name
+
+
+def test_a_day_s_pages_are_in_flight_together(ws: Workspace) -> None:
+    """The recorded day is five page-sized slices; at the table's default rate of five a
+    second, all five are asked for before any is answered."""
+    [ref] = opened(OkxBarsLoader, ws).discover(spec(resolution="1m"))
+    gate = Gate(History(), width=5)
+
+    points = list(opened(OkxBarsLoader, ws, gate).load(ref, ref.span))
+
+    assert gate.peak == 5
+    assert as_served(points) == as_served(walked(opened(OkxBarsLoader, ws), MINUTES, RECORDED_DAY))
+    assert in_flight() == []
+
+
+@pytest.mark.parametrize(("rate", "width"), [(2, 2), (IN_FLIGHT, IN_FLIGHT), (50, IN_FLIGHT)])
+def test_as_many_pages_are_in_flight_as_the_table_s_rate_and_never_more_than_twenty(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch, rate: int, width: int
+) -> None:
+    """Five days of minute bars — twenty-five slices: the recorded day's five, and four days
+    the stand-in serves nothing for. As many requests go out together as the table's rate
+    allows in a second, up to what the endpoint admits from one address, and no more: the
+    gate shows that many in flight at once, and the pool they are sent from has no room for
+    another."""
+    pools: list[int] = []
+
+    class Counted(ThreadPoolExecutor):
+        def __init__(self, max_workers: int, **named: Any) -> None:
+            pools.append(max_workers)
+            super().__init__(max_workers, **named)
+
+    monkeypatch.setattr(bars, "ThreadPoolExecutor", Counted)
+    gate = Gate(Candles(), width=width)
+    loader = opened(OkxBarsLoader, on_rate(ws, rate), gate)
+
+    points = list(loader.points(loader.client(), MINUTES, (date(2026, 9, 24), RECORDED_DAY)))
+
+    assert (gate.peak, pools) == (width, [width])
+    assert len(points) == 1440 and gate.sent == 25
+
+
+SCENARIOS = {
+    "as served": Candles(),
+    "pages of 100": Candles(cap=100),
+    "pages of 7": Candles(cap=7),
+    "an hour missing across two slices": Candles(
+        missing=frozenset(range(1790621940000 - 1_800_000, 1790621940000 + 1_800_000, 60_000))
+    ),
+    "a whole slice missing": Candles(
+        missing=frozenset(range(1790585940000, 1790603940000, 60_000))
+    ),
+    "the first nine hours missing": Candles(
+        missing=frozenset(range(1790553540000, 1790553540000 + 9 * 3_600_000, 60_000))
+    ),
+    "the last candle missing": Candles(missing=frozenset({1790639880000})),
+    "every candle missing": Candles(missing=frozenset(int(row[0]) for row in ROWS)),
+}
+
+
+@pytest.mark.parametrize("name", SCENARIOS)
+def test_the_bars_are_those_a_walk_one_page_at_a_time_found(ws: Workspace, name: str) -> None:
+    """Built in the test: the stand-in with rows taken out, or serving short pages. However
+    the day is served, the slices in flight together yield the walk's bars, field for field."""
+    stand_in = SCENARIOS[name]
+    loader = opened(OkxBarsLoader, ws, stand_in)
+
+    points = list(loader.points(loader.client(), MINUTES, (RECORDED_DAY, RECORDED_DAY)))
+
+    expected = walked(opened(OkxBarsLoader, ws, stand_in), MINUTES, RECORDED_DAY)
+    assert as_served(points) == as_served(expected)
+    kept = {int(row[0]) for row in ROWS} - stand_in.missing
+    assert len(points) == len(kept)
+
+
+@settings(
+    max_examples=25, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    gaps=st.lists(st.tuples(st.integers(0, 1439), st.integers(1, 400)), max_size=4),
+    cap=st.integers(1, PAGE),
+)
+def test_any_gaps_and_any_page_size_yield_the_walk_s_bars(
+    ws: Workspace, gaps: list[tuple[int, int]], cap: int
+) -> None:
+    """The same, for up to four runs of missing candles anywhere in the day and any page size
+    from one candle to 300."""
+    first = 1790553540000
+    missing = frozenset(
+        first + 60_000 * minute for start, width in gaps for minute in range(start, start + width)
+    )
+    stand_in = Candles(missing=missing, cap=cap)
+    loader = opened(OkxBarsLoader, ws, stand_in)
+
+    points = list(loader.points(loader.client(), MINUTES, (RECORDED_DAY, RECORDED_DAY)))
+
+    expected = walked(opened(OkxBarsLoader, ws, stand_in), MINUTES, RECORDED_DAY)
+    assert as_served(points) == as_served(expected)
+
+
+def test_a_throttled_page_is_waited_out_while_the_others_are_in_flight(ws: Workspace) -> None:
+    """The recorded 429 (the archive listing's, the one throttle recorded) answered to each
+    page on its first asking, then the recorded page: every page waits out its own throttle,
+    and the day is the day."""
+    throttled = next(n for n in HISTORY_PROVENANCE["files"] if n.startswith(THROTTLED))
+    replay = History()
+    once: set[str] = set()
+    lock = threading.Lock()
+
+    def throttling(url: str, params: dict[str, str]) -> Response:
+        with lock:
+            first = params["after"] not in once
+            once.add(params["after"])
+        return answer(throttled) if first else replay(url, params)
+
+    loader = opened(OkxBarsLoader, ws, throttling)
+
+    points = list(loader.points(loader.client(), MINUTES, (RECORDED_DAY, RECORDED_DAY)))
+
+    assert as_served(points) == as_served(walked(opened(OkxBarsLoader, ws), MINUTES, RECORDED_DAY))
+    assert loader.pauses == [2.0] * 5
+
+
+def test_a_page_refused_stops_the_load_and_leaves_nothing_in_flight(ws: Workspace) -> None:
+    """The recorded HTTP 400 (the listing's, for eleven days) answered to the day's third
+    page: the load stops with the call's own refusal, and no request is left running."""
+    eleven = (
+        "market-data-history__begin-1789747200000_dateAggrType-daily_end-1790611200000"
+        "_instFamilyList-USDC-USDT_instType-SWAP_module-1.json"
+    )
+    replay = History()
+
+    def refusing(url: str, params: dict[str, str]) -> Response:
+        if params["after"] == "1790603940000":
+            return answer(eleven)
+        return replay(url, params)
+
+    loader = opened(OkxBarsLoader, ws, refusing)
+
+    with pytest.raises(KansoError, match=f"okx: {CANDLES} did not answer.*HTTP 400, code 50076"):
+        list(loader.points(loader.client(), MINUTES, (RECORDED_DAY, RECORDED_DAY)))
+    assert in_flight() == []
+
+
+def test_a_load_left_part_way_leaves_nothing_in_flight(ws: Workspace) -> None:
+    loader = opened(OkxBarsLoader, ws)
+    points = loader.points(loader.client(), MINUTES, (RECORDED_DAY, RECORDED_DAY))
+
+    first = next(points)
+    points.close()
+
+    assert first.ts_event == utc("2026-09-28T00:00:00")
+    assert in_flight() == []
 
 
 # --- the shape of a spec ------------------------------------------------------------

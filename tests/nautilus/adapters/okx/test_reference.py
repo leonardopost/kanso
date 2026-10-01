@@ -8,13 +8,16 @@ named the exchange asks it nothing. A linear USDT swap resolves into a `CryptoPe
 whose contract terms are the row's and whose fees are zero, and it validates on a USDT
 account. An inverse contract, a suspended one, one not yet listed and one the exchange does
 not list are each refused by name, per id. An answer that is not the API's is the call's
-failure, not an id's. And the request carries a User-Agent and nothing else.
+failure, not an id's. And the request carries a User-Agent and nothing else, and every
+request to the API is held to the table's rate, however many threads send.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -532,12 +535,15 @@ def test_the_transport_drives_the_engine_s_coroutine_and_reads_status_and_body()
     assert answer.listed and answer.rows[0]["instId"] == "BTC-USDT-SWAP"
     assert sent[0][1:] == (f"{US}{INSTRUMENTS}", {"instType": "SWAP", "instId": "BTC-USDT-SWAP"})
     assert str(sent[0][0]).endswith("GET")
-    assert quoted[0] == {"keys": None, "timeout_secs": reference.TIMEOUT_S}
+    assert quoted[0] == {"keys": [reference.QUOTA_KEY], "timeout_secs": reference.TIMEOUT_S}
 
 
-def test_the_archive_listing_is_metered_on_its_own_key_and_a_download_waits_longer() -> None:
-    """The listing throttles hardest, so it is sent under its path's own quota; a file on
-    the exchange's file host is tens of megabytes, so it is given the longer timeout."""
+def test_every_api_request_names_the_table_s_quota_and_the_listing_its_own_as_well() -> None:
+    """The engine holds a request to its default quota only under a key the request names,
+    so every request to the API names one key, whatever its path, and all of them share the
+    table's rate. The listing throttles hardest, so it names its path's own quota first; a
+    file on the exchange's file host is not the API's, and is tens of megabytes, so it names
+    no key and is given the longer timeout."""
     quoted: list[dict[str, Any]] = []
 
     class Answered:
@@ -551,12 +557,38 @@ def test_the_archive_listing_is_metered_on_its_own_key_and_a_download_waits_long
 
     send = pyo3_transport(3, factory=lambda rate: Client())
     send(f"{US}{reference.ARCHIVES}", {})
+    send(f"{US}/api/v5/market/history-candles", {})
     send("https://static.okx.com/cdn/okex/traderecords/trades/daily/x.zip?v=999", {})
 
     assert quoted == [
-        {"keys": [reference.ARCHIVES], "timeout_secs": reference.TIMEOUT_S},
+        {"keys": [reference.ARCHIVES, reference.QUOTA_KEY], "timeout_secs": reference.TIMEOUT_S},
+        {"keys": [reference.QUOTA_KEY], "timeout_secs": reference.TIMEOUT_S},
         {"keys": None, "timeout_secs": reference.DOWNLOAD_TIMEOUT_S},
     ]
+    assert reference.QUOTA_KEY not in reference.KEYED_QUOTAS
+
+
+def test_the_engine_s_client_holds_requests_from_several_threads_to_the_table_s_rate() -> None:
+    """The transport over the engine's own client, sent to from three threads at once. The
+    host is no name at all, so the engine fails each request once its quota admits it,
+    before anything is resolved or connected: twelve requests at ten a second — ten at
+    once, then one each 100 ms — take at least 0.2 s however fast the machine."""
+    send = pyo3_transport(10)
+    candles = "http://not a host/api/v5/market/history-candles"
+
+    def sent(_: int) -> str:
+        try:
+            send(candles, {"instId": "BTC-USDT-SWAP"})
+        except Exception as exc:  # the engine's parse error, once the quota admitted it
+            return type(exc).__name__
+        return "answered"  # pragma: no cover - nothing can answer it
+
+    start = time.monotonic()
+    with ThreadPoolExecutor(3) as pool:
+        outcomes = set(pool.map(sent, range(12)))
+
+    assert time.monotonic() - start >= 0.19
+    assert "answered" not in outcomes
 
 
 def test_a_body_that_is_json_but_not_the_envelope_is_no_answer() -> None:

@@ -364,6 +364,20 @@ offers `request`, `get`, `post`, `patch` and `delete`; `HttpResponse` carries
 headers=None, timeout_secs=None)` streams a response straight to disk without
 holding it in memory, which is the transport for bulk history objects.
 
+**A request is metered by the keys it names, and by nothing else.** `default_quota`
+holds a key the request names that `keyed_quotas` gives no quota of its own, each
+such key in a bucket of its own; a request that names no key waits for no quota at
+all, whatever `default_quota` states. A request naming several keys waits until
+every one admits it. The wait comes before the request is built — a request to a
+string that is no URL is held just as long before it fails — and a key's bucket
+lives in the client, so requests sent from several threads, each awaiting in its
+own event loop, share it. Measured with `default_quota` at
+`rate_per_second(2)`, twelve requests from six threads to a loopback server that
+answered in 0.6 s: naming no key, all twelve arrived within 0.6 s; naming one key,
+two arrived at once and then one every half second; naming `a` and `b` in turn,
+two buckets let through two a second each. So a caller whose default quota is to
+hold names one key on every request.
+
 Corporate actions
 -----------------
 The engine has **no corporate-action concept**. `PositionAdjustmentType` has
@@ -2553,6 +2567,46 @@ def _check_quota() -> tuple[bool, str]:
     return holds, f"Quota constructors {built}; a zero max burst is refused ({zero_burst})"
 
 
+_NOT_A_URL = "http://[::1"
+"""What the quota check sends to: the client fails it once the quota admits it, before any
+name is resolved or any socket opened, so the check reaches nothing."""
+
+
+def _check_http_client_meters_named_keys() -> tuple[bool, str]:
+    import asyncio
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from nautilus_trader.core import nautilus_pyo3
+
+    client = nautilus_pyo3.HttpClient(default_quota=nautilus_pyo3.Quota.rate_per_second(10))
+
+    def sent(keys: list[str] | None) -> str:
+        async def once() -> str:
+            try:
+                await client.request(nautilus_pyo3.HttpMethod.GET, _NOT_A_URL, keys=keys)
+            except Exception as exc:  # the only outcome: the string is no URL
+                return type(exc).__name__
+            return "answered"  # pragma: no cover - nothing can answer it
+
+        return asyncio.run(once())
+
+    def timed(keys: list[str] | None) -> tuple[float, set[str]]:
+        start = time.monotonic()
+        with ThreadPoolExecutor(3) as pool:
+            outcomes = set(pool.map(lambda _: sent(keys), range(12)))
+        return time.monotonic() - start, outcomes
+
+    unnamed, _ = timed(None)
+    named, outcomes = timed(["probe"])
+    holds = named >= 0.15 and "answered" not in outcomes
+    return holds, (
+        f"twelve requests from three threads, each in its own event loop, on a default quota "
+        f"of ten a second: naming one key they took {named:.2f}s (ten at once, then one each "
+        f"100 ms), naming none {unnamed:.2f}s; each ended {sorted(outcomes)} at {_NOT_A_URL!r}"
+    )
+
+
 def _check_http_download() -> tuple[bool, str]:
     import inspect
 
@@ -2939,6 +2993,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "nautilus_pyo3.Quota expresses a rate per second, minute or hour",
         _check_quota,
+    ),
+    (
+        "nautilus_pyo3.HttpClient holds a request that names a key to its default quota, and "
+        "one key's quota is shared by every thread that sends under it",
+        _check_http_client_meters_named_keys,
     ),
     (
         "nautilus_pyo3.http_download streams a URL to a file path",
