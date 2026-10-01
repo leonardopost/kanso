@@ -640,6 +640,13 @@ error. An improvement counts only when it clears `max(min_delta, k_se × metric_
 operator's smallest interesting difference and the spread of the folds that produced the
 number. Both parameters are fixed at classification, before any result is seen.
 
+The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
+return period belongs to the fold its end falls in. So the metric is a mean of folds and not
+of periods: every fold weighs the same however many sessions it holds, and a fold that holds
+none scores zero and is averaged in like the rest. Over a research window of months the
+folds hold nearly as many sessions each and the two means nearly agree; over a window of a
+few sessions they need not, and that is the window a certificate measures (below).
+
 Here is the rule refusing a real improvement. The hypothesis carries `min_delta: 0.0` and
 `k_se: 1.0`; the neutral baseline above scored `0.000000`:
 
@@ -1018,6 +1025,26 @@ written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
 next       kanso cert show demo_mr
 ```
+
+**The certificate's `objective` is measured the way a card's metric is**, and so is the
+`certification` number `embargoed_window` and `walk_forward_consistency` record: the
+hypothesis's objective over the certification window cut into the workspace's `[research]
+folds` calendar folds, reported as the mean of the folds `±` the standard error of their
+spread. It is not the mean of the window's sessions, and on a short window the two differ.
+Five sessions, Monday to Friday, in four folds are four spans of a day and a quarter; a
+session's period ends at its last event, and sessions that end after 18:00 UTC, as a US
+equity session does, put Thursday and Friday together in the last fold, each at half the
+weight of Monday, Tuesday or Wednesday. Sessions earning 10, 20, 30, 40 and 50 bp of the
+capital average 30 bp; the certificate records `(10 + 20 + 30 + 45) / 4 = 26.25`. The same
+bytes run in process return those five sessions exactly; the arithmetic is what differs.
+Which sessions share a fold follows from the hour the periods end — a daily bar published
+at 16:00 UTC puts Wednesday with Thursday instead — and the standard error is the spread of
+four fold means, so two sessions that disagree inside one fold cancel there rather than
+widening it. A fold that holds no period at all scores zero: Monday to Sunday in four folds
+leaves the last, from Saturday morning on, empty, and the week above is certified at
+`(10 + 25 + 45 + 0) / 4 = 20`. Only a window whose folds hold the same number of sessions
+each is certified at its mean per session; `docs/backlog.md` row 110 says what closing the
+difference would take.
 
 Certifying the same bytes again under the same plan **and** the same engine is refused:
 

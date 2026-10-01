@@ -161,7 +161,14 @@ class EvaluatedGate(KansoModel):
 
 
 class ObjectiveResult(KansoModel):
-    """The objective as certification measured it."""
+    """The objective as certification measured it: over the certification window cut into
+    the workspace's `[research] folds` equal calendar folds, `value` the mean of the folds and
+    `se` the standard error of their spread — a card's arithmetic on the embargoed window.
+
+    A mean of folds and not of sessions: every fold weighs the same however many periods it
+    holds, and one that holds none scores zero, so over a window of a few sessions `value`
+    is not the mean per session of the same run.
+    """
 
     id: CatalogueId
     value: float

@@ -29,8 +29,8 @@ from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
 from kanso.criteria import library
 from kanso.criteria.gates.parity_replay import NO_PARITY
-from kanso.criteria.objectives import wf_sharpe_vs_hold
-from kanso.criteria.run import day_of, midnight_ns
+from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_vs_hold
+from kanso.criteria.run import BPS, day_of, midnight_ns
 from kanso.data import snapshot as snapshots
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
 from kanso.errors import PreconditionError, ValidationError
@@ -308,6 +308,50 @@ def test_the_certificate_records_everything_it_was_produced_under(
     assert made.venue_model.venue == "XNAS"
     assert made.criteria_version and made.nautilus_version
     assert made.n_trials == records.n_trials(store, HYP_ID) == 1
+
+
+WEEK = (date(2024, 2, 12), date(2024, 2, 16))
+"""Monday to Friday: five sessions, which the demo workspace's four folds cannot split evenly."""
+
+A_WEEK = document(
+    windows={
+        "research": {"start": date(2024, 1, 1), "end": date(2024, 1, 31)},
+        "certification": {"start": WEEK[0], "end": WEEK[1]},
+        "forward": {"start": date(2024, 3, 1)},
+    },
+    objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+)
+"""The demo sleeve certified over one week, on its return on the capital."""
+
+
+def test_a_certificate_measures_its_window_in_the_research_folds_not_by_the_session(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The certified bytes run in process earn the certificate's sessions; its number is
+    their mean over four calendar folds. A session's period ends at its bar, published at
+    16:00 UTC, so Wednesday's and Thursday's share the third fold and weigh half as much."""
+    classify(ws, store, A_WEEK, REVERTING)
+    a_card(ws, store, REVERTING, document=A_WEEK)
+    write_plan(ws)
+
+    made = certify(ws, store, HYP_ID)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+    alone = backtest.run(run._request(subject, subject.certification), subject.catalog).run
+    monday, tuesday, wednesday, thursday, friday = (
+        earned / alone.capital * BPS for earned in alone.returns
+    )
+    assert subject.folds == ws.config.research.folds == 4
+    assert wf_contribution_bps.fold_values(alone, subject.folds) == pytest.approx(
+        (monday, tuesday, (wednesday + thursday) / 2, friday)
+    )
+    assert (made.objective.value, made.objective.se) == pytest.approx(
+        wf_contribution_bps.compute(alone, subject.folds)
+    )
+    (window,) = [gate for gate in made.gates if gate.id == "embargoed_window"]
+    assert window.evidence["certification"] == pytest.approx(made.objective.value)
+    per_session = (monday + tuesday + wednesday + thursday + friday) / 5
+    assert made.objective.value != pytest.approx(per_session), "a mean of folds, not sessions"
 
 
 def test_a_certificate_is_immutable_and_reads_back_as_it_was_written(
