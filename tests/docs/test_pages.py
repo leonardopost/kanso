@@ -526,3 +526,32 @@ def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_i
             line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
         )
         assert claim in row and "**closed.**" in row and closure in row, number
+
+
+def test_the_pages_say_a_stall_certifies_in_a_child_held_to_the_lane_s_share() -> None:
+    """A lane that certified in its own process kept what the windows cost and stopped
+    answering `SIGTERM`; the pages say where a stall's certification is made, what bounds it,
+    what records its cost, and that a lane stops whatever it ran, and both backlog rows that
+    recorded the two defects are closed in place."""
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "A stall's certification is a child held to the same figure" in lanes
+    assert "(`cert_peak_mem_gb`, `cert_wall_s`)" in lanes
+    assert "or `kanso cert run` by hand" in lanes
+    assert "**A lane stops at its next safe point, whatever it ran.**" in lanes
+    envelope = prose(section(page("workspace.md"), "`envelope.yaml`"))
+    assert "A stall's certification is held to the same figure." in envelope
+    cli = prose(page("cli.md"))
+    assert "The certification is made in a child of the lane, exactly as `cert run` makes it" in cli
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+    )
+    assert "a stall's certification in flight is killed the same way" in stop
+    for number, opening in (
+        ("118", "~~A stall's certification ran in the lane's own process"),
+        ("119", "~~A lane that had replayed a parity on a node no longer answered `SIGTERM`~~"),
+    ):
+        row = next(
+            line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
+        )
+        assert row.split("|")[3].strip().startswith(opening)
+        assert "**closed.**" in row

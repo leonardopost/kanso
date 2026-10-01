@@ -156,8 +156,29 @@ heavier hypothesis than the one now researching — an overlay on one-second bar
 peak a daily sleeve will never approach, and every lane is charged for it until you say
 otherwise.
 
-**A lane stops at its next safe point, whatever it ran.** Between cards and while it waits for a
-claim, a `SIGTERM` is the lane's own: a trading node takes the
+**A lane's share bounds what the lane runs in its children.** The lane process itself holds
+the engine, its store and, while it stages a card, one session of the window at a time; the
+one run it still makes in its own process is the hold a benchmark objective differences
+against, once per run over the research window. Everything else heavy runs in a child it
+watches, and what a child cost goes when the child exits. A card's child
+is killed once its resident memory passes the lane's share, floored at three times what the
+run's baseline needed (`docs/workspace.md`, `envelope.yaml`). A stall's certification is a
+child held to the same figure for a card of the run it judges: both windows, every
+perturbation a gate runs and `parity_replay`'s node replay are made there, and the lane only
+reads back the certificate, or the refusal it raised, and records what the certification
+cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Measured on a 16 GB host
+with six lanes at `mem_per_lane_gb` 2.5 while lanes still certified in their own process:
+two idle lanes held 2.9 GB and 4.1 GB after certifying, swap reached 13.3 GB, and nothing but
+killing them gave it back. A certification that needs more than the share is killed and
+refused — the lane records a `lane_failed` naming what it reached and puts the hypothesis
+back — and the answer is yours: a larger `mem_per_lane_gb`, which plans fewer lanes around
+what certification actually costs, or `kanso cert run` by hand, which certifies in your own
+process with nothing but the host to bound it. No wall time bounds a certification, since how
+many engine runs it makes is its plan's choice. Only the baseline runs uncapped, because it is
+what the rest are measured against.
+
+**A lane stops at its next safe point, whatever it ran.** Between cards, while it waits for a
+claim and while a child certifies, a `SIGTERM` is the lane's own: a trading node takes the
 stop signals for the loop it is handed and closing that loop does not give them back, so
 every node kanso builds — a replay's, a stage's — hands them back to the process that built
 it. Measured before that on an operator's workspace on 2026-10-01: lanes that had replayed a

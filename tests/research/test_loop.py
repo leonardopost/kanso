@@ -933,13 +933,13 @@ def test_the_memory_cap_is_the_lane_share_floored_at_the_baseline_s_need(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
     run = loop.begin(ws, store, registered)
-    assert loop._mem_cap(ws, run) == 8.0
+    assert loop.mem_cap(ws, run) == 8.0
 
     heavy = run.model_copy(update={"baseline_peak_mem_gb": 100.0})
-    assert loop._mem_cap(ws, heavy) == loop.HEADROOM * 100.0
+    assert loop.mem_cap(ws, heavy) == loop.HEADROOM * 100.0
 
     ws.path("envelope.yaml").unlink()
-    assert loop._mem_cap(ws, run) == loop.HEADROOM * run.baseline_peak_mem_gb
+    assert loop.mem_cap(ws, run) == loop.HEADROOM * run.baseline_peak_mem_gb
 
 
 @pytest.mark.parametrize("declared, peak, cap", [(2.0, 0.25, 2.0), (0.5, 4.0, 12.0)])
@@ -958,7 +958,7 @@ def test_a_declared_lane_memory_is_what_a_card_of_that_lane_may_hold(
     plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": declared})
     write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
 
-    assert loop._mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak})) == cap
+    assert loop.mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak})) == cap
 
 
 def test_one_card_is_costed_with_one_venue_model() -> None:

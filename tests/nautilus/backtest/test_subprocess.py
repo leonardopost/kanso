@@ -455,7 +455,7 @@ def test_a_card_ends_itself_once_its_parent_is_gone(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(runner.os, "_exit", ended.append)
 
-    runner._end_with(4242)
+    runner.end_with(4242)
 
     assert ended == [runner.ORPHANED]
 

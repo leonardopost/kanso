@@ -1612,6 +1612,13 @@ the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb
 six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
 rather than the declaration.
 
+A stall's certification is held to the same figure. The lane certifies in a child, and a
+child whose resident memory passes what a card of the judged run may hold is killed and the
+certification refused, with a remedy naming this key and `kanso cert run`, which certifies
+in your own process instead. What each certification cost is on its `stalled` event
+(`cert_peak_mem_gb`), so declare at least that if you want the daemon to certify on its own:
+a share sized for cards alone is a share no certification of a heavier window fits in.
+
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another
 machine detects its own rather than inheriting one that describes a machine it never ran on.

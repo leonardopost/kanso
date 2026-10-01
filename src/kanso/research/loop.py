@@ -145,6 +145,7 @@ __all__ = [
     "begin",
     "card",
     "end",
+    "mem_cap",
 ]
 
 BASELINE: Final = "baseline"
@@ -598,10 +599,12 @@ def _benchmark_run(setup: Setup, *, snapshot_id: str, cache: dict[str, CardRun])
     return cache[key]
 
 
-def _mem_cap(ws: Workspace, run: RunRecord) -> float:
+def mem_cap(ws: Workspace, run: RunRecord) -> float:
     """What a card of this run may hold resident: the lane's share, never below the floor.
 
-    The floor is three times what the baseline actually needed, so a run whose own
+    A stall's certification of one of the run's cards is held to the same figure, since it
+    runs in the same lane (`kanso.certify.child`). The floor is three times what the
+    baseline actually needed, so a run whose own
     starting point is heavier than the lane plan expected still gets cards rather than a
     string of kills. The lane's share is `[env] mem_per_lane_gb` where one is declared,
     which is the only way this threshold falls under the plan's own 4 GB floor
@@ -1325,7 +1328,7 @@ def card(
             source,
             run.snapshot_id,
             budget_s=run.card_budget_s,
-            mem_cap_gb=_mem_cap(ws, run),
+            mem_cap_gb=mem_cap(ws, run),
         ),
         setup.catalog,
         directory,
