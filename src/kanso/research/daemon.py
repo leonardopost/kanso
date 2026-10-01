@@ -73,6 +73,7 @@ from kanso.hyp import STRATEGY_FILE
 from kanso.nautilus import backtest
 from kanso.research import driver as research_driver
 from kanso.research import explore, lanes, records, scheduler
+from kanso.research.loop import TakenError
 from kanso.schemas import RunRecord, parse_duration
 from kanso.state import Event, StateStore, usable
 from kanso.workspace import LANE_ROOT, Workspace, find
@@ -526,7 +527,10 @@ def worker(ws: Workspace, lane: str) -> int:
     mid-run returns beside them — and the lane waits before taking anything else, so a
     provider that is down costs a call a minute rather than a call a second. The two
     exceptions are the operator's: a hypothesis retired, or taken out of the queue, while
-    the lane held it stays out.
+    the lane held it stays out. One taken out before its run began is not a failure at
+    all: the lane lets go of it at the next catalog read of its baseline, or within a
+    second of the card (`loop.begin`), records nothing and claims the next hypothesis
+    without waiting.
 
     A turn that ended in a stall is where `[research] explore_after_stalls` is read: after
     the driver returns, so the stall's certification and its requeue are already done and
@@ -552,6 +556,8 @@ def worker(ws: Workspace, lane: str) -> int:
                 outcome = research_driver.run(
                     ws, store, subject, cards=CARDS_PER_TURN, lane=lane, stop=stopping
                 )
+            except TakenError:
+                continue  # the operator took it back before its run began; take the next
             except KansoError as exc:
                 if stopping():
                     break  # the card was interrupted, not failed; the run resumes next start

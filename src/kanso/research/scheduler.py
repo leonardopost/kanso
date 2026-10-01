@@ -291,10 +291,11 @@ def remove(store: StateStore, hyp_id: str) -> str:
     """Take a hypothesis out of the queue, or out of a lane's hands before its run begins.
 
     Returns where it came from: `"queue"` when a row was removed, `"lane"` when none was
-    but a lane holds it. That lane refuses to begin the run — a baseline in flight is
-    discarded — and its failure does not bring the hypothesis back; a run that had already
-    begun is ended with `research end`. Refuses a hypothesis that is neither queued nor
-    held.
+    but a lane holds it. That lane lets it go at its next catalog read, or within a second
+    when the baseline card is already running — the card is killed — and begins no run
+    (`loop.begin`); its failure does not bring the hypothesis back either. A run that had
+    already begun is ended with `research end`. Refuses a hypothesis that is neither
+    queued nor held.
     """
     passage = last_passage(store, hyp_id)
     if drop(store, hyp_id):

@@ -349,6 +349,63 @@ def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
     assert not runner._INTERRUPT.is_set()
 
 
+def test_a_card_no_longer_wanted_is_killed_at_the_watcher_s_next_ask(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane's claim taken back while its baseline card runs: the watcher asks the check
+    between polls, kills the child and raises what the check raised.
+
+    The check refuses once the child is running, as the watcher starts, so what is measured
+    is the watcher's kill rather than the refusal to read or to spawn, which the daemon's
+    suite measures (`test_a_removal_during_the_window_load_frees_the_lane_at_the_next_read`).
+    """
+    import signal
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    watch = runner._watch
+    watched: list[Any] = []
+
+    def held() -> None:
+        if watched:
+            raise PreconditionError("the claim was taken back", remedy="queue it again")
+
+    def taken_once_running(child: Any, budget_s: Any, mem_cap_gb: Any) -> Any:
+        watched.append(child)
+        return watch(child, budget_s, mem_cap_gb)
+
+    monkeypatch.setattr(runner, "_watch", taken_once_running)
+    monkeypatch.setattr(runner, "WANTED_POLL_S", 0.05)
+    with runner.wanted(held), pytest.raises(PreconditionError, match="taken back") as failure:
+        run_subprocess(request_for(source=SLOW_SLEEVE), store, lane)
+
+    assert [child.returncode for child in watched] == [-signal.SIGKILL]
+    assert failure.value.remedy == "queue it again"
+    assert runner._WANTED == [], "the check is the block's, and leaves with it"
+    assert not (lane / runner.CARD_ROOM).exists()
+
+
+def test_a_card_nobody_wants_reads_no_window_and_starts_no_card(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A check that already refuses stops the card before the first catalog read."""
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    def taken() -> None:
+        raise PreconditionError("the claim was taken back")
+
+    monkeypatch.setattr(runner, "_window_points", lambda *_: pytest.fail("the window was read"))
+    monkeypatch.setattr(
+        runner.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a card was started")
+    )
+    with runner.wanted(taken), pytest.raises(PreconditionError, match="taken back"):
+        run_subprocess(request_for(), store, lane)
+
+    assert runner._WANTED == []
+
+
 def test_a_process_told_to_stop_reads_no_window_and_starts_no_card(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
