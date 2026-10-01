@@ -854,6 +854,21 @@ A live data client that polls several series independently must emit the same
 per-`(ts_init, kind)` markers. A single marker at the end of a poll that covered more
 than one instant would flush the first instant after later books had already moved.
 
+**The simulated venue is settled where the research path settles it.** The research
+engine settles every venue after every point, the markers included, so under a stated
+latency (`costs.latency_ms`) a command that came due by a held point lands before the
+marker hands that point to the author. The node's venue sees no marker through its own
+market subscription and used to land it on the next point it saw, after the flush — so a
+sleeve that sold on the first print it handled while long sold a print later on the node
+than on the engine, and an operator's `parity_replay` of a level-two book hypothesis under
+20 ms failed the same way, on the instant of one intent, with every earlier intent agreed and
+the node's instant the later. Both of kanso's simulated venues — a replay's and a stage's — now settle at each
+marker, above the sleeve. A change to the book also stamps `data_time`, and so what a
+sleeve sends from `on_order_book_deltas`, with its own `ts_event`, where it used to carry
+the last print's, which for a sleeve that holds only the book was no instant at all; a
+book intent is compared on the change it was decided on, and `kanso replay parity` holds
+at a tolerance of zero for book data too.
+
 **A limit that rests is filled by the venue's rule.** A limit order that was not marketable
 when it was placed waits on the book, and a later point that reaches its price fills it at
 that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`

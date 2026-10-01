@@ -30,6 +30,7 @@ from tests.replay.conftest import (
     HOLDING,
     INSTRUMENT,
     POSTING,
+    PRINT_EXIT,
     RAISING,
     RESTING,
     REVERTING,
@@ -215,6 +216,42 @@ def test_the_two_paths_pay_an_exit_owed_on_book_points_alike(latency_ms: float) 
         replace(request, venue_model=model), [instrument()], [tuple(book(FORWARD[0]))]
     )
 
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_land_what_came_due_by_a_held_print_before_its_handler_alike(
+    latency_ms: float,
+) -> None:
+    """A level-two feed has coincident instants, so every point is handed to the author by a
+    flush marker. The research path settles the venue after every point, markers included,
+    so an entry that came due by a print lands before the marker hands that print to the
+    author; the node's venue saw no marker and landed it on the next point it saw, after
+    the handler had run flat, so a sleeve that sells on the first print it handles while
+    long sold a print later on the node. Both now sell on the print the entry came due at."""
+    from tests.nautilus.backtest.test_exit_flat import chasing_costs
+    from tests.nautilus.backtest.test_order_book import deltas, prints
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=PRINT_EXIT, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    day = FORWARD[0]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        [tuple(deltas(day)), tuple(prints(day))],
+    )
+
+    base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
+    assert [(intent[0] - base) // SECOND_NS for intent in engine.intents] == [0, 1]
     assert node.intents == engine.intents
     assert node.run.fills == engine.run.fills
     assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
