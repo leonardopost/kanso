@@ -76,6 +76,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
@@ -140,6 +141,7 @@ __all__ = [
     "SAME_BOOK",
     "RedundantError",
     "Setup",
+    "TakenError",
     "begin",
     "card",
     "end",
@@ -192,6 +194,14 @@ class RedundantError(PreconditionError):
 
     Raised after the card is recorded, not instead of recording it. The card is the
     measurement; this is the answer to whoever asked for another experiment and got none.
+    """
+
+
+class TakenError(PreconditionError):
+    """The operator took the hypothesis out of this lane's hands before its run began.
+
+    Not a failure: nothing was wrong with the hypothesis or the lane, so a lane that meets
+    it records nothing, owes the queue nothing and takes the next hypothesis at once.
     """
 
 
@@ -1005,6 +1015,13 @@ def begin(
     Refuses a hypothesis that is not registered, is not classified, already has an active
     run, whose workspace `hypothesis.yaml` no longer equals its pin, or which no snapshot
     covers. A baseline that will not run leaves no record and no lane directory.
+
+    One the operator takes out of `lane`'s hands (`research queue remove`) is refused with
+    `TakenError` wherever the begin has got to: before anything is read, at the next
+    catalog read of the warmup, the benchmark or the baseline's window, within
+    `backtest.WANTED_POLL_S` of a removal while the baseline card runs — the card is
+    killed — and once more before the run is recorded. It leaves no lane directory and no
+    `baseline_failed`, because the baseline did not fail.
     """
     lane = lanes.check_lane(lane)
     registration = _registration(ws, store, hyp_id)
@@ -1035,8 +1052,10 @@ def begin(
             "this workspace has no envelope, so no lane has a memory share",
             remedy="run `kanso env detect`",
         )
-    setup = _setup(ws, store, hyp)
-    prefixes = _warmup_spans(setup)
+    held = partial(_admitted, store, hyp_id, lane)
+    with backtest.wanted(held):
+        setup = _setup(ws, store, hyp)
+        prefixes = _warmup_spans(setup)
     snapshot = covering(
         ws, hyp.universe, hyp.data_requirements, hyp.resolution, hyp.windows, prefixes
     )
@@ -1065,16 +1084,24 @@ def begin(
     lanes.restore(store, directory, pins)
     host_cache: dict[str, CardRun] = {}
     try:
-        host_run = _host_run(
-            setup,
-            snapshot_id=snapshot.snapshot_id,
-            budget_s=float(ws.config.research.baseline_budget_s),
-            directory=directory,
-            cache=host_cache,
-        )
-        benchmark_run = _benchmark_run(setup, snapshot_id=snapshot.snapshot_id, cache=host_cache)
-        result = _baseline(ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best)
-        _admitted(store, hyp_id, lane)  # the baseline took minutes; the operator may have acted
+        with backtest.wanted(held):
+            host_run = _host_run(
+                setup,
+                snapshot_id=snapshot.snapshot_id,
+                budget_s=float(ws.config.research.baseline_budget_s),
+                directory=directory,
+                cache=host_cache,
+            )
+            benchmark_run = _benchmark_run(
+                setup, snapshot_id=snapshot.snapshot_id, cache=host_cache
+            )
+            result = _baseline(
+                ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best
+            )
+        held()  # the card's last poll may have come before a removal did
+    except TakenError:
+        lanes.remove(directory)  # the operator's word, not a failure of the baseline
+        raise
     except KansoError as exc:
         # Nothing a card could be judged against ran, so the run leaves no trace but the
         # event the scheduler reads to requeue the hypothesis at a lower priority.
@@ -1336,7 +1363,7 @@ def _lane_source(store: StateStore, run: RunRecord, directory: Path) -> bytes:
 def _admitted(store: StateStore, hyp_id: str, lane: str) -> None:
     """Refuse to begin a run for a hypothesis the operator took out of this lane's hands."""
     if taken(store, hyp_id, lane):
-        raise PreconditionError(
+        raise TakenError(
             f"{hyp_id} was taken out of the queue while lane {lane} held it, so this lane "
             "does not begin its run",
             remedy=f"`kanso research queue add {hyp_id}` when you want it researched again",

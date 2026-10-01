@@ -364,6 +364,20 @@ offers `request`, `get`, `post`, `patch` and `delete`; `HttpResponse` carries
 headers=None, timeout_secs=None)` streams a response straight to disk without
 holding it in memory, which is the transport for bulk history objects.
 
+**A request is metered by the keys it names, and by nothing else.** `default_quota`
+holds a key the request names that `keyed_quotas` gives no quota of its own, each
+such key in a bucket of its own; a request that names no key waits for no quota at
+all, whatever `default_quota` states. A request naming several keys waits until
+every one admits it. The wait comes before the request is built — a request to a
+string that is no URL is held just as long before it fails — and a key's bucket
+lives in the client, so requests sent from several threads, each awaiting in its
+own event loop, share it. Measured with `default_quota` at
+`rate_per_second(2)`, twelve requests from six threads to a loopback server that
+answered in 0.6 s: naming no key, all twelve arrived within 0.6 s; naming one key,
+two arrived at once and then one every half second; naming `a` and `b` in turn,
+two buckets let through two a second each. So a caller whose default quota is to
+hold names one key on every request.
+
 Corporate actions
 -----------------
 The engine has **no corporate-action concept**. `PositionAdjustmentType` has
@@ -404,7 +418,9 @@ read-only `PortfolioFacade` that a component's `portfolio` attribute is typed
 as; in every environment kanso runs, that attribute is the kernel's own
 `Portfolio`.
 
-A `SimulationModule` is handed every market point through `pre_process(data)`
+A `SimulationModule` is handed every market point through `pre_process(data)` —
+the point itself, so its `ts_event` is the one the loader wrote, which is what
+`kanso.nautilus.splits` compares with the instant a split takes effect —
 *before* the venue's matching engine sees it — `SimulatedExchange.process_bar`,
 `process_quote_tick`, `process_trade_tick`, the three order-book variants,
 `process_instrument_status` and `process_instrument_close` each loop the modules
@@ -2553,6 +2569,46 @@ def _check_quota() -> tuple[bool, str]:
     return holds, f"Quota constructors {built}; a zero max burst is refused ({zero_burst})"
 
 
+_NOT_A_URL = "http://[::1"
+"""What the quota check sends to: the client fails it once the quota admits it, before any
+name is resolved or any socket opened, so the check reaches nothing."""
+
+
+def _check_http_client_meters_named_keys() -> tuple[bool, str]:
+    import asyncio
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from nautilus_trader.core import nautilus_pyo3
+
+    client = nautilus_pyo3.HttpClient(default_quota=nautilus_pyo3.Quota.rate_per_second(10))
+
+    def sent(keys: list[str] | None) -> str:
+        async def once() -> str:
+            try:
+                await client.request(nautilus_pyo3.HttpMethod.GET, _NOT_A_URL, keys=keys)
+            except Exception as exc:  # the only outcome: the string is no URL
+                return type(exc).__name__
+            return "answered"  # pragma: no cover - nothing can answer it
+
+        return asyncio.run(once())
+
+    def timed(keys: list[str] | None) -> tuple[float, set[str]]:
+        start = time.monotonic()
+        with ThreadPoolExecutor(3) as pool:
+            outcomes = set(pool.map(lambda _: sent(keys), range(12)))
+        return time.monotonic() - start, outcomes
+
+    unnamed, _ = timed(None)
+    named, outcomes = timed(["probe"])
+    holds = named >= 0.15 and "answered" not in outcomes
+    return holds, (
+        f"twelve requests from three threads, each in its own event loop, on a default quota "
+        f"of ten a second: naming one key they took {named:.2f}s (ten at once, then one each "
+        f"100 ms), naming none {unnamed:.2f}s; each ended {sorted(outcomes)} at {_NOT_A_URL!r}"
+    )
+
+
 def _check_http_download() -> tuple[bool, str]:
     import inspect
 
@@ -2737,10 +2793,12 @@ def _check_simulation_module_precedes_matching() -> tuple[bool, str]:
     from nautilus_trader.portfolio.portfolio import Portfolio
 
     seen: list[object] = []
+    handed: list[object] = []
 
     class _Probe(SimulationModule):  # type: ignore[misc]
         def pre_process(self, data: object) -> None:
             seen.append(exchange.best_bid_price(instrument.id))
+            handed.append(data)
 
         def process(self, ts_now: int) -> None:
             pass
@@ -2775,20 +2833,28 @@ def _check_simulation_module_precedes_matching() -> tuple[bool, str]:
         bar_execution=True,
     )
     exchange.add_instrument(instrument)
-    exchange.process_bar(_sample_bar(ts_event=1_000, ts_init=1_000, close=10.0))
-    exchange.process_bar(_sample_bar(ts_event=2_000, ts_init=2_000, close=100.0))
+    bars = (
+        _sample_bar(ts_event=1_000, ts_init=1_000, close=10.0),
+        _sample_bar(ts_event=2_000, ts_init=2_500, close=100.0),
+    )
+    for bar in bars:
+        exchange.process_bar(bar)
     # The other three of a module's four calls, so this check fails if any of them stops
     # being reachable: the clock tick the venue makes after it settles, and the two the
     # engine's own reset and diagnostics paths make.
-    exchange.process(2_000)
+    exchange.process(2_500)
     probe.log_diagnostics(None)
     probe.reset()
     marks = [None if price is None else float(price) for price in seen]  # type: ignore[arg-type]
-    holds = marks == [None, 10.0]
+    itself = len(handed) == len(bars) and all(a is b for a, b in zip(handed, bars, strict=True))
+    stamps = [int(point.ts_event) for point in handed]  # type: ignore[attr-defined]
+    holds = marks == [None, 10.0] and itself
     return holds, (
         f"a module's pre_process saw the venue's best bid at {marks} while processing bars "
         f"priced 10.00 then 100.00: the second call reached it before the matching engine "
-        f"had moved the book, so a module acts on a point before the venue matches against it"
+        f"had moved the book, so a module acts on a point before the venue matches against it; "
+        f"each call was handed the bar itself: {itself}, ts_event {stamps}, which is the "
+        f"stamp `kanso.nautilus.splits` compares with a split's instant"
     )
 
 
@@ -2941,6 +3007,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_quota,
     ),
     (
+        "nautilus_pyo3.HttpClient holds a request that names a key to its default quota, and "
+        "one key's quota is shared by every thread that sends under it",
+        _check_http_client_meters_named_keys,
+    ),
+    (
         "nautilus_pyo3.http_download streams a URL to a file path",
         _check_http_download,
     ),
@@ -2967,7 +3038,8 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_portfolio_resync,
     ),
     (
-        "a simulation module is handed every market point before the venue matches against it",
+        "a simulation module is handed every market point, as loaded, before the venue "
+        "matches against it",
         _check_simulation_module_precedes_matching,
     ),
     (

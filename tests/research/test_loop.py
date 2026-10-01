@@ -19,7 +19,7 @@ from kanso.data import snapshot
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import show
 from kanso.nautilus import backtest
-from kanso.research import loop, passages, records, scheduler
+from kanso.research import lanes, loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
 from kanso.schemas import Hypothesis, RunRecord
 from kanso.state import StateStore
@@ -666,6 +666,48 @@ def test_code_that_violates_the_boundary_is_discarded_before_it_runs(
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
 
 
+SHADOWING = REVERTING.replace(
+    b"        self.long = False\n\n    def on_bar",
+    b"        self.long = False\n        self._close = 3\n\n    def on_bar",
+)
+"""REVERTING keeping a column index under the name of the harness's own exit method."""
+
+
+def test_a_strategy_binding_a_name_its_base_owns_is_a_wrong_answer_and_not_a_crash(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Measured before the rule: this card ran, and crashed at its first exit with
+    `TypeError: 'int' object is not callable` inside `submit_exit`, because the harness's
+    `_close` had been replaced by an int. A crash tells the proposer nothing it can act on."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, SHADOWING)
+
+    refused = loop.card(ws, store, registered, "keeps the close's column")
+
+    assert refused.status == "discard"
+    assert (refused.metric, refused.wall_s) == (0.0, 0.0)
+    assert [gate.id for gate in refused.gate_results] == ["strategy_integrity"]
+    (problem,) = refused.gate_results[0].evidence["problems"]
+    assert str(problem).startswith(
+        "line 17: '_close' belongs to KansoStrategy, and binding 'self._close' replaces it"
+    )
+    assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
+
+
+def test_a_baseline_binding_a_name_its_base_owns_refuses_the_run_naming_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, SHADOWING)
+
+    with pytest.raises(PreconditionError, match="line 17: '_close' belongs to KansoStrategy") as (
+        caught
+    ):
+        loop.begin(ws, store, hyp_id)
+
+    assert records.active(store, hyp_id) is None
+    assert f"fix hypotheses/{hyp_id}/strategy.py" in (caught.value.remedy or "")
+
+
 def test_editing_the_hypothesis_inside_a_run_is_rejected_and_restored(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
@@ -1209,3 +1251,57 @@ def test_an_objective_that_measures_no_benchmark_runs_no_hold(
 
     assert loop._benchmark_run(setup, snapshot_id="a" * 64, cache=cache) is None  # type: ignore[arg-type]
     assert cache == {}
+
+
+# --- a removal while the run is being begun -------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("doc", "entered"),
+    [
+        (document(warmup={"sessions": 3}), "warmup_prefix"),
+        (HELD, "benchmark"),
+        (DOCUMENT, "_stage"),
+    ],
+    ids=["warmup", "benchmark", "baseline"],
+)
+def test_a_removal_is_honoured_at_the_next_read_of_whatever_begin_is_reading(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    doc: dict[str, object],
+    entered: str,
+) -> None:
+    """The warmup's sessions, the benchmark's hold and the baseline's window are all read in
+    the lane's own process before the run exists. A removal that lands as one of them
+    begins is honoured at its first read: nothing of it is read, and the begin leaves no
+    lane directory and no `baseline_failed`, because no baseline failed."""
+    from nautilus_trader.model.data import Bar
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    hyp_id = classify(ws, store, doc)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    real = getattr(backtest, entered)
+    query = ParquetDataCatalog.query
+    read: list[bool] = []
+
+    def removing(*args: object, **kwargs: object) -> object:
+        assert scheduler.remove(store, hyp_id) == "lane"
+        return real(*args, **kwargs)
+
+    def counted(catalog: object, data_cls: type, *args: object, **kwargs: object) -> object:
+        if data_cls is Bar:
+            read.append(passages.taken(store, hyp_id, "l1"))
+        return query(catalog, data_cls, *args, **kwargs)
+
+    monkeypatch.setattr(backtest, entered, removing)
+    monkeypatch.setattr(ParquetDataCatalog, "query", counted)
+
+    with pytest.raises(loop.TakenError, match="taken out of the queue while lane l1 held it"):
+        loop.begin(ws, store, hyp_id, lane="l1")
+
+    assert True not in read, "no bar is read once the hypothesis is taken"
+    assert records.active(store, hyp_id) is None
+    assert not lanes.lane_dir(ws, "l1", hyp_id).exists()
+    assert loop.BASELINE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]

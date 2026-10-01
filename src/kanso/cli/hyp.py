@@ -10,9 +10,11 @@ registered and `retire` ends its life.
 nothing: the report's `next` is `validate`, and `add` is still the operator's.
 
 `validate` and `add` are the operator's override path for a classification: edit the file,
-check it, re-pin it. Both refuse a file that is not admissible with exit 3, and `add` and
-`retire` refuse a hypothesis with an active run with exit 2, because a run is pinned to the
-bytes it began with and moving the pin under it would silently change what it is testing.
+check it, re-pin it. Both refuse a file that is not admissible with exit 3 — `validate` a
+`strategy.py` beside it that binds a name its base class owns as well, which the baseline
+card would refuse — and `add` and `retire` refuse a hypothesis with an active run with exit
+2, because a run is pinned to the bytes it began with and moving the pin under it would
+silently change what it is testing.
 """
 
 from __future__ import annotations
@@ -108,6 +110,7 @@ def _new(ws: Workspace, hyp_id: str) -> Report:
 
 def _validate(ws: Workspace, path: Path) -> Report:
     hypothesis = hyp.validate(ws, path)
+    hyp.check_strategy(ws, hypothesis.id)
     return Report(data=_summary(hypothesis, path), lines=_summary_lines(hypothesis, path, "valid"))
 
 

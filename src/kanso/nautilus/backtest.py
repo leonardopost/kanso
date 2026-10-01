@@ -35,7 +35,10 @@ supervision rather than by `setrlimit`, which does not bound RSS on Linux and is
 for address space on macOS. The peak comes from the reaped child's own resource usage.
 The child watches back: it ends itself when the process that started it is gone, so a lane
 killed outright never leaves a card running with nobody supervising it, and a process told
-to stop starts no card at all.
+to stop starts no card at all. A caller can also say what the work is for (`wanted`): a
+check asked before every catalog query for points and every `WANTED_POLL_S` while a card
+runs, whose refusal ends the read and kills the card, so work nobody wants any more is
+dropped at the next query rather than after the window and the card have run to their end.
 What comes back from a failed child is the tail of its traceback and, when the failure was
 one kanso itself raised, that refusal's remedy — so a caller reporting a card that did not
 run can name the fault that occurred rather than assume every one of them is the code's.
@@ -95,7 +98,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
@@ -144,6 +147,7 @@ __all__ = [
     "run_subprocess",
     "stage_of",
     "tunable",
+    "wanted",
     "warmup_prefix",
     "window_data",
 ]
@@ -193,6 +197,9 @@ POLL_S: Final = 0.02
 MEMORY_POLL_S: Final = 0.25
 """How often the supervisor asks the operating system for the child's resident size."""
 
+WANTED_POLL_S: Final = 1.0
+"""How often the supervisor asks the `wanted` checks whether the card is still wanted."""
+
 _INTERRUPT = threading.Event()
 """Set when the process supervising a card has been told to stop.
 
@@ -227,6 +234,31 @@ def interrupt() -> None:
 def resume() -> None:
     """Forget an interrupt, so a later card in this process runs to its end."""
     _INTERRUPT.clear()
+
+
+_WANTED: list[Callable[[], None]] = []
+"""The checks the `wanted` blocks this process is inside have registered, innermost last."""
+
+
+@contextlib.contextmanager
+def wanted(check: Callable[[], None]) -> Iterator[None]:
+    """Read windows and run cards, inside the block, only for as long as `check` passes.
+
+    `check` raises once the work is not wanted any more — a lane's claim on the hypothesis
+    whose baseline it is preparing, taken back by `research queue remove`
+    (`kanso.research.loop.begin`) — and is asked before every catalog query for points this
+    process makes (the one lookup of the universe's definitions a read begins with is not
+    one), before a card is spawned, and every `WANTED_POLL_S` while one runs, which is
+    killed before the refusal is raised. So a refusal costs at most the query in flight or
+    a poll of the card. Measured before this, on 0.13.1.dev1: four lanes whose claims were
+    taken back went on reading their windows for nineteen minutes, because the claim was
+    asked about only once the window had been read and the baseline had run on it.
+    """
+    _WANTED.append(check)
+    try:
+        yield
+    finally:
+        _WANTED.remove(check)
 
 
 GIB: Final = float(1024**3)
@@ -652,12 +684,14 @@ def _market_points(
 
     Bars are asked for by the bar type the sleeve subscribes to, spelled by the strategy
     module itself, so the runner loads exactly the grain the strategy will receive rather
-    than every grain the catalog happens to hold for that instrument.
+    than every grain the catalog happens to hold for that instrument. The `wanted` checks
+    are asked first, as before every catalog query for points.
     """
     from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
     from kanso.nautilus.strategy import BAR, BOOK, QUOTE, _bar_type
 
+    _refuse_if_unwanted()
     if requirement == BAR:
         identifier = str(_bar_type(instrument.id, resolution))
         return tuple(catalog.query(Bar, identifiers=[identifier], start=start, end=end))
@@ -716,6 +750,7 @@ def _custom_points(
     it is market-wide, so both are asked for at once and the ones belonging to another
     universe are dropped.
     """
+    _refuse_if_unwanted()
     admissible = {*universe, None}
     found = catalog.query(data_cls, identifiers=None, start=start, end=end)
     return tuple(point for point in found if _instrument_of(point) in admissible)
@@ -1977,7 +2012,7 @@ def _interrupted() -> PreconditionError:
 
 
 def _refuse_if_interrupted() -> None:
-    """Start no card in a process that has been told to stop.
+    """Start no card in a process that has been told to stop, or for work not wanted.
 
     Asked before the window is read and again before the child is spawned, because a stop
     that lands while a lane is reading a window, or waiting on a model, is still a stop: a
@@ -1986,15 +2021,23 @@ def _refuse_if_interrupted() -> None:
     """
     if _INTERRUPT.is_set():
         raise _interrupted()
+    _refuse_if_unwanted()
+
+
+def _refuse_if_unwanted() -> None:
+    """Ask every `wanted` check this process is inside; the first that refuses raises."""
+    for check in tuple(_WANTED):
+        check()
 
 
 def _watch(
     child: Any, budget_s: float | None, mem_cap_gb: float | None
 ) -> tuple[str | None, float]:
-    """Wait for the child, killing its process group when it overruns either bound or when
-    this process has been told to stop."""
+    """Wait for the child, killing its process group when it overruns either bound, when
+    this process has been told to stop, or when a `wanted` check refuses — which is raised
+    once the child is reaped."""
     started = time.monotonic()
-    checked = started
+    checked = asked = started
     breach: str | None = None
     while True:
         pid, status, usage = os.wait4(child.pid, os.WNOHANG)
@@ -2011,11 +2054,23 @@ def _watch(
             if _resident_gb(child.pid) > mem_cap_gb:
                 breach = MEMORY
         if breach is not None:
-            _kill(child.pid)
-            _pid, status, usage = os.wait4(child.pid, 0)
-            child.returncode = os.waitstatus_to_exitcode(status)
-            return breach, usage.ru_maxrss * _MAXRSS_BYTES / GIB
+            return breach, _killed(child)
+        if now - asked >= WANTED_POLL_S:
+            asked = now
+            try:
+                _refuse_if_unwanted()
+            except BaseException:  # a card never outlives the watch on it, however it ended
+                _killed(child)
+                raise
         time.sleep(POLL_S)
+
+
+def _killed(child: Any) -> float:
+    """Kill the child's process group, reap it, and return the peak it reached."""
+    _kill(child.pid)
+    _pid, status, usage = os.wait4(child.pid, 0)
+    child.returncode = os.waitstatus_to_exitcode(status)
+    return usage.ru_maxrss * _MAXRSS_BYTES / GIB
 
 
 def _kill(pid: int) -> None:

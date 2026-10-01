@@ -14,6 +14,7 @@ from kanso.criteria.objectives import (
     BENCHMARK,
     RELATIVE,
     SHARPE_FAMILY,
+    STATISTICS,
     applies_to,
     benchmark_level,
     history_days,
@@ -173,6 +174,33 @@ def test_a_period_in_cash_contributes_zero_and_pulls_the_mean_down() -> None:
         wf_contribution_bps.compute(busy, 4)[0]
     )
     assert wf_contribution_bps.compute(idle, 4)[1] > wf_contribution_bps.compute(busy, 4)[1]
+
+
+WEEK = (40.0, 80.0, 120.0, 160.0, 200.0)
+"""Monday to Friday on $40k of capital: 10, 20, 30, 40 and 50 bp, 30 bp a session."""
+
+
+def test_a_short_window_weighs_each_fold_alike_and_not_each_period() -> None:
+    """Five sessions in four calendar folds of a day and a quarter: a period ends at its
+    session's last instant, so Thursday and Friday share the last fold and each weighs half
+    what Monday does. One fold is the whole window, and that is the mean per period."""
+    run = build_run(WEEK, capital=40_000.0)
+    assert wf_contribution_bps.fold_values(run, 4) == pytest.approx((10.0, 20.0, 30.0, 45.0))
+    assert wf_contribution_bps.compute(run, 4)[0] == pytest.approx(26.25)
+    assert wf_contribution_bps.compute(run, 1)[0] == pytest.approx(30.0)
+
+
+def test_a_fold_that_holds_no_period_scores_zero_and_is_averaged_in() -> None:
+    """Monday to Sunday in four folds of a day and three quarters: the last runs from
+    Saturday morning, holds no session, and takes a quarter of the metric with it."""
+    run = build_run(WEEK, capital=40_000.0, days=7)
+    assert wf_contribution_bps.fold_values(run, 4) == pytest.approx((10.0, 25.0, 45.0, 0.0))
+    assert wf_contribution_bps.compute(run, 4)[0] == pytest.approx(20.0)
+    empty = run.folds(4)[-1]
+    assert empty.returns == ()
+    assert {name: measure(empty) for name, measure in STATISTICS.items()} == dict.fromkeys(
+        STATISTICS, 0.0
+    )
 
 
 def test_the_marginal_contribution_differences_the_folds_against_the_host() -> None:

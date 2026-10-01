@@ -71,6 +71,8 @@ BINDINGS = {
     "is left of the position and refuses once the position is already closed",
     "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
     "flight as it is, and cancels both",
+    "nautilus_pyo3.HttpClient holds a request that names a key to its default quota, and "
+    "one key's quota is shared by every thread that sends under it",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -163,3 +165,25 @@ def test_the_fee_and_settlement_claims_hold(verified: list[Fact]) -> None:
     )
     assert settlement.holds
     assert "settles in USDC and is booked in USDT" in settlement.evidence
+
+
+def test_a_client_whose_quota_holds_no_request_fails_the_quota_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stand-in failing every request at once, as the engine's client does a request that
+    names no key: the check reads that as a quota that holds nothing."""
+    from nautilus_trader.core import nautilus_pyo3
+
+    class Unmetered:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def request(self, *_: object, **__: object) -> object:
+            raise RuntimeError("not a URL")
+
+    monkeypatch.setattr(nautilus_pyo3, "HttpClient", Unmetered)
+
+    holds, evidence = facts._check_http_client_meters_named_keys()
+
+    assert not holds
+    assert "['RuntimeError']" in evidence

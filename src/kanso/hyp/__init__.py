@@ -38,7 +38,7 @@ from kanso.hyp.scaffold import (
     scaffold,
     stub,
 )
-from kanso.hyp.validate import read_source, validate, venue_models
+from kanso.hyp.validate import check_strategy, read_source, validate, venue_models
 
 __all__ = [
     "HYPOTHESES",
@@ -50,6 +50,7 @@ __all__ = [
     "active_run",
     "add",
     "check_id",
+    "check_strategy",
     "host_resolution",
     "host_sizing",
     "hypothesis_dir",

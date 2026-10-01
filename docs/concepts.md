@@ -445,7 +445,7 @@ already over. There are eight.
 
 | gate | what it refuses |
 |---|---|
-| `strategy_integrity` | a file that reads what the embargo hides, or imports outside the allow-list |
+| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, or binds a name its base class owns |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
@@ -576,9 +576,9 @@ The harness settles a period on a point delivered to the sleeve itself, so a gro
 the sleeve never subscribes to that holds a period's only point moves the runner's period end
 and not the harness's, and `balance` lags one period until the sleeve is handed a point.
 `bootstrap` resamples closed trades' net P&L, which holds neither the carry nor a transfer, so
-its `mdd_p95` understates the drawdown a levered book recorded. And the attribute reads of
-the harness's period close are denied, but an unsized `strategy.py` defining a method of the
-same name is not refused: it moves `balance`, never the arithmetic the card is struck with.
+its `mdd_p95` understates the drawdown a levered book recorded. The harness's period close is
+out of reach both ways: its attribute reads are denied, and a `strategy.py` that defines a
+method of the same name binds a name the base owns, which the same gate refuses, sized or not.
 
 **Under a `sizing` rule the floor is not a gate at all.** `sizing: {mode: full_book, budget: N}`
 in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry
@@ -643,6 +643,13 @@ research window's contiguous folds; the metric is their mean and `metric_se` the
 error. An improvement counts only when it clears `max(min_delta, k_se × metric_se)` — the
 operator's smallest interesting difference and the spread of the folds that produced the
 number. Both parameters are fixed at classification, before any result is seen.
+
+The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
+return period belongs to the fold its end falls in. So the metric is a mean of folds and not
+of periods: every fold weighs the same however many sessions it holds, and a fold that holds
+none scores zero and is averaged in like the rest. Over a research window of months the
+folds hold nearly as many sessions each and the two means nearly agree; over a window of a
+few sessions they need not, and that is the window a certificate measures (below).
 
 Here is the rule refusing a real improvement. The hypothesis carries `min_delta: 0.0` and
 `k_se: 1.0`; the neutral baseline above scored `0.000000`:
@@ -793,6 +800,40 @@ position's opening basis** — the account, `avg_px_open`, `peak_qty`, `realized
 the share count the position opened in, so after a split it is a price per share that no
 longer exists. kanso's own extraction reads none of them, and `program.md` lists them for
 the author.
+
+**A name the base class owns is the harness's.** `KansoStrategy` keeps its machinery on
+names a strategy could as well have chosen — `_close` places the sleeve's exits, `_fund`
+and `_refund` book funding, `_last_price` holds the last prices, `size` scales an entry by
+the attached overlays — and
+Python lets a subclass bind any of them without a word. `self._close = 3` in `on_start`
+replaces the exit method with an int, and the card runs until its first exit, where it
+crashes inside `submit_exit` with a traceback that names the harness and not the line that
+did it. So the gate refuses a class whose instances are a `KansoStrategy` or a
+`KansoModifier` — one that names either among its bases, through an alias, a module or a
+class of the file that does, and any class of the file such a class names, a mixin
+included — when it binds a name that base owns: by `def`, by assignment in the class body,
+or by assignment on the instance a method receives. The refusal names the name, the base
+and the line. What the base owns is read from the installed classes whenever the gate runs,
+never kept as a list: every name `dir()` shows of it, the engine's beneath it included, and
+every attribute kanso's own classes set on `self`. What it leaves to the author is
+`config_cls`, a modifier's `construct`, `evaluate` and `on_data`, the engine's `on_*`
+handlers and the dunders. The rule is the same sized or not; under a sizing rule an
+override is also a size knob no attribute scan could see. A binding made through another
+object — a module-level function handed the strategy — is not one the scan follows.
+
+```
+$ kanso research card demo_mr --desc "keep the close column index on self._close"
+card       38fe6bc · discard · keep the close column index on self._close
+metric     0.000000 ± 0.000000 · 0 trade(s)
+cost       0.0s · 0.00 GB · trial 2
+best       none yet
+           strategy_integrity: fail — n_problems=1, problems=["line 16: '_close' belongs to KansoStrategy, and binding 'self._close' replaces it, so the harness would reach yours where it expects its own; rename yours — KansoStrategy owns every name it defines or sets, underscored or not"]
+```
+
+The same refusal reaches an operator before any run: `kanso hyp validate` refuses a
+`hypotheses/<id>/strategy.py` that binds one (exit 3), `research begin` refuses a baseline
+that does with the line named, and `kanso doctor`'s `base names` check lists every
+hypothesis whose file does.
 
 ## Delivery
 
@@ -988,6 +1029,26 @@ written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
 next       kanso cert show demo_mr
 ```
+
+**The certificate's `objective` is measured the way a card's metric is**, and so is the
+`certification` number `embargoed_window` and `walk_forward_consistency` record: the
+hypothesis's objective over the certification window cut into the workspace's `[research]
+folds` calendar folds, reported as the mean of the folds `±` the standard error of their
+spread. It is not the mean of the window's sessions, and on a short window the two differ.
+Five sessions, Monday to Friday, in four folds are four spans of a day and a quarter; a
+session's period ends at its last event, and sessions that end after 18:00 UTC, as a US
+equity session does, put Thursday and Friday together in the last fold, each at half the
+weight of Monday, Tuesday or Wednesday. Sessions earning 10, 20, 30, 40 and 50 bp of the
+capital average 30 bp; the certificate records `(10 + 20 + 30 + 45) / 4 = 26.25`. The same
+bytes run in process return those five sessions exactly; the arithmetic is what differs.
+Which sessions share a fold follows from the hour the periods end — a daily bar published
+at 16:00 UTC puts Wednesday with Thursday instead — and the standard error is the spread of
+four fold means, so two sessions that disagree inside one fold cancel there rather than
+widening it. A fold that holds no period at all scores zero: Monday to Sunday in four folds
+leaves the last, from Saturday morning on, empty, and the week above is certified at
+`(10 + 25 + 45 + 0) / 4 = 20`. Only a window whose folds hold the same number of sessions
+each is certified at its mean per session; `docs/backlog.md` row 110 says what closing the
+difference would take.
 
 Certifying the same bytes again under the same plan **and** the same engine is refused:
 

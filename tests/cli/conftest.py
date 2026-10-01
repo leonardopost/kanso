@@ -218,6 +218,15 @@ class Strategy(KansoStrategy):
         pass
 '''
 
+SHADOWING = FLAT.replace(
+    "    def on_bar(self, bar) -> None:\n",
+    "    def on_start(self) -> None:\n"
+    "        self._close = 3\n"
+    "\n"
+    "    def on_bar(self, bar) -> None:\n",
+)
+"""FLAT keeping a column index under the name of the harness's own exit method, on line 14."""
+
 FADE = '''from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 

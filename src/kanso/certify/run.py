@@ -15,6 +15,14 @@ is a difference, and a hypothesis measured against a benchmark adds the benchmar
 each — produced by the runner from the subject's own request for that window, and held
 fixed while a perturbation gate moves the subject.
 
+**Both windows are measured the way a card is.** The objective the certificate records,
+and every gate's reading of it, is taken over the workspace's `[research] folds` equal
+calendar folds of the window it is read on, the certification window included however
+short it is. It is therefore a mean of folds and not of sessions: five sessions in four
+folds put two of them in one fold at half a session's weight each, and a fold that holds
+no period scores zero, so the certificate's number is not the mean per session of the run
+that produced it.
+
 **An inadmissible snapshot fails the plan rather than raising.** A snapshot holding a
 dataset whose publication nobody declared, or one whose prices a vendor adjusted as of the
 day they were requested, cannot support a point-in-time claim: the first cannot be dated,

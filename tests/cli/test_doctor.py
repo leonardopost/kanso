@@ -32,7 +32,18 @@ from kanso.workspace import find
 
 from ..data.adapters.brokered import expose
 from ..data.adapters.massive import Replay, refused
-from .conftest import HYP_ID, INSTRUMENT, RESEARCH, at, lane, payload, run
+from .conftest import (
+    FLAT,
+    HYP_ID,
+    INSTRUMENT,
+    RESEARCH,
+    SHADOWING,
+    at,
+    lane,
+    payload,
+    run,
+    write_hypothesis,
+)
 
 CHECKS = (
     "versions",
@@ -43,6 +54,7 @@ CHECKS = (
     "repository",
     "gitignore",
     "best",
+    "base names",
     "certificates",
     "record",
     "skills",
@@ -953,6 +965,24 @@ def test_a_missing_workspace_strategy_is_the_same_warning(
     assert items(result, "best") == [
         f"{HYP_ID}: strategy.py is missing · best {_best_sha(deployed)[:7]}"
     ]
+
+
+def test_base_names_warns_naming_every_strategy_that_binds_a_name_its_base_owns(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """Read from the files alone, so a strategy is named before any run or registration."""
+    assert status(at(runner, workspace, "doctor", "--json"), "base names") == "ok"
+    write_hypothesis(workspace, SHADOWING)
+    write_hypothesis(workspace, FLAT, id="clean_one")
+
+    result = at(runner, workspace, "doctor", "--json")
+
+    assert result.exit_code == Exit.OK
+    assert status(result, "base names") == "warn"
+    assert items(result, "base names") == [f"{HYP_ID}: KansoStrategy's '_close' at line 14"]
+    check = checks(result)["base names"]
+    assert check["detail"] == f"2 strategy.py file(s) · 1 bind a name its base owns: {HYP_ID}"
+    assert "kanso hyp validate hypotheses/<id>/hypothesis.yaml" in str(check["remedy"])
 
 
 def test_certificates_fail_only_when_a_subject_s_bytes_are_held_nowhere(

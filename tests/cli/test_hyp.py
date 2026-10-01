@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from kanso.errors import Exit
 
-from .conftest import HYP_ID, INSTRUMENT, at, payload, write_hypothesis
+from .conftest import HYP_ID, INSTRUMENT, SHADOWING, at, payload, write_hypothesis
 
 
 def test_new_renders_the_three_scoped_files(runner: CliRunner, workspace: Path) -> None:
@@ -106,6 +106,23 @@ def test_validate_refuses_an_account_currency_the_engine_does_not_register(
     assert result.exit_code == Exit.VALIDATION
     assert "'USTD'" in payload(result)["error"]
     assert "[research] currency in kanso.toml" in payload(result)["remedy"]
+
+
+def test_validate_refuses_a_strategy_that_binds_a_name_its_base_owns(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The baseline card would refuse it, so the operator hears it before a run begins; `add`
+    pins the hypothesis file alone, because the strategy is the loop's to change."""
+    path = write_hypothesis(loaded, SHADOWING)
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    error = payload(result)["error"]
+    assert f"hypotheses/{HYP_ID}/strategy.py" in error
+    assert "line 14: '_close' belongs to KansoStrategy, and binding 'self._close'" in error
+    assert f"kanso hyp validate hypotheses/{HYP_ID}/hypothesis.yaml" in payload(result)["remedy"]
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
 
 
 def test_add_registers_the_file_under_the_sha_of_its_bytes(runner: CliRunner, loaded: Path) -> None:
