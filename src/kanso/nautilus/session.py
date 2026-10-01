@@ -39,6 +39,13 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 * A live engine kills the process outright on an unhandled exception in queue processing
   unless `graceful_shutdown_on_exception` is set, so every engine here sets it and a
   strategy that raises stops the node instead of the interpreter.
+* `TradingNode(config, loop)` handed a loop installs that loop's handlers for `SIGTERM`,
+  `SIGINT` and `SIGABRT` (setting `SIGINT` to its default first), so that a signal stops the
+  node, and closing the loop does not give them back: asyncio's loop resets them to their
+  defaults, so `SIGTERM` then kills the process outright, and uvloop's — the loop the kernel
+  installs as the policy outside a test run — leaves its own handler on the closed loop,
+  which swallows every signal after it. A process that builds a node therefore keeps its
+  stop signals itself (`signals_kept`), around the node's construction and its disposal.
 * `LiveRiskEngineConfig.max_order_submit_rate` throttles submissions against the engine's
   clock. In a backtest that clock advances with the data, so the default never binds; in a
   node it is wall time, and a replay compresses years of decisions into seconds. The rate is
@@ -50,8 +57,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import signal
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, cast
 
@@ -74,6 +82,7 @@ from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
 
 __all__ = [
+    "NODE_SIGNALS",
     "Replayed",
     "SHUTDOWN_TOPIC",
     "STOPPED",
@@ -82,6 +91,7 @@ __all__ = [
     "measured",
     "ordered",
     "run_node",
+    "signals_kept",
 ]
 
 TRADER_ID: Final = "KANSO-001"
@@ -105,6 +115,9 @@ START_TURNS: Final = 100_000
 POST_STOP_S: Final = 0.1
 CONNECT_S: Final = 10.0
 DISCONNECT_S: Final = 5.0
+
+NODE_SIGNALS: Final = (signal.SIGTERM, signal.SIGINT, signal.SIGABRT)
+"""The signals a kernel handed a loop takes for that loop."""
 
 
 @dataclass(frozen=True)
@@ -168,7 +181,8 @@ def run_node(
     backtest._seed_globals(request.snapshot_id)
     started = time.perf_counter()
     loop = asyncio.new_event_loop()
-    node = TradingNode(config=_config(), loop=loop)
+    with signals_kept():
+        node = TradingNode(config=_config(), loop=loop)
     try:
         node.build()
         kernel = node.kernel
@@ -206,7 +220,8 @@ def run_node(
         released = len(measured(points[: client.released], opens))
         clock_ns = client.last_ts if client.last_ts >= opens else None
     finally:
-        node.dispose()
+        with signals_kept():
+            node.dispose()
     wall_s = time.perf_counter() - started
     if stopped is not None:
         crashed = backtest._crashed(
@@ -223,6 +238,31 @@ def run_node(
         released,
         clock_ns,
     )
+
+
+@contextlib.contextmanager
+def signals_kept() -> Iterator[None]:
+    """Leave this process's stop signals as they were, whatever a node does to them inside.
+
+    A node built here is driven to its end by the feed and stopped by kanso, never by a
+    signal, and the process that builds one answers its own: a lane stops at its next safe
+    point, the monitor at the end of its pass. So the handlers the kernel installs are taken
+    back as soon as it is built, and again once it is disposed of, together with the
+    descriptor a signal wakes. Measured on 2026-10-01 on an operator's workspace: lanes
+    that had replayed a certification's parity on a node did not exit within a minute of
+    a `SIGTERM`, and only `SIGKILL` moved them; reproduced in a fresh process, a lane given
+    `SIGTERM` after a stall's certification was still running ten seconds later.
+    """
+    saved = {number: signal.getsignal(number) for number in NODE_SIGNALS}
+    wakeup = signal.set_wakeup_fd(-1)
+    signal.set_wakeup_fd(wakeup)
+    try:
+        yield
+    finally:
+        for number, handler in saved.items():
+            if handler is not None:  # one installed outside Python cannot be put back from it
+                signal.signal(number, handler)
+        signal.set_wakeup_fd(wakeup)
 
 
 def measured(points: Sequence[Any], opens_ns: int) -> tuple[Any, ...]:

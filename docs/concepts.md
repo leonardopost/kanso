@@ -156,6 +156,14 @@ heavier hypothesis than the one now researching — an overlay on one-second bar
 peak a daily sleeve will never approach, and every lane is charged for it until you say
 otherwise.
 
+**A lane stops at its next safe point, whatever it ran.** Between cards and while it waits for a
+claim, a `SIGTERM` is the lane's own: a trading node takes the
+stop signals for the loop it is handed and closing that loop does not give them back, so
+every node kanso builds — a replay's, a stage's — hands them back to the process that built
+it. Measured before that on an operator's workspace on 2026-10-01: lanes that had replayed a
+certification's parity on a node did not exit within a minute of a `SIGTERM`, and only
+`SIGKILL` moved them.
+
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
 before every card, and the first two are compared against the blobs the run pinned. The one

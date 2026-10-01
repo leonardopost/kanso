@@ -17,7 +17,9 @@ its turn.
 
 **Stopping keeps everything.** `stop` sends one signal. The supervisor passes it on to
 every child at once and exits; a worker kills the card it is watching, begins no further
-proposal or card, leaves the run open and the lane directory where it is, and exits too. A
+proposal or card, leaves the run open and the lane directory where it is, and exits too —
+whatever it ran before, since every trading node hands the stop signals back to the process
+that built it (`kanso.nautilus.session.signals_kept`). A
 worker still busy when the one grace the supervisor gives them all runs out — waiting on a
 model, say — is killed, and that costs the call and nothing else: the run, its blobs and
 its `best` are all in state. Nothing is ended and nothing is cleaned up, so the next

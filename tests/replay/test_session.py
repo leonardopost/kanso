@@ -9,11 +9,14 @@ None of that can be established against a double.
 from __future__ import annotations
 
 import asyncio
+import signal
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import date
 from typing import Any
 
 import pytest
+import uvloop
 from nautilus_trader.model.data import CustomData, DataType
 from nautilus_trader.model.identifiers import ClientId, InstrumentId
 
@@ -1023,6 +1026,43 @@ def test_a_strategy_that_raises_stops_the_node_rather_than_the_process() -> None
     assert replayed.intents == ()
     assert replayed.released < len(bars(FORWARD))
     assert replayed.clock_ns is not None
+
+
+def _stopping(*_: object) -> None:
+    """The stop handler a lane installs before anything it runs builds a node."""
+
+
+@pytest.fixture
+def own_signals() -> Iterator[None]:
+    """The process's stop signals, handled the way a lane handles them, for one test."""
+    saved = {number: signal.getsignal(number) for number in session.NODE_SIGNALS}
+    for number in session.NODE_SIGNALS:
+        signal.signal(number, _stopping)
+    yield
+    for number, handler in saved.items():
+        signal.signal(number, handler)
+
+
+@pytest.mark.usefixtures("own_signals")
+@pytest.mark.parametrize("loop", ["asyncio", "uvloop"])
+def test_a_node_leaves_the_process_that_built_it_its_stop_signals(
+    loop: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane that replayed a parity on a node still answers its own `SIGTERM`.
+
+    The kernel takes the stop signals for the loop it is handed. uvloop — the loop it installs
+    as the policy outside a test run — left its handler on the closed loop, swallowing every
+    signal after it; asyncio's reset them to their defaults, so `SIGTERM` killed the process
+    outright. Either way a lane no longer stopped at its next safe point.
+    """
+    if loop == "uvloop":
+        monkeypatch.setattr(asyncio, "new_event_loop", uvloop.new_event_loop)
+
+    replayed = session.run_node(request_for(), [instrument()], [tuple(bars(FORWARD))])
+
+    assert replayed.intents, "the node ran its window"
+    assert [signal.getsignal(number) for number in session.NODE_SIGNALS] == [_stopping] * 3
+    assert signal.set_wakeup_fd(-1) == -1, "no closed loop is left to wake"
 
 
 def test_a_window_with_no_points_is_refused() -> None:
