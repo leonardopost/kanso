@@ -157,25 +157,30 @@ peak a daily sleeve will never approach, and every lane is charged for it until 
 otherwise.
 
 **A lane's share bounds what the lane runs in its children.** The lane process itself holds
-the engine, its store and, while it stages a card, one session of the window at a time; the
-one run it still makes in its own process is the hold a benchmark objective differences
-against, once per run over the research window. Everything else heavy runs in a child it
-watches, and what a child cost goes when the child exits. A card's child
-is killed once its resident memory passes the lane's share, floored at three times what the
-run's baseline needed (`docs/workspace.md`, `envelope.yaml`). A stall's certification is a
-child held to the same figure for a card of the run it judges: both windows, every
-perturbation a gate runs and `parity_replay`'s node replay are made there, and the lane only
-reads back the certificate, or the refusal it raised, and records what the certification
-cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Measured on a 16 GB host
-with six lanes at `mem_per_lane_gb` 2.5 while lanes still certified in their own process:
-two idle lanes held 2.9 GB and 4.1 GB after certifying, swap reached 13.3 GB, and nothing but
-killing them gave it back. A certification that needs more than the share is killed and
-refused — the lane records a `lane_failed` naming what it reached and puts the hypothesis
-back — and the answer is yours: a larger `mem_per_lane_gb`, which plans fewer lanes around
-what certification actually costs, or `kanso cert run` by hand, which certifies in your own
-process with nothing but the host to bound it. No wall time bounds a certification, since how
-many engine runs it makes is its plan's choice. Only the baseline runs uncapped, because it is
-what the rest are measured against.
+the engine, its store and, while it stages a run, one session of the window at a time, and
+it makes no run in its own process: every card, the baseline, a host-alone run and the hold
+a benchmark objective differences against — once per run, over the research window — are
+staged into a child it watches, and what a child cost goes when the child exits. A card's
+child is killed once its resident memory passes the lane's share, floored at three times
+what the run's baseline needed (`docs/workspace.md`, `envelope.yaml`). A stall's
+certification is a child held to the same figure for a card of the run it judges: both
+windows, every perturbation a gate runs and `parity_replay`'s node replay are made there,
+and the lane only reads back the certificate, or the refusal it raised, and records what the
+certification cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Measured on a
+16 GB host with six lanes at `mem_per_lane_gb` 2.5 while lanes still certified in their own
+process: two idle lanes held 2.9 GB and 4.1 GB after certifying, swap reached 13.3 GB, and
+nothing but killing them gave it back. A certification that needs more than the share is
+killed and refused — the lane records a `lane_failed` naming what it reached and puts the
+hypothesis back — and the answer is yours: a larger `mem_per_lane_gb`, which plans fewer
+lanes around what certification actually costs, or `kanso cert run` by hand, which certifies
+in your own process with nothing but the host to bound it. No wall time bounds a
+certification, since how many engine runs it makes is its plan's choice. The hold moved out
+of the lane for the same reason: run in the lane's own process it read the whole window at
+once and left the lane holding what the engine allocated for it — 7.6 MB of peak on the
+research suite's month of daily bars, measured in a fresh lane, against 0.2 MB now that a
+child runs it. The baseline, a host-alone run and the hold have no memory cap, because they
+are what the rest are measured against, and the hold has no wall time either; it is the same
+run, element by element, as the lane made of it.
 
 **A lane stops at its next safe point, whatever it ran.** Between cards, while it waits for a
 claim and while a child certifies, a `SIGTERM` is the lane's own: a trading node takes the

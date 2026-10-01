@@ -64,9 +64,10 @@ upward and not the doubled bar is neither a keep nor a repeat, which is exactly 
 
 **A benchmark is run once per run.** A hypothesis whose objective is measured against a
 hold of its first leg has that hold produced by the runner — the card's own request with
-the strategy replaced (`backtest.benchmark`) — in this process, before the baseline, and
-every card of the run is differenced against the same one, exactly as an attached
-construct's cards are against one host-alone run.
+the strategy replaced (`backtest.benchmark`) — in a child of the lane, as a card is, before
+the baseline, and every card of the run is differenced against the same one, exactly as an
+attached construct's cards are against one host-alone run. The lane keeps the run the
+child reported and none of what producing it cost.
 """
 
 from __future__ import annotations
@@ -581,22 +582,60 @@ def _host_run(
     return setup.impl.host_run(host, snapshot_id, compute, cache)
 
 
-def _benchmark_run(setup: Setup, *, snapshot_id: str, cache: dict[str, CardRun]) -> CardRun | None:
+def _benchmark_run(
+    setup: Setup, *, snapshot_id: str, directory: Path, cache: dict[str, CardRun]
+) -> CardRun | None:
     """The hold a benchmark objective differences against, computed once per run.
 
-    Run in this process over the research window, as a composition or a certification run
-    is: the hold is kanso's own sleeve, so there is nothing to confine, and its request is
-    the card's with only the strategy replaced — the same snapshot, warmup prefix, money
-    and grains. Keyed by the snapshot and the prefix, because those are what a card's data
-    is; `None` for an objective that measures no benchmark.
+    Its request is the card's with only the strategy replaced — the same snapshot, warmup
+    prefix, money and grains — and it runs over the research window in a child of the lane,
+    staged a session at a time through the lane's transfer directory exactly as a card is
+    (`backtest.run_subprocess`), so what a whole window of the hold costs goes when the child
+    exits rather than staying with a process that researches all day. Like the baseline it
+    has no memory cap, because it is what the cards are measured against, and unlike the
+    baseline no wall time either: `backtest.benchmark` takes both bounds off its request.
+    A window the catalog cannot give is refused while it is read, as a card's is, and a hold
+    that does not run in its child is a refusal naming why (`_no_hold`). Keyed by the
+    snapshot and the prefix, because those are what a card's data is; `None` for an
+    objective that measures no benchmark.
     """
     if not measures_benchmark(setup.hyp):
         return None
     key = f"{BENCHMARK_KEY}@{snapshot_id}@{setup.prefix}"
     if key not in cache:
         request = _request(setup, b"", snapshot_id, budget_s=None, mem_cap_gb=None)
-        cache[key] = backtest.run(backtest.benchmark(request), setup.catalog).run
+        held = backtest.run_subprocess(
+            backtest.benchmark(request), setup.catalog, directory, setup.extensions
+        )
+        refused = held.refused
+        if refused is not None:
+            raise _no_hold(
+                setup,
+                f"sizing refused {refused.rule} at {refused.instrument_id}: {refused.why}",
+                f"declare a `sizing` rule a hold of the first leg can take, then run "
+                f"`kanso hyp add hypotheses/{setup.hyp.id}/hypothesis.yaml`",
+            )
+        if held.crashed:
+            raise _no_hold(
+                setup, f"{held.reason}: {held.traceback_tail or 'no output'}", held.remedy
+            )
+        cache[key] = held.run
     return cache[key]
+
+
+def _no_hold(setup: Setup, why: str, remedy: str | None = None) -> PreconditionError:
+    """Why a run has no benchmark to measure against: its hold did not run.
+
+    The remedy is the rule's when a sizing rule refused the hold, the one the failure named
+    when kanso raised it with one, and otherwise `kanso doctor` — never an edit to
+    `strategy.py`: the hold is kanso's own sleeve, so a hold that did not run is not the
+    strategy's to fix.
+    """
+    return PreconditionError(
+        f"benchmark: the hold of {setup.hyp.id}'s first leg did not run over the research "
+        f"window ({why}), so there is nothing to measure against",
+        remedy=remedy or "run `kanso doctor`",
+    )
 
 
 def mem_cap(ws: Workspace, run: RunRecord) -> float:
@@ -1022,8 +1061,8 @@ def begin(
     One the operator takes out of `lane`'s hands (`research queue remove`) is refused with
     `TakenError` wherever the begin has got to: before anything is read, at the next
     catalog read of the warmup, the benchmark or the baseline's window, within
-    `backtest.WANTED_POLL_S` of a removal while the baseline card runs — the card is
-    killed — and once more before the run is recorded. It leaves no lane directory and no
+    `backtest.WANTED_POLL_S` of a removal while the hold or the baseline card runs — the
+    child is killed — and once more before the run is recorded. It leaves no lane directory and no
     `baseline_failed`, because the baseline did not fail.
     """
     lane = lanes.check_lane(lane)
@@ -1096,7 +1135,7 @@ def begin(
                 cache=host_cache,
             )
             benchmark_run = _benchmark_run(
-                setup, snapshot_id=snapshot.snapshot_id, cache=host_cache
+                setup, snapshot_id=snapshot.snapshot_id, directory=directory, cache=host_cache
             )
             result = _baseline(
                 ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best
@@ -1320,7 +1359,10 @@ def card(
         cache=_HOST_RUNS.setdefault(run.run_id, {}),
     )
     benchmark_run = _benchmark_run(
-        setup, snapshot_id=run.snapshot_id, cache=_HOST_RUNS.setdefault(run.run_id, {})
+        setup,
+        snapshot_id=run.snapshot_id,
+        directory=directory,
+        cache=_HOST_RUNS.setdefault(run.run_id, {}),
     )
     result = backtest.run_subprocess(
         _request(

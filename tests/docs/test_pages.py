@@ -555,3 +555,25 @@ def test_the_pages_say_a_stall_certifies_in_a_child_held_to_the_lane_s_share() -
         )
         assert row.split("|")[3].strip().startswith(opening)
         assert "**closed.**" in row
+
+
+def test_the_pages_say_a_lane_runs_its_benchmark_hold_in_a_child() -> None:
+    """The hold a benchmark objective differences against was the one whole-window run a lane
+    still made in its own process; the pages say a child runs it as a card is run, and the
+    backlog closes the row that recorded it and the open half of the row before it."""
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "it makes no run in its own process" in lanes
+    assert "the hold a benchmark objective differences against" in lanes
+    assert "one run it still makes in its own process" not in lanes
+    assert "it is the same run, element by element, as the lane made of it" in lanes
+    hold = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert "each card of a run (once per run, in a child of the lane as a card is" in hold
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 1(18|20) \|", line)
+    }
+    item = rows["120"].split("|")[3].strip()
+    assert item.startswith("~~The hold a benchmark objective differences against was run in")
+    assert "in the lane's own process~~ **closed.**" in item
+    assert "a child runs it now (row 120)" in rows["118"].split("|")[5]
