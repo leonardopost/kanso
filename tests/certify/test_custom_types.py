@@ -19,6 +19,7 @@ import yaml
 
 from kanso.certify import certificate, run
 from kanso.certify.run import certify
+from kanso.criteria.run import day_of, midnight_ns
 from kanso.data import catalog, snapshot
 from kanso.data.instruments import resolve_universe
 from kanso.data.loaders.synthetic import SyntheticLoader
@@ -30,7 +31,7 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace, find
 from tests.research.conftest import classify, document
 
-from .test_run import a_card, write_plan
+from .test_run import CERT_GATES, a_card, write_plan
 
 PERP = "BTCUSDT-PERP.SIM"
 HYP_ID = "perp_hold"
@@ -179,7 +180,28 @@ def test_the_lags_a_certification_observes_are_grouped_by_the_type_a_wrapped_poi
     """The window the certifier reads holds the settlements inside the catalog's wrapper,
     and the evidence it takes is keyed by the type inside: `funding`, settled at the
     instant it was published, beside the bars."""
-    request = backtest.RunRequest(
+    _, groups = backtest.window_data(window_request(), catalog_path(perp_ws))
+
+    observed = run._observed_lags(groups)
+
+    assert set(observed) == {(PERP, "bar"), (PERP, "funding")}
+    assert observed[(PERP, "funding")] == 0.0
+
+
+# --- a day's volume on a contract --------------------------------------------------
+
+
+CAPACITY: dict[str, Any] = {
+    "id": "capacity_vs_adv",
+    "stage": "cert",
+    "params": {"participation": 0.2, "adv_days": 5},
+    "rationale": "a day's contracts against a day's contracts, both as notional",
+}
+
+
+def window_request() -> backtest.RunRequest:
+    """The certification window's request, as the certifier builds it for the perpetual."""
+    return backtest.RunRequest(
         hyp=Hypothesis.model_validate(DOCUMENT),
         strategy_source=HOLDING,
         window=CERTIFICATION,
@@ -187,9 +209,34 @@ def test_the_lags_a_certification_observes_are_grouped_by_the_type_a_wrapped_poi
         venue_model=perp_model().model_dump(),
         capital=100_000.0,
     )
-    _, groups = backtest.window_data(request, catalog_path(perp_ws))
 
-    observed = run._observed_lags(groups)
 
-    assert set(observed) == {(PERP, "bar"), (PERP, "funding")}
-    assert observed[(PERP, "funding")] == 0.0
+def test_a_perpetual_s_daily_volume_is_notional_through_its_contract_multiplier(
+    perp_ws: Workspace, store: StateStore
+) -> None:
+    """The runner strikes a fill's notional as `qty x px x multiplier`, and a perpetual's bar
+    counts contracts, so the day's volume the capacity gate holds that fill to is
+    `volume x close x multiplier` of the same definition: a hundredth of a coin a contract
+    here, a thousand DOGE a contract on the exchange that found this."""
+    from nautilus_trader.model.data import Bar
+
+    classify(perp_ws, store, DOCUMENT, HOLDING)
+    a_card(perp_ws, store, HOLDING, hyp_id=HYP_ID, document=DOCUMENT, model=perp_model())
+    write_plan(perp_ws, HYP_ID, gates=[*CERT_GATES, CAPACITY])
+
+    made = certify(perp_ws, store, HYP_ID)
+
+    (capacity,) = [gate for gate in made.gates if gate.id == "capacity_vs_adv"]
+    assert capacity.skipped is None, "the window's bars carry the volume series"
+    judged = capacity.evidence["instruments"][PERP]
+    (perpetual,), groups = backtest.window_data(window_request(), catalog_path(perp_ws))
+    assert float(perpetual.multiplier) == 0.01, "the manual entry's contract is a hundredth"
+    per_day: dict[date, float] = {}
+    for group in groups:
+        for point in group:
+            if isinstance(point, Bar) and int(point.ts_init) >= midnight_ns(CERTIFICATION[0]):
+                day = day_of(int(point.ts_event))
+                per_day[day] = per_day.get(day, 0.0) + float(point.volume) * float(point.close)
+    contracts = [per_day[day] for day in sorted(per_day)][-5:]
+    assert judged["adv"] == pytest.approx(0.01 * sum(contracts) / len(contracts))
+    assert judged["adv"] < sum(contracts) / len(contracts), "contracts are not the notional"

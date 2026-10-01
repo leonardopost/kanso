@@ -472,7 +472,12 @@ contract multiplier being one for a share and the contract size for a future or 
 Each recorded fill and trade carries the multiplier it was struck with, so a cost model
 re-applied to the record charges the notional the runner charged. A record written before the
 multiplier was kept reads as one, a share's; a run struck on a multiplied instrument before then
-is re-run before a cost model is re-applied to it.
+is re-run before a cost model is re-applied to it. The volume a certification holds a day's
+fills to is the same product. A bar's volume counts the instrument's own unit — shares for a
+share, contracts for a perpetual or a future — so `capacity_vs_adv` reads each day's volume as
+`volume x close x multiplier` of the resolved definition the window was run with, and the
+busiest day's fill notional is held to a share of an average struck in the same unit: contracts
+against contracts, never contracts against the coins inside them.
 
 **A perpetual is a linear contract settled in the account's currency.** A crypto perpetual
 swap (`instrument_class: swap`, `docs/workspace.md`) is to kanso a contract whose notional is

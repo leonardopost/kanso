@@ -254,6 +254,27 @@ def test_the_pages_say_a_certification_groups_a_wrapped_custom_point_by_its_payl
     assert "`kanso.data.types.type_id_of` answers for the point a wrapper carries" in backlog
 
 
+def test_the_pages_say_a_day_s_volume_is_struck_with_the_instrument_s_multiplier() -> None:
+    """A bar counts the instrument's unit and a fill is `qty x px x multiplier`; the pages
+    say the capacity gate reads a day's volume in the same unit, and the backlog row that
+    recorded a perpetual's contracts compared against its fills' notional is closed."""
+    concepts = prose(page("concepts.md"))
+    assert "The volume a certification holds a day's fills to is the same product." in concepts
+    assert (
+        "`capacity_vs_adv` reads each day's volume as `volume x close x multiplier` of the "
+        "resolved definition the window was run with"
+    ) in concepts
+    assert "contracts against contracts, never contracts against the coins inside them" in concepts
+    cert_run = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso cert run")
+    )
+    assert "each day's volume struck as `volume x close x multiplier`" in cert_run
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 113 |"))
+    assert backlog.split("|")[3].strip().startswith("~~`capacity_vs_adv` compared")
+    assert "**closed**: the certifier strikes each day's volume with the multiplier" in backlog
+    assert "`kanso cert plan ID --replan` mints the next plan version" in backlog
+
+
 def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:
     """`[research]` is a layer between the defaults and the broker, a restated default is
     not one, and the code must be one the engine registers."""
@@ -487,15 +508,15 @@ def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_i
     cli = prose(page("cli.md"))
     assert "once `embargoed_window` has failed it is recorded as skipped with the reason" in cli
     rows = {
-        113: (
+        114: (
             "~~`param_plateau` set its floor at a fraction of the unperturbed objective",
             "fails an unperturbed objective at or below zero before any parameter is moved",
         ),
-        114: (
+        115: (
             "~~A certification ran the plateau's perturbation backtests after",
             "judges `param_plateau` after every other cert gate",
         ),
-        115: (
+        116: (
             "~~`bootstrap` passed on the drawdown alone",
             "a ninety-percent band that lies at or below zero fails the gate whatever the drawdown",
         ),
