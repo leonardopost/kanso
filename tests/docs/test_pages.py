@@ -464,3 +464,44 @@ def test_both_pages_state_the_utc_period_rule_a_continuous_calendar_relies_on() 
     assert "`calendar: continuous`" in catalog
     assert "`timezone`, `session_start` or `session_end` is refused (exit 3)" in catalog
     assert "`calendar: weekdays` is the default and is recorded in no manifest" in catalog
+
+
+def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_its_numbers() -> (
+    None
+):
+    """A fraction of a loss lies above the loss, so the pages say the plateau fails a
+    non-positive objective before moving anything, that a failed window spares its
+    backtests, and that the bootstrap judges the band it records; the three backlog rows
+    that recorded a certificate right by accident are closed in place."""
+    concepts = prose(section(page("concepts.md"), "Certification, the plan and the certificate"))
+    assert (
+        "An unperturbed objective at or below zero therefore fails the gate before any "
+        "parameter is moved" in concepts
+    )
+    assert "The plateau is judged after every other cert gate" in concepts
+    assert "A window gate that judged nothing spares nothing." in concepts
+    assert "`bootstrap` judges both of the numbers it records" in concepts
+    assert "a band that lies at or below zero says the population of trades carries no edge" in (
+        concepts
+    )
+    cli = prose(page("cli.md"))
+    assert "once `embargoed_window` has failed it is recorded as skipped with the reason" in cli
+    rows = {
+        113: (
+            "~~`param_plateau` set its floor at a fraction of the unperturbed objective",
+            "fails an unperturbed objective at or below zero before any parameter is moved",
+        ),
+        114: (
+            "~~A certification ran the plateau's perturbation backtests after",
+            "judges `param_plateau` after every other cert gate",
+        ),
+        115: (
+            "~~`bootstrap` passed on the drawdown alone",
+            "a ninety-percent band that lies at or below zero fails the gate whatever the drawdown",
+        ),
+    }
+    for number, (claim, closure) in rows.items():
+        row = next(
+            line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
+        )
+        assert claim in row and "**closed.**" in row and closure in row, number

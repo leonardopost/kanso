@@ -45,6 +45,15 @@ arithmetic the unperturbed one was. Only the subject's own parameters can move �
 sleeve's own configuration fields, or the construct parameters an attached modifier was
 composed with — never the capital, the risk limits or anything else the hypothesis injects.
 
+**A failed window spares the perturbation backtests.** The gates are evidence for a pass,
+and a certificate is the conjunction of the gates that judged, so once `embargoed_window` —
+required of every plan — has judged the subject and refused it, nothing `param_plateau`
+could score changes the verdict. The plateau is therefore judged after every other cert
+gate and, when the window gate failed, recorded as skipped with the reason instead of
+running a backtest per parameter; the certificate lists its gates in the plan's order
+regardless. A window gate that judged nothing spares nothing: a skip is an absence of
+evidence, not a refusal, and the plateau then refuses a loss itself before moving anything.
+
 The verdict moves the hypothesis and never ends it: a pass certifies it, a fail returns it
 to research with the ids of its failing gates recorded where the proposer reads them, and
 every `n_fail`-th consecutive failure escalates. The ids alone, because a certification
@@ -120,6 +129,7 @@ __all__ = [
     "CERTIFIABLE",
     "CERT_STAGE",
     "UNIMPLEMENTED",
+    "WINDOW_FAILED",
     "Measured",
     "Subject",
     "certify",
@@ -149,6 +159,18 @@ UNIMPLEMENTED: Final = (
 
 PARITY: Final = "parity_replay"
 """The one cert gate whose evidence is a replay rather than a run of the window."""
+
+WINDOW: Final = "embargoed_window"
+"""The required out-of-sample gate: once it has refused a subject, the verdict is a fail."""
+
+PLATEAU: Final = "param_plateau"
+"""The one cert gate that costs a backtest per perturbation, judged after all the others."""
+
+WINDOW_FAILED: Final = (
+    "embargoed_window failed and a certificate whose window failed cannot pass, so the "
+    "perturbation backtests were not run: a plateau around a result the embargo refused is "
+    "not evidence"
+)
 
 _HEX: Final = frozenset("0123456789abcdef")
 
@@ -795,11 +817,14 @@ def _judge(
         )
 
     registry = gates()
-    evaluated: list[EvaluatedGate] = []
-    for gate in planned:
+    verdicts: dict[str, EvaluatedGate] = {}
+    for gate in _perturbation_last(planned):
         found = registry.get(gate.id)
         if found is None:
-            evaluated.append(_skipped(gate, UNIMPLEMENTED))
+            verdicts[gate.id] = _skipped(gate, UNIMPLEMENTED)
+            continue
+        if gate.id == PLATEAU and _window_failed(verdicts):
+            verdicts[gate.id] = _skipped(gate, WINDOW_FAILED)
             continue
         context = GateContext(
             hyp=subject.hyp,
@@ -823,8 +848,30 @@ def _judge(
             rerun=rerun,
             session=compared,
         )
-        evaluated.append(_evaluated(gate, found.evaluate(context)))
-    return evaluated, ObjectiveResult(id=objective.id, value=value, se=se)
+        verdicts[gate.id] = _evaluated(gate, found.evaluate(context))
+    return [verdicts[gate.id] for gate in planned], ObjectiveResult(
+        id=objective.id, value=value, se=se
+    )
+
+
+def _perturbation_last(planned: Sequence[PlannedGate]) -> list[PlannedGate]:
+    """The plan's cert gates with the one that costs a backtest per parameter moved last.
+
+    Every cheap verdict is then in hand before the expensive one is paid for, the window
+    gate's among them, which is the one that decides whether it is paid for at all. Only
+    the judging is reordered: the certificate lists the gates in the plan's order.
+    """
+    return sorted(planned, key=lambda gate: gate.id == PLATEAU)
+
+
+def _window_failed(verdicts: Mapping[str, EvaluatedGate]) -> bool:
+    """Whether the out-of-sample gate judged this subject and refused it.
+
+    A window gate that skipped is an absence of evidence rather than a refusal, and spares
+    nothing: the plateau then runs, and refuses a loss itself before moving anything.
+    """
+    window = verdicts.get(WINDOW)
+    return window is not None and window.skipped is None and not window.passed
 
 
 def _evaluated(planned: PlannedGate, result: GateResult) -> EvaluatedGate:

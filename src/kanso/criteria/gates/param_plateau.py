@@ -18,6 +18,15 @@ parameter of three moved by ten percent rounds back to three, and scoring that a
 manufacture a pass out of the very same run; a parameter sitting at zero has no
 proportional step at all. Both are recorded as dropped, and no verdict rests on them.
 
+**The gate is defined around an edge and nowhere else.** The floor is a fraction of the
+unperturbed score, and a fraction of a loss lies above the loss: at −10 and a half the floor
+is −5, so a move that changed nothing would read as failing to keep half of the result and
+one that merely lost less would pass — the test inverts. An unperturbed score at or below
+zero therefore fails before any parameter is moved, with the reason in the evidence and a
+backtest count of zero. It fails rather than skips because the context is whole and it is
+the subject that lacks the property: a plateau around a loss is a robust loss, which is not
+what robustness certifies, and a skip is a pass.
+
 **Every perturbation costs a backtest.** The runs go through the re-run the certification
 runner supplies, one after another in a fixed order, so two runs of the same certification
 produce the same numbers and the price of the gate is visible in its evidence as a count.
@@ -45,6 +54,10 @@ NO_PARAMETERS: Final = (
     "the strategy configuration declares no numeric parameter of its own, so nothing moved"
 )
 ALL_DROPPED: Final = "every perturbation rounded back to the value it started from"
+NOT_POSITIVE: Final = (
+    "the unperturbed objective is not positive, and a plateau around a loss is not evidence "
+    "of robustness, so no parameter was moved"
+)
 
 
 class _ParamPlateau:
@@ -69,20 +82,29 @@ class _ParamPlateau:
         unperturbed = objective.compute(
             ctx.run, ctx.research_folds, ctx.host_run, ctx.benchmark_run
         )[0]
+        reading: dict[str, object] = {
+            "objective": objective.id,
+            "unperturbed": unperturbed,
+            "perturb_pct": percent,
+            "keep_fraction": fraction,
+            "n_fields": len(ctx.tunable),
+            "dropped": dropped,
+        }
+        if unperturbed <= 0:
+            return verdict(
+                self.id,
+                False,
+                {**reading, "n_backtests": 0, "perturbations": [], "reason": NOT_POSITIVE},
+            )
         floor = fraction * unperturbed
         scored = _score(ctx, objective, ctx.rerun, moves)
         return verdict(
             self.id,
             all(metric >= floor for _, _, _, metric in scored),
             {
-                "objective": objective.id,
-                "unperturbed": unperturbed,
-                "perturb_pct": percent,
-                "keep_fraction": fraction,
+                **reading,
                 "floor": floor,
                 "n_backtests": len(scored),
-                "n_fields": len(ctx.tunable),
-                "dropped": dropped,
                 "perturbations": [
                     {"field": name, "direction": way, "value": value, "metric": metric}
                     for name, way, value, metric in scored

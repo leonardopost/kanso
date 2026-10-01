@@ -1134,21 +1134,53 @@ def test_cost_stress_without_its_context_judges_nothing(overrides: Any) -> None:
 # --- bootstrap --------------------------------------------------------------------
 
 
-def test_bootstrap_resamples_the_trade_sequence() -> None:
+def test_bootstrap_resamples_the_trade_sequence_and_passes_an_edge_inside_the_limit() -> None:
+    run = build_run(
+        FLAT,
+        trades=tuple(trade(day, pnl=10.0) for day in DAYS),
+        capital=1_000.0,
+    )
+    result = bootstrap.evaluate(context(run, params={"n": 200}, strategy_sha="a" * 64))
+    assert result.evidence["mdd_p95"] == pytest.approx(0.0)
+    assert result.evidence["objective_ci90"] == pytest.approx([10.0, 10.0])
+    assert result.passed
+
+
+def test_bootstrap_fails_a_band_that_never_reaches_above_zero_whatever_the_drawdown() -> None:
+    """Four losing trades resample to a band of losses: no order of them carries an edge."""
     run = build_run(
         FLAT,
         trades=tuple(trade(day, pnl=-10.0) for day in DAYS),
         capital=1_000.0,
     )
     result = bootstrap.evaluate(context(run, params={"n": 200}, strategy_sha="a" * 64))
-    assert result.evidence["mdd_p95"] == pytest.approx(4.0)
+    assert result.evidence["mdd_p95"] == pytest.approx(4.0), "well inside the 15% limit"
     assert result.evidence["objective_ci90"] == pytest.approx([-10.0, -10.0])
-    assert result.passed
+    assert not result.passed and result.skipped is None
 
 
-def test_bootstrap_fails_a_drawdown_distribution_beyond_the_limit() -> None:
-    run = build_run(FLAT, trades=tuple(trade(day, pnl=-50.0) for day in DAYS), capital=1_000.0)
-    assert not bootstrap.evaluate(context(run, params={"n": 200})).passed
+def test_bootstrap_fails_a_band_whose_top_is_exactly_zero() -> None:
+    """Trades netting nothing resample to a band of [0, 0], and an edge of none is none."""
+    run = build_run(FLAT, trades=tuple(trade(day, pnl=0.0) for day in DAYS), capital=1_000.0)
+    result = bootstrap.evaluate(context(run, params={"n": 200}, strategy_sha="a" * 64))
+    assert result.evidence["objective_ci90"] == pytest.approx([0.0, 0.0])
+    assert not result.passed
+
+
+def test_bootstrap_fails_a_drawdown_distribution_beyond_the_limit_on_the_drawdown_alone() -> None:
+    """Three wins and one deep loss: an edge in most orders, and a 20% drawdown in two thirds."""
+    run = build_run(
+        FLAT,
+        trades=tuple(
+            trade(day, pnl=value)
+            for day, value in zip(DAYS, (60.0, -200.0, 60.0, 60.0), strict=True)
+        ),
+        capital=1_000.0,
+    )
+    result = bootstrap.evaluate(context(run, params={"n": 200}, strategy_sha="a" * 64))
+    assert result.evidence["objective_ci90"][1] > 0, "the band reaches above zero"
+    assert result.evidence["mdd_p95"] >= 20.0 > result.evidence["limit_pct"]
+    assert not result.passed
 
 
 def test_bootstrap_is_deterministic_for_one_strategy() -> None:
