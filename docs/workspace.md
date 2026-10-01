@@ -293,8 +293,9 @@ already moved past it would stamp its own older version over the newer one and l
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
 the workspace has no
 registered hypotheses, no cards, no best pointer, no certificate of record and no approvals —
-nor any record of what a source answered empty, so every gap a backfill closed that way is a
-gap again until `kanso data backfill` asks once more.
+nor any record of what a source answered empty, so a backfill asks a source again for a gap
+it already answered. Coverage is untouched: it is read off the manifests and the market's
+calendar, never off an answer.
 What survives is what is file-backed: `catalog/` still serves its data, `certificates/<hyp>/`
 still holds the certificate YAML and the certified `<sha7>.py`, `strategies/<id>/` still holds
 `strategy.yaml` and its `impl/` directories, and `kanso strat show` and `kanso replay
@@ -588,7 +589,10 @@ commission and no spread, so under the defaults a bar-only hypothesis is refused
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
-as it does for `sizing`; a row pinned before 0.13 reads as unchanged until it is re-pinned.
+`latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
+in its pins, so its re-pin compares against the costs the file it pinned states, read back
+from the state store; only when the store no longer holds those bytes, or this kanso cannot
+read them as a hypothesis, does the missing key read as unchanged.
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 
@@ -816,7 +820,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id`, `warmup`, `benchmark` or `book` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup`, `benchmark`, `book` or `costs` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.
@@ -1210,11 +1214,11 @@ error: types: funding is settled round the clock and needs calendar 'continuous'
 
 Nothing else is generated.
 
-**Coverage counts one fact the manifests do not hold**: the days between two served spans of
-a series that its source was asked for and answered with nothing, which `state.db` records
-as each empty chunk comes back. A backfill is chunked, and a chunk edge that falls on a
-weekend leaves the spans either side a weekend apart; the next backfill asks for exactly
-those days. In a fresh `kanso init --demo` workspace, after `kanso data instruments resolve`:
+**Coverage counts only the days a market opened.** A backfill is chunked, and a chunk edge
+that falls on a weekend leaves the spans the chunks served a weekend apart. The store's
+definition of the instrument names its market, and on that market's calendar
+(`docs/concepts.md`, Snapshot) the weekend is closed, so the series is one. In a fresh
+`kanso init --demo` workspace, after `kanso data instruments resolve`:
 
 ```
 $ kanso data backfill --loader synthetic --spec demo.yaml --to 2024-04-30
@@ -1225,38 +1229,29 @@ loader     synthetic · demo.yaml
 2024-04-01..2024-04-30 DEMO.SIM bar → written · 8580 rows
 total      4 chunk(s) · 33540 rows written
 $ kanso data show
-DEMO.SIM bar 1m · 2024-01-02..2024-03-01, 2024-03-04..2024-03-29, 2024-04-01..2024-04-30 · 33540 rows
+DEMO.SIM bar 1m · 2024-01-02..2024-04-30 · 33540 rows
            DEMO.SIM-bar-1m-raw-20240131 · synthetic · 8580 rows
            DEMO.SIM-bar-1m-raw-20240301 · synthetic · 8580 rows
            DEMO.SIM-bar-1m-raw-20240329 · synthetic · 7800 rows
            DEMO.SIM-bar-1m-raw-20240430 · synthetic · 8580 rows
-           gap 2024-03-02..2024-03-03
-           gap 2024-03-30..2024-03-31
 total      4 dataset(s) · 33540 rows
 $ kanso data backfill --loader synthetic --spec demo.yaml --to 2024-04-30
 loader     synthetic · demo.yaml
-2024-03-02..2024-03-03 DEMO.SIM bar → empty
-2024-03-30..2024-03-31 DEMO.SIM bar → empty
-total      2 chunk(s) · 0 rows written
-$ kanso data show
-DEMO.SIM bar 1m · 2024-01-02..2024-03-01, 2024-03-04..2024-03-29, 2024-04-01..2024-04-30 · 33540 rows
-           DEMO.SIM-bar-1m-raw-20240131 · synthetic · 8580 rows
-           DEMO.SIM-bar-1m-raw-20240301 · synthetic · 8580 rows
-           DEMO.SIM-bar-1m-raw-20240329 · synthetic · 7800 rows
-           DEMO.SIM-bar-1m-raw-20240430 · synthetic · 8580 rows
-           answered empty 2024-03-02..2024-03-03
-           answered empty 2024-03-30..2024-03-31
-total      4 dataset(s) · 33540 rows
+           DEMO.SIM bar: nothing missing before 2024-04-30
+total      0 chunk(s) · 0 rows written
 ```
 
-The served spans are what they were; the two weekends are now coverage, so `research begin`
-pins a snapshot across them — the one taken before they were asked, since a snapshot pins
-bytes and the answers are not bytes — and a third backfill plans nothing. An answer counts
-only between two served spans and only on the days it names: a month answered empty before
-a series' first served day is not coverage, and the days a chunk was asked for and did not
-serve stay a gap until a backfill asks for them again. kanso keeps no calendar, so a weekday
-answered empty — a holiday, or a day the source simply holds nothing for — reads the same
-and is counted; the `answered empty` lines are where to look for one.
+Each dataset still records what it served — its id ends on the day it served to, so the
+second stops at Friday the 1st of March and the third, asked from Saturday the 2nd to Sunday
+the 31st, served the 4th to Friday the 29th — and the weekends between them are no gap, so
+`research begin` pins a snapshot across them and a second backfill plans nothing. A day the
+market opened that nothing serves is a gap however it arose. A chunk the source answers
+empty on such days is recorded in `state.db` and shown inside its gap as `answered empty`:
+the source holds nothing there, which is why the gap persists, and `data backfill` does not
+ask for it twice. It is never coverage, because a source that lost a trading day and a
+market that shut read the same in its answer. An instrument the store does not define, and
+a market with no calendar on file, are read with every day open, so their weekends are gaps
+like any other.
 
 A **snapshot** freezes what is held: the dataset checksums plus the checksum of the resolved
 instruments. Every run is pinned to one, and to the instruments as much as to the data:
@@ -1712,8 +1707,9 @@ inherits your certified work.** Copy the directory and you have everything. Clon
 repository and you have the data, every certificate, the composed implementations and the
 source of every hypothesis — reproduced to the digit — but not the record: no research
 history, no `best` pointer, no trial count, no approvals, no version or session index, and no
-record of what a source answered empty, so a window across a weekend a backfill closed that
-way is refused by `research begin` until `kanso data backfill` asks for it again. That is
+record of what a source answered empty, so a backfill asks again for a gap its source
+already answered; coverage is read off the manifests and the market's calendar, which do
+travel. That is
 the design rather than an accident: the record is what one machine did, and approvals in
 particular must never travel, because real capital always needs a person to say so again on
 the machine that will trade. `kanso doctor` names the situation when it meets it — the

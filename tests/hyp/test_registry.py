@@ -323,13 +323,8 @@ def test_a_row_pinned_before_sizing_joined_the_scope_keeps_the_best(
     assert record(ws, store).best_sha == "c" * 64
 
 
-def test_a_row_pinned_before_costs_joined_the_scope_keeps_the_best(
-    ws: Workspace, store: StateStore
-) -> None:
-    """A row from before 0.13 has no `costs` key in its pins, and nearly every hypothesis
-    states costs, so the missing key reads as the schedule it is compared against."""
-    register(ws, store)
-    set_best(store)
+def pin_before_costs(store: StateStore) -> None:
+    """Rewrite the row's pins in the shape a release before 0.13 wrote: no `costs` key."""
     held = store.connection.execute(
         "SELECT pins FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
     ).fetchone()
@@ -339,7 +334,66 @@ def test_a_row_pinned_before_costs_joined_the_scope_keeps_the_best(
         "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
     )
 
+
+LATER: dict[str, Any] = {**DOCUMENT["costs"], "latency_ms": 20}
+"""The fixture's schedule with the venue seeing each order 20 ms late."""
+
+
+def test_a_row_pinned_before_costs_joined_the_scope_keeps_the_best_under_the_same_costs(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A row from before 0.13 has no `costs` key in its pins, but the file it pinned has one,
+    and it charges what the file charges now."""
+    register(ws, store)
+    set_best(store)
+    pin_before_costs(store)
+
     register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
+
+
+def test_a_row_pinned_before_costs_joined_the_scope_clears_the_best_the_file_charged_otherwise(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Measured on four hypotheses pinned under 0.12 and re-pinned with a latency added: the
+    missing key read as the new schedule, and each kept the best it scored at zero delay."""
+    register(ws, store)
+    set_best(store)
+    pin_before_costs(store)
+
+    register(ws, store, document(costs=LATER))
+
+    assert record(ws, store).best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["reason"] for event in cleared] == [
+        "costs changed from {'commission_bps': 0.5, 'slippage_bps': 1.0, 'spread': "
+        "'fixed_bps', 'fixed_bps': 2.0} to {'commission_bps': 0.5, 'slippage_bps': 1.0, "
+        "'spread': 'fixed_bps', 'fixed_bps': 2.0, 'latency_ms': 20.0}"
+    ]
+
+
+@pytest.mark.parametrize(
+    "pinned",
+    [None, "d" * 64, b"schema: 2\n"],
+    ids=["no-sha", "no-bytes", "unreadable-bytes"],
+)
+def test_a_row_pinned_before_costs_joined_the_scope_whose_file_is_gone_keeps_the_best(
+    ws: Workspace, store: StateStore, pinned: str | bytes | None
+) -> None:
+    """With no pinned file to read — no sha, no bytes under it, or bytes this kanso does not
+    read as a hypothesis — nothing says what the old pin charged, and an upgrade must not
+    clear every best in a workspace, so the missing key reads as the schedule it meets."""
+    register(ws, store)
+    set_best(store)
+    pin_before_costs(store)
+    sha = store.put_blob(pinned) if isinstance(pinned, bytes) else pinned
+    store.connection.execute(
+        "UPDATE hypotheses SET hypothesis_sha = ? WHERE hyp_id = ?", (sha, HYP_ID)
+    )
+
+    register(ws, store, document(costs=LATER))
 
     assert record(ws, store).best_sha == "c" * 64
 

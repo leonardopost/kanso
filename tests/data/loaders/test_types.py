@@ -15,12 +15,20 @@ from typing import Any
 import pytest
 from nautilus_trader.core.data import Data
 from nautilus_trader.model.custom import customdataclass
-from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
+from nautilus_trader.model.data import (
+    Bar,
+    CustomData,
+    DataType,
+    OrderBookDelta,
+    QuoteTick,
+    TradeTick,
+)
 from nautilus_trader.model.identifiers import InstrumentId
 
 from kanso.data.types import (
     BUILTIN_TYPES,
     CorporateAction,
+    Funding,
     custom_types,
     data_types,
     register_custom_type,
@@ -149,3 +157,29 @@ def test_a_point_reports_its_own_type_id() -> None:
     assert type_id_of(action) == "corporate_action"
     with pytest.raises(ValidationError, match="is not a registered data type"):
         type_id_of(object())
+
+
+def test_a_point_the_catalog_wrapped_reports_the_type_id_of_its_payload() -> None:
+    """A custom point read back from the catalog arrives inside the engine's `CustomData`,
+    and that is the shape every in-process window holds it in, so the wrapper answers for
+    the point it carries: `funding`, not a type nobody registers."""
+    settlement = Funding(
+        instrument_id=InstrumentId.from_str("BTCUSDT-PERP.SIM"), rate=0.0001, ts_event=1, ts_init=1
+    )
+    wrapped = CustomData(DataType(Funding), settlement)
+    assert type_id_of(wrapped) == "funding"
+    assert type_id_of(settlement) == "funding", "a loader's own output is matched as before"
+
+
+def test_a_wrapped_point_of_an_unregistered_class_is_still_refused_by_that_class() -> None:
+    class Probe(Data):
+        @property
+        def ts_event(self) -> int:
+            return 1
+
+        @property
+        def ts_init(self) -> int:
+            return 1
+
+    with pytest.raises(ValidationError, match="Probe is not a registered data type"):
+        type_id_of(CustomData(DataType(Probe), Probe()))
