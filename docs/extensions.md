@@ -360,7 +360,10 @@ reaches the author's `on_data` as an instance of it, at the instant it became pu
 card, on either replay path and on a stage replaying the catalog. A stage fed by a broker's
 live feed is handed what that feed publishes, and no feed kanso ships publishes a custom
 type. The author subscribes nothing and imports nothing, which is as well: `strategy_integrity` refuses a `strategy.py` that imports `kanso.data` or an
-extension's module, so the class a subscription needs is out of its reach.
+extension's module, so the class a subscription needs is out of its reach. A point read
+back from the catalog travels inside the engine's `CustomData` wrapper, and everything that
+reads a window in this process — a certification's evidence gates among it — groups the
+point by the type inside the wrapper, exactly as a loader's bare output is grouped.
 
 Research, cards, certification, composition, replays and stages all see an extension's type,
 because every process that reads a hypothesis's data imports the workspace's extensions

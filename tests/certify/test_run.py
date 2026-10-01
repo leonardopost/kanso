@@ -154,8 +154,13 @@ def a_card(
     best: bool = True,
     status: str = "keep",
     n_trades: int = 4,
+    model: VenueModel | None = None,
 ) -> str:
-    """One recorded card of a closed run, and the run record that pinned its data."""
+    """One recorded card of a closed run, and the run record that pinned its data.
+
+    `model` is the venue model the card was measured under; the demo's on XNAS unless the
+    subject trades somewhere else.
+    """
     pinned = yaml.safe_dump(document or DOCUMENT, sort_keys=False).encode("utf-8")
     run_record = records.insert(
         store,
@@ -195,7 +200,7 @@ def a_card(
                 "peak_mem_gb": 0.5,
                 "status": status,
                 "desc": "a card",
-                "venue_model": venue_model(),
+                "venue_model": model or venue_model(),
                 "created_at": NOW,
             }
         ),

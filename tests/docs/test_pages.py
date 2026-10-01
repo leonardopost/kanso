@@ -238,6 +238,19 @@ def test_the_workspace_page_states_the_funding_contract_and_its_refusal() -> Non
     assert "the OKX package's `okx_funding` loader serves the exchange's settled rates" in backlog
 
 
+def test_the_pages_say_a_certification_groups_a_wrapped_custom_point_by_its_payload() -> None:
+    """A custom point read back from the catalog travels inside `CustomData`; the pages
+    say every in-process reader groups it by the type inside, and the backlog row that
+    recorded a certification dying on the wrapper is closed in place."""
+    extensions = prose(page("extensions.md"))
+    assert "travels inside the engine's `CustomData` wrapper" in extensions
+    assert "a certification's evidence gates among it" in extensions
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 111 |"))
+    assert "~~A certification of a hypothesis requiring a custom type died" in backlog
+    assert "**closed.**" in backlog
+    assert "`kanso.data.types.type_id_of` answers for the point a wrapper carries" in backlog
+
+
 def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:
     """`[research]` is a layer between the defaults and the broker, a restated default is
     not one, and the code must be one the engine registers."""

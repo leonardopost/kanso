@@ -23,7 +23,9 @@ and decoder built by the engine's `make_dict_serializer` / `make_dict_deserializ
 from the class's `to_dict` / `from_dict`. Field annotations on such a class are
 restricted to `InstrumentId`, `str`, `bool`, `float`, `int`, `bytes`, `ndarray` and
 `dict`; a schema is a `pyarrow.Schema`, which the engine hands out as `get_schema(cls)`
-or as the `_schema` attribute the decorator sets.
+or as the `_schema` attribute the decorator sets. A custom point read back from the
+catalog, or published by the data engine, is wrapped in `CustomData`, whose `data` is the
+point itself; a loader yields the bare point.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ import re
 from typing import Final
 
 from nautilus_trader.core.data import Data
-from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
+from nautilus_trader.model.data import Bar, CustomData, OrderBookDelta, QuoteTick, TradeTick
 
 from kanso.data.types.corporate_action import KINDS, TYPE_ID, CorporateAction
 from kanso.data.types.funding import TYPE_ID as FUNDING
@@ -143,12 +145,20 @@ def resolve_type(type_id: str) -> type:
 
 
 def type_id_of(point: object) -> str:
-    """The type id of a data point, for grouping a loader's output by dataset."""
+    """The type id of a data point, for grouping points by dataset.
+
+    A loader's output is bare and matches its class exactly. A point read back from the
+    catalog arrives wrapped in the engine's `CustomData`, and the wrapper answers for the
+    point it carries, so a window read in this process — a certification's — groups the
+    same way a loader's output does. A point of an unregistered class is refused, wrapped
+    or not, and the refusal names that class.
+    """
+    inner = point.data if isinstance(point, CustomData) else point
     for type_id, cls in data_types().items():
-        if type(point) is cls:
+        if type(inner) is cls:
             return type_id
     raise ValidationError(
-        f"{_name(point)} is not a registered data type; register it with "
+        f"{_name(inner)} is not a registered data type; register it with "
         "kanso.data.types.register_custom_type before loading it"
     )
 
