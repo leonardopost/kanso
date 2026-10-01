@@ -645,10 +645,14 @@ by the quota rather than by the endpoint's answer time: driven through the engin
 against a loopback stand-in for the endpoint answering each page in 0.4 to 0.8 seconds, one
 day of `5s` bars took 36.0 seconds in 59 requests one after another and 11.5 seconds in 58
 together — 5.03 a second, never more than 10 in one second or 15 in two — with the same
-17,280 bars; at `rate_per_second = 2` the same day took 29.0 seconds, 2.00 a second. A slice
-whose page holds nothing as old as the slice's first candle is walked on from the page's
-oldest candle, so a day with candles missing, or a page shorter than 300, yields exactly the
-bars a walk one page at a time would. The bars are yielded oldest first, one day at a time.
+17,280 bars; at `rate_per_second = 2` the same day took 29.0 seconds, 2.00 a second. Driven
+live against `us.okx.com` on 2026-10-01, the day of 2026-09-30 of `BTC-USDT-SWAP` `5s` bars
+took 25.2 and 23.0 seconds one page after another and 13.8 and 14.1 seconds together, each
+wall time including about 1.5 seconds of command start-up, with the same 17,280 bars in
+byte-identical parquet; its pages answered in 0.48 to 0.78 seconds. A slice whose page holds
+nothing as old as the slice's first candle is walked on from the page's oldest candle, so a
+day with candles missing, or a page shorter than 300, yields exactly the bars a walk one
+page at a time would. The bars are yielded oldest first, one day at a time.
 
 The sizes are the endpoint's, in the spelling whose candles open on UTC — its `6H`, `12H`,
 `1D` and `1W` open on Hong Kong time, `1D` at 16:00 UTC — and any other size is refused
