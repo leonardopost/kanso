@@ -247,10 +247,11 @@ def test_an_unscheduled_split_inside_the_prefix_is_refused(deep: Path, request_f
 
 
 def test_the_parent_refuses_a_split_inside_the_prefix_before_any_child_runs(
-    deep: Path, tmp_path: Path, request_for, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The child would refuse it too, but as a crash the run records; the parent's own
-    check over the delivered span is what makes it a refusal the operator reads."""
+    check over the delivered span's corporate actions, read before the child is started, is
+    what makes it a refusal the operator reads."""
     from kanso.nautilus import backtest
 
     ex = midnight_ns(date(2023, 12, 29))
@@ -264,18 +265,16 @@ def test_the_parent_refuses_a_split_inside_the_prefix_before_any_child_runs(
         ts_event=ex,
         ts_init=ex,
     )
-    read = backtest._window_points
-
-    def with_split(*args: object) -> object:
-        groups, loaded = read(*args)  # type: ignore[arg-type]
-        return (*groups, (split,)), loaded
-
-    monkeypatch.setattr(backtest, "_window_points", with_split)
+    store = catalog(tmp_path / "split", [*bars(DECEMBER), *bars(RESEARCH), split], [instrument()])
+    hyp = hypothesis(data_requirements=("bar", "corporate_action"))
+    monkeypatch.setattr(
+        backtest.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a card was started")
+    )
     lane = tmp_path / "lane"
     lane.mkdir()
 
     with pytest.raises(PreconditionError, match="split effective 2023-12-29"):
-        backtest.run_subprocess(request_for(RESEARCH, prefix=PREFIX), deep, lane)
+        backtest.run_subprocess(request_for(RESEARCH, prefix=PREFIX, hypothesis_=hyp), store, lane)
 
 
 # --- what the run measures -----------------------------------------------------

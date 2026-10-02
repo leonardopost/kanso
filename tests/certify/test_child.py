@@ -102,9 +102,9 @@ def test_a_certification_whose_lane_is_told_to_stop_is_killed(
     hyp_id, sha = certifiable(ws, store)
     watch = backtest._watch
 
-    def stopped_once_running(process: Any, *args: Any) -> tuple[str | None, float]:
+    def stopped_once_running(process: Any, *args: Any, **fed: Any) -> tuple[str | None, float]:
         backtest.interrupt()
-        return watch(process, *args)
+        return watch(process, *args, **fed)
 
     monkeypatch.setattr(backtest, "_watch", stopped_once_running)
     try:

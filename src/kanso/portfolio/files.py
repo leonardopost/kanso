@@ -16,7 +16,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from kanso.errors import PreconditionError, ValidationError
-from kanso.schemas import Deployment, Portfolio, Stage, Stages, load_yaml, write_yaml
+from kanso.schemas import (
+    Deployment,
+    Portfolio,
+    Stage,
+    Stages,
+    VenueOverride,
+    load_yaml,
+    write_yaml,
+)
 from kanso.schemas.portfolio import STAGES
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -37,6 +45,7 @@ __all__ = [
     "remove",
     "stage_of",
     "unallocated",
+    "venue_overrides",
     "with_stage",
     "write",
 ]
@@ -59,6 +68,18 @@ def read(ws: Workspace) -> Portfolio:
             remedy="run `kanso init` in this directory, or restore portfolio.yaml",
         )
     return load_yaml(Portfolio, path)
+
+
+def venue_overrides(ws: Workspace) -> dict[str, VenueOverride]:
+    """The operator's `venues.<MIC>` entries, or none when the file or the key is absent.
+
+    A workspace with no portfolio inherits every venue from its broker, so the absence is
+    an answer here rather than the refusal `read` makes for a command that deploys.
+    """
+    path = portfolio_file(ws)
+    if not path.is_file():
+        return {}
+    return dict(load_yaml(Portfolio, path).venues or {})
 
 
 def write(ws: Workspace, portfolio: Portfolio) -> Path:

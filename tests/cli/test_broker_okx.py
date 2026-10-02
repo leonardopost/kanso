@@ -5,7 +5,10 @@ stage naming one would meet, and `doctor` reads `[adapters.okx]` through the pac
 model and reports the clients unset. The package's public reference resolves a listed swap
 through `kanso data instruments resolve` and is surveyed by `--check`, and its public-history
 loaders fill the catalog through `kanso data load`, answered here from the recordings in
-`tests/nautilus/adapters/okx/fixtures/`. No variable is set and nothing reaches a network.
+`tests/nautilus/adapters/okx/fixtures/`. `doctor --check-adapters` reads the real account's
+own fee tier only when its three names resolve — this file's placeholders, in the workspace's
+`.env` — answered from the account's recorded answers, and fails a workspace that charges it
+less than it pays. No variable of the shell is read and nothing reaches a network.
 """
 
 from __future__ import annotations
@@ -16,9 +19,9 @@ import pytest
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
-from kanso.nautilus.adapters.okx import reference
+from kanso.nautilus.adapters.okx import account, reference
 
-from ..nautilus.adapters.okx.recorded import History, Replay, recorded_for
+from ..nautilus.adapters.okx.recorded import Account, History, Replay, recorded_for
 from .conftest import at, payload, reconfigure
 
 DEMO = "okx_demo"
@@ -327,3 +330,209 @@ def test_data_load_refuses_trade_days_the_archives_do_not_serve(
 
     assert result.exit_code == Exit.VALIDATION
     assert "UTC days 2026-09-29 are not served" in payload(result)["error"]
+
+
+AEON_ENTRY = """AEON-USDT-SWAP.OKX:
+  nautilus_id: AEON-USDT-SWAP.OKX
+  asset_class: CRYPTOCURRENCY
+  manual: true
+  corporate_actions: none
+  override:
+    instrument_class: swap
+    base_currency: AEON
+    quote_currency: USDT
+    settlement_currency: USDT
+    multiplier: "10"
+    price_increment: "0.00001"
+    size_increment: "1"
+    lot_size: "1"
+"""
+"""AEON as the exchange's listing gave it to the operator's workspace on 2026-10-02 (see
+`tests/nautilus/adapters/okx/test_book.py`)."""
+
+
+def test_data_load_writes_a_book_and_prints_a_dataset_a_day(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """okx_book and okx_trades declare a day per dataset: two days of prints are two
+    datasets with a manifest each, and a day of the book is one, its points the changes the
+    recorded excerpt makes to the top three."""
+    listing, history = Replay(), History()
+    monkeypatch.setattr(
+        reference,
+        "pyo3_transport",
+        lambda rate, **_: (
+            lambda url, params, headers=None: (
+                history(url, params, headers) if recorded_for(url, params) else listing(url, params)
+            )
+        ),
+    )
+    root = resolving(workspace)
+    (root / "instruments.yaml").write_text(AEON_ENTRY, encoding="utf-8")
+    resolved = at(
+        runner, root, "data", "instruments", "resolve", "USDC-USDT-SWAP.OKX",
+        "AEON-USDT-SWAP.OKX", "--as-of", "2026-09-30", "--json",
+    )  # fmt: skip
+    assert resolved.exit_code == Exit.OK, resolved.stdout
+    specs = {
+        "okx_trades": "instruments: [USDC-USDT-SWAP]\nstart: 2026-09-26\nend: 2026-09-27\n",
+        "okx_book": "instruments: [AEON-USDT-SWAP]\nstart: 2026-09-01\nend: 2026-09-01\n"
+        "levels: 3\n",
+    }
+    loaded: dict[str, list[dict[str, object]]] = {}
+    for loader, text in specs.items():
+        spec = root / f"{loader}.yaml"
+        spec.write_text(f"loader: {loader}\n{text}", encoding="utf-8")
+        result = at(runner, root, "data", "load", "--loader", loader, "--spec", spec, "--json")
+        assert result.exit_code == Exit.OK, result.stdout
+        loaded[loader] = payload(result)["datasets"]
+
+    assert [(one["span"], one["rows"]) for one in loaded["okx_trades"]] == [
+        (["2026-09-26", "2026-09-26"], 214),
+        (["2026-09-27", "2026-09-27"], 288),
+    ]
+    [day] = loaded["okx_book"]
+    assert (day["dataset_id"], day["span"]) == (
+        "AEON_USDT_SWAP.OKX-book-none-raw-20260901",
+        ["2026-09-01", "2026-09-01"],
+    )
+    assert day["rows"] > 0 and day["publication"] == "realtime"
+    shown = payload(at(runner, root, "data", "show", "--json"))["series"]
+    assert {(one["instrument"], one["type"]) for one in shown} == {
+        ("USDC-USDT-SWAP.OKX", "trade"),
+        ("AEON-USDT-SWAP.OKX", "book"),
+    }
+    assert not [url for url, params in history.asked if "key" in str(params).lower()]
+
+
+# -- the account's own tier -----------------------------------------------------------
+
+
+@pytest.fixture
+def account_read(monkeypatch: pytest.MonkeyPatch) -> Account:
+    """The account's recorded answers, served wherever the check would build its client."""
+    served = Account()
+    monkeypatch.setattr(account, "signed_transport", lambda rate, **_: served)
+    return served
+
+
+def keyed(root: Path) -> Path:
+    """The real account's three names in the workspace's `.env`, as this file's placeholders."""
+    (root / ".env").write_text(
+        "KANSO_OKX_API_KEY=placeholder-key\nKANSO_OKX_API_SECRET=placeholder-secret\n"
+        "KANSO_OKX_PASSPHRASE=placeholder-passphrase\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def adapters_check(result: object) -> dict[str, object]:
+    return next(one for one in payload(result)["checks"] if one["name"] == "adapters")  # type: ignore[arg-type]
+
+
+STATE = (
+    "okx: state this in portfolio.yaml, merged into any venues.OKX entry already there:",
+    "  venues:",
+    "    OKX:",
+    "      costs:",
+    "        commission_bps: 7",
+    "        maker_bps: 5",
+)
+
+
+def test_doctor_reads_the_account_s_tier_only_when_asked_and_fails_charging_it_less(
+    runner: CliRunner, workspace: Path, replay: Replay, account_read: Account
+) -> None:
+    root = keyed(with_table(workspace, 'region = "us"\n'))
+    plain = at(runner, root, "doctor", "--json")
+    assert plain.exit_code == Exit.OK and account_read.sent == []
+
+    checked = at(runner, root, "doctor", "--check-adapters", "--json")
+
+    assert checked.exit_code == Exit.PRECONDITION
+    adapters = adapters_check(checked)
+    assert adapters["status"] == "fail"
+    assert str(adapters["detail"]).endswith(
+        "1/1 datasets included · okx's account pays taker 7 bp and maker 5 bp; the declaration "
+        "and portfolio.yaml charge 5 and 2 · 3 request(s)"
+    )
+    items = [str(item) for item in adapters["items"]]  # type: ignore[attr-defined]
+    assert "okx: account fee level Lv1 · acctLv 2, futures mode · posMode net_mode" in items
+    assert tuple(items[-len(STATE) :]) == STATE
+    assert len(account_read.sent) == 2
+    assert "placeholder" not in checked.stdout
+
+
+def test_doctor_prints_the_lines_to_state_in_its_plain_report(
+    runner: CliRunner, workspace: Path, replay: Replay, account_read: Account
+) -> None:
+    root = keyed(with_table(workspace, 'region = "us"\n'))
+
+    report = at(runner, root, "doctor", "--check-adapters").stdout
+
+    lines = report.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == STATE[0])
+    assert [line.strip() for line in lines[start : start + len(STATE)]] == [
+        line.strip() for line in STATE
+    ]
+    indents = [len(line) - len(line.lstrip()) for line in lines[start : start + len(STATE)]]
+    assert indents[1:] == [indents[0] + 2, indents[0] + 4, indents[0] + 6, indents[0] + 8] + [
+        indents[0] + 8
+    ]
+
+
+def test_doctor_is_green_once_portfolio_yaml_states_what_the_account_pays(
+    runner: CliRunner, workspace: Path, replay: Replay, account_read: Account
+) -> None:
+    root = keyed(with_table(workspace, 'region = "us"\n'))
+    portfolio = root / "portfolio.yaml"
+    portfolio.write_text(
+        portfolio.read_text(encoding="utf-8")
+        + "venues:\n  OKX:\n    costs:\n      commission_bps: 7\n      maker_bps: 5\n",
+        encoding="utf-8",
+    )
+
+    checked = at(runner, root, "doctor", "--check-adapters", "--json")
+
+    assert checked.exit_code == Exit.OK, checked.stdout
+    adapters = adapters_check(checked)
+    assert adapters["status"] == "ok"
+    assert str(adapters["detail"]).endswith("1/1 datasets included · 3 request(s)")
+    items = [str(item) for item in adapters["items"]]  # type: ignore[attr-defined]
+    assert "okx: portfolio.yaml venues.OKX.costs states commission_bps 7, maker_bps 5" in items
+    assert not any("state this" in item for item in items)
+
+
+def test_doctor_with_no_key_reports_the_declared_table_and_sends_nothing(
+    runner: CliRunner, workspace: Path, replay: Replay, account_read: Account
+) -> None:
+    root = with_table(workspace, 'region = "us"\n')
+
+    checked = at(runner, root, "doctor", "--check-adapters", "--json")
+
+    assert checked.exit_code == Exit.OK
+    adapters = adapters_check(checked)
+    items = [str(item) for item in adapters["items"]]  # type: ignore[attr-defined]
+    assert (
+        "okx: declares taker 5 bp and maker 2 bp on OKX, the exchange's global Regular tier; "
+        "an entity's own Regular tier can differ"
+    ) in items
+    assert any(item.startswith("okx: the account's own tier was not read") for item in items)
+    assert account_read.sent == []
+    assert str(adapters["detail"]).endswith("1/1 datasets included · 1 request(s)")
+
+
+def test_doctor_warns_a_key_with_no_host_and_sends_it_nowhere(
+    runner: CliRunner, workspace: Path, replay: Replay, account_read: Account
+) -> None:
+    root = keyed(with_table(workspace, "rate_per_second = 5\n"))
+
+    checked = at(runner, root, "doctor", "--check-adapters", "--json")
+
+    assert checked.exit_code == Exit.OK
+    adapters = adapters_check(checked)
+    assert adapters["status"] == "warn"
+    assert "okx's account was not read: [adapters.okx] states no region" in str(adapters["detail"])
+    assert "made no network call" in str(adapters["detail"])
+    assert 'region = "us"' in str(adapters["remedy"])
+    assert account_read.sent == [] and replay.asked == []

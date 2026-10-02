@@ -64,7 +64,7 @@ from kanso.errors import KansoError, ValidationError
 from kanso.hyp import HYPOTHESES, HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE, hypothesis_dir
 from kanso.nautilus import adapters as brokers
 from kanso.nautilus import facts
-from kanso.portfolio import Declared, exec_client_declarations, stage_refusals
+from kanso.portfolio import Declared, exec_client_declarations, stage_refusals, venue_overrides
 from kanso.research.daemon import active_runs
 from kanso.schemas import Hypothesis, InstrumentEntry, InstrumentsFile, parse_yaml
 from kanso.schemas.models import ModelsFile
@@ -482,7 +482,14 @@ def _adapters(ws: Workspace, check_adapters: bool) -> Check:
     and history floor per dataset, at the grain the source gates on — which is why a
     dataset the plan excludes is reported and not graded down: it is a fact about a
     subscription, not a fault in this workspace. A credential that does not authenticate
-    is the one failure, because every later command through that adapter will stop on it.
+    is a failure, because every later command through that adapter will stop on it.
+
+    Each broker is asked, too, what its account says of the terms its declaration states,
+    and is handed the operator's `venues` entries to compare with: a broker reads its account
+    only when its credentials resolve, and reports its declaration either way. An account
+    that pays more than the workspace charges — every card costed below what it pays — or
+    that cannot trade what the broker declares fails; one the broker could not read for a
+    reason the workspace can fix warns.
     """
     known = registry.adapters(ext.discover(ws.root, ws.config.extensions_paths))
     configured = {name: adapter for name, adapter in known.items() if adapter.configured(ws)}
@@ -497,29 +504,49 @@ def _adapters(ws: Workspace, check_adapters: bool) -> Check:
             items=tuple(items),
             remedy=None if not configured else "run `kanso doctor --check-adapters` to probe them",
         )
-    if not configured:
-        return Check(
-            "adapters",
-            "ok",
-            f"{detail}; --check-adapters had no configured adapter to reach and made no "
-            "network call",
-            items=tuple(items),
-        )
     surveys = [adapter.survey(ws) for _, adapter in sorted(configured.items())]
+    overrides = venue_overrides(ws)
+    accounts = [
+        found
+        for _, broker in sorted(brokers.packaged().items())
+        if (found := broker.check_account(ws, overrides)) is not None
+    ]
     items += [line for survey in surveys for line in _survey_items(survey)]
-    spent = sum(survey.requests for survey in surveys)
+    items += [line for account in accounts for line in account.items]
+    spent = sum(survey.requests for survey in surveys) + sum(one.requests for one in accounts)
     reach = [item for survey in surveys for item in survey.reach]
-    included = f"{sum(1 for item in reach if item.ok)}/{len(reach)} datasets included"
     refused = [survey.adapter for survey in surveys if not survey.reachable]
+    flagged = [account for account in accounts if account.status != "ok"]
     if refused:
-        return Check(
-            "adapters",
-            "fail",
-            f"{detail}; {', '.join(refused)} did not authenticate · {spent} request(s)",
-            items=tuple(items),
-            remedy="check the credential named above; every command through that adapter stops",
-        )
-    return Check("adapters", "ok", f"{detail}; {included} · {spent} request(s)", items=tuple(items))
+        reached = f"{', '.join(refused)} did not authenticate"
+    elif surveys:
+        reached = f"{sum(1 for item in reach if item.ok)}/{len(reach)} datasets included"
+    else:
+        reached = "--check-adapters had no configured adapter to reach"
+    said = " · ".join(
+        [
+            reached,
+            *(account.detail for account in flagged),
+            f"{spent} request(s)" if spent else "made no network call",
+        ]
+    )
+    remedies = [
+        *(
+            ["check the credential named above; every command through that adapter stops"]
+            if refused
+            else []
+        ),
+        *(account.remedy for account in flagged if account.remedy),
+    ]
+    statuses = {account.status for account in flagged} | ({"fail"} if refused else set())
+    status: Status = "fail" if "fail" in statuses else "warn" if statuses else "ok"
+    return Check(
+        "adapters",
+        status,
+        f"{detail}; {said}",
+        items=tuple(items),
+        remedy="; ".join(remedies) or None,
+    )
 
 
 def _adapter_item(ws: Workspace, adapter: registry.Adapter) -> str:

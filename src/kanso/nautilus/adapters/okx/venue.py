@@ -8,20 +8,30 @@ package and nowhere else in kanso.
 
 **What is declared.** The package declares perpetual swaps: a margin account, settled in
 USDT, charged 5 basis points on a fill that takes liquidity and 2 on one that rests on the
-book (`commission_bps` and `maker_bps`). Provenance: the exchange's published Regular
-(Lv1) perpetual schedule, and the operator's account measured on 2026-09-30 with
-`GET /api/v5/account/trade-fee?instType=SWAP`, which answered level `Lv1`, maker `-0.0002`
-and taker `-0.0005` — the exchange signs a fee the account pays as negative — so 2 and 5
-basis points. The same call for `SPOT` answered 0.70 %, the Australian retail spot schedule;
-it is not declared, because this package declares perpetuals. The account's position mode
-read `net_mode` on the same day, and a client (a later change) will require net mode at
-connect.
+book (`commission_bps` and `maker_bps`). These are the exchange's **global** Regular (Lv1)
+perpetual tier, from its published schedule — and no more than that. The exchange serves
+accounts through regional entities, each with a Regular tier of its own, so the
+declaration is right for an account on the global entity and can be wrong for any other.
 
-**Declared, not fetched.** The fee tier is a fact about an account on a day, and a card is
-costed before any account is opened — so the tier is stated here from the published
-schedule and the measurement above, and an account on another tier states its own rates
-under `venues.OKX.costs` in `portfolio.yaml` (origin `venue_override`), exactly as an
-operator stresses any venue's costs.
+Measured with the operator's read-only key on `us.okx.com`, on an account of the
+Australian entity: on 2026-10-01, in futures mode (`acctLv` 2),
+`GET /api/v5/account/trade-fee?instType=SWAP` answered level `Lv1`, maker `-0.0005` and
+taker `-0.0007` on `maker`/`taker`, `makerU`/`takerU` and `makerUSDC`/`takerUSDC` alike —
+the exchange signs a fee the account pays as negative — so 5 and 7 basis points, and the
+account's fee page showed Futures 0.0500 % maker and 0.0700 % taker. The day before, in spot
+mode (`acctLv` 1), the same call had answered `-0.0002` and `-0.0005`, the global figures,
+and was taken for this account's tier: a workspace costed on the declaration charged it 3 bp
+too little on every fill that rested and 2 bp on every one that took. The same call for
+`SPOT` answered 0.70 %, the Australian retail spot schedule; it is not declared, because
+this package declares perpetuals. The account's position mode read `net_mode` on both days,
+and a client (a later change) will require net mode at connect.
+
+**Declared, not fetched — and checked when asked.** The fee tier is a fact about an
+account on a day, and a card is costed before any account is opened — so the tier is stated
+here from the published schedule, and an account on another tier states its own rates under
+`venues.OKX.costs` in `portfolio.yaml` (origin `venue_override`), exactly as an operator
+stresses any venue's costs. `kanso doctor --check-adapters` reads the account's own tier
+with its key and prints those lines where the workspace charges otherwise (`account.py`).
 
 **The rates are charged once, by the runner, and never by the engine.** Costs are
 deducted per fill in the extraction and nowhere else, and the simulated venue charges
@@ -61,7 +71,9 @@ CURRENCY: Final = "USDT"
 
 COMMISSION_BPS: Final = 5.0
 MAKER_BPS: Final = 2.0
-"""The Regular (Lv1) perpetual taker and maker rates, measured on the operator's account."""
+"""The global Regular (Lv1) perpetual taker and maker rates. A regional entity's Regular tier
+differs — the Australian one's was 7 and 5, measured 2026-10-01 — and is stated under
+`venues.OKX.costs`."""
 
 PERPETUAL: Final = VenueDeclaration(
     account="margin",

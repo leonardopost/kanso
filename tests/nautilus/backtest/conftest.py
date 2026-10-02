@@ -527,3 +527,136 @@ def request_for(hyp: Hypothesis):
         )
 
     return make
+
+
+POSTER = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Rests 100 at the best bid when flat and offers what it holds at the best ask,
+    re-posted whenever that side's best price moves; it also counts what it is handed."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.posted = None
+        self.books = 0
+        self.prints = 0
+
+    def on_order_book_deltas(self, deltas):
+        self.books += 1
+        self._post(deltas.instrument_id)
+
+    def on_trade_tick(self, tick):
+        self.prints += 1
+        self._post(tick.instrument_id)
+
+    def _post(self, instrument_id):
+        book = self.cache.order_book(instrument_id)
+        bid, ask = book.best_bid_price(), book.best_ask_price()
+        if bid is None or ask is None:
+            return
+        held = self.held(instrument_id)
+        want = ("BUY", float(bid)) if held <= 0 else ("SELL", float(ask))
+        if want == self.posted:
+            return
+        self.cancel_all_orders(instrument_id)
+        if want[0] == "BUY":
+            sent = self.submit_entry(instrument_id, "BUY", qty=100, price=want[1])
+        else:
+            sent = self.submit_exit(instrument_id, price=want[1])
+        self.posted = want if sent is not None else None
+'''
+"""A sleeve that rests at the touch of a level-two book, on the book and on every print."""
+
+TICK_DAYS = (date(2024, 1, 2), date(2024, 1, 3))
+"""The two sessions the tick feed below covers, inside the research window."""
+
+TICK_STEP_NS = 7 * 60 * SECOND_NS
+TICK_EVENTS = 40
+"""An event every seven minutes from 12:00 UTC, forty a session: four hours and more, so a
+read of an hour cuts a session into several and a read of a day holds it whole."""
+
+
+def ticking(day: date, symbol: str = SYMBOL) -> tuple[list[object], list[TradeTick]]:
+    """One session of a level-two book and its prints, built to share instants.
+
+    The book opens 50 bid at 10.00 and 50 offered at 10.02 — two changes at one instant —
+    and every event after it either resizes both sides (two changes) or moves the whole book
+    a cent up or back (four: each side's best deleted and the next added). A millisecond
+    after each event come its prints: two sellers' prints of 30 at the bid sharing their
+    nanosecond on even events, one buyer's print of 30 at the offer on odd ones, so some
+    instants hold two points of a kind and some one.
+    """
+    from nautilus_trader.model.enums import BookAction, OrderSide
+
+    from kanso.data.loaders.points import make_delta
+
+    ident = InstrumentId(Symbol(symbol), _venue())
+    base = midnight_ns(day) + 12 * 3_600 * SECOND_NS
+    book: list[object] = [
+        make_delta(ident, BookAction.ADD, OrderSide.BUY, 1_000, 50, 0, 2, 0, base, base),
+        make_delta(ident, BookAction.ADD, OrderSide.SELL, 1_002, 50, 0, 2, 0, base, base),
+    ]
+    made: list[TradeTick] = []
+    bid, ask = 1_000, 1_002
+    for event in range(1, TICK_EVENTS):
+        ts = base + event * TICK_STEP_NS
+        if event % 3:
+            book += [
+                make_delta(
+                    ident, BookAction.UPDATE, OrderSide.BUY, bid, 50 + event, 0, 2, 0, ts, ts
+                ),
+                make_delta(
+                    ident, BookAction.UPDATE, OrderSide.SELL, ask, 50 + event, 0, 2, 0, ts, ts
+                ),
+            ]
+        else:
+            step = 1 if bid == 1_000 else -1
+            book += [
+                make_delta(ident, BookAction.DELETE, OrderSide.BUY, bid, 0, 0, 2, 0, ts, ts),
+                make_delta(ident, BookAction.ADD, OrderSide.BUY, bid + step, 50, 0, 2, 0, ts, ts),
+                make_delta(ident, BookAction.DELETE, OrderSide.SELL, ask, 0, 0, 2, 0, ts, ts),
+                make_delta(ident, BookAction.ADD, OrderSide.SELL, ask + step, 50, 0, 2, 0, ts, ts),
+            ]
+            bid, ask = bid + step, ask + step
+        printed = ts + 1_000_000
+        if event % 2 == 0:
+            sides = [(bid, AggressorSide.SELLER)] * 2
+        else:
+            sides = [(ask, AggressorSide.BUYER)]
+        for index, (px, side) in enumerate(sides):
+            made.append(
+                TradeTick(
+                    ident,
+                    Price(px / 100, 2),
+                    Quantity.from_int(30),
+                    side,
+                    TradeId(f"{day:%m%d}-{event}-{index}"),
+                    ts_event=printed,
+                    ts_init=printed,
+                )
+            )
+    return book, made
+
+
+def tick_hypothesis(latency_ms: float = 20.0) -> Hypothesis:
+    """`hypothesis()` on a level-two book and its prints, under a latency."""
+    document = hypothesis().model_dump(mode="json")
+    document.update(resolution="tick", data_requirements=["book", "trade"])
+    document["costs"] = {**document["costs"], "latency_ms": latency_ms}
+    return Hypothesis.model_validate(document)
+
+
+def tick_groups(days: Sequence[date] = TICK_DAYS) -> list[tuple[object, ...]]:
+    """The book and the prints of `days`, one type per group, as a catalog serves them."""
+    sessions = [ticking(day) for day in days]
+    return [
+        tuple(point for book, _ in sessions for point in book),
+        tuple(point for _, made in sessions for point in made),
+    ]

@@ -122,7 +122,11 @@ def doctor(
         bool, typer.Option("--report", help="Redact paths, for pasting upstream.")
     ] = False,
     check_adapters: Annotated[
-        bool, typer.Option("--check-adapters", help="Allow one request per adapter.")
+        bool,
+        typer.Option(
+            "--check-adapters",
+            help="Probe each configured adapter, and each broker account whose key resolves.",
+        ),
     ] = False,
     as_json: JsonOption = False,
 ) -> None:

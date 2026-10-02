@@ -364,6 +364,8 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
+a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —
@@ -407,7 +409,11 @@ a sleeve whose exit rests at the ask reads the whole position there until the ex
 exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
-equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
+equity curve strikes at each period end, and one a strategy may size from. Reading it on every
+bar costs what the sleeve's orders gained since the last read, however long they have lived,
+so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
+does not save memory either, since the engine keeps every order's events for the run
+(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns
 (`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second
@@ -757,11 +763,13 @@ between: a print that would have filled the order in that interval finds it not 
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
 the first point of data after its delay has passed, and only after matching that point, so
 the delay a run models is never shorter than the one stated and at tick resolution
-exceeds it by one point. On a feed whose instants coincide — every level-two book, any grain
-of several names — that point reaches the sleeve through a flush marker, and the command
-lands before the sleeve's handler for it on both code paths (`docs/concepts.md`,
-Delivery). It models the round trip from
-the strategy to the exchange's book through the account and route it will trade on, and it
+exceeds it by one point. On a feed of prints, quotes or a book, and on any grain of several
+names, a print, a quote or a bar reaches the sleeve through a flush marker at its instant,
+and the command lands before the sleeve's handler for it on both code paths
+(`docs/concepts.md`, Delivery). A change to the book is never held: the sleeve's
+`on_order_book_deltas` for it runs before a command due at that change lands, and sees the
+order sent and not yet on the book; the next point's handler sees it there. It models the
+round trip from the strategy to the exchange's book through the account and route it will trade on, and it
 is measured there, on real orders, rather than assumed. State the whole round trip: a feed
 that reaches the strategy late and an order that reaches the book late add up, and a rule
 that reacts to a point and posts lands the same instant either way, so one number carries
@@ -828,6 +836,21 @@ prices and instants allowed. On a level-two book (`OrderBookDelta` data) the ven
 track queue position — `queue_position` in the engine's venue configuration — so a limit
 that joins a level showing 500 ahead fills only after those 500 have traded through; an
 order posted inside the spread creates its own level and has nothing ahead of it either way.
+
+A hypothesis that requires `book` needs the book on every UTC day its window holds a name's
+bars, quotes or prints. A day that holds them and no change of that name's book — its book
+archive missing, say — is refused, on a card, a replay and a certification alike, naming the
+name and the days and the load that fixes it:
+
+```
+data: demo_book holds the book, and the catalog holds market data and no book change for DEMO.XNAS on 2024-01-03
+remedy: load the book for DEMO.XNAS over 2024-01-03..2024-01-03 with `kanso data load`, then take a snapshot
+```
+
+The venue would otherwise match that day's prints against the book the day before left. A
+card reports the refusal as a crash carrying that remedy, and `kanso research begin` refuses a
+baseline that met it (exit 2). Hours of prints after a day's last change of the book, in a
+day that has one, are not refused.
 
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 
@@ -1068,6 +1091,14 @@ end: 2026-09-28
 ```
 
 ```yaml
+loader: okx_book                 # the book, kept exact to `levels` deep, from the daily archives
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-28
+end: 2026-09-28
+levels: 3                        # required, 1 to 400; okx_book only
+```
+
+```yaml
 loader: okx_funding              # the realised rate at each settlement
 instruments: [BTC-USDT-SWAP]
 start: 2026-09-01
@@ -1081,6 +1112,9 @@ $ kanso data load --loader okx_funding --spec funding.yaml
 A range reaching before what the exchange serves — about three months of funding, about
 six of `1s` bars — or into a UTC day that has not ended is refused naming the day to use
 (exit 3); `docs/adapters.md` gives each loader's source, horizon, units and rate limits.
+`okx_trades` and `okx_book` write each UTC day as a dataset of its own, with its own
+manifest, so a range of them is as many datasets as days, and `data show` joins them into
+one span.
 
 **A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
 every settlement, so a hypothesis whose universe holds one lists `funding` in
@@ -1376,20 +1410,20 @@ The lane directories, and the only place research edits anything.
 
 ```
 runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
-runs/<lane>/<hyp>/.card/   a card's payload, report and output, only while the card runs
+runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
 runs/daemon.log            whatever the daemon and its children write to a stream
 ```
 
-`.card/` is how a card's points reach the child that runs it: the lane writes the window's
-points there, the card writes back what it measured, and the lane removes the directory once
-it has read it. A lane killed in the middle of a card leaves that one payload behind — it can
-be hundreds of megabytes for a window of minute bars — and the run's next card empties the
-directory before it writes, so a lane never holds more than one. Under a running daemon that
-next card comes at once: the supervisor starts a dead lane again under its name, and the lane
-in its place resumes the run. A lane killed in its baseline has no run yet; the supervisor
-puts the hypothesis back in the queue and removes the directory, payload and all. The scope
-check a card passes ignores `.card/`, as it ignores every dot-file.
+`.card/` is where a card's child writes back what it measured and whatever it printed; the
+lane removes the directory once it has read them. The window never goes there: the lane
+streams it to the child on its standard input, a chunk at a time, while the card runs
+(`docs/concepts.md`, Card). A lane killed in the middle of a card leaves those two small
+files behind, and the run's next card empties the directory before it starts. Under a
+running daemon that next card comes at once: the supervisor starts a dead lane again under
+its name, and the lane in its place resumes the run. A lane killed in its baseline has no
+run yet; the supervisor puts the hypothesis back in the queue and removes the directory. The
+scope check a card passes ignores `.card/`, as it ignores every dot-file.
 
 A lane writes no log of its own, and no file under `runs/` records what a run did. The
 record of a run is in `state.db` — the run row, every card with its metric and verdict, and
@@ -1615,7 +1649,8 @@ be standing when the long-running node arrives.
 ## `sessions/`
 
 One directory per run of a node: `session.yaml`, the points released (`stream.jsonl`) and the
-order intents that came back (`intents.jsonl`). Replay writes one, a parity comparison writes
+order intents that came back (`intents.jsonl`). A book's changes of one instrument at one
+instant are released as one point, so they are one line of the stream. Replay writes one, a parity comparison writes
 two — one per code path — and a deployment that actually runs a node writes one. They are the
 evidence behind a `parity_replay` gate and behind a stage's realised window. The sessions a
 warmed target was fed before its range are not among the points released, and `clock_ns` is

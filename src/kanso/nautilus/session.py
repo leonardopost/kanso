@@ -77,7 +77,7 @@ from nautilus_trader.model.identifiers import TraderId
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, sandbox
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest, RunResult
-from kanso.nautilus.cross_section import arm, ordered, warm, without_markers
+from kanso.nautilus.cross_section import arm, coincident, ordered, warm, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
 
@@ -176,7 +176,8 @@ def run_node(
     and never resumed into.
     """
     marks = backtest.checked(request, instruments, groups)
-    points = ordered(groups)
+    backtest.book_held(request, groups)
+    points = ordered(groups, coincident=coincident(request.hyp))
     opens, _ = request.bounds
     backtest._seed_globals(request.snapshot_id)
     started = time.perf_counter()
