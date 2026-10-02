@@ -700,6 +700,34 @@ def test_a_stop_at_market_cancels_the_take_profit_it_would_otherwise_wait_on(
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
 
 
+STOP_ASKED_TWICE = STOP_OVER_TAKE_PROFIT.replace(
+    b"        elif 30 <= self.seen < 35:\n            self.submit_exit(instrument_id)\n",
+    b"        elif self.seen == 30:\n"
+    b"            self.submit_exit(instrument_id)\n"
+    b"            self.submit_exit(instrument_id)\n",
+)
+"""STOP_OVER_TAKE_PROFIT asking for its stop twice in one handler, so the second call finds
+the first stop still working."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_a_stop_asked_for_again_keeps_the_stop_already_working(
+    request_for, latency_ms: float
+) -> None:
+    """A second exit at market asked for in the handler that sent the first leaves the first
+    alone — a market order is the venue's to fill, and is never cancelled to make room — and
+    adds nothing to it: the take-profit is cancelled and the position is sold once. With no
+    latency the take-profit's cancel is spent when sent, so the first ask sends the stop and
+    the second finds it working; a quote reaches the sleeve only once the venue has settled
+    at its instant, so a stop sent on one quote has landed by the next, and only a second
+    ask in the same handler meets it. Under a latency the first ask is owed until the
+    cancel lands, and the second owes nothing more."""
+    assert STOP_ASKED_TWICE != STOP_OVER_TAKE_PROFIT
+    run = _run(request_for, latency_ms, STOP_ASKED_TWICE)
+    flat_within_the_session(run)
+    assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
 @pytest.mark.parametrize("cancel", ["cancel_all_orders", "cancel_orders", "cancel_order"])
 def test_an_owed_exit_at_a_price_is_forgotten_once_the_sleeve_cancels_its_exits_again(
     request_for, cancel: str
@@ -908,7 +936,11 @@ def test_an_exit_at_market_is_paid_behind_a_modify_the_sleeve_sends_on_every_poi
     flat_within_the_session(run)
 
 
-SEEN_AT_SEND = b"""
+def seen_at_send(answered: bool) -> bytes:
+    """What MODIFIED_EVERY_QUOTE adds to fail the run unless, whenever a cancel held behind
+    its modify is sent, the order reads `ACCEPTED` with the latest modify answered or not as
+    `answered` says, and unless one was sent at all."""
+    return b"""
     def modify_order(self, order, quantity=None, price=None, *args, **kwargs):
         self.asked = price
         super().modify_order(order, quantity, price, *args, **kwargs)
@@ -917,16 +949,13 @@ SEEN_AT_SEND = b"""
         for held in self._behind_modify.values():
             current = self._current(held)
             seen = (current.status_string(), current.price == self.asked)
-            assert seen == ("ACCEPTED", False), seen
+            assert seen == ("ACCEPTED", %s), seen
             self.checked = True
         super()._send_behind_modify()
 
     def on_stop(self):
         assert getattr(self, "checked", False), "no cancel was held behind a modify"
-"""
-"""What MODIFIED_EVERY_QUOTE adds to fail the run unless, whenever a cancel held behind its
-modify is sent, the order reads `ACCEPTED` with the latest modify still unanswered, and unless
-one was sent at all."""
+""" % str(answered).encode()
 
 
 @pytest.mark.parametrize("last", ["session", "window"])

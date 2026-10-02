@@ -260,6 +260,147 @@ def test_the_two_paths_land_what_came_due_by_a_held_print_before_its_handler_ali
     assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
 
 
+def test_a_replay_refuses_a_day_of_prints_without_its_book_as_a_card_does() -> None:
+    """The replay path asks the same of its window as a card: a book hypothesis whose window
+    holds a day of prints and no change of that day's book is refused before a node is
+    built, naming the name and the day."""
+    from datetime import timedelta
+
+    from tests.nautilus.backtest.test_subprocess import _session
+
+    first = FORWARD[0]
+    second = first + timedelta(days=1)
+    hyp = hypothesis(resolution="tick", horizon="1d", data_requirements=["book", "trade"])
+    points = [*_session(first, booked=True), *_session(second, booked=False, shift=300)]
+    book = tuple(point for point in points if not hasattr(point, "trade_id"))
+    printed = tuple(point for point in points if hasattr(point, "trade_id"))
+
+    with pytest.raises(PreconditionError, match=f"no book change for DEMO.XNAS on {second}"):
+        session.run_node(request_for(hyp=hyp), [instrument()], [book, printed])
+
+
+LANDING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy under the book from the first handler it runs, and a second buy from the
+    first handler that finds the first one on the book, so the second's instant is the
+    first point whose handler saw the first order land."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.first = None
+        self.landed = False
+
+    def on_order_book_deltas(self, deltas):
+        self._handle(deltas.instrument_id)
+
+    def on_trade_tick(self, tick):
+        self._handle(tick.instrument_id)
+
+    def _handle(self, instrument_id):
+        if self.first is None:
+            self.first = self.submit_entry(instrument_id, "BUY", qty=100, price=9.00)
+        elif not self.landed and self.first.is_open:
+            self.landed = True
+            self.submit_entry(instrument_id, "BUY", qty=1, price=8.99)
+'''
+
+
+@pytest.mark.parametrize(("requirements", "landed_ms"), [(["book"], 40), (["book", "trade"], 20)])
+def test_a_command_due_at_a_book_change_lands_after_its_handler_on_both_paths(
+    requirements: list[str], landed_ms: int
+) -> None:
+    """A book handler is never held: the engine hands a batch of changes to the venue and to
+    the sleeve before it settles the commands due then. A buy sent at the opening book under
+    20 ms comes due at the change 20 ms later, whose handler still sees it sent; the change
+    after sees it on the book. A print at the same instant is held behind a marker, so its
+    handler sees it landed. Both paths alike."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide, BookAction, OrderSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    from kanso.data.loaders.points import make_delta
+    from tests.nautilus.backtest.test_exit_flat import chasing_costs
+    from tests.nautilus.backtest.test_order_book import _id
+
+    millisecond = 1_000_000
+    base = midnight_ns(FORWARD[0]) + 14 * 3_600 * SECOND_NS
+    book = [
+        make_delta(_id(), BookAction.ADD, OrderSide.BUY, 1_000, 500, 1, 2, 0, base, base),
+        make_delta(_id(), BookAction.ADD, OrderSide.SELL, 1_002, 500, 2, 2, 0, base, base),
+    ]
+    for step in (1, 2, 3):
+        ts = base + 20 * millisecond * step
+        book.append(
+            make_delta(_id(), BookAction.UPDATE, OrderSide.BUY, 1_000, 500 + step, 1, 2, 0, ts, ts)
+        )
+    prints = [
+        TradeTick(
+            _id(),
+            Price(10.01, 2),
+            Quantity.from_int(1),
+            AggressorSide.BUYER,
+            TradeId(f"P{step}"),
+            ts_event=base + 20 * millisecond * step,
+            ts_init=base + 20 * millisecond * step,
+        )
+        for step in range(4)
+    ]
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=requirements,
+        costs=chasing_costs(20.0),
+    )
+    request = request_for(source=LANDING, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(20.0)}  # type: ignore[dict-item]
+    groups = [tuple(book), tuple(prints)] if "trade" in requirements else [tuple(book)]
+    node, engine = both(replace(request, venue_model=model), [instrument()], groups)
+
+    assert [(intent[0] - base) // millisecond for intent in engine.intents] == [0, landed_ms]
+    assert node.intents == engine.intents
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_agree_over_a_book_of_many_changes_an_instant_and_prints_that_share_one(
+    latency_ms: float,
+) -> None:
+    """A level-two book whose instants carry two or four changes, with prints a millisecond
+    after them, two to a nanosecond on some and one on others, and a sleeve that re-posts at
+    the touch on every call: both paths hand it the same batches and the same prints, and
+    agree order for order and fill for fill."""
+    from tests.nautilus.backtest.conftest import POSTER, ticking
+    from tests.nautilus.backtest.test_exit_flat import chasing_costs
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=POSTER, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    sessions = [ticking(day) for day in (FORWARD[0], date(2024, 3, 4))]
+    book = tuple(point for changes, _ in sessions for point in changes)
+    printed = tuple(point for _, made in sessions for point in made)
+    node, engine = both(replace(request, venue_model=model), [instrument()], [book, printed])
+
+    assert not engine.crashed, engine.traceback_tail
+    assert engine.run.fills
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+
+
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_the_two_paths_pay_a_stop_a_take_profit_in_flight_cut_alike(latency_ms: float) -> None:
     """A stop sent behind the sleeve's own take-profit still in flight is cut to nothing and
@@ -547,11 +688,14 @@ def test_a_cancel_held_behind_a_modify_every_point_goes_out_before_the_latest_is
     latency_ms: float,
 ) -> None:
     """Under a latency, the cancel an exit at market holds behind a modify goes out on the
-    next quote before either path has answered the latest modify, shorter than the second
-    between quotes or not; and for a sleeve that modifies on every quote the order then reads
-    `ACCEPTED`, not `PENDING_UPDATE`, the answer to an earlier modify having landed since.
-    Both paths stay flat and agree. Measured on the round before this test: a docstring said
-    the order read `PENDING_UPDATE` there at 2500 ms, and on both paths it read `ACCEPTED`."""
+    next quote, and for a sleeve that modifies on every quote the order then reads
+    `ACCEPTED`, not `PENDING_UPDATE`. A latency shorter than the second between quotes has
+    answered the latest modify by then — a quote feed is marked, so what came due by a quote
+    lands before its handler runs — and a longer one has not, only an earlier one. Both
+    paths stay flat and agree. Measured on the round before this test: a docstring said the
+    order read `PENDING_UPDATE` there at 2500 ms, and on both paths it read `ACCEPTED`; and
+    before a quote feed was always marked, the 20 ms modify was still unanswered there too,
+    because the quote was handed to the author before what it had made due landed."""
     from tests.nautilus.backtest import test_exit_flat
 
     sessions = (date(2024, 3, 4), date(2024, 3, 5))
@@ -561,7 +705,7 @@ def test_a_cancel_held_behind_a_modify_every_point_goes_out_before_the_latest_is
         data_requirements=["quote"],
         costs=test_exit_flat.chasing_costs(latency_ms),
     )
-    source = test_exit_flat.MODIFIED_EVERY_QUOTE + test_exit_flat.SEEN_AT_SEND
+    source = test_exit_flat.MODIFIED_EVERY_QUOTE + test_exit_flat.seen_at_send(latency_ms < 1_000)
     request = request_for(source=source, hyp=hyp)
     model = dict(request.venue_model)
     model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]

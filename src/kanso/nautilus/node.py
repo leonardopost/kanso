@@ -101,7 +101,7 @@ from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
-from kanso.nautilus.cross_section import arm, deliver_from, warm
+from kanso.nautilus.cross_section import arm, coincident, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, signals_kept
 from kanso.nautilus.strategy import BOOK
@@ -667,7 +667,10 @@ def _window_data(
         per_version.append(tuple(group for group in kept if group))
     return _Window(
         instruments=tuple(instruments[name] for name in sorted(instruments)),
-        points=ordered(tuple(seen[key] for key in sorted(seen))),
+        points=ordered(
+            tuple(seen[key] for key in sorted(seen)),
+            coincident=any(coincident(request.hyp) for request in requests),
+        ),
         per_version=tuple(per_version),
     )
 

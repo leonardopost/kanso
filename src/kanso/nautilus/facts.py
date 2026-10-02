@@ -51,6 +51,21 @@ exposes `get_schema`, `list_schemas`, `ArrowSerializer.serialize_batch` and
 directory layout directly. The engine offers the schemas; it does not offer the
 writer.
 
+**The SQL query does not keep an instant's points in file order; a query handed its files
+does.** `query` reads a built-in type through DataFusion with `ORDER BY ts_init`, and that
+sort is not stable: the points of one instant come back in an order that depends on the span
+asked for. Measured on a day of one crypto venue's BTC/USDT perpetual-swap prints, 79 of
+524,932 instants came back reordered read an hour at a time against read whole — trade ids
+848, 849, 850, 851 in the file, 848, 850, 849, 851 in the hour — and a synthetic file of
+30,000 prints holding 1 to 40 to an instant came back out of file order read whole. Given
+`files=`, `query` takes the dataset path for every type: it reads the files in the order
+given, each in its own row order, filters `ts_init` inclusively at both ends and sorts only
+when the rows are out of `ts_init` order, with a stable sort. `filter_files(data_cls,
+get_file_list_from_data_cls(data_cls), [identifier], start, end)` names one identifier's
+files that intersect a span, and their names, the interval each covers, sort in time order.
+kanso reads quotes, prints and book changes that way
+(`kanso.nautilus.backtest._in_file_order`).
+
 Availability timestamps
 -----------------------
 Every `Data` carries two nanosecond timestamps, `ts_event` (the economic
@@ -247,6 +262,25 @@ constraint kanso cannot repair from outside the engine; what it does is measure 
 here, record it, and tell a researcher that turnover — not per-bar work — is what a
 card's budget buys.
 
+**An order's events grow only at its end, and its strategy is handed each one as it is
+taken.** `Order.apply` appends the event it takes last, once its state machine has accepted
+it, and nothing else writes the list; `Order.events` hands back a new list holding every
+event each time it is read, where `event_count` and `last_event` read the length and the
+last element without one. The execution engine publishes each event it applied to the
+strategy's `events.order.<id>` topic after applying it, and the strategy publishes the
+pending modify and pending cancel it applies itself, so `handle_event` is handed each event
+when it is the order's last. Measured, a buy resting at 9.50, moved on every print it was
+open on and filled in parts by sellers' prints of 10, with no latency and with thirty
+seconds: every event after the first was handed in the order the order holds them, each
+as its last with the count one higher than before, and every list read on the way was a
+prefix of the last. The first, `OrderInitialized`, is handed before the order is in the
+cache. That is what lets `KansoStrategy` fold an order's events into its balance as they
+come instead of copying the order's history on every read: a sleeve that moves a resting
+order on every bar adds two events a bar, and copied whole they cost the square of the bars.
+An engine release in which this stops holding leaves the balance exact — a read that cannot
+show the events it was handed are all of them takes the copy instead — and brings the square
+back.
+
 Three more facts about matching bind the sleeve's sizing and its in-flight
 guard. `Order.is_closed` is false for a fresh order and true once a terminal
 event — filled, cancelled, rejected, denied, expired — has been applied, on
@@ -284,6 +318,21 @@ at 9.50 against a print at 9.49: a seller's print, or one with no aggressor, fil
 9.50; a buyer's never does, at any probability. A bar's own prints carry no such label —
 the engine walks them as book updates — so this bites only on trade data, which is why
 a trade file that records no side is loaded as `NO_AGGRESSOR` and never given one.
+
+**A book's changes of one instant reach the venue and the strategy whole only as one
+`OrderBookDeltas`.** Fed one `OrderBookDelta` at a time, the backtest engine hands each to
+`SimulatedExchange.process_order_book_delta`, which applies it and matches, and the data
+engine — buffering nothing — publishes each as a one-element `OrderBookDeltas` once the book
+it keeps has applied it, so a strategy is called once per change with the book half-moved
+and the venue matches against every intermediate state. Fed the same changes as one
+`OrderBookDeltas`, the exchange applies all of them and matches once
+(`process_order_book_deltas`), and the data engine publishes the batch whole after its book
+has taken all of it. Measured, a buy resting at 10.00 under an offer at 10.05, met by an
+instant that adds an offer at 10.00 and deletes it again: one change at a time, the strategy
+was called with each delta alone — the first call saw no offer at all — and the buy filled
+against the offer that existed only between the two; as one batch, it was called once per
+instant with both deltas and an offer of 10.05, and nothing filled. kanso delivers a book a
+batch per instrument and instant (`kanso.nautilus.cross_section.batched`).
 
 **An order whose cancel was sent is working until the cancel lands.** `Strategy.cancel_order`
 and `cancel_all_orders` apply `OrderPendingCancel` to the order before the command leaves
@@ -1002,6 +1051,129 @@ def _check_a_cancel_in_flight_leaves_the_order_to_fill() -> tuple[bool, str]:
     )
 
 
+def _probe_handed_events(latency_ns: int) -> tuple[list[str], list[tuple[object, ...]], bool]:
+    """A buy of 30 resting at 9.50 and moved between 9.50 and 9.51 on every print it is still
+    open on, against sellers' prints of 10 that reach it. Returns the names of the events
+    the order holds at the end; for each event of it the strategy was handed, its name and,
+    once the order is in the cache, the order's event count then and whether the event was
+    the order's last; and whether every list `Order.events` handed back on the way is a
+    prefix of the last one, and a list of its own."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AccountType, AggressorSide, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import TradeId, Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.order: Any = None
+            self.handed: list[tuple[object, ...]] = []
+            self.lists: list[list[Any]] = []
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def handle_event(self, event: Any) -> None:
+            mine = getattr(event, "client_order_id", None)
+            if self.order is not None and mine == self.order.client_order_id:
+                held = self.cache.order(mine)
+                if held is None:
+                    self.handed.append((type(event).__name__,))
+                else:
+                    self.handed.append(
+                        (type(event).__name__, held.event_count, held.last_event is event)
+                    )
+                    self.lists.append(held.events)
+            super().handle_event(event)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.order = self.order_factory.limit(
+                    equity.id, OrderSide.BUY, Quantity.from_int(30), Price(9.5, 2)
+                )
+                self.submit_order(self.order)
+                return
+            price = Price(9.51 if self.seen % 2 else 9.5, 2)
+            if (
+                self.order.is_open
+                and not self.order.is_pending_update
+                and price != self.order.price
+            ):
+                self.modify_order(self.order, price=price)
+
+    points = [
+        TradeTick(
+            equity.id,
+            Price(price, 2),
+            Quantity.from_int(10),
+            AggressorSide.SELLER if price < 10.0 else AggressorSide.BUYER,
+            TradeId(f"P-{index}"),
+            (index + 1) * _MINUTE_NS,
+            (index + 1) * _MINUTE_NS,
+        )
+        for index, price in enumerate((10.0, 10.0, 9.51, 10.0, 9.5, 10.0, 9.51, 10.0, 9.5, 10.0))
+    ]
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        final = probe.order.events
+        grown = all(
+            seen == final[: len(seen)] and seen is not later
+            for seen, later in zip(probe.lists, [*probe.lists[1:], final], strict=True)
+        )
+        return [type(event).__name__ for event in final], probe.handed, grown
+    finally:
+        engine.dispose()
+
+
+def _check_an_order_hands_its_strategy_each_event_as_its_last() -> tuple[bool, str]:
+    """`KansoStrategy._settle`'s premise for reading an order's events once: what the strategy
+    is handed is what the order took, in order, as it took it."""
+    seen: list[str] = []
+    holds = True
+    for latency_ns in (0, _MINUTE_NS // 2):
+        final, handed, grown = _probe_handed_events(latency_ns)
+        expected = [(final[0],)] + [
+            (name, count, True) for count, name in enumerate(final[1:], start=2)
+        ]
+        moved = "OrderUpdated" in final and final.count("OrderFilled") >= 2
+        holds = holds and grown and moved and handed == expected
+        seen.append(
+            f"{'no latency' if not latency_ns else 'thirty seconds'}: the order holds {final}; "
+            f"handed (event, count, was last) {handed}"
+        )
+    return holds, (
+        "a buy of 30 resting at 9.50, moved on every print it was open on and filled in parts "
+        "by sellers' prints of 10 — "
+        + "; ".join(seen)
+        + ". Every event the order took after its first was handed to handle_event in the "
+        "order it holds them, each as its last with the count one higher than the one before, "
+        "and every list Order.events handed back on the way was a new list and a prefix of "
+        "the last"
+    )
+
+
 def _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight() -> tuple[bool, str]:
     """What `KansoStrategy.cancel_all_orders` mirrors when it notes the orders it cancelled:
     the engine marks an order open at the venue `PENDING_CANCEL` at once. On the backtest it
@@ -1345,6 +1517,117 @@ def _check_queue_position_waits_for_the_size_ahead() -> tuple[bool, str]:
     )
 
 
+def _probe_book_batch(*, batched: bool) -> tuple[list[tuple[int, float | None]], list[int]]:
+    """A book of 100 bid at 9.95 and 100 offered at 10.05, a buy of 10 resting at 10.00 sent
+    from the first call, then an instant that adds an offer at 10.00 and deletes it: each
+    call's delta count and the best offer the cache showed it, and the fill instants (in
+    seconds). Fed a delta at a time, or as one `OrderBookDeltas` per instant."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import FillModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import BookOrder, OrderBookDelta, OrderBookDeltas
+    from nautilus_trader.model.enums import AccountType, BookAction, BookType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    second = 1_000_000_000
+
+    def delta(ts: int, action: Any, side: Any, px: float, size: int) -> Any:
+        order = BookOrder(side, Price(px, 2), Quantity.from_int(size), 0)
+        return OrderBookDelta(equity.id, action, order, 0, 0, ts, ts)
+
+    instants = [
+        [
+            delta(second, BookAction.ADD, OrderSide.BUY, 9.95, 100),
+            delta(second, BookAction.ADD, OrderSide.SELL, 10.05, 100),
+        ],
+        [
+            delta(3 * second, BookAction.ADD, OrderSide.SELL, 10.00, 100),
+            delta(3 * second, BookAction.DELETE, OrderSide.SELL, 10.00, 0),
+        ],
+    ]
+    points: list[object] = (
+        [OrderBookDeltas(equity.id, changes) for changes in instants]
+        if batched
+        else [change for changes in instants for change in changes]
+    )
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[tuple[int, float | None]] = []
+            self.filled_at: list[int] = []
+
+        def on_start(self) -> None:
+            self.subscribe_order_book_deltas(equity.id)
+
+        def on_order_book_deltas(self, deltas: Any) -> None:
+            best = self.cache.order_book(equity.id).best_ask_price()
+            self.calls.append((len(deltas.deltas), None if best is None else float(best)))
+            if len(self.calls) == 1:
+                self.submit_order(
+                    self.order_factory.limit(
+                        equity.id, OrderSide.BUY, Quantity.from_int(10), Price(10.0, 2)
+                    )
+                )
+
+        def on_order_filled(self, event: Any) -> None:
+            self.filled_at.append(int(event.ts_event) // second)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            fill_model=FillModel(prob_fill_on_limit=1.0),
+            book_type=BookType.L2_MBP,
+            trade_execution=True,
+            queue_position=True,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return probe.calls, probe.filled_at
+    finally:
+        engine.dispose()
+
+
+def _check_a_book_batch_is_matched_once() -> tuple[bool, str]:
+    """What a batch buys the venue: it matches after the whole instant, not after each change."""
+    _, singly = _probe_book_batch(batched=False)
+    _, whole = _probe_book_batch(batched=True)
+    holds = singly == [3] and whole == []
+    return holds, (
+        f"a buy resting at 10.00 under an offer of 10.05, then an instant adding an offer at "
+        f"10.00 and deleting it: filled at seconds {singly} fed a change at a time and at "
+        f"{whole} fed as one OrderBookDeltas, which the exchange applies whole before it matches"
+    )
+
+
+def _check_a_book_batch_is_published_whole() -> tuple[bool, str]:
+    """What a batch buys the strategy: one call per instant, after the book has taken all of it."""
+    singly, _ = _probe_book_batch(batched=False)
+    whole, _ = _probe_book_batch(batched=True)
+    holds = singly == [(1, None), (1, 10.05), (1, 10.0), (1, 10.05)] and whole == [
+        (2, 10.05),
+        (2, 10.05),
+    ]
+    return holds, (
+        f"two instants of two changes each reached on_order_book_deltas as {singly} "
+        "(deltas per call, best offer the cache showed) fed a change at a time, and as "
+        f"{whole} fed as one OrderBookDeltas per instant: the data engine publishes a batch "
+        "whole, after its own book has applied every change in it"
+    )
+
+
 def _check_close_cost_is_flat() -> tuple[bool, str]:
     """Count the pickle loads a run makes closing positions in two instruments in turn.
 
@@ -1587,6 +1870,68 @@ def _check_catalog_orders_by_ts_init() -> tuple[bool, str]:
         "the catalog's query builder appends `ts_init >= start` / `ts_init <= end` and "
         '`ORDER BY ts_init`, and its dataset path filters `pds.field("ts_init")`; '
         "`ts_event` is never used to order or filter"
+    )
+
+
+def _check_files_keep_an_instant_in_file_order() -> tuple[bool, str]:
+    """Write 30,000 prints holding 1 to 40 to an instant, ten seconds apart, and read them
+    back through `query(files=...)` whole and in five spans cut at instants."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    equity: Any = _sample_equity()
+    second = 1_000_000_000
+    stamps: list[int] = []
+    cohort = 0
+    while len(stamps) < 30_000:
+        stamps += [second * (1 + 10 * cohort)] * (1 + cohort * 7_919 % 40)
+        cohort += 1
+    stamps = stamps[:30_000]
+    prints = [
+        TradeTick(
+            equity.id,
+            Price(10.0, 2),
+            Quantity.from_int(1),
+            AggressorSide.BUYER,
+            TradeId(str(index)),
+            ts,
+            ts,
+        )
+        for index, ts in enumerate(stamps)
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        catalog = ParquetDataCatalog(directory)
+        catalog.write_data([equity])
+        catalog.write_data(prints)
+        identifier = str(equity.id)
+
+        def read(start: int, end: int) -> list[str]:
+            files = sorted(
+                catalog.filter_files(
+                    TradeTick,
+                    catalog.get_file_list_from_data_cls(TradeTick),
+                    [identifier],
+                    start,
+                    end,
+                )
+            )
+            found = catalog.query(TradeTick, start=start, end=end, files=files)
+            return [str(point.trade_id) for point in found]
+
+        cuts = [stamps[0], *(stamps[len(stamps) * k // 5] for k in range(1, 5)), stamps[-1] + 1]
+        whole = read(stamps[0], stamps[-1])
+        spans = [read(start, end - 1) for start, end in zip(cuts, cuts[1:], strict=False)]
+    in_file = [str(index) for index in range(len(stamps))]
+    pieced = [trade for span in spans for trade in span]
+    holds = whole == in_file and pieced == in_file
+    return holds, (
+        f"{len(stamps)} prints, 1 to 40 an instant, read through query(files=...): whole "
+        f"{'in' if whole == in_file else 'out of'} file order, and in five spans cut at "
+        f"instants {'in' if pieced == in_file else 'out of'} file order, "
+        f"{len(pieced)} prints in all"
     )
 
 
@@ -2923,6 +3268,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_catalog_orders_by_ts_init,
     ),
     (
+        "a catalog query handed its files returns the points of one instant in file order, "
+        "whatever span it reads, with ts_init inclusive at both ends",
+        _check_files_keep_an_instant_in_file_order,
+    ),
+    (
         "the backtest engine sorts, merges and clocks its data stream by ts_init",
         _check_engine_orders_by_ts_init,
     ),
@@ -3078,6 +3428,15 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_queue_position_waits_for_the_size_ahead,
     ),
     (
+        "an OrderBookDeltas is applied whole by the simulated exchange and matched once",
+        _check_a_book_batch_is_matched_once,
+    ),
+    (
+        "the data engine publishes an OrderBookDeltas whole, after its book has applied it, "
+        "and a lone OrderBookDelta as a batch of one",
+        _check_a_book_batch_is_published_whole,
+    ),
+    (
         "closing a position costs the same whatever was closed before it",
         _check_close_cost_is_flat,
     ),
@@ -3085,6 +3444,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "an order whose cancel was sent is not closed until the cancel lands, and under a "
         "latency the market can fill it first",
         _check_a_cancel_in_flight_leaves_the_order_to_fill,
+    ),
+    (
+        "an order's events grow only at its end, and its strategy is handed each one as the "
+        "order's last when the order takes it",
+        _check_an_order_hands_its_strategy_each_event_as_its_last,
     ),
     (
         "close_position sends a reduce-only order, which the simulated venue trims to what "

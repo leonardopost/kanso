@@ -62,75 +62,63 @@ def test_a_card_leaves_the_lane_directory_exactly_as_it_found_it(
     assert {path.name: path.read_bytes() for path in lane.iterdir()} == before
 
 
-def test_a_payload_a_killed_lane_left_is_reclaimed_by_its_next_card(
+def test_what_a_killed_lane_left_is_reclaimed_by_its_next_card(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A lane killed mid-card leaves its payload in its own transfer directory — never in a
-    temporary directory of its own that nothing would ever find again — so the next card
-    empties it before writing, and removes it once it has read what came back."""
+    """A lane killed mid-card leaves what its card wrote in its own transfer directory —
+    never in a temporary directory of its own that nothing would ever find again — so the
+    next card empties it before it starts, and removes it once it has read what came back.
+    The window itself is never there: it travels on the child's standard input."""
     from kanso.nautilus import backtest as runner
 
     left = lane / runner.CARD_ROOM
     left.mkdir()
-    (left / "request.pkl").write_bytes(b"a window of points nobody will read" * 1_000)
-    (left / "result.pkl").write_bytes(b"a report nobody collected")
+    (left / runner.OUTPUT_FILE).write_bytes(b"what a killed card said" * 1_000)
+    (left / runner.RESULT_FILE).write_bytes(b"a report nobody collected")
     seen: list[list[str]] = []
     supervised = runner._supervised
 
-    def watching(request: object, room: Path, workdir: Path) -> object:
+    def watching(request: object, room: Path, workdir: Path, payload: object) -> object:
         seen.append(sorted(path.name for path in room.iterdir()))
         assert room == left and workdir == lane
-        return supervised(request, room, workdir)  # type: ignore[arg-type]
+        return supervised(request, room, workdir, payload)  # type: ignore[arg-type]
 
     monkeypatch.setattr(runner, "_supervised", watching)
 
     carded = run_subprocess(request_for(), store, lane)
 
     assert not carded.crashed, carded.traceback_tail
-    assert seen == [["request.pkl"]], "the stale report went, and this card's payload is fresh"
+    assert seen == [[]], "the room was emptied, and nothing of the window was put in it"
     assert not left.exists()
 
 
-def test_the_payload_is_a_header_the_request_and_one_pickle_per_session(
-    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+def test_the_stream_is_a_header_the_request_one_pickle_per_chunk_and_its_end(
+    store: Path, request_for
 ) -> None:
-    """The points reach the file a session at a time: no process holds the window, and no
-    copy of it is held as bytes beside the objects, which for a window of ticks is gigabytes."""
+    """The points are pickled a chunk at a time as the stream is asked for them, and a read
+    of daily bars is a day: no process holds the window, and no copy of it is held as bytes
+    beside the objects, which for a window of ticks is gigabytes."""
     import pickle
 
     from kanso.nautilus import backtest as runner
 
-    read: list[tuple[object, object, list[object]]] = []
-
-    def reading(request: object, room: Path, workdir: Path) -> object:
-        with (room / runner.REQUEST_FILE).open("rb") as handle:
-            header, body = pickle.load(handle), pickle.load(handle)
-            chunks: list[object] = []
-            while True:
-                try:
-                    chunks.append(pickle.load(handle))
-                except EOFError:
-                    break
-            read.append((header, body, chunks))
-        raise RuntimeError("read, and not run")
-
-    monkeypatch.setattr(runner, "_supervised", reading)
     request = request_for()
+    records = [
+        pickle.loads(record)
+        for record in runner._payload(request, store, (("/elsewhere", "an_extension"),))
+    ]
 
-    with pytest.raises(RuntimeError, match="read, and not run"):
-        run_subprocess(request, store, lane, (("/elsewhere", "an_extension"),))
-
-    ((header, body, chunks),) = read
+    header, body, *chunks, end = records
     assert header == {"extensions": [["/elsewhere", "an_extension"]]}
     assert isinstance(body, dict) and set(body) == {"request", "instruments"}
     assert body["request"] == request.plain()
+    assert end == runner.END
     _, groups = runner.window_data(request, store)
     whole = sorted(int(p.ts_init) for g in groups for p in g)
     assert all(set(chunk) == {"groups"} for chunk in chunks)
     sessions = {day_of(ts) for ts in whole}
     assert len(chunks) == len(sessions), "one pickle per session that held a point"
     assert sorted(int(p.ts_init) for c in chunks for g in c["groups"] for p in g) == whole
-    assert not (lane / runner.CARD_ROOM).exists(), "removed even when the card never ran"
 
 
 def test_the_child_is_given_an_allow_list_and_no_catalog(
@@ -332,10 +320,10 @@ def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
     watch = runner._watch
     watched: list[Any] = []
 
-    def stopped_once_running(child: Any, budget_s: Any, mem_cap_gb: Any) -> Any:
+    def stopped_once_running(child: Any, *bounds: Any, **fed: Any) -> Any:
         watched.append(child)
         runner.interrupt()
-        return watch(child, budget_s, mem_cap_gb)
+        return watch(child, *bounds, **fed)
 
     monkeypatch.setattr(runner, "_watch", stopped_once_running)
     try:
@@ -371,9 +359,9 @@ def test_a_card_no_longer_wanted_is_killed_at_the_watcher_s_next_ask(
         if watched:
             raise PreconditionError("the claim was taken back", remedy="queue it again")
 
-    def taken_once_running(child: Any, budget_s: Any, mem_cap_gb: Any) -> Any:
+    def taken_once_running(child: Any, *bounds: Any, **fed: Any) -> Any:
         watched.append(child)
-        return watch(child, budget_s, mem_cap_gb)
+        return watch(child, *bounds, **fed)
 
     monkeypatch.setattr(runner, "_watch", taken_once_running)
     monkeypatch.setattr(runner, "WANTED_POLL_S", 0.05)
@@ -422,27 +410,35 @@ def test_a_process_told_to_stop_reads_no_window_and_starts_no_card(
         runner.resume()
 
 
-def test_a_stop_that_lands_while_the_window_is_read_starts_no_card(
+def test_a_stop_that_lands_while_the_window_is_read_kills_the_card_it_started(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The window is read while the card runs, so a stop that lands during a read is a stop
+    of a running card: the watch kills it at its next poll, and nothing is read after it."""
+    import signal
+
     from kanso.errors import PreconditionError
     from kanso.nautilus import backtest as runner
 
     read = runner._window_points
+    reads: list[object] = []
 
     def reading(*args: object) -> object:
+        reads.append(args)
         runner.interrupt()
         return read(*args)  # type: ignore[arg-type]
 
+    started = _children(monkeypatch)
     monkeypatch.setattr(runner, "_window_points", reading)
-    monkeypatch.setattr(
-        runner.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a card was started")
-    )
     try:
         with pytest.raises(PreconditionError, match="the card was interrupted"):
             run_subprocess(request_for(), store, lane)
     finally:
         runner.resume()
+
+    assert len(reads) == 1, "the stop ended the stream at the read it landed in"
+    assert [child.returncode for child in started] == [-signal.SIGKILL]
+    assert not (lane / runner.CARD_ROOM).exists()
 
 
 def test_a_card_ends_itself_once_its_parent_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -466,31 +462,26 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     """Measured with real processes: a lane killed outright takes its card with it.
 
     The card leads its own session, so the kill never reaches it; left to itself this one
-    would spend far longer than the wait below in `on_start` alone. The payload is staged
-    as the parent stages it — the header, the request, then the session's points as their
-    own record — because a card handed no session runs nothing and ends at once, which
-    made this check a race against the child's start-up.
+    would spend far longer than the wait below in `on_start` alone. The stream is the one
+    the parent writes — the header, the request, the window's chunks and the end — because
+    a card handed no chunk runs nothing and ends at once, which made this check a race
+    against the child's start-up.
     """
-    import pickle
     import signal
     import subprocess
     import sys
     import time
 
-    from kanso.nautilus.backtest import _BOOTSTRAP, window_data
+    from kanso.nautilus.backtest import _BOOTSTRAP, _payload
 
     request = request_for(source=SLOW_SLEEVE)
-    instruments, groups = window_data(request, store)
-    handed = tmp_path / "request.pkl"
-    with handed.open("wb") as handle:
-        pickle.dump({"extensions": []}, handle)
-        pickle.dump({"request": request.plain(), "instruments": instruments}, handle)
-        pickle.dump({"groups": groups}, handle)  # one session, as the parent stages it
+    handed = tmp_path / "stream.pkl"
+    handed.write_bytes(b"".join(_payload(request, store, ())))
     starts_a_card = (
         "import os, subprocess, sys, time\n"
-        f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r}, {str(handed)!r},"
+        f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r},"
         f" {str(tmp_path / 'result.pkl')!r}, str(os.getpid())], start_new_session=True,"
-        f" cwd={str(lane)!r})\n"
+        f" cwd={str(lane)!r}, stdin=open({str(handed)!r}, 'rb'))\n"
         "print(card.pid, flush=True)\n"
         "time.sleep(120)\n"
     )
@@ -509,12 +500,12 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
             os.killpg(card, signal.SIGKILL)
 
 
-def test_the_window_is_released_before_the_card_is_supervised(
+def test_the_parent_holds_one_read_of_the_window_at_a_time(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The child holds its own copy of the points for the whole card; the parent, which read
-    them only to write the payload, holds none of them while it waits. Measured before this:
-    a lane kept 1.4 GB of an eighteen-month five-second window alive beside a 2.7 GB card."""
+    """The child holds its own copy of the chunk it runs; the parent, which reads the window
+    only to stream it, holds nothing of a read once the next begins. Measured before this: a
+    lane kept 1.4 GB of an eighteen-month five-second window alive beside a 2.7 GB card."""
     import sys
 
     from kanso.nautilus import backtest as runner
@@ -523,13 +514,6 @@ def test_the_window_is_released_before_the_card_is_supervised(
     window: list[object] = []
 
     def reading(*args: object) -> object:
-        groups, loaded = read(*args)  # type: ignore[arg-type]
-        window.extend(groups)
-        return groups, loaded
-
-    supervised = runner._supervised
-
-    def checking(request: object, room: Path, workdir: Path) -> object:
         holding: list[str] = []
         frame = sys._getframe(1)
         while frame is not None:
@@ -540,17 +524,532 @@ def test_the_window_is_released_before_the_card_is_supervised(
                     if any(value is held for held in window)
                 ]
             frame = frame.f_back
-        assert holding == [], f"the parent still holds the window while the card runs: {holding}"
-        return supervised(request, room, workdir)  # type: ignore[arg-type]
+        assert holding == [], f"the parent still holds an earlier read: {holding}"
+        groups, loaded = read(*args)  # type: ignore[arg-type]
+        window.extend(groups)
+        window.extend(point for group in groups for point in group)
+        return groups, loaded
 
     monkeypatch.setattr(runner, "_window_points", reading)
-    monkeypatch.setattr(runner, "_supervised", checking)
 
     request = request_for()
     carded = run_subprocess(request, store, lane)
 
     assert not carded.crashed, carded.traceback_tail
-    reads = len(window)
+    reads = sum(isinstance(held, tuple) for held in window)
     _, groups = runner.window_data(request, store)
     sessions = {day_of(int(p.ts_init)) for g in groups for p in g}
     assert reads == len(sessions), "the window was read once, a session at a time"
+
+
+def _children(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Every process the card path starts from here on, kept to be asked how it ended."""
+    import subprocess
+
+    started: list[Any] = []
+    spawn = subprocess.Popen
+
+    def recorded(*args: Any, **kwargs: Any) -> Any:
+        child = spawn(*args, **kwargs)
+        started.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess, "Popen", recorded)
+    return started
+
+
+def _gone(pid: int) -> bool:
+    """Whether no process of this id is left, reaped and all."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def _tick_store(root: Path) -> Path:
+    """A catalog of the two tick sessions of `conftest.ticking`."""
+    from .conftest import catalog, instrument, tick_groups
+
+    return catalog(root, [point for group in tick_groups() for point in group], [instrument()])
+
+
+def _session(day: Any, *, booked: bool, shift: int = 0) -> list[object]:
+    """A book opened at noon, 10.00 bid and 10.02 offered (plus `shift` cents), when
+    `booked`; and nineteen prints of 30 seven minutes apart after it, buyers' at the offer and
+    sellers' at the bid in turn, so the session's last two hours hold prints and no change."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide, BookAction, OrderSide
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    from kanso.criteria.run import midnight_ns
+    from kanso.data.loaders.points import make_delta
+
+    from .conftest import SECOND_NS, SYMBOL, _venue
+
+    ident = InstrumentId(Symbol(SYMBOL), _venue())
+    base = midnight_ns(day) + 12 * 3_600 * SECOND_NS
+    bid, ask = 1_000 + shift, 1_002 + shift
+    made: list[object] = []
+    if booked:
+        made += [
+            make_delta(ident, BookAction.ADD, OrderSide.BUY, bid, 50, 0, 2, 0, base, base),
+            make_delta(ident, BookAction.ADD, OrderSide.SELL, ask, 50, 0, 2, 0, base, base),
+        ]
+    for event in range(1, 20):
+        ts = base + event * 420 * SECOND_NS + 1_000_000
+        px, side = (bid, AggressorSide.SELLER) if event % 2 == 0 else (ask, AggressorSide.BUYER)
+        made.append(
+            TradeTick(
+                ident,
+                Price(px / 100, 2),
+                Quantity.from_int(30),
+                side,
+                TradeId(f"{day:%m%d}-{event}"),
+                ts_event=ts,
+                ts_init=ts,
+            )
+        )
+    return made
+
+
+def test_a_day_of_prints_without_its_book_is_refused_however_the_window_is_read(
+    tmp_path: Path, lane: Path, request_for
+) -> None:
+    """A book hypothesis whose window holds a day's prints and none of that day's book changes
+    — its book archive missing, and the market three dollars on — is refused that day, read
+    whole or an hour at a time, rather than matched against the book the day before left.
+    Measured before this: streamed an hour or a day at a time, the card ran, and its venue
+    matched the second day's prints against the first day's book. Hours of prints after a
+    day's last change, inside a day that holds its book, are not refused."""
+    from kanso.errors import PreconditionError
+
+    from .conftest import POSTER, TICK_DAYS, catalog, instrument, tick_hypothesis
+
+    first, second = TICK_DAYS
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(0.0))
+    whole_day = catalog(tmp_path / "first", _session(first, booked=True), [instrument()])
+    gap = catalog(
+        tmp_path / "gap",
+        [*_session(first, booked=True), *_session(second, booked=False, shift=300)],
+        [instrument()],
+    )
+
+    alone = run_subprocess(request, whole_day, lane)
+    assert not alone.crashed, alone.traceback_tail
+    assert alone.run.fills, "the first day trades, its last two hours prints alone"
+
+    with pytest.raises(PreconditionError, match=f"no book change for DEMO.XNAS on {second}"):
+        run(request, gap)
+    carded = run_subprocess(request, gap, lane)
+
+    assert carded.crashed
+    assert carded.traceback_tail is not None and f"DEMO.XNAS on {second}" in carded.traceback_tail
+    assert carded.remedy == (
+        f"load the book for DEMO.XNAS over {second}..{second} with `kanso data load`, "
+        "then take a snapshot"
+    )
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identical_card(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch, latency_ms: float
+) -> None:
+    """A window of book changes and prints, several to an instant on some instants and one
+    on others, read a day at a time, an hour at a time, and an hour at a time cut to seven
+    points a chunk: the card is the card the whole window run in this process gives.
+
+    Seven points cut inside an hour, and leave chunks whose every instant holds one point of
+    its kind — a feed that would go unmarked if whether it is marked were read off the
+    chunk, and whose prints would then be handled before a command due at them landed."""
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import POSTER, tick_hypothesis
+
+    store = _tick_store(tmp_path / "ticks")
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(latency_ms))
+    whole = run(request, store)
+    assert whole.run.fills, "the poster trades, so the comparison compares something"
+
+    cut = runner._cut
+    chunks: list[int] = []
+
+    def counted(groups: Any, cap: int) -> Any:
+        for chunk in cut(groups, cap):
+            chunks.append(sum(len(group) for group in chunk))
+            yield chunk
+
+    monkeypatch.setattr(runner, "_cut", counted)
+    carded: dict[str, Any] = {}
+    for name, read_ns, cap in (
+        ("day", runner.NS_PER_DAY, 10**9),
+        ("hour", runner.READ_TICK_NS, 10**9),
+        ("hour, seven points", runner.READ_TICK_NS, 7),
+    ):
+        chunks.clear()
+        monkeypatch.setattr(runner, "READ_TICK_NS", read_ns)
+        monkeypatch.setattr(runner, "CHUNK_POINTS", cap)
+        result = run_subprocess(request, store, lane)
+        assert not result.crashed, result.traceback_tail
+        carded[name] = (result.run, result.intents, tuple(chunks))
+
+    assert {name: (ran, intents) for name, (ran, intents, _) in carded.items()} == {
+        name: (whole.run, whole.intents) for name in carded
+    }
+    assert len(carded["day"][2]) == 2, "a read of a day is a session"
+    assert len(carded["hour"][2]) == 10, "five hours a session"
+    assert max(carded["hour, seven points"][2]) <= 7
+    assert len(carded["hour, seven points"][2]) > len(carded["hour"][2])
+
+
+def test_a_tick_window_whose_first_hour_holds_only_book_changes_gives_the_identical_card(
+    tmp_path: Path, lane: Path, request_for
+) -> None:
+    """A book that opens an hour before the first print: read an hour at a time, the card's
+    first chunk is two book changes and no marker, and the sleeve still has to be held for
+    the markers of every chunk after it, because it subscribes to them as it starts. Held only
+    from the first chunk that carries a marker, the same card made two fills and two orders
+    fewer than the window run whole."""
+    from nautilus_trader.model.enums import BookAction, OrderSide
+
+    from kanso.data.loaders.points import make_delta
+
+    from .conftest import (
+        POSTER,
+        SECOND_NS,
+        TICK_DAYS,
+        catalog,
+        instrument,
+        tick_hypothesis,
+        ticking,
+    )
+
+    book, made = ticking(TICK_DAYS[0])
+    opens = int(book[0].ts_init) - 3_600 * SECOND_NS  # type: ignore[attr-defined]
+    ident = book[0].instrument_id  # type: ignore[attr-defined]
+    book = [
+        make_delta(ident, BookAction.ADD, OrderSide.BUY, 1_000, 50, 0, 2, 0, opens, opens),
+        make_delta(ident, BookAction.ADD, OrderSide.SELL, 1_002, 50, 0, 2, 0, opens, opens),
+        *book[2:],
+    ]
+    store = catalog(tmp_path / "early", [*book, *made], [instrument()])
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(20.0))
+
+    whole = run(request, store)
+    carded = run_subprocess(request, store, lane)
+
+    assert whole.run.fills
+    assert not carded.crashed, carded.traceback_tail
+    assert (carded.run, carded.intents) == (whole.run, whole.intents)
+
+
+def test_a_bar_window_cut_below_a_day_gives_the_identical_card(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two names' daily bars cut to one bar a chunk — below an instant, so each chunk is the
+    instant both names share — give the card the day reads do."""
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import INSTRUMENT, RESEARCH, bars, catalog, hypothesis, instrument
+
+    other = "OTHR"
+    store = catalog(
+        tmp_path / "two",
+        [*bars(RESEARCH), *bars(RESEARCH, other)],
+        [instrument(), instrument(other)],
+    )
+    request = request_for(hypothesis_=hypothesis(universe=[INSTRUMENT, f"{other}.XNAS"]))
+
+    by_day = run_subprocess(request, store, lane)
+    monkeypatch.setattr(runner, "CHUNK_POINTS", 1)
+    by_instant = run_subprocess(request, store, lane)
+
+    assert not by_day.crashed, by_day.traceback_tail
+    assert by_day.run.fills
+    assert (by_instant.run, by_instant.intents) == (by_day.run, by_day.intents)
+
+
+def _after_the_first_chunk(monkeypatch: pytest.MonkeyPatch, then: Any) -> list[int]:
+    """Have the stream call `then` when it is asked for the record after its first chunk —
+    once that chunk is wholly written — and count the chunks it was asked for."""
+    import pickle
+
+    from kanso.nautilus import backtest as runner
+
+    stream = runner._stream
+    asked: list[int] = []
+
+    def streaming(*args: Any) -> Any:
+        for record in stream(*args):
+            yield record
+            if "groups" in pickle.loads(record):
+                asked.append(len(record))
+                if len(asked) == 1:
+                    then()
+
+    monkeypatch.setattr(runner, "_stream", streaming)
+    return asked
+
+
+def test_a_card_stopped_mid_stream_leaves_no_spool_and_no_child(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stop that lands once the first chunk is written: the child is killed and reaped,
+    the stream goes no further, and the lane holds its three files and nothing else."""
+    import signal
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import tick_hypothesis
+
+    store = _tick_store(tmp_path / "ticks")
+    started = _children(monkeypatch)
+    asked = _after_the_first_chunk(monkeypatch, runner.interrupt)
+    try:
+        with pytest.raises(PreconditionError, match="the card was interrupted"):
+            run_subprocess(
+                request_for(source=SLOW_SLEEVE, hypothesis_=tick_hypothesis()), store, lane
+            )
+    finally:
+        runner.resume()
+
+    assert len(asked) == 1
+    (child,) = started
+    assert child.returncode == -signal.SIGKILL and _gone(child.pid)
+    assert sorted(path.name for path in lane.iterdir()) == [
+        "hypothesis.yaml",
+        "program.md",
+        "strategy.py",
+    ]
+
+
+def test_a_card_out_of_time_mid_stream_leaves_no_spool_and_no_child(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A card whose budget runs out while its stream is still being written — its child
+    busy in `on_start`, the pipe full behind it — is killed as any card out of time is."""
+    import pickle
+    import signal
+
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import tick_hypothesis
+
+    store = _tick_store(tmp_path / "ticks")
+    stream = runner._stream
+
+    def endless(*args: Any) -> Any:
+        records = stream(*args)
+        yield next(records)
+        yield next(records)
+        yield next(records)
+        while True:  # more than any pipe holds, so the stream is mid-way when time runs out
+            yield pickle.dumps({"groups": ()})
+
+    started = _children(monkeypatch)
+    monkeypatch.setattr(runner, "_stream", endless)
+    result = run_subprocess(
+        request_for(source=SLOW_SLEEVE, hypothesis_=tick_hypothesis(), budget_s=1.0), store, lane
+    )
+
+    assert (result.crashed, result.reason) == (True, "budget")
+    (child,) = started
+    assert child.returncode == -signal.SIGKILL and _gone(child.pid)
+    assert not (lane / runner.CARD_ROOM).exists()
+
+
+def test_a_refusal_raised_mid_stream_is_a_refusal(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `wanted` check that refuses before the second read — after the first chunk went
+    out — comes out of the card as the refusal it was, remedy and all, with the child dead."""
+    import signal
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import tick_hypothesis
+
+    store = _tick_store(tmp_path / "ticks")
+    read = runner._window_points
+    reads: list[object] = []
+
+    def reading(*args: object) -> object:
+        reads.append(args)
+        return read(*args)  # type: ignore[arg-type]
+
+    def held() -> None:
+        if reads:
+            raise PreconditionError("the claim was taken back", remedy="queue it again")
+
+    started = _children(monkeypatch)
+    monkeypatch.setattr(runner, "_window_points", reading)
+    with runner.wanted(held), pytest.raises(PreconditionError, match="taken back") as refused:
+        run_subprocess(request_for(source=SLOW_SLEEVE, hypothesis_=tick_hypothesis()), store, lane)
+
+    assert refused.value.remedy == "queue it again"
+    assert len(reads) == 1
+    (child,) = started
+    assert child.returncode == -signal.SIGKILL and _gone(child.pid)
+    assert not (lane / runner.CARD_ROOM).exists()
+
+
+def test_a_window_holding_only_its_warmup_is_refused_after_the_stream(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whether a window held anything is known only once all of it is read, with the child
+    already running the prefix: it is killed, and the refusal is the parent's to make."""
+    from datetime import date
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import bars, catalog, instrument
+
+    prefix = (date(2023, 12, 1), date(2023, 12, 31))
+    store = catalog(tmp_path / "december", bars(prefix), [instrument()])
+    started = _children(monkeypatch)
+    with pytest.raises(PreconditionError, match="holds nothing") as refused:
+        run_subprocess(request_for(prefix=prefix), store, lane)
+
+    assert refused.value.remedy is not None and "data load" in refused.value.remedy
+    (child,) = started
+    assert child.returncode is not None and _gone(child.pid)
+    assert not (lane / runner.CARD_ROOM).exists()
+
+
+def test_the_parent_reads_a_chunk_only_once_the_last_one_is_written() -> None:
+    """The feed asks its stream for a record only once every byte of the one before is in
+    the pipe, so what a slow reader has taken is never more than a pipe's worth behind what
+    the stream has handed over."""
+    import threading
+    import time
+
+    from kanso.nautilus import backtest as runner
+
+    records = [bytes([index]) * 600_000 for index in range(4)]
+    received = bytearray()
+    behind: list[int] = []
+    read_fd, write_fd = os.pipe()
+
+    def payload() -> Any:
+        for index, record in enumerate(records):
+            behind.append(sum(map(len, records[:index])) - len(received))
+            yield record
+
+    def slow_reader() -> None:
+        while chunk := os.read(read_fd, 16_384):
+            received.extend(chunk)
+            time.sleep(0.0005)
+
+    reader = threading.Thread(target=slow_reader)
+    reader.start()
+    feed = runner._Feed(os.fdopen(write_fd, "wb"), payload())
+    while not feed._done:
+        feed.step(0.01)
+    reader.join(timeout=30)
+    os.close(read_fd)
+
+    assert bytes(received) == b"".join(records)
+    assert behind[0] == 0
+    assert all(0 <= gap <= 256 * 1024 for gap in behind), behind
+
+
+def test_a_feed_whose_reader_is_gone_goes_quiet() -> None:
+    """A child that stops reading breaks the pipe: the feed lets go of its stream and leaves
+    the watch to reap the child, rather than raising out of the watch."""
+    from kanso.nautilus import backtest as runner
+
+    closed: list[bool] = []
+
+    def payload() -> Any:
+        try:
+            while True:
+                yield b"x" * 100_000
+        finally:
+            closed.append(True)
+
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    pipe = os.fdopen(write_fd, "wb")
+    feed = runner._Feed(pipe, payload())
+    feed.step(0.01)
+    feed.step(0.01)
+
+    assert feed._done and closed == [True]
+    assert pipe.closed
+
+
+def test_a_feed_closes_the_pipe_the_moment_its_stream_ends() -> None:
+    """The child reads the end of its input as soon as the stream ends, whether or not the
+    stream's last record was `END`, so a stream that stopped short is refused by the child
+    rather than waited on. Before this the pipe stayed open until the child had exited, and a
+    stream with no `END` left the child waiting on its input until it was killed."""
+    from kanso.nautilus import backtest as runner
+
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    pipe = os.fdopen(write_fd, "wb")
+    feed = runner._Feed(pipe, iter([b"a record"]))
+    while not feed._done:
+        feed.step(0.01)
+
+    try:
+        assert os.read(read_fd, 64) == b"a record"
+        assert os.read(read_fd, 64) == b"", "the reader is at the end of its input"
+    finally:
+        os.close(read_fd)
+    feed.close()
+    assert pipe.closed
+
+
+def test_a_card_whose_stream_ends_without_its_end_is_refused_not_waited_on(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stream that ends without `END` closes the child's input, and the child refuses the
+    window as cut short; the card does not run on to its time budget."""
+    import pickle
+
+    from kanso.nautilus import backtest as runner
+
+    stream = runner._stream
+
+    def short(*args: Any) -> Any:
+        for record in stream(*args):
+            if pickle.loads(record) != runner.END:
+                yield record
+
+    monkeypatch.setattr(runner, "_stream", short)
+    carded = run_subprocess(request_for(budget_s=30.0), store, lane)
+
+    assert carded.crashed
+    assert carded.reason != runner.BUDGET
+    assert carded.traceback_tail is not None and "stopped before its end" in carded.traceback_tail
+
+
+def test_a_stream_cut_before_its_end_is_not_a_card(
+    tmp_path: Path, request_for, store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child whose stream stops before `END` — its lane died mid-window — writes a failure
+    naming the cut, never a run of the part it was handed."""
+    import io
+    import pickle
+    import sys
+
+    from kanso.nautilus import backtest as runner
+
+    whole = list(runner._payload(request_for(), store, ()))
+    assert pickle.loads(whole[-1]) == runner.END
+    monkeypatch.setattr(runner, "end_with", lambda _parent: None)
+    for cut in (b"".join(whole[:-1]), b"".join(whole[:-1])[:-10]):
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(cut)))
+        result = tmp_path / "result.pkl"
+
+        assert runner.main([str(result), "1"]) == 1
+
+        reported = pickle.loads(result.read_bytes())
+        assert reported["ok"] is False
+        assert "stopped before its end" in reported["traceback"]
+        assert reported["remedy"] == "start the daemon again; the run resumes from its last card"

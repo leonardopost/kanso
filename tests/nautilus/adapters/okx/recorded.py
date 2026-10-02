@@ -12,6 +12,12 @@ instant, and `History` serves an answer only for exactly the request it was reco
 A request for a file that names a `Range` is answered as the file host was measured
 answering one on 2026-10-02 — 206 and the bytes of the range, fewer when it runs past the
 end, and 416 when it starts at or past the end — from the recorded file.
+
+`fixtures/account/` holds the real account's own answers to the two signed reads `doctor
+--check-adapters` sends — the fee tier and the account configuration — on 2026-09-30, in
+spot mode, and on 2026-10-01, in futures mode, recorded with the operator's read-only key;
+its `provenance.json` says what the probe printed and what it left out. `Account` serves
+them by path and keeps every url and header it was sent, so a test can read the signature.
 """
 
 from __future__ import annotations
@@ -124,3 +130,45 @@ class History:
         if int(first) >= len(served.body):
             return Response(416, RANGE_NOT_SATISFIABLE)
         return Response(206, served.body[int(first) : int(last) + 1])
+
+
+ACCOUNT = FIXTURES / "account"
+
+ACCOUNT_PROVENANCE: dict[str, Any] = json.loads((ACCOUNT / "provenance.json").read_text("utf-8"))
+
+FUTURES_MODE = "2026-10-01"
+SPOT_MODE = "2026-09-30"
+"""The two days the account was read: in futures mode, and the day before, in spot mode."""
+
+
+def account_answer(name: str) -> Response:
+    """One recorded account answer, by its file name, with its recorded status."""
+    return Response(
+        status=int(ACCOUNT_PROVENANCE["files"][name]["status"]),
+        body=(ACCOUNT / name).read_bytes(),
+    )
+
+
+@dataclass
+class Account:
+    """A signed transport serving the account's recorded answers by path, as of one day.
+
+    `answers` replaces the recording for a path — a test serving an answer the exchange was
+    never recorded giving says so where it builds one. Every url and header map sent is
+    kept, so a test reads exactly what would have gone over the wire.
+    """
+
+    day: str = FUTURES_MODE
+    answers: dict[str, Response] = field(default_factory=dict)
+    sent: list[tuple[str, dict[str, str]]] = field(default_factory=list)
+
+    def __call__(self, url: str, headers: Mapping[str, str]) -> Response:
+        self.sent.append((url, dict(headers)))
+        path = url.split("okx.com", 1)[1]
+        if path in self.answers:
+            return self.answers[path]
+        name = {
+            "/api/v5/account/trade-fee?instType=SWAP": f"trade-fee_instType-SWAP_{self.day}.json",
+            "/api/v5/account/config": f"config_{self.day}.json",
+        }[path]
+        return account_answer(name)
