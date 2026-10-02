@@ -31,7 +31,9 @@ def test_a_strategy_replays_on_the_live_code_path_by_default(
     assert session["from"] == "2024-06-03", "the range opens at the forward window"
     assert session["to"] == "2024-06-28", "and closes where the catalog does"
     assert session["released"] > 0
-    assert Path(session["path"]).is_dir()
+    assert len(session["stream_sha256"]) == 64
+    held = sorted(path.name for path in Path(session["path"]).iterdir())
+    assert held == ["intents.jsonl", "session.yaml"], "the stream is recorded by its digest"
 
 
 def test_the_research_code_path_is_asked_for_by_name(runner: CliRunner, deployed: Path) -> None:
@@ -120,6 +122,8 @@ def test_parity_runs_both_paths_and_reports_that_they_agree(
     assert parity["node_intents"] == parity["engine_intents"]
     assert parity["max_ts_delta_ns"] == 0
     assert parity["node"] != parity["engine"]
+    assert parity["node_released"] == parity["engine_released"] > 0
+    assert parity["node_stream"] == parity["engine_stream"] is not None
 
 
 def test_parity_reads_as_the_verdict_and_the_two_sessions(
@@ -186,6 +190,32 @@ def test_show_of_one_session_is_that_session(runner: CliRunner, deployed: Path) 
     assert result.exit_code == Exit.OK
     assert payload(result)["session_id"] == made["session_id"]
     assert payload(result)["intents"] == made["intents"]
+
+
+def test_show_reads_as_what_ran_what_it_was_fed_and_what_came_back(
+    runner: CliRunner, deployed: Path
+) -> None:
+    made = payload(at(runner, deployed, "replay", "run", "--strategy", HYP_ID, "--json"))
+
+    result = at(runner, deployed, "replay", "show", made["session_id"])
+
+    assert result.exit_code == Exit.OK
+    assert f"{made['released']} point(s) · sha256 {made['stream_sha256']}" in result.stdout
+    assert "intents" in result.stdout
+
+
+def test_a_session_from_before_the_digest_shows_none(runner: CliRunner, deployed: Path) -> None:
+    """A record an earlier kanso wrote is listed and shown, and says it carries no digest."""
+    from tests.replay.test_record import LEGACY
+
+    held = deployed / "sessions" / "20261001T025018Z-node-9994868"
+    held.mkdir(parents=True)
+    (held / "session.yaml").write_text(LEGACY)
+
+    result = at(runner, deployed, "replay", "show", "20261001T025018Z-node-9994868")
+
+    assert result.exit_code == Exit.OK
+    assert "2212224 point(s) · sha256 not recorded" in result.stdout
 
 
 def test_a_session_this_workspace_never_ran_is_refused(runner: CliRunner, deployed: Path) -> None:

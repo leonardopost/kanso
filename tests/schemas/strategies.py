@@ -651,6 +651,7 @@ def sessions(draw: st.DrawFn) -> Session:
         speed=draw(NON_NEGATIVE),
         exec_=draw(IDENTIFIERS),
         released=draw(st.integers(0, 10**9)),
+        stream_sha256=draw(st.none() | SHAS),
         intents=draw(st.integers(0, 10**9)),
         clock_ns=draw(st.none() | st.integers(0, 2**63 - 1)),
         started_at=draw(TIMESTAMPS),

@@ -11,12 +11,12 @@ metadata:
 ## Steps
 1. Pick the target: `--strategy <id>[@<version>]` (deployed/composed impl) or `--hyp <id> [--sha <s>]` (defaults to `best`; `<s>` is any unique prefix of a card's `strategy_sha`). Pick the range: `--from <date> --to <date>`; omit for `forward.start` → last data in the catalog. `kanso data show` shows what ranges exist.
 2. Replay: `kanso replay run --strategy <id>@<version> --from <date> --to <date> --speed 0 --json`. Default mode `node` = the live code path (TradingNode + replay data client + sandbox fills); `--mode engine` = the research code path (BacktestNode) on the same data. The feed is the target's universe.
-3. Read the session: `kanso replay show <session>` → what ran, over which range, at what speed and against which execution client, plus how many points were released and how many order intents came back; the stream and the intents themselves are the JSON-lines files in `sessions/<session>/`. `kanso replay show` without an argument lists sessions.
-4. Parity: `kanso replay parity --hyp <id> --from <d> --to <d>` runs node then engine on identical data and prints the first divergence in order intents, or `identical`. This is the same check the `parity_replay` certification gate runs over the certification window.
+3. Read the session: `kanso replay show <session>` → what ran, over which range, at what speed and against which execution client, plus how many points were released, the sha256 of their stream and how many order intents came back. The intents themselves are `sessions/<session>/intents.jsonl`; the stream is not written — replay the range again to see its points, and the digest says whether it matched. `kanso replay show` without an argument lists sessions.
+4. Parity: `kanso replay parity --hyp <id> --from <d> --to <d>` runs node then engine on identical data and prints the first divergence — in what the two paths were released (count, then digest), then in order intents — or `identical`. This is the same check the `parity_replay` certification gate runs over the certification window.
 
 ## Rules
 - Replay is evaluation only: it never creates cards, never changes `best`, never certifies. Use it to answer questions, not to search parameters — that is the research loop's job.
 - Any window may be replayed, including certification and forward; say which window you used when reporting numbers.
-- A target whose hypothesis declares a `warmup` is fed the sessions before the range on both paths, with every order dropped until the range opens; `released` and the stream are the range's own points. Report the range, not the prefix.
+- A target whose hypothesis declares a `warmup` is fed the sessions before the range on both paths, with every order dropped until the range opens; `released` and the stream's digest are the range's own points. Report the range, not the prefix.
 - `--speed 1` replays at wall-clock pace (useful to watch a node behave); `--speed 0` is the default for questions.
-- Sessions persist under `sessions/`; large ranges produce large sessions — prefer the narrowest range that answers the question.
+- Sessions persist under `sessions/` and nothing prunes them; a session's size is its intents, so a strategy that trades often over a long range writes a large one — prefer the narrowest range that answers the question.

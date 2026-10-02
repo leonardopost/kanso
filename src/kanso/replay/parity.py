@@ -13,6 +13,15 @@ different decision and there is no tolerance that makes it the same one. The ins
 one field where a tolerance is meaningful at all, and even that only because an intent is
 stamped with the data event's time: the tolerance is there to be set to zero and to say so.
 
+**What each path was fed is compared before what it decided.** Both are handed the window's
+points from the catalog, and each session records how many it was released and the digest
+of their stream. Two paths released different points — a feed that stopped short, a catalog
+that changed between the two runs — can agree or disagree about their orders and neither
+says anything about the code, so a difference there is the first divergence, reported
+against the stream rather than an intent, and no tolerance applies to it. The digest is what
+keeps that check honest without the stream itself: the stream is never written, and two
+streams that differ in any point have different digests.
+
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
 
@@ -40,10 +49,14 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
-__all__ = ["FIELDS", "Divergence", "Parity", "compare", "parity"]
+__all__ = ["FIELDS", "RELEASED", "STREAM", "Divergence", "Parity", "compare", "parity"]
 
 FIELDS: Final = ("ts_event", "instrument", "side", "qty", "order_type", "price")
 """The order intent, field by field, in the order they are compared."""
+
+RELEASED: Final = "released"
+STREAM: Final = "stream_sha256"
+"""The two fields of a session that say what its path was fed, compared before any order."""
 
 MISSING: Final = "missing"
 """The field a divergence names when one path stopped submitting and the other did not."""
@@ -51,31 +64,38 @@ MISSING: Final = "missing"
 
 @dataclass(frozen=True)
 class Divergence:
-    """The first place two intent sequences stopped agreeing."""
+    """The first place two sessions stopped agreeing: in what they were fed, or in an order.
 
-    index: int
+    `index` is the order's position in submission order, and `None` for a divergence in
+    the stream, which is one record per session rather than a sequence to index.
+    """
+
+    index: int | None
     field: str
     node: object | None
     engine: object | None
 
     def render(self) -> str:
         """One line naming where the paths parted and what each said."""
+        where = "stream" if self.index is None else f"intent {self.index}"
         if self.field == MISSING:
             longer = "node" if self.engine is None else "engine"
-            return f"intent {self.index}: only the {longer} path submitted one"
+            return f"{where}: only the {longer} path submitted one"
         return (
-            f"intent {self.index}: {self.field} is {self.node!r} on the node path "
+            f"{where}: {self.field} is {self.node!r} on the node path "
             f"and {self.engine!r} on the engine path"
         )
 
 
 @dataclass(frozen=True)
 class Parity:
-    """What comparing two sessions' order intents found, and both sequences it compared.
+    """What comparing two sessions found, and everything it compared.
 
     The sequences travel with the verdict so a reader with a tolerance of its own — a gate
     whose plan chose one — can ask the same question again without running anything: `at`
-    re-compares what is already here.
+    re-compares what is already here. What each path was released travels too, as a count
+    and a digest; a session written before kanso kept the digest has none, and then the
+    count is all there is to compare.
     """
 
     node: str
@@ -85,11 +105,25 @@ class Parity:
     engine_orders: tuple[Intent, ...]
     max_ts_delta_ns: int
     divergence: Divergence | None = None
+    node_released: int = 0
+    engine_released: int = 0
+    node_stream: str | None = None
+    engine_stream: str | None = None
 
     @property
     def identical(self) -> bool:
-        """Whether the two paths submitted the same orders, within the tolerance."""
+        """Whether the two paths were fed the same points and submitted the same orders."""
         return self.divergence is None
+
+    @property
+    def fed(self) -> Divergence | None:
+        """Where the two streams differed, or `None` when both paths were released the same."""
+        if self.node_released != self.engine_released:
+            return Divergence(None, RELEASED, self.node_released, self.engine_released)
+        digests = (self.node_stream, self.engine_stream)
+        if None not in digests and self.node_stream != self.engine_stream:
+            return Divergence(None, STREAM, self.node_stream, self.engine_stream)
+        return None
 
     @property
     def compared(self) -> int:
@@ -97,9 +131,9 @@ class Parity:
         return min(len(self.node_orders), len(self.engine_orders))
 
     def at(self, ts_ns: int) -> Parity:
-        """The same two sequences judged at another instant tolerance."""
+        """The same two sessions judged at another instant tolerance."""
         divergence, widest = compare(self.node_orders, self.engine_orders, ts_ns=ts_ns)
-        return replace(self, ts_ns=ts_ns, max_ts_delta_ns=widest, divergence=divergence)
+        return replace(self, ts_ns=ts_ns, max_ts_delta_ns=widest, divergence=self.fed or divergence)
 
     def payload(self) -> dict[str, object]:
         """The result as one JSON object."""
@@ -111,6 +145,10 @@ class Parity:
             "compared": self.compared,
             "node_intents": len(self.node_orders),
             "engine_intents": len(self.engine_orders),
+            "node_released": self.node_released,
+            "engine_released": self.engine_released,
+            "node_stream": self.node_stream,
+            "engine_stream": self.engine_stream,
             "max_ts_delta_ns": self.max_ts_delta_ns,
             "divergence": None if self.divergence is None else self.divergence.render(),
         }
@@ -188,16 +226,16 @@ def parity(
 
 
 def of_sessions(ws: Workspace, node: Session, engine: Session, *, ts_ns: int = 0) -> Parity:
-    """Compare two persisted sessions without running anything."""
-    left = record.intents_of(ws, node.session_id)
-    right = record.intents_of(ws, engine.session_id)
-    divergence, widest = compare(left, right, ts_ns=ts_ns)
+    """Compare two persisted sessions without running anything: the streams, then the orders."""
     return Parity(
         node=node.session_id,
         engine=engine.session_id,
         ts_ns=ts_ns,
-        node_orders=left,
-        engine_orders=right,
-        max_ts_delta_ns=widest,
-        divergence=divergence,
-    )
+        node_orders=record.intents_of(ws, node.session_id),
+        engine_orders=record.intents_of(ws, engine.session_id),
+        max_ts_delta_ns=0,
+        node_released=node.released,
+        engine_released=engine.released,
+        node_stream=node.stream_sha256,
+        engine_stream=engine.stream_sha256,
+    ).at(ts_ns)

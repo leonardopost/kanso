@@ -136,9 +136,11 @@ it, and `kanso hyp resume` brings that one back.
 **A plan that names `parity_replay` makes `cert run` replay.** That gate is the comparison
 of the two code paths over the certification window, so the runner replays the subject on
 the node path and on the engine path and hands the gate what the comparison found; the two
-sessions it wrote stay in `sessions/` to be read. A replay that cannot be set up at all
-leaves the gate without its evidence, and the certificate records that nothing compared the
-paths rather than claiming that they agreed. Neither path throttles what a strategy submits: the
+sessions it wrote stay in `sessions/` to be read, and the gate's evidence carries what each
+path was released — its count and its stream's digest — beside the intents it compared, so
+the certificate states what both paths were fed whatever becomes of the sessions. A replay
+that cannot be set up at all leaves the gate without its evidence, and the certificate
+records that nothing compared the paths rather than claiming that they agreed. Neither path throttles what a strategy submits: the
 engine's risk engine would deny the hundred-and-first order inside one second of its clock,
 and a denied order is closed and leaves the room for the next, so a sleeve re-posting through
 a flickering quote would size its next entry from a fuller room on the engine path than on
@@ -266,9 +268,9 @@ operator instruction; acknowledging an inbox entry is not one.
 
 | command | what it does |
 |---|---|
-| `kanso replay run (--strategy STRATEGY[@V] \| --hyp ID [--sha S]) [--from D] [--to D] [--speed N] [--mode node\|engine]` | replay one target over the catalog and write `sessions/<id>/`: the record, the points released and the order intents that came back. `node` is the live code path — a trading node, kanso's replay data client, a simulated execution client — and `engine` is the research one. The range defaults to the target's forward window through the last day the catalog serves. A target whose hypothesis declares a `warmup` is fed the sessions before the range on both paths, with every order dropped until the range opens; the session records the range's points and nothing it warmed on |
-| `kanso replay parity (…)` | replay on both code paths over the same days and compare the order intents element by element — instant, instrument, side, quantity, order type and, for an order that names one, price — reporting the first divergence with its index and its field, or that the two agreed. `--ts-ns` is the instant tolerance in nanoseconds, and it exists to be set to zero |
-| `kanso replay show [SESSION]` | one session, or every session this workspace holds |
+| `kanso replay run (--strategy STRATEGY[@V] \| --hyp ID [--sha S]) [--from D] [--to D] [--speed N] [--mode node\|engine]` | replay one target over the catalog and write `sessions/<id>/`: the record — with the count of points released and the sha256 of their stream, which is not itself written — and the order intents that came back. `node` is the live code path — a trading node, kanso's replay data client, a simulated execution client — and `engine` is the research one. The range defaults to the target's forward window through the last day the catalog serves. A target whose hypothesis declares a `warmup` is fed the sessions before the range on both paths, with every order dropped until the range opens; the session records the range's points and nothing it warmed on |
+| `kanso replay parity (…)` | replay on both code paths over the same days and compare what each was released — the count, then the stream's digest, a difference in either being the first divergence at any tolerance — then the order intents element by element — instant, instrument, side, quantity, order type and, for an order that names one, price — reporting the first divergence with its index and its field, or that the two agreed. `--ts-ns` is the instant tolerance in nanoseconds, and it exists to be set to zero |
+| `kanso replay show [SESSION]` | one session — what ran, over which range, the points released and their stream's digest, the intents that came back — or every session this workspace holds |
 
 **Replay always executes against kanso's own simulated venue**, whatever a stage is
 configured with: a replay feeds history and a broker fills against current prices, so the

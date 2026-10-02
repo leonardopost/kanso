@@ -9,6 +9,7 @@ nobody builds is a gate that has never run.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from kanso import replay
@@ -98,6 +99,20 @@ def test_a_path_that_stopped_submitting_diverges_where_it_stopped() -> None:
     assert result.evidence["node_intents"] == 2
     assert result.evidence["engine_intents"] == 1
     assert "only the node path" in str(result.evidence["divergence"])
+
+
+def test_two_paths_fed_different_points_fail_even_with_no_order_to_compare() -> None:
+    """Silence on the same points is a skip; silence on different points is a failure, since
+    the feed itself disagreed and that needed no order to be seen."""
+    unfed = replace(compared((), ()), node_released=4, engine_released=5)
+
+    result = judged(unfed)
+
+    assert not result.passed
+    assert result.skipped is None
+    assert result.evidence["node_released"] == 4
+    assert result.evidence["engine_released"] == 5
+    assert str(result.evidence["divergence"]).startswith("stream: released is 4")
 
 
 def test_evidence_names_both_sessions_so_a_divergence_can_be_looked_at() -> None:

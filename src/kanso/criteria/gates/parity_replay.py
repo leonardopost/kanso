@@ -14,6 +14,12 @@ submitted — instant, instrument, side, quantity, order type and, for an order 
 one, price — and a difference anywhere in that sequence is a different decision, at a known
 index, in a named field.
 
+**What each path was fed is compared first.** Each session records how many points its path
+was released and the digest of their stream, and two paths handed different points — a feed
+that stopped short, a catalog that changed between the runs — fail whatever they submitted,
+because orders decided on different data say nothing about whether the code agrees. That
+failure needs no order to be found, so it fails even when neither path submitted one.
+
 **Only the instant carries a tolerance**, in nanoseconds, and the plan chooses it. An
 intent is stamped with the data event's time rather than with a clock, because the node
 runs on a live clock and the engine on a test clock and a wall-clock stamp could never
@@ -23,9 +29,9 @@ tolerance under which a different quantity is the same quantity.
 
 **The gate runs nothing.** Replaying one target twice over the certification window is the
 runner's work; what arrives here is the comparison it produced, re-judged at the tolerance
-this plan chose. Two empty sequences are not agreement — a window in which neither path
-submitted an order says nothing about whether they would have agreed — so that is recorded
-as a skip and no verdict rests on it.
+this plan chose. Two empty sequences on the same points are not agreement — a window in
+which neither path submitted an order says nothing about whether they would have agreed — so
+that is recorded as a skip and no verdict rests on it.
 """
 
 from __future__ import annotations
@@ -53,7 +59,7 @@ class _ParityReplay:
         if not isinstance(ctx.session, Parity):
             return skipped(self.id, NO_PARITY)
         judged = ctx.session.at(tolerance)
-        if not judged.node_orders and not judged.engine_orders:
+        if judged.fed is None and not judged.node_orders and not judged.engine_orders:
             return skipped(self.id, NO_INTENTS)
         return verdict(self.id, judged.identical, judged.payload())
 

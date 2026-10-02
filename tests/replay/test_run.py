@@ -14,6 +14,7 @@ from kanso import replay
 from kanso.criteria.run import midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.replay import record
+from kanso.replay.record import Point
 from kanso.replay.run import REPLAYED
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -23,10 +24,16 @@ from tests.replay.conftest import (
     FORWARD_START,
     INSTRUMENT,
     RAISING,
+    bars,
     carded,
     composed,
     document,
 )
+
+
+def stream(window: tuple[date, date] = FORWARD) -> str:
+    """The digest of the daily bars a replay of this window releases, in feed order."""
+    return record.digest(Point.of(bar) for bar in bars(window))
 
 
 def test_replays_the_forward_window_by_default(
@@ -56,14 +63,12 @@ def test_a_replay_trades_and_records_its_intents(
 def test_the_stream_is_the_points_that_were_released(
     ws: Workspace, store: StateStore, carded_hyp: str
 ) -> None:
-    """Every released point is on the record, in availability order."""
+    """Every released point is in the digest, in availability order, and none is written."""
     session = replay.run(ws, store, hyp=carded_hyp)
-    stream = record.stream_of(ws, session.session_id)
 
-    assert len(stream) == session.released
-    assert [point.ts_init for point in stream] == sorted(point.ts_init for point in stream)
-    assert {point.type for point in stream} == {"Bar"}
-    assert session.clock_ns == stream[-1].ts_init
+    assert session.stream_sha256 == stream()
+    assert session.clock_ns == bars(FORWARD)[-1].ts_init
+    assert not (record.session_dir(ws, session.session_id) / "stream.jsonl").exists()
 
 
 def test_the_engine_path_replays_the_same_range(
@@ -188,8 +193,9 @@ def test_a_strategy_that_raises_stops_the_node_and_says_so(
     assert session.intents == 0
     assert events[0].detail["crashed"] is True
     assert 0 < session.released < (FORWARD[1] - FORWARD[0]).days + 1
-    assert len(record.stream_of(ws, session.session_id)) == session.released
-    assert session.clock_ns == record.stream_of(ws, session.session_id)[-1].ts_init
+    reached = bars(FORWARD)[: session.released]
+    assert session.stream_sha256 == record.digest(Point.of(bar) for bar in reached)
+    assert session.clock_ns == reached[-1].ts_init
 
 
 def test_a_strategy_that_trades_nothing_replays_cleanly(ws: Workspace, store: StateStore) -> None:
@@ -323,7 +329,7 @@ def test_a_session_can_be_replayed_from_its_own_record(
 
     assert again.session_id != first.session_id
     assert record.intents_of(ws, again.session_id) == record.intents_of(ws, first.session_id)
-    assert record.stream_of(ws, again.session_id) == record.stream_of(ws, first.session_id)
+    assert again.stream_sha256 == first.stream_sha256
     assert again.clock_ns == first.clock_ns
 
 
@@ -340,13 +346,13 @@ def test_a_warmed_target_is_fed_its_prefix_and_records_only_the_range(
     engine = replay.run(ws, store, hyp=warmed, mode=replay.ENGINE)
 
     for session in (node, engine):
-        stream = record.stream_of(ws, session.session_id)
-        assert session.released == len(stream) == (FORWARD[1] - FORWARD[0]).days + 1
-        assert stream[0].ts_init >= midnight_ns(FORWARD_START)
-        assert session.clock_ns == stream[-1].ts_init
+        assert session.released == (FORWARD[1] - FORWARD[0]).days + 1
+        assert session.stream_sha256 == stream(), "the range's own bars, not the prefix's"
+        assert session.clock_ns == bars(FORWARD)[-1].ts_init
+    assert bars(FORWARD)[0].ts_init >= midnight_ns(FORWARD_START)
     assert node.intents == engine.intents > 0
     first = min(intent.ts_event for intent in record.intents_of(ws, node.session_id))
-    assert first == record.stream_of(ws, node.session_id)[0].ts_event, (
+    assert first == bars(FORWARD)[0].ts_event, (
         "warmed, the rule trades the range's first bar, a trough; cold it would wait for "
         "its third close and the next trough, four sessions on"
     )
