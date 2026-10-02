@@ -13,12 +13,14 @@ from kanso.criteria.integrity import (
     DENIED_BOOK,
     DENIED_BUILTINS,
     DENIED_CLOCK,
+    DENIED_DEPTH,
     DENIED_DUNDERS,
     DENIED_HISTORY,
     DENIED_MODULES,
     DENIED_NUMPY_FILE,
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
+    DENIED_UNDER_DEPTH,
     check,
     clashes,
     import_allowed,
@@ -189,6 +191,46 @@ def test_everything_the_runner_hands_the_harness_for_a_book_policy_is_denied() -
     book(sleeve, BookPolicy(reset="monthly"), 0, 1, cushion=1.0, settled_ns=0)
 
     assert set(vars(sleeve)) <= DENIED_BOOK
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_DEPTH))
+def test_the_harness_s_own_book_under_depth_is_out_of_reach(name: str) -> None:
+    """The harness keeps every change of a `depth` book; the author is handed the view."""
+    (problem,) = scan(f"x = self.{name}")
+
+    assert f"attribute '.{name}' is denied" in problem
+    assert "read them there" in problem
+
+
+def test_everything_the_harness_keeps_of_a_depth_book_is_denied() -> None:
+    """A new piece of the harness's book, or a new way of showing it, is out of reach the
+    moment it is added."""
+    from tests.nautilus.strategy.test_sleeve import config
+
+    sleeve = KansoStrategy(config(depth=(100_000_000, 3)))
+    kept = {name for name in vars(sleeve) if name.startswith(("_depth", "_top"))}
+    shown = {name for name in dir(KansoStrategy) if name.startswith(("_show", "_take_depth"))}
+
+    assert kept
+    assert kept | shown <= DENIED_DEPTH
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_UNDER_DEPTH))
+def test_the_bus_and_the_book_subscriptions_are_refused_under_depth_alone(name: str) -> None:
+    """Under `depth` they reach the book around the view; without it they are ordinary."""
+    (problem,) = scan(f"self.{name}", depth=True)
+
+    assert f"attribute '.{name}' is denied under depth" in problem
+    assert "on_order_book_deltas and on_quote_tick" in problem
+    assert scan(f"self.{name}") == []
+
+
+def test_a_lane_under_depth_is_checked_for_what_depth_refuses(lane: Path) -> None:
+    (lane / "strategy.py").write_text("x = self.msgbus\n", encoding="utf-8")
+
+    assert check(lane, {}) == []
+    (problem,) = check(lane, {}, depth=True)
+    assert "'.msgbus' is denied under depth" in problem
 
 
 def test_a_strategy_reaching_for_the_schedule_is_refused_by_the_route_it_took() -> None:

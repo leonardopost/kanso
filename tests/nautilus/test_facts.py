@@ -73,6 +73,8 @@ BINDINGS = {
     "flight as it is, and cancels both",
     "nautilus_pyo3.HttpClient holds a request that names a key to its default quota, and "
     "one key's quota is shared by every thread that sends under it",
+    "a level-two book sets the size an add or an update names, ignores a delete of a "
+    "price it does not hold, and empties both sides on a clear",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

@@ -828,7 +828,14 @@ would be a second route to the catalog that no window bounds. The state the harn
 for a `book` policy — the instant it cuts return periods from, the period it is in, the
 cushion and the last end it settled — is denied the same way: it is a clock of where the
 window opens and a record of what the book made before this month, and a strategy reads
-the book the policy left from `balance` alone.
+the book the policy left from `balance` alone. The harness's own copy of a book a `depth`
+hypothesis holds, and the methods that show the author its view of it, are denied to every
+strategy for the same kind of reason: they are the book at every change, which the account
+does not see. Under `depth` the message bus, which carries the data engine's own topics and
+every change of the book among them, and the two subscriptions that would hand the author a
+book of its own — `subscribe_order_book_at_interval` and `subscribe_order_book_depth` — are
+denied too; the view reaches `on_order_book_deltas` and level one `on_quote_tick`, and the
+refusal says so.
 
 Two further denials are about corporate actions rather than about capability, both are
 listed in the same gate's output, and both name their reason there so a proposer can act on
@@ -945,6 +952,28 @@ sellers' prints of 100 a second apart fill the order at the seventh, eighth and 
 the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
 third and fourth, credited with what stood ahead of it — which is why a posting thesis on
 that venue rests a level of its own. `kanso doctor` checks both engine facts.
+
+**Under `depth` the strategy sees the book its account would, and the venue every change.**
+Without the key a sleeve is handed each change to the book as the venue is. With it
+(`docs/workspace.md`, `depth`) the harness keeps its own copy of each book — the cache's is
+already past the change being handled when a handler runs — and hands the author two views of
+it, from the same code on both paths. The depth view: at the first point published after
+each multiple of `every_ms`, the top `levels` of each side as they stood at that instant,
+as one `OrderBookDeltas` of the differences from the last view, stamped with the instant and
+closed by `F_LAST`, handed only when it moved. Every change the harness holds when it does
+so was published at or before the instant, because a change after it is itself a point
+published after it and shows the view first. Level one: a `QuoteTick` of the best bid and
+offer to `on_quote_tick` for every instant whose changes, all applied, moved the top —
+handed at the change on a feed whose every instant is one change, and otherwise at the flush
+marker after the instant's changes, so a top the instant passed through on its way is never
+shown. Each call runs in the envelope every handler does: held cancels go out before it and
+owed exits are asked for after it, and both still run once for every change the author is
+not shown. An order sent from either is stamped with the instant shown and reaches the venue
+`costs.latency_ms` after the point that carried the call; the data is not delayed again,
+since the latency is the whole round trip. The harness keeps the book by the engine's own
+level-two rules — an add or an update sets the level, a delete of a price not held does
+nothing, a clear empties both sides — which `kanso doctor` checks, and a property test holds
+its top levels and its best equal to the engine's `OrderBook` after any sequence of changes.
 
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and

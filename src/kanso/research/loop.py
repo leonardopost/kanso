@@ -1250,7 +1250,11 @@ def _baseline(
     run was the best card's, which decides what beginning again would take.
     """
     problems = check_integrity(
-        directory, dict(pins), sized=setup.hyp.sizing is not None, construct=setup.construct
+        directory,
+        dict(pins),
+        sized=setup.hyp.sizing is not None,
+        construct=setup.construct,
+        depth=setup.hyp.depth is not None,
     )
     if problems:
         _refuse_baseline(setup.hyp.id, "; ".join(problems[:5]), from_best=from_best)

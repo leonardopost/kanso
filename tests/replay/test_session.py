@@ -225,6 +225,34 @@ def test_the_two_paths_pay_an_exit_owed_on_book_points_alike(latency_ms: float) 
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_show_a_depth_sleeve_the_same_book_alike(latency_ms: float) -> None:
+    """Under `depth` the harness keeps its own copy of the book and hands the author a view
+    on a grid and level one on every instant the top moved. Both paths run that code over
+    the same feed, so a rule reading level one alone posts, re-posts and fills alike."""
+    from tests.nautilus.backtest.test_depth import POSTER, book, prints
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        depth={"every_ms": 100, "levels": 3},
+    )
+    request = request_for(source=POSTER, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), "latency_ms": latency_ms}  # type: ignore[arg-type]
+    day = FORWARD[0]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        [tuple(book(day)), tuple(prints(day))],
+    )
+
+    assert engine.run.fills
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_the_two_paths_land_what_came_due_by_a_held_print_before_its_handler_alike(
     latency_ms: float,
 ) -> None:

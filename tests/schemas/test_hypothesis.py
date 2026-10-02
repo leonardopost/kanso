@@ -407,3 +407,55 @@ def test_a_maintenance_floor_above_what_the_leverage_holds_at_entry_is_refused()
 def test_a_book_policy_survives_the_round_trip(hyp: Hypothesis) -> None:
     again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
     assert again.book == hyp.book
+
+
+TICK_BOOK: dict[str, Any] = {"resolution": "tick", "data_requirements": ["book", "trade"]}
+
+
+def test_depth_is_optional_and_carries_its_grid_and_levels() -> None:
+    assert build().depth is None
+    shown = build(**TICK_BOOK, depth={"every_ms": 100, "levels": 3})
+    assert shown.depth is not None
+    assert (shown.depth.every_ms, shown.depth.levels, shown.depth.every_ns) == (
+        100,
+        3,
+        100_000_000,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("every_ms", 0), ("every_ms", -100), ("levels", 0), ("levels", 401)],
+)
+def test_depth_refuses_a_value_outside_its_range(field: str, value: int) -> None:
+    depth = {"every_ms": 100, "levels": 3, field: value}
+    with pytest.raises(ValidationError, match=f"depth.{field}"):
+        build(**TICK_BOOK, depth=depth)
+
+
+def test_depth_takes_the_deepest_book_an_archive_serves() -> None:
+    assert build(**TICK_BOOK, depth={"every_ms": 1, "levels": 400}).depth is not None
+
+
+def test_depth_needs_the_book_it_is_a_view_of() -> None:
+    with pytest.raises(ValidationError, match="depth: needs 'book' in data_requirements"):
+        build(
+            resolution="tick",
+            data_requirements=["trade"],
+            depth={"every_ms": 100, "levels": 3},
+        )
+
+
+def test_depth_refuses_a_quote_series_beside_its_own_level_one() -> None:
+    with pytest.raises(ValidationError, match="depth: refuses 'quote' in data_requirements"):
+        build(
+            resolution="tick",
+            data_requirements=["book", "quote"],
+            depth={"every_ms": 100, "levels": 3},
+        )
+
+
+@given(hypotheses())
+def test_depth_survives_the_round_trip(hyp: Hypothesis) -> None:
+    again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
+    assert again.depth == hyp.depth

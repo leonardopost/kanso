@@ -62,6 +62,13 @@ the host's; `self.held(id)` is the reader. A sized overlay may name `Clip` and n
 or `clips=`. Every denial says why and what to write instead, because the proposer is a
 model and a refusal it cannot act on is a loop.
 
+**Under `depth`**, a fifth set. The harness keeps every change of the book for the venue
+and hands the author the book on the hypothesis's grid and level one on every change, so
+the harness's own copy and the methods that show it are denied to every strategy, and under
+`depth` so are the message bus, which carries every change on the data engine's topics, and
+the two subscriptions that would hand the author a book of its own: snapshots on an
+interval, and the ten-level depth an account on a sampled channel is not served.
+
 **The base's names** belong to the base. A class whose instances are a `KansoStrategy` or a
 `KansoModifier` — it names one among its bases, through an alias, a module or a class of the
 file that does, or it is a class of the file such a class names — may not bind a name that
@@ -238,6 +245,29 @@ window opens and how far into it a card is, and the cushion is what the book has
 before this month; a strategy reads the book the policy left through `balance`, which is
 the number the card is struck on, and nothing else of it."""
 
+DENIED_DEPTH: Final = frozenset(
+    {
+        "_depth_books",
+        "_depth_shown",
+        "_depth_seen_ns",
+        "_top_shown",
+        "_top_due",
+        "_take_depth",
+        "_show_view",
+        "_show_book",
+        "_show_top",
+        "_show_depth",
+    }
+)
+"""The harness's own copy of a book a `depth` hypothesis holds, at every change, and the
+methods that show the author its view of it."""
+
+WHY_DEPTH: Final = (
+    "the account sees a book's depth only on the grid `depth.every_ms` sets and level one on "
+    "every change, which the harness hands to on_order_book_deltas and on_quote_tick; read "
+    "them there"
+)
+
 WHY: Final = {
     **dict.fromkeys(
         DENIED_SCHEDULE,
@@ -261,6 +291,7 @@ WHY: Final = {
         "it is the harness's own book-policy state, a clock of where the window opens and "
         "what the book set aside; read the book the policy left from `balance`",
     ),
+    **dict.fromkeys(DENIED_DEPTH, f"it is the harness's book at every change, and {WHY_DEPTH}"),
 }
 """Why each denial that carries a reason exists, said in the refusal so a proposer can act on it."""
 
@@ -274,6 +305,7 @@ DENIED_ATTRIBUTES: Final = (
     | DENIED_STALE_BASIS
     | DENIED_HISTORY
     | DENIED_BOOK
+    | DENIED_DEPTH
 )
 
 SIZE_HELPERS: Final = frozenset({"submit_entry", "submit_exit"})
@@ -300,6 +332,13 @@ DENIED_UNDER_SIZING: Final = frozenset(
 sleeve's own; denied only when the hypothesis declares `sizing`."""
 
 WHY_UNDER_SIZING: Final = "because the harness sizes every order to the budget"
+
+DENIED_UNDER_DEPTH: Final = frozenset(
+    {"msgbus", "subscribe_order_book_at_interval", "subscribe_order_book_depth"}
+)
+"""What reaches a book at every change, or as snapshots the account is not served, around
+the view the harness hands; denied only when the hypothesis declares `depth`. The bus
+carries the data engine's own topics, every change of the book among them."""
 
 OVERLAY_CONSTRUCT: Final = "overlay"
 SIZED_OVERLAY_NAMES: Final = frozenset({"Hedge"})
@@ -383,11 +422,13 @@ def scan(
     *,
     sized: bool = False,
     construct: str | None = None,
+    depth: bool = False,
 ) -> list[str]:
     """Every import, identifier and attribute rule this source breaks, in file order.
 
     `sized` says the hypothesis declares a sizing rule and `construct` which construct the
-    source is, so the rules of the sizing rule apply to the right vocabulary.
+    source is, so the rules of the sizing rule apply to the right vocabulary; `depth` says
+    it declares `depth`, so what reaches the book around the harness's view is refused.
     """
     try:
         tree = ast.parse(source, filename=origin)
@@ -411,6 +452,11 @@ def scan(
             problems.append(
                 f"line {node.lineno}: attribute '.{node.attr}' is denied"
                 + ("" if why is None else f", because {why}")
+            )
+        elif isinstance(node, ast.Attribute) and depth and node.attr in DENIED_UNDER_DEPTH:
+            problems.append(
+                f"line {node.lineno}: attribute '.{node.attr}' is denied under depth, "
+                f"because {WHY_DEPTH}"
             )
     return sorted(set(problems), key=problems.index)
 
@@ -687,6 +733,7 @@ def check(
     *,
     sized: bool = False,
     construct: str | None = None,
+    depth: bool = False,
 ) -> list[str]:
     """The whole static half: the directory's scope, then the strategy's own source."""
     problems = scope(lane_dir, pinned)
@@ -697,4 +744,4 @@ def check(
         text = source.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return [*problems, f"{STRATEGY} cannot be read as text: {exc}"]
-    return [*problems, *scan(text, sized=sized, construct=construct)]
+    return [*problems, *scan(text, sized=sized, construct=construct, depth=depth)]

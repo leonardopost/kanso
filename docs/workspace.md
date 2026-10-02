@@ -128,6 +128,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
 | declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
+| declare `depth` on a hypothesis whose `data_requirements` does not list `book`, or lists `quote` | 3 · at `hyp validate`: depth is a view of a book the hypothesis holds, and level one reaches `on_quote_tick` from it alone |
 | bind a name the strategy's base class owns in `strategy.py` — `self._close = 3`, `def _fund(...)`, `size = 10` in the class body | 3 · at `hyp validate`, naming the name and the line; a warning in `doctor`'s `base names`; the baseline refused at `research begin` (2), and any card that carries it a `discard` by `strategy_integrity` |
 | name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
@@ -582,6 +583,44 @@ every window ends flat, so the time the version spent off the stage — a stop, 
 on live before a demotion back to paper — held nothing to borrow against. A new version, or
 a version on a stage it has not run on, starts with nothing set aside.
 
+**`depth` is yours too, and scope.** A hypothesis that holds a level-two `book` hands every
+change of it to the simulated venue, which keeps its queues and matches against it, and,
+without the key, to the strategy's `on_order_book_deltas` as well. An account rarely sees a
+book that way. Measured on 2026-10-02 against OKX's public feeds: the depth channel an
+ordinary account subscribes to is a snapshot every 100 ms, the change-by-change book is
+served only from the fourth fee tier, and the top of the book is free every 10 ms. A rule
+that earns on every change of depth earns on data its account cannot have. `depth` hands the
+strategy what the account sees, and leaves the venue every change:
+
+```yaml
+depth:                             # scope: adding or changing it clears `best`
+  every_ms: 100                    # the book the strategy sees, as of each multiple of this
+  levels: 3                        # of each side, from the best; at most the levels loaded
+```
+
+Under the key the strategy's `on_order_book_deltas` is handed the top `levels` of each side
+as they stood at each multiple of `every_ms` after the epoch — UTC-aligned — as one batch of
+the changes since the view before it, stamped with that instant (`data_time` reads it), at
+the first point of data published after it, and only when something it shows moved. Its
+`on_quote_tick` is handed level one — the best bid and offer with their sizes — once for every
+instant whose changes, all applied, left the top where it was not, never partway through
+an instant. Neither is delayed again: an order sent from either reaches the venue
+`costs.latency_ms` after the point that carried the call, as every order does, because the
+latency is the whole round trip, feed and order together. The quote is a signal and moves
+nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
+`spread: quotes` has no quote series to read. What else the strategy may not touch under the
+key — the message bus and the engine's own book subscriptions — is in `docs/concepts.md`,
+The embargo. A strategy that reads level one alone sends and fills the same on any grid,
+since the venue is handed every change whatever the strategy is shown. The same harness code
+runs on both code paths, and a deployed stage is configured with the key as its card was.
+
+`levels` may not usefully exceed the levels the book was loaded at: a loader that keeps the
+top K of an archive leaves a level pushed past K at its last size rather than deleting it, so
+past K the book holds stale levels. `kanso hyp validate` refuses (exit 3) `depth` on a
+hypothesis whose `data_requirements` does not list `book`, and one that also lists `quote`,
+because a quote series would be a second source of `on_quote_tick` that neither the strategy
+nor a replay could tell apart. Classification never touches the key.
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
@@ -824,7 +863,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id`, `warmup`, `benchmark`, `book` or `costs` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.

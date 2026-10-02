@@ -49,7 +49,7 @@ from hashlib import sha256
 from importlib import import_module, invalidate_caches
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Final, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, get_args, get_origin, get_type_hints
 
 from pydantic import Field
 
@@ -388,6 +388,7 @@ def _sleeve_config(
         "max_leverage": hyp.risk_limits.max_leverage,
         "sizing_budget": 0.0 if hyp.sizing is None else hyp.sizing.budget,
         "venue_model": version.pins.venue_model.model_dump(mode="json"),
+        **({} if hyp.depth is None else {"depth": [hyp.depth.every_ns, hyp.depth.levels]}),
         **dict(version.config),
     }
 
@@ -503,13 +504,16 @@ def _typed(config_cls: type, config: Mapping[str, Any]) -> dict[str, Any]:
 
     YAML has lists and a configuration declares tuples, and the engine's own decoder
     cannot be asked to do the conversion because a free-form mapping defeats it. Only the
-    fields the class itself annotates as tuples are converted, so a field an author
-    declared as a list stays one.
+    fields the class itself annotates as tuples, or as a tuple or nothing, are converted,
+    so a field an author declared as a list stays one.
     """
     hints = get_type_hints(config_cls)
     return {
-        name: tuple(value)
-        if isinstance(value, list) and get_origin(hints.get(name)) is tuple
-        else value
+        name: tuple(value) if isinstance(value, list) and _a_tuple(hints.get(name)) else value
         for name, value in config.items()
     }
+
+
+def _a_tuple(hint: object) -> bool:
+    """Whether a field is annotated as a tuple, alone or beside `None`."""
+    return get_origin(hint) is tuple or any(get_origin(arg) is tuple for arg in get_args(hint))

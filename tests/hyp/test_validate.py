@@ -184,6 +184,31 @@ def test_a_repeated_data_requirement_is_refused(ws: Workspace) -> None:
     assert "repeats" in failure.message
 
 
+def test_depth_without_the_book_it_views_is_refused(ws: Workspace) -> None:
+    depth = {"every_ms": 100, "levels": 3}
+    failure = refused(ws, document(resolution="tick", data_requirements=["trade"], depth=depth))
+
+    assert "depth: needs 'book' in data_requirements" in failure.message
+
+
+def test_depth_beside_a_quote_series_is_refused(ws: Workspace) -> None:
+    depth = {"every_ms": 100, "levels": 3}
+    failure = refused(
+        ws, document(resolution="tick", data_requirements=["book", "quote"], depth=depth)
+    )
+
+    assert "depth: refuses 'quote' in data_requirements" in failure.message
+
+
+def test_depth_over_a_book_is_admissible(ws: Workspace) -> None:
+    depth = {"every_ms": 100, "levels": 3}
+    parsed = accepted(
+        ws, document(resolution="tick", data_requirements=["book", "trade"], depth=depth)
+    )
+
+    assert parsed.depth is not None and parsed.depth.every_ms == 100
+
+
 def test_a_spread_read_from_quotes_needs_quotes(ws: Workspace) -> None:
     costs = {"commission_bps": 0.5, "slippage_bps": 1.0, "spread": "quotes"}
 

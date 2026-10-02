@@ -828,6 +828,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             # The venue a run fills against is simulated and settles no funding, so the
             # sleeve's balance books it as this extraction does.
             books_funding=True,
+            depth=None if hyp.depth is None else (hyp.depth.every_ns, hyp.depth.levels),
             **dict(request.overrides),
         )
     except ValueError as exc:

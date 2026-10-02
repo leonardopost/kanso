@@ -627,6 +627,22 @@ def test_strategy_integrity_fails_a_lane_that_reaches_the_catalog(lane: Path) ->
     assert result.evidence["n_problems"] == 1
 
 
+def test_strategy_integrity_refuses_the_bus_only_under_depth(lane: Path) -> None:
+    """Under `depth` the bus carries every change of the book the strategy is shown a view
+    of; without the key it is an ordinary attribute."""
+    (lane / "strategy.py").write_text("x = self.msgbus\n", encoding="utf-8")
+    shown = make_hyp(
+        resolution="tick",
+        data_requirements=["book", "trade"],
+        depth={"every_ms": 100, "levels": 3},
+    )
+
+    assert strategy_integrity.evaluate(context(build_run((1.0,)), lane_dir=lane)).passed
+    refused = strategy_integrity.evaluate(context(build_run((1.0,)), lane_dir=lane, hyp=shown))
+    assert not refused.passed
+    assert "denied under depth" in refused.evidence["problems"][0]
+
+
 def test_strategy_integrity_without_a_lane_directory_judges_nothing() -> None:
     result = strategy_integrity.evaluate(context(build_run((1.0,))))
     assert result.passed and result.skipped is not None
