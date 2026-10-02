@@ -66,6 +66,72 @@ def test_the_stream_is_the_points_that_were_released(
     assert session.clock_ns == stream[-1].ts_init
 
 
+def test_both_paths_replay_their_window_in_a_card_s_chunks_and_agree(
+    ws: Workspace, store: StateStore, carded_hyp: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neither path reads its window whole: each is handed the chunks a card's child is
+    streamed, read a day at a time here and cut to one bar a chunk, and the two still
+    submit the same orders and record the same stream as a replay of uncut days does.
+
+    Measured before this on a perpetual swap's three-level book and prints: `kanso replay
+    parity` over one day of BTC reached a 6.0 GB footprint and was stopped, and two days of a
+    thinner name took 0.98 GB and 813 s, about ten times a card of the same days."""
+    from kanso.nautilus import backtest
+
+    uncut = {mode: replay.run(ws, store, hyp=carded_hyp, mode=mode) for mode in replay.MODES}
+
+    def refused(*_: object, **__: object) -> object:
+        raise AssertionError("a replay read its window whole")
+
+    cut = backtest._cut
+    chunks: list[int] = []
+
+    def counted(groups: object, cap: int) -> object:
+        for chunk in cut(groups, cap):  # type: ignore[arg-type]
+            chunks.append(sum(len(group) for group in chunk))
+            yield chunk
+
+    monkeypatch.setattr(backtest, "window_data", refused)
+    monkeypatch.setattr(backtest, "_cut", counted)
+    monkeypatch.setattr(backtest, "CHUNK_POINTS", 1)
+    found = replay.parity(ws, store, hyp=carded_hyp)
+
+    assert found.identical and found.compared > 0
+    assert set(chunks) == {1} and len(chunks) == 2 * uncut[replay.NODE].released
+    for mode, session_id in ((replay.NODE, found.node), (replay.ENGINE, found.engine)):
+        assert record.intents_of(ws, session_id) == record.intents_of(ws, uncut[mode].session_id)
+        assert record.stream_of(ws, session_id) == record.stream_of(ws, uncut[mode].session_id)
+    assert not [path for path in record.sessions_path(ws).iterdir() if path.is_file()], (
+        "a stream spooled while the session ran is moved into it, not left beside it"
+    )
+
+
+def test_a_replay_refused_part_way_leaves_no_spooled_stream(
+    ws: Workspace, store: StateStore, carded_hyp: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window refused after the session has begun recording leaves no session and no file
+    of the stream it had begun: the refusal is what the operator gets."""
+    from kanso.nautilus import backtest
+
+    read = backtest._window_points
+    reads: list[int] = []
+
+    def refusing(*args: object) -> object:
+        reads.append(1)
+        if len(reads) > 3:
+            raise PreconditionError("the fourth day is not wanted", remedy="run nothing")
+        return read(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backtest, "_window_points", refusing)
+    for mode in replay.MODES:
+        reads.clear()
+        with pytest.raises(PreconditionError, match="the fourth day is not wanted"):
+            replay.run(ws, store, hyp=carded_hyp, mode=mode)
+
+    assert replay.sessions(ws) == []
+    assert not record.sessions_path(ws).exists() or not list(record.sessions_path(ws).iterdir())
+
+
 def test_the_engine_path_replays_the_same_range(
     ws: Workspace, store: StateStore, carded_hyp: str
 ) -> None:

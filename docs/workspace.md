@@ -1666,6 +1666,11 @@ They accumulate and nothing prunes them; the directory is gitignored. `kanso rep
 lists what is on disk, so deleting a session directory removes it from the listing cleanly —
 the certificate that cites it still stands, it just no longer has the stream to show you.
 
+A replay writes its stream while it runs, to `sessions/.spool-<random>.jsonl`, and moves
+that file into its session directory when it writes the record; a replay that is refused or
+fails part-way removes it. One killed outright leaves it behind: nothing reads a spool, and
+it is yours to delete once no replay is running.
+
 ## `escalations/inbox.md`
 
 Append-only, and kanso means it. One line per escalation — `misaligned`, `cert_failed`,

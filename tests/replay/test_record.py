@@ -125,6 +125,40 @@ def test_the_stream_round_trips(ws: Workspace) -> None:
     assert record.stream_of(ws, written.session_id) == tuple(points)
 
 
+def test_a_stream_spooled_while_the_session_ran_is_moved_into_it(ws: Workspace) -> None:
+    """A replay records what it releases as it releases it; the session it writes holds
+    exactly those lines, the file they were spooled to is gone, and the listing never took
+    the spool for a session."""
+    released = bars(FORWARD)[:3]
+
+    with record.spooled(ws) as stream:
+        for bar in released:
+            stream.add(bar)
+        assert record.list_sessions(ws) == []
+        written = record.write(ws, session(), stream, [])
+
+    assert stream.count == 3
+    assert record.stream_of(ws, written.session_id) == tuple(Point.of(bar) for bar in released)
+    assert sorted(path.name for path in record.sessions_path(ws).iterdir()) == [written.session_id]
+
+
+def test_a_session_that_released_nothing_spools_an_empty_stream(ws: Workspace) -> None:
+    with record.spooled(ws) as stream:
+        written = record.write(ws, session(), stream, [])
+
+    assert record.stream_of(ws, written.session_id) == ()
+
+
+def test_a_spool_never_written_is_removed(ws: Workspace) -> None:
+    """Leaving the block without writing the session — a refusal, a crash — leaves nothing."""
+    with pytest.raises(RuntimeError), record.spooled(ws) as stream:
+        stream.add(bars(FORWARD)[0])
+        raise RuntimeError("the run failed")
+
+    assert not stream.path.exists()
+    assert list(record.sessions_path(ws).iterdir()) == []
+
+
 def test_the_intents_round_trip(ws: Workspace) -> None:
     """An order reads back exactly, including a price it did not carry."""
     limit = Intent(2_000, INSTRUMENT, "SELL", 5.0, "LIMIT", 10.25)

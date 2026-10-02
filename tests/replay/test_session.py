@@ -476,6 +476,50 @@ def test_the_two_paths_agree_over_a_book_of_many_changes_an_instant_and_prints_t
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_agree_over_a_book_window_handed_in_chunks(latency_ms: float) -> None:
+    """The same book and prints cut into chunks of at most seven points between instants, as
+    a card's child is streamed them: the live path handed them a chunk at a time submits and
+    fills what the research path does, chunked or whole, and records as released exactly the
+    window's points in the order the whole window would have released them."""
+    from kanso.replay.record import Point
+    from tests.nautilus.backtest.conftest import POSTER, ticking
+    from tests.nautilus.backtest.test_exit_flat import chasing_costs
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=POSTER, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    request = replace(request, venue_model=model)
+    sessions = [ticking(day) for day in (FORWARD[0], date(2024, 3, 4))]
+    groups = [
+        tuple(point for changes, _ in sessions for point in changes),
+        tuple(point for _, made in sessions for point in made),
+    ]
+    chunks = list(backtest._cut(groups, 7))
+    released: list[object] = []
+
+    whole = backtest.execute(request, [instrument()], groups)
+    engine = backtest.execute_chunked(request, [instrument()], chunks)
+    node = session.run_node_chunked(request, [instrument()], iter(chunks), sink=released.extend)
+
+    assert len(chunks) > 10 and max(sum(map(len, chunk)) for chunk in chunks) <= 7
+    assert not node.result.crashed and whole.run.fills
+    assert (engine.run, engine.intents) == (whole.run, whole.intents)
+    assert node.intents == engine.intents
+    assert node.result.run == engine.run
+    fed = measured(ordered(groups, coincident=True), request.bounds[0])
+    assert [Point.of(point) for point in measured(released, request.bounds[0])] == [
+        Point.of(point) for point in fed
+    ]
+    assert node.released == len(fed)
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_the_two_paths_pay_a_stop_a_take_profit_in_flight_cut_alike(latency_ms: float) -> None:
     """A stop sent behind the sleeve's own take-profit still in flight is cut to nothing and
     owed; once the venue holds the take-profit open the owed stop cancels it and takes the

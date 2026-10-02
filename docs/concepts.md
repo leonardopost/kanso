@@ -315,6 +315,26 @@ holds nothing but its warmup — kills the child first and is raised as the refu
 child whose stream stops before its end refuses it, and never reports the part it was
 handed as a card.
 
+**A replay streams its window as a card does.** `kanso replay run` and `parity` — and so the
+`parity_replay` certification gate — read the range through the reads and chunks a card's
+child is streamed, in the replaying process: the research path runs each chunk in the engine
+before the next is read, and the live path releases each into the node once the one before
+has been released and the node has gone quiet. Between two chunks both do the same things in
+the same order — the fills so far are priced at the chunk's quotes, the sleeve is held for the
+next chunk's markers, the venue is bound to what it carries — so a range is replayed the same
+however it is cut, and the two paths agree at a tolerance of zero over a window of book
+changes and prints cut to seven points a chunk, as over one handed whole. The stream a
+session records is written as it is released. So a replay holds one read and one chunk of
+its range, never the whole. Measured on 2026-10-02 on one day of OKX BTC-USDT-SWAP's
+three-level book and prints (5,668,044 points released): `kanso replay parity` gave
+`identical` on 2,556 intents in 874 s at 0.88 GB resident, where the acceptance build that
+read the day whole, earlier that day, reached a 6.0 GB footprint and was stopped; on two days
+of GRAM-USDT-SWAP (863,292 points) it gave `identical` on 1,723 intents in 148 s at 0.47 GB,
+against 813 s and 0.98 GB on that build, and
+the streamed engine session's intents equal those of the same range run whole in one
+process, element by element. Certification's own runs and a stage node still read their
+windows whole (`docs/backlog.md`).
+
 **Return periods are cut on the UTC clock.** The window opens at 00:00Z of its first day,
 and from there the runner cuts one `[research] return_period` after another — a day by
 default — for as long as the window lasts; a period exists only when a point landed in it,
