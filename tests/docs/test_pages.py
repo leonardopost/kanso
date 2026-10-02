@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -109,6 +110,22 @@ def test_both_pages_say_a_lane_writes_no_log_of_its_own() -> None:
         assert "A lane writes no log of its own" in text, name
         assert "`kanso research show`" in text, name
         assert "`events` table" in text, name
+
+
+def test_the_pages_say_a_prune_holds_the_daemon_off_and_copies_the_store_first() -> None:
+    """A prune deletes research memory, so what makes that safe — the daemon held off, a
+    whole copy first, room on the disk — and where the copy is have to be on the page."""
+    row = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso state prune")
+    )
+    assert "Refused (exit 2) while a daemon runs" in row
+    assert "`runs/state-<instant>.db`" in row
+    assert "that copy and twice what is kept" in row
+    assert "`--dry-run` counts what would go and writes nothing" in row
+    workspace = prose(page("workspace.md"))
+    assert "runs/state-<instant>.db" in workspace
+    assert "`kanso state prune` deletes the books no run can select" in workspace
+    assert "until `kanso state prune` deletes them" in prose(page("concepts.md"))
 
 
 def test_both_pages_say_the_run_s_base_is_never_judged() -> None:
@@ -426,14 +443,54 @@ def test_the_provider_is_named_at_the_path_it_imports_from() -> None:
     assert "`kanso.data.instruments.ResolveError`" in page("extensions.md")
 
 
+def resolves(dotted: str) -> bool:
+    """Whether a dotted path names an attribute of its parent module or a module of its own.
+
+    A submodule is an attribute of its package only once something has imported it, so the
+    attribute alone would make the answer depend on which tests ran first. A name that is
+    neither is refused; a module that exists and fails to import raises rather than reading
+    as absent.
+    """
+    module, _, attribute = dotted.rpartition(".")
+    if hasattr(importlib.import_module(module), attribute):
+        return True
+    try:
+        importlib.import_module(dotted)
+    except ModuleNotFoundError as error:
+        if error.name != dotted:
+            raise
+        return False
+    return True
+
+
 def test_every_dotted_kanso_path_the_docs_name_resolves() -> None:
     found = set()
     for path in [*DOCS.glob("*.md"), ROOT / "README.md"]:
         found.update(re.findall(r"`(kanso\.[a-z_]+(?:\.[A-Za-z_]+)+)`", path.read_text()))
     assert found
     for dotted in sorted(found):
-        module, _, attribute = dotted.rpartition(".")
-        assert hasattr(importlib.import_module(module), attribute), dotted
+        assert resolves(dotted), dotted
+
+
+def test_a_submodule_resolves_before_anything_imported_it_and_nothing_else_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured 2026-10-02: `kanso.certify.child` failed under `pytest tests/docs` alone and
+    passed in the suite, because only the suite had imported it first."""
+    package = tmp_path / "kanso_docs_probe"
+    package.mkdir()
+    (package / "__init__.py").write_text("NAMED = 1\n")
+    (package / "child.py").write_text("")
+    monkeypatch.syspath_prepend(tmp_path)
+    try:
+        assert not hasattr(importlib.import_module("kanso_docs_probe"), "child")
+        assert resolves("kanso_docs_probe.child")
+        assert resolves("kanso_docs_probe.NAMED")
+        assert not resolves("kanso_docs_probe.absent")
+        assert not resolves("kanso_docs_probe.child.Absent")
+    finally:
+        for name in ("kanso_docs_probe.child", "kanso_docs_probe"):
+            sys.modules.pop(name, None)
 
 
 # -- docs/maintainers.md --------------------------------------------------------------
@@ -637,3 +694,31 @@ def test_the_pages_say_a_lane_runs_its_benchmark_hold_in_a_child() -> None:
     assert item.startswith("~~The hold a benchmark objective differences against was run in")
     assert "in the lane's own process~~ **closed.**" in item
     assert "a child runs it now (row 121)" in rows["119"].split("|")[5]
+
+
+def test_the_pages_say_the_monitor_demotes_in_a_child() -> None:
+    """A monitor pass that demoted ran its stages' nodes in a process that runs all day; the
+    pages say a child makes it, that a stop leaves it to finish, and the backlog closes the
+    row that recorded it and the open half of the row before it."""
+    stages = prose(section(page("concepts.md"), "Stages"))
+    assert "**except a demotion the monitor makes**, which runs in a child of the monitor" in stages
+    moves = prose(section(page("concepts.md"), "Promotion and demotion"))
+    assert "**The monitor demotes in a child of its own process.**" in moves
+    assert "leaves it to finish" in moves
+    monitoring = prose(section(page("cli.md"), "Monitoring"))
+    assert (
+        "A pass demotes in a child of its own process, exactly as `kanso demote` does" in monitoring
+    )
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+    )
+    assert "A demotion the monitor is making is not: it is left to finish" in stop
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 12[12] \|", line)
+    }
+    item = rows["122"].split("|")[3].strip()
+    assert item.startswith("~~A monitor pass that demoted a version ran its stages' nodes in")
+    assert "the monitor's own process~~ **closed.**" in item
+    assert "a child makes the monitor's demotion now (row 122)" in rows["121"].split("|")[5]

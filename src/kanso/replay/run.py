@@ -19,6 +19,7 @@ become evidence for a decision the research loop makes.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from datetime import date
 from typing import TYPE_CHECKING, Final
 
@@ -27,7 +28,7 @@ from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, session
 from kanso.nautilus.session import Replayed
 from kanso.replay import record
-from kanso.replay.record import Intent, Point, Session
+from kanso.replay.record import Intent, Point, Session, Stream
 from kanso.replay.target import Target, resolve
 from kanso.schemas.venue import SANDBOX
 
@@ -84,12 +85,11 @@ def run(
     target = resolve(ws, store, strategy=strategy, version=version, hyp=hyp, sha=sha)
     window = _range(ws, target, start, end)
     request = target.request(window)
-    instruments, groups = backtest.window_data(request, target.catalog)
-    points = session.measured(session.ordered(groups), request.bounds[0])
+    instruments, chunks = backtest.window_chunks(request, target.catalog)
     started = record.now()
-    replayed = _execute(request, instruments, groups, mode=mode, speed=speed)
+    stream = Stream()
+    replayed = _execute(request, instruments, chunks, mode=mode, speed=speed, sink=stream)
     result = replayed.result
-    market = points[: replayed.released]
     made = Session.model_validate(
         {
             "session_id": record.session_id(mode, target.label, window, started),
@@ -100,19 +100,14 @@ def run(
             "to": window[1],
             "speed": speed,
             "exec": SANDBOX.id,
-            "released": len(market),
+            "released": stream.count,
             "intents": len(result.intents),
             "clock_ns": replayed.clock_ns,
             "started_at": started,
             "ended_at": record.now(),
         }
     )
-    written = record.write(
-        ws,
-        made,
-        (Point.of(point) for point in market),
-        (Intent.of(row) for row in result.intents),
-    )
+    written = record.write(ws, made, stream, (Intent.of(row) for row in result.intents))
     record.insert(store, written)
     store.event(
         REPLAYED,
@@ -175,20 +170,32 @@ def _range(
 def _execute(
     request: backtest.RunRequest,
     instruments: tuple[object, ...],
-    groups: tuple[tuple[object, ...], ...],
+    chunks: Iterator[tuple[tuple[object, ...], ...]],
     *,
     mode: str,
     speed: float,
+    sink: Stream,
 ) -> Replayed:
-    """The chosen code path over this window's points.
+    """The chosen code path over this window's points, a chunk at a time.
 
-    The research path has no feed to stop short, so it always reaches the end of the window
-    and its session clock is the last point of it. Both paths are fed a warmed target's
-    prefix and neither counts it: what was released is the range's own points.
+    Both paths are handed the window in the chunks a card's child is streamed
+    (`backtest.window_chunks`), and each folds what it released into `sink` as a chunk of
+    it runs, so neither holds the window whole and the digest the session records is of
+    the feed itself. The research path has no feed to stop short, so it always reaches the
+    end of the window and its session clock is the last point of it. Both paths are fed a
+    warmed target's prefix and neither counts it: what was released is the range's own
+    points.
     """
+    opens = request.bounds[0]
+    clock: int | None = None
+
+    def released(points: Sequence[object]) -> None:
+        nonlocal clock
+        for point in session.measured(points, opens):
+            sink.add(Point.of(point))
+            clock = int(point.ts_init)
+
     if mode == NODE:
-        return session.run_node(request, instruments, groups, speed=speed)
-    points = session.measured(session.ordered(groups), request.bounds[0])
-    result = backtest.execute(request, instruments, groups)
-    clock = int(points[-1].ts_init) if points else None
-    return Replayed(result, len(points), clock)
+        return session.run_node_chunked(request, instruments, chunks, speed=speed, sink=released)
+    result = backtest.execute_chunked(request, instruments, chunks, sink=released)
+    return Replayed(result, sink.count, clock)

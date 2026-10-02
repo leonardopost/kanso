@@ -202,6 +202,7 @@ __all__ = [
     "attach",
     "bar_topics",
     "relay",
+    "wire",
 ]
 
 MARKET_FIRST: Final = 10
@@ -607,20 +608,36 @@ def attach(
 
     Returns the clients in the order the venues were given, so a caller can reach an
     exchange afterwards — to read the book a position was marked at, or to check that a
-    flattening order was matched.
+    flattening order was matched. A caller handing the window over a chunk at a time binds
+    each later chunk with `wire` before releasing it.
     """
     made: list[SimulatedVenue] = []
-    topics = bar_topics(points)
-    marked = any(is_marker(point) for point in points)
     for venue in venues:
         client = SimulatedVenue(kernel, venue)
         kernel.exec_engine.register_client(client)
         kernel.exec_engine.register_venue_routing(client, Venue(venue.name))
-        for topic in topics.get(venue.name, ()):
-            kernel.msgbus.subscribe(topic=topic, handler=client.on_data, priority=MARKET_FIRST)
-        if marked:
+        made.append(client)
+    clients = tuple(made)
+    wire(kernel, clients, points)
+    return clients
+
+
+def wire(kernel: Any, clients: Sequence[SimulatedVenue], points: Sequence[Any]) -> None:
+    """Bind each venue to the bars and the flush markers these points carry, where it is not
+    bound to them already.
+
+    A bar topic and the marker topic are subscribed at `MARKET_FIRST`, so a venue bound
+    before a later chunk of its window is released handles that chunk exactly as one bound
+    to the whole window before it started: what orders a topic's handlers is their
+    priority, not when they subscribed.
+    """
+    topics = bar_topics(points)
+    marked = any(is_marker(point) for point in points)
+    for client in clients:
+        for topic in topics.get(client.venue.value, ()):
+            if not kernel.msgbus.is_subscribed(topic, client.on_data):
+                kernel.msgbus.subscribe(topic=topic, handler=client.on_data, priority=MARKET_FIRST)
+        if marked and not kernel.msgbus.is_subscribed(MARKER_TOPIC, client.on_marker):
             kernel.msgbus.subscribe(
                 topic=MARKER_TOPIC, handler=client.on_marker, priority=MARKET_FIRST
             )
-        made.append(client)
-    return tuple(made)

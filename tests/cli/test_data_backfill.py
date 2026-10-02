@@ -370,6 +370,8 @@ def test_the_days_of_a_gap_nobody_answered_are_still_planned(
 SOURCE = '''\
 """A synthetic source with the holidays and the page limit a real one has."""
 
+from pathlib import Path
+
 from kanso.data.loader import utc_day
 from kanso.data.loaders.synthetic import SyntheticLoader
 
@@ -381,6 +383,9 @@ CLOSED = frozenset({closed!r})
 PAGE = {page}
 """The most sessions one request is served, or 0 for as many as it asks for."""
 
+ASKED = Path(__file__).with_name("asked.txt")
+"""Every window this source was asked for, a line each, as a bill would list them."""
+
 
 class Source:
     id = "{name}"
@@ -389,6 +394,8 @@ class Source:
         return SyntheticLoader().discover(dict(spec, loader="synthetic"))
 
     def load(self, ref, window):
+        with ASKED.open("a", encoding="utf-8") as asked:
+            asked.write(f"{{window[0]}} {{window[1]}}\\n")
         served, days = [], set()
         for point in SyntheticLoader().load(ref, window):
             day = utc_day(point.ts_event)
@@ -422,6 +429,13 @@ def a_source(
     )
     write_spec(root, "full.yaml", loader=name, **span)
     return name
+
+
+def asked(root: Path, name: str) -> list[tuple[str, str]]:
+    """Every window the source `a_source` installed as `name` was asked for, in order."""
+    bill = root / "kanso_ext" / name / "asked.txt"
+    lines = bill.read_text(encoding="utf-8").splitlines() if bill.exists() else []
+    return [(start, end) for start, end in (line.split() for line in lines)]
 
 
 @pytest.fixture
@@ -523,3 +537,30 @@ def test_a_month_answered_empty_before_the_first_served_day_is_not_coverage(
     assert series["spans"] == [["2024-04-29", "2024-06-25"]]
     assert series["empty"] == []
     assert series["gaps"] == []
+
+
+@pytest.mark.usefixtures("_leave_the_interpreter_as_found")
+def test_a_month_answered_empty_before_the_first_served_day_is_not_asked_again(
+    runner: CliRunner, resolved: Path
+) -> None:
+    """Not coverage, so a repeat plans it again, but its recorded answer is read, not paid for.
+
+    The month lies before the last day the series serves, so its empty answer is no source
+    that has yet to publish: the record stands, and the source is not asked a second time.
+    """
+    from kanso.state import StateStore
+
+    before = tuple(str(date(2024, 3, 28) + timedelta(days=n)) for n in range(30))
+    loader = a_source(resolved, "unlisted", closed=before, start="2024-03-28", end="2024-06-25")
+    first = backfill(runner, resolved, loader=loader)
+    [month, *_] = outcomes(first)
+    assert month == ("2024-03-28", "2024-04-26", "empty")
+    assert asked(resolved, loader).count(month[:2]) == 1
+
+    again = backfill(runner, resolved, loader=loader)
+
+    assert outcomes(again)[0] == month
+    assert asked(resolved, loader).count(month[:2]) == 1
+    with StateStore(resolved / "state.db") as store:
+        recorded = [event.detail for event in store.events(kind="data_chunk_empty")]
+    assert recorded.count({"start": month[0], "end": month[1]}) == 1

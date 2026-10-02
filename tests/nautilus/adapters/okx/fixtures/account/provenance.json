@@ -1,0 +1,36 @@
+{
+  "source": "OKX private REST API, two signed read-only GETs: /api/v5/account/trade-fee?instType=SWAP and /api/v5/account/config",
+  "authentication": "the operator's API key for the real account (not the demo account) of an Australian retail entity, permission read_only (the config row's own perm field), served by us.okx.com; signed as the exchange documents — OK-ACCESS-KEY, OK-ACCESS-SIGN (base64 HMAC-SHA256 of timestamp + GET + path with its query), OK-ACCESS-TIMESTAMP, OK-ACCESS-PASSPHRASE, Content-Type application/json — and a User-Agent that is not the standard library's. No credential value is in any file here",
+  "recorded_with": "a read-only probe (python urllib) on the operator's machine that printed each answer's code and msg and, of each row, only an allow-list of fields: never uid, mainUid, label or ip. Each file is that printout put back in the envelope it was read from — code \"0\", msg empty, the rows under data — with the rows' fields in the order served. The probe did not print the HTTP status; 200 is recorded because the exchange answers code 0 under 200. Fields outside the allow-list — feeGroup, if it was served — were not printed and are not here",
+  "dropped": "kycLv, which the probe printed (\"2\" on both days), is left out of both config rows: it is a fact about the operator, not one of the account's terms",
+  "files": {
+    "trade-fee_instType-SWAP_2026-10-01.json": {
+      "url": "https://us.okx.com/api/v5/account/trade-fee?instType=SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-01T10:25:11Z",
+      "body": "the probe's printout of the row, every field it allowed; the row's ts reads 2026-10-01T10:25:10.914Z. The account was in futures mode (acctLv 2): maker -0.0005, taker -0.0007 on every margin type, level Lv1 — 5 and 7 basis points, the Australian entity's Regular tier, which the account's fee page showed the same day as Futures 0.0500 % maker, 0.0700 % taker"
+    },
+    "config_2026-10-01.json": {
+      "url": "https://us.okx.com/api/v5/account/config",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-01T10:25:11Z",
+      "body": "the probe's printout of the row, whose line was cut at 300 characters after roleType: the allowed fields served after it (settleCcy, spotOffsetType, spotRoleType, traderInsts, type on 2026-09-30) were not recorded this day"
+    },
+    "trade-fee_instType-SWAP_2026-09-30.json": {
+      "url": "https://us.okx.com/api/v5/account/trade-fee?instType=SWAP",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T06:17:33Z",
+      "body": "the probe's printout of the row, every field it allowed; the row's ts reads 2026-09-30T06:17:32.771Z. The same account, then in spot mode (acctLv 1): maker -0.0002, taker -0.0005, level Lv1 — the exchange's global Regular tier, not the one it was charged once it could trade swaps"
+    },
+    "config_2026-09-30.json": {
+      "url": "https://us.okx.com/api/v5/account/config",
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-09-30T06:17:33Z",
+      "body": "the probe's printout of the row, every field it allowed"
+    }
+  }
+}

@@ -28,8 +28,13 @@ refusal survives the trip across the process boundary.
 
 **A card runs in a child of its own.** `run_subprocess` starts one in a new session with
 an environment allow-list and no path to any catalog: the parent reads the window from
-the catalog and serialises the points to the child, so a card has no route to data
-outside its window even if its code looked for one. The parent supervises wall time and
+the catalog and streams the points to the child on its standard input, so a card has no
+route to data outside its window even if its code looked for one. The window travels in
+chunks cut between instants — reads of an hour for a feed of prints, quotes or a book and
+of a day otherwise, each cut to at most `CHUNK_POINTS` points — and the parent reads the
+next chunk only once the last is written, so the parent holds one read of the window, which
+it keeps until every chunk cut from it is written, and the child holds the chunk it runs;
+nothing of the window is ever on disk. The parent supervises wall time and
 resident memory and kills the process group on breach; resident memory is bounded by
 supervision rather than by `setrlimit`, which does not bound RSS on Linux and is rejected
 for address space on macOS. The peak comes from the reaped child's own resource usage.
@@ -91,6 +96,7 @@ import os
 import pickle
 import random
 import resource
+import select
 import shutil
 import signal
 import subprocess
@@ -107,7 +113,7 @@ from itertools import chain
 from math import fsum
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final
+from typing import IO, Any, Final
 
 from kanso.criteria import CardRun, Fill, FundingPayment, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
@@ -140,6 +146,7 @@ __all__ = [
     "RunResult",
     "booked",
     "checked",
+    "checked_chunks",
     "child_env",
     "benchmark",
     "end_with",
@@ -152,6 +159,7 @@ __all__ = [
     "wanted",
     "warmup_prefix",
     "watched",
+    "window_chunks",
     "window_data",
 ]
 
@@ -208,17 +216,37 @@ _INTERRUPT = threading.Event()
 
 A card child leads its own session, so nothing outside this process can kill it with the
 lane that started it; the watcher reads this flag between polls and kills the child itself,
-so a stop costs the card in flight and never leaves it running unbudgeted. Once it is set
-no card is started at all: `run_subprocess` refuses before it reads the window and again
-before it spawns.
+so a stop costs the card in flight and never leaves it running unbudgeted — the window
+being streamed to it included, since the watch reads it between polls. Once it is set no
+card is started at all: `run_subprocess` refuses before it reads anything and again before
+it spawns.
 """
 
 CARD_ROOM: Final = ".card"
-"""The directory inside a lane a card's payload, report and stream travel through. A dot
-directory, so the scope check a card passes before it runs ignores it."""
+"""The directory inside a lane a card's report and output travel through. A dot directory,
+so the scope check a card passes before it runs ignores it."""
 
-REQUEST_FILE: Final = "request.pkl"
 RESULT_FILE: Final = "result.pkl"
+OUTPUT_FILE: Final = "stderr.txt"
+
+READ_TICK_NS: Final = 3_600 * NS_PER_SECOND
+"""How much of a window of prints, quotes or a book the parent reads from the catalog at a
+time; any other window is read a day at a time. Measured on one perpetual swap's level-two book
+and prints: an hour's read costs at most 2.6 times per point what a twelve-hour read does,
+about three seconds over a whole day of BTC."""
+
+CHUNK_POINTS: Final = 250_000
+"""The most catalog points one chunk of a card's stream holds, unless one instant alone
+holds more. Measured on a day of BTC's book and prints: a fresh child holds about 0.2 GB
+of its own plus 0.66-0.81 KB per point of the chunk it runs, so this is about 0.4 GB; and
+caps of 10,000, 50,000, 200,000 and none gave the identical card, at about 10 ms of CPU
+per extra chunk."""
+
+FEED_BYTES: Final = 64 * 1024
+"""The most the parent writes to a card's standard input in one step of its watch."""
+
+END: Final = {"end": True}
+"""The record a card's stream ends with; a stream that stops before it is not a window."""
 
 PARENT_POLL_S: Final = 0.5
 """How often a card asks whether the process that started it is still its parent."""
@@ -614,7 +642,7 @@ def window_data(
     declares, or at every grain the request names when an overlay's differs from its
     host's. Each group is homogeneous because the engine assumes one type per `add_data`
     call. The upper bound is the window's, prefix or not. A card child is handed the same
-    points a session at a time (`_stage`), through the same reader.
+    points a chunk at a time (`_payload`), through the same reader.
     """
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
@@ -683,12 +711,17 @@ def _refuse_missing_grain(request: RunRequest, loaded: Mapping[str, int]) -> Non
 def _market_points(
     catalog: Any, requirement: str, instrument: Any, resolution: str, start: int, end: int
 ) -> tuple[object, ...]:
-    """One instrument's bars, quotes or trades over the window.
+    """One instrument's bars, quotes, trades or book changes over the window.
 
     Bars are asked for by the bar type the sleeve subscribes to, spelled by the strategy
     module itself, so the runner loads exactly the grain the strategy will receive rather
     than every grain the catalog happens to hold for that instrument. The `wanted` checks
     are asked first, as before every catalog query for points.
+
+    Quotes, trades and book changes are read in the order the catalog's files hold them
+    (`_in_file_order`), because those are the series whose points share instants as a rule,
+    and the order of the points of one instant is part of what a card is handed. A bar
+    series holds one bar an instant, so its order is its `ts_init` alone.
     """
     from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
@@ -699,8 +732,42 @@ def _market_points(
         identifier = str(_bar_type(instrument.id, resolution))
         return tuple(catalog.query(Bar, identifiers=[identifier], start=start, end=end))
     data_cls = {QUOTE: QuoteTick, BOOK: OrderBookDelta}.get(requirement, TradeTick)
-    identifier = str(instrument.id)
-    return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
+    return _in_file_order(catalog, data_cls, str(instrument.id), start, end)
+
+
+def _in_file_order(
+    catalog: Any, data_cls: type, identifier: str, start: int, end: int
+) -> tuple[object, ...]:
+    """One instrument's points of `data_cls` with `start <= ts_init <= end`, the points of
+    one instant in the order its files hold them, whatever span is asked for.
+
+    The catalog's query for a built-in type sorts on `ts_init` in SQL, and that sort is not
+    stable: which order it leaves the points of one instant in depends on the span asked
+    for. Measured on 2026-10-02 on a day of one crypto venue's BTC/USDT perpetual-swap
+    prints (2026-06-22, 524,932 instants): read whole and read an hour at a time, 79
+    instants came back in different orders — trade ids 848, 849, 850, 851 in the file and
+    the day read, 848, 850, 849, 851 in the hour read — and a card of a sleeve that trades
+    on prints made 9,060 intents over twenty minutes of them read whole and 9,064 read by
+    the hour. Handed the file list instead, the catalog reads with its dataset path, which
+    keeps each file's rows in order, takes the files in the order given and sorts stably
+    when they overlap, so the stream is the vendor's order and the same at any read length:
+    on the same day, both the prints and the 10,803,349 book changes came back exactly in
+    file order an hour at a time, in the time the SQL path took. The files are one
+    directory's, named by the interval they cover, so their names sort in time order.
+
+    Engine facts this relies on (nautilus_trader 1.231.0): `query(..., files=...)` takes the
+    dataset path for every type; `filter_files` keeps the files of an identifier that
+    intersect the span; and the dataset path filters on `ts_init` inclusively at both ends,
+    as the SQL path does (re-checked by `kanso.nautilus.facts`).
+    """
+    files = sorted(
+        catalog.filter_files(
+            data_cls, catalog.get_file_list_from_data_cls(data_cls), [identifier], start, end
+        )
+    )
+    if not files:
+        return ()
+    return tuple(catalog.query(data_cls, start=start, end=end, files=files))
 
 
 Scope = tuple[frozenset[str], dict[str, set[date]]]
@@ -828,6 +895,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             # The venue a run fills against is simulated and settles no funding, so the
             # sleeve's balance books it as this extraction does.
             books_funding=True,
+            depth=None if hyp.depth is None else (hyp.depth.every_ns, hyp.depth.levels),
             **dict(request.overrides),
         )
     except ValueError as exc:
@@ -850,9 +918,17 @@ def tunable(request: RunRequest) -> dict[str, float]:
 
 
 def _modifier(
-    construct: str, source: bytes, params: Mapping[str, object], hyp_id: str, host: str
+    construct: str,
+    source: bytes,
+    params: Mapping[str, object],
+    hyp: Hypothesis,
+    host: str,
 ) -> Any:
-    """One attached construct, configured against the sleeve it modifies."""
+    """One attached construct, configured against the sleeve it modifies.
+
+    Under the hypothesis's `depth` it is handed no book of its own, as its host is handed
+    only the view: a subscription it makes to the book is refused.
+    """
     from kanso.nautilus.strategy import KansoModifier
 
     module = _module(source, "modifier")
@@ -863,12 +939,14 @@ def _modifier(
             f"as a {construct!r}"
         )
     try:
-        config = cls.config_cls(host_strategy_id=host, hyp_id=hyp_id, **dict(params))
+        config = cls.config_cls(host_strategy_id=host, hyp_id=hyp.id, **dict(params))
     except TypeError as exc:
         raise ValidationError(
             f"construct.params: {cls.config_cls.__name__} does not take these parameters: {exc}"
         ) from None
-    return cls(config=config)
+    modifier = cls(config=config)
+    modifier._book_withheld = hyp.depth is not None
+    return modifier
 
 
 # --- the engine --------------------------------------------------------------
@@ -892,17 +970,33 @@ def execute_chunked(
     request: RunRequest,
     instruments: Sequence[object],
     chunks: Iterable[Sequence[Sequence[object]]],
+    *,
+    sink: Callable[[Sequence[object]], None] | None = None,
 ) -> RunResult:
     """Run the strategy over the window one chunk at a time, and extract the run once.
 
     Each chunk is a slice of the delivered span in time order, grouped one type per
     group, and holds every point of its instants: the engine is fed it, run in streaming
     mode to its end, and cleared, so what a card holds at any moment is one chunk beside
-    the marks the extraction folds as the points pass (`Marks`). Every chunk is checked
-    as the whole window was: a point outside the window is refused, and so is a split the
-    window holds and no definition schedules. The cross-section markers are the chunk's
-    own, and the sleeve is armed for them chunk by chunk, which is the same dispatch the
-    whole window gets because a chunk boundary falls between instants, never inside one.
+    the marks the extraction folds as the points pass (`Marks`) — the groups are let go
+    once the chunk is ordered, and the ordered stream once it has run, so the next chunk
+    is unpickled beside nothing of this one. Every chunk is checked as the whole window
+    was: a point outside the window is refused, and so is a split the window holds and no
+    definition schedules, and under a hypothesis that holds the book, a UTC day holding a
+    name's market data and no change of its book (`_refuse_unbooked`). The cross-section
+    markers are the chunk's own and follow the hypothesis's rule
+    (`kanso.nautilus.cross_section.coincident`), and the sleeve is held for them from the
+    first chunk on — even a first chunk holding no marker, such as the book changes of an
+    hour before the first print, because a sleeve subscribes to markers when it starts, on
+    the first chunk — which is the same dispatch the whole window gets because a chunk
+    boundary falls between instants, never inside one. A feed the rule leaves unmarked is
+    marked chunk by chunk, where two points of one series share an instant, and a sleeve
+    that started on a chunk with none subscribes the markers when a chunk that has them
+    comes (`KansoStrategy._bind_markers`).
+
+    The chunks are checked and ordered as `checked_chunks` does it for both code paths, and
+    `sink`, when given, is handed each chunk's ordered stream before it runs — what a replay
+    records as released, a chunk at a time, rather than the window held whole beside it.
 
     Engine facts this relies on (nautilus_trader 1.231.0): `run(streaming=True)` pauses
     after the data it holds is exhausted without finalising; `clear_data` drops the stream
@@ -922,7 +1016,7 @@ def execute_chunked(
     from nautilus_trader.model.identifiers import Venue
 
     from kanso.nautilus.actions import modules
-    from kanso.nautilus.cross_section import is_marker, warm
+    from kanso.nautilus.cross_section import BOOK, coincident, is_marker, warm
 
     model = VenueModel.model_validate(dict(request.venue_model))
     marks = Marks(request, model)
@@ -971,28 +1065,29 @@ def execute_chunked(
         strategy = cls(config=config)
         for construct, source, params in request.modifiers:
             engine.add_actor(
-                _modifier(construct, source, params, request.hyp.id, cls.__name__),
+                _modifier(construct, source, params, request.hyp, cls.__name__),
             )
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
         booked(strategy, request)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
+        marked = coincident(request.hyp)
+        book = BOOK in request.hyp.data_requirements
         ran = False
-        for groups in chunks:
-            splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
-            points = _ordered(groups)
-            marks.take(points)
-            if not points:
-                continue
-            strategy._hold_until_cross_section = any(is_marker(point) for point in points)
-            _load_stream(engine, points)
+        for points in checked_chunks(request, instruments, chunks, marks):
+            strategy._hold_until_cross_section = marked or any(is_marker(p) for p in points)
+            if ran and strategy._hold_until_cross_section:
+                strategy._bind_markers()
+            if sink is not None:
+                sink(points)
+            _load_stream(engine, points, book=book)
+            del points
             engine.run(start=opens, end=closes - 1, streaming=True)
             ran = True
             marks.price(_fill_events(_positions(engine.cache))[0])
             marks.next_chunk()
             engine.clear_data()
-        marks.check()
         if ran:
             engine.end()
         card = _extract(request, engine, marks)
@@ -1008,6 +1103,116 @@ def execute_chunked(
         peak_mem_gb=_own_peak_gb(),
         intents=intents,
     )
+
+
+def checked_chunks(
+    request: RunRequest,
+    instruments: Sequence[object],
+    chunks: Iterable[Sequence[Sequence[object]]],
+    marks: Marks,
+) -> Iterator[tuple[object, ...]]:
+    """Each chunk of a window as the engine delivers it, refused as the whole window would be.
+
+    The one discipline both code paths run a window's chunks under — `execute_chunked` on
+    the research path, `session.run_node_chunked` on the live one — so a chunk one path
+    refuses, orders or marks is refused, ordered and marked the same on the other. Each
+    chunk's groups are checked for a split no definition schedules, ordered and marked by
+    the hypothesis's rule (`kanso.nautilus.cross_section.coincident`), and folded into
+    `marks`, which refuses a point outside the window; under a hypothesis that holds the
+    book, every UTC day before the chunk's first instant is held to a change of each name's
+    book (`_refuse_unbooked`). A chunk that holds nothing is not handed on. Once the last
+    chunk has been taken, a window that held nothing is refused (`Marks.check`) and so is a
+    last day without its book. A consumer that stops early — a node that halted — is not
+    asked about the days it never reached.
+    """
+    from kanso.nautilus.cross_section import BOOK, coincident
+
+    marked = coincident(request.hyp)
+    book = BOOK in request.hyp.data_requirements
+    fed: dict[int, set[Any]] = {}
+    changed: dict[int, set[Any]] = {}
+    for groups in chunks:
+        splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
+        points = _ordered(groups, coincident=marked)
+        del groups
+        marks.take(points)
+        if not points:
+            continue
+        if book:
+            _refuse_unbooked(request, fed, changed, before=int(points[0].ts_init))  # type: ignore[attr-defined]
+            _book_days(points, fed, changed)
+        yield points
+        del points
+    marks.check()
+    if book:
+        _refuse_unbooked(request, fed, changed)
+
+
+def _book_days(
+    points: Sequence[object], fed: dict[int, set[Any]], changed: dict[int, set[Any]]
+) -> None:
+    """Add to `fed` the instruments each UTC day of this stream holds market data for — bars,
+    quotes, prints or book changes — and to `changed` those whose book it changed that day;
+    both keyed by the day's number since the epoch."""
+    from nautilus_trader.model.data import (
+        Bar,
+        OrderBookDelta,
+        OrderBookDeltas,
+        QuoteTick,
+        TradeTick,
+    )
+
+    for point in points:
+        kind = type(point)
+        if kind is OrderBookDeltas or kind is OrderBookDelta:
+            name = point.instrument_id  # type: ignore[attr-defined]
+            changed.setdefault(int(point.ts_init) // NS_PER_DAY, set()).add(name)  # type: ignore[attr-defined]
+        elif kind is Bar:
+            name = point.bar_type.instrument_id  # type: ignore[attr-defined]
+        elif kind is TradeTick or kind is QuoteTick:
+            name = point.instrument_id  # type: ignore[attr-defined]
+        else:
+            continue
+        fed.setdefault(int(point.ts_init) // NS_PER_DAY, set()).add(name)  # type: ignore[attr-defined]
+
+
+def _refuse_unbooked(
+    request: RunRequest,
+    fed: dict[int, set[Any]],
+    changed: dict[int, set[Any]],
+    *,
+    before: int | None = None,
+) -> None:
+    """A hypothesis that holds the book is refused a UTC day that holds a name's market data
+    and none of its book's changes: its venue would match that day's prints against the book
+    the day before left, or against none. Asked of every day before `before` — a chunk's
+    first instant, once every chunk of those days has been seen — and of every day once the
+    window has run; the days asked are let go.
+
+    The engine refuses a stream holding an instrument's data and none of its book data, and
+    a run fed a day at a time was refused that way a day at a time. A card read an hour at a
+    time is fed streams of an hour, of which a quiet one can hold prints after the book's
+    last change, so the engine's check is turned off for those (`_load_stream`) and made
+    here, a day at a time, as it was.
+    """
+    days = sorted(day for day in fed if before is None or day < int(before) // NS_PER_DAY)
+    missing: dict[str, list[date]] = {}
+    for day in days:
+        for name in fed.pop(day) - changed.pop(day, set()):
+            missing.setdefault(str(name), []).append(day_of(day * NS_PER_DAY))
+    if missing:
+        named = "; ".join(
+            f"{name} on {', '.join(str(day) for day in found)}"
+            for name, found in sorted(missing.items())
+        )
+        first = min(day for found in missing.values() for day in found)
+        last = max(day for found in missing.values() for day in found)
+        raise PreconditionError(
+            f"data: {request.hyp.id} holds the book, and the catalog holds market data and no "
+            f"book change for {named}",
+            remedy=f"load the book for {', '.join(sorted(missing))} over {first}..{last} with "
+            "`kanso data load`, then take a snapshot",
+        )
 
 
 def booked(strategy: object, request: RunRequest) -> None:
@@ -1278,9 +1483,10 @@ def checked(
     through the corporate action and report it as return, so it is refused with the entry
     the operator has to write.
 
-    Every path that extracts a run calls this — `execute` here, chunk by chunk, and
-    `session.run_node` and `node._realised` over their whole window — because a refusal
-    one path makes and another does not is a divergence waiting to happen. `run_subprocess`
+    Every path that extracts a run makes these refusals — `execute` and
+    `session.run_node_chunked` chunk by chunk (`checked_chunks`), `node._realised` here over
+    its whole window — because a refusal one path makes and another does not is a
+    divergence waiting to happen. `run_subprocess`
     makes the split half of it once more in the parent, before the child exists, so a card
     refuses with a message an operator can read instead of crashing with one only the run
     records. The split check runs over the whole delivered span: a split inside the warmup
@@ -1330,54 +1536,67 @@ def _range_of(point: object) -> tuple[float | None, float | None]:
     return None, None
 
 
-def _ordered(groups: Sequence[Sequence[object]]) -> tuple[object, ...]:
-    """The window as the engine delivers it: stable `ts_init` order, then flush markers."""
+def _ordered(groups: Sequence[Sequence[object]], *, coincident: bool = False) -> tuple[object, ...]:
+    """The window as the engine delivers it: book batches, stable `ts_init` order, then
+    flush markers."""
     from kanso.nautilus.cross_section import ordered
 
-    return ordered(groups)
+    return ordered(groups, coincident=coincident)
 
 
-def _load_stream(engine: Any, points: Sequence[object]) -> None:
+def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -> None:
     """Add the ordered stream in homogeneous type runs, then sort once.
 
     The engine assumes one type per `add_data` call. Markers are `CustomData` and need
     `CLIENT_ID`; bars, quotes and trades do not. Consecutive same-type runs keep the
     insertion order `sort_data`'s stable sort then preserves, so a marker that follows
     its cohort in the ordered stream still follows it after the sort.
+
+    Under `book` — a hypothesis that holds a level-two book — a run of an instrument whose
+    book this stream does not change is added without the engine's validation, whose one
+    consequence here is that it refuses to run a stream holding an instrument's prints and
+    none of its book changes. A chunk of a window can be exactly that — the prints after the
+    last change of an hour — so the refusal is made of each UTC day instead, as it was when a
+    run was fed a day at a time (`_refuse_unbooked`). Nothing else validation does is lost:
+    the venue's market-data client was registered when the venue was added, and every
+    instrument was added before any point.
     """
-    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model.data import (
+        Bar,
+        OrderBookDelta,
+        OrderBookDeltas,
+        QuoteTick,
+        TradeTick,
+    )
     from nautilus_trader.model.identifiers import ClientId
 
     if not points:
         return
+    booked = {
+        str(point.instrument_id)
+        for point in points
+        if isinstance(point, (OrderBookDelta, OrderBookDeltas))
+    }
+
+    def add(run: Sequence[object]) -> None:
+        first = run[0]
+        plain = type(first) in (Bar, QuoteTick, TradeTick, OrderBookDelta, OrderBookDeltas)
+        name = _instrument_of(first)
+        engine.add_data(
+            list(run),
+            client_id=None if plain else ClientId(CLIENT_ID),
+            validate=not (book and plain and name not in booked),
+            sort=False,
+        )
+
     run: list[object] = []
     for point in points:
         if run and type(point) is not type(run[0]):
-            _add_run(engine, run, Bar, QuoteTick, TradeTick, ClientId)
+            add(run)
             run = []
         run.append(point)
-    _add_run(engine, run, Bar, QuoteTick, TradeTick, ClientId)
+    add(run)
     engine.sort_data()
-
-
-def _add_run(
-    engine: Any,
-    run: Sequence[object],
-    bar_cls: type,
-    quote_cls: type,
-    trade_cls: type,
-    client_id_cls: type,
-) -> None:
-    """One homogeneous `add_data` call, unsorted."""
-    first = run[0]
-    from nautilus_trader.model.data import OrderBookDelta
-
-    plain = type(first) in (bar_cls, quote_cls, trade_cls, OrderBookDelta)
-    engine.add_data(
-        list(run),
-        client_id=None if plain else client_id_cls(CLIENT_ID),
-        sort=False,
-    )
 
 
 # --- the extraction ----------------------------------------------------------
@@ -1856,18 +2075,17 @@ def run_subprocess(
     `extensions` are the workspace extensions this process imported, as `kanso.ext.imported`
     answered — each one's directory and module name. The child imports them before it
     unpickles a point, so a custom type an extension defines is registered there and its
-    class found under the name it was pickled by (`main`). They travel in the payload, not
+    class found under the name it was pickled by (`main`). They travel in the stream, not
     the environment: the child is handed where an extension lives, never the catalog, and
     still inherits no credential.
 
-    The payload is written to `<workdir>/.card/`, the lane's own transfer directory, as
-    pickles in sequence on one file — the extensions, the request and its instruments, then
-    one session's points at a time as the parent reads them — so no process holds more than
-    a session of the window: the parent lets each session go once it is on disk, and the
-    child takes them one at a time. The directory is emptied before the card and removed
-    after it, so a lane killed mid-card leaves at most one payload behind, and its next
-    card reclaims it: a payload is the whole window's points on disk, hundreds of megabytes
-    for a window of minute bars and gigabytes for one of ticks.
+    The window travels on the child's standard input (`_payload`), read while the child
+    runs: the child is started first, and the parent reads the next chunk of the window
+    only once the last is written, so a card costs the read and the run together rather
+    than one after the other, and nothing of the window is ever on disk. The lane's
+    transfer directory, `<workdir>/.card/`, holds only what comes back — the child's report
+    and its output — and is emptied before the card and removed after it, so a lane killed
+    mid-card leaves at most those two small files behind, and its next card reclaims them.
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -1881,75 +2099,178 @@ def run_subprocess(
     _refuse_if_interrupted()
     room = _card_room(workdir)
     try:
-        _stage(request, catalog_path, room, extensions)
+        payload = _payload(request, catalog_path, extensions)
         gc.collect()
-        return _supervised(request, room, workdir)
+        return _supervised(request, room, workdir, payload)
     finally:
         shutil.rmtree(room, ignore_errors=True)
 
 
-def _stage(
-    request: RunRequest, catalog_path: Path, room: Path, extensions: Sequence[tuple[str, str]]
-) -> None:
-    """Read the window a session at a time and write each session's points as they are read.
+def window_chunks(
+    request: RunRequest, catalog_path: Path
+) -> tuple[tuple[object, ...], Iterator[tuple[tuple[object, ...], ...]]]:
+    """The resolved instruments, and the delivered span's points as chunks read as they are
+    asked for: the window a card's child is streamed, in the same chunks, from the same reads.
 
-    Returns nothing on purpose. The points are the parent's largest allocation by a wide
-    margin — a year of five-second bars is gigabytes, and a month of one name's quote
-    changes and prints is ten — and the child holds them for the whole card, so neither
-    process ever holds more than a session of them: the parent reads one calendar day of
-    the delivered span, checks it, pickles it and lets it go, and the child unpickles them
-    one at a time (`main`, `execute_chunked`). Measured before this: a lane held 1.4 GB of
-    an eighteen-month five-second window beside a 2.7 GB card, six such lanes put a 16 GB
-    machine into swap, and a half-month of ticks did the same beside three.
+    Each chunk is a slice of the span in time order, grouped one type per group, holding
+    every point of its instants and at most `CHUNK_POINTS` of them unless one instant alone
+    holds more; the span is read an hour at a time for a feed of prints, quotes or a book
+    and a day at a time otherwise (`_chunked`). A caller that runs one chunk before it asks
+    for the next — `execute_chunked`, `session.run_node_chunked` — holds one read and one
+    chunk of the window and never the whole of it.
 
-    The refusals a whole-window read made are made here, in the parent, where a refusal is
-    a refusal rather than a crash the run records: a split no definition schedules, an
-    overlay grain the catalog does not hold, and a window it holds nothing for.
+    The refusals a whole window can be refused for without reading its points are made
+    here, before anything is returned: a universe the catalog holds no definition for, and
+    a split the window holds that no definition schedules, read off its corporate actions
+    alone. An overlay grain the catalog does not hold is refused once the last chunk has
+    been read. Every caller re-checks each chunk as it runs it.
     """
+    catalog, held, instruments, scope = _opened(request, catalog_path)
+    return instruments, _chunked(request, catalog, held, scope)
+
+
+def _opened(
+    request: RunRequest, catalog_path: Path
+) -> tuple[Any, dict[str, Any], tuple[Any, ...], Scope | None]:
+    """The catalog, the universe's definitions in universe order, and the session scope,
+    with the refusals that come before a window's points are read made."""
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    from kanso.data.types import CorporateAction
+    from kanso.data.types.corporate_action import TYPE_ID
 
     hyp = request.hyp
     catalog = ParquetDataCatalog(str(catalog_path))
     held = _held(catalog, hyp)
     instruments = tuple(held[name] for name in sorted(hyp.universe))
     opens, closes = request.delivered
-    measured, _ = request.bounds
+    if TYPE_ID in hyp.data_requirements:
+        actions = _custom_points(catalog, CorporateAction, hyp.universe, opens, closes - 1)
+        splits.unscheduled(instruments, actions, request.span)
     scope = _scope_days(catalog, hyp, opens, closes - 1)
+    return catalog, held, instruments, scope
+
+
+def _chunked(
+    request: RunRequest, catalog: Any, held: Mapping[str, Any], scope: Scope | None
+) -> Iterator[tuple[tuple[object, ...], ...]]:
+    """The delivered span as chunks, read from the catalog only as they are asked for.
+
+    The span is read a step at a time — an hour of a window of prints, quotes or a book, a
+    day of any other, aligned to UTC midnight — and each read is cut into chunks of at most
+    `CHUNK_POINTS` points between instants (`_cut`), so whoever runs a chunk before asking
+    for the next holds the read until every chunk cut from it is handed on, and the chunk.
+    An overlay grain the catalog does not hold is refused once every read is done.
+    """
+    from kanso.nautilus.cross_section import TICK_KINDS
+
+    opens, closes = request.delivered
+    step = READ_TICK_NS if TICK_KINDS.intersection(request.hyp.data_requirements) else NS_PER_DAY
     loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
-    inside = False
-    with (room / REQUEST_FILE).open("wb") as handle:
-        pickle.dump(
-            {"extensions": [list(source) for source in extensions]},
-            handle,
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
-        pickle.dump(
-            {"request": request.plain(), "instruments": instruments},
-            handle,
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
-        for day_start in range(midnight_ns(day_of(opens)), closes, NS_PER_DAY):
-            start = max(opens, day_start)
-            end = min(closes, day_start + NS_PER_DAY) - 1
-            groups, counts = _window_points(request, catalog, held, scope, start, end)
-            for grain, count in counts.items():
-                loaded[grain] += count
-            if not groups:
-                continue
-            splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
-            inside = inside or any(
-                int(point.ts_init) >= measured  # type: ignore[attr-defined]
-                for point in chain.from_iterable(groups)
-            )
-            pickle.dump({"groups": groups}, handle, protocol=pickle.HIGHEST_PROTOCOL)
-            del groups
+    first = midnight_ns(day_of(opens))
+    for read_start in range(first + (opens - first) // step * step, closes, step):
+        start = max(opens, read_start)
+        end = min(closes, read_start + step) - 1
+        groups, counts = _window_points(request, catalog, held, scope, start, end)
+        for grain, count in counts.items():
+            loaded[grain] += count
+        yield from _cut(groups, CHUNK_POINTS)
+        del groups
     _refuse_missing_grain(request, loaded)
+
+
+def _payload(
+    request: RunRequest, catalog_path: Path, extensions: Sequence[tuple[str, str]]
+) -> Iterator[bytes]:
+    """What a card's child is handed, as the pickles it reads in turn: the stream itself is
+    `_stream`, and `window_chunks` makes the refusals that come before the child exists, so
+    a card refuses with a message an operator can read before any child is spawned. The
+    child re-checks every chunk it is handed.
+    """
+    instruments, chunks = window_chunks(request, catalog_path)
+    return _stream(request, instruments, chunks, extensions)
+
+
+def _stream(
+    request: RunRequest,
+    instruments: tuple[Any, ...],
+    chunks: Iterator[tuple[tuple[object, ...], ...]],
+    extensions: Sequence[tuple[str, str]],
+) -> Iterator[bytes]:
+    """The window as a sequence of pickles, read from the catalog only as they are asked for.
+
+    The first names the extensions, the second is the request and its instruments, every
+    one after it is one chunk of the window's points grouped one type per group
+    (`window_chunks`), and the last is `END`. The parent holds the read until every chunk
+    cut from it is written, and the child the chunk it runs, so neither holds more than a
+    read and a chunk of it. Estimated on 2026-10-02 before this, from bytes per object
+    times rows rather than from a card run: a day of one perpetual swap's three-level book
+    and prints, read and pickled a day at a time, would have been 4.5 GB in the child and
+    4.8 GB in the parent, and a 45-day window of it 22.8 GB on disk before the card began.
+
+    The refusals only the whole window can make are made once it has been read, before
+    `END`: an overlay grain the catalog does not hold, and a window it holds nothing for.
+    A refusal raised here — those, a `wanted` check before a catalog query — reaches the
+    watch on the child, which kills the child before it is raised (`_watch`).
+    """
+    measured, _ = request.bounds
+    inside = False
+    yield _pickled({"extensions": [list(source) for source in extensions]})
+    yield _pickled({"request": request.plain(), "instruments": instruments})
+    for chunk in chunks:
+        inside = inside or any(
+            int(point.ts_init) >= measured  # type: ignore[attr-defined]
+            for point in chain.from_iterable(chunk)
+        )
+        yield _pickled({"groups": chunk})
     if not inside:
         raise PreconditionError(
-            f"data: the catalog holds nothing for {hyp.id} over "
+            f"data: the catalog holds nothing for {request.hyp.id} over "
             f"{request.window[0]}..{request.window[1]}",
             remedy="run `kanso data load` for the window, then take a snapshot",
         )
+    yield _pickled(END)
+
+
+def _pickled(record: object) -> bytes:
+    """One record of a card's stream."""
+    return pickle.dumps(record, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _cut(groups: Sequence[Sequence[object]], cap: int) -> Iterator[tuple[tuple[object, ...], ...]]:
+    """One read's groups as chunks of at most `cap` points, cut only between instants.
+
+    A read of `cap` points or fewer is one chunk. Otherwise the instants of every group
+    together are walked in order and a chunk closes at the last instant that keeps it at
+    or under `cap` — or after its first instant, when that instant alone holds more — so
+    every point of an instant is in one chunk. Each group keeps its own order and its
+    place among the groups, which is what the engine's stable sort orders an instant by;
+    and a read returns an instant's points in the same order whatever span it covers
+    (`_in_file_order`), so a window cut anywhere is delivered exactly as it is whole. A
+    group a chunk holds nothing of is left out of it.
+    """
+    if sum(len(group) for group in groups) <= cap:
+        if groups:
+            yield tuple(tuple(group) for group in groups)
+        return
+    stamps = sorted(int(point.ts_init) for point in chain.from_iterable(groups))  # type: ignore[attr-defined]
+    edges: list[int] = []
+    begin = 0
+    while begin + cap < len(stamps):
+        end = bisect.bisect_left(stamps, stamps[begin + cap], begin)
+        if end == begin:
+            end = bisect.bisect_right(stamps, stamps[begin], begin)
+            if end == len(stamps):
+                break
+        edges.append(stamps[end])
+        begin = end
+    del stamps
+    chunks: list[list[list[object]]] = [[[] for _ in groups] for _ in range(len(edges) + 1)]
+    for index, group in enumerate(groups):
+        for point in group:
+            chunks[bisect.bisect_right(edges, int(point.ts_init))][index].append(point)  # type: ignore[attr-defined]
+    while chunks:
+        yield tuple(tuple(group) for group in chunks.pop(0) if group)
 
 
 def _card_room(workdir: Path) -> Path:
@@ -1978,31 +2299,30 @@ def child_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
-    """Start the child, watch its clock and its memory, and read back what it produced.
+def _supervised(
+    request: RunRequest, room: Path, workdir: Path, payload: Iterator[bytes]
+) -> RunResult:
+    """Start the child, stream it its window, watch its clock and its memory, and read back
+    what it produced.
 
     The child is told which process started it, and ends itself when that process is no
     longer its parent (`end_with`): it leads its own session, so a lane killed outright
     cannot take it down, and without that it would run on with nobody watching its budget.
+    Its clock starts before the window is read, so a card's budget and wall time count the
+    read the run did not overlap.
     """
     result_path = room / RESULT_FILE
     _refuse_if_interrupted()
     breach, peak_gb, wall_s = watched(
-        [
-            sys.executable,
-            "-c",
-            _BOOTSTRAP,
-            str(room / REQUEST_FILE),
-            str(result_path),
-            str(os.getpid()),
-        ],
+        [sys.executable, "-c", _BOOTSTRAP, str(result_path), str(os.getpid())],
         cwd=workdir,
-        errors=room / "stderr.txt",
+        errors=room / OUTPUT_FILE,
         env=child_env(),
         budget_s=request.budget_s,
         mem_cap_gb=request.mem_cap_gb,
+        feed=payload,
     )
-    tail = _tail((room / "stderr.txt").read_text(encoding="utf-8", errors="replace"))
+    tail = _tail((room / OUTPUT_FILE).read_text(encoding="utf-8", errors="replace"))
     if breach == INTERRUPTED:
         raise _interrupted()
     if breach is not None:
@@ -2018,6 +2338,8 @@ def watched(
     env: Mapping[str, str] | None,
     budget_s: float | None,
     mem_cap_gb: float | None,
+    stoppable: bool = True,
+    feed: Iterator[bytes] | None = None,
 ) -> tuple[str | None, float, float]:
     """Start a child in a session of its own, watch it as a card is watched, and say how
     it ended: the breach that killed it (`None` when it exited by itself), the peak resident
@@ -2025,9 +2347,12 @@ def watched(
 
     Whatever it writes to a stream goes to `errors`. `env` is the environment it starts
     with, the parent's own when `None`. The watch is `_watch`'s: the wall-time and
-    resident-memory bounds, this process's stop, and the `wanted` checks it is inside. A
-    card is one child watched this way and a stall's certification another
-    (`kanso.certify.child`).
+    resident-memory bounds, this process's stop unless the child is not `stoppable`, and
+    the `wanted` checks it is inside. A card is one child watched this way, a stall's
+    certification another (`kanso.certify.child`), and a monitor's demotion a third that a
+    stop leaves to finish (`kanso.portfolio.child`). `feed`, when given, is written to the
+    child's standard input between the watch's polls (`_Feed`), and anything it raises kills
+    the child first; a child given none reads nothing.
     """
     started = time.monotonic()
     with errors.open("wb") as stream:
@@ -2035,13 +2360,82 @@ def watched(
             list(argv),
             cwd=str(cwd),
             env=None if env is None else dict(env),
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if feed is None else subprocess.PIPE,
             stdout=stream,
             stderr=stream,
             start_new_session=True,
         )
-        breach, peak_gb = _watch(child, budget_s, mem_cap_gb)
+        pipe = child.stdin
+        fed = None if pipe is None or feed is None else _Feed(pipe, feed)
+        try:
+            breach, peak_gb = _watch(child, budget_s, mem_cap_gb, stoppable, feed=fed)
+        finally:
+            if fed is not None:
+                fed.close()
     return breach, peak_gb, time.monotonic() - started
+
+
+class _Feed:
+    """A card's stream, written to its standard input a step at a time between the watch's
+    polls, by the one thread the watch runs on.
+
+    One thread, because what the stream reads before each catalog query includes the
+    `wanted` checks, which may ask the store through a connection that belongs to the
+    thread that opened it. A step writes at most `FEED_BYTES` of the record in hand, once
+    the pipe will take some of it, or waits up to the poll for it to; only once a record is
+    wholly written is the next one asked for, so the parent holds one record beside the read
+    it was cut from and the child one chunk beside the next it unpickles. The feed owns the
+    pipe, and closes it the moment the stream ends, so the child reads the end of its input
+    there whether or not the stream's last record was `END` — a stream that stopped short is
+    refused by the child (`_chunks`) rather than waited on. A child that stops reading — it
+    crashed, or ended itself — breaks the pipe, and the feed then closes it, goes quiet and
+    leaves the watch to reap the child.
+    """
+
+    def __init__(self, pipe: IO[bytes], payload: Iterator[bytes]) -> None:
+        fd = pipe.fileno()
+        os.set_blocking(fd, False)
+        self._pipe = pipe
+        self._fd = fd
+        self._ready = select.poll()  # not `select.select`, which refuses a descriptor past 1023
+        self._ready.register(fd, select.POLLOUT)
+        self._payload = payload
+        self._pending = memoryview(b"")
+        self._done = False
+
+    def step(self, timeout: float) -> None:
+        """Write what the pipe will take of the record in hand, reading the next record when
+        none is; wait up to `timeout` when there is nothing to do."""
+        if self._done:
+            time.sleep(timeout)
+            return
+        if not self._pending:
+            try:
+                self._pending = memoryview(next(self._payload))
+            except StopIteration:
+                self.close()
+                return
+        if not self._ready.poll(timeout * 1_000):
+            return
+        try:
+            written = os.write(self._fd, self._pending[:FEED_BYTES])
+        except BlockingIOError:  # pragma: no cover - select said it would take some
+            return
+        except BrokenPipeError:
+            self.close()
+            return
+        self._pending = self._pending[written:]
+
+    def close(self) -> None:
+        """Stop writing, close the pipe, and let go of the stream and whatever it still
+        holds. Closing twice is closing once."""
+        self._done = True
+        self._pending = memoryview(b"")
+        with contextlib.suppress(BrokenPipeError):  # nothing is buffered; a gone reader is gone
+            self._pipe.close()
+        close = getattr(self._payload, "close", None)
+        if close is not None:
+            close()
 
 
 def _interrupted() -> PreconditionError:
@@ -2072,11 +2466,18 @@ def _refuse_if_unwanted() -> None:
 
 
 def _watch(
-    child: Any, budget_s: float | None, mem_cap_gb: float | None
+    child: Any,
+    budget_s: float | None,
+    mem_cap_gb: float | None,
+    stoppable: bool = True,
+    *,
+    feed: _Feed | None = None,
 ) -> tuple[str | None, float]:
     """Wait for the child, killing its process group when it overruns either bound, when
-    this process has been told to stop, or when a `wanted` check refuses — which is raised
-    once the child is reaped."""
+    this process has been told to stop and the child is `stoppable`, or when a `wanted`
+    check refuses — which is raised once the child is reaped. With a `feed`, the time
+    between polls is spent writing the child its stream, and a refusal the stream raises is
+    raised the same way."""
     started = time.monotonic()
     checked = asked = started
     breach: str | None = None
@@ -2086,7 +2487,7 @@ def _watch(
             child.returncode = os.waitstatus_to_exitcode(status)
             return breach, usage.ru_maxrss * _MAXRSS_BYTES / GIB
         now = time.monotonic()
-        if _INTERRUPT.is_set():
+        if stoppable and _INTERRUPT.is_set():
             breach = INTERRUPTED
         elif budget_s is not None and now - started > budget_s:
             breach = BUDGET
@@ -2096,14 +2497,17 @@ def _watch(
                 breach = MEMORY
         if breach is not None:
             return breach, _killed(child)
-        if now - asked >= WANTED_POLL_S:
-            asked = now
-            try:
+        try:
+            if now - asked >= WANTED_POLL_S:
+                asked = now
                 _refuse_if_unwanted()
-            except BaseException:  # a card never outlives the watch on it, however it ended
-                _killed(child)
-                raise
-        time.sleep(POLL_S)
+            if feed is None:
+                time.sleep(POLL_S)
+            else:
+                feed.step(POLL_S)
+        except BaseException:  # a card never outlives the watch on it, however it ended
+            _killed(child)
+            raise
 
 
 def _killed(child: Any) -> float:
@@ -2227,12 +2631,24 @@ def _empty(request: RunRequest) -> CardRun:
 
 
 def _chunks(handle: Any) -> Iterator[tuple[tuple[object, ...], ...]]:
-    """Each session's groups as the parent pickled them, one at a time, until the file ends."""
+    """Each chunk's groups as the parent pickled them, one at a time, until the stream's end.
+
+    A stream that stops before `END` — the lane writing it died, or its pipe was cut — is
+    refused rather than run to a card: a window missing its end would report as a run of a
+    shorter one. A chunk is handed on without being held here, so the run that lets it go
+    lets it go.
+    """
     while True:
         try:
-            yield pickle.load(handle)["groups"]
-        except EOFError:
+            record = pickle.load(handle)
+        except (EOFError, pickle.UnpicklingError) as cut:
+            raise PreconditionError(
+                "the card's window stopped before its end: the lane streaming it is gone",
+                remedy="start the daemon again; the run resumes from its last card",
+            ) from cut
+        if record == END:
             return
+        yield record.pop("groups")
 
 
 def main(argv: Sequence[str]) -> int:
@@ -2247,52 +2663,52 @@ def main(argv: Sequence[str]) -> int:
     do about a card that did not run, and it can only choose the right thing if the cause
     is what names it.
 
-    The third argument is the pid of the process that started the card, which it outlives
-    by at most `PARENT_POLL_S` (`end_with`).
+    The arguments are where the report goes and the pid of the process that started the
+    card, which it outlives by at most `PARENT_POLL_S` (`end_with`).
 
-    The payload is a sequence of pickles on one file. The first names the workspace
-    extensions the parent imported, and they are imported here before anything else is
-    unpickled, because a point of an extension's custom type is an instance of a class that
-    exists only once its module has been imported, under the name it was pickled by. The
-    second is the request and its instruments; every one after it is one session's points,
-    read one at a time as the run consumes them (`_chunks`), so the child holds a session
-    beside the marks and never the window.
+    The stream is a sequence of pickles on standard input (`_stream`). The first names the
+    workspace extensions the parent imported, and they are imported here before anything
+    else is unpickled, because a point of an extension's custom type is an instance of a
+    class that exists only once its module has been imported, under the name it was
+    pickled by. The second is the request and its instruments; every one after it is one
+    chunk of the window, read only once the chunk before it has run (`_chunks`), so the
+    child holds a chunk beside the marks and never the window; and the last is `END`.
     """
     from kanso.ext import reimport
 
-    request_path, result_path = Path(argv[0]), Path(argv[1])
+    result_path = Path(argv[0])
     threading.Thread(
-        target=end_with, args=(int(argv[2]),), name="kanso-card-parent", daemon=True
+        target=end_with, args=(int(argv[1]),), name="kanso-card-parent", daemon=True
     ).start()
-    with request_path.open("rb") as handle:
-        handed = pickle.load(handle)
-        reimport((str(directory), str(name)) for directory, name in handed["extensions"])
-        payload = pickle.load(handle)
-        try:
-            result = execute_chunked(payload["request"], payload["instruments"], _chunks(handle))
-        except SizingError as refused:
-            result_path.write_bytes(
-                pickle.dumps(
-                    {
-                        "ok": True,
-                        "run": _empty(payload["request"]),
-                        "intents": (),
-                        "refused": refused.refusal.payload(),
-                    }
-                )
+    handle = sys.stdin.buffer
+    handed = pickle.load(handle)
+    reimport((str(directory), str(name)) for directory, name in handed["extensions"])
+    payload = pickle.load(handle)
+    try:
+        result = execute_chunked(payload["request"], payload["instruments"], _chunks(handle))
+    except SizingError as refused:
+        result_path.write_bytes(
+            pickle.dumps(
+                {
+                    "ok": True,
+                    "run": _empty(payload["request"]),
+                    "intents": (),
+                    "refused": refused.refusal.payload(),
+                }
             )
-            return 0
-        except Exception as failure:
-            result_path.write_bytes(
-                pickle.dumps(
-                    {
-                        "ok": False,
-                        "traceback": _tail(traceback.format_exc()),
-                        "remedy": failure.remedy if isinstance(failure, KansoError) else None,
-                    }
-                )
+        )
+        return 0
+    except Exception as failure:
+        result_path.write_bytes(
+            pickle.dumps(
+                {
+                    "ok": False,
+                    "traceback": _tail(traceback.format_exc()),
+                    "remedy": failure.remedy if isinstance(failure, KansoError) else None,
+                }
             )
-            return 1
+        )
+        return 1
     result_path.write_bytes(
         pickle.dumps({"ok": True, "run": result.run, "intents": result.intents})
     )

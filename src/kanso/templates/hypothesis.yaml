@@ -56,6 +56,10 @@ windows:                           # dates YYYY-MM-DD; certification.start ≥ r
 #   maintenance_pct: 25            # floor for the `maintenance_margin` gate: the period-end holdings at the period's
 #                                  # worst prices, as a percentage of their gross; `hyp validate` refuses (exit 3) a
 #                                  # floor above 100 / max_leverage. A reset or a carry needs a margin account (exit 3)
+# depth:                           # yours: classification never touches it. Scope: changing it clears `best`. Needs `book`
+#   every_ms: 100                  # in data_requirements and refuses `quote` (exit 3). The venue sees every change; the
+#   levels: 3                      # strategy's on_order_book_deltas sees the top `levels` a side as of each multiple of
+#                                  # every_ms, and on_quote_tick level one on every instant the top moved
 construct:                         # (set by kanso classify) {id: sleeve|alpha|filter|overlay|exit|execution|allocation|<extension>, host?, params?, rationale}
 objective:                         # (set by kanso classify) {id, params: {min_delta, k_se}}
 constraints:                       # (set by kanso classify) card-stage gates [{id, params}]; cert/paper/live gates are planned at certification

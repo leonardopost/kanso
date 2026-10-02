@@ -591,7 +591,7 @@ def _benchmark_run(
 
     Its request is the card's with only the strategy replaced — the same snapshot, warmup
     prefix, money and grains — and it runs over the research window in a child of the lane,
-    staged a session at a time through the lane's transfer directory exactly as a card is
+    streamed to it a chunk at a time exactly as a card's window is
     (`backtest.run_subprocess`), so what a whole window of the hold costs goes when the child
     exits rather than staying with a process that researches all day. Like the baseline it
     has no memory cap, because it is what the cards are measured against, and unlike the
@@ -1250,7 +1250,11 @@ def _baseline(
     run was the best card's, which decides what beginning again would take.
     """
     problems = check_integrity(
-        directory, dict(pins), sized=setup.hyp.sizing is not None, construct=setup.construct
+        directory,
+        dict(pins),
+        sized=setup.hyp.sizing is not None,
+        construct=setup.construct,
+        depth=setup.hyp.depth is not None,
     )
     if problems:
         _refuse_baseline(setup.hyp.id, "; ".join(problems[:5]), from_best=from_best)

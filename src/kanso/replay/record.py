@@ -16,8 +16,10 @@ node and the engine copies byte-identical in every pair. What the copy proved is
 two paths were released the same points, and `stream_sha256` keeps exactly that: the sha256
 of the bytes the file held, one sorted-key JSON line per point, so `released` and the digest
 say what was fed and parity compares them, and a `stream.jsonl` an earlier kanso kept hashes
-under `shasum -a 256` to the digest a session of the same points records now. A session
-written before the digest has none, and may still hold the file, which nothing reads.
+under `shasum -a 256` to the digest a session of the same points records now. The digest is
+taken as the points are released, a chunk at a time (`Stream`), so a replay holds neither
+its stream nor its window whole and writes nothing until it has finished. A session written
+before the digest has none, and may still hold the file, which nothing reads.
 
 The intents are kept whole. They are what parity compares, field by field and with an
 instant tolerance a digest cannot honour, and they are what a reader opens to see where two
@@ -58,6 +60,7 @@ __all__ = [
     "Mode",
     "Point",
     "Session",
+    "Stream",
     "digest",
     "insert",
     "intents_of",
@@ -221,20 +224,47 @@ def session_dir(ws: Workspace, identifier: str) -> Path:
     return sessions_path(ws) / identifier
 
 
+class Stream:
+    """What a session released, taken point by point as it runs: a count and a running digest.
+
+    A replay releases its window a chunk at a time and holds none of it once a chunk has
+    run, so what it released cannot be handed to `write` as a sequence at the end. Each
+    point is folded into the digest as its chunk is released instead, and nothing is
+    written until `write`: a replay holds 32 bytes of its stream whatever its window held,
+    and one refused, failed or killed part-way leaves nothing in `sessions/` at all.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self._hashed = hashlib.sha256()
+
+    def add(self, point: Point) -> None:
+        """Take one released point: count it and fold its stream line into the digest."""
+        self._hashed.update(_line(point.dumps()))
+        self.count += 1
+
+    @property
+    def sha256(self) -> str:
+        """The sha256 of every stream line taken so far, in the order they were taken."""
+        return self._hashed.hexdigest()
+
+
 def write(
     ws: Workspace,
     session: Session,
-    points: Iterable[Point],
+    points: Iterable[Point] | Stream,
     intents: Iterable[Intent],
 ) -> Session:
     """Write the session and its intents, taking the first id no other session holds.
 
-    The points are consumed once, into the digest the record carries, and are not written.
-    A session is never overwritten: the id carries a counter until it names a directory
-    that does not exist, so a repeated replay of one target in one second is two records
-    rather than one record twice.
+    The points are recorded by their digest and never written: a `Stream` taken while the
+    session ran is read for it, and a sequence is consumed once into it. A session is never
+    overwritten: the id carries a counter until it names a directory that does not exist,
+    so a repeated replay of one target in one second is two records rather than one record
+    twice.
     """
-    resolved = _free(ws, session).model_copy(update={"stream_sha256": digest(points)})
+    hashed = points.sha256 if isinstance(points, Stream) else digest(points)
+    resolved = _free(ws, session).model_copy(update={"stream_sha256": hashed})
     directory = session_dir(ws, resolved.session_id)
     directory.mkdir(parents=True)
     write_yaml(resolved, directory / SESSION_FILE)
@@ -247,10 +277,10 @@ def digest(points: Iterable[Point]) -> str:
 
     Hashed as they pass, so a stream of millions of points is never held as text.
     """
-    hashed = hashlib.sha256()
+    stream = Stream()
     for point in points:
-        hashed.update(_line(point.dumps()))
-    return hashed.hexdigest()
+        stream.add(point)
+    return stream.sha256
 
 
 def read(ws: Workspace, identifier: str) -> Session:

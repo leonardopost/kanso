@@ -19,8 +19,9 @@ its turn.
 every child at once and exits; a worker kills the card or the certification it is watching,
 begins no further proposal or card, leaves the run open and the lane directory where it is,
 and exits too — whatever it ran before, since every trading node hands the stop signals
-back to the process that built it (`kanso.nautilus.session.signals_kept`). A
-worker still busy when the one grace the supervisor gives them all runs out — waiting on a
+back to the process that built it (`kanso.nautilus.session.signals_kept`). The monitor
+exits once a demotion it is making has finished (`kanso.portfolio.child`). A worker still
+busy when the one grace the supervisor gives them all runs out — waiting on a
 model, say — is killed, and that costs the call and nothing else: the run, its blobs and
 its `best` are all in state. Nothing is ended and nothing is cleaned up, so the next
 `start` picks the runs up where they were left — which is why stopping the daemon is a
@@ -63,7 +64,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -100,6 +101,7 @@ __all__ = [
     "Status",
     "claim",
     "clear_stop",
+    "held_off",
     "lane_names",
     "log_path",
     "main",
@@ -797,6 +799,42 @@ def _acquire(ws: Workspace) -> IO[bytes]:
     The lock and the pid are one file so that "who is the daemon" and "is it still alive"
     cannot disagree: the answer is whoever holds the lock, and the number inside is theirs.
     """
+    handle = _lock(ws)
+    if handle is None:
+        raise PreconditionError(
+            f"another daemon holds {pid_path(ws)}",
+            remedy="run `kanso research stop`, or wait for the running daemon to exit",
+        )
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"{os.getpid()}\n".encode())
+    handle.flush()
+    return handle
+
+
+@contextlib.contextmanager
+def held_off(ws: Workspace) -> Iterator[None]:
+    """Hold the daemon's lock for as long as the body runs, without being the daemon.
+
+    For work that must have the state store to itself (`kanso state prune`). The lock is
+    the one the supervisor takes, so a daemon already running refuses the work here, and a
+    `start` made while the work runs finds the lock held and its supervisor exits at once.
+    Nothing is written on the file, so no `status` reads this process as a daemon.
+    """
+    handle = _lock(ws)
+    if handle is None:
+        raise PreconditionError(
+            f"a daemon is running in this workspace: it holds {pid_path(ws)}",
+            remedy="run `kanso research stop`, then run this again",
+        )
+    try:
+        yield
+    finally:
+        handle.close()
+
+
+def _lock(ws: Workspace) -> IO[bytes] | None:
+    """The pid file, open and locked by this process, or `None` when another holds it."""
     path = pid_path(ws)
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+b")
@@ -804,14 +842,7 @@ def _acquire(ws: Workspace) -> IO[bytes]:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         handle.close()
-        raise PreconditionError(
-            f"another daemon holds {path}",
-            remedy="run `kanso research stop`, or wait for the running daemon to exit",
-        ) from None
-    handle.seek(0)
-    handle.truncate()
-    handle.write(f"{os.getpid()}\n".encode())
-    handle.flush()
+        return None
     return handle
 
 

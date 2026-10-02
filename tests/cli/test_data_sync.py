@@ -201,20 +201,23 @@ def test_a_source_with_nothing_further_says_so(runner: CliRunner, files: Path) -
     assert any("served nothing after" in str(note) for note in document["notes"])
 
 
-def test_a_repeated_sync_asks_the_source_nothing_twice(runner: CliRunner, files: Path) -> None:
-    """Sync checkpoints per chunk exactly as backfill does, so a repeat is free."""
+def test_a_sync_asks_again_for_what_its_source_had_not_yet_published(
+    runner: CliRunner, files: Path
+) -> None:
+    """Past the series' last served day an empty answer means "not published yet": it is not
+    recorded, so the next sync asks again and writes what the source has served since."""
     from kanso.state import StateStore
 
     first = payload(at(runner, files, "data", "sync", "--to", "2024-01-20", "--json"))
     assert [chunk["outcome"] for chunk in first["chunks"]] == ["empty"]
-    with StateStore(files / "state.db") as store:
-        recorded = len(store.events(kind="data_chunk_empty"))
+    (files / "bars.csv").write_text(CSV_HEADER + rows(8), encoding="utf-8")
 
     second = payload(at(runner, files, "data", "sync", "--to", "2024-01-20", "--json"))
 
-    assert [chunk["outcome"] for chunk in second["chunks"]] == ["empty"]
+    assert [chunk["outcome"] for chunk in second["chunks"]] == ["written"]
+    assert second["rows"] == 3
     with StateStore(files / "state.db") as store:
-        assert len(store.events(kind="data_chunk_empty")) == recorded == 1
+        assert store.events(kind="data_chunk_empty") == []
 
 
 def test_a_dataset_already_at_the_horizon_is_left_alone(runner: CliRunner, files: Path) -> None:

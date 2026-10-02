@@ -187,6 +187,35 @@ def test_a_session_from_before_the_digest_reads_back_without_one() -> None:
     assert "stream_sha256" not in dump_yaml(found)
 
 
+def test_a_stream_taken_while_the_session_ran_is_recorded_by_its_digest(ws: Workspace) -> None:
+    """A replay takes what it releases a chunk at a time: the count and the digest are those
+    of the whole stream, nothing reaches `sessions/` until the session is written, and the
+    session written holds the digest, never the stream."""
+    released = [Point.of(bar) for bar in bars(FORWARD)[:3]]
+    stream = record.Stream()
+
+    for chunk in (released[:1], released[1:]):
+        for point in chunk:
+            stream.add(point)
+    assert not record.sessions_path(ws).exists()
+    written = record.write(ws, session(released=3), stream, [])
+
+    assert stream.count == 3
+    assert stream.sha256 == record.digest(released)
+    assert record.read(ws, written.session_id).stream_sha256 == stream.sha256
+    assert [path.name for path in record.sessions_path(ws).iterdir()] == [written.session_id]
+    assert sorted(path.name for path in record.session_dir(ws, written.session_id).iterdir()) == [
+        record.INTENTS_FILE,
+        record.SESSION_FILE,
+    ]
+
+
+def test_a_session_that_released_nothing_records_the_empty_digest(ws: Workspace) -> None:
+    written = record.write(ws, session(released=0), record.Stream(), [])
+
+    assert written.stream_sha256 == hashlib.sha256(b"").hexdigest()
+
+
 def test_the_intents_round_trip(ws: Workspace) -> None:
     """An order reads back exactly, including a price it did not carry."""
     limit = Intent(2_000, INSTRUMENT, "SELL", 5.0, "LIMIT", 10.25)

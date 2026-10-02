@@ -35,6 +35,7 @@ from kanso.cli import monitor as monitor_commands
 from kanso.cli import portfolio as portfolio_commands
 from kanso.cli import replay as replay_commands
 from kanso.cli import research as research_commands
+from kanso.cli import state as state_commands
 from kanso.cli import status as status_commands
 from kanso.cli import strat as strat_commands
 from kanso.cli.context import STATE_DB, global_json, open_workspace, workspace_option
@@ -76,6 +77,7 @@ app.add_typer(portfolio_commands.app, name="portfolio")
 app.add_typer(replay_commands.app, name="replay")
 app.add_typer(monitor_commands.app, name="monitor")
 app.add_typer(ext_commands.app, name="ext")
+app.add_typer(state_commands.app, name="state")
 
 # Four commands are registered rather than declared here: their bodies live beside the
 # other command modules, and the application is where the command line is assembled.
@@ -122,7 +124,11 @@ def doctor(
         bool, typer.Option("--report", help="Redact paths, for pasting upstream.")
     ] = False,
     check_adapters: Annotated[
-        bool, typer.Option("--check-adapters", help="Allow one request per adapter.")
+        bool,
+        typer.Option(
+            "--check-adapters",
+            help="Probe each configured adapter, and each broker account whose key resolves.",
+        ),
     ] = False,
     as_json: JsonOption = False,
 ) -> None:

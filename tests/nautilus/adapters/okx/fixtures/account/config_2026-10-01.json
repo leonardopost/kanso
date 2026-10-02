@@ -1,0 +1,1 @@
+{"code": "0", "data": [{"acctLv": "2", "autoLoan": false, "ctIsoMode": "automatic", "enableSpotBorrow": false, "greeksType": "PA", "level": "Lv1", "levelTmp": "", "liquidationGear": "-1", "mgnIsoMode": "auto_transfers_ccy", "opAuth": "0", "perm": "read_only", "posMode": "net_mode", "roleType": "0"}], "msg": ""}

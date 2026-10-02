@@ -4,12 +4,16 @@ name: ci
 # It runs the offline suite only: no credential is available to it and none is added,
 # which is what proves the core works with every vendor credential unset.
 
+# A commit runs the matrix once: on `main` by its push, anywhere else by its pull request.
+# A branch push and its PR's merge ref are different refs, so triggering on both ran every
+# PR commit twice and no concurrency group could tell them apart. A PR against any base
+# runs, so one stacked on another branch is tested against that branch.
 on:
   push:
-    branches: ["main", "feat/**", "fix/**", "docs/**", "chore/**"]
-  pull_request:
     branches: ["main"]
+  pull_request:
 
+# One run per ref: a new push to a PR cancels the run of the commit it replaces.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

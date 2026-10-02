@@ -83,7 +83,7 @@ never edits the file.
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
 | `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` — and the instrument store by `instruments resolve` alone: a validation and a registration resolve in memory, and a run reads the store | no |
-| `runs/` | `research begin`, the daemon | no |
+| `runs/` | `research begin`, the daemon, `state prune` (its copy of `state.db`) | no |
 | `sessions/` | replay, parity, stage nodes | no |
 | `certificates/` | `cert plan`, `cert run` | no |
 | `strategies/` | `strat compose` | no |
@@ -128,6 +128,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
 | declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
+| declare `depth` on a hypothesis whose `data_requirements` does not list `book`, or lists `quote` | 3 · at `hyp validate`: depth is a view of a book the hypothesis holds, and level one reaches `on_quote_tick` from it alone |
 | bind a name the strategy's base class owns in `strategy.py` — `self._close = 3`, `def _fund(...)`, `size = 10` in the class body | 3 · at `hyp validate`, naming the name and the line; a warning in `doctor`'s `base names`; the baseline refused at `research begin` (2), and any card that carries it a `discard` by `strategy_integrity` |
 | name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
@@ -289,6 +290,23 @@ the schema and the number moving together: a migration applied to a database tha
 already moved past it would stamp its own older version over the newer one and leave a
 `state.db` whose schema no `kanso migrate` could reach again.
 
+**What grows, and the one thing kanso gives back.** Every judged card stores its book — what
+it held, session by session, and the number it earned — so the redundancy rule can refuse
+the next spelling of the same bets (`docs/concepts.md`). A book is read only under the pins
+of the run asking, and nothing deletes one as research moves on, so the books stored under a
+file since re-pinned, an earlier kanso, a snapshot a newer run moved past or a retired
+hypothesis stay, read by nothing, and can come to be nearly the whole file: measured on
+2026-10-02 in a live workspace, 3,025 MB of books in a 3,399 MB `state.db`, of which 250 sat
+under pins a run could still be given. `VACUUM` alone gives back only free pages, and there
+are none until rows are deleted. `kanso state prune` deletes the books no run can select —
+with the daemon stopped, after copying the whole file to `runs/state-<instant>.db`, which
+the `.gitignore` `init` writes keeps out of git — and rewrites the file; `kanso state prune --dry-run` says what it
+would delete while the daemon works. The copy is yours to delete — or, if a book it held is
+wanted after all, to put back: stop everything, delete `state.db-wal` and `state.db-shm`, and
+put it in `state.db`'s place, which also loses whatever was recorded since the prune. No
+card, no best, no trial count and no certificate is touched by a prune: a book deleted whose
+pins come back is re-earned by the next run, one card at a time.
+
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
 the workspace has no
@@ -363,6 +381,8 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
+a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —
@@ -406,7 +426,11 @@ a sleeve whose exit rests at the ask reads the whole position there until the ex
 exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
-equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
+equity curve strikes at each period end, and one a strategy may size from. Reading it on every
+bar costs what the sleeve's orders gained since the last read, however long they have lived,
+so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
+does not save memory either, since the engine keeps every order's events for the run
+(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns
 (`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second
@@ -582,6 +606,55 @@ every window ends flat, so the time the version spent off the stage — a stop, 
 on live before a demotion back to paper — held nothing to borrow against. A new version, or
 a version on a stage it has not run on, starts with nothing set aside.
 
+**`depth` is yours too, and scope.** A hypothesis that holds a level-two `book` hands every
+change of it to the simulated venue, which keeps its queues and matches against it, and,
+without the key, to the strategy's `on_order_book_deltas` as well. An account rarely sees a
+book that way. Measured on 2026-10-02 against OKX's public feeds: the depth channel an
+ordinary account subscribes to is a snapshot every 100 ms, the change-by-change book is
+served only from the fourth fee tier, and the top of the book is free every 10 ms. A rule
+that earns on every change of depth earns on data its account cannot have. `depth` hands the
+strategy what the account sees, and leaves the venue every change:
+
+```yaml
+depth:                             # scope: adding or changing it clears `best`
+  every_ms: 100                    # the book the strategy sees, as of each multiple of this
+  levels: 3                        # of each side, from the best: 1 to 400, at most the levels loaded
+```
+
+Under the key the strategy's `on_order_book_deltas` is handed the top `levels` of each side
+as they stood at each multiple of `every_ms` after the epoch — UTC-aligned — as one batch of
+the changes since the view before it, stamped with that instant (`data_time` reads it), at
+the first point of data published after it, and only when something it shows moved. Its
+`on_quote_tick` is handed level one — the best bid and offer with their sizes — once for every
+instant whose changes, all applied, left the top where it was not, never partway through
+an instant and never later than it: at the change itself, stamped with it, before any later
+point of the feed. Neither is delayed again: an order sent from either reaches the venue
+`costs.latency_ms` after the point that carried the call, as every order does, because the
+latency is the whole round trip, feed and order together. The quote is a signal and moves
+nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
+`spread: quotes` has no quote series to read. What else the strategy may not touch under the
+key — the message bus and the engine's own book subscriptions — is in `docs/concepts.md`,
+The embargo. An attached construct researched or composed under the key is handed no book
+at all, neither the view nor a subscription of its own — asking for one is refused, and
+the card crashes naming the call; it reads its host's prices from the context it is asked
+with. A strategy that reads level one alone sends and fills the same on any grid,
+since the venue is handed every change whatever the strategy is shown. The same harness code
+runs on both code paths, and a deployed stage is configured with the key as its card was.
+An exit the harness still owes the strategy — an exit at market a cancel in flight cut — is
+asked for again on every change of the book, whether or not the strategy is shown anything
+there, and one paid on a change is stamped with that change, after level one is handed,
+never with the earlier grid instant of a view handed on it.
+
+`levels` is 1 to 400, the depth of the sampled channel the key models (measured on
+2026-10-02 against OKX's: 400 levels a side every 100 ms; its archives hold 5,000 a side at
+one second, which no account sees live), and `kanso hyp validate` refuses (exit 3) any other
+value, naming `depth.levels`. It may not usefully exceed the levels the book was loaded at
+either: a loader that keeps the top K of an archive leaves a level pushed past K at its last
+size rather than deleting it, so past K the book holds stale levels. `kanso hyp validate` refuses (exit 3) `depth` on a
+hypothesis whose `data_requirements` does not list `book`, and one that also lists `quote`,
+because a quote series would be a second source of `on_quote_tick` that neither the strategy
+nor a replay could tell apart. Classification never touches the key.
+
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
@@ -712,11 +785,13 @@ between: a print that would have filled the order in that interval finds it not 
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
 the first point of data after its delay has passed, and only after matching that point, so
 the delay a run models is never shorter than the one stated and at tick resolution
-exceeds it by one point. On a feed whose instants coincide — every level-two book, any grain
-of several names — that point reaches the sleeve through a flush marker, and the command
-lands before the sleeve's handler for it on both code paths (`docs/concepts.md`,
-Delivery). It models the round trip from
-the strategy to the exchange's book through the account and route it will trade on, and it
+exceeds it by one point. On a feed of prints, quotes or a book, and on any grain of several
+names, a print, a quote or a bar reaches the sleeve through a flush marker at its instant,
+and the command lands before the sleeve's handler for it on both code paths
+(`docs/concepts.md`, Delivery). A change to the book is never held: the sleeve's
+`on_order_book_deltas` for it runs before a command due at that change lands, and sees the
+order sent and not yet on the book; the next point's handler sees it there. It models the
+round trip from the strategy to the exchange's book through the account and route it will trade on, and it
 is measured there, on real orders, rather than assumed. State the whole round trip: a feed
 that reaches the strategy late and an order that reaches the book late add up, and a rule
 that reacts to a point and posts lands the same instant either way, so one number carries
@@ -784,6 +859,21 @@ track queue position — `queue_position` in the engine's venue configuration �
 that joins a level showing 500 ahead fills only after those 500 have traded through; an
 order posted inside the spread creates its own level and has nothing ahead of it either way.
 
+A hypothesis that requires `book` needs the book on every UTC day its window holds a name's
+bars, quotes or prints. A day that holds them and no change of that name's book — its book
+archive missing, say — is refused, on a card, a replay and a certification alike, naming the
+name and the days and the load that fixes it:
+
+```
+data: demo_book holds the book, and the catalog holds market data and no book change for DEMO.XNAS on 2024-01-03
+remedy: load the book for DEMO.XNAS over 2024-01-03..2024-01-03 with `kanso data load`, then take a snapshot
+```
+
+The venue would otherwise match that day's prints against the book the day before left. A
+card reports the refusal as a crash carrying that remedy, and `kanso research begin` refuses a
+baseline that met it (exit 2). Hours of prints after a day's last change of the book, in a
+day that has one, are not refused.
+
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 
 ```
@@ -824,7 +914,7 @@ cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id`, `warmup`, `benchmark`, `book` or `costs` clears it — stripping the classification counts, since a draft
+`objective.id`, `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification counts, since a draft
 has no construct and the best was earned as one — and the event log records `best_cleared`
 naming the field that moved. `kanso
 classify` re-pins on the same terms, so classifying onto another construct clears it too.
@@ -1023,6 +1113,14 @@ end: 2026-09-28
 ```
 
 ```yaml
+loader: okx_book                 # the book, kept exact to `levels` deep, from the daily archives
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-28
+end: 2026-09-28
+levels: 3                        # required, 1 to 400; okx_book only
+```
+
+```yaml
 loader: okx_funding              # the realised rate at each settlement
 instruments: [BTC-USDT-SWAP]
 start: 2026-09-01
@@ -1036,6 +1134,9 @@ $ kanso data load --loader okx_funding --spec funding.yaml
 A range reaching before what the exchange serves — about three months of funding, about
 six of `1s` bars — or into a UTC day that has not ended is refused naming the day to use
 (exit 3); `docs/adapters.md` gives each loader's source, horizon, units and rate limits.
+`okx_trades` and `okx_book` write each UTC day as a dataset of its own, with its own
+manifest, so a range of them is as many datasets as days, and `data show` joins them into
+one span.
 
 **A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
 every settlement, so a hypothesis whose universe holds one lists `funding` in
@@ -1331,20 +1432,21 @@ The lane directories, and the only place research edits anything.
 
 ```
 runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
-runs/<lane>/<hyp>/.card/   a card's payload, report and output, only while the card runs
+runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
 runs/daemon.log            whatever the daemon and its children write to a stream
+runs/state-<instant>.db    a copy of state.db `kanso state prune` made before it deleted anything
 ```
 
-`.card/` is how a card's points reach the child that runs it: the lane writes the window's
-points there, the card writes back what it measured, and the lane removes the directory once
-it has read it. A lane killed in the middle of a card leaves that one payload behind — it can
-be hundreds of megabytes for a window of minute bars — and the run's next card empties the
-directory before it writes, so a lane never holds more than one. Under a running daemon that
-next card comes at once: the supervisor starts a dead lane again under its name, and the lane
-in its place resumes the run. A lane killed in its baseline has no run yet; the supervisor
-puts the hypothesis back in the queue and removes the directory, payload and all. The scope
-check a card passes ignores `.card/`, as it ignores every dot-file.
+`.card/` is where a card's child writes back what it measured and whatever it printed; the
+lane removes the directory once it has read them. The window never goes there: the lane
+streams it to the child on its standard input, a chunk at a time, while the card runs
+(`docs/concepts.md`, Card). A lane killed in the middle of a card leaves those two small
+files behind, and the run's next card empties the directory before it starts. Under a
+running daemon that next card comes at once: the supervisor starts a dead lane again under
+its name, and the lane in its place resumes the run. A lane killed in its baseline has no
+run yet; the supervisor puts the hypothesis back in the queue and removes the directory. The
+scope check a card passes ignores `.card/`, as it ignores every dot-file.
 
 A lane writes no log of its own, and no file under `runs/` records what a run did. The
 record of a run is in `state.db` — the run row, every card with its metric and verdict, and
@@ -1588,7 +1690,15 @@ copy and the engine's byte for byte the same. The digest keeps what those copies
 `kanso replay parity` and the `parity_replay` gate compare the two paths' counts and digests
 before their orders, and two paths released different points fail whatever they submitted.
 To see the points themselves, replay the session over its range again; on the same catalog
-it releases the same stream, and the digest says whether it did.
+it releases the same stream, and the digest says whether it did. A book's changes of one
+instrument at one instant are released as one point, so they are one line of that stream.
+
+A replay takes the digest as it runs. It streams its range in a card's chunks
+(`kanso replay run`), and each path folds what a chunk released into the digest as the
+chunk is released, so a replay holds neither its stream nor its window whole, and the
+digest of a range streamed a chunk at a time is the digest of the same range run whole.
+Nothing is written until the replay has finished: one refused, failed or killed part-way
+leaves nothing in `sessions/`.
 
 **The intents are kept whole.** They are what parity compares — field by field, with an
 instant tolerance a digest cannot honour — and what a reader opens to find where two paths
@@ -1604,6 +1714,14 @@ workspace root:
 
 ```bash
 rm sessions/*/stream.jsonl
+```
+
+A `.spool-<random>.jsonl` directly under `sessions/` was left by a development build after
+0.13.0 that wrote the stream there while a replay ran and moved it into the session at the
+end; one killed part-way left it behind. Nothing reads one either:
+
+```bash
+rm sessions/.spool-*.jsonl
 ```
 
 **What a certificate's citation rests on.** Its `parity_replay` evidence names the two

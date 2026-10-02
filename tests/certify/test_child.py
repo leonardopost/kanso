@@ -55,9 +55,10 @@ def test_a_stall_certifies_in_a_child_and_runs_none_of_it_in_the_lane(
     def refused(*_: object, **__: object) -> Any:
         raise AssertionError("the lane ran what its certification child is for")
 
-    for name in ("run", "execute", "execute_chunked", "window_data"):
+    for name in ("run", "execute", "execute_chunked", "window_data", "window_chunks"):
         monkeypatch.setattr(backtest, name, refused)
-    monkeypatch.setattr(session, "run_node", refused)
+    for name in ("run_node", "run_node_chunked"):
+        monkeypatch.setattr(session, name, refused)
     watched = backtest.watched
     caps: list[float | None] = []
 
@@ -102,9 +103,9 @@ def test_a_certification_whose_lane_is_told_to_stop_is_killed(
     hyp_id, sha = certifiable(ws, store)
     watch = backtest._watch
 
-    def stopped_once_running(process: Any, *args: Any) -> tuple[str | None, float]:
+    def stopped_once_running(process: Any, *args: Any, **fed: Any) -> tuple[str | None, float]:
         backtest.interrupt()
-        return watch(process, *args)
+        return watch(process, *args, **fed)
 
     monkeypatch.setattr(backtest, "_watch", stopped_once_running)
     try:

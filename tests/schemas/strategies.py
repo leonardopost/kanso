@@ -25,6 +25,7 @@ from kanso.schemas import (
     DataAvailability,
     DateWindow,
     Deployment,
+    Depth,
     Detected,
     Envelope,
     EvaluatedGate,
@@ -167,6 +168,16 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
     override = draw(st.none() | costs())
     if override is not None and override.spread == "quotes" and "quote" not in required:
         required = [*required, "quote"]
+    depth = (
+        None
+        if "quote" in required
+        else draw(
+            st.none()
+            | st.builds(Depth, every_ms=st.integers(1, 60_000), levels=st.integers(1, 400))
+        )
+    )
+    if depth is not None:
+        required = [*required, "book"]
     horizon = draw(durations())
     if classified is None:
         classified = draw(st.booleans())
@@ -205,6 +216,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         warmup=draw(st.none() | st.builds(Warmup, sessions=st.integers(1, 250))),
         benchmark=draw(st.none() | st.just(Benchmark(hold="first_leg"))),
         book=draw(st.none() | books(max_leverage)),
+        depth=depth,
         construct=draw(construct_refs()) if classified else None,
         objective=ObjectiveRef(
             id=draw(CATALOGUE_IDS),

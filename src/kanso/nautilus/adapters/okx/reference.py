@@ -193,7 +193,7 @@ every path rather than the path itself."""
 
 ASSET_CLASS: Final = "perpetuals"
 DATASET: Final = "reference"
-DATASETS: Final = (DATASET, "bars", "trades", "funding")
+DATASETS: Final = (DATASET, "bars", "trades", "book", "funding")
 """The reference, then one dataset per public-history loader (`history.py`)."""
 
 
@@ -209,9 +209,14 @@ class Response:
 
 
 class Transport(Protocol):
-    """How a GET is sent: injectable, so the suite serves recorded bodies and no socket."""
+    """How a GET is sent: injectable, so the suite serves recorded bodies and no socket.
 
-    def __call__(self, url: str, params: Mapping[str, str]) -> Response: ...
+    `headers` is sent only when a caller names some — a `Range` for a file too large for
+    one answer (`book.py`) — and never carries a credential."""
+
+    def __call__(
+        self, url: str, params: Mapping[str, str], headers: Mapping[str, str] | None = None
+    ) -> Response: ...
 
 
 def pyo3_transport(rate_per_second: int, *, factory: Any = None) -> Transport:
@@ -231,13 +236,16 @@ def pyo3_transport(rate_per_second: int, *, factory: Any = None) -> Transport:
     """
     client = (factory or _http_client)(rate_per_second)
 
-    def send(url: str, params: Mapping[str, str]) -> Response:
+    def send(
+        url: str, params: Mapping[str, str], headers: Mapping[str, str] | None = None
+    ) -> Response:
         from nautilus_trader.core import nautilus_pyo3
 
         path = urlsplit(url).path
         api = path.startswith(API)
         keys = [*([path] if path in KEYED_QUOTAS else []), QUOTA_KEY] if api else None
         timeout = TIMEOUT_S if api else DOWNLOAD_TIMEOUT_S
+        extra = {"headers": dict(headers)} if headers else {}
 
         async def once() -> Any:
             return await client.request(
@@ -246,6 +254,7 @@ def pyo3_transport(rate_per_second: int, *, factory: Any = None) -> Transport:
                 params=dict(params),
                 keys=keys,
                 timeout_secs=timeout,
+                **extra,
             )
 
         answer = asyncio.run(once())
@@ -363,10 +372,17 @@ class PublicClient:
         return answer
 
     def fetch(
-        self, url: str, params: Mapping[str, str] | None = None, *, name: str = ""
+        self,
+        url: str,
+        params: Mapping[str, str] | None = None,
+        *,
+        name: str = "",
+        headers: Mapping[str, str] | None = None,
     ) -> Response:
         """One GET of `url` as it came back, or a stop when nothing came back at all."""
         try:
+            if headers:
+                return self.transport(url, dict(params or {}), dict(headers))
             return self.transport(url, dict(params or {}))
         except Exception as exc:  # every fault below the answer is one outcome
             raise KansoError(
@@ -524,7 +540,7 @@ class OkxReference(InstrumentProvider):
 @dataclass(frozen=True, slots=True)
 class Capabilities:
     """What the exchange's public data offers: definitions of the listed perpetual swaps,
-    and their bars, trade prints and realised funding."""
+    and their bars, trade prints, books and realised funding."""
 
     def names(self) -> tuple[str, ...]:
         return DATASETS

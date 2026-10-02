@@ -4,7 +4,7 @@ The file is the operator's statement of a falsifiable idea plus the classificati
 agent writes back into it. Status, pins and the hypothesis's best card live in the state
 store, never here, so the file's bytes are stable enough to be content-addressed.
 
-Three families of rule are enforced here, all of them local to the file:
+Four families of rule are enforced here, all of them local to the file:
 
 * the windows are ordered, do not overlap, and the certification window opens no earlier
   than the embargo after research closes — `max(5 x horizon, 1d)`, rounded up to whole
@@ -13,7 +13,8 @@ Three families of rule are enforced here, all of them local to the file:
 * the resolution and the cost model must be answerable from the data the hypothesis asks
   for: bar resolution needs bars, a quote-derived spread needs quotes, a fixed spread
   needs its width;
-* a classified hypothesis carries `strategy_integrity` among its constraints.
+* a classified hypothesis carries `strategy_integrity` among its constraints;
+* `depth` views a book the hypothesis holds, and nothing else feeds `on_quote_tick`.
 
 Whether a universe id resolves to an instrument, whether a construct exists in the
 catalogue and whether an objective applies are checked where those catalogues live.
@@ -209,6 +210,39 @@ class Book(KansoModel):
         return self.reset != "none" or self.financing_rate_bps > 0
 
 
+NS_PER_MS: Final = 1_000_000
+MAX_DEPTH_LEVELS: Final = 400
+"""The most levels of each side a strategy may be shown: the depth of the sampled channel
+the key models. Measured 2026-10-02 by subscribing to a crypto exchange's public depth
+channel: 400 levels a side, a change every 100 ms. It is not the deepest book there is — the
+same exchange's archives serve 5,000 levels a side, at one second — but a view deeper than
+the sampled channel serves is depth an account on it does not see."""
+
+
+class Depth(KansoModel):
+    """What a strategy sees of a level-two book, when it may not see every change of it.
+
+    The venue is handed every change the catalog holds, so queues, fills and the matching
+    are those of the full book. The author is handed two things only: the top `levels`
+    prices of each side as they stood at each multiple of `every_ms` after the epoch, as a
+    batch of the changes since the last one it was handed, and level one — the best bid and
+    ask with their sizes — on every instant the top moved, as a quote. That is what an
+    account subscribed to an exchange's sampled depth channel and to its top-of-book channel
+    sees, and no more. The grid is milliseconds because the duration grammar is whole
+    seconds, as `costs.latency_ms` is. Operator-owned like `book`, so classification neither
+    reads nor writes it; and scope, so a best that read every change is not compared with a
+    card that saw the book a tenth of a second at a time.
+    """
+
+    every_ms: int = Field(gt=0)
+    levels: int = Field(ge=1, le=MAX_DEPTH_LEVELS)
+
+    @property
+    def every_ns(self) -> int:
+        """The grid in nanoseconds, the unit every instant of a feed is stamped in."""
+        return self.every_ms * NS_PER_MS
+
+
 class ConstructRef(KansoModel):
     """What `classify` decided this hypothesis is, in portfolio-construction terms."""
 
@@ -282,6 +316,7 @@ class Hypothesis(Versioned):
     warmup: Warmup | None = None
     benchmark: Benchmark | None = None
     book: Book | None = None
+    depth: Depth | None = None
     required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")
     objective: ObjectiveRef | None = None
@@ -325,6 +360,7 @@ class Hypothesis(Versioned):
         self._check_scope()
         self._check_costs()
         self._check_book()
+        self._check_depth()
         self._check_constraints()
         return self
 
@@ -359,6 +395,25 @@ class Hypothesis(Versioned):
                 f"book.maintenance_pct: {self.book.maintenance_pct:g}% is above the "
                 f"{at_entry:g}% a book levered to max_leverage {self.risk_limits.max_leverage:g} "
                 "holds at entry, so the first entry the limits admit would breach it"
+            )
+
+    def _check_depth(self) -> None:
+        """Depth is a view of a book the hypothesis holds, and the only source of its quotes.
+
+        Level one reaches `on_quote_tick`, so a quote series beside it would be a second
+        source of the same handler that neither the author nor a replay could tell apart.
+        """
+        if self.depth is None:
+            return
+        if "book" not in self.data_requirements:
+            raise ValueError(
+                "depth: needs 'book' in data_requirements; depth is what the strategy sees of "
+                "a level-two book the hypothesis holds"
+            )
+        if "quote" in self.data_requirements:
+            raise ValueError(
+                "depth: refuses 'quote' in data_requirements; under depth level one reaches "
+                "on_quote_tick from the book, and a quote series would be a second source of it"
             )
 
     def _check_resolution(self) -> None:

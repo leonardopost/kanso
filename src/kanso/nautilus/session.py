@@ -59,7 +59,7 @@ import asyncio
 import contextlib
 import signal
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, cast
 
@@ -77,9 +77,10 @@ from nautilus_trader.model.identifiers import TraderId
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, sandbox
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest, RunResult
-from kanso.nautilus.cross_section import arm, ordered, warm, without_markers
+from kanso.nautilus.cross_section import coincident, is_marker, ordered, warm, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.venue import venue_configs
+from kanso.schemas import VenueModel
 
 __all__ = [
     "NODE_SIGNALS",
@@ -91,6 +92,7 @@ __all__ = [
     "measured",
     "ordered",
     "run_node",
+    "run_node_chunked",
     "signals_kept",
 ]
 
@@ -166,18 +168,50 @@ def run_node(
     settle_turns: int = SETTLE_TURNS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> Replayed:
-    """Run this request on the live code path and extract it exactly as a backtest is.
+    """Run this request on the live code path over a window handed whole: one chunk.
 
-    The data is checked against the requested window before anything is built, so a session
-    handed points from outside its range refuses them rather than trading on them. A
-    request naming a warmup prefix is fed it first with the strategy warmed at the
+    `run_node_chunked` is the form a replay runs, a chunk of the window at a time.
+    """
+    return run_node_chunked(
+        request, instruments, [groups], speed=speed, settle_turns=settle_turns, sleep=sleep
+    )
+
+
+def run_node_chunked(
+    request: RunRequest,
+    instruments: Sequence[Any],
+    chunks: Iterable[Sequence[Sequence[Any]]],
+    *,
+    speed: float = 0.0,
+    settle_turns: int = SETTLE_TURNS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    sink: Callable[[Sequence[Any]], None] | None = None,
+) -> Replayed:
+    """Run this request on the live code path a chunk at a time, and extract it exactly as a
+    backtest is.
+
+    The chunks are checked, ordered and marked by the discipline the research path runs
+    them under (`backtest.checked_chunks`), so a session handed points from outside its
+    range refuses them rather than trading on them, and the first chunk is checked before
+    the node is built. Each chunk is handed to the feed only once the one before it has
+    been released and the node has gone quiet, so a session holds one chunk of its window
+    and never the whole of it; between two chunks the sleeve is held for markers, the
+    venue is bound to what the chunk carries, and the fills so far are priced, exactly
+    where the research path does each between two engine runs. A refusal a later chunk
+    raises stops the node first and is raised after it.
+
+    A request naming a warmup prefix is fed it first with the strategy warmed at the
     window's open, exactly as `execute` does; what the session reports released, and the
     clock a stage resumes from, are the window's own points, so a prefix is never claimed
-    and never resumed into.
+    and never resumed into. `sink`, when given, is handed what each chunk released, in
+    feed order and markers included, once the chunk has run: what a replay records.
     """
-    marks = backtest.checked(request, instruments, groups)
-    points = ordered(groups)
+    model = VenueModel.model_validate(dict(request.venue_model))
+    marks = backtest.Marks(request, model)
+    stream = backtest.checked_chunks(request, instruments, chunks, marks)
+    first = next(stream, ())
     opens, _ = request.bounds
+    marked = coincident(request.hyp)
     backtest._seed_globals(request.snapshot_id)
     started = time.perf_counter()
     loop = asyncio.new_event_loop()
@@ -195,7 +229,7 @@ def run_node(
             kernel.msgbus,
             kernel.cache,
             kernel.clock,
-            points=points,
+            points=first,
             speed=speed,
             settle_turns=settle_turns,
             sleep=sleep,
@@ -204,20 +238,24 @@ def run_node(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
-        _venues(request, kernel, points)
+        venues = _venues(request, kernel, first)
         strategy = _strategy(request, node)
-        arm(strategy, points)
+        strategy._hold_until_cross_section = marked or any(is_marker(p) for p in first)
         if request.prefix is not None:
             warm(strategy, opens)
         backtest.booked(strategy, request)
-        loop.run_until_complete(_drive(node, client, strategy, halt))
+        feed = _Feed(kernel, client, strategy, venues, marks, opens, sink)
+        chunked = feed.chunks(first, stream, marked=marked)
+        del first
+        loop.run_until_complete(_drive(node, client, strategy, halt, chunked))
+        feed.close()
         card = backtest._extract(request, kernel, marks)
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
         )
         stopped = halt.reason
-        released = len(measured(points[: client.released], opens))
+        released = feed.released
         clock_ns = client.last_ts if client.last_ts >= opens else None
     finally:
         with signals_kept():
@@ -238,6 +276,77 @@ def run_node(
         released,
         clock_ns,
     )
+
+
+class _Feed:
+    """What a node session does between two chunks of its window, beside the feed itself.
+
+    The same steps the research path takes between two engine runs, in the same order: the
+    fills the last chunk made are priced at its quotes before they are let go, and the next
+    chunk holds the sleeve for markers when it carries them — binding them, if the sleeve
+    started on a chunk that had none — and binds the venue to its bars and markers before a
+    point of it is released. What each chunk released is handed to the sink and counted, as
+    a session counts it: the window's own points, never the prefix's and never a marker.
+    """
+
+    def __init__(
+        self,
+        kernel: Any,
+        client: ReplayDataClient,
+        strategy: Any,
+        venues: Sequence[Any],
+        marks: backtest.Marks,
+        opens: int,
+        sink: Callable[[Sequence[Any]], None] | None,
+    ) -> None:
+        self._kernel = kernel
+        self._client = client
+        self._strategy = strategy
+        self._venues = venues
+        self._marks = marks
+        self._opens = opens
+        self._sink = sink
+        self._handed = 0
+        self._current: Sequence[Any] = ()
+        self.released = 0
+
+    def chunks(
+        self, first: Sequence[Any], rest: Iterator[tuple[Any, ...]], *, marked: bool
+    ) -> Iterator[Sequence[Any]]:
+        """The window's chunks, each made ready for the node before it is handed on. The
+        first is never empty: a window that holds nothing is refused before a node exists."""
+        self._current = first
+        del first
+        yield self._current
+        self.close()
+        for points in rest:
+            hold = marked or any(is_marker(point) for point in points)
+            self._strategy._hold_until_cross_section = hold
+            if hold:
+                self._strategy._bind_markers()
+            sandbox.wire(self._kernel, self._venues, points)
+            self._client.load(points)
+            self._current = points
+            del points
+            yield self._current
+            self.close()
+
+    def close(self) -> None:
+        """Account for the chunk the node was last handed: what of it was released, and the
+        quotes its fills are priced at. Asked once a chunk has run, and once more after the
+        feed stopped, for a chunk a halt cut short."""
+        points, self._current = self._current, ()
+        if not points:
+            return
+        done = self._client.released - self._handed
+        self._handed = self._client.released
+        reached = points[:done]
+        self.released += len(measured(reached, self._opens))
+        if self._sink is not None:
+            self._sink(reached)
+        self._marks.price(backtest._fill_events(backtest._positions(self._kernel.cache))[0])
+        self._marks.next_chunk()
+        self._client.load(())
 
 
 @contextlib.contextmanager
@@ -304,14 +413,16 @@ def _config() -> TradingNodeConfig:
     )
 
 
-def _venues(request: RunRequest, kernel: Any, points: Sequence[Any]) -> None:
+def _venues(request: RunRequest, kernel: Any, points: Sequence[Any]) -> tuple[Any, ...]:
     """One simulated venue per venue the universe trades, wired to this session's bars.
 
     The same call a stage node makes, so the exchange a replay is compared against and the
     exchange a deployed stage executes against are one piece of code rather than two that
     have to be kept in step.
     """
-    sandbox.attach(kernel, venue_configs(request.hyp, request.venue_model, request.capital), points)
+    return sandbox.attach(
+        kernel, venue_configs(request.hyp, request.venue_model, request.capital), points
+    )
 
 
 def _strategy(request: RunRequest, node: TradingNode) -> Any:
@@ -319,24 +430,42 @@ def _strategy(request: RunRequest, node: TradingNode) -> Any:
     cls, config = backtest._sleeve(request)
     for construct, source, params in request.modifiers:
         node.trader.add_actor(
-            backtest._modifier(construct, source, params, request.hyp.id, cls.__name__)
+            backtest._modifier(construct, source, params, request.hyp, cls.__name__)
         )
     strategy = cls(config=config)
     node.trader.add_strategy(strategy)
     return strategy
 
 
-async def _drive(node: TradingNode, client: ReplayDataClient, strategy: Any, halt: Halt) -> None:
-    """Start the node, release the window into it, and stop it again.
+async def _drive(
+    node: TradingNode,
+    client: ReplayDataClient,
+    strategy: Any,
+    halt: Halt,
+    chunks: Iterable[Sequence[Any]],
+) -> None:
+    """Start the node, release the window into it a chunk at a time, and stop it again.
 
-    A node that asked to shut down is stopping already; the session lets that finish before
-    it stops the node itself, so the two stops do not run at once and leave the kernel
-    half-stopped when the loop closes.
+    Each chunk is released once the node is quiet after the one before. A node that asked
+    to shut down is stopping already; the session lets that finish before it stops the node
+    itself, so the two stops do not run at once and leave the kernel half-stopped when the
+    loop closes. A refusal raised while the next chunk was being made ready is raised once
+    the node has stopped, so a window refused part-way leaves no node running.
     """
     runner = asyncio.create_task(node.run_async())
     await _started(node, client, strategy)
     await client.settle()
-    await client.replay()
+    refused: Exception | None = None
+    pending = iter(chunks)
+    while halt.running():
+        try:
+            if next(pending, None) is None:
+                break
+        except Exception as raised:
+            refused = raised
+            break
+        await client.settle()
+        await client.replay()
     if halt.reason is not None:
         await _halted(node)
     await node.stop_async()
@@ -344,6 +473,8 @@ async def _drive(node: TradingNode, client: ReplayDataClient, strategy: Any, hal
     with contextlib.suppress(asyncio.CancelledError):
         await runner
     await _cleared()
+    if refused is not None:
+        raise refused
 
 
 async def _cleared() -> None:

@@ -54,6 +54,7 @@ class Feeder(ReplayDataClient):
         self._released = 0
         self._paced = 0.0
         self._last_ts = 0
+        self._previous = None
 
     def _handle_data(self, point: Any) -> None:  # type: ignore[override]
         self.released_points.append(point)
@@ -200,3 +201,25 @@ def test_the_first_point_is_released_without_waiting() -> None:
 
     assert client.paced_s == 0.0
     assert client.released == 1
+
+
+def test_a_window_loaded_a_chunk_at_a_time_is_released_as_it_is_whole() -> None:
+    """The count, the last instant and the pace carry from one chunk to the next, so the
+    first point of a chunk waits on the last of the one before, as it does in one stream."""
+    whole_delays, whole_sleep = slept()
+    whole = Feeder(points=[Point(0), Point(10**9), Point(3 * 10**9)], speed=1.0, sleep=whole_sleep)
+    run(whole.replay())
+    chunk_delays, chunk_sleep = slept()
+    chunked = Feeder(points=[Point(0), Point(10**9)], speed=1.0, sleep=chunk_sleep)
+
+    run(chunked.replay())
+    chunked.load([Point(3 * 10**9)])
+    run(chunked.replay())
+
+    assert chunked.released_points == whole.released_points
+    assert chunked.released == whole.released == 3
+    assert chunked.last_ts == whole.last_ts == 3 * 10**9
+    assert chunked.paced_s == whole.paced_s == 3.0
+    assert (
+        [delay for delay in chunk_delays if delay] == [d for d in whole_delays if d] == [1.0, 2.0]
+    )

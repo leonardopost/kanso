@@ -39,16 +39,40 @@ files that appeared under the engine's tree, each hashed and bound to its path w
 store. `nautilus_trader 1.231.0` writes those files deterministically, so the same points
 written twice into two stores hash the same, which is what makes a snapshot id a fact
 about data rather than about a machine.
+
+**A dataset too large to hold is written in batches.** By default a write gathers every
+point and sorts it before writing any, which is right for a series of bars and fatal for a
+liquid instrument's day of book changes: the engine's `write_data` holds about 204 bytes a
+book delta and a 561-byte-a-delta transient on top while it converts them, so a day of about
+8.5 million changes — a liquid perpetual's, ten levels deep — would peak near 6.5 GB written
+whole. Asked for `batch`, the write takes the points as they come, in `ts_init` order, and
+hands the engine at most `batch` of them at a time, cutting only between two instants so no
+instant is split across two files. Each batch is checked as a whole write is — availability,
+a delayed dataset's rule, one series — and each becomes one file whose interval is disjoint
+from the last, so the store reads the batches back as one series; the clash with held data
+is checked once, over the span requested, before the first file. The manifest is one, over
+every file the write produced, and a failure in any batch removes every file the write had
+already produced and records nothing, so a dataset is written whole or not at all.
+
+**A replaced dataset is kept until its replacement is written.** A replace or a supersede
+removes the held dataset before the first new file is written, because the engine keeps its
+files' intervals disjoint; a batched write has by then read one batch of a stream that may
+still fail. So the files a removal could touch are first linked aside, under
+`catalog/.replaced/`, and a write that fails — a refused point in a later batch, a loader
+that raises, an interrupt — puts them and their manifests back as they were before it
+removes the aside. Only a write that records its manifest lets them go.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Sequence
+import os
+import shutil
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from nautilus_trader.model.data import CustomData
 from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
@@ -76,6 +100,13 @@ if TYPE_CHECKING:  # pragma: no cover - kept out of the runtime import graph
 NANOS_PER_SECOND = 1_000_000_000
 DAY_END_NANOS = 86_400 * NANOS_PER_SECOND - 1
 """The last nanosecond of a UTC day, so a dated window closes inclusively."""
+
+ASIDE_DIR: Final = ".replaced"
+"""Where a write keeps what a replace removed, beside the engine's tree, until it is done."""
+
+WRITE_BATCH: Final = 250_000
+"""Points per `write_data` call on a batched write: about 0.2 GB of engine objects and
+conversion at a book delta's measured 204 + 561 bytes, whatever the day holds."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +199,7 @@ def write(
     as_of: date | None = None,
     adjustment_basis: str | None = None,
     supersedes: str | None = None,
+    batch: int | None = None,
 ) -> Written:
     """Write one dataset into the store and record what it is.
 
@@ -176,7 +208,23 @@ def write(
     point's availability is impossible or a delayed dataset's timestamps did not come from
     a declared rule, and `PreconditionError` when the write would overwrite data a
     snapshot has pinned or would overlap held data without an explicit replace.
+
+    With `batch`, the points are taken in the `ts_init` order they arrive in and written
+    at most `batch` at a time, each batch cut between two instants; the module docstring
+    says what that changes and what it does not.
     """
+    if batch is not None:
+        return _write_batched(
+            ws,
+            points,
+            ref=ref,
+            source=source,
+            replace=replace,
+            as_of=as_of,
+            adjustment_basis=adjustment_basis,
+            supersedes=supersedes,
+            batch=batch,
+        )
     ordered = sorted(points, key=lambda point: point.ts_init)
     if not ordered:
         raise ValidationError(
@@ -205,17 +253,52 @@ def write(
         )
     replaced = _clear(ws, held, dataset, ref, served, replace, data_cls, identifier, supersedes)
 
-    catalog = open_catalog(ws)
-    before = _tree(data_path(ws))
-    catalog.write_data(ordered)
-    files = _new_files(before, _tree(data_path(ws)))
-    if not files:
-        raise PreconditionError(
-            f"dataset {dataset!r} wrote no bytes: the store already holds files for this "
-            "availability range",
-            remedy="run `kanso data show` and load with --replace to rewrite the span",
-        )
+    root = data_path(ws)
+    before = _tree(root)
+    try:
+        open_catalog(ws).write_data(ordered)
+        files = _new_files(before, _tree(root))
+        if not files:
+            raise PreconditionError(
+                f"dataset {dataset!r} wrote no bytes: the store already holds files for this "
+                "availability range",
+                remedy="run `kanso data show` and load with --replace to rewrite the span",
+            )
+    except BaseException:
+        _undo(ws, before, [held[name] for name in replaced])
+        raise
+    _let_go(ws)
 
+    return _record(
+        ws,
+        ref,
+        source,
+        dataset=dataset,
+        served=served,
+        rows=len(ordered),
+        files=files,
+        replaced=replaced,
+        as_of=as_of,
+        adjustment_basis=adjustment_basis,
+        supersedes=supersedes,
+    )
+
+
+def _record(
+    ws: Workspace,
+    ref: DatasetRefLike,
+    source: str,
+    *,
+    dataset: str,
+    served: tuple[date, date],
+    rows: int,
+    files: tuple[str, ...],
+    replaced: tuple[str, ...],
+    as_of: date | None,
+    adjustment_basis: str | None,
+    supersedes: str | None,
+) -> Written:
+    """The manifest of what a write produced, recorded, and the write's own account of it."""
     manifest = Manifest(
         dataset_id=dataset,
         source=source,
@@ -224,7 +307,7 @@ def write(
         resolution=ref.resolution,
         span=served,
         adjusted=ref.adjusted,
-        row_count=len(ordered),
+        row_count=rows,
         checksum=_checksum(data_path(ws), files),
         vendor=ref.vendor,
         vendor_dataset=ref.vendor_dataset,
@@ -237,6 +320,123 @@ def write(
     )
     write_manifest(ws, manifest)
     return Written(manifest=manifest, requested=ref.span, files=files, replaced=replaced)
+
+
+def _write_batched(
+    ws: Workspace,
+    points: Iterable[Any],
+    *,
+    ref: DatasetRefLike,
+    source: str,
+    replace: bool,
+    as_of: date | None,
+    adjustment_basis: str | None,
+    supersedes: str | None,
+    batch: int,
+) -> Written:
+    """`write` a batch at a time: the same checks per batch, one manifest over every file."""
+    batches = _cut(points, batch)
+    first = next(batches, None)
+    if first is None:
+        raise ValidationError(
+            f"dataset for {ref.instrument} {ref.type}: no points were served, and an empty "
+            "dataset would claim coverage it does not have",
+            remedy="narrow the request, or check the source's history floor",
+        )
+    series = _checked(first, ref)
+    held = manifests(ws)
+    if supersedes is not None and supersedes not in held:
+        raise PreconditionError(
+            f"supersedes: {supersedes!r} is not a dataset this workspace holds",
+            remedy="name the dataset this one follows, or omit supersedes",
+        )
+    requested = dataset_id(ref.instrument, ref.type, ref.resolution, ref.adjusted, ref.span[1])
+    replaced = _clear(ws, held, requested, ref, ref.span, replace, *series[:2], supersedes)
+
+    catalog = open_catalog(ws)
+    root = data_path(ws)
+    before = _tree(root)
+    rows = 0
+    first_day, last_day = served_span(first)
+    current: list[Any] | None = first
+    del first
+    try:
+        while current is not None:
+            found = _checked(current, ref)
+            if found != series:
+                raise ValidationError(
+                    f"a dataset holds one series, but these points span "
+                    f"{series[0].__name__}/{series[1]} and {found[0].__name__}/{found[1]}",
+                    remedy="write one dataset per instrument and type",
+                )
+            catalog.write_data(current)
+            rows += len(current)
+            span = served_span(current)
+            first_day, last_day = min(first_day, span[0]), max(last_day, span[1])
+            current = next(batches, None)
+        files = _new_files(before, _tree(root))
+        if not files:
+            raise PreconditionError(
+                f"dataset for {ref.instrument} {ref.type} wrote no bytes: the store already "
+                "holds files for this availability range",
+                remedy="run `kanso data show` and load with --replace to rewrite the span",
+            )
+    except BaseException:
+        _undo(ws, before, [held[name] for name in replaced])
+        raise
+    _let_go(ws)
+    served = (first_day, last_day)
+    return _record(
+        ws,
+        ref,
+        source,
+        dataset=dataset_id(ref.instrument, ref.type, ref.resolution, ref.adjusted, served[1]),
+        served=served,
+        rows=rows,
+        files=files,
+        replaced=replaced,
+        as_of=as_of,
+        adjustment_basis=adjustment_basis,
+        supersedes=supersedes,
+    )
+
+
+def _cut(points: Iterable[Any], size: int) -> Iterator[list[Any]]:
+    """The points in batches of at least `size`, each closed at the next change of instant.
+
+    A batch runs past `size` only for as long as the instant does, so no instant is split
+    across two files. Points that go back in `ts_init` are refused: a batched write keeps
+    nothing back to sort, and the engine files each batch under its own interval.
+    """
+    current: list[Any] = []
+    last = None
+    for point in points:
+        if last is not None and point.ts_init < last:
+            raise ValidationError(
+                f"a {type(point).__name__} at ts_init {point.ts_init} follows one at {last}: a "
+                "dataset written a batch at a time must arrive in availability order",
+                remedy="the loader promises non-decreasing ts_init; report it",
+            )
+        if len(current) >= size and point.ts_init != last:
+            yield current
+            current = []
+        current.append(point)
+        last = point.ts_init
+    if current:
+        yield current
+
+
+def _checked(points: Sequence[Any], ref: DatasetRefLike) -> tuple[type, str | None, str | None]:
+    """One batch checked as a whole write checks its points, and the series it is."""
+    publication.check_availability(points)
+    if ref.publication == "delayed":
+        publication.check_delayed(points, ref.publication_rule)
+    found = _identify(points)
+    if found[2] is not None and found[2] != ref.instrument:
+        raise ValidationError(
+            f"instrument: the dataset declares {ref.instrument!r} but its points carry {found[2]!r}"
+        )
+    return found
 
 
 def load_window(
@@ -364,10 +564,51 @@ def _clear(
             remedy="pass --replace to delete and rewrite the overlapped span",
         )
     catalog = open_catalog(ws)
+    _set_aside(ws, catalog, data_cls)
     for manifest in clashing:
         _delete(catalog, data_cls, identifier, manifest.span)
         remove_manifest(ws, manifest.dataset_id)
     return tuple(sorted(m.dataset_id for m in clashing))
+
+
+def _set_aside(ws: Workspace, catalog: ParquetDataCatalog, data_cls: type) -> None:
+    """Link every file the store holds of `data_cls` under `catalog/.replaced/`.
+
+    Those are all the files a removal of `data_cls` can touch, and a link costs no bytes: the
+    removal unlinks the store's name and the aside one keeps the file, until `_let_go`
+    drops it or `_undo` links it back.
+    """
+    aside = catalog_path(ws) / ASIDE_DIR
+    shutil.rmtree(aside, ignore_errors=True)
+    root = data_path(ws)
+    for name in catalog.get_file_list_from_data_cls(data_cls):
+        path = Path(name)
+        kept = aside / path.relative_to(root)
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        os.link(path, kept)
+
+
+def _undo(ws: Workspace, before: dict[str, tuple[int, int]], removed: Sequence[Manifest]) -> None:
+    """A failed write taken back: the files it produced removed, and what its replace
+    removed put back, files and manifests, as they were before it began."""
+    root = data_path(ws)
+    for name in set(_tree(root)) - set(before):
+        (root / name).unlink(missing_ok=True)
+    aside = catalog_path(ws) / ASIDE_DIR
+    if removed and aside.is_dir():
+        for kept in aside.rglob("*"):
+            home = root / kept.relative_to(aside)
+            if kept.is_file() and not home.exists():
+                home.parent.mkdir(parents=True, exist_ok=True)
+                os.link(kept, home)
+    for manifest in removed:
+        write_manifest(ws, manifest)
+    _let_go(ws)
+
+
+def _let_go(ws: Workspace) -> None:
+    """What a write set aside, dropped once the write is recorded or undone."""
+    shutil.rmtree(catalog_path(ws) / ASIDE_DIR, ignore_errors=True)
 
 
 def _delete(

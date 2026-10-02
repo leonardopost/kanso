@@ -93,12 +93,15 @@ def outstanding(engines: Sequence[object]) -> int:
 
 
 class ReplayDataClient(LiveMarketDataClient):
-    """A live data client that releases a held window of points, one settled step at a time.
+    """A live data client that releases a held stretch of points, one settled step at a time.
 
-    The points are given whole at construction, already in the order the engine would put
-    them in, and `replay` releases them. Subscriptions are the engine's business: the client
-    records them through the base class and releases every point regardless, exactly as a
-    backtest hands its whole stream to the data engine and lets it route.
+    The points are given at construction, already in the order the engine would put them
+    in, and `replay` releases them. A window handed over a chunk at a time is `load`ed a
+    chunk at a time, each replayed before the next is loaded: the count released, the last
+    instant and the pace carry across, so a window replayed in chunks is released exactly
+    as it is whole. Subscriptions are the engine's business: the client records them
+    through the base class and releases every point regardless, exactly as a backtest hands
+    its stream to the data engine and lets it route.
     """
 
     def __init__(
@@ -133,12 +136,17 @@ class ReplayDataClient(LiveMarketDataClient):
         self._released = 0
         self._paced = 0.0
         self._last_ts = 0
+        self._previous: int | None = None
 
     # --- what the session sets and reads ------------------------------------
 
     def attach(self, *engines: object) -> None:
         """Name the engines whose queues the feed waits on between points."""
         self._engines = tuple(engines)
+
+    def load(self, points: Sequence[Any]) -> None:
+        """Hold the next stretch of the window in place of the one already replayed."""
+        self._points = tuple(points)
 
     @property
     def released(self) -> int:
@@ -180,18 +188,19 @@ class ReplayDataClient(LiveMarketDataClient):
         The pace is the gap between two points' availability instants divided by `speed`;
         at speed zero there is no pace and the feed advances as soon as the node is quiet.
         A feed stops short when the node it is feeding stops, and the count it returns is
-        how the caller learns that the window was not replayed whole.
+        how the caller learns that the window was not replayed whole. The count is of
+        every point released since the client was built, over every stretch it was loaded
+        with, and the first point of a stretch is paced from the last of the one before.
         """
-        previous: int | None = None
         for point in self._points:
             if not self._alive():
                 break
             ts = int(point.ts_init)
-            await self._pace(previous, ts)
+            await self._pace(self._previous, ts)
             self._handle_data(point)
             self._released += 1
             self._last_ts = ts
-            previous = ts
+            self._previous = ts
             await self.settle()
         return self._released
 
