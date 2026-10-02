@@ -255,6 +255,24 @@ def test_the_pages_say_a_certification_groups_a_wrapped_custom_point_by_its_payl
     assert "`kanso.data.types.type_id_of` answers for the point a wrapper carries" in backlog
 
 
+def test_the_pages_say_the_venue_is_settled_at_a_marker_as_the_research_path_settles() -> None:
+    """A command that came due by a held point lands before the marker hands that point to
+    the author on both code paths; the concepts page says where, the workspace page says it
+    under `costs.latency_ms`, and the backlog row that recorded the parity failure of a
+    level-two book under a latency is closed in place."""
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    assert "The simulated venue is settled where the research path settles it." in concepts
+    assert "now settle at each marker, above the sleeve" in concepts
+    assert "A change to the book also stamps `data_time`" in concepts
+    workspace = prose(page("workspace.md"))
+    assert "the command lands before the sleeve's handler for it on both code paths" in workspace
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 118 |"))
+    assert "~~`parity_replay` failed on a level-two book under a latency" in backlog
+    assert "**closed.**" in backlog
+    assert "`SimulatedVenue.on_marker` settles the exchange at each marker's instant" in backlog
+    assert "`handle_order_book_deltas` stamps `data_time`" in backlog
+
+
 def test_the_pages_say_a_day_s_volume_is_struck_with_the_instrument_s_multiplier() -> None:
     """A bar counts the instrument's unit and a fill is `qty x px x multiplier`; the pages
     say the capacity gate reads a day's volume in the same unit, and the backlog row that

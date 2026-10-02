@@ -11,7 +11,10 @@ environment: a test clock advanced by the data stream in a backtest, a wall cloc
 live node. Reading the engine clock therefore makes a strategy behave differently in
 replay than it did in research, which is exactly what the parity gate refuses. `data_time`
 is held by overriding the engine's data handlers, so it is correct before the author's
-`on_bar` runs. The engine delivers by `ts_init` (availability) and never by `ts_event`, so
+`on_bar` runs — and before `on_order_book_deltas`, which a change to the book stamps with
+its own `ts_event`; it used to leave the last print's there, which for a sleeve that holds
+only the book is no instant at all. The engine delivers by `ts_init` (availability) and
+never by `ts_event`, so
 a late-published point can carry an earlier reference time than its predecessor;
 `data_time` reports the event being handled, because that is the reference time of the
 information the strategy is acting on. On a multi-instrument instant the last prices of
@@ -979,7 +982,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def handle_order_book_deltas(self, deltas: object, historical: bool = False) -> None:
         """Hand a change to the book to the author, then ask again for any exit still owed.
 
-        A book change reaches `on_order_book_deltas` and no other handler here, so a sleeve
+        The change is the data event the author is acting on, so `data_time` is its
+        `ts_event` before `on_order_book_deltas` runs, as a bar's is before `on_bar`: an
+        order sent from there is stamped with the change, not with the last print. A book
+        change reaches `on_order_book_deltas` and no other handler here, so a sleeve
         that holds only the book would otherwise never be asked again for an exit a cancel
         in flight held back, and would hold the position to the end of the window. In
         nautilus_trader 1.231.0 `Actor.handle_order_book_deltas` is `cpdef`, hands the
@@ -989,6 +995,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the node).
         """
         live = not historical and self.is_running and not self._warming()
+        if not historical:
+            self._data_time = int(deltas.ts_event)  # type: ignore[attr-defined]
         if live:
             self._send_behind_modify()
         super().handle_order_book_deltas(deltas, historical)

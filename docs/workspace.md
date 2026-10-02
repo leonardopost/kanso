@@ -711,7 +711,10 @@ between: a print that would have filled the order in that interval finds it not 
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
 the first point of data after its delay has passed, and only after matching that point, so
 the delay a run models is never shorter than the one stated and at tick resolution
-exceeds it by one point. It models the round trip from
+exceeds it by one point. On a feed whose instants coincide — every level-two book, any grain
+of several names — that point reaches the sleeve through a flush marker, and the command
+lands before the sleeve's handler for it on both code paths (`docs/concepts.md`,
+Delivery). It models the round trip from
 the strategy to the exchange's book through the account and route it will trade on, and it
 is measured there, on real orders, rather than assumed. State the whole round trip: a feed
 that reaches the strategy late and an order that reaches the book late add up, and a rule
