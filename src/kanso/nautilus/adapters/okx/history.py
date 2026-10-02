@@ -36,11 +36,12 @@ ended is refused naming the last complete day. A `load` asked past what the sour
 yet — `data sync` extends a series to today — serves what the source holds and stops, and
 the manifest records the span actually served.
 
-**A throttle is waited out; nothing else is.** An answer of HTTP 429 or code `50011` is
-asked again after a growing pause, up to `RETRIES` times — the archive listing is paced
-below its measured limit (`trades.LISTING_GAP_S`), and this is what is left if it throttles
-anyway. Any other answer that is not the
-API's success stops the call, because nothing about the data was established by it.
+**A throttle is waited out; nothing else is.** The client the reference shares asks a
+throttled request again after a growing pause (`reference.PublicClient.get`), on the
+loader's own `pause` — the archive listing is paced below its measured limit
+(`trades.LISTING_GAP_S`), and this is what is left if it throttles anyway. Any other answer
+that is not the API's success, and a throttle that does not lift, stops the call, because
+nothing about the data was established by it.
 
 Every dataset is `realtime`: a bar is public at its close, a print when it prints and a
 funding payment when it settles, so `ts_init` equals `ts_event` and no publication rule is
@@ -77,7 +78,6 @@ __all__ = [
     "DAY",
     "MS_PER_DAY",
     "NS_PER_MS",
-    "RETRIES",
     "HistoryLoader",
     "HistorySpec",
     "Series",
@@ -93,13 +93,6 @@ DAY: Final = timedelta(days=1)
 MS_PER_DAY: Final = 86_400_000
 NS_PER_MS: Final = 1_000_000
 """The API times every row in milliseconds since the epoch; the engine in nanoseconds."""
-
-RETRIES: Final = 5
-PAUSE_S: Final = 2.0
-"""Attempts at a throttled request, and the pause before the next, times the attempt."""
-
-THROTTLED: Final = "50011"
-"""The exchange's code for a request over its rate limit, answered under HTTP 429."""
 
 _EPOCH: Final = date(1970, 1, 1)
 
@@ -143,21 +136,11 @@ def units(text: object, precision: int) -> int | None:
     return int(scaled)
 
 
-def answered(
-    client: PublicClient,
-    path: str,
-    params: Mapping[str, str],
-    pause: Callable[[float], None],
-) -> tuple[Any, ...]:
-    """The `data` of one successful answer, waiting out a throttle and stopping on the rest."""
-    for attempt in range(1, RETRIES + 1):
-        answer = client.get(path, params)
-        if answer.listed:
-            return answer.data
-        if answer.status != 429 and answer.code != THROTTLED:
-            break
-        if attempt < RETRIES:
-            pause(PAUSE_S * attempt)
+def answered(client: PublicClient, path: str, params: Mapping[str, str]) -> tuple[Any, ...]:
+    """The `data` of one successful answer, a throttle waited out by the client, or a stop."""
+    answer = client.get(path, params)
+    if answer.listed:
+        return answer.data
     raise KansoError(
         f"okx: {path} did not answer as the exchange's API does ({answer.said()})",
         Exit.ERROR,
@@ -317,7 +300,9 @@ class HistoryLoader:
     def client(self) -> PublicClient:
         """The public client on the table's host, built once and kept for its quota."""
         if self._client is None:
-            self._client = ADAPTER.client(self.workspace, transport=self.transport)
+            self._client = ADAPTER.client(
+                self.workspace, transport=self.transport, pause=self.pause
+            )
         return self._client
 
     # --- what each loader supplies ------------------------------------------------

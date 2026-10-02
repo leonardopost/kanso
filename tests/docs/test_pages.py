@@ -18,6 +18,7 @@ from kanso.classify import catalogue
 from kanso.config import Config, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.models.wire import REQUEST_TIMEOUT_S
+from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.research import driver
 from tests.cli.test_doctor import CHECKS
 
@@ -265,11 +266,32 @@ def test_the_pages_say_the_venue_is_settled_at_a_marker_as_the_research_path_set
     assert "A change to the book also stamps `data_time`" in concepts
     workspace = prose(page("workspace.md"))
     assert "the command lands before the sleeve's handler for it on both code paths" in workspace
-    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 113 |"))
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 118 |"))
     assert "~~`parity_replay` failed on a level-two book under a latency" in backlog
     assert "**closed.**" in backlog
     assert "`SimulatedVenue.on_marker` settles the exchange at each marker's instant" in backlog
     assert "`handle_order_book_deltas` stamps `data_time`" in backlog
+
+
+def test_the_pages_say_a_day_s_volume_is_struck_with_the_instrument_s_multiplier() -> None:
+    """A bar counts the instrument's unit and a fill is `qty x px x multiplier`; the pages
+    say the capacity gate reads a day's volume in the same unit, and the backlog row that
+    recorded a perpetual's contracts compared against its fills' notional is closed."""
+    concepts = prose(page("concepts.md"))
+    assert "The volume a certification holds a day's fills to is the same product." in concepts
+    assert (
+        "`capacity_vs_adv` reads each day's volume as `volume x close x multiplier` of the "
+        "resolved definition the window was run with"
+    ) in concepts
+    assert "contracts against contracts, never contracts against the coins inside them" in concepts
+    cert_run = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso cert run")
+    )
+    assert "each day's volume struck as `volume x close x multiplier`" in cert_run
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 113 |"))
+    assert backlog.split("|")[3].strip().startswith("~~`capacity_vs_adv` compared")
+    assert "**closed**: the certifier strikes each day's volume with the multiplier" in backlog
+    assert "`kanso cert plan ID --replan` mints the next plan version" in backlog
 
 
 def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> None:
@@ -328,6 +350,34 @@ def test_the_wait_the_workspace_page_states_is_the_one_the_client_waits() -> Non
     stated = re.search(r"waits \*\*(\w+) minutes\*\*", models)
     assert stated is not None
     assert spelled(stated.group(1)) * 60 == REQUEST_TIMEOUT_S
+
+
+def test_the_pages_say_a_run_asks_no_vendor_about_what_the_store_holds() -> None:
+    """Five lanes beginning together each asked the reference for every instrument, and the
+    exchange throttled four of them out of their runs; the pages say a run reads the store."""
+    instruments = prose(section(page("workspace.md"), "`instruments.yaml`"))
+    assert "A run asks the reference adapter nothing about an instrument the store holds." in (
+        instruments
+    )
+    assert "`hyp validate` and `hyp add` build the definition in memory to check it" in (
+        instruments
+    )
+    snapshot = prose(section(page("concepts.md"), "Snapshot"))
+    assert "a run asks no reference adapter about an instrument its snapshot pins" in snapshot
+
+
+def test_the_throttle_wait_the_adapters_page_states_is_the_one_the_client_waits() -> None:
+    """The reference and the public history wait out a throttle through one client."""
+    waits = [f"{PAUSE_S * attempt:g}" for attempt in range(1, RETRIES)]
+    stated = f"is asked again after {', '.join(waits[:-1])} and {waits[-1]} seconds"
+    okx = prose(section(page("adapters.md"), "The OKX adapter"))
+    assert okx.count(stated) == 2
+    fifth = re.search(r"does not lift by the (\w+) attempt", okx)
+    assert fifth is not None
+    assert _ORDINALS.index(fifth.group(1)) + 1 == RETRIES
+
+
+_ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth")
 
 
 def test_the_lane_memory_floor_the_workspace_page_states_is_the_one_the_package_clamps_to() -> None:
@@ -482,3 +532,44 @@ def test_both_pages_state_the_utc_period_rule_a_continuous_calendar_relies_on() 
     assert "`calendar: continuous`" in catalog
     assert "`timezone`, `session_start` or `session_end` is refused (exit 3)" in catalog
     assert "`calendar: weekdays` is the default and is recorded in no manifest" in catalog
+
+
+def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_its_numbers() -> (
+    None
+):
+    """A fraction of a loss lies above the loss, so the pages say the plateau fails a
+    non-positive objective before moving anything, that a failed window spares its
+    backtests, and that the bootstrap judges the band it records; the three backlog rows
+    that recorded a certificate right by accident are closed in place."""
+    concepts = prose(section(page("concepts.md"), "Certification, the plan and the certificate"))
+    assert (
+        "An unperturbed objective at or below zero therefore fails the gate before any "
+        "parameter is moved" in concepts
+    )
+    assert "The plateau is judged after every other cert gate" in concepts
+    assert "A window gate that judged nothing spares nothing." in concepts
+    assert "`bootstrap` judges both of the numbers it records" in concepts
+    assert "a band that lies at or below zero says the population of trades carries no edge" in (
+        concepts
+    )
+    cli = prose(page("cli.md"))
+    assert "once `embargoed_window` has failed it is recorded as skipped with the reason" in cli
+    rows = {
+        114: (
+            "~~`param_plateau` set its floor at a fraction of the unperturbed objective",
+            "fails an unperturbed objective at or below zero before any parameter is moved",
+        ),
+        115: (
+            "~~A certification ran the plateau's perturbation backtests after",
+            "judges `param_plateau` after every other cert gate",
+        ),
+        116: (
+            "~~`bootstrap` passed on the drawdown alone",
+            "a ninety-percent band that lies at or below zero fails the gate whatever the drawdown",
+        ),
+    }
+    for number, (claim, closure) in rows.items():
+        row = next(
+            line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
+        )
+        assert claim in row and "**closed.**" in row and closure in row, number

@@ -18,16 +18,19 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from kanso.certify import run
 from kanso.certify.run import certify
 from kanso.criteria import CardRun, gates
 from kanso.criteria.gates.param_plateau import (
     ALL_DROPPED,
     NO_PARAMETERS,
     NO_RERUN,
+    NOT_POSITIVE,
     _moved,
     gate,
 )
 from kanso.criteria.objectives import wf_sharpe_vs_hold
+from kanso.nautilus import backtest
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.certify.test_run import CERT_GATES, a_card, write_plan
@@ -166,10 +169,14 @@ def test_the_floor_is_the_chosen_fraction_of_the_unperturbed_metric() -> None:
 
 
 def test_a_benchmark_stays_fixed_while_the_subject_is_moved() -> None:
-    """Every perturbed run is measured against the one hold the unperturbed run was."""
+    """Every perturbed run is measured against the one hold the unperturbed run was.
+
+    The subject beats its hold, since the gate refuses one that does not before it moves
+    anything; the moved run beats it by less.
+    """
     hold = build_run((1.0, 2.0, 1.0, 3.0, 2.0, 1.0, 2.0, 2.0))
-    subject = build_run((3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0))
-    moved = build_run((2.0, -1.0, 4.0, 2.0, 5.0, -2.0, 6.0, 1.0))
+    subject = build_run((3.0, 2.0, 4.0, 3.0, 5.0, 2.0, 6.0, 3.0))
+    moved = build_run((2.0, 2.0, 4.0, 4.0, 5.0, 2.0, 6.0, 2.0))
     measured = judged(
         lambda overrides: moved,  # type: ignore[arg-type]
         {"fast": 10.0},
@@ -187,6 +194,32 @@ def test_a_benchmark_stays_fixed_while_the_subject_is_moved() -> None:
     assert [p["metric"] for p in measured.evidence["perturbations"]] == pytest.approx(
         [wf_sharpe_vs_hold.compute(moved, 4, benchmark=hold)[0]] * 2
     )
+
+
+# --- what it refuses to judge -------------------------------------------------
+
+
+@pytest.mark.parametrize("edge", [-69.63, -1.0, 0.0])
+def test_an_objective_at_or_below_zero_fails_before_any_parameter_is_moved(edge: float) -> None:
+    """A fraction of a loss lies above the loss, so the floor would reward leaving the plateau."""
+    rerun = Rerun()
+
+    result = judged(rerun, {"slow": 40.0, "fast": 10.0}, run=a_run(edge))
+
+    assert not result.passed and result.skipped is None, "a judged fail, not a skip"
+    assert result.evidence["reason"] == NOT_POSITIVE
+    assert result.evidence["unperturbed"] == pytest.approx(edge)
+    assert result.evidence["n_backtests"] == 0
+    assert result.evidence["perturbations"] == []
+    assert "floor" not in result.evidence, "a fraction of a loss is no floor"
+    assert rerun.calls == [], "not one perturbation was paid for"
+
+
+def test_a_loss_with_nothing_to_move_is_still_the_skip_it_always_was() -> None:
+    """The skips for absent context come first: the fail is a verdict on a whole context."""
+    result = judged(Rerun(), {}, run=a_run(-1.0))
+
+    assert result.passed and result.skipped == NO_PARAMETERS
 
 
 # --- what it will not judge ---------------------------------------------------
@@ -327,6 +360,110 @@ def test_the_moved_parameters_are_the_authors_own_and_not_the_injected_ones(
         "notional",
         "min_fall",
     }
+
+
+CHASING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    notional: float = 5_000.0
+    min_rise: float = 0.5
+
+
+class Strategy(KansoStrategy):
+    """Buys the peak of a rise it considers big enough, and sells the trough: a loss a cycle."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.closes = []
+        self.long = False
+
+    def on_bar(self, bar) -> None:
+        self.closes.append(float(bar.close))
+        if len(self.closes) < 3:
+            return
+        first, second, third = self.closes[-3:]
+        settings = self.kanso_config
+        if first < second < third and not self.long:
+            if third - first >= settings.min_rise:
+                self.submit_entry(
+                    bar.bar_type.instrument_id, "BUY", notional=settings.notional
+                )
+                self.long = True
+        elif first > second > third and self.long:
+            self.submit_exit(bar.bar_type.instrument_id)
+            self.long = False
+'''
+"""The reverter's mirror: it trades the saw-tooth the wrong way round, with two parameters."""
+
+UNFLOORED: dict[str, Any] = {**CERT_GATES[0], "params": {}}
+"""The window gate with no `min_fraction` chosen, which is a window gate that judges nothing."""
+
+
+def perturbed_runs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, float]]:
+    """The overrides of every engine run a certification makes from here on, as they happen.
+
+    The subject's own runs, a hold's and a replay's carry none; only a perturbation does.
+    """
+    moved: list[dict[str, float]] = []
+    original = backtest.execute
+
+    def counted(request: backtest.RunRequest, instruments: Any, groups: Any) -> Any:
+        if request.overrides:
+            moved.append(dict(request.overrides))
+        return original(request, instruments, groups)
+
+    monkeypatch.setattr(run.backtest, "execute", counted)
+    return moved
+
+
+def gate_of(made: Any, name: str) -> Any:
+    return next(found for found in made.gates if found.id == name)
+
+
+def test_a_failed_window_spares_the_perturbation_backtests_and_the_certificate_says_so(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    classify(ws, store, DOCUMENT, CHASING)
+    a_card(ws, store, CHASING)
+    write_plan(ws, gates=[PLATEAU_GATE, *CERT_GATES])
+    moved = perturbed_runs(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    window, plateau = gate_of(made, "embargoed_window"), gate_of(made, "param_plateau")
+    assert made.verdict == "fail"
+    assert window.skipped is None and not window.passed
+    assert window.evidence["certification"] <= 0, "the mirror loses out of sample"
+    assert plateau.skipped == run.WINDOW_FAILED and plateau.passed
+    assert plateau.evidence == {}
+    assert moved == [], "not one perturbation was run"
+    assert [found.id for found in made.gates] == [
+        planned["id"] for planned in (PLATEAU_GATE, *CERT_GATES)
+    ], "judged last, listed where the plan put it"
+
+
+def test_a_window_that_judged_nothing_spares_nothing_and_the_gate_refuses_the_loss_itself(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    classify(ws, store, DOCUMENT, CHASING)
+    a_card(ws, store, CHASING)
+    write_plan(ws, gates=[UNFLOORED, *CERT_GATES[1:], PLATEAU_GATE])
+    moved = perturbed_runs(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    window, plateau = gate_of(made, "embargoed_window"), gate_of(made, "param_plateau")
+    assert window.skipped is not None, "a skip is an absence of evidence, not a refusal"
+    assert plateau.skipped is None and not plateau.passed
+    assert plateau.evidence["reason"] == NOT_POSITIVE
+    assert plateau.evidence["unperturbed"] <= 0
+    assert plateau.evidence["n_backtests"] == 0
+    assert plateau.evidence["n_fields"] == 2, "notional and min_rise were there to move"
+    assert moved == [], "the gate refused the loss before paying for a move"
+    assert made.verdict == "fail"
 
 
 def test_the_toolbox_no_longer_declares_the_gate_without_an_implementation() -> None:

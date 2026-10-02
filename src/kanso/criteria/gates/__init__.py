@@ -1120,14 +1120,18 @@ class _Bootstrap:
     """What the trade sequence could have looked like, and how deep it could have drawn.
 
     A replication resamples the closed trades with replacement, keeping the population and
-    losing the order, and rebuilds the equity path from the starting capital. The path
-    gives the drawdown distribution, which is what the gate judges; the same draw gives
-    the objective's own statistic, which is recorded as evidence and becomes a deployed
-    version's expectation. The statistic is the run's objective family measured on the
-    resampled trades — a Sharpe of the trade series, or its mean edge per trade — less,
-    for an objective measured against a benchmark, what the benchmark scored on the same
-    statistic over the same folds: a hold has no trades of its own to resample, and the
-    band a paper stage judges a realised difference against has to be one of differences.
+    losing the order, and rebuilds the equity path from the starting capital. The gate
+    judges both of the numbers it records. The path gives the drawdown distribution, whose
+    ninety-fifth percentile is held to the hypothesis's limit; the same draw gives the
+    objective's own statistic, whose ninety-percent band must reach above zero — a band
+    that lies at or below zero says the population of trades carries no edge in whatever
+    order it arrives, and a drawdown inside the limit does not make that a pass. The band
+    is also what becomes a deployed version's expectation. The statistic is the run's
+    objective family measured on the resampled trades — a Sharpe of the trade series, or
+    its mean edge per trade — less, for an objective measured against a benchmark, what
+    the benchmark scored on the same statistic over the same folds: a hold has no trades
+    of its own to resample, and the band a paper stage judges a realised difference
+    against has to be one of differences.
     """
 
     id: ClassVar[str] = "bootstrap"
@@ -1145,7 +1149,7 @@ class _Bootstrap:
         low, high, worst = self._resample(ctx, objective, replications)
         return verdict(
             self.id,
-            worst <= limit,
+            worst <= limit and high > 0,
             {
                 "objective": objective.id,
                 "objective_ci90": [low, high],

@@ -198,7 +198,9 @@ is in the snapshot for the same reason as the data — a tick size reassigned ne
 not silently rewrite a card that was measured under the old one — and it is read back where
 a run is pinned. The store is resolved before it is frozen: a snapshot over instrument data
 is refused while the store holds no definition, since the checksum of nothing pins nothing a
-run could use.
+run could use. A run reads its definitions back from the store and nowhere else: `research
+begin` and every card build the venue model from what the store holds, so a run asks no
+reference adapter about an instrument its snapshot pins, however many lanes begin at once.
 
 **Covers** is counted in whole UTC days, from the spans the datasets **served** — never from
 what was asked of the source — on the days the instrument's market opened. A chunked
@@ -472,7 +474,12 @@ contract multiplier being one for a share and the contract size for a future or 
 Each recorded fill and trade carries the multiplier it was struck with, so a cost model
 re-applied to the record charges the notional the runner charged. A record written before the
 multiplier was kept reads as one, a share's; a run struck on a multiplied instrument before then
-is re-run before a cost model is re-applied to it.
+is re-run before a cost model is re-applied to it. The volume a certification holds a day's
+fills to is the same product. A bar's volume counts the instrument's own unit — shares for a
+share, contracts for a perpetual or a future — so `capacity_vs_adv` reads each day's volume as
+`volume x close x multiplier` of the resolved definition the window was run with, and the
+busiest day's fill notional is held to a share of an average struck in the same unit: contracts
+against contracts, never contracts against the coins inside them.
 
 **A perpetual is a linear contract settled in the account's currency.** A crypto perpetual
 swap (`instrument_class: swap`, `docs/workspace.md`) is to kanso a contract whose notional is
@@ -1082,6 +1089,25 @@ that window with the strategy replaced — and every gate that measures the obje
 certification hold beside the certification run and the research hold beside the research
 run. `param_plateau` moves the subject's parameters and re-runs the subject alone: the hold
 it is differenced against stays the one it was measured against.
+
+`param_plateau` is defined around an edge and nowhere else. Its floor is a fraction of the
+unperturbed objective, and a fraction of a loss lies above the loss: at −10 and a
+`keep_fraction` of a half the floor is −5, so a perturbation that changed nothing would read
+as failing to keep half of the result, and one that merely lost less would pass. An
+unperturbed objective at or below zero therefore fails the gate before any parameter is
+moved, with the `reason` in its evidence and `n_backtests` at zero. It fails rather than
+skips because its context is whole and it is the subject that lacks the property: a plateau
+around a loss is a robust loss, not evidence of robustness, and a skip is a pass. The runner
+spares the same backtests once `embargoed_window` has failed. The plateau is judged after
+every other cert gate, and when the window gate judged the subject and refused it, the
+plateau is recorded as skipped with the reason and no perturbation is run — the gates are
+evidence for a pass, and a certificate whose window failed cannot pass — while the
+certificate lists its gates in the plan's order as before. A window gate that judged nothing
+spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
+percentile of the resampled drawdown against `risk_limits.max_drawdown_pct`, and the
+ninety-percent band of the resampled objective, which must reach above zero — a band that
+lies at or below zero says the population of trades carries no edge in whatever order it
+arrives, and a drawdown inside the limit does not make that a pass.
 
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
