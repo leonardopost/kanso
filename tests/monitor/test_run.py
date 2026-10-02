@@ -438,17 +438,20 @@ def test_a_workspace_without_a_portfolio_is_refused(ws: Workspace, store: StateS
 # --- the seams ----------------------------------------------------------------
 
 
-def test_demotion_is_the_portfolios_act(
+def test_demotion_is_the_portfolios_act_made_in_a_child(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A pass handed no demote calls the portfolio's, which moves *and* redeploys."""
+    """A pass handed no demote makes the portfolio's — which moves *and* redeploys — in a
+    child of the monitor, so the nodes it runs leave nothing in a process that runs all day."""
     import kanso.portfolio
+    from kanso.portfolio import child
 
-    assert monitor.run.portfolio_demote is kanso.portfolio.demote
+    assert monitor.run.demote_in_child is child.demote_in_child
+    assert child.demote is kanso.portfolio.demote
     calls: list[tuple[str, int]] = []
     monkeypatch.setattr(
         monitor.run,
-        "portfolio_demote",
+        "demote_in_child",
         lambda _ws, _store, strategy, number: calls.append((strategy, number)),
     )
     deploy(ws, store, stage="live", state="live", ci90=(1.0, 2.0), live=((STRATEGY_ID, 1),))

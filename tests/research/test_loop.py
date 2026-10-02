@@ -4,37 +4,44 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
-from dataclasses import fields, replace
-from datetime import date
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, fields, replace
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
+from typing import ClassVar, Final
 
 import pytest
 
 from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
 from kanso.criteria.objectives import wf_sharpe_net
-from kanso.data import snapshot
-from kanso.errors import PreconditionError, ValidationError
+from kanso.data import instruments, snapshot
+from kanso.data.instruments import current_definitions, definition_checksum, read_cache
+from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
 from kanso.hyp import show
 from kanso.nautilus import backtest
 from kanso.research import lanes, loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
-from kanso.schemas import Hypothesis, RunRecord
+from kanso.schemas import Hypothesis, InstrumentsFile, Resolved, RunRecord, write_yaml
 from kanso.state import StateStore
-from kanso.workspace import Workspace
+from kanso.workspace import Workspace, find
 
 from .conftest import (
     DOCUMENT,
     ENVELOPE,
     FLAT,
     HYP_ID,
+    INSTRUMENT,
     PROGRAM,
     RAISING,
     READING,
     RESEARCH,
     REVERTING,
+    VENUE,
     WEAK,
     classify,
     document,
@@ -933,13 +940,13 @@ def test_the_memory_cap_is_the_lane_share_floored_at_the_baseline_s_need(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
     run = loop.begin(ws, store, registered)
-    assert loop._mem_cap(ws, run) == 8.0
+    assert loop.mem_cap(ws, run) == 8.0
 
     heavy = run.model_copy(update={"baseline_peak_mem_gb": 100.0})
-    assert loop._mem_cap(ws, heavy) == loop.HEADROOM * 100.0
+    assert loop.mem_cap(ws, heavy) == loop.HEADROOM * 100.0
 
     ws.path("envelope.yaml").unlink()
-    assert loop._mem_cap(ws, run) == loop.HEADROOM * run.baseline_peak_mem_gb
+    assert loop.mem_cap(ws, run) == loop.HEADROOM * run.baseline_peak_mem_gb
 
 
 @pytest.mark.parametrize("declared, peak, cap", [(2.0, 0.25, 2.0), (0.5, 4.0, 12.0)])
@@ -958,7 +965,7 @@ def test_a_declared_lane_memory_is_what_a_card_of_that_lane_may_hold(
     plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": declared})
     write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
 
-    assert loop._mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak})) == cap
+    assert loop.mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak})) == cap
 
 
 def test_one_card_is_costed_with_one_venue_model() -> None:
@@ -1185,6 +1192,102 @@ def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore
     assert loop._warmup_spans(setup) == ()
 
 
+# --- the definitions a run is priced under ---------------------------------------
+
+
+@dataclass
+class Throttled:
+    """A reference provider that answers every question with the vendor's throttle.
+
+    It stands in for an exchange that five lanes starting together have pushed over its
+    rate limit, without being one: whatever asks it anything fails as those lanes did.
+    """
+
+    id: ClassVar[str] = "throttled"
+    asked: list[tuple[str, ...]] = field(default_factory=list)
+
+    def resolve(self, ids: Sequence[str], as_of: date) -> dict[str, object]:
+        self.asked.append(tuple(ids))
+        raise KansoError("throttled: the listing did not answer (HTTP 429)", Exit.ERROR)
+
+    def sources(self, instrument_id: str) -> dict[str, str]:  # pragma: no cover - never asked
+        return {}
+
+
+def resolved_elsewhere(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Workspace, Throttled]:
+    """The workspace as a reference adapter leaves it, with that adapter no longer answering.
+
+    The instrument's entry records a resolution through the adapter as of a day after the
+    research window opens — the day `kanso data instruments resolve` was run, as an operator
+    runs it — so the cache answers no question dated at the window's start, and the store
+    holds the definition the snapshot pins.
+    """
+    held = current_definitions(ws)[INSTRUMENT]
+    entry = (
+        read_cache(ws)
+        .root[INSTRUMENT]
+        .model_copy(
+            update={
+                "manual": False,
+                "resolved": Resolved(
+                    adapter=Throttled.id,
+                    as_of=date(2024, 3, 1),
+                    at=datetime(2024, 3, 1, 18, tzinfo=UTC),
+                    checksum=definition_checksum(held),
+                ),
+            }
+        )
+    )
+    write_yaml(InstrumentsFile({INSTRUMENT: entry}), ws.path("instruments.yaml"))
+    config = ws.path("kanso.toml")
+    config.write_text(
+        config.read_text(encoding="utf-8") + f'\n[data]\nreference = "{Throttled.id}"\n',
+        encoding="utf-8",
+    )
+    provider = Throttled()
+    monkeypatch.setitem(instruments.PROVIDERS, Throttled.id, lambda _: provider)
+    return find(ws.root), provider
+
+
+def test_a_run_begins_and_cards_with_its_reference_adapter_unreachable(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A card is priced under the definitions the store holds, which the snapshot pins, so
+    beginning a run and carding it ask the vendor nothing: five lanes starting together made
+    one request per instrument each, and the exchange throttled four of them out of their
+    runs within a second. The hypothesis was registered while the vendor answered —
+    registration validates the universe, and that is the operator's command, not a lane's."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    configured, provider = resolved_elsewhere(ws, monkeypatch)
+
+    run = loop.begin(configured, store, hyp_id)
+    edit(configured, run, REVERTING)
+    loop.card(configured, store, hyp_id, "buy the trough")
+
+    assert provider.asked == []
+    assert statuses(store, hyp_id) == ["keep", "keep"]
+
+
+def test_lanes_setting_up_together_ask_the_reference_nothing(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Six setups at once, each on a store of its own as a lane process holds one."""
+    configured, provider = resolved_elsewhere(ws, monkeypatch)
+    hyp = Hypothesis.model_validate(DOCUMENT)
+
+    def lane(_: int) -> loop.Setup:
+        with StateStore(configured.path("state.db")) as own:
+            return loop._setup(configured, own, hyp)
+
+    with ThreadPoolExecutor(6) as pool:
+        setups = list(pool.map(lane, range(6)))
+
+    assert provider.asked == []
+    assert {setup.venue_model.venue for setup in setups} == {VENUE}
+
+
 # --- a benchmark -------------------------------------------------------------
 
 
@@ -1249,8 +1352,149 @@ def test_an_objective_that_measures_no_benchmark_runs_no_hold(
     setup = loop._setup(ws, store, Hypothesis.model_validate(DOCUMENT))
     cache: dict[str, object] = {}
 
-    assert loop._benchmark_run(setup, snapshot_id="a" * 64, cache=cache) is None  # type: ignore[arg-type]
+    assert (
+        loop._benchmark_run(setup, snapshot_id="a" * 64, directory=ws.root, cache=cache)  # type: ignore[arg-type]
+        is None
+    )
     assert cache == {}
+
+
+@pytest.mark.parametrize("sessions", [None, 3], ids=["unwarmed", "warmed"])
+def test_the_hold_a_lane_runs_in_a_child_is_the_one_its_own_process_would_run(
+    ws: Workspace, store: StateStore, sessions: int | None
+) -> None:
+    """The child is handed the window a session at a time and the process reads it whole,
+    and the hold is the same run either way, element by element: the benchmark moved out
+    of the lane, and no number moved with it."""
+    doc = HELD if sessions is None else {**HELD, "warmup": {"sessions": sessions}}
+    if sessions is not None:
+        load_december(ws)
+    hyp_id = classify(ws, store, doc)
+
+    run = loop.begin(ws, store, hyp_id)
+
+    setup = loop._setup(ws, store, Hypothesis.model_validate(doc))
+    assert (setup.prefix is None) == (sessions is None)
+    request = loop._request(setup, FLAT, run.snapshot_id, budget_s=None, mem_cap_gb=None)
+    in_process = backtest.run(backtest.benchmark(request), setup.catalog).run
+    in_child = loop._HOST_RUNS[run.run_id][f"benchmark@{run.snapshot_id}@{setup.prefix}"]
+    assert len(in_child.fills) == 1 and len(in_child.returns) > 1
+    assert in_child == in_process
+    assert sorted(child.name for child in lane_of(ws, run).iterdir()) == sorted(SCOPED_FILES), (
+        "the hold's transfer directory is gone with the child"
+    )
+
+
+@pytest.mark.parametrize(
+    ("doc", "hold", "said", "remedy"),
+    [
+        (
+            HELD,
+            RAISING,
+            "did not run over the research window (exception: ",
+            "run `kanso doctor`",
+        ),
+        (
+            {**HELD, **SIZED},
+            REVERSING,
+            "did not run over the research window (sizing refused one_position at DEMO.XNAS",
+            "declare a `sizing` rule a hold of the first leg can take, then run "
+            "`kanso hyp add hypotheses/demo_mr/hypothesis.yaml`",
+        ),
+    ],
+    ids=["raised", "refused"],
+)
+def test_a_hold_that_does_not_run_in_its_child_refuses_the_run_naming_why(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    doc: dict[str, object],
+    hold: bytes,
+    said: str,
+    remedy: str,
+) -> None:
+    """A hold the child could not run is a refusal before the baseline, never a cached empty
+    run every card would then be differenced against. The remedy is never to edit
+    `strategy.py`: the hold is kanso's own sleeve, and here only the hold was broken."""
+    hyp_id = classify(ws, store, doc)
+    original = backtest.benchmark
+    monkeypatch.setattr(
+        loop.backtest,
+        "benchmark",
+        lambda request: replace(original(request), strategy_source=hold),
+    )
+
+    with pytest.raises(PreconditionError) as refused:
+        loop.begin(ws, store, hyp_id)
+
+    assert refused.value.message.startswith("benchmark: the hold of demo_mr's first leg")
+    assert said in refused.value.message
+    assert refused.value.remedy == remedy
+    assert show(ws, store, hyp_id).active_run is None  # type: ignore[union-attr]
+    assert records.cards_of(store, hyp_id) == [], "the baseline never ran"
+    failed = [event for event in store.events(subject=hyp_id) if event.kind == "baseline_failed"]
+    assert [event.detail["reason"] for event in failed] == [refused.value.message]
+
+
+HOLD_IN_A_FRESH_LANE: Final = r"""
+import sys
+from pathlib import Path
+
+from kanso.nautilus import backtest
+from kanso.research import loop, records
+from kanso.state import StateStore
+from kanso.workspace import find
+
+ws, hyp_id = find(Path(sys.argv[1])), sys.argv[2]
+with StateStore(ws.path("state.db")) as store:
+    run = records.require_active(store, hyp_id)
+    setup = loop._setup(ws, store, loop._pinned(ws, store, run), run.host_version)
+    directory = ws.root / run.dir
+    source = store.get_blob(run.base_sha)
+    card = loop._request(setup, source, run.snapshot_id, budget_s=None, mem_cap_gb=None)
+    backtest.run_subprocess(card, setup.catalog, directory, setup.extensions)
+    before = backtest._own_peak_gb()
+    hold = loop._benchmark_run(setup, snapshot_id=run.snapshot_id, directory=directory, cache={})
+    print("held", len(hold.fills), before, backtest._own_peak_gb(), flush=True)
+"""
+"""A lane started again on a run whose objective measures a hold. Its cache is its own
+process's, so the first card it judges computes the hold again. It stages one card first, as
+every turn of a lane does, so what reading a window costs the lane is in its peak before the
+hold is measured rather than charged to it."""
+
+HOLD_FOOTPRINT_GB: Final = 0.004
+"""How far computing the hold may move the lane's own peak resident memory: half of what it
+cost the lane to run it itself. Measured on this workspace's month of daily bars, three fresh
+processes each: 7.6 MB when the lane ran the hold in its own process, 0.1 to 0.2 MB now that
+a child runs it."""
+
+
+def test_a_lane_that_ran_its_hold_holds_none_of_what_it_cost(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Measured on an operator's workspace on 2026-10-01 for a stall's certification: a
+    long-lived process never gives back what a whole-window run allocated, and the hold was
+    the one whole-window run a lane still made in its own process."""
+    hyp_id = classify(ws, store, HELD)
+    loop.begin(ws, store, hyp_id)
+
+    lane = subprocess.run(
+        [sys.executable, "-c", HOLD_IN_A_FRESH_LANE, str(ws.root), hyp_id],
+        cwd=str(ws.root),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=300.0,
+        check=False,
+    )
+
+    said = lane.stdout.splitlines()
+    assert lane.returncode == 0 and said and said[-1].startswith("held "), lane.stdout + lane.stderr
+    _, fills, before, after = said[-1].split()
+    assert fills == "1"
+    assert float(after) - float(before) < HOLD_FOOTPRINT_GB, (
+        f"the lane's own peak went from {before} GB to {after} GB"
+    )
 
 
 # --- a removal while the run is being begun -------------------------------------

@@ -45,7 +45,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from kanso.errors import PreconditionError
 from kanso.hyp import active_run, set_status
@@ -408,8 +408,9 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     # Certification reads research; research schedules certification. The import is
     # deferred so the cycle exists only while this function runs.
     from kanso.certify.certificate import judged
+    from kanso.certify.child import certify_in_child
     from kanso.certify.plan import read_plan
-    from kanso.certify.run import certify, pinned_sha
+    from kanso.certify.run import pinned_sha
     from kanso.env.envelope import engine_version
 
     if _status(store, hyp_id) in DEAD:
@@ -433,14 +434,26 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
             nautilus_version=engine_version(),
         )
     verdict: str | None = None
+    cost: dict[str, object] = {}
     if certifiable:
         set_status(store, hyp_id, "candidate")
         store.event(CERTIFIABLE, hyp_id, {"strategy_sha": best})
-        verdict = certify(ws, store, hyp_id, sha=best, lane=lane).verdict
+        made = certify_in_child(ws, store, hyp_id, sha=cast("str", best), lane=lane)
+        verdict = made.certificate.verdict
+        cost = {
+            "cert_peak_mem_gb": round(made.peak_mem_gb, 3),
+            "cert_wall_s": round(made.wall_s, 3),
+        }
     store.event(
         STALLED,
         hyp_id,
-        {"best_sha": best, "best_metric": scored, "certifiable": certifiable, "verdict": verdict},
+        {
+            "best_sha": best,
+            "best_metric": scored,
+            "certifiable": certifiable,
+            "verdict": verdict,
+            **cost,
+        },
     )
     if _status(store, hyp_id) in DEAD:
         drop(store, hyp_id)

@@ -48,6 +48,11 @@ refresh replaces what is held, and a plain resolution refuses by name rather tha
 the registry of record under whatever was pinned to it. A definition dated otherwise is
 added beside the held ones, so a run pinned to an earlier date still reproduces.
 
+A run asks none of this. Its cards are priced under what the store holds, so
+`run_definitions` reads the store and resolves only an id it holds no definition of: a
+run's start and its cards ask no reference adapter about an instrument the store defines,
+however many lanes start at once and whatever date the cache was resolved as of.
+
 NautilusTrader facts this module relies on (nautilus_trader 1.231.0):
 
 * The six instrument classes are `Equity`, `OptionContract`, `FuturesContract`,
@@ -1035,6 +1040,25 @@ def resolve_universe(
         write_store(ws, resolved.values(), replace=refresh)
         _write_cache(ws.path(CACHE_NAME), file, updates)
     return resolved
+
+
+def run_definitions(ws: Workspace, ids: Sequence[str], as_of: date) -> dict[str, object]:
+    """The definition each id's card is priced under: the store's, with no vendor asked.
+
+    A card's engine keeps the newest-dated definition the store holds of each instrument,
+    and the run's snapshot pins exactly what the store holds, so that is the definition
+    returned for every id the store holds — whatever date the cache was resolved as of, and
+    without the reference adapter being built. Only an id the store holds no definition of
+    is resolved, as of `as_of` and recording nothing, as `resolve_universe` answers it; a
+    run over one is refused by name when its snapshot is chosen.
+    """
+    held = current_definitions(ws)
+    wanted = list(dict.fromkeys(ids))
+    found = {name: held[name] for name in wanted if name in held}
+    missing = [name for name in wanted if name not in found]
+    if missing:
+        found.update(resolve_universe(ws, missing, as_of, record=False))
+    return found
 
 
 def _vendor_key(file: InstrumentsFile, wanted: str, adapter: str) -> str:

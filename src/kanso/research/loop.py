@@ -64,9 +64,10 @@ upward and not the doubled bar is neither a keep nor a repeat, which is exactly 
 
 **A benchmark is run once per run.** A hypothesis whose objective is measured against a
 hold of its first leg has that hold produced by the runner — the card's own request with
-the strategy replaced (`backtest.benchmark`) — in this process, before the baseline, and
-every card of the run is differenced against the same one, exactly as an attached
-construct's cards are against one host-alone run.
+the strategy replaced (`backtest.benchmark`) — in a child of the lane, as a card is, before
+the baseline, and every card of the run is differenced against the same one, exactly as an
+attached construct's cards are against one host-alone run. The lane keeps the run the
+child reported and none of what producing it cost.
 """
 
 from __future__ import annotations
@@ -89,7 +90,7 @@ from kanso.criteria.context import verdict
 from kanso.criteria.gates import strategy_integrity
 from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
-from kanso.data.instruments import resolve_universe
+from kanso.data.instruments import run_definitions
 from kanso.data.manifest import catalog_path
 from kanso.data.snapshot import covering
 from kanso.env import read as read_envelope
@@ -145,6 +146,7 @@ __all__ = [
     "begin",
     "card",
     "end",
+    "mem_cap",
 ]
 
 BASELINE: Final = "baseline"
@@ -421,10 +423,12 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     `version` is the host version the run is pinned to, so every card of a run differences
     against the same host however often the host is re-certified while the run is open.
 
-    The universe is resolved for the venue model and recorded nowhere: the card is priced
-    under the definitions the store holds, which its snapshot pins, and a definition
-    written here would move the store under that pin without changing what the card runs
-    against. Only `kanso data instruments resolve` writes the store.
+    The venue model is built from the definitions the card is priced under — the ones the
+    store holds, which its snapshot pins — so neither a run's start nor any of its cards
+    asks a reference adapter about an instrument the store defines: lanes starting together
+    would otherwise each ask the vendor for every instrument at once, and be throttled out
+    of their runs. Nothing is recorded, because a definition written here would move the
+    store under that pin; only `kanso data instruments resolve` writes the store.
     """
     ref = hyp.construct
     if ref is None:
@@ -435,7 +439,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     extensions = ext.imported(ws)
     impl = construct_for(ref.id, ws)
     harness = impl.harness(hyp, _host(ws, hyp), version=version)
-    instruments = resolve_universe(ws, hyp.universe, hyp.windows.research.start, record=False)
+    instruments = run_definitions(ws, hyp.universe, hyp.windows.research.start)
     model = _one_venue_model(venue_models(ws, hyp, instruments))
     research = ws.config.research
     host_source: bytes | None = None
@@ -580,28 +584,68 @@ def _host_run(
     return setup.impl.host_run(host, snapshot_id, compute, cache)
 
 
-def _benchmark_run(setup: Setup, *, snapshot_id: str, cache: dict[str, CardRun]) -> CardRun | None:
+def _benchmark_run(
+    setup: Setup, *, snapshot_id: str, directory: Path, cache: dict[str, CardRun]
+) -> CardRun | None:
     """The hold a benchmark objective differences against, computed once per run.
 
-    Run in this process over the research window, as a composition or a certification run
-    is: the hold is kanso's own sleeve, so there is nothing to confine, and its request is
-    the card's with only the strategy replaced — the same snapshot, warmup prefix, money
-    and grains. Keyed by the snapshot and the prefix, because those are what a card's data
-    is; `None` for an objective that measures no benchmark.
+    Its request is the card's with only the strategy replaced — the same snapshot, warmup
+    prefix, money and grains — and it runs over the research window in a child of the lane,
+    staged a session at a time through the lane's transfer directory exactly as a card is
+    (`backtest.run_subprocess`), so what a whole window of the hold costs goes when the child
+    exits rather than staying with a process that researches all day. Like the baseline it
+    has no memory cap, because it is what the cards are measured against, and unlike the
+    baseline no wall time either: `backtest.benchmark` takes both bounds off its request.
+    A window the catalog cannot give is refused while it is read, as a card's is, and a hold
+    that does not run in its child is a refusal naming why (`_no_hold`). Keyed by the
+    snapshot and the prefix, because those are what a card's data is; `None` for an
+    objective that measures no benchmark.
     """
     if not measures_benchmark(setup.hyp):
         return None
     key = f"{BENCHMARK_KEY}@{snapshot_id}@{setup.prefix}"
     if key not in cache:
         request = _request(setup, b"", snapshot_id, budget_s=None, mem_cap_gb=None)
-        cache[key] = backtest.run(backtest.benchmark(request), setup.catalog).run
+        held = backtest.run_subprocess(
+            backtest.benchmark(request), setup.catalog, directory, setup.extensions
+        )
+        refused = held.refused
+        if refused is not None:
+            raise _no_hold(
+                setup,
+                f"sizing refused {refused.rule} at {refused.instrument_id}: {refused.why}",
+                f"declare a `sizing` rule a hold of the first leg can take, then run "
+                f"`kanso hyp add hypotheses/{setup.hyp.id}/hypothesis.yaml`",
+            )
+        if held.crashed:
+            raise _no_hold(
+                setup, f"{held.reason}: {held.traceback_tail or 'no output'}", held.remedy
+            )
+        cache[key] = held.run
     return cache[key]
 
 
-def _mem_cap(ws: Workspace, run: RunRecord) -> float:
+def _no_hold(setup: Setup, why: str, remedy: str | None = None) -> PreconditionError:
+    """Why a run has no benchmark to measure against: its hold did not run.
+
+    The remedy is the rule's when a sizing rule refused the hold, the one the failure named
+    when kanso raised it with one, and otherwise `kanso doctor` — never an edit to
+    `strategy.py`: the hold is kanso's own sleeve, so a hold that did not run is not the
+    strategy's to fix.
+    """
+    return PreconditionError(
+        f"benchmark: the hold of {setup.hyp.id}'s first leg did not run over the research "
+        f"window ({why}), so there is nothing to measure against",
+        remedy=remedy or "run `kanso doctor`",
+    )
+
+
+def mem_cap(ws: Workspace, run: RunRecord) -> float:
     """What a card of this run may hold resident: the lane's share, never below the floor.
 
-    The floor is three times what the baseline actually needed, so a run whose own
+    A stall's certification of one of the run's cards is held to the same figure, since it
+    runs in the same lane (`kanso.certify.child`). The floor is three times what the
+    baseline actually needed, so a run whose own
     starting point is heavier than the lane plan expected still gets cards rather than a
     string of kills. The lane's share is `[env] mem_per_lane_gb` where one is declared,
     which is the only way this threshold falls under the plan's own 4 GB floor
@@ -1019,8 +1063,8 @@ def begin(
     One the operator takes out of `lane`'s hands (`research queue remove`) is refused with
     `TakenError` wherever the begin has got to: before anything is read, at the next
     catalog read of the warmup, the benchmark or the baseline's window, within
-    `backtest.WANTED_POLL_S` of a removal while the baseline card runs — the card is
-    killed — and once more before the run is recorded. It leaves no lane directory and no
+    `backtest.WANTED_POLL_S` of a removal while the hold or the baseline card runs — the
+    child is killed — and once more before the run is recorded. It leaves no lane directory and no
     `baseline_failed`, because the baseline did not fail.
     """
     lane = lanes.check_lane(lane)
@@ -1093,7 +1137,7 @@ def begin(
                 cache=host_cache,
             )
             benchmark_run = _benchmark_run(
-                setup, snapshot_id=snapshot.snapshot_id, cache=host_cache
+                setup, snapshot_id=snapshot.snapshot_id, directory=directory, cache=host_cache
             )
             result = _baseline(
                 ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best
@@ -1317,7 +1361,10 @@ def card(
         cache=_HOST_RUNS.setdefault(run.run_id, {}),
     )
     benchmark_run = _benchmark_run(
-        setup, snapshot_id=run.snapshot_id, cache=_HOST_RUNS.setdefault(run.run_id, {})
+        setup,
+        snapshot_id=run.snapshot_id,
+        directory=directory,
+        cache=_HOST_RUNS.setdefault(run.run_id, {}),
     )
     result = backtest.run_subprocess(
         _request(
@@ -1325,7 +1372,7 @@ def card(
             source,
             run.snapshot_id,
             budget_s=run.card_budget_s,
-            mem_cap_gb=_mem_cap(ws, run),
+            mem_cap_gb=mem_cap(ws, run),
         ),
         setup.catalog,
         directory,

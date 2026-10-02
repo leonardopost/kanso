@@ -18,6 +18,7 @@ from kanso.classify import catalogue
 from kanso.config import Config, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.models.wire import REQUEST_TIMEOUT_S
+from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.research import driver
 from tests.cli.test_doctor import CHECKS
 
@@ -254,6 +255,24 @@ def test_the_pages_say_a_certification_groups_a_wrapped_custom_point_by_its_payl
     assert "`kanso.data.types.type_id_of` answers for the point a wrapper carries" in backlog
 
 
+def test_the_pages_say_the_venue_is_settled_at_a_marker_as_the_research_path_settles() -> None:
+    """A command that came due by a held point lands before the marker hands that point to
+    the author on both code paths; the concepts page says where, the workspace page says it
+    under `costs.latency_ms`, and the backlog row that recorded the parity failure of a
+    level-two book under a latency is closed in place."""
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    assert "The simulated venue is settled where the research path settles it." in concepts
+    assert "now settle at each marker, above the sleeve" in concepts
+    assert "A change to the book also stamps `data_time`" in concepts
+    workspace = prose(page("workspace.md"))
+    assert "the command lands before the sleeve's handler for it on both code paths" in workspace
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 118 |"))
+    assert "~~`parity_replay` failed on a level-two book under a latency" in backlog
+    assert "**closed.**" in backlog
+    assert "`SimulatedVenue.on_marker` settles the exchange at each marker's instant" in backlog
+    assert "`handle_order_book_deltas` stamps `data_time`" in backlog
+
+
 def test_the_pages_say_a_day_s_volume_is_struck_with_the_instrument_s_multiplier() -> None:
     """A bar counts the instrument's unit and a fill is `qty x px x multiplier`; the pages
     say the capacity gate reads a day's volume in the same unit, and the backlog row that
@@ -331,6 +350,34 @@ def test_the_wait_the_workspace_page_states_is_the_one_the_client_waits() -> Non
     stated = re.search(r"waits \*\*(\w+) minutes\*\*", models)
     assert stated is not None
     assert spelled(stated.group(1)) * 60 == REQUEST_TIMEOUT_S
+
+
+def test_the_pages_say_a_run_asks_no_vendor_about_what_the_store_holds() -> None:
+    """Five lanes beginning together each asked the reference for every instrument, and the
+    exchange throttled four of them out of their runs; the pages say a run reads the store."""
+    instruments = prose(section(page("workspace.md"), "`instruments.yaml`"))
+    assert "A run asks the reference adapter nothing about an instrument the store holds." in (
+        instruments
+    )
+    assert "`hyp validate` and `hyp add` build the definition in memory to check it" in (
+        instruments
+    )
+    snapshot = prose(section(page("concepts.md"), "Snapshot"))
+    assert "a run asks no reference adapter about an instrument its snapshot pins" in snapshot
+
+
+def test_the_throttle_wait_the_adapters_page_states_is_the_one_the_client_waits() -> None:
+    """The reference and the public history wait out a throttle through one client."""
+    waits = [f"{PAUSE_S * attempt:g}" for attempt in range(1, RETRIES)]
+    stated = f"is asked again after {', '.join(waits[:-1])} and {waits[-1]} seconds"
+    okx = prose(section(page("adapters.md"), "The OKX adapter"))
+    assert okx.count(stated) == 2
+    fifth = re.search(r"does not lift by the (\w+) attempt", okx)
+    assert fifth is not None
+    assert _ORDINALS.index(fifth.group(1)) + 1 == RETRIES
+
+
+_ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth")
 
 
 def test_the_lane_memory_floor_the_workspace_page_states_is_the_one_the_package_clamps_to() -> None:
@@ -460,6 +507,19 @@ def test_a_backlog_count_the_readme_states_is_the_count_the_table_holds() -> Non
     assert (spelled(stated[1]), spelled(stated[2])) == (len(rows), len(rows) - closed)
 
 
+def test_every_backlog_row_has_its_own_number_and_follows_the_one_before() -> None:
+    """Rows are cited by number — from other rows, from these tests, from pull requests — so
+    two branches that each opened the next row must not both land it: a reader handed a
+    number would find two rows, and a test asking for the first would read the wrong one."""
+    numbers = [
+        int(line.split("|")[1])
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| \d+ \|", line)
+    ]
+    assert len(numbers) == len(set(numbers))
+    assert numbers == sorted(numbers)
+
+
 def test_the_repair_budget_the_cli_page_states_is_the_one_the_driver_enforces() -> None:
     """A bound written in words on a page and held as a constant in a module: the two
     drifted apart once, when the driver spent it on the run's crash streak while the page
@@ -526,3 +586,82 @@ def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_i
             line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
         )
         assert claim in row and "**closed.**" in row and closure in row, number
+
+
+def test_the_pages_say_a_stall_certifies_in_a_child_held_to_the_lane_s_share() -> None:
+    """A lane that certified in its own process kept what the windows cost and stopped
+    answering `SIGTERM`; the pages say where a stall's certification is made, what bounds it,
+    what records its cost, and that a lane stops whatever it ran, and both backlog rows that
+    recorded the two defects are closed in place."""
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "A stall's certification is a child held to the same figure" in lanes
+    assert "(`cert_peak_mem_gb`, `cert_wall_s`)" in lanes
+    assert "or `kanso cert run` by hand" in lanes
+    assert "**A lane stops at its next safe point, whatever it ran.**" in lanes
+    envelope = prose(section(page("workspace.md"), "`envelope.yaml`"))
+    assert "A stall's certification is held to the same figure." in envelope
+    cli = prose(page("cli.md"))
+    assert "The certification is made in a child of the lane, exactly as `cert run` makes it" in cli
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+    )
+    assert "a stall's certification in flight is killed the same way" in stop
+    for number, opening in (
+        ("119", "~~A stall's certification ran in the lane's own process"),
+        ("120", "~~A lane that had replayed a parity on a node no longer answered `SIGTERM`~~"),
+    ):
+        row = next(
+            line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
+        )
+        assert row.split("|")[3].strip().startswith(opening)
+        assert "**closed.**" in row
+
+
+def test_the_pages_say_a_lane_runs_its_benchmark_hold_in_a_child() -> None:
+    """The hold a benchmark objective differences against was the one whole-window run a lane
+    still made in its own process; the pages say a child runs it as a card is run, and the
+    backlog closes the row that recorded it and the open half of the row before it."""
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "it makes no run in its own process" in lanes
+    assert "the hold a benchmark objective differences against" in lanes
+    assert "one run it still makes in its own process" not in lanes
+    assert "it is the same run, element by element, as the lane made of it" in lanes
+    hold = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert "each card of a run (once per run, in a child of the lane as a card is" in hold
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 1(19|21) \|", line)
+    }
+    item = rows["121"].split("|")[3].strip()
+    assert item.startswith("~~The hold a benchmark objective differences against was run in")
+    assert "in the lane's own process~~ **closed.**" in item
+    assert "a child runs it now (row 121)" in rows["119"].split("|")[5]
+
+
+def test_the_pages_say_the_monitor_demotes_in_a_child() -> None:
+    """A monitor pass that demoted ran its stages' nodes in a process that runs all day; the
+    pages say a child makes it, that a stop leaves it to finish, and the backlog closes the
+    row that recorded it and the open half of the row before it."""
+    stages = prose(section(page("concepts.md"), "Stages"))
+    assert "**except a demotion the monitor makes**, which runs in a child of the monitor" in stages
+    moves = prose(section(page("concepts.md"), "Promotion and demotion"))
+    assert "**The monitor demotes in a child of its own process.**" in moves
+    assert "leaves it to finish" in moves
+    monitoring = prose(section(page("cli.md"), "Monitoring"))
+    assert (
+        "A pass demotes in a child of its own process, exactly as `kanso demote` does" in monitoring
+    )
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+    )
+    assert "A demotion the monitor is making is not: it is left to finish" in stop
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 12[12] \|", line)
+    }
+    item = rows["122"].split("|")[3].strip()
+    assert item.startswith("~~A monitor pass that demoted a version ran its stages' nodes in")
+    assert "the monitor's own process~~ **closed.**" in item
+    assert "a child makes the monitor's demotion now (row 122)" in rows["121"].split("|")[5]

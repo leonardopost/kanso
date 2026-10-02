@@ -156,6 +156,40 @@ heavier hypothesis than the one now researching — an overlay on one-second bar
 peak a daily sleeve will never approach, and every lane is charged for it until you say
 otherwise.
 
+**A lane's share bounds what the lane runs in its children.** The lane process itself holds
+the engine, its store and, while it stages a run, one session of the window at a time, and
+it makes no run in its own process: every card, the baseline, a host-alone run and the hold
+a benchmark objective differences against — once per run, over the research window — are
+staged into a child it watches, and what a child cost goes when the child exits. A card's
+child is killed once its resident memory passes the lane's share, floored at three times
+what the run's baseline needed (`docs/workspace.md`, `envelope.yaml`). A stall's
+certification is a child held to the same figure for a card of the run it judges: both
+windows, every perturbation a gate runs and `parity_replay`'s node replay are made there,
+and the lane only reads back the certificate, or the refusal it raised, and records what the
+certification cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Measured on a
+16 GB host with six lanes at `mem_per_lane_gb` 2.5 while lanes still certified in their own
+process: two idle lanes held 2.9 GB and 4.1 GB after certifying, swap reached 13.3 GB, and
+nothing but killing them gave it back. A certification that needs more than the share is
+killed and refused — the lane records a `lane_failed` naming what it reached and puts the
+hypothesis back — and the answer is yours: a larger `mem_per_lane_gb`, which plans fewer
+lanes around what certification actually costs, or `kanso cert run` by hand, which certifies
+in your own process with nothing but the host to bound it. No wall time bounds a
+certification, since how many engine runs it makes is its plan's choice. The hold moved out
+of the lane for the same reason: run in the lane's own process it read the whole window at
+once and left the lane holding what the engine allocated for it — 7.6 MB of peak on the
+research suite's month of daily bars, measured in a fresh lane, against 0.2 MB now that a
+child runs it. The baseline, a host-alone run and the hold have no memory cap, because they
+are what the rest are measured against, and the hold has no wall time either; it is the same
+run, element by element, as the lane made of it.
+
+**A lane stops at its next safe point, whatever it ran.** Between cards, while it waits for a
+claim and while a child certifies, a `SIGTERM` is the lane's own: a trading node takes the
+stop signals for the loop it is handed and closing that loop does not give them back, so
+every node kanso builds — a replay's, a stage's — hands them back to the process that built
+it. Measured before that on an operator's workspace on 2026-10-01: lanes that had replayed a
+certification's parity on a node did not exit within a minute of a `SIGTERM`, and only
+`SIGKILL` moved them.
+
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
 before every card, and the first two are compared against the blobs the run pinned. The one
@@ -198,7 +232,9 @@ is in the snapshot for the same reason as the data — a tick size reassigned ne
 not silently rewrite a card that was measured under the old one — and it is read back where
 a run is pinned. The store is resolved before it is frozen: a snapshot over instrument data
 is refused while the store holds no definition, since the checksum of nothing pins nothing a
-run could use.
+run could use. A run reads its definitions back from the store and nowhere else: `research
+begin` and every card build the venue model from what the store holds, so a run asks no
+reference adapter about an instrument its snapshot pins, however many lanes begin at once.
 
 **Covers** is counted in whole UTC days, from the spans the datasets **served** — never from
 what was asked of the source — on the days the instrument's market opened. A chunked
@@ -548,7 +584,7 @@ whole, what each order closes freeing room for the next, and a bracket's exits a
 A modify is asked nothing: `modify_order` is the engine's own, so an entry placed small and
 grown by a modify, or a resting one moved to a price at which it opens more, is held neither
 to the room nor to the funding question, and the room reads it at its new size and price from
-then on (`docs/backlog.md` row 118). A `sizing` rule denies `modify_order` to a researched
+then on (`docs/backlog.md` row 123). A `sizing` rule denies `modify_order` to a researched
 strategy, so the gap is an unsized sleeve's. On a pair's
 ex-date the venue restates the held leg at the day's first point, which may be the other leg's;
 until the held leg prints again its last price is restated by the split's ratio, for the balance
@@ -873,6 +909,21 @@ the silent leg still trades at the last price that was public, which is not look
 A live data client that polls several series independently must emit the same
 per-`(ts_init, kind)` markers. A single marker at the end of a poll that covered more
 than one instant would flush the first instant after later books had already moved.
+
+**The simulated venue is settled where the research path settles it.** The research
+engine settles every venue after every point, the markers included, so under a stated
+latency (`costs.latency_ms`) a command that came due by a held point lands before the
+marker hands that point to the author. The node's venue sees no marker through its own
+market subscription and used to land it on the next point it saw, after the flush — so a
+sleeve that sold on the first print it handled while long sold a print later on the node
+than on the engine, and an operator's `parity_replay` of a level-two book hypothesis under
+20 ms failed the same way, on the instant of one intent, with every earlier intent agreed and
+the node's instant the later. Both of kanso's simulated venues — a replay's and a stage's — now settle at each
+marker, above the sleeve. A change to the book also stamps `data_time`, and so what a
+sleeve sends from `on_order_book_deltas`, with its own `ts_event`, where it used to carry
+the last print's, which for a sleeve that holds only the book was no instant at all; a
+book intent is compared on the change it was decided on, and `kanso replay parity` holds
+at a tolerance of zero for book data too.
 
 **A limit that rests is filled by the venue's rule.** A limit order that was not marketable
 when it was placed waits on the book, and a later point that reaches its price fills it at
@@ -1219,6 +1270,11 @@ certified under different latencies, or one on a book and one without, are refus
 recorded when the live stage could not hold the version, rather than run on whichever
 venue came first.
 
+**A stage node runs in the process that deploys it** — yours, under
+`kanso portfolio deploy`, `promote`, `demote` and `strat retire` — **except a demotion the
+monitor makes**, which runs in a child of the monitor (below), because the monitor runs all
+day and a process that runs all day never gives back what a node allocated in it.
+
 The stage file carries only the **id** of an execution client. What matters is the pair of
 declarations behind that id: `capital` is `simulated`, `broker_paper` or `real`, and `clock`
 is `replay` or `wall`. Those two declarations, and not any string in a configuration file,
@@ -1325,6 +1381,23 @@ live       0 version(s) · 0 · no node ran
 ```
 
 The asymmetry is deliberate. Taking risk off needs no permission; putting it on does.
+
+**The monitor demotes in a child of its own process.** Each redeploy builds a trading node
+and replays everything its stage has not replayed — a stage's clock moves only when it is
+deployed, so that is everything loaded since its last deploy — beside the hold a benchmark
+objective differences against, and the monitor is a process that runs all day: what a node
+allocated in it would never be given back. So a pass makes the demotion in a child it
+watches, the same `kanso demote` makes in yours, and keeps only the child's report: the
+strategy file, the stages, the sessions, the stage records and every event are written by
+the child, and are the ones the monitor would have written, window for window and intent for
+intent. Measured in a fresh monitor process on the suite's synthetic saw-tooth, a pass that
+demoted a live version and redeployed paper over a month of new daily bars raised the
+monitor's own peak by 35.2 MB when it demoted itself — 40.4 MB over nine months — and by 1.0
+to 1.1 MB in a child, as much as a pass that only judges moves it (0 to 1.1 MB). Nothing
+bounds the child: a demotion takes a failing version off real capital, so no memory share
+and no wall time may refuse one, and a `research stop` that lands while it runs leaves it to
+finish, as nothing stopped a demotion the monitor made itself. A refusal in the child
+reaches the pass as the same refusal, recorded against the version as any other.
 
 There is one exception to demotion, and it is the stronger act rather than a weaker one: a
 live version that breaches the stage's daily loss limit **halts the stage** instead of being

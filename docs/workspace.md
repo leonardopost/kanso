@@ -82,7 +82,7 @@ never edits the file.
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
-| `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` — and the instrument store by `instruments resolve` alone: a validation, a registration and a card resolve in memory | no |
+| `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` — and the instrument store by `instruments resolve` alone: a validation and a registration resolve in memory, and a run reads the store | no |
 | `runs/` | `research begin`, the daemon | no |
 | `sessions/` | replay, parity, stage nodes | no |
 | `certificates/` | `cert plan`, `cert run` | no |
@@ -364,7 +364,7 @@ both paths the limits and `self.held(id)` are read with the sleeve's own unfille
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
 `modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
-a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 118).
+a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —
@@ -524,7 +524,8 @@ policy, with every order in the warmup dropped like the strategy's — and never
 is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
 of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
 fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
-path that measures the objective — each card of a run (once per run, then reused), both
+path that measures the objective — each card of a run (once per run, in a child of the lane
+as a card is, then reused), both
 certification windows (a `param_plateau` perturbation moves the strategy and never the
 hold), the expectation composition measures, and every window a stage node closes, where it
 is stored beside the version's realised run for the paper and live gates. `kanso hyp
@@ -717,7 +718,10 @@ between: a print that would have filled the order in that interval finds it not 
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
 the first point of data after its delay has passed, and only after matching that point, so
 the delay a run models is never shorter than the one stated and at tick resolution
-exceeds it by one point. It models the round trip from
+exceeds it by one point. On a feed whose instants coincide — every level-two book, any grain
+of several names — that point reaches the sleeve through a flush marker, and the command
+lands before the sleeve's handler for it on both code paths (`docs/concepts.md`,
+Delivery). It models the round trip from
 the strategy to the exchange's book through the account and route it will trade on, and it
 is measured there, on real orders, rather than assumed. State the whole round trip: a feed
 that reaches the strategy late and an order that reaches the book late add up, and a rule
@@ -906,12 +910,21 @@ hypothesis may name it by its qualified id, and the vendor is still asked for it
 spelling. An entry with no key for the configured adapter is asked for as it was named.
 
 An edit to `override` reaches the store at the next `kanso data instruments resolve` and
-never before: `hyp validate`, `hyp add` and every card build the definition in memory to
-check it, and a run is priced under what the store holds. Resolved as of a date the store
-already holds a definition for, an edited override is a correction of that definition, and
-a correction is explicit — the plain command refuses by name (exit 2) and `--refresh`
-replaces it. Resolved as of another date it is added beside what is held, since what an
-instrument was on each date is its own fact.
+never before: `hyp validate` and `hyp add` build the definition in memory to check it, and a
+run is priced under what the store holds. Resolved as of a date the store already holds a
+definition for, an edited override is a correction of that definition, and a correction is
+explicit — the plain command refuses by name (exit 2) and `--refresh` replaces it. Resolved
+as of another date it is added beside what is held, since what an instrument was on each
+date is its own fact.
+
+A run asks the reference adapter nothing about an instrument the store holds. `research
+begin` and every card build the venue model from the definitions a card is priced under —
+the newest-dated the store holds of each instrument, which are what the run's snapshot pins
+— whatever date the cache was resolved as of, so lanes starting together send the vendor no
+request at all, and a vendor that is down or throttling stops no run. An edited `override`
+therefore changes no run until it is resolved and snapshotted. Only an id the store holds no
+definition of is resolved, in memory, and a run over one is refused by name when its
+snapshot is chosen.
 
 `manual: true` suppresses resolution entirely and requires you to supply the constructor
 fields yourself. That is the path the file loaders, the synthetic loader and the demo take,
@@ -1094,7 +1107,8 @@ A workspace whose entries are all `manual` may still name a reference adapter in
 reference` without setting that adapter's key: the adapter is built only once resolution
 finds an id the cache and the manual entries cannot answer, and building it is what
 resolves the credential. Name the vendor you will eventually resolve through; you need it
-configured on the day you first ask it something.
+configured on the day you first ask it something. A research run is never that day for an
+instrument the store already holds.
 
 The registry of record is the catalog's instrument store, not this file — `kanso data
 instruments show <ID>` reads the store and renders the definition a run would use, the
@@ -1617,6 +1631,13 @@ the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline pe
 the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
 six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
 rather than the declaration.
+
+A stall's certification is held to the same figure. The lane certifies in a child, and a
+child whose resident memory passes what a card of the judged run may hold is killed and the
+certification refused, with a remedy naming this key and `kanso cert run`, which certifies
+in your own process instead. What each certification cost is on its `stalled` event
+(`cert_peak_mem_gb`), so declare at least that if you want the daemon to certify on its own:
+a share sized for cards alone is a share no certification of a heavier window fits in.
 
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another
