@@ -21,7 +21,12 @@ or `editable` — and from where.
    --demo` and the first-run sequence in `README.md` — is the smoke test, and it must stay
    green with every `KANSO_*` and vendor variable unset.
 3. Conventional commit on a `feat/`, `fix/`, `docs/` or `chore/` branch; PR; CI (macOS
-   arm64 + Linux x86_64, Python 3.12/3.13) must be green.
+   arm64 + Linux x86_64, Python 3.12/3.13) must be green. CI runs on a push to `main` and
+   on a pull request against any base, never on a branch push, so each commit runs the
+   matrix once: a branch is tested when it has a PR (a draft will do), and a new push to
+   the PR cancels the run it replaces. A PR stacked on another branch is tested against
+   that branch; GitHub retargeting it to `main` starts no run, so push to it — merging
+   `main` in will do — before it merges.
 
 The suite is offline in its entirety: no test reaches a vendor, a broker or a model, and
 there is no `tests/live/` tree and no `live` marker to select one with. **Credentialed
