@@ -32,6 +32,7 @@ manifest, a session or a commit from anywhere in this package.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -52,8 +53,8 @@ from kanso.nautilus.adapters.alpaca.config import (
 from kanso.nautilus.adapters.alpaca.venue import VENUES, declaration
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
-    from kanso.nautilus.adapters import EngineClaim
-    from kanso.schemas import ExecutionClientSpec, VenueDeclaration
+    from kanso.nautilus.adapters import AccountCheck, EngineClaim
+    from kanso.schemas import ExecutionClientSpec, VenueDeclaration, VenueOverride
     from kanso.workspace import Workspace
 
 __all__ = [
@@ -139,6 +140,13 @@ class AlpacaBroker:
     def venue_declaration(self, venue: str) -> VenueDeclaration | None:
         """What this broker declares about a venue it serves, or `None` for one it does not."""
         return declaration(venue)
+
+    def check_account(
+        self, ws: Workspace, overrides: Mapping[str, VenueOverride]
+    ) -> AccountCheck | None:
+        """Nothing: the declaration states the broker's published US equity commission,
+        zero, and no account of it is read to say otherwise."""
+        return None
 
     def transport(self, ws: Workspace, *, factory: Any = None) -> Transport:
         """One rate-limited connection for this workspace, shared by everything here.
