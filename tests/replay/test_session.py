@@ -9,11 +9,14 @@ None of that can be established against a double.
 from __future__ import annotations
 
 import asyncio
+import signal
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import date
 from typing import Any
 
 import pytest
+import uvloop
 from nautilus_trader.model.data import CustomData, DataType
 from nautilus_trader.model.identifiers import ClientId, InstrumentId
 
@@ -30,6 +33,7 @@ from tests.replay.conftest import (
     HOLDING,
     INSTRUMENT,
     POSTING,
+    PRINT_EXIT,
     RAISING,
     RESTING,
     REVERTING,
@@ -215,6 +219,42 @@ def test_the_two_paths_pay_an_exit_owed_on_book_points_alike(latency_ms: float) 
         replace(request, venue_model=model), [instrument()], [tuple(book(FORWARD[0]))]
     )
 
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_land_what_came_due_by_a_held_print_before_its_handler_alike(
+    latency_ms: float,
+) -> None:
+    """A level-two feed has coincident instants, so every point is handed to the author by a
+    flush marker. The research path settles the venue after every point, markers included,
+    so an entry that came due by a print lands before the marker hands that print to the
+    author; the node's venue saw no marker and landed it on the next point it saw, after
+    the handler had run flat, so a sleeve that sells on the first print it handles while
+    long sold a print later on the node. Both now sell on the print the entry came due at."""
+    from tests.nautilus.backtest.test_exit_flat import chasing_costs
+    from tests.nautilus.backtest.test_order_book import deltas, prints
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=PRINT_EXIT, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    day = FORWARD[0]
+    node, engine = both(
+        replace(request, venue_model=model),
+        [instrument()],
+        [tuple(deltas(day)), tuple(prints(day))],
+    )
+
+    base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
+    assert [(intent[0] - base) // SECOND_NS for intent in engine.intents] == [0, 1]
     assert node.intents == engine.intents
     assert node.run.fills == engine.run.fills
     assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
@@ -1023,6 +1063,43 @@ def test_a_strategy_that_raises_stops_the_node_rather_than_the_process() -> None
     assert replayed.intents == ()
     assert replayed.released < len(bars(FORWARD))
     assert replayed.clock_ns is not None
+
+
+def _stopping(*_: object) -> None:
+    """The stop handler a lane installs before anything it runs builds a node."""
+
+
+@pytest.fixture
+def own_signals() -> Iterator[None]:
+    """The process's stop signals, handled the way a lane handles them, for one test."""
+    saved = {number: signal.getsignal(number) for number in session.NODE_SIGNALS}
+    for number in session.NODE_SIGNALS:
+        signal.signal(number, _stopping)
+    yield
+    for number, handler in saved.items():
+        signal.signal(number, handler)
+
+
+@pytest.mark.usefixtures("own_signals")
+@pytest.mark.parametrize("loop", ["asyncio", "uvloop"])
+def test_a_node_leaves_the_process_that_built_it_its_stop_signals(
+    loop: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane that replayed a parity on a node still answers its own `SIGTERM`.
+
+    The kernel takes the stop signals for the loop it is handed. uvloop — the loop it installs
+    as the policy outside a test run — left its handler on the closed loop, swallowing every
+    signal after it; asyncio's reset them to their defaults, so `SIGTERM` killed the process
+    outright. Either way a lane no longer stopped at its next safe point.
+    """
+    if loop == "uvloop":
+        monkeypatch.setattr(asyncio, "new_event_loop", uvloop.new_event_loop)
+
+    replayed = session.run_node(request_for(), [instrument()], [tuple(bars(FORWARD))])
+
+    assert replayed.intents, "the node ran its window"
+    assert [signal.getsignal(number) for number in session.NODE_SIGNALS] == [_stopping] * 3
+    assert signal.set_wakeup_fd(-1) == -1, "no closed loop is left to wake"
 
 
 def test_a_window_with_no_points_is_refused() -> None:

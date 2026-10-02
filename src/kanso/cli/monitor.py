@@ -10,7 +10,9 @@ The pass acts rather than reports: a paper version whose gates all pass becomes
 version that fails the daily loss halts its stage instead, because halting is the stronger
 act and demoting into a halted stage would change nothing about the money. Every action is
 taken once, on the transition, so running the command twice in a row is not two
-escalations.
+escalations. A demotion is made in a child of the pass (`kanso.portfolio.child`), which
+writes every record itself, so the nodes its redeploys run leave nothing behind in the
+daemon's monitor.
 
 The command exits 0 whatever the verdicts are. A failing gate is a fact about a deployment,
 not a failure of the pass that found it, and an operator watching for exit codes would

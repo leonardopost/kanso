@@ -16,9 +16,12 @@ lane is neither of those things, so an operator at a keyboard never costs a daem
 its turn.
 
 **Stopping keeps everything.** `stop` sends one signal. The supervisor passes it on to
-every child at once and exits; a worker kills the card it is watching, begins no further
-proposal or card, leaves the run open and the lane directory where it is, and exits too. A
-worker still busy when the one grace the supervisor gives them all runs out — waiting on a
+every child at once and exits; a worker kills the card or the certification it is watching,
+begins no further proposal or card, leaves the run open and the lane directory where it is,
+and exits too — whatever it ran before, since every trading node hands the stop signals
+back to the process that built it (`kanso.nautilus.session.signals_kept`). The monitor
+exits once a demotion it is making has finished (`kanso.portfolio.child`). A worker still
+busy when the one grace the supervisor gives them all runs out — waiting on a
 model, say — is killed, and that costs the call and nothing else: the run, its blobs and
 its `best` are all in state. Nothing is ended and nothing is cleaned up, so the next
 `start` picks the runs up where they were left — which is why stopping the daemon is a
@@ -534,7 +537,9 @@ def worker(ws: Workspace, lane: str) -> int:
 
     A turn that ended in a stall is where `[research] explore_after_stalls` is read: after
     the driver returns, so the stall's certification and its requeue are already done and
-    the parent is not held while a model writes a new hypothesis. What that exploration
+    the parent is not held while a model writes a new hypothesis. That certification is made
+    in a child the lane watches as it watches a card (`kanso.certify.child`), so the lane is
+    left holding none of what its windows cost. What that exploration
     does, failure included, is its own events (`research/explore.py`) and never a
     `lane_failed`.
 

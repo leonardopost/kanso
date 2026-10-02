@@ -824,7 +824,7 @@ the check sends nothing and lists the declaration, what `portfolio.yaml` states 
 is charged, and which names did not resolve; with the keys set and no `region`, it sends
 nothing and warns, because a key is accepted only by its own entity's host. The fee
 answer's `feeGroup`, the per-group rates the exchange documents beside the account-wide
-ones, is not read (`docs/backlog.md` entry 118).
+ones, is not read (`docs/backlog.md` entry 124).
 
 ## Writing your own
 

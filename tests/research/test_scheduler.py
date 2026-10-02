@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from kanso import hyp
-from kanso.certify import run as certify_run
+from kanso.certify import child
 from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
 from kanso.inbox import unread
@@ -23,7 +23,7 @@ from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
-from tests.certify.test_run import a_card, with_n_fail, write_plan
+from tests.certify.test_run import a_card, write_plan
 
 from .conftest import (
     ATTACHED_HOST,
@@ -310,7 +310,7 @@ def test_a_stall_whose_certificate_fails_comes_back_to_the_queue(
     write_plan(ws)
     scheduler.enqueue(store, hyp_id)
 
-    stall = scheduler.on_stall(with_n_fail(ws, 1), store, hyp_id)
+    stall = scheduler.on_stall(tuned(ws, n_fail=1), store, hyp_id)
 
     assert stall.verdict == "fail"
     assert stall.priority == scheduler.STALL_PRIORITY
@@ -331,14 +331,14 @@ def test_a_retire_that_lands_during_the_certification_is_still_honoured(
     a_card(ws, store, FLAT)
     write_plan(ws)
     scheduler.enqueue(store, hyp_id)
-    real = certify_run.certify
+    real = child.certify_in_child
 
     def retiring(*args: Any, **kwargs: Any) -> Any:
         made = real(*args, **kwargs)
         hyp.retire(ws, store, hyp_id)
         return made
 
-    monkeypatch.setattr(certify_run, "certify", retiring)
+    monkeypatch.setattr(child, "certify_in_child", retiring)
 
     stall = scheduler.on_stall(ws, store, hyp_id)
 
@@ -359,7 +359,7 @@ def test_a_hypothesis_that_keeps_failing_keeps_getting_lanes(
     """
     hyp_id = classify(ws, store, DOCUMENT, FLAT)
     write_plan(ws)
-    policy = with_n_fail(ws, 3)
+    policy = tuned(ws, n_fail=3)  # read by the child that certifies, so it is on disk
 
     for attempt in range(1, 6):
         # Each attempt's keep beats the last, as a keep beats its run's base: an equal
@@ -895,13 +895,13 @@ def test_a_removal_that_lands_during_the_certification_is_honoured(
     a_card(ws, store, FLAT)
     write_plan(ws)
     scheduler.hold(store, hyp_id, "l1")
-    real = certify_run.certify
+    real = child.certify_in_child
 
     def removing(*args: Any, **kwargs: Any) -> Any:
         assert scheduler.remove(store, hyp_id) == "lane"
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(certify_run, "certify", removing)
+    monkeypatch.setattr(child, "certify_in_child", removing)
 
     stall = scheduler.on_stall(ws, store, hyp_id, "l1")
 

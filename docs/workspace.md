@@ -363,6 +363,8 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
+a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —
@@ -406,7 +408,11 @@ a sleeve whose exit rests at the ask reads the whole position there until the ex
 exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
-equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
+equity curve strikes at each period end, and one a strategy may size from. Reading it on every
+bar costs what the sleeve's orders gained since the last read, however long they have lived,
+so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
+does not save memory either, since the engine keeps every order's events for the run
+(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns
 (`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second
@@ -518,7 +524,8 @@ policy, with every order in the warmup dropped like the strategy's — and never
 is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
 of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
 fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
-path that measures the objective — each card of a run (once per run, then reused), both
+path that measures the objective — each card of a run (once per run, in a child of the lane
+as a card is, then reused), both
 certification windows (a `param_plateau` perturbation moves the strategy and never the
 hold), the expectation composition measures, and every window a stage node closes, where it
 is stored beside the version's realised run for the paper and live gates. `kanso hyp
@@ -711,7 +718,10 @@ between: a print that would have filled the order in that interval finds it not 
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
 the first point of data after its delay has passed, and only after matching that point, so
 the delay a run models is never shorter than the one stated and at tick resolution
-exceeds it by one point. It models the round trip from
+exceeds it by one point. On a feed whose instants coincide — every level-two book, any grain
+of several names — that point reaches the sleeve through a flush marker, and the command
+lands before the sleeve's handler for it on both code paths (`docs/concepts.md`,
+Delivery). It models the round trip from
 the strategy to the exchange's book through the account and route it will trade on, and it
 is measured there, on real orders, rather than assumed. State the whole round trip: a feed
 that reaches the strategy late and an order that reaches the book late add up, and a rule
@@ -1621,6 +1631,13 @@ the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline pe
 the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
 six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
 rather than the declaration.
+
+A stall's certification is held to the same figure. The lane certifies in a child, and a
+child whose resident memory passes what a card of the judged run may hold is killed and the
+certification refused, with a remedy naming this key and `kanso cert run`, which certifies
+in your own process instead. What each certification cost is on its `stalled` event
+(`cert_peak_mem_gb`), so declare at least that if you want the daemon to certify on its own:
+a share sized for cards alone is a share no certification of a heavier window fits in.
 
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another

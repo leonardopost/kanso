@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterator
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -31,9 +31,10 @@ from kanso.research import loop as research_loop
 from kanso.schemas import parse_duration
 from kanso.state import StateStore
 from kanso.workspace import Workspace
+from tests.certify.test_run import a_card, write_plan
 from tests.processes import children, ends, running
 
-from .conftest import DOCUMENT, RESEARCH, classify, document
+from .conftest import DOCUMENT, RESEARCH, REVERTING, classify, document
 from .mocked import ALIGNED, SEED, proposal, scripted, write_script
 from .test_scheduler import open_run
 
@@ -764,6 +765,83 @@ def test_a_lane_hands_its_stop_request_to_the_driver_and_explores_nothing_once_s
 
     assert daemon.worker(ws, "l1") == 0
     assert asked == [False, True]
+
+
+LANE_THAT_STALLED: Final = r'''
+import sys
+from pathlib import Path
+
+from kanso.certify import certificate, child, plan  # what a stall imports, before it is measured
+from kanso.nautilus import backtest
+from kanso.research import daemon, scheduler
+from kanso.workspace import find
+
+ws, hyp_id = find(Path(sys.argv[1])), sys.argv[2]
+turns = []
+
+
+def claim(store, lane):
+    """The first claim stalls a run and certifies its best, as the driver would; then idle."""
+    turns.append(lane)
+    if len(turns) == 1:
+        before = backtest._own_peak_gb()
+        verdict = scheduler.on_stall(ws, store, hyp_id, lane).verdict
+        print("idle", verdict, before, backtest._own_peak_gb(), flush=True)
+    return None
+
+
+daemon.claim = claim
+raise SystemExit(daemon.worker(ws, "l1"))
+'''
+"""A real lane process — the loop the engine installs outside a test run is uvloop there — whose
+first claim certifies a stall and which then waits for a claim that never comes."""
+
+FOOTPRINT_GB: Final = 0.02
+"""How far a stall's certification may move the lane's own peak resident memory. Measured on
+this workspace's certification: about 40 MB when the lane certified in its own process, about
+2 MB now that a child certifies."""
+
+
+def test_a_lane_idle_after_certifying_a_stall_holds_none_of_it_and_answers_a_stop(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Both defects measured on an operator's workspace on 2026-10-01, in one lane.
+
+    Lanes that had certified in their own process held up to 4.1 GB between cards capped at
+    2.5 GB, and did not exit within a minute of a `SIGTERM` — the parity replay's node had
+    taken the signal for a loop it then closed — so only `SIGKILL` gave the memory back.
+    """
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+    lane = subprocess.Popen(
+        [sys.executable, "-c", LANE_THAT_STALLED, str(ws.root), hyp_id],
+        cwd=str(ws.root),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        said: list[str] = []
+        assert lane.stdout is not None
+        for line in lane.stdout:
+            said.append(line)
+            if line.startswith("idle "):
+                break
+        assert said and said[-1].startswith("idle "), "".join(said)
+        _, verdict, before, after = said[-1].split()
+
+        assert verdict == "pass"
+        assert float(after) - float(before) < FOOTPRINT_GB, (
+            f"the lane's own peak went from {before} GB to {after} GB"
+        )
+        lane.send_signal(signal.SIGTERM)
+        assert lane.wait(timeout=10.0) == 0, "an idle lane stops cleanly at its next wait"
+    finally:
+        if lane.poll() is None:  # pragma: no cover - only when the lane ignored the stop
+            lane.kill()
+            lane.wait()
 
 
 def test_two_supervisors_cannot_hold_one_workspace(ws: Workspace) -> None:
