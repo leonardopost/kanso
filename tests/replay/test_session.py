@@ -24,7 +24,7 @@ from kanso.criteria.run import midnight_ns
 from kanso.data.types import CorporateAction, Funding
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
-from kanso.nautilus.cross_section import is_marker
+from kanso.nautilus.cross_section import coincident, is_marker
 from kanso.nautilus.session import Halt, measured, ordered
 from tests.replay.conftest import (
     BLOCKING_FILTER,
@@ -336,8 +336,9 @@ def test_the_two_paths_land_what_came_due_by_a_held_print_before_its_handler_ali
 
 def test_a_replay_refuses_a_day_of_prints_without_its_book_as_a_card_does() -> None:
     """The replay path asks the same of its window as a card: a book hypothesis whose window
-    holds a day of prints and no change of that day's book is refused before a node is
-    built, naming the name and the day."""
+    holds a day of prints and no change of that day's book is refused, naming the name and
+    the day — once the feed has passed the day, as a card's child refuses it, and with the
+    node stopped before the refusal is raised."""
     from datetime import timedelta
 
     from tests.nautilus.backtest.test_subprocess import _session
@@ -517,6 +518,39 @@ def test_the_two_paths_agree_over_a_book_window_handed_in_chunks(latency_ms: flo
         Point.of(point) for point in fed
     ]
     assert node.released == len(fed)
+
+
+def test_a_venue_is_bound_to_the_markers_a_later_chunk_first_carries() -> None:
+    """A level-two window cut to one point a chunk: the first chunk carries no flush marker
+    and a later one does, so the node's venue is bound to the markers only when that chunk
+    comes. Bound then, it settles what came due by a print before the marker hands the
+    print to the author, and the node sells where the research path does."""
+    from tests.nautilus.backtest.test_exit_flat import chasing_costs
+    from tests.nautilus.backtest.test_order_book import deltas, prints
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        costs=chasing_costs(20.0),
+    )
+    request = request_for(source=PRINT_EXIT, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(20.0)}  # type: ignore[dict-item]
+    request = replace(request, venue_model=model)
+    day = FORWARD[0]
+    groups = [tuple(deltas(day)), tuple(prints(day))]
+    chunks = list(backtest._cut(groups, 1))
+    rule = coincident(hyp)
+    marked = [any(map(is_marker, ordered(chunk, coincident=rule))) for chunk in chunks]
+
+    engine = backtest.execute(request, [instrument()], groups)
+    node = session.run_node_chunked(request, [instrument()], iter(chunks))
+
+    assert not marked[0] and any(marked)
+    assert [(fill.side, fill.qty) for fill in engine.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    assert node.intents == engine.intents
+    assert node.result.run.fills == engine.run.fills
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
@@ -1325,6 +1359,52 @@ def test_a_strategy_that_raises_stops_the_node_rather_than_the_process() -> None
     assert replayed.intents == ()
     assert replayed.released < len(bars(FORWARD))
     assert replayed.clock_ns is not None
+
+
+RAISING_LATER = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Runs three bars and asks the impossible of the fourth."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar) -> None:
+        self.seen += 1
+        if self.seen == 4:
+            raise RuntimeError("the replay asked for the impossible")
+'''
+
+
+@pytest.mark.parametrize("cap", [1, 2, 10**9])
+def test_a_node_stopped_in_a_later_chunk_reports_what_it_released(cap: int) -> None:
+    """A strategy that raises on the fourth bar stops the node part-way through a chunk that
+    is not the first when the window is handed a bar or two at a time. The session counts,
+    hands its sink and resumes from exactly the four bars it released — the fourth was
+    released before its handler raised — as it does over the window handed whole."""
+    window = tuple(bars(FORWARD))
+    released: list[object] = []
+
+    replayed = session.run_node_chunked(
+        request_for(source=RAISING_LATER),
+        [instrument()],
+        iter(backtest._cut([window], cap)),
+        sink=released.extend,
+    )
+
+    assert replayed.result.crashed
+    assert replayed.result.reason == backtest.EXCEPTION
+    assert replayed.released == 4
+    assert [point for point in released if not is_marker(point)] == list(window[:4])
+    assert replayed.clock_ns == int(window[3].ts_init)
 
 
 def _stopping(*_: object) -> None:

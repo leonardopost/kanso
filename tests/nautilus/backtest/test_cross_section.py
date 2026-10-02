@@ -498,11 +498,13 @@ def test_a_sleeve_started_on_an_unmarked_chunk_is_flushed_on_a_marked_one(reques
     ex-date do; here two settlements of nothing. Chunked by day, the first day holds no such
     instant and the sleeve starts unmarked; the second does, and the sleeve, held for
     markers from then on, subscribes them then, or every point of the second day waits for
-    a flush that never reaches it. It is handed what one chunk of both days hands."""
+    a flush that never reaches it. It is handed what one chunk of both days hands, on the
+    research path and on a node handed the days a chunk at a time alike."""
     import sys
     from hashlib import sha256
 
     from kanso.nautilus.backtest import execute_chunked
+    from kanso.nautilus.session import run_node_chunked
     from tests.nautilus.backtest.test_depth import _bars, _settlements
 
     first, second = date(2024, 1, 2), date(2024, 1, 3)
@@ -515,18 +517,24 @@ def test_a_sleeve_started_on_an_unmarked_chunk_is_flushed_on_a_marked_one(reques
     assert not any(map(is_marker, ordered(days[0])))
     assert any(map(is_marker, ordered(days[1])))
 
-    def handed(chunks: list[tuple[tuple[object, ...], ...]], tag: str) -> list[tuple[str, int]]:
+    def handed(
+        chunks: list[tuple[tuple[object, ...], ...]], tag: str, *, node: bool = False
+    ) -> list[tuple[str, int]]:
         source = STAMPS + f"# {tag}\n".encode()
-        result = execute_chunked(
-            request_for(RESEARCH, source=source, hypothesis_=hyp), [instrument()], chunks
-        )
+        request = request_for(RESEARCH, source=source, hypothesis_=hyp)
+        if node:
+            result = run_node_chunked(request, [instrument()], iter(chunks)).result
+        else:
+            result = execute_chunked(request, [instrument()], chunks)
         assert not result.crashed, result.traceback_tail
         return list(sys.modules[f"kanso_sleeve_{sha256(source).hexdigest()[:12]}"].SEEN)
 
     whole = handed([(days[0][0] + days[1][0], days[0][1] + days[1][1])], "one")
     by_day = handed(days, "two")
+    on_a_node = handed(days, "three", node=True)
 
     assert by_day == whole
+    assert on_a_node == whole
     assert [kind for kind, _ in by_day] == [
         *("bar", "data", "bar", "bar"),
         *("bar", "bar", "data", "data", "bar"),
