@@ -580,12 +580,27 @@ leg an overlay asks for, with the legs before it counted. An entry a strategy bu
 not rebuilt at another size, and only the funding question is asked of it: one that would take
 gross exposure past `max_leverage` of the book is refused inside the handler that placed it as
 `unfunded_order`, and the card is a `discard` carrying a `sizing` gate. An order list is judged
-whole, what each order closes freeing room for the next, and a bracket's exits are not asked. On a pair's
+whole, what each order closes freeing room for the next, and a bracket's exits are not asked.
+A modify is asked nothing: `modify_order` is the engine's own, so an entry placed small and
+grown by a modify, or a resting one moved to a price at which it opens more, is held neither
+to the room nor to the funding question, and the room reads it at its new size and price from
+then on (`docs/backlog.md` row 123). A `sizing` rule denies `modify_order` to a researched
+strategy, so the gap is an unsized sleeve's. On a pair's
 ex-date the venue restates the held leg at the day's first point, which may be the other leg's;
 until the held leg prints again its last price is restated by the split's ratio, for the balance
 and for the room. `position_size` still judges a position against the capital
 (`docs/backlog.md`), and under a `sizing` rule the budget is funded by definition (row 76).
-`self.balance` reads the number.
+`self.balance` reads the number, and a read costs what the sleeve's orders gained since the
+last one rather than what they hold: each event of each order — a fill, and the two a modify
+adds — is folded in once, as the engine hands it to the sleeve, so a sleeve may read it on
+every bar while it moves a resting order on every bar. Read whole each time, such an order
+cost its whole history on every read and the square of it over a card — measured on a crypto
+workspace, a card that re-priced its resting orders on every five-second bar ran 2.4 minutes
+per simulated day and was killed. The engine keeps every event of every order for the whole
+run, closed or not, so a card's memory still grows with every modify, and re-posting the
+order saves none of it: one resting order moved on each of 30,000 one-second bars left the
+engine holding 60,001 events, and the same sleeve cancelling it for a fresh one every 2,000
+moves left it holding 60,043 across fifteen orders, at the same peak.
 
 **A `book` policy changes the equity a card is measured on** (`docs/workspace.md` has the
 keys). The runner applies it once, at each period end of the extraction, in one order: the

@@ -35,7 +35,14 @@ from the capital and the risk limits injected from the hypothesis, leaving room 
 round-trip cost the runner will apply. This is where per-strategy exposure is enforced,
 because the engine has nowhere else to enforce it: `RiskEngineConfig` offers exactly one
 limit, `max_notional_per_order` keyed by instrument, which is a per-order backstop and
-knows nothing of a position, a strategy or a book.
+knows nothing of a position, a strategy or a book. An entry the author built is refused at
+`submit_order` when the book cannot fund it, and `cancel_order`, `cancel_orders` and
+`cancel_all_orders` are kanso's own so that an exit owed or a cancel held back is kept.
+`modify_order` is not: it is the engine's, and a modify that grows an entry's quantity, or
+moves a resting entry to a price at which it opens more, is held neither to the room nor to
+what the book funds — the room reads the order at its new size and price from its next read
+on. A sizing rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`);
+an unsized one may call it (`docs/backlog.md` row 123).
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -81,6 +88,10 @@ holds an emulated order after its first, after marking the orders before it
 `PENDING_CANCEL` (read in `trading/strategy.pyx`); the order emulator takes an emulated
 order out and marks it pending cancel locally before `cancel_order` returns (read in
 `execution/emulator.pyx`, measured on both paths by the exit and replay tests);
+`Order.events` hands back a new list of every event the order holds, where `event_count`
+and `last_event` read its length and its last element without one, and an order's events
+grow only at its end, each handed to the strategy's `handle_event` once the order has taken
+it (`kanso.nautilus.facts` measures it on the backtest engine);
 `StrategyConfig` and `ActorConfig` are frozen msgspec structs
 whose subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls`
 here is kanso's own attribute, honoured by kanso's loader alone.
@@ -91,7 +102,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections import deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_FLOOR, Decimal
 from math import fsum, prod
@@ -420,6 +431,20 @@ def _order_price(order: object) -> float | None:
     return None if price is None else float(price)
 
 
+@dataclass(eq=False, slots=True)
+class _Tracked:
+    """One order the sleeve sent, as far as its balance has read it (`KansoStrategy._settle`)."""
+
+    order: Any
+    read: int = 0
+    """How many of its events have been folded in."""
+    unread: list[Any] | None = None
+    """The events it has gained since, as `handle_event` was handed them, while they are known
+    to be exactly those (`KansoStrategy._arrived`); `None` when they are not."""
+    booked: set[object] = field(default_factory=set)
+    """The ids of its fills booked so far."""
+
+
 class KansoStrategy(Strategy):  # type: ignore[misc]
     """The sleeve: a whole strategy, with its universe and its limits injected."""
 
@@ -462,8 +487,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._awaiting: set[object] = set()
         self._charges = _charges(resolved)
         self._cash = resolved.capital
-        self._ledger: list[list[Any]] = []
-        self._booked: set[object] = set()
+        self._ledger: dict[object, _Tracked] = {}
         self._print_ns: dict[str, int] = {}
         self._scope_days: dict[str, set[date]] = {}
         self._scope_cls: type | None = None
@@ -648,6 +672,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Entries and an overlay's hedge legs are cut to what the smaller of this and the
         capital can fund, and a strategy may size from it.
+
+        A read costs what the sleeve's orders gained since the last one, not what they hold:
+        each event of each order is folded in once (`_settle`), so a sleeve may read it on
+        every bar while it moves a resting order on every bar.
 
         Under a `book` policy it is the book the policy leaves. The runner settles each
         period at its last point — the carry on what the book held above its equity, then
@@ -834,7 +862,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _start(self) -> None:
         self.subscribe_universe()
-        self._ledger.extend([order, 0] for order in self.cache.orders(strategy_id=self.id))
+        self._ledger.update(
+            (order.client_order_id, _Tracked(order))
+            for order in self.cache.orders(strategy_id=self.id)
+        )
         self.msgbus.subscribe(topic=actions.TOPIC, handler=self._on_restated)
         super()._start()
 
@@ -1979,7 +2010,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         orders = [
             order
-            for order in (self._current(entry[0]) for entry in self._ledger)
+            for order in (self._current(entry.order) for entry in self._ledger.values())
             if order.instrument_id == instrument_id
             and order_side in (OrderSide.NO_ORDER_SIDE, order.side)
             and not order.is_closed
@@ -2027,8 +2058,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return True
 
     def handle_event(self, event: Any) -> None:
-        """Hand an event to the engine's own handling, then send a cancel held back for the
-        order it is about once the node has handed that order to the venue (`_hold_cancel`).
+        """Keep an event for the balance's next read (`_arrived`), hand it to the engine's own
+        handling, then send a cancel held back for the order it is about once the node has
+        handed that order to the venue (`_hold_cancel`). The event is kept first, so an
+        author's handler for it that reads the balance reads it from what was kept.
 
         In nautilus_trader 1.231.0 the node's simulated venue reports an order `SUBMITTED`
         from inside the call that hands it to the exchange, before the exchange matches it,
@@ -2040,6 +2073,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instant as the order and lands right behind it (`SimulatedVenue._send`). Measured on
         both paths by the replay tests.
         """
+        self._arrived(event)
         super().handle_event(event)
         client_order_id = getattr(event, "client_order_id", None)
         held = self._unsent.get(client_order_id)
@@ -2149,8 +2183,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         instant = self._instant()
         working = []
-        for entry in self._ledger:
-            order = self._current(entry[0])
+        for entry in self._ledger.values():
+            order = self._current(entry.order)
             if (
                 order.is_closed
                 or self.cache.is_order_pending_cancel_local(order.client_order_id)
@@ -2161,7 +2195,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     and order.is_pending_cancel
                     and self._cancels.get(order.client_order_id, False)
                 )
-                or (not clips and self._is_clip(entry[0]))
+                or (not clips and self._is_clip(entry.order))
                 or self._not_yet_live(order)
             ):
                 continue
@@ -2295,8 +2329,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         book. An order that would shrink a position frees nothing until it fills.
         """
         added: dict[str, float] = {}
-        for entry in self._ledger:
-            order = self._current(entry[0])
+        for entry in self._ledger.values():
+            order = self._current(entry.order)
             if order.is_closed or order.order_type == OrderType.MARKET or self._is_clip(order):
                 continue
             key = order.instrument_id.value
@@ -2316,54 +2350,109 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _settle(self, key: str | None = None, until_ns: int | None = None) -> list[Any]:
         """Fold every fill not booked yet into the sleeve's cash, as the runner charges it.
 
-        Each order the sleeve sent is kept with how many of its events have been read, read
-        again only when that count moves, and let go once the venue has closed it; a fill is
-        booked once, by its event id, whichever object carried it. With `key` only that
-        name's orders are read: a quote makes its own name's spread current and no other,
-        so a fill in another name waits for that name's quote or for a read of the balance.
-        A quoted spread's series is then cut back to its last quote: every fill before now
-        is booked, and a fill still to come is charged at a quote no older than that one.
+        Each order the sleeve sent is kept with how many of its events have been folded in,
+        read again only when that count moves, and then only for the events it gained since
+        (`_gained`), so a read costs what is new and not what the order has accumulated: an
+        order modified on every bar gains two events a bar, and read whole it cost its whole
+        history a bar and the square of it a card. A fill is booked once, by its event id,
+        whichever object carried it; an order the engine has replaced with another object
+        is read again from its first event (`_current`). The order, its count and its fill
+        ids are let go once the venue has closed it and every fill of it is booked. With
+        `key` only that name's orders are read: a quote makes its own name's spread current
+        and no other, so a fill in another name waits for that name's quote or for a read of
+        the balance. A quoted spread's series is then cut back to its last quote: every fill
+        before now is booked, and a fill still to come is charged at a quote no older than
+        that one.
 
         With `until_ns` a fill after that instant is left unbooked and its order is read
-        again next time: it is returned instead, for the period close that has to strike the
-        book as it stood at the instant (`_book_at`), and it is booked by the next read, at
-        a quote no older than the last one seen.
+        again next time from where it was: it is returned instead, for the period close that
+        has to strike the book as it stood at the instant (`_book_at`), and it is booked by
+        the next read, at a quote no older than the last one seen.
         """
-        waiting: list[list[Any]] = []
         later: list[Any] = []
-        for entry in self._ledger:
-            order = entry[0] = self._current(entry[0])
+        closed: list[object] = []
+        for client_order_id, entry in self._ledger.items():
+            order = self._current(entry.order)
+            if order is not entry.order:
+                entry.order, entry.read, entry.unread = order, 0, None
             if key is not None and order.instrument_id.value != key:
-                waiting.append(entry)
                 continue
             count = order.event_count
             held_back = False
-            if count != entry[1]:
-                for event in order.events:
-                    if not isinstance(event, OrderFilled) or event.id in self._booked:
+            if count != entry.read:
+                gained = self._gained(entry, count)
+                for event in gained:
+                    if not isinstance(event, OrderFilled) or event.id in entry.booked:
                         continue
                     if until_ns is not None and int(event.ts_event) > until_ns:
                         later.append(event)
                         held_back = True
                         continue
-                    self._booked.add(event.id)
+                    entry.booked.add(event.id)
                     self._cash -= self._paid(event)
                     if self._cfg.books_funding:
                         self._filled.append(
                             (int(event.ts_event), event.instrument_id.value, self._signed(event))
                         )
-                if not held_back:
-                    entry[1] = count
-            if held_back or not order.is_closed:
-                waiting.append(entry)
-            else:
+                if held_back:
+                    entry.unread = gained
+                else:
+                    entry.read, entry.unread = count, []
+            if not held_back and order.is_closed:
+                closed.append(client_order_id)
                 self._cancels.pop(order.client_order_id, None)
-        self._ledger = waiting
+        for client_order_id in closed:
+            del self._ledger[client_order_id]
         for name, (times, values) in self._quoted.items():
             if key is None or name == key:
                 del times[:-1]
                 del values[:-1]
         return later
+
+    @staticmethod
+    def _gained(entry: _Tracked, count: int) -> list[Any]:
+        """The events an order gained since the balance last folded it in, `count` being how
+        many it holds now.
+
+        They are the ones `handle_event` was handed (`_arrived`) when those are known to be
+        exactly them — as many as the order gained, on the object the balance read. Otherwise
+        they are taken from the order, whose `events` hands back a copy of every event it
+        holds (`Order.events` in nautilus_trader 1.231.0), which is what the handed ones save:
+        that copy costs the order's whole history however little of it is new.
+        """
+        unread = entry.unread
+        if unread is not None and len(unread) == count - entry.read:
+            return unread
+        events: list[Any] = entry.order.events[entry.read :]
+        return events
+
+    def _arrived(self, event: Any) -> None:
+        """Keep an event of an order the balance reads, for the next read to take from it
+        rather than from the order (`_gained`).
+
+        In nautilus_trader 1.231.0 an order's events only ever grow at its end, one for each
+        event `Order.apply` takes, and the engine hands the strategy each event of its own
+        orders once the order has applied it — the execution engine for what the venue and
+        the strategy's own commands send, the strategy itself for the pending modify and
+        pending cancel it applies (`execution/engine.pyx`, `trading/strategy.pyx`) — so the
+        event handed here is normally the order's last, one past those already kept
+        (`kanso.nautilus.facts` measures it on the backtest engine). The engine also hands
+        over an event the order refused to take, such as a cancel landing on an order a fill
+        has just closed (`ExecutionEngine._apply_event_to_order` goes on after an
+        `InvalidStateTrigger`): the order's count has not moved, so what is kept is still
+        all of it, and the event is not kept. Anything else — an event handed after a later
+        one, one of an order the engine has since replaced — leaves the kept ones unknown to
+        be complete, and the next read takes the order's own.
+        """
+        entry = self._ledger.get(getattr(event, "client_order_id", None))
+        if entry is None or entry.unread is None:
+            return
+        order = self.cache.order(event.client_order_id)
+        kept = entry.read + len(entry.unread)
+        if order is entry.order and order.event_count == kept + 1 and order.last_event is event:
+            entry.unread.append(event)
+        elif order is not entry.order or order.event_count != kept:
+            entry.unread = None
 
     def _paid(self, event: Any) -> float:
         """What one fill took out of cash: the value it bought, or gave back what it sold
@@ -2596,7 +2685,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _track(self, order: object) -> None:
         """Keep every order this sleeve sent for the balance to book its fills from, and a
         market order until the venue closes it."""
-        self._ledger.append([order, 0])
+        self._ledger.setdefault(order.client_order_id, _Tracked(order))  # type: ignore[attr-defined]
         if order.order_type == OrderType.MARKET:  # type: ignore[attr-defined]
             self._sent.append(order)
 
