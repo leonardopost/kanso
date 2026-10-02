@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import signal
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 import pytest
+import uvloop
 from nautilus_trader.live.node import TradingNode
 
 from kanso.errors import Exit, KansoError
-from kanso.nautilus import node, sandbox
+from kanso.nautilus import node, sandbox, session
 from kanso.nautilus.node import Placement, StageNode
 from kanso.nautilus.venue import fill_model, latency_model, venue_configs
 from kanso.portfolio import deploy
@@ -341,6 +343,40 @@ def test_each_version_runs_under_an_identity_of_its_own(placement: Placement) ->
     assert placement.tag == f"{placement.strategy_id}-1"
     assert placement.identity.endswith(placement.tag)
     assert placement.label == f"{placement.strategy_id}@1"
+
+
+def _stopping(*_: object) -> None:
+    """The stop handler the monitor installs before its pass runs a stage node."""
+
+
+@pytest.mark.parametrize("loop", ["asyncio", "uvloop"])
+def test_a_stage_node_leaves_the_monitor_its_stop_signals(
+    ws: Workspace,
+    store: StateStore,
+    composed_strategy: StrategyFile,
+    loop: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The monitor still answers its own `SIGTERM` once a pass has run a node.
+
+    The kernel takes the stop signals for the loop it is handed and closing the loop does
+    not give them back (`kanso.nautilus.session.signals_kept`): the monitor would otherwise
+    ignore a stop after its first pass over a deployed stage, or be killed by it outright.
+    """
+    if loop == "uvloop":
+        monkeypatch.setattr(asyncio, "new_event_loop", uvloop.new_event_loop)
+    saved = {number: signal.getsignal(number) for number in session.NODE_SIGNALS}
+    for number in session.NODE_SIGNALS:
+        signal.signal(number, _stopping)
+    try:
+        ran = deploy(ws, store, "paper")
+        handlers = [signal.getsignal(number) for number in session.NODE_SIGNALS]
+    finally:
+        for number, handler in saved.items():
+            signal.signal(number, handler)
+
+    assert ran.session is not None and ran.session.released, "a node ran the stage's window"
+    assert handlers == [_stopping] * 3
 
 
 def test_a_restart_with_nothing_new_runs_no_node_at_all(

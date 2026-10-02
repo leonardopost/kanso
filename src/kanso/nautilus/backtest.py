@@ -134,6 +134,7 @@ __all__ = [
     "DEFAULT_PERIOD",
     "DIED",
     "EXCEPTION",
+    "INTERRUPTED",
     "MEMORY",
     "RunRequest",
     "RunResult",
@@ -141,6 +142,7 @@ __all__ = [
     "checked",
     "child_env",
     "benchmark",
+    "end_with",
     "execute",
     "main",
     "run",
@@ -149,6 +151,7 @@ __all__ = [
     "tunable",
     "wanted",
     "warmup_prefix",
+    "watched",
     "window_data",
 ]
 
@@ -1979,37 +1982,66 @@ def _supervised(request: RunRequest, room: Path, workdir: Path) -> RunResult:
     """Start the child, watch its clock and its memory, and read back what it produced.
 
     The child is told which process started it, and ends itself when that process is no
-    longer its parent (`_end_with`): it leads its own session, so a lane killed outright
+    longer its parent (`end_with`): it leads its own session, so a lane killed outright
     cannot take it down, and without that it would run on with nobody watching its budget.
     """
     result_path = room / RESULT_FILE
     _refuse_if_interrupted()
-    started = time.monotonic()
-    with (room / "stderr.txt").open("wb") as errors:
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                _BOOTSTRAP,
-                str(room / REQUEST_FILE),
-                str(result_path),
-                str(os.getpid()),
-            ],
-            cwd=str(workdir),
-            env=child_env(),
-            stdin=subprocess.DEVNULL,
-            stdout=errors,
-            stderr=errors,
-            start_new_session=True,
-        )
-        breach, peak_gb = _watch(child, request.budget_s, request.mem_cap_gb)
-    wall_s = time.monotonic() - started
+    breach, peak_gb, wall_s = watched(
+        [
+            sys.executable,
+            "-c",
+            _BOOTSTRAP,
+            str(room / REQUEST_FILE),
+            str(result_path),
+            str(os.getpid()),
+        ],
+        cwd=workdir,
+        errors=room / "stderr.txt",
+        env=child_env(),
+        budget_s=request.budget_s,
+        mem_cap_gb=request.mem_cap_gb,
+    )
     tail = _tail((room / "stderr.txt").read_text(encoding="utf-8", errors="replace"))
     if breach == INTERRUPTED:
         raise _interrupted()
     if breach is not None:
         return _crashed(request, wall_s, peak_gb, breach, tail)
     return _reported(request, result_path, wall_s, peak_gb, tail)
+
+
+def watched(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    errors: Path,
+    env: Mapping[str, str] | None,
+    budget_s: float | None,
+    mem_cap_gb: float | None,
+) -> tuple[str | None, float, float]:
+    """Start a child in a session of its own, watch it as a card is watched, and say how
+    it ended: the breach that killed it (`None` when it exited by itself), the peak resident
+    memory it reached in gibibytes, and its wall time.
+
+    Whatever it writes to a stream goes to `errors`. `env` is the environment it starts
+    with, the parent's own when `None`. The watch is `_watch`'s: the wall-time and
+    resident-memory bounds, this process's stop, and the `wanted` checks it is inside. A
+    card is one child watched this way and a stall's certification another
+    (`kanso.certify.child`).
+    """
+    started = time.monotonic()
+    with errors.open("wb") as stream:
+        child = subprocess.Popen(
+            list(argv),
+            cwd=str(cwd),
+            env=None if env is None else dict(env),
+            stdin=subprocess.DEVNULL,
+            stdout=stream,
+            stderr=stream,
+            start_new_session=True,
+        )
+        breach, peak_gb = _watch(child, budget_s, mem_cap_gb)
+    return breach, peak_gb, time.monotonic() - started
 
 
 def _interrupted() -> PreconditionError:
@@ -2088,8 +2120,9 @@ def _kill(pid: int) -> None:
         os.killpg(pid, signal.SIGKILL)
 
 
-def _end_with(parent: int) -> None:
-    """In a card: end the process the moment `parent` is no longer the one it answers to.
+def end_with(parent: int) -> None:
+    """In a card, or a stall's certification: end the process the moment `parent` is no
+    longer the one it answers to.
 
     A card leads its own session so that its watcher can kill it without killing the lane,
     which also means the lane cannot take it down by dying: a lane killed outright — by the
@@ -2098,7 +2131,8 @@ def _end_with(parent: int) -> None:
     another parent, so the card asks every `PARENT_POLL_S` whose child it is, and exits the
     moment the answer is not the lane that started it — including at once, when the lane
     was gone before the card began. It exits without cleaning up, because nothing is left
-    to read what it would have written.
+    to read what it would have written. A certification child is watched by its lane the
+    same way and ends itself the same way (`kanso.certify.child`).
     """
     while os.getppid() == parent:
         time.sleep(PARENT_POLL_S)
@@ -2214,7 +2248,7 @@ def main(argv: Sequence[str]) -> int:
     is what names it.
 
     The third argument is the pid of the process that started the card, which it outlives
-    by at most `PARENT_POLL_S` (`_end_with`).
+    by at most `PARENT_POLL_S` (`end_with`).
 
     The payload is a sequence of pickles on one file. The first names the workspace
     extensions the parent imported, and they are imported here before anything else is
@@ -2228,7 +2262,7 @@ def main(argv: Sequence[str]) -> int:
 
     request_path, result_path = Path(argv[0]), Path(argv[1])
     threading.Thread(
-        target=_end_with, args=(int(argv[2]),), name="kanso-card-parent", daemon=True
+        target=end_with, args=(int(argv[2]),), name="kanso-card-parent", daemon=True
     ).start()
     with request_path.open("rb") as handle:
         handed = pickle.load(handle)

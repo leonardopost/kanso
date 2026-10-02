@@ -70,6 +70,9 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.
+* A kernel handed a loop takes the process's stop signals for it and closing the loop does
+  not give them back (`kanso.nautilus.session`), so the stage node is built and disposed of
+  inside `signals_kept` too, and the monitor running it answers a stop.
 """
 
 from __future__ import annotations
@@ -100,7 +103,7 @@ from kanso.nautilus import backtest, sandbox, splits
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
-from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered
+from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, signals_kept
 from kanso.nautilus.strategy import BOOK
 from kanso.nautilus.venue import venue_config, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
@@ -490,7 +493,8 @@ def run(
         return _idle(node, requests)
     backtest._seed_globals(requests[0].snapshot_id)
     loop = asyncio.new_event_loop()
-    built = TradingNode(config=node.config(), loop=loop)
+    with signals_kept():
+        built = TradingNode(config=node.config(), loop=loop)
     try:
         built.build()
         kernel = built.kernel
@@ -543,7 +547,8 @@ def run(
             halted=halt.reason,
         )
     finally:
-        built.dispose()
+        with signals_kept():
+            built.dispose()
     return replace(
         ran,
         realised=tuple(

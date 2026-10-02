@@ -507,6 +507,19 @@ def test_a_backlog_count_the_readme_states_is_the_count_the_table_holds() -> Non
     assert (spelled(stated[1]), spelled(stated[2])) == (len(rows), len(rows) - closed)
 
 
+def test_every_backlog_row_has_its_own_number_and_follows_the_one_before() -> None:
+    """Rows are cited by number — from other rows, from these tests, from pull requests — so
+    two branches that each opened the next row must not both land it: a reader handed a
+    number would find two rows, and a test asking for the first would read the wrong one."""
+    numbers = [
+        int(line.split("|")[1])
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| \d+ \|", line)
+    ]
+    assert len(numbers) == len(set(numbers))
+    assert numbers == sorted(numbers)
+
+
 def test_the_repair_budget_the_cli_page_states_is_the_one_the_driver_enforces() -> None:
     """A bound written in words on a page and held as a constant in a module: the two
     drifted apart once, when the driver spent it on the run's crash streak while the page
@@ -573,3 +586,54 @@ def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_i
             line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
         )
         assert claim in row and "**closed.**" in row and closure in row, number
+
+
+def test_the_pages_say_a_stall_certifies_in_a_child_held_to_the_lane_s_share() -> None:
+    """A lane that certified in its own process kept what the windows cost and stopped
+    answering `SIGTERM`; the pages say where a stall's certification is made, what bounds it,
+    what records its cost, and that a lane stops whatever it ran, and both backlog rows that
+    recorded the two defects are closed in place."""
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "A stall's certification is a child held to the same figure" in lanes
+    assert "(`cert_peak_mem_gb`, `cert_wall_s`)" in lanes
+    assert "or `kanso cert run` by hand" in lanes
+    assert "**A lane stops at its next safe point, whatever it ran.**" in lanes
+    envelope = prose(section(page("workspace.md"), "`envelope.yaml`"))
+    assert "A stall's certification is held to the same figure." in envelope
+    cli = prose(page("cli.md"))
+    assert "The certification is made in a child of the lane, exactly as `cert run` makes it" in cli
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+    )
+    assert "a stall's certification in flight is killed the same way" in stop
+    for number, opening in (
+        ("119", "~~A stall's certification ran in the lane's own process"),
+        ("120", "~~A lane that had replayed a parity on a node no longer answered `SIGTERM`~~"),
+    ):
+        row = next(
+            line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
+        )
+        assert row.split("|")[3].strip().startswith(opening)
+        assert "**closed.**" in row
+
+
+def test_the_pages_say_a_lane_runs_its_benchmark_hold_in_a_child() -> None:
+    """The hold a benchmark objective differences against was the one whole-window run a lane
+    still made in its own process; the pages say a child runs it as a card is run, and the
+    backlog closes the row that recorded it and the open half of the row before it."""
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "it makes no run in its own process" in lanes
+    assert "the hold a benchmark objective differences against" in lanes
+    assert "one run it still makes in its own process" not in lanes
+    assert "it is the same run, element by element, as the lane made of it" in lanes
+    hold = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert "each card of a run (once per run, in a child of the lane as a card is" in hold
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 1(19|21) \|", line)
+    }
+    item = rows["121"].split("|")[3].strip()
+    assert item.startswith("~~The hold a benchmark objective differences against was run in")
+    assert "in the lane's own process~~ **closed.**" in item
+    assert "a child runs it now (row 121)" in rows["119"].split("|")[5]

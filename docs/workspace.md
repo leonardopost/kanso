@@ -518,7 +518,8 @@ policy, with every order in the warmup dropped like the strategy's — and never
 is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
 of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
 fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
-path that measures the objective — each card of a run (once per run, then reused), both
+path that measures the objective — each card of a run (once per run, in a child of the lane
+as a card is, then reused), both
 certification windows (a `param_plateau` perturbation moves the strategy and never the
 hold), the expectation composition measures, and every window a stage node closes, where it
 is stored beside the version's realised run for the paper and live gates. `kanso hyp
@@ -1624,6 +1625,13 @@ the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline pe
 the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
 six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
 rather than the declaration.
+
+A stall's certification is held to the same figure. The lane certifies in a child, and a
+child whose resident memory passes what a card of the judged run may hold is killed and the
+certification refused, with a remedy naming this key and `kanso cert run`, which certifies
+in your own process instead. What each certification cost is on its `stalled` event
+(`cert_peak_mem_gb`), so declare at least that if you want the daemon to certify on its own:
+a share sized for cards alone is a share no certification of a heavier window fits in.
 
 Because it measures *this* host, the rendered `.gitignore` excludes it: `init` writes it and
 `env detect` rewrites it, but it is not committed, so a clone of the repository on another

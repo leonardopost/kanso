@@ -65,7 +65,7 @@ acts follow from the certificate with no decision left in them; a stage that can
 escalates and the verdict still stands.
 
 Engine facts this module relies on (nautilus_trader 1.231.0): a backtest is built and run
-in this process by `kanso.nautilus.backtest`, whose window refusal is what keeps a
+in the process certifying by `kanso.nautilus.backtest`, whose window refusal is what keeps a
 certification on the window it asked for; every data point carries `ts_event` and
 `ts_init` as nanosecond integers, and the difference between them is the publication delay
 the availability gate measures.
@@ -135,6 +135,7 @@ __all__ = [
     "certify",
     "pinned_sha",
     "show",
+    "subject_run",
 ]
 
 CERT_STAGE: Final = "cert"
@@ -437,13 +438,19 @@ def _chosen_sha(store: StateStore, hyp_id: str, sha: str | None) -> str:
 def pinned_sha(store: StateStore, hyp_id: str, sha: str) -> str:
     """The hypothesis file the newest card of these bytes was measured under, as its run
     pinned it — the pin a certification of the card would record."""
+    return subject_run(store, hyp_id, sha).hypothesis_sha
+
+
+def subject_run(store: StateStore, hyp_id: str, sha: str) -> RunRecord:
+    """The run that produced the newest card of these bytes: what a certification of them
+    is pinned to, and what its lane sized that run's cards by."""
     cards = [card for card in records.cards_of(store, hyp_id) if card.strategy_sha == sha]
     if not cards:
         raise PreconditionError(
             f"{hyp_id} has no card of {sha[:7]}",
             remedy="name a strategy this hypothesis has carded",
         )
-    return _run_of(store, hyp_id, cards[-1].run_id).hypothesis_sha
+    return _run_of(store, hyp_id, cards[-1].run_id)
 
 
 def _run_of(store: StateStore, hyp_id: str, run_id: str) -> RunRecord:
@@ -562,12 +569,15 @@ def _measure(subject: Subject) -> Measured:
     entry point, because those points are also what the availability gate measures its
     delays on and what the capacity gate compares a day's trading against.
 
-    Certification runs in this process rather than in a child of its own: the subject is a
-    card that already passed the integrity gate and already ran, and the window it is run
-    over is fixed here rather than chosen by it. A strategy that nevertheless raises stops
-    the certification and says so, so the failure reaches the operator as a refusal rather
-    than as a verdict — a card that will not run has not failed a test, it has not taken
-    one — and the daemon lane that asked for it survives to research something else.
+    Every run is made in the process certifying rather than in a child per run, as a card
+    is: the subject is a card that already passed the integrity gate and already ran, and
+    the window it is run over is fixed here rather than chosen by it. A strategy that
+    nevertheless raises stops the certification and says so, so the failure reaches the
+    operator as a refusal rather than as a verdict — a card that will not run has not failed
+    a test, it has not taken one. The process certifying is the operator's own under `kanso
+    cert run`, and for a stall a child of the lane that stalled, watched by that lane under
+    its memory share (`kanso.certify.child`), so the daemon lane that asked for it survives
+    to research something else and is left holding none of what the windows cost.
     """
     request = _request(subject, subject.certification)
     backtest.stage_of(subject.hyp, subject.certification)
