@@ -867,14 +867,38 @@ own proposer reward-hacking its way to a better number, layered with the data is
 the card subprocess. It is not a sandbox against a hostile actor and does not claim to be
 one.
 
-The engine's history requests — `request_bars` and its quote, trade and custom siblings —
-are denied with the rest: history reaches a strategy only as the `warmup` prefix its
-hypothesis declares, which the runner resolves and feeds before the window, and a request
-would be a second route to the catalog that no window bounds. The state the harness keeps
+The engine's history requests — `request_bars` and every other `request_*` an engine actor
+holds, a book's snapshot, deltas and depth among them — are denied with the rest: history
+reaches a strategy only as the `warmup` prefix its hypothesis declares, which the runner
+resolves and feeds before the window, and a request would be a second route to the catalog
+that no window bounds. `request_instrument` and `request_instruments` are denied with the
+cache, as the other route to an instrument and its splits. The component clock is denied under
+both the names the engine gives it, `clock` and `_clock`: it reads the instant the engine is
+at, which under `depth` is every change of the book, where a strategy reads `data_time`. The state the harness keeps
 for a `book` policy — the instant it cuts return periods from, the period it is in, the
 cushion and the last end it settled — is denied the same way: it is a clock of where the
 window opens and a record of what the book made before this month, and a strategy reads
-the book the policy left from `balance` alone.
+the book the policy left from `balance` alone. The harness's own copy of a book a `depth`
+hypothesis holds, and the methods that show the author its view of it, are denied to every
+strategy for the same kind of reason: they are the book at every change, which the account
+does not see. Under `depth` the message bus, which carries the data engine's own topics and
+every change of the book among them, is denied under both the names the engine gives it,
+`msgbus` and `_msgbus`, and so are the three subscriptions that would hand the author a book
+of its own — `subscribe_order_book_deltas`, `subscribe_order_book_at_interval` and
+`subscribe_order_book_depth`; the view reaches `on_order_book_deltas` and level one
+`on_quote_tick`, and the refusal says so. The same denials bind an attached construct, which
+is handed no view of the book at all: it reads the host's prices from the context it is
+asked with, and a construct the gate did not scan under `depth` that subscribes a book anyway
+is refused when it asks, which crashes the card with the call named.
+
+A denied name is refused however the scan can see it spelled. The builtins and the
+introspection that would reach one by another route are denied with it: `__getattribute__`,
+which `object` and every instance carry and which reads an attribute by a name held in a
+string; `__getstate__`, `__reduce__` and `__reduce_ex__`, which hand back an instance's
+attributes all at once; `__builtins__`, and a builtin function's `__self__`, which is the
+builtins module and so `open`; and `__traceback__` with the frame attributes, which walk up
+into the harness's own frames. A denied attribute named in a format field —
+`"{0.cache}".format(self)` — is refused as the attribute is.
 
 Two further denials are about corporate actions rather than about capability, both are
 listed in the same gate's output, and both name their reason there so a proposer can act on
@@ -1022,6 +1046,28 @@ sellers' prints of 100 a second apart fill the order at the seventh, eighth and 
 the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
 third and fourth, credited with what stood ahead of it — which is why a posting thesis on
 that venue rests a level of its own. `kanso doctor` checks both engine facts.
+
+**Under `depth` the strategy sees the book its account would, and the venue every change.**
+Without the key a sleeve is handed each change to the book as the venue is. With it
+(`docs/workspace.md`, `depth`) the harness keeps its own copy of each book — the cache's is
+already past the change being handled when a handler runs — and hands the author two views of
+it, from the same code on both paths. The depth view: at the first point published after
+each multiple of `every_ms`, the top `levels` of each side as they stood at that instant,
+as one `OrderBookDeltas` of the differences from the last view, stamped with the instant and
+closed by `F_LAST`, handed only when it moved. Every change the harness holds when it does
+so was published at or before the instant, because a change after it is itself a point
+published after it and shows the view first. Level one: a `QuoteTick` of the best bid and
+offer to `on_quote_tick` for every instant whose changes, all applied, moved the top —
+handed at the change on a feed whose every instant is one change, and otherwise at the flush
+marker after the instant's changes, so a top the instant passed through on its way is never
+shown. Each call runs in the envelope every handler does: held cancels go out before it and
+owed exits are asked for after it, and both still run once for every change the author is
+not shown. An order sent from either is stamped with the instant shown and reaches the venue
+`costs.latency_ms` after the point that carried the call; the data is not delayed again,
+since the latency is the whole round trip. The harness keeps the book by the engine's own
+level-two rules — an add or an update sets the level, a delete of a price not held does
+nothing, a clear empties both sides — which `kanso doctor` checks, and a property test holds
+its top levels and its best equal to the engine's `OrderBook` after any sequence of changes.
 
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and

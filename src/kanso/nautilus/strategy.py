@@ -64,6 +64,13 @@ for the next host buy. Every attached overlay is asked once per host entry. Each
 is classified as an entry or an exit by its effect on the net position: an order that
 shrinks the absolute net position is an exit, anything else is an entry.
 
+**It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
+every change of a level-two book still reaches both venues, but the author is handed only
+the top levels as they stood on a grid, at the first point after each grid instant, and
+level one on every instant the top moved, from a copy of the book the harness keeps itself
+by the engine's level-two rules (`kanso.nautilus.facts` checks them). Without the key the
+author is handed every change, as the venue is.
+
 Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor`
 methods are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`,
 `handle_trade_tick`, `handle_order_book_deltas`, `handle_data`, `submit_order`,
@@ -99,7 +106,7 @@ here is kanso's own attribute, honoured by kanso's loader alone.
 
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right, insort
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -114,19 +121,24 @@ from nautilus_trader.model.data import (
     Bar,
     BarSpecification,
     BarType,
+    BookOrder,
     DataType,
+    OrderBookDelta,
+    OrderBookDeltas,
     QuoteTick,
     TradeTick,
 )
 from nautilus_trader.model.enums import (
     AggregationSource,
     BarAggregation,
+    BookAction,
     BookType,
     LiquiditySide,
     OrderSide,
     OrderStatus,
     OrderType,
     PriceType,
+    RecordFlag,
     order_side_to_str,
     order_type_to_str,
 )
@@ -267,6 +279,10 @@ class KansoConfig(StrategyConfig, frozen=True):
     extraction does. The runner and a stage node on a simulated venue set it, because the
     simulated account settles no funding; an account a broker keeps settles its own, and a
     sleeve on one leaves it off. Either way the strategy's `on_data` is handed the point."""
+    depth: tuple[int, int] | None = None
+    """What the author is shown of a level-two book under the hypothesis's `depth`: the grid
+    in nanoseconds and the levels of each side. None hands the author every change, as the
+    venue is handed them."""
     fixed_params: tuple[str, ...] = ()
     """The numeric fields of an author's own configuration that are not knobs — a selector
     among rules, a clock constant, a size the hypothesis sets — so the `param_plateau` gate
@@ -431,6 +447,98 @@ def _order_price(order: object) -> float | None:
     return None if price is None else float(price)
 
 
+class _Ladder:
+    """One side of a level-two book by price level, the best price last.
+
+    The harness keeps its own copy of each book a `depth` sleeve holds, because the cache's
+    is already past the change being handled when a handler runs, and because the engine's
+    `OrderBook.bids()` builds every level it holds — which, on a book loaded to its top few
+    levels, includes every price a move left behind — where this hands the top few alone.
+    A change follows the engine's L2 rules (nautilus_trader 1.231.0, `model/book.pyx`): an
+    add or an update sets the level's size whether or not it is held, a delete of a price
+    not held does nothing, and a clear empties both sides.
+    """
+
+    __slots__ = ("keys", "levels", "sign")
+
+    def __init__(self, sign: int) -> None:
+        self.sign = sign
+        self.keys: list[int] = []
+        self.levels: dict[int, tuple[Price, Quantity]] = {}
+
+    def put(self, price: Price, size: Quantity) -> None:
+        key = price.raw * self.sign
+        if key not in self.levels:
+            insort(self.keys, key)
+        self.levels[key] = (price, size)
+
+    def drop(self, price: Price) -> None:
+        key = price.raw * self.sign
+        if self.levels.pop(key, None) is not None:
+            del self.keys[bisect_left(self.keys, key)]
+
+    def clear(self) -> None:
+        self.keys.clear()
+        self.levels.clear()
+
+    def top(self, count: int) -> dict[Price, Quantity]:
+        """The best `count` levels, best first."""
+        return dict(self.levels[key] for key in reversed(self.keys[-count:]))
+
+    def best(self) -> tuple[Price, Quantity] | None:
+        return self.levels[self.keys[-1]] if self.keys else None
+
+
+def _apply(book: tuple[_Ladder, _Ladder], deltas: Any) -> None:
+    """Apply one batch of changes to a harness book of (bids, asks)."""
+    bids, asks = book
+    for delta in deltas.deltas:
+        action = delta.action
+        if action == BookAction.CLEAR:
+            bids.clear()
+            asks.clear()
+            continue
+        order = delta.order
+        side = bids if order.side == OrderSide.BUY else asks
+        if action == BookAction.DELETE:
+            side.drop(order.price)
+        else:
+            side.put(order.price, order.size)
+
+
+def _changes(
+    instrument_id: InstrumentId,
+    shown: dict[Price, Quantity],
+    now: dict[Price, Quantity],
+    side: OrderSide,
+    ts_ns: int,
+) -> list[OrderBookDelta]:
+    """What turns the levels an author was shown of one side into the levels it has now."""
+    made = [
+        OrderBookDelta(
+            instrument_id,
+            BookAction.DELETE,
+            BookOrder(side, price, Quantity(0, size.precision), 0),
+            0,
+            0,
+            ts_ns,
+            ts_ns,
+        )
+        for price, size in shown.items()
+        if price not in now
+    ]
+    for price, size in now.items():
+        was = shown.get(price)
+        if was is None or was != size:
+            action = BookAction.ADD if was is None else BookAction.UPDATE
+            made.append(
+                OrderBookDelta(
+                    instrument_id, action, BookOrder(side, price, size, 0), 0, 0, ts_ns, ts_ns
+                )
+            )
+    return made
+
+
 @dataclass(eq=False, slots=True)
 class _Tracked:
     """One order the sleeve sent, as far as its balance has read it (`KansoStrategy._settle`)."""
@@ -470,6 +578,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._hedging = False
         self._exiting = False
         self._hold_until_cross_section = False
+        self._markers_bound = False
         self._trading_from_ns = 0
         self._delivered_ns = 0
         self._fed_from_ns = 0
@@ -505,6 +614,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._mark_at: dict[str, tuple[int, float]] = {}
         self._settling: list[tuple[int, str, float, float]] = []
         self._filled: list[tuple[int, str, float]] = []
+        self._depth_books: dict[str, tuple[_Ladder, _Ladder]] = {}
+        self._depth_shown: dict[str, tuple[dict[Price, Quantity], dict[Price, Quantity]]] = {}
+        self._depth_seen_ns = -1
+        self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -908,6 +1021,21 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 custom = DataType(resolve_type(requirement))
                 self.subscribe_data(custom, client_id=ClientId(CLIENT_ID))
         if self._hold_until_cross_section:
+            self._bind_markers()
+
+    def _bind_markers(self) -> None:
+        """Subscribe the cross-section flush markers, once, whenever a feed first has them.
+
+        A sleeve held for markers subscribes them when it starts; one the runner arms for a
+        later chunk of the window, after it started unmarked, subscribes them then, or every
+        point that chunk holds back would wait for a flush that never reaches it.
+        """
+        from nautilus_trader.model.identifiers import ClientId
+
+        from kanso.nautilus.backtest import CLIENT_ID
+
+        if not self._markers_bound:
+            self._markers_bound = True
             self.subscribe_data(MARKER_TYPE, client_id=ClientId(CLIENT_ID))
 
     # --- data handlers: the clock, the last observations, the exit rules -----
@@ -951,6 +1079,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             bar.bar_type.instrument_id.value, bar.ts_init
         ):
             return
+        self._show_book(int(bar.ts_init))
         self._turn(int(bar.ts_init))
         self._delivered_ns = int(bar.ts_init)
         key = bar.bar_type.instrument_id.value
@@ -972,6 +1101,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             tick.instrument_id.value, tick.ts_init
         ):
             return
+        self._show_book(int(tick.ts_init))
         self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
@@ -998,6 +1128,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             tick.instrument_id.value, tick.ts_init
         ):
             return
+        self._show_book(int(tick.ts_init))
         self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
         key = tick.instrument_id.value
@@ -1029,7 +1160,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         historical ones to `handle_historical_data` instead (read in `common/actor.pyx`; the
         replay tests measure the owed exit it pays on both paths, the backtest engine and
         the node).
+
+        Under `depth` the change is the harness's and not the author's: it goes into the
+        harness's own copy of the book and the author is handed what is due of it — the
+        grid's view and level one (`_take_depth`) — while the owed exits are asked for on
+        every change as before, stamped with the change.
         """
+        if self._cfg.depth is not None and not historical:
+            self._take_depth(deltas)
+            return
         live = not historical and self.is_running and not self._warming()
         if not historical:
             self._data_time = int(deltas.ts_event)  # type: ignore[attr-defined]
@@ -1038,6 +1177,115 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         super().handle_order_book_deltas(deltas, historical)
         if live:
             self._pay_owed()
+
+    # --- depth: the book as the account sees it ------------------------------
+
+    def _take_depth(self, deltas: Any) -> None:
+        """Keep a change of the book under `depth`, showing the author only what is due.
+
+        The grid's view that came due before this change is shown first, so it never holds
+        this change or any later one. The change then goes into the harness's book, and
+        level one is shown at once if the change moved it: the runner hands every change one
+        instrument's book made at one instant as one batch on both paths
+        (`kanso.nautilus.cross_section.batched`), so the batch is the whole instant and level
+        one is never shown partway through one. A book batch is never held for a flush
+        marker, and none follows it, so waiting for anything after the batch would hand
+        level one at the next point of the feed rather than at the change.
+
+        The exits owed are asked for last, with `data_time` the change's: the change is
+        where the venue's state that makes them due — a cancel that has landed, a fill that
+        has cut what is left — is known, whether or not the author was shown anything of it.
+        `_show_view` asks for none, because the grid's view is stamped with an instant
+        before the change it is shown on.
+        """
+        instrument_id = deltas.instrument_id
+        key = instrument_id.value
+        ts_event = int(deltas.ts_event)
+        self._show_depth(int(deltas.ts_init))
+        book = self._depth_books.get(key)
+        if book is None:
+            book = self._depth_books[key] = (_Ladder(1), _Ladder(-1))
+        _apply(book, deltas)
+        self._show_top(instrument_id, book, ts_event, int(deltas.ts_init))
+        self._data_time = ts_event
+        if self.is_running and not self._warming():
+            self._send_behind_modify()
+            self._pay_owed()
+
+    def _show_book(self, ts_init: int) -> None:
+        """Show the author the grid's view that came due before a point published at
+        `ts_init`; the point's own dispatch asks for the exits owed."""
+        if self._cfg.depth is not None:
+            self._show_depth(ts_init)
+
+    def _show_top(
+        self,
+        instrument_id: InstrumentId,
+        book: tuple[_Ladder, _Ladder],
+        ts_event: int,
+        ts_init: int,
+    ) -> None:
+        """Hand level one of a book just changed, when both sides hold a level and the top
+        is unlike the one last shown.
+
+        The quote is stamped with the instant of the change and is a signal only: it moves
+        no last price, no mark and no quoted spread, as the book it is read from moves none.
+        """
+        bids, asks = book
+        bid, ask = bids.best(), asks.best()
+        if bid is None or ask is None:
+            return
+        key = instrument_id.value
+        top = (bid[0], bid[1], ask[0], ask[1])
+        if top == self._top_shown.get(key):
+            return
+        self._top_shown[key] = top
+        self._show_view(
+            QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init), ts_event
+        )
+
+    def _show_depth(self, ts_init: int) -> None:
+        """Hand the book as of the last grid instant before `ts_init`, once per grid instant.
+
+        Every change the harness holds was published at or before that instant: a change
+        after it would have been handled by `_take_depth`, which shows the grid first. Each
+        instrument whose top levels moved since it was last shown gets one batch of the
+        differences, stamped with the grid instant and closed by `F_LAST`.
+        """
+        every, levels = self._cfg.depth  # type: ignore[misc]
+        grid = (ts_init - 1) // every * every
+        if grid <= self._depth_seen_ns:
+            return
+        self._depth_seen_ns = grid
+        for key in sorted(self._depth_books):
+            bids, asks = self._depth_books[key]
+            shown = self._depth_shown.setdefault(key, ({}, {}))
+            now = (bids.top(levels), asks.top(levels))
+            instrument_id = InstrumentId.from_str(key)
+            made = [
+                *_changes(instrument_id, shown[0], now[0], OrderSide.BUY, grid),
+                *_changes(instrument_id, shown[1], now[1], OrderSide.SELL, grid),
+            ]
+            if not made:
+                continue
+            self._depth_shown[key] = now
+            last = made[-1]
+            made[-1] = OrderBookDelta(
+                instrument_id, last.action, last.order, RecordFlag.F_LAST, 0, grid, grid
+            )
+            self._show_view(OrderBookDeltas(instrument_id, made), grid)
+
+    def _show_view(self, data: QuoteTick | OrderBookDeltas, data_time: int) -> None:
+        """Hand the author a view of the book stamped `data_time`, the cancels held behind a
+        modify sent before it as before any handler. The exits owed are not asked for here
+        but by the point the view is shown on, stamped with that point (`_take_depth`)."""
+        self._data_time = data_time
+        if self.is_running and not self._warming():
+            self._send_behind_modify()
+        if isinstance(data, QuoteTick):
+            super().handle_quote_tick(data, False)
+        else:
+            super().handle_order_book_deltas(data, False)
 
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):
@@ -1050,6 +1298,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if isinstance(ts_init, int):
             if self._undelivered(ts_init):
                 return
+            self._show_book(ts_init)
             self._turn(ts_init)
             self._delivered_ns = ts_init
         if self._cfg.books_funding:
@@ -2872,6 +3121,7 @@ class KansoModifier(Actor):  # type: ignore[misc]
             )
         super().__init__(resolved)
         self._cfg: KansoModifierConfig = resolved
+        self._book_withheld = False
 
     @property
     def modifier_config(self) -> KansoModifierConfig:
@@ -2890,6 +3140,37 @@ class KansoModifier(Actor):  # type: ignore[misc]
     def _stop(self) -> None:
         deregister_modifier(self.msgbus, self._cfg.host_strategy_id, self)
         super()._stop()
+
+    # --- no book of its own under `depth` -----------------------------------
+
+    def subscribe_order_book_deltas(self, *args: Any, **kwargs: Any) -> None:
+        self._refuse_book("subscribe_order_book_deltas")
+        super().subscribe_order_book_deltas(*args, **kwargs)
+
+    def subscribe_order_book_at_interval(self, *args: Any, **kwargs: Any) -> None:
+        self._refuse_book("subscribe_order_book_at_interval")
+        super().subscribe_order_book_at_interval(*args, **kwargs)
+
+    def subscribe_order_book_depth(self, *args: Any, **kwargs: Any) -> None:
+        self._refuse_book("subscribe_order_book_depth")
+        super().subscribe_order_book_depth(*args, **kwargs)
+
+    def _refuse_book(self, route: str) -> None:
+        """Refuse a book of the construct's own when the hypothesis declares `depth`.
+
+        The host is handed only the view of a book an account would see; a construct that
+        decides the host's orders is handed none, and asking for one is refused rather than
+        answered with every change. The runner sets `_book_withheld` from the hypothesis.
+        The engine's subscriptions are `cpdef` (nautilus_trader 1.231.0), and an author's
+        call reaches this Python override.
+        """
+        if self._book_withheld:
+            raise ValidationError(
+                f"{type(self).__name__}.{route}: under `depth` an attached construct is handed "
+                "no book of its own, because its host sees only the view an account would; "
+                "read the host's prices from the context `evaluate` and `on_data` are asked with",
+                remedy="remove the subscription from strategy.py",
+            )
 
     def evaluate(self, ctx: HookContext) -> Decision:
         """This construct's decision for the moment described by `ctx`.

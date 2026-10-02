@@ -23,10 +23,14 @@ comes from.
 import alias — so that a denied capability cannot be reached by a second route. That
 covers the builtins that open files, evaluate strings or reach attributes by name; the
 modules that reach the filesystem, the process or the network; the introspection dunders
-that walk from any object to any other; the Rust bridge names; numpy's file functions; and
+that walk from any object to any other — to an attribute by a name held in a string, to an
+instance's attributes all at once, to the builtins module — and the frame attributes that
+walk up into the harness's own frames; the Rust bridge names; numpy's file functions; and
 the component clock with its timer API, since a strategy reads data time and wall-clock
 logic cannot survive replay parity. The builtins are refused as names only: `Bar.open` and
 the other OHLC attributes are ordinary data, and the ban is on the builtin, not the word.
+A denied attribute named in a string's format field is refused as well, since
+`"{0.cache}".format(self)` reads it by that name.
 
 Two attribute sets are refused for reasons that are about corporate actions rather than
 about capability, and both carry the reason in the refusal, because a discarded card whose
@@ -62,6 +66,15 @@ the host's; `self.held(id)` is the reader. A sized overlay may name `Clip` and n
 or `clips=`. Every denial says why and what to write instead, because the proposer is a
 model and a refusal it cannot act on is a loop.
 
+**Under `depth`**, a fifth set. The harness keeps every change of the book for the venue
+and hands the author the book on the hypothesis's grid and level one on every change, so
+the harness's own copy and the methods that show it are denied to every strategy, and under
+`depth` so are the message bus under both the names the engine gives it, which carries every
+change on the data engine's topics, and the three subscriptions that would hand the author
+a book of its own: every change, snapshots on an interval, and the ten-level depth an
+account on a sampled channel is not served. The last three bind an attached construct too,
+which is an engine actor the harness hands no view.
+
 **The base's names** belong to the base. A class whose instances are a `KansoStrategy` or a
 `KansoModifier` — it names one among its bases, through an alias, a module or a class of the
 file that does, or it is a class of the file such a class names — may not bind a name that
@@ -85,10 +98,12 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from collections.abc import Iterable, Iterator, Mapping
 from functools import cache
 from hashlib import sha256
 from pathlib import Path
+from string import Formatter
 from typing import Final, NamedTuple
 
 ALLOWED_IMPORTS: Final = frozenset(
@@ -147,8 +162,43 @@ DENIED_MODULES: Final = frozenset(
     {"os", "sys", "subprocess", "socket", "pathlib", "importlib", "builtins", "ctypes", "time"}
 )
 DENIED_DUNDERS: Final = frozenset(
-    {"__subclasses__", "__globals__", "__code__", "__class__", "__mro__", "__bases__", "__dict__"}
+    {
+        "__subclasses__",
+        "__globals__",
+        "__code__",
+        "__class__",
+        "__mro__",
+        "__bases__",
+        "__dict__",
+        "__getattribute__",
+        "__getstate__",
+        "__reduce__",
+        "__reduce_ex__",
+        "__builtins__",
+        "__self__",
+        "__traceback__",
+    }
 )
+"""The dunders that walk from one object to another: to a class and its relatives, to a
+function's globals, to an attribute by a name held as a string (`__getattribute__`, which
+`object` and every instance carry), to an instance's attributes all at once (`__getstate__`
+and the two reduce hooks hand back its `__dict__`), to the builtins themselves
+(`__builtins__`, and a builtin function's `__self__`, which is the builtins module), and to a
+frame (`__traceback__`)."""
+DENIED_FRAMES: Final = frozenset(
+    {
+        "gi_frame",
+        "cr_frame",
+        "ag_frame",
+        "tb_frame",
+        "f_back",
+        "f_globals",
+        "f_locals",
+        "f_builtins",
+    }
+)
+"""A generator's, a coroutine's or a traceback's frame, and what a frame reaches: the frames
+that called it, the harness's among them, with their locals, and the module's globals."""
 DENIED_BRIDGE: Final = frozenset({"nautilus_pyo3", "capsule_to_list"})
 DENIED_NUMPY_FILE: Final = frozenset(
     {"load", "save", "savez", "fromfile", "tofile", "loadtxt", "genfromtxt", "savetxt", "memmap"}
@@ -156,6 +206,7 @@ DENIED_NUMPY_FILE: Final = frozenset(
 DENIED_CLOCK: Final = frozenset(
     {
         "clock",
+        "_clock",
         "set_timer",
         "set_timer_ns",
         "set_time_alert",
@@ -170,11 +221,15 @@ DENIED_CLOCK: Final = frozenset(
         "local_now",
     }
 )
-"""The component clock and its timer API, reachable only as an attribute."""
+"""The component clock and its timer API, reachable only as an attribute — the clock under
+both the names the engine gives it, `clock` and `_clock` (nautilus_trader 1.231.0). It reads
+the instant the engine is at, which in a backtest is the point being matched and under
+`depth` every change of the book, where the author is handed `data_time`."""
 
-DENIED_SCHEDULE: Final = frozenset({"cache"})
-"""The one route by which a `strategy.py` can hold an instrument, and so its `info.splits`:
-every split of that instrument's life, which is the certification window and beyond."""
+DENIED_SCHEDULE: Final = frozenset({"cache", "request_instrument", "request_instruments"})
+"""The routes by which a `strategy.py` can hold an instrument, and so its `info.splits`:
+every split of that instrument's life, which is the certification window and beyond — the
+cache, and the engine's requests for an instrument, which the data engine answers."""
 
 DENIED_STALE_BASIS: Final = frozenset(
     {
@@ -201,9 +256,15 @@ leaves in the share count the position opened in and which nothing can rewrite."
 DENIED_HISTORY: Final = frozenset(
     {
         "request_bars",
+        "request_aggregated_bars",
         "request_quote_ticks",
         "request_trade_ticks",
+        "request_order_book_snapshot",
+        "request_order_book_deltas",
+        "request_order_book_depth",
+        "request_funding_rates",
         "request_data",
+        "request_join",
         "_trading_from_ns",
         "_delivered_ns",
         "_fed_from_ns",
@@ -211,7 +272,9 @@ DENIED_HISTORY: Final = frozenset(
         "_undelivered",
     }
 )
-"""The engine's history requests, and the harness's warmup gate: the three attributes it
+"""The engine's history requests — every `request_*` an engine actor holds but the two for an
+instrument (`DENIED_SCHEDULE`), the book's among them, which under `depth` would hand the
+author a book the account is not served — and the harness's warmup gate: the three attributes it
 reads and the two methods that combine them. History reaches a strategy only as the prefix
 its hypothesis declares, delivered like the window's own points; a request would be a
 second route to the catalog, and the gate's own state — or its answer — a clock that says
@@ -238,6 +301,28 @@ window opens and how far into it a card is, and the cushion is what the book has
 before this month; a strategy reads the book the policy left through `balance`, which is
 the number the card is struck on, and nothing else of it."""
 
+DENIED_DEPTH: Final = frozenset(
+    {
+        "_depth_books",
+        "_depth_shown",
+        "_depth_seen_ns",
+        "_top_shown",
+        "_take_depth",
+        "_show_view",
+        "_show_book",
+        "_show_top",
+        "_show_depth",
+    }
+)
+"""The harness's own copy of a book a `depth` hypothesis holds, at every change, and the
+methods that show the author its view of it."""
+
+WHY_DEPTH: Final = (
+    "the account sees a book's depth only on the grid `depth.every_ms` sets and level one on "
+    "every change, which the harness hands to on_order_book_deltas and on_quote_tick; read "
+    "them there"
+)
+
 WHY: Final = {
     **dict.fromkeys(
         DENIED_SCHEDULE,
@@ -261,6 +346,7 @@ WHY: Final = {
         "it is the harness's own book-policy state, a clock of where the window opens and "
         "what the book set aside; read the book the policy left from `balance`",
     ),
+    **dict.fromkeys(DENIED_DEPTH, f"it is the harness's book at every change, and {WHY_DEPTH}"),
 }
 """Why each denial that carries a reason exists, said in the refusal so a proposer can act on it."""
 
@@ -269,11 +355,13 @@ DENIED_IDENTIFIERS: Final = DENIED_MODULES | DENIED_DUNDERS | DENIED_BRIDGE | DE
 
 DENIED_ATTRIBUTES: Final = (
     DENIED_IDENTIFIERS
+    | DENIED_FRAMES
     | DENIED_CLOCK
     | DENIED_SCHEDULE
     | DENIED_STALE_BASIS
     | DENIED_HISTORY
     | DENIED_BOOK
+    | DENIED_DEPTH
 )
 
 SIZE_HELPERS: Final = frozenset({"submit_entry", "submit_exit"})
@@ -300,6 +388,23 @@ DENIED_UNDER_SIZING: Final = frozenset(
 sleeve's own; denied only when the hypothesis declares `sizing`."""
 
 WHY_UNDER_SIZING: Final = "because the harness sizes every order to the budget"
+
+DENIED_UNDER_DEPTH: Final = frozenset(
+    {
+        "msgbus",
+        "_msgbus",
+        "subscribe_order_book_deltas",
+        "subscribe_order_book_at_interval",
+        "subscribe_order_book_depth",
+    }
+)
+"""What reaches a book at every change, or as snapshots the account is not served, around
+the view the harness hands; denied only when the hypothesis declares `depth`. The bus
+carries the data engine's own topics, every change of the book among them, and every
+`Strategy` and `Actor` holds it twice, as `msgbus` and as `_msgbus` (nautilus_trader
+1.231.0). The harness subscribes a sleeve's book itself, so `subscribe_order_book_deltas`
+is a second subscription only an attached construct, which the harness does not gate,
+would be handed every change through."""
 
 OVERLAY_CONSTRUCT: Final = "overlay"
 SIZED_OVERLAY_NAMES: Final = frozenset({"Hedge"})
@@ -383,11 +488,13 @@ def scan(
     *,
     sized: bool = False,
     construct: str | None = None,
+    depth: bool = False,
 ) -> list[str]:
     """Every import, identifier and attribute rule this source breaks, in file order.
 
     `sized` says the hypothesis declares a sizing rule and `construct` which construct the
-    source is, so the rules of the sizing rule apply to the right vocabulary.
+    source is, so the rules of the sizing rule apply to the right vocabulary; `depth` says
+    it declares `depth`, so what reaches the book around the harness's view is refused.
     """
     try:
         tree = ast.parse(source, filename=origin)
@@ -412,7 +519,66 @@ def scan(
                 f"line {node.lineno}: attribute '.{node.attr}' is denied"
                 + ("" if why is None else f", because {why}")
             )
+        elif isinstance(node, ast.Attribute) and depth and node.attr in DENIED_UNDER_DEPTH:
+            problems.append(
+                f"line {node.lineno}: attribute '.{node.attr}' is denied under depth, "
+                f"because {WHY_DEPTH}"
+            )
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            problems.extend(_format_problems(node.value, node.lineno, depth=depth))
     return sorted(set(problems), key=problems.index)
+
+
+def _format_fields(text: str) -> Iterator[str]:
+    """Every replacement field `str.format` would read in `text`, nested specs included."""
+    try:
+        parsed = list(Formatter().parse(text))
+    except ValueError:
+        return
+    for _, field, spec, _ in parsed:
+        if field:
+            yield field
+        if spec:
+            yield from _format_fields(spec)
+
+
+_FIELD_STEP: Final = re.compile(r"\.([^.\[]*)|\[([^\]]*)\]")
+
+
+def _field_attributes(field: str) -> list[str]:
+    """The attributes a format field's name reads, in the grammar `str.format` parses it by:
+    an argument, then `.name` and `[key]` steps; a key is an item, never an attribute."""
+    position = len(re.split(r"[.\[]", field, maxsplit=1)[0])
+    names: list[str] = []
+    while position < len(field):
+        step = _FIELD_STEP.match(field, position)
+        if step is None:
+            break
+        if step.group(1) is not None:
+            names.append(step.group(1))
+        position = step.end()
+    return names
+
+
+def _format_problems(text: str, line: int, *, depth: bool) -> Iterable[str]:
+    """A denied attribute named in a format field, which `str.format` reaches by its name.
+
+    `"{0.cache}".format(self)` is the attribute read the scan refuses when spelled as one,
+    with the name held in a string; any string can be formatted, so every literal is read.
+    """
+    for field in _format_fields(text):
+        for name in _field_attributes(field):
+            if name in DENIED_ATTRIBUTES:
+                why = WHY.get(name)
+            elif depth and name in DENIED_UNDER_DEPTH:
+                why = WHY_DEPTH
+            else:
+                continue
+            yield (
+                f"line {line}: attribute '.{name}' is denied, and naming it in the format "
+                f"field '{{{field}}}' reaches it all the same"
+                + ("" if why is None else f"; it is denied because {why}")
+            )
 
 
 def _sizing_problems(tree: ast.AST, *, sized: bool, construct: str | None) -> Iterable[str]:
@@ -687,6 +853,7 @@ def check(
     *,
     sized: bool = False,
     construct: str | None = None,
+    depth: bool = False,
 ) -> list[str]:
     """The whole static half: the directory's scope, then the strategy's own source."""
     problems = scope(lane_dir, pinned)
@@ -697,4 +864,4 @@ def check(
         text = source.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return [*problems, f"{STRATEGY} cannot be read as text: {exc}"]
-    return [*problems, *scan(text, sized=sized, construct=construct)]
+    return [*problems, *scan(text, sized=sized, construct=construct, depth=depth)]

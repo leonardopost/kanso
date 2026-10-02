@@ -480,6 +480,15 @@ place kanso can act between a point arriving and an order being matched against
 it, and both of kanso's venues are a `SimulatedExchange`, which is why the
 corporate action lives there rather than in a strategy.
 
+A level-two book
+----------------
+An `OrderBook` of type `L2_MBP` keeps one size per price: an `ADD` or an `UPDATE` sets the
+size at its price whether or not the book holds it, a `DELETE` of a price it does not hold
+changes nothing, and a `CLEAR` empties both sides. Under `depth` the harness keeps its own
+copy of a book by exactly these rules (`kanso.nautilus.strategy`), because the cache's
+copy is already past the change a handler is handling, so the view an author is handed is
+the venue's book only while the engine keeps to them.
+
 Claims a broker adapter makes
 -----------------------------
 A broker package binds to the engine's own adapter for that broker, and this module may
@@ -1499,6 +1508,41 @@ def _probe_queue(ahead: int, print_sizes: tuple[int, ...], *, queue_position: bo
         return probe.filled_at
     finally:
         engine.dispose()
+
+
+def _check_a_level_two_book_keeps_one_size_per_price() -> tuple[bool, str]:
+    """What the harness's own copy of a `depth` book mirrors: the engine's L2 rules."""
+    from nautilus_trader.model.book import OrderBook
+    from nautilus_trader.model.data import BookOrder, OrderBookDelta
+    from nautilus_trader.model.enums import BookAction, BookType, OrderSide
+    from nautilus_trader.model.identifiers import InstrumentId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    instrument_id = InstrumentId.from_str("BOOK.SIM")
+    book = OrderBook(instrument_id, BookType.L2_MBP)
+
+    def apply(action: Any, side: Any, price: float, size: int) -> list[tuple[float, float]]:
+        order = BookOrder(side, Price(price, 2), Quantity(size, 0), 0)
+        book.apply_delta(OrderBookDelta(instrument_id, action, order, 0, 0, 1, 1))
+        return [(level.price.as_double(), level.size()) for level in book.bids()]
+
+    updated = apply(BookAction.UPDATE, OrderSide.BUY, 10.00, 500)
+    replaced = apply(BookAction.ADD, OrderSide.BUY, 10.00, 300)
+    ignored = apply(BookAction.DELETE, OrderSide.BUY, 9.99, 0)
+    apply(BookAction.ADD, OrderSide.SELL, 10.02, 100)
+    cleared = apply(BookAction.CLEAR, OrderSide.NO_ORDER_SIDE, 0.0, 0)
+    holds = (
+        updated == [(10.0, 500.0)]
+        and replaced == [(10.0, 300.0)]
+        and ignored == [(10.0, 300.0)]
+        and cleared == []
+        and book.asks() == []
+    )
+    return holds, (
+        f"an update of a price not held left the bids {updated}; an add over it {replaced}; a "
+        f"delete of a price not held {ignored}; a clear left bids {cleared} and asks "
+        f"{[level.price.as_double() for level in book.asks()]}"
+    )
 
 
 def _check_queue_position_waits_for_the_size_ahead() -> tuple[bool, str]:
@@ -3426,6 +3470,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "queue_position on a level-two book makes a joining limit wait for the size ahead",
         _check_queue_position_waits_for_the_size_ahead,
+    ),
+    (
+        "a level-two book sets the size an add or an update names, ignores a delete of a "
+        "price it does not hold, and empties both sides on a clear",
+        _check_a_level_two_book_keeps_one_size_per_price,
     ),
     (
         "an OrderBookDeltas is applied whole by the simulated exchange and matched once",

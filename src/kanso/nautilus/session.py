@@ -320,7 +320,7 @@ def _strategy(request: RunRequest, node: TradingNode) -> Any:
     cls, config = backtest._sleeve(request)
     for construct, source, params in request.modifiers:
         node.trader.add_actor(
-            backtest._modifier(construct, source, params, request.hyp.id, cls.__name__)
+            backtest._modifier(construct, source, params, request.hyp, cls.__name__)
         )
     strategy = cls(config=config)
     node.trader.add_strategy(strategy)

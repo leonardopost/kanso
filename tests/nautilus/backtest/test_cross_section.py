@@ -447,3 +447,67 @@ def test_whether_a_feed_is_marked_does_not_depend_on_the_chunk(request_for) -> N
 
     assert whole.run.fills
     assert (cut.run, cut.intents) == (whole.run, whole.intents)
+
+
+STAMPS = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+SEEN = []
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Records the instant of every bar and settlement it is handed, and trades nothing."""
+
+    config_cls = Config
+
+    def on_bar(self, bar):
+        SEEN.append(("bar", int(bar.ts_init)))
+
+    def on_data(self, data):
+        SEEN.append(("data", int(data.ts_init)))
+'''
+
+
+def test_a_sleeve_started_on_an_unmarked_chunk_is_flushed_on_a_marked_one(request_for) -> None:
+    """One name's bars and custom points are not coincident by rule, so a chunk is marked
+    only when two points of one series share an instant — as a split and a dividend on one
+    ex-date do; here two settlements of nothing. Chunked by day, the first day holds no such
+    instant and the sleeve starts unmarked; the second does, and the sleeve, held for
+    markers from then on, subscribes them then, or every point of the second day waits for
+    a flush that never reaches it. It is handed what one chunk of both days hands."""
+    import sys
+    from hashlib import sha256
+
+    from kanso.nautilus.backtest import execute_chunked
+    from tests.nautilus.backtest.test_depth import _bars, _settlements
+
+    first, second = date(2024, 1, 2), date(2024, 1, 3)
+    hyp = hypothesis(data_requirements=("bar", "funding"), resolution="1s")
+    assert not coincident(hyp)
+    days = [
+        (tuple(_bars(first, (1_000, 2_000, 3_000))), tuple(_settlements(first, (1_500,)))),
+        (tuple(_bars(second, (1_000, 2_000, 3_000))), tuple(_settlements(second, (2_000, 2_000)))),
+    ]
+    assert not any(map(is_marker, ordered(days[0])))
+    assert any(map(is_marker, ordered(days[1])))
+
+    def handed(chunks: list[tuple[tuple[object, ...], ...]], tag: str) -> list[tuple[str, int]]:
+        source = STAMPS + f"# {tag}\n".encode()
+        result = execute_chunked(
+            request_for(RESEARCH, source=source, hypothesis_=hyp), [instrument()], chunks
+        )
+        assert not result.crashed, result.traceback_tail
+        return list(sys.modules[f"kanso_sleeve_{sha256(source).hexdigest()[:12]}"].SEEN)
+
+    whole = handed([(days[0][0] + days[1][0], days[0][1] + days[1][1])], "one")
+    by_day = handed(days, "two")
+
+    assert by_day == whole
+    assert [kind for kind, _ in by_day] == [
+        *("bar", "data", "bar", "bar"),
+        *("bar", "bar", "data", "data", "bar"),
+    ]

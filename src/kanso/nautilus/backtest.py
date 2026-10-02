@@ -894,6 +894,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             # The venue a run fills against is simulated and settles no funding, so the
             # sleeve's balance books it as this extraction does.
             books_funding=True,
+            depth=None if hyp.depth is None else (hyp.depth.every_ns, hyp.depth.levels),
             **dict(request.overrides),
         )
     except ValueError as exc:
@@ -916,9 +917,17 @@ def tunable(request: RunRequest) -> dict[str, float]:
 
 
 def _modifier(
-    construct: str, source: bytes, params: Mapping[str, object], hyp_id: str, host: str
+    construct: str,
+    source: bytes,
+    params: Mapping[str, object],
+    hyp: Hypothesis,
+    host: str,
 ) -> Any:
-    """One attached construct, configured against the sleeve it modifies."""
+    """One attached construct, configured against the sleeve it modifies.
+
+    Under the hypothesis's `depth` it is handed no book of its own, as its host is handed
+    only the view: a subscription it makes to the book is refused.
+    """
     from kanso.nautilus.strategy import KansoModifier
 
     module = _module(source, "modifier")
@@ -929,12 +938,14 @@ def _modifier(
             f"as a {construct!r}"
         )
     try:
-        config = cls.config_cls(host_strategy_id=host, hyp_id=hyp_id, **dict(params))
+        config = cls.config_cls(host_strategy_id=host, hyp_id=hyp.id, **dict(params))
     except TypeError as exc:
         raise ValidationError(
             f"construct.params: {cls.config_cls.__name__} does not take these parameters: {exc}"
         ) from None
-    return cls(config=config)
+    modifier = cls(config=config)
+    modifier._book_withheld = hyp.depth is not None
+    return modifier
 
 
 # --- the engine --------------------------------------------------------------
@@ -975,7 +986,10 @@ def execute_chunked(
     first chunk on — even a first chunk holding no marker, such as the book changes of an
     hour before the first print, because a sleeve subscribes to markers when it starts, on
     the first chunk — which is the same dispatch the whole window gets because a chunk
-    boundary falls between instants, never inside one.
+    boundary falls between instants, never inside one. A feed the rule leaves unmarked is
+    marked chunk by chunk, where two points of one series share an instant, and a sleeve
+    that started on a chunk with none subscribes the markers when a chunk that has them
+    comes (`KansoStrategy._bind_markers`).
 
     Engine facts this relies on (nautilus_trader 1.231.0): `run(streaming=True)` pauses
     after the data it holds is exhausted without finalising; `clear_data` drops the stream
@@ -1044,7 +1058,7 @@ def execute_chunked(
         strategy = cls(config=config)
         for construct, source, params in request.modifiers:
             engine.add_actor(
-                _modifier(construct, source, params, request.hyp.id, cls.__name__),
+                _modifier(construct, source, params, request.hyp, cls.__name__),
             )
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
@@ -1067,6 +1081,8 @@ def execute_chunked(
                 _refuse_unbooked(request, fed, changed, before=int(points[0].ts_init))  # type: ignore[attr-defined]
                 _book_days(points, fed, changed)
             strategy._hold_until_cross_section = marked or any(is_marker(p) for p in points)
+            if ran and strategy._hold_until_cross_section:
+                strategy._bind_markers()
             _load_stream(engine, points, book=book)
             del points
             engine.run(start=opens, end=closes - 1, streaming=True)

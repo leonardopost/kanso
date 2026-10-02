@@ -13,12 +13,14 @@ from kanso.criteria.integrity import (
     DENIED_BOOK,
     DENIED_BUILTINS,
     DENIED_CLOCK,
+    DENIED_DEPTH,
     DENIED_DUNDERS,
     DENIED_HISTORY,
     DENIED_MODULES,
     DENIED_NUMPY_FILE,
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
+    DENIED_UNDER_DEPTH,
     check,
     clashes,
     import_allowed,
@@ -189,6 +191,216 @@ def test_everything_the_runner_hands_the_harness_for_a_book_policy_is_denied() -
     book(sleeve, BookPolicy(reset="monthly"), 0, 1, cushion=1.0, settled_ns=0)
 
     assert set(vars(sleeve)) <= DENIED_BOOK
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_DEPTH))
+def test_the_harness_s_own_book_under_depth_is_out_of_reach(name: str) -> None:
+    """The harness keeps every change of a `depth` book; the author is handed the view."""
+    (problem,) = scan(f"x = self.{name}")
+
+    assert f"attribute '.{name}' is denied" in problem
+    assert "read them there" in problem
+
+
+def test_everything_the_harness_keeps_of_a_depth_book_is_denied() -> None:
+    """A new piece of the harness's book, or a new way of showing it, is out of reach the
+    moment it is added."""
+    from tests.nautilus.strategy.test_sleeve import config
+
+    sleeve = KansoStrategy(config(depth=(100_000_000, 3)))
+    kept = {name for name in vars(sleeve) if name.startswith(("_depth", "_top"))}
+    shown = {name for name in dir(KansoStrategy) if name.startswith(("_show", "_take_depth"))}
+
+    assert kept
+    assert kept | shown <= DENIED_DEPTH
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_UNDER_DEPTH))
+def test_the_bus_and_the_book_subscriptions_are_refused_under_depth_alone(name: str) -> None:
+    """Under `depth` they reach the book around the view; without it they are ordinary."""
+    (problem,) = scan(f"self.{name}", depth=True)
+
+    assert f"attribute '.{name}' is denied under depth" in problem
+    assert "on_order_book_deltas and on_quote_tick" in problem
+    assert scan(f"self.{name}") == []
+
+
+def test_every_route_the_engine_gives_to_the_bus_or_a_book_is_refused_under_depth() -> None:
+    """Read off the engine rather than off the set, so a member dropped from it fails here:
+    every name a strategy or an attached construct holds the bus by, and every subscription
+    to a book. Measured on nautilus_trader 1.231.0: `msgbus` and `_msgbus`, and three
+    subscriptions, on `Strategy` and `Actor` alike."""
+    from nautilus_trader.common.actor import Actor
+    from nautilus_trader.trading.strategy import Strategy
+
+    routes = {
+        name
+        for cls in (Strategy, Actor)
+        for name in dir(cls)
+        if "msgbus" in name or name.startswith("subscribe_order_book")
+    }
+
+    assert routes >= {
+        "msgbus",
+        "_msgbus",
+        "subscribe_order_book_deltas",
+        "subscribe_order_book_at_interval",
+        "subscribe_order_book_depth",
+    }
+    for name in sorted(routes):
+        assert scan(f"self.{name}", depth=True), f".{name} reaches the book under depth"
+
+
+def test_every_request_and_every_clock_the_engine_gives_an_actor_is_refused() -> None:
+    """Read off the engine rather than off the sets, so a request or a clock it adds is
+    refused the day it is added: every `request_*` hands the author history, a book the
+    account is not served — a snapshot, the deltas or the depth of a book — or an instrument
+    with its splits, and the clock, under either name, the instant the engine is at, which
+    under `depth` is every change of the book. Measured on nautilus_trader 1.231.0: twelve
+    requests and `clock` and `_clock`, on `Strategy` and `Actor` alike."""
+    from nautilus_trader.common.actor import Actor
+    from nautilus_trader.trading.strategy import Strategy
+
+    routes = {
+        name
+        for cls in (Strategy, Actor)
+        for name in dir(cls)
+        if name.startswith("request_") or "clock" in name
+    }
+
+    assert routes >= {
+        "clock",
+        "_clock",
+        "request_order_book_snapshot",
+        "request_order_book_deltas",
+        "request_order_book_depth",
+        "request_instrument",
+    }
+    for name in sorted(routes):
+        for depth in (False, True):
+            assert scan(f"self.{name}", depth=depth), f".{name} was allowed"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "at = self._clock.timestamp_ns()",
+        "self.request_order_book_snapshot(InstrumentId.from_str('DEMO.XNAS'), limit=10)",
+        "self.request_order_book_depth(InstrumentId.from_str('DEMO.XNAS'), depth=10)",
+        'shown = "{0._clock}".format(self)',
+    ],
+)
+def test_a_depth_sleeve_is_refused_the_clock_and_a_book_of_its_own_asking(line: str) -> None:
+    """Two routes past the view a `depth` sleeve is handed: the engine's instant, which there
+    is the instant of every change, and a book asked for rather than subscribed."""
+    source = (
+        "from nautilus_trader.model.identifiers import InstrumentId\n"
+        "class Strategy:\n"
+        "    def on_order_book_deltas(self, deltas):\n"
+        f"        {line}\n"
+    )
+
+    assert scan(source, depth=True)
+    assert scan(source)
+
+
+def test_an_attached_construct_under_depth_may_not_subscribe_the_book() -> None:
+    source = (
+        "from nautilus_trader.model.identifiers import InstrumentId\n"
+        "class Modifier:\n"
+        "    def on_start(self):\n"
+        "        self.subscribe_order_book_deltas(InstrumentId.from_str('DEMO.XNAS'))\n"
+    )
+
+    assert scan(source, construct="filter") == []
+    (problem,) = scan(source, depth=True, construct="filter")
+    assert "'.subscribe_order_book_deltas' is denied under depth" in problem
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'books = self.__getattribute__("_depth_books")',
+        'cache = object.__getattribute__(self, "cache")',
+        "kept = self.__getstate__()",
+        "kept = self.__reduce__()",
+        "kept = self.__reduce_ex__(2)",
+        'opened = __builtins__["open"]',
+        "opened = len.__self__.open",
+        "up = (x for x in ()).gi_frame.f_back",
+        "try:\n    1 / 0\nexcept ZeroDivisionError as exc:\n    up = exc.__traceback__",
+        "up = frame.tb_frame.f_locals",
+        "up = frame.f_globals",
+        "up = frame.f_builtins",
+        "up = coroutine.cr_frame",
+        "up = generator.ag_frame",
+        'shown = "{0._depth_books[DEMO.XNAS][1].keys}".format(self)',
+        'shown = "{0.price:{1.cache}}".format(tick, self)',
+        'shown = "{0.__dict__}".format(self)',
+    ],
+)
+def test_a_denied_name_reached_by_another_spelling_is_refused(source: str) -> None:
+    """The attribute rules match a spelling, so every spelling that reaches the same object
+    by a name held in a string, by an instance's attributes all at once, by the builtins
+    module or by a frame is refused as well."""
+    assert scan(source), f"{source!r} was allowed"
+
+
+def test_the_routes_refused_reach_what_they_are_refused_for() -> None:
+    """Not a hypothetical: run as a strategy file is run, each spelling hands over the
+    builtin `open`, an attribute by its name, or an instance's attributes."""
+    import builtins
+
+    from kanso.nautilus.backtest import _module
+
+    module = _module(
+        b"OPEN = len.__self__.open\n"
+        b"HELD = __builtins__\n"
+        b"class Kept:\n"
+        b"    pass\n"
+        b"KEPT = Kept()\n"
+        b"KEPT.cache = 1\n"
+        b"BY_NAME = object.__getattribute__(KEPT, 'cache')\n"
+        b"ALL = KEPT.__getstate__()\n",
+        "integrity_probe",
+    )
+
+    assert module.OPEN is open
+    assert module.HELD in (builtins, vars(builtins))
+    assert (module.BY_NAME, module.ALL) == (1, {"cache": 1})
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'shown = "{0.price:>10}".format(tick)',
+        'shown = "{0[cache]}".format(held)',
+        'shown = "{0.close} {1}".format(bar, 2)',
+        'shown = "{ not a field"',
+        'shown = "{0[a]b.cache}"',
+        'shown = "{0._msgbus}".format(self)',
+    ],
+)
+def test_a_format_field_naming_no_denied_attribute_passes(source: str) -> None:
+    """An item key is not an attribute, a malformed string or field formats nothing — after
+    an item only `.` or `[` may follow — and the bus is an ordinary attribute without
+    `depth`."""
+    assert scan(source) == []
+
+
+def test_a_format_field_naming_the_bus_is_refused_under_depth() -> None:
+    (problem,) = scan('shown = "{0._msgbus}".format(self)', depth=True)
+
+    assert "format field '{0._msgbus}'" in problem
+    assert "on_order_book_deltas and on_quote_tick" in problem
+
+
+def test_a_lane_under_depth_is_checked_for_what_depth_refuses(lane: Path) -> None:
+    (lane / "strategy.py").write_text("x = self.msgbus\n", encoding="utf-8")
+
+    assert check(lane, {}) == []
+    (problem,) = check(lane, {}, depth=True)
+    assert "'.msgbus' is denied under depth" in problem
 
 
 def test_a_strategy_reaching_for_the_schedule_is_refused_by_the_route_it_took() -> None:

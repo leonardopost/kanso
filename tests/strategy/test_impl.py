@@ -363,3 +363,31 @@ def test_the_manifest_config_carries_the_overlays_extra_grain_and_the_sleeves_bu
         impl._sleeve_config(draft_hypothesis(ws, store, "demo_free"), 1.0, draft)["sizing_budget"]
         == 0.0
     )
+
+
+def test_a_stage_shows_a_depth_sleeve_the_book_a_card_showed_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The grid and the levels reach a deployed sleeve as the runner injects them into a
+    card's, and come back from the manifest's YAML as the pair the configuration declares."""
+    from kanso.nautilus.strategy import KansoConfig
+
+    from .conftest import draft_hypothesis, draft_version
+
+    shown = draft_hypothesis(
+        ws,
+        store,
+        "demo_depth",
+        resolution="tick",
+        data_requirements=["book", "trade"],
+        depth={"every_ms": 100, "levels": 3},
+    )
+    plain = draft_hypothesis(ws, store, "demo_plain")
+    draft = draft_version(store, "demo_depth", ())
+
+    assert impl._sleeve_config(shown, 1.0, draft)["depth"] == [100_000_000, 3]
+    assert "depth" not in impl._sleeve_config(plain, 1.0, draft)
+    assert impl._typed(KansoConfig, {"depth": [100_000_000, 3], "fixed_params": []}) == {
+        "depth": (100_000_000, 3),
+        "fixed_params": (),
+    }

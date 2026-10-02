@@ -107,6 +107,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
             "spread": "fixed_bps",
             "fixed_bps": 2.0,
         },
+        "depth": None,
     }
 
 
@@ -464,6 +465,42 @@ def test_a_change_of_book_policy_names_the_rule_that_moved(
         "'reset': 'monthly'} to {'reset': 'monthly', 'financing_rate_bps': 100.0, "
         "'maintenance_pct': None}"
     ], "the pinned side reads back from JSON with its keys sorted"
+
+
+def test_a_change_of_depth_clears_the_best(ws: Workspace, store: StateStore) -> None:
+    """A rule that saw the book every tenth of a second and one that saw it every second are
+    different strategies over the same days, so the grid and the levels shown are scope."""
+    booked = {"resolution": "tick", "data_requirements": ["book", "trade"]}
+    register(ws, store, document(**booked, depth={"every_ms": 100, "levels": 3}))
+    set_best(store)
+
+    register(ws, store, document(**booked, depth={"every_ms": 1000, "levels": 3}))
+
+    assert record(ws, store).best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["reason"] for event in cleared] == [
+        "depth changed from {'every_ms': 100, 'levels': 3} to {'every_ms': 1000, 'levels': 3}"
+    ]
+
+
+def test_a_row_pinned_before_depth_joined_the_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A row from before `depth` has no key for it in its pins, which reads as no depth."""
+    register(ws, store)
+    set_best(store)
+    held = store.connection.execute(
+        "SELECT pins FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    pins = json.loads(held["pins"])
+    del pins["depth"]
+    store.connection.execute(
+        "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
+    )
+
+    register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
 
 
 def test_a_row_pinned_before_benchmark_joined_the_scope_keeps_the_best(

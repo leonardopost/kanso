@@ -103,7 +103,11 @@ class _StrategyIntegrity:
         if ctx.lane_dir is None:
             return skipped(self.id, "no lane directory was supplied, so nothing was inspected")
         problems = check_integrity(
-            ctx.lane_dir, ctx.pinned, sized=ctx.hyp.sizing is not None, construct=ctx.construct
+            ctx.lane_dir,
+            ctx.pinned,
+            sized=ctx.hyp.sizing is not None,
+            construct=ctx.construct,
+            depth=ctx.hyp.depth is not None,
         )
         return verdict(
             self.id,
