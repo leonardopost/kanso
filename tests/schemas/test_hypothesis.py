@@ -433,7 +433,7 @@ def test_depth_refuses_a_value_outside_its_range(field: str, value: int) -> None
         build(**TICK_BOOK, depth=depth)
 
 
-def test_depth_takes_the_deepest_book_an_archive_serves() -> None:
+def test_depth_takes_every_level_the_sampled_channel_serves() -> None:
     assert build(**TICK_BOOK, depth={"every_ms": 1, "levels": 400}).depth is not None
 
 

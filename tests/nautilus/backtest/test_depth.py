@@ -15,10 +15,18 @@ from datetime import date
 from hashlib import sha256
 from typing import Any
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from nautilus_trader.model.book import OrderBook
-from nautilus_trader.model.data import OrderBookDelta, OrderBookDeltas, TradeTick
+from nautilus_trader.model.data import (
+    Bar,
+    CustomData,
+    DataType,
+    OrderBookDelta,
+    OrderBookDeltas,
+    TradeTick,
+)
 from nautilus_trader.model.enums import (
     AggressorSide,
     BookAction,
@@ -31,7 +39,9 @@ from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import midnight_ns
 from kanso.data.loaders.points import make_delta
-from kanso.nautilus.backtest import RunRequest, execute
+from kanso.data.types.funding import Funding
+from kanso.errors import ValidationError
+from kanso.nautilus.backtest import RunRequest, execute, execute_chunked
 from kanso.schemas import Hypothesis
 from tests.nautilus.backtest.conftest import RESEARCH, SYMBOL, _venue, hypothesis, instrument
 
@@ -428,6 +438,268 @@ def test_an_order_sent_from_a_view_reaches_the_venue_a_latency_after_its_point(
     assert at_once.intents == late.intents
     assert [(fill.ts_ns - base) // MS_NS for fill in at_once.run.fills] == [30]
     assert [(fill.ts_ns - base) // MS_NS for fill in late.run.fills] == [50]
+
+
+QUOTE_TAKER = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Takes the first offer of 10.01 it is shown at level one, and nothing else.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.taken = False
+
+    def on_quote_tick(self, tick) -> None:
+        if not self.taken and tick.ask_price.as_double() == 10.01:
+            self.taken = True
+            self.submit_entry(tick.instrument_id, "BUY", qty=100, price=10.01)
+"""
+
+BOOK_ROUTES = {
+    "subscribe_order_book_deltas": "(InstrumentId.from_str('DEMO.XNAS'))",
+    "subscribe_order_book_at_interval": (
+        "(InstrumentId.from_str('DEMO.XNAS'), interval_ms=3_600_000)"
+    ),
+    "subscribe_order_book_depth": "(InstrumentId.from_str('DEMO.XNAS'))",
+}
+"""Each way an engine actor subscribes a book of its own, as an attached construct would."""
+
+
+def subscriber(route: str) -> bytes:
+    """A filter that subscribes its host's book by `route` and counts the changes it is
+    handed, allowing every order."""
+    return f"""
+from nautilus_trader.model.identifiers import InstrumentId
+
+from kanso.nautilus.strategy import Decision, KansoModifier, KansoModifierConfig
+
+SEEN = []
+
+
+class Config(KansoModifierConfig):
+    pass
+
+
+class Modifier(KansoModifier):
+    construct = "filter"
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.{route}{BOOK_ROUTES[route]}
+
+    def on_order_book_deltas(self, deltas) -> None:
+        SEEN.append(len(deltas.deltas))
+
+    def evaluate(self, ctx):
+        return Decision(allow=True)
+""".encode()
+
+
+def test_level_one_of_a_marked_instant_is_handed_at_its_marker(request_for) -> None:
+    """The instant at 130 ms takes the best offer away and puts 10.01 in its place. Its level
+    one is handed at the flush marker after its two changes, so a taker of the new offer
+    fills at 130 ms with no latency and at 150 ms, the next point, with 10 ms; were it handed
+    only at the next change, at 150 ms, those would be 150 and 250."""
+    base = _base(RESEARCH[0])
+    filled = {}
+    for latency_ms in (0.0, 10.0):
+        result = run(
+            request_for(
+                RESEARCH, source=QUOTE_TAKER, hypothesis_=depth_hypothesis(latency_ms=latency_ms)
+            ),
+            [tuple(book())],
+        )
+        assert [(intent[0] - base) // MS_NS for intent in result.intents] == [130]
+        filled[latency_ms] = [(fill.ts_ns - base) // MS_NS for fill in result.run.fills]
+
+    assert filled == {0.0: [130], 10.0: [150]}
+
+
+def test_an_owed_exit_is_paid_on_a_change_the_author_is_not_shown(request_for) -> None:
+    """BOOK_ONLY exits at market once, on its thirtieth view, and never asks again; the
+    market exit it cancelled its resting one for is refused by the latency, so the exit is
+    owed. Every change after the thirtieth is to a bid below the one level shown, so the
+    author is shown nothing more, and the harness still asks for the owed exit on each of
+    those changes: the position is closed rather than held to the end of the window."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS, chasing_costs
+
+    base = midnight_ns(RESEARCH[0]) + BOOK_OPEN_NS
+    changes = [
+        make_delta(_id(), BookAction.ADD, OrderSide.BUY, 1_000, 500, 1, 2, 0, base, base),
+        make_delta(_id(), BookAction.ADD, OrderSide.SELL, 1_002, 500, 2, 2, 0, base, base),
+    ]
+    for second in range(1, 80):
+        ts = base + second * 1_000_000_000
+        if second <= 30:
+            change = (OrderSide.SELL, 1_002, 500 + second)  # level one moves: a view
+        else:
+            change = (OrderSide.BUY, 998, 100 + second)  # below level one: no view
+        side, ticks, size = change
+        changes.append(make_delta(_id(), BookAction.UPDATE, side, ticks, size, 2, 2, 0, ts, ts))
+    document = depth_hypothesis(levels=1).model_dump(mode="json", by_alias=True)
+    document.update(data_requirements=["book"], costs=chasing_costs(20.0))
+    result = run(
+        request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=Hypothesis.model_validate(document)),
+        [tuple(changes)],
+    )
+
+    assert [(fill.side, fill.qty) for fill in result.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+def _bars(day: date, at_ms: tuple[int, ...]) -> list[Bar]:
+    from kanso.nautilus.strategy import _bar_type
+
+    made = []
+    for ms in at_ms:
+        ts = _base(day) + ms * MS_NS
+        made.append(
+            Bar(
+                _bar_type(_id(), "1s"),
+                Price(10.0, 2),
+                Price(10.0, 2),
+                Price(10.0, 2),
+                Price(10.0, 2),
+                Quantity.from_int(100),
+                ts_event=ts,
+                ts_init=ts,
+            )
+        )
+    return made
+
+
+def _settlements(day: date, at_ms: tuple[int, ...]) -> list[CustomData]:
+    """Funding settlements of nothing, wrapped as the catalog hands a custom point over."""
+    return [
+        CustomData(
+            DataType(Funding),
+            Funding(
+                instrument_id=_id(),
+                rate=0.0,
+                ts_event=_base(day) + ms * MS_NS,
+                ts_init=_base(day) + ms * MS_NS,
+            ),
+        )
+        for ms in at_ms
+    ]
+
+
+@pytest.mark.parametrize("requirement", ["bar", "funding"])
+def test_the_view_is_handed_at_a_bar_or_a_custom_point_after_the_grid_instant(
+    request_for, requirement: str
+) -> None:
+    """The view comes at the first point of any data published after a grid instant, not
+    only a print or a change: the best bid that goes at 420 ms is shown at the point at
+    700 ms, here a bar or a funding settlement, rather than at the next change at 1,210."""
+    deltas = book()
+    at_ms = (50, 105, 205, 700, 1_400)
+    points: list[Any] = (
+        _bars(RESEARCH[0], at_ms) if requirement == "bar" else _settlements(RESEARCH[0], at_ms)
+    )
+    document = depth_hypothesis().model_dump(mode="json", by_alias=True)
+    document.update(
+        resolution="1s" if requirement == "bar" else "tick",
+        data_requirements=["book", requirement],
+    )
+    source = PROBE + f"# handed at a {requirement}\n".encode()
+    run(
+        request_for(RESEARCH, source=source, hypothesis_=Hypothesis.model_validate(document)),
+        [tuple(deltas), tuple(points)],
+    )
+    owed = expected_views(deltas, points, EVERY_MS * MS_NS, LEVELS)
+    base = _base(RESEARCH[0])
+
+    assert [(stamp - base) // MS_NS for stamp, _ in owed] == [0, 100, 200, 600, 1_300]
+    assert handed_views(seen(source)) == owed
+
+
+@pytest.mark.parametrize("route", sorted(BOOK_ROUTES))
+def test_an_attached_construct_is_refused_a_book_of_its_own_under_depth(
+    request_for, route: str
+) -> None:
+    """Without the key a construct may subscribe its host's book, and by the changes it is
+    handed every one of them; under it, where its host is handed only the view, asking for a
+    book is refused, so it cannot decide the host's orders on depth the account does not
+    see."""
+    deltas = book()
+    source = subscriber(route)
+    groups: list[tuple[object, ...]] = [tuple(deltas), tuple(prints())]
+    free = execute(
+        request_for(
+            RESEARCH,
+            source=PROBE,
+            hypothesis_=depth_hypothesis(every_ms=None),
+            modifiers=(("filter", source, {}),),
+        ),
+        [instrument()],
+        groups,
+    )
+    handed = sys.modules[f"kanso_modifier_{sha256(source).hexdigest()[:12]}"].SEEN
+
+    assert not free.crashed, free.traceback_tail
+    if route == "subscribe_order_book_deltas":
+        assert sum(handed) == len(deltas)
+    with pytest.raises(ValidationError, match=f"Modifier.{route}: under `depth`") as refused:
+        execute(
+            request_for(
+                RESEARCH,
+                source=PROBE,
+                hypothesis_=depth_hypothesis(),
+                modifiers=(("filter", source, {}),),
+            ),
+            [instrument()],
+            groups,
+        )
+    assert refused.value.remedy == "remove the subscription from strategy.py"
+
+
+@pytest.mark.parametrize("every_ms", [None, EVERY_MS])
+def test_a_marked_chunk_after_an_unmarked_one_is_handed_as_one_window_hands_it(
+    request_for, every_ms: int | None
+) -> None:
+    """The second day holds an instant of two changes and the first none, so a run chunked
+    by day starts unmarked and is armed for markers on the second chunk. It hands the author
+    what one chunk of both days hands, every print of the second day included."""
+    first, second = date(2024, 1, 2), date(2024, 1, 3)
+    unmarked = [
+        OrderBookDelta(
+            delta.instrument_id,
+            delta.action,
+            delta.order,
+            0,
+            0,
+            _base(first) + index * 7 * MS_NS + 1,
+            _base(first) + index * 7 * MS_NS + 1,
+        )
+        for index, delta in enumerate(book(first))
+    ]
+    changed = {int(delta.ts_init) for delta in unmarked}
+    early = [tick for tick in prints(first) if int(tick.ts_init) not in changed]
+    hyp = depth_hypothesis(every_ms=every_ms)
+
+    def handed(chunks: list[list[tuple[object, ...]]], tag: str) -> list[tuple[str, int]]:
+        source = PROBE + f"# {tag} {every_ms}\n".encode()
+        result = execute_chunked(
+            request_for(RESEARCH, source=source, hypothesis_=hyp), [instrument()], chunks
+        )
+        assert not result.crashed, result.traceback_tail
+        return [(kind, data_time) for kind, data_time, _ in seen(source)]
+
+    whole = handed([[tuple(unmarked + book(second)), tuple(early + prints(second))]], "one")
+    by_day = handed(
+        [[tuple(unmarked), tuple(early)], [tuple(book(second)), tuple(prints(second))]], "two"
+    )
+
+    assert by_day == whole
+    assert [stamp for kind, stamp in by_day if kind == "trade" and stamp > _base(second)] == [
+        int(tick.ts_init) for tick in prints(second)
+    ]
 
 
 def test_depth_reaches_the_sleeve_as_grid_and_levels() -> None:

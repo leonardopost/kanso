@@ -212,7 +212,11 @@ class Book(KansoModel):
 
 NS_PER_MS: Final = 1_000_000
 MAX_DEPTH_LEVELS: Final = 400
-"""The deepest book a venue's archive serves per side, and so the most a strategy is shown."""
+"""The most levels of each side a strategy may be shown: the depth of the sampled channel
+the key models. Measured 2026-10-02 by subscribing to a crypto exchange's public depth
+channel: 400 levels a side, a change every 100 ms. It is not the deepest book there is — the
+same exchange's archives serve 5,000 levels a side, at one second — but a view deeper than
+the sampled channel serves is depth an account on it does not see."""
 
 
 class Depth(KansoModel):

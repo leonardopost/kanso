@@ -201,6 +201,45 @@ def test_a_baseline_that_reaches_outside_the_lane_is_never_executed(
     assert records.active(store, hyp_id) is None
 
 
+BUS_RIDER = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Listens to every change of the book on the bus, past the view `depth` hands it."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self._msgbus.subscribe(topic="data.book.deltas.*", handler=self.on_order_book_deltas)
+'''
+
+
+def test_a_baseline_that_reaches_the_bus_under_depth_is_never_executed(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run's own integrity check is the one `depth` widens: under it the baseline is
+    refused before anything runs. The workspace holds daily bars and no book, and the
+    refusal comes before any point is read, so the snapshot of the bars stands in for one
+    that holds the book too."""
+    covering = loop.covering
+    monkeypatch.setattr(
+        loop,
+        "covering",
+        lambda ws_, universe, _, *rest: covering(ws_, universe, ["bar"], *rest),
+    )
+    shown = document(data_requirements=["bar", "book"], depth={"every_ms": 100, "levels": 3})
+    hyp_id = classify(ws, store, shown, BUS_RIDER)
+
+    with pytest.raises(PreconditionError, match="'._msgbus' is denied under depth"):
+        loop.begin(ws, store, hyp_id)
+    assert records.active(store, hyp_id) is None
+
+
 def test_the_second_run_of_a_day_is_the_second_tag(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:

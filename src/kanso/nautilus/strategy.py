@@ -553,6 +553,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._hedging = False
         self._exiting = False
         self._hold_until_cross_section = False
+        self._markers_bound = False
         self._trading_from_ns = 0
         self._delivered_ns = 0
         self._fed_from_ns = 0
@@ -990,6 +991,21 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 custom = DataType(resolve_type(requirement))
                 self.subscribe_data(custom, client_id=ClientId(CLIENT_ID))
         if self._hold_until_cross_section:
+            self._bind_markers()
+
+    def _bind_markers(self) -> None:
+        """Subscribe the cross-section flush markers, once, whenever a feed first has them.
+
+        A sleeve held for markers subscribes them when it starts; one the runner arms for a
+        later chunk of the window, after it started unmarked, subscribes them then, or every
+        point that chunk holds back would wait for a flush that never reaches it.
+        """
+        from nautilus_trader.model.identifiers import ClientId
+
+        from kanso.nautilus.backtest import CLIENT_ID
+
+        if not self._markers_bound:
+            self._markers_bound = True
             self.subscribe_data(MARKER_TYPE, client_id=ClientId(CLIENT_ID))
 
     # --- data handlers: the clock, the last observations, the exit rules -----
@@ -3007,6 +3023,7 @@ class KansoModifier(Actor):  # type: ignore[misc]
             )
         super().__init__(resolved)
         self._cfg: KansoModifierConfig = resolved
+        self._book_withheld = False
 
     @property
     def modifier_config(self) -> KansoModifierConfig:
@@ -3025,6 +3042,37 @@ class KansoModifier(Actor):  # type: ignore[misc]
     def _stop(self) -> None:
         deregister_modifier(self.msgbus, self._cfg.host_strategy_id, self)
         super()._stop()
+
+    # --- no book of its own under `depth` -----------------------------------
+
+    def subscribe_order_book_deltas(self, *args: Any, **kwargs: Any) -> None:
+        self._refuse_book("subscribe_order_book_deltas")
+        super().subscribe_order_book_deltas(*args, **kwargs)
+
+    def subscribe_order_book_at_interval(self, *args: Any, **kwargs: Any) -> None:
+        self._refuse_book("subscribe_order_book_at_interval")
+        super().subscribe_order_book_at_interval(*args, **kwargs)
+
+    def subscribe_order_book_depth(self, *args: Any, **kwargs: Any) -> None:
+        self._refuse_book("subscribe_order_book_depth")
+        super().subscribe_order_book_depth(*args, **kwargs)
+
+    def _refuse_book(self, route: str) -> None:
+        """Refuse a book of the construct's own when the hypothesis declares `depth`.
+
+        The host is handed only the view of a book an account would see; a construct that
+        decides the host's orders is handed none, and asking for one is refused rather than
+        answered with every change. The runner sets `_book_withheld` from the hypothesis.
+        The engine's subscriptions are `cpdef` (nautilus_trader 1.231.0), and an author's
+        call reaches this Python override.
+        """
+        if self._book_withheld:
+            raise ValidationError(
+                f"{type(self).__name__}.{route}: under `depth` an attached construct is handed "
+                "no book of its own, because its host sees only the view an account would; "
+                "read the host's prices from the context `evaluate` and `on_data` are asked with",
+                remedy="remove the subscription from strategy.py",
+            )
 
     def evaluate(self, ctx: HookContext) -> Decision:
         """This construct's decision for the moment described by `ctx`.

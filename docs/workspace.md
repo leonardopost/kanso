@@ -595,7 +595,7 @@ strategy what the account sees, and leaves the venue every change:
 ```yaml
 depth:                             # scope: adding or changing it clears `best`
   every_ms: 100                    # the book the strategy sees, as of each multiple of this
-  levels: 3                        # of each side, from the best; at most the levels loaded
+  levels: 3                        # of each side, from the best: 1 to 400, at most the levels loaded
 ```
 
 Under the key the strategy's `on_order_book_deltas` is handed the top `levels` of each side
@@ -610,13 +610,19 @@ latency is the whole round trip, feed and order together. The quote is a signal 
 nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
 `spread: quotes` has no quote series to read. What else the strategy may not touch under the
 key — the message bus and the engine's own book subscriptions — is in `docs/concepts.md`,
-The embargo. A strategy that reads level one alone sends and fills the same on any grid,
+The embargo. An attached construct researched or composed under the key is handed no book
+at all, neither the view nor a subscription of its own — asking for one is refused, and
+the card crashes naming the call; it reads its host's prices from the context it is asked
+with. A strategy that reads level one alone sends and fills the same on any grid,
 since the venue is handed every change whatever the strategy is shown. The same harness code
 runs on both code paths, and a deployed stage is configured with the key as its card was.
 
-`levels` may not usefully exceed the levels the book was loaded at: a loader that keeps the
-top K of an archive leaves a level pushed past K at its last size rather than deleting it, so
-past K the book holds stale levels. `kanso hyp validate` refuses (exit 3) `depth` on a
+`levels` is 1 to 400, the depth of the sampled channel the key models (measured on
+2026-10-02 against OKX's: 400 levels a side every 100 ms; its archives hold 5,000 a side at
+one second, which no account sees live), and `kanso hyp validate` refuses (exit 3) any other
+value, naming `depth.levels`. It may not usefully exceed the levels the book was loaded at
+either: a loader that keeps the top K of an archive leaves a level pushed past K at its last
+size rather than deleting it, so past K the book holds stale levels. `kanso hyp validate` refuses (exit 3) `depth` on a
 hypothesis whose `data_requirements` does not list `book`, and one that also lists `quote`,
 because a quote series would be a second source of `on_quote_tick` that neither the strategy
 nor a replay could tell apart. Classification never touches the key.

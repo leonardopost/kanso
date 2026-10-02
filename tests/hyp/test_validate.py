@@ -200,6 +200,16 @@ def test_depth_beside_a_quote_series_is_refused(ws: Workspace) -> None:
     assert "depth: refuses 'quote' in data_requirements" in failure.message
 
 
+@pytest.mark.parametrize("levels", [0, 401])
+def test_depth_levels_outside_one_to_four_hundred_are_refused(ws: Workspace, levels: int) -> None:
+    depth = {"every_ms": 100, "levels": levels}
+    failure = refused(
+        ws, document(resolution="tick", data_requirements=["book", "trade"], depth=depth)
+    )
+
+    assert "depth.levels" in failure.message
+
+
 def test_depth_over_a_book_is_admissible(ws: Workspace) -> None:
     depth = {"every_ms": 100, "levels": 3}
     parsed = accepted(
