@@ -577,3 +577,31 @@ def test_the_pages_say_a_lane_runs_its_benchmark_hold_in_a_child() -> None:
     assert item.startswith("~~The hold a benchmark objective differences against was run in")
     assert "in the lane's own process~~ **closed.**" in item
     assert "a child runs it now (row 120)" in rows["118"].split("|")[5]
+
+
+def test_the_pages_say_the_monitor_demotes_in_a_child() -> None:
+    """A monitor pass that demoted ran its stages' nodes in a process that runs all day; the
+    pages say a child makes it, that a stop leaves it to finish, and the backlog closes the
+    row that recorded it and the open half of the row before it."""
+    stages = prose(section(page("concepts.md"), "Stages"))
+    assert "**except a demotion the monitor makes**, which runs in a child of the monitor" in stages
+    moves = prose(section(page("concepts.md"), "Promotion and demotion"))
+    assert "**The monitor demotes in a child of its own process.**" in moves
+    assert "leaves it to finish" in moves
+    monitoring = prose(section(page("cli.md"), "Monitoring"))
+    assert (
+        "A pass demotes in a child of its own process, exactly as `kanso demote` does" in monitoring
+    )
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+    )
+    assert "A demotion the monitor is making is not: it is left to finish" in stop
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 12[01] \|", line)
+    }
+    item = rows["121"].split("|")[3].strip()
+    assert item.startswith("~~A monitor pass that demoted a version ran its stages' nodes in")
+    assert "the monitor's own process~~ **closed.**" in item
+    assert "a child makes the monitor's demotion now (row 121)" in rows["120"].split("|")[5]

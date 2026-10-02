@@ -1238,6 +1238,11 @@ certified under different latencies, or one on a book and one without, are refus
 recorded when the live stage could not hold the version, rather than run on whichever
 venue came first.
 
+**A stage node runs in the process that deploys it** — yours, under
+`kanso portfolio deploy`, `promote`, `demote` and `strat retire` — **except a demotion the
+monitor makes**, which runs in a child of the monitor (below), because the monitor runs all
+day and a process that runs all day never gives back what a node allocated in it.
+
 The stage file carries only the **id** of an execution client. What matters is the pair of
 declarations behind that id: `capital` is `simulated`, `broker_paper` or `real`, and `clock`
 is `replay` or `wall`. Those two declarations, and not any string in a configuration file,
@@ -1344,6 +1349,23 @@ live       0 version(s) · 0 · no node ran
 ```
 
 The asymmetry is deliberate. Taking risk off needs no permission; putting it on does.
+
+**The monitor demotes in a child of its own process.** Each redeploy builds a trading node
+and replays everything its stage has not replayed — a stage's clock moves only when it is
+deployed, so that is everything loaded since its last deploy — beside the hold a benchmark
+objective differences against, and the monitor is a process that runs all day: what a node
+allocated in it would never be given back. So a pass makes the demotion in a child it
+watches, the same `kanso demote` makes in yours, and keeps only the child's report: the
+strategy file, the stages, the sessions, the stage records and every event are written by
+the child, and are the ones the monitor would have written, window for window and intent for
+intent. Measured in a fresh monitor process on the suite's synthetic saw-tooth, a pass that
+demoted a live version and redeployed paper over a month of new daily bars raised the
+monitor's own peak by 35.2 MB when it demoted itself — 40.4 MB over nine months — and by 1.0
+to 1.1 MB in a child, as much as a pass that only judges moves it (0 to 1.1 MB). Nothing
+bounds the child: a demotion takes a failing version off real capital, so no memory share
+and no wall time may refuse one, and a `research stop` that lands while it runs leaves it to
+finish, as nothing stopped a demotion the monitor made itself. A refusal in the child
+reaches the pass as the same refusal, recorded against the version as any other.
 
 There is one exception to demotion, and it is the stronger act rather than a weaker one: a
 live version that breaches the stage's daily loss limit **halts the stage** instead of being

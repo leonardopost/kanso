@@ -19,8 +19,9 @@ its turn.
 every child at once and exits; a worker kills the card or the certification it is watching,
 begins no further proposal or card, leaves the run open and the lane directory where it is,
 and exits too — whatever it ran before, since every trading node hands the stop signals
-back to the process that built it (`kanso.nautilus.session.signals_kept`). A
-worker still busy when the one grace the supervisor gives them all runs out — waiting on a
+back to the process that built it (`kanso.nautilus.session.signals_kept`). The monitor
+exits once a demotion it is making has finished (`kanso.portfolio.child`). A worker still
+busy when the one grace the supervisor gives them all runs out — waiting on a
 model, say — is killed, and that costs the call and nothing else: the run, its blobs and
 its `best` are all in state. Nothing is ended and nothing is cleaned up, so the next
 `start` picks the runs up where they were left — which is why stopping the daemon is a

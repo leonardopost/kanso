@@ -33,7 +33,9 @@ and an escalation repeated every few minutes is an inbox nobody reads.
 
 Demotion is the portfolio's act, not this module's, because it moves a version *and* redeploys
 the stages whose switch is off — so it is called through, and a caller that wants to observe a
-pass without one hands in its own.
+pass without one hands in its own. A pass makes it in a child (`kanso.portfolio.child`): each
+redeploy builds and runs a trading node over everything its stage has not replayed, and a
+monitor that runs all day never gives back what a node allocated in its own process.
 """
 
 from __future__ import annotations
@@ -50,8 +52,8 @@ from kanso.inbox import escalate
 from kanso.monitor.realised import Tenure, tenure
 from kanso.monitor.stage import UNKNOWN, StageRecord
 from kanso.portfolio import clients, files, records
+from kanso.portfolio.child import demote_in_child
 from kanso.portfolio.deploy import clock_of, restated
-from kanso.portfolio.promote import demote as portfolio_demote
 from kanso.schemas import (
     CertificationPlan,
     GateResult,
@@ -102,7 +104,8 @@ NO_BOOK: Final = "the stage has closed no window for it yet, so there is nothing
 UNIMPLEMENTED: Final = "this version of kanso has no implementation for it"
 
 Demote = Callable[["Workspace", "StateStore", str, int], object]
-"""How a failing live version is moved off its stage: the portfolio's `demote`."""
+"""How a failing live version is moved off its stage: the portfolio's `demote`, made in a child
+of the monitor (`kanso.portfolio.child.demote_in_child`) unless a caller hands in another."""
 
 
 @dataclass(frozen=True)
@@ -184,7 +187,7 @@ def run_once(ws: Workspace, store: StateStore, *, demote: Demote | None = None) 
     Exposure comes first because a breach halts the stage, and a version judged on a stage
     that is about to be halted should be judged knowing it.
     """
-    move = demote or portfolio_demote
+    move = demote or demote_in_child
     outcomes: list[Outcome] = []
     portfolio = files.read(ws)
     for stage in STAGES:
