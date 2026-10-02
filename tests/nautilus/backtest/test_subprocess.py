@@ -320,10 +320,10 @@ def test_a_card_interrupted_by_a_stop_is_killed_and_not_a_crash(
     watch = runner._watch
     watched: list[Any] = []
 
-    def stopped_once_running(child: Any, budget_s: Any, mem_cap_gb: Any, **fed: Any) -> Any:
+    def stopped_once_running(child: Any, *bounds: Any, **fed: Any) -> Any:
         watched.append(child)
         runner.interrupt()
-        return watch(child, budget_s, mem_cap_gb, **fed)
+        return watch(child, *bounds, **fed)
 
     monkeypatch.setattr(runner, "_watch", stopped_once_running)
     try:
@@ -359,9 +359,9 @@ def test_a_card_no_longer_wanted_is_killed_at_the_watcher_s_next_ask(
         if watched:
             raise PreconditionError("the claim was taken back", remedy="queue it again")
 
-    def taken_once_running(child: Any, budget_s: Any, mem_cap_gb: Any, **fed: Any) -> Any:
+    def taken_once_running(child: Any, *bounds: Any, **fed: Any) -> Any:
         watched.append(child)
-        return watch(child, budget_s, mem_cap_gb, **fed)
+        return watch(child, *bounds, **fed)
 
     monkeypatch.setattr(runner, "_watch", taken_once_running)
     monkeypatch.setattr(runner, "WANTED_POLL_S", 0.05)

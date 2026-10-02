@@ -41,15 +41,22 @@ credentials and whatever the region. So the factory passes the private url
 the region `[adapters.okx]` declares, and the business url `derive_okx_ws_url` derives
 from it, exactly as the engine's own execution client does, and never leaves either to
 the default.
+
+**The account's own tier is read only when asked.** The declaration is the exchange's global
+Regular tier, and an account's regional entity may charge another, so `kanso doctor
+--check-adapters` reads the real account's fee tier, account mode and position mode with its
+three names and prints the `venues.OKX.costs` lines to state where the workspace charges
+otherwise (`account.py`). It is the one place this package sends a credential.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from kanso import creds
-from kanso.nautilus.adapters.okx import facts
+from kanso.nautilus.adapters.okx import account, facts
 from kanso.nautilus.adapters.okx.config import (
     CLIENTS,
     DEMO,
@@ -62,11 +69,11 @@ from kanso.nautilus.adapters.okx.config import (
     table,
 )
 from kanso.nautilus.adapters.okx.reference import ADAPTER
-from kanso.nautilus.adapters.okx.venue import declaration
+from kanso.nautilus.adapters.okx.venue import VENUE, declaration
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
-    from kanso.nautilus.adapters import EngineClaim
-    from kanso.schemas import ExecutionClientSpec, VenueDeclaration
+    from kanso.nautilus.adapters import AccountCheck, EngineClaim
+    from kanso.schemas import ExecutionClientSpec, VenueDeclaration, VenueOverride
     from kanso.workspace import Workspace
 
 __all__ = [
@@ -133,6 +140,11 @@ class OkxBroker:
     def venue_declaration(self, venue: str) -> VenueDeclaration | None:
         """What this broker declares about a venue it serves, or `None` for one it does not."""
         return declaration(venue)
+
+    def check_account(self, ws: Workspace, overrides: Mapping[str, VenueOverride]) -> AccountCheck:
+        """The real account's fee tier, account mode and position mode against the
+        declaration and the workspace's `venues.OKX` entry (`account.py`)."""
+        return account.check(ws, overrides.get(VENUE))
 
 
 BROKER: Final = OkxBroker()

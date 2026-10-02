@@ -31,7 +31,13 @@ from kanso.portfolio.deploy import (
     clock_of,
     deploy,
 )
-from kanso.portfolio.files import PORTFOLIO_FILE, halt, portfolio_file, stage_of
+from kanso.portfolio.files import (
+    PORTFOLIO_FILE,
+    halt,
+    portfolio_file,
+    stage_of,
+    venue_overrides,
+)
 from kanso.portfolio.files import read as read_portfolio
 from kanso.portfolio.files import write as write_portfolio
 from kanso.portfolio.lifecycle import Adoption, on_certified
@@ -100,5 +106,6 @@ __all__ = [
     "show",
     "stage_refusals",
     "subject_of",
+    "venue_overrides",
     "write_portfolio",
 ]

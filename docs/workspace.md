@@ -363,6 +363,8 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
+a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —
@@ -406,7 +408,11 @@ a sleeve whose exit rests at the ask reads the whole position there until the ex
 exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
-equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
+equity curve strikes at each period end, and one a strategy may size from. Reading it on every
+bar costs what the sleeve's orders gained since the last read, however long they have lived,
+so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
+does not save memory either, since the engine keeps every order's events for the run
+(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns
 (`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second

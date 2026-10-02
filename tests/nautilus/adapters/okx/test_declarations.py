@@ -15,9 +15,11 @@ declarations is driven against its recordings in `test_reference.py`.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -37,11 +39,14 @@ from kanso.nautilus.adapters.okx import (
     OkxConfig,
     Region,
     facts,
+    venue,
 )
 from kanso.nautilus.adapters.okx.config import DEFAULT_RATE_PER_SECOND, spec
 from kanso.nautilus.adapters.okx.venue import VENUE, declaration, instrument_id
 from kanso.schemas import resolve_venue_model
 from kanso.workspace import Workspace, init
+
+from .recorded import FUTURES_MODE, SPOT_MODE, account_answer
 
 DEMO = "okx_demo"
 LIVE = "okx"
@@ -192,6 +197,27 @@ def test_the_venue_declares_the_account_the_currency_and_the_two_rates_only() ->
         "maker_bps": 2.0,
     }
     assert declaration("XNAS") is None
+
+
+def test_the_declaration_is_the_global_tier_and_not_the_australian_entity_s() -> None:
+    """The declared rates are what the account answered for swaps while it was in spot
+    mode — the exchange's global figures. Its own entity's tier, recorded the next day in
+    futures mode, is 7 and 5, and the docstring says which is which, and when."""
+
+    def taker_and_maker(day: str) -> tuple[Decimal, Decimal]:
+        name = f"trade-fee_instType-SWAP_{day}.json"
+        [row] = json.loads(account_answer(name).body)["data"]
+        return (-Decimal(row["takerU"]) * 10_000, -Decimal(row["makerU"]) * 10_000)
+
+    declared = declaration(VENUE)
+    assert declared is not None and declared.costs is not None
+    rates = (declared.costs.commission_bps, declared.costs.maker_bps)
+    assert taker_and_maker(SPOT_MODE) == rates == (5.0, 2.0)
+    assert taker_and_maker(FUTURES_MODE) == (7, 5)
+    told = " ".join(str(venue.__doc__).split())
+    assert "the exchange's **global** Regular (Lv1) perpetual tier" in told
+    assert "each with a Regular tier of its own" in told
+    assert "Australian entity: on 2026-10-01" in told
 
 
 def test_the_declared_model_resolves_with_the_default_slippage_and_a_quoted_spread() -> None:

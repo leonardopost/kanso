@@ -78,6 +78,8 @@ BINDINGS = {
     "and a lone OrderBookDelta as a batch of one",
     "a catalog query handed its files returns the points of one instant in file order, "
     "whatever span it reads, with ts_init inclusive at both ends",
+    "an order's events grow only at its end, and its strategy is handed each one as the "
+    "order's last when the order takes it",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

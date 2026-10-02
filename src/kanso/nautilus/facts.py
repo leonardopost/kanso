@@ -262,6 +262,25 @@ constraint kanso cannot repair from outside the engine; what it does is measure 
 here, record it, and tell a researcher that turnover — not per-bar work — is what a
 card's budget buys.
 
+**An order's events grow only at its end, and its strategy is handed each one as it is
+taken.** `Order.apply` appends the event it takes last, once its state machine has accepted
+it, and nothing else writes the list; `Order.events` hands back a new list holding every
+event each time it is read, where `event_count` and `last_event` read the length and the
+last element without one. The execution engine publishes each event it applied to the
+strategy's `events.order.<id>` topic after applying it, and the strategy publishes the
+pending modify and pending cancel it applies itself, so `handle_event` is handed each event
+when it is the order's last. Measured, a buy resting at 9.50, moved on every print it was
+open on and filled in parts by sellers' prints of 10, with no latency and with thirty
+seconds: every event after the first was handed in the order the order holds them, each
+as its last with the count one higher than before, and every list read on the way was a
+prefix of the last. The first, `OrderInitialized`, is handed before the order is in the
+cache. That is what lets `KansoStrategy` fold an order's events into its balance as they
+come instead of copying the order's history on every read: a sleeve that moves a resting
+order on every bar adds two events a bar, and copied whole they cost the square of the bars.
+An engine release in which this stops holding leaves the balance exact — a read that cannot
+show the events it was handed are all of them takes the copy instead — and brings the square
+back.
+
 Three more facts about matching bind the sleeve's sizing and its in-flight
 guard. `Order.is_closed` is false for a fresh order and true once a terminal
 event — filled, cancelled, rejected, denied, expired — has been applied, on
@@ -1029,6 +1048,129 @@ def _check_a_cancel_in_flight_leaves_the_order_to_fill() -> tuple[bool, str]:
         f"and {instant} with none: the cancel is applied as PENDING_CANCEL before it leaves "
         "the strategy, the order is not closed until it lands, a latency lets the market "
         "fill it in between, and with no latency it lands before the next point is matched"
+    )
+
+
+def _probe_handed_events(latency_ns: int) -> tuple[list[str], list[tuple[object, ...]], bool]:
+    """A buy of 30 resting at 9.50 and moved between 9.50 and 9.51 on every print it is still
+    open on, against sellers' prints of 10 that reach it. Returns the names of the events
+    the order holds at the end; for each event of it the strategy was handed, its name and,
+    once the order is in the cache, the order's event count then and whether the event was
+    the order's last; and whether every list `Order.events` handed back on the way is a
+    prefix of the last one, and a list of its own."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AccountType, AggressorSide, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import TradeId, Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.order: Any = None
+            self.handed: list[tuple[object, ...]] = []
+            self.lists: list[list[Any]] = []
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def handle_event(self, event: Any) -> None:
+            mine = getattr(event, "client_order_id", None)
+            if self.order is not None and mine == self.order.client_order_id:
+                held = self.cache.order(mine)
+                if held is None:
+                    self.handed.append((type(event).__name__,))
+                else:
+                    self.handed.append(
+                        (type(event).__name__, held.event_count, held.last_event is event)
+                    )
+                    self.lists.append(held.events)
+            super().handle_event(event)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.order = self.order_factory.limit(
+                    equity.id, OrderSide.BUY, Quantity.from_int(30), Price(9.5, 2)
+                )
+                self.submit_order(self.order)
+                return
+            price = Price(9.51 if self.seen % 2 else 9.5, 2)
+            if (
+                self.order.is_open
+                and not self.order.is_pending_update
+                and price != self.order.price
+            ):
+                self.modify_order(self.order, price=price)
+
+    points = [
+        TradeTick(
+            equity.id,
+            Price(price, 2),
+            Quantity.from_int(10),
+            AggressorSide.SELLER if price < 10.0 else AggressorSide.BUYER,
+            TradeId(f"P-{index}"),
+            (index + 1) * _MINUTE_NS,
+            (index + 1) * _MINUTE_NS,
+        )
+        for index, price in enumerate((10.0, 10.0, 9.51, 10.0, 9.5, 10.0, 9.51, 10.0, 9.5, 10.0))
+    ]
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        final = probe.order.events
+        grown = all(
+            seen == final[: len(seen)] and seen is not later
+            for seen, later in zip(probe.lists, [*probe.lists[1:], final], strict=True)
+        )
+        return [type(event).__name__ for event in final], probe.handed, grown
+    finally:
+        engine.dispose()
+
+
+def _check_an_order_hands_its_strategy_each_event_as_its_last() -> tuple[bool, str]:
+    """`KansoStrategy._settle`'s premise for reading an order's events once: what the strategy
+    is handed is what the order took, in order, as it took it."""
+    seen: list[str] = []
+    holds = True
+    for latency_ns in (0, _MINUTE_NS // 2):
+        final, handed, grown = _probe_handed_events(latency_ns)
+        expected = [(final[0],)] + [
+            (name, count, True) for count, name in enumerate(final[1:], start=2)
+        ]
+        moved = "OrderUpdated" in final and final.count("OrderFilled") >= 2
+        holds = holds and grown and moved and handed == expected
+        seen.append(
+            f"{'no latency' if not latency_ns else 'thirty seconds'}: the order holds {final}; "
+            f"handed (event, count, was last) {handed}"
+        )
+    return holds, (
+        "a buy of 30 resting at 9.50, moved on every print it was open on and filled in parts "
+        "by sellers' prints of 10 — "
+        + "; ".join(seen)
+        + ". Every event the order took after its first was handed to handle_event in the "
+        "order it holds them, each as its last with the count one higher than the one before, "
+        "and every list Order.events handed back on the way was a new list and a prefix of "
+        "the last"
     )
 
 
@@ -3302,6 +3444,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "an order whose cancel was sent is not closed until the cancel lands, and under a "
         "latency the market can fill it first",
         _check_a_cancel_in_flight_leaves_the_order_to_fill,
+    ),
+    (
+        "an order's events grow only at its end, and its strategy is handed each one as the "
+        "order's last when the order takes it",
+        _check_an_order_hands_its_strategy_each_event_as_its_last,
     ),
     (
         "close_position sends a reduce-only order, which the simulated venue trims to what "
