@@ -83,7 +83,7 @@ never edits the file.
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
 | `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` — and the instrument store by `instruments resolve` alone: a validation and a registration resolve in memory, and a run reads the store | no |
-| `runs/` | `research begin`, the daemon | no |
+| `runs/` | `research begin`, the daemon, `state prune` (its copy of `state.db`) | no |
 | `sessions/` | replay, parity, stage nodes | no |
 | `certificates/` | `cert plan`, `cert run` | no |
 | `strategies/` | `strat compose` | no |
@@ -289,6 +289,23 @@ second applies nothing and reports `nothing pending`. That second reading is wha
 the schema and the number moving together: a migration applied to a database that has
 already moved past it would stamp its own older version over the newer one and leave a
 `state.db` whose schema no `kanso migrate` could reach again.
+
+**What grows, and the one thing kanso gives back.** Every judged card stores its book — what
+it held, session by session, and the number it earned — so the redundancy rule can refuse
+the next spelling of the same bets (`docs/concepts.md`). A book is read only under the pins
+of the run asking, and nothing deletes one as research moves on, so the books stored under a
+file since re-pinned, an earlier kanso, a snapshot a newer run moved past or a retired
+hypothesis stay, read by nothing, and can come to be nearly the whole file: measured on
+2026-10-02 in a live workspace, 3,025 MB of books in a 3,399 MB `state.db`, of which 250 sat
+under pins a run could still be given. `VACUUM` alone gives back only free pages, and there
+are none until rows are deleted. `kanso state prune` deletes the books no run can select —
+with the daemon stopped, after copying the whole file to `runs/state-<instant>.db`, which
+the `.gitignore` `init` writes keeps out of git — and rewrites the file; `kanso state prune --dry-run` says what it
+would delete while the daemon works. The copy is yours to delete — or, if a book it held is
+wanted after all, to put back: stop everything, delete `state.db-wal` and `state.db-shm`, and
+put it in `state.db`'s place, which also loses whatever was recorded since the prune. No
+card, no best, no trial count and no certificate is touched by a prune: a book deleted whose
+pins come back is re-earned by the next run, one card at a time.
 
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
@@ -1418,6 +1435,7 @@ runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and noth
 runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
 runs/daemon.log            whatever the daemon and its children write to a stream
+runs/state-<instant>.db    a copy of state.db `kanso state prune` made before it deleted anything
 ```
 
 `.card/` is where a card's child writes back what it measured and whatever it printed; the

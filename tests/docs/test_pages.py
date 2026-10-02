@@ -112,6 +112,22 @@ def test_both_pages_say_a_lane_writes_no_log_of_its_own() -> None:
         assert "`events` table" in text, name
 
 
+def test_the_pages_say_a_prune_holds_the_daemon_off_and_copies_the_store_first() -> None:
+    """A prune deletes research memory, so what makes that safe — the daemon held off, a
+    whole copy first, room on the disk — and where the copy is have to be on the page."""
+    row = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso state prune")
+    )
+    assert "Refused (exit 2) while a daemon runs" in row
+    assert "`runs/state-<instant>.db`" in row
+    assert "that copy and twice what is kept" in row
+    assert "`--dry-run` counts what would go and writes nothing" in row
+    workspace = prose(page("workspace.md"))
+    assert "runs/state-<instant>.db" in workspace
+    assert "`kanso state prune` deletes the books no run can select" in workspace
+    assert "until `kanso state prune` deletes them" in prose(page("concepts.md"))
+
+
 def test_both_pages_say_the_run_s_base_is_never_judged() -> None:
     """A model asked about the bytes a run was handed judged a seed nobody proposed, and
     each drift it reported "rewound" a run onto the bytes it was already on."""

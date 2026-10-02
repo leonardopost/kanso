@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date
+import json
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from kanso.criteria.run import CardRun, Held, Trade, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
+from kanso.schemas import RunRecord
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -528,3 +532,120 @@ def test_the_tag_counts_the_runs_of_that_day(store: StateStore) -> None:
     from datetime import date
 
     assert records.next_tag(store, "demo_mr", date(2024, 5, 6)) == "20240506-1"
+
+
+# -- which stored books a run can still select ------------------------------------
+
+NOW = "9.9.9+000000000000"
+"""The criteria version a run begun now is pinned to, in the tests below."""
+
+BOOK = {"2024-01-02": [["A.X", 1, True]]}
+
+
+def a_hypothesis(store: StateStore, hyp_id: str, *files: bytes, status: str = "researching") -> str:
+    """Register `hyp_id` under the last of `files` and return the sha of each, in order."""
+    shas = [store.put_blob(file) for file in files]
+    store.connection.execute(
+        "INSERT INTO hypotheses (hyp_id, status, hypothesis_sha, created_at, updated_at)"
+        " VALUES (?, ?, ?, '2026-10-02', '2026-10-02')",
+        (hyp_id, status, shas[-1]),
+    )
+    return shas[-1]
+
+
+def a_judged_run(
+    store: StateStore,
+    hyp_id: str,
+    minute: int,
+    file: bytes,
+    snapshot: str,
+    criteria: str = NOW,
+    *,
+    open_: bool = False,
+) -> RunRecord:
+    """A run begun `minute` minutes into the day under these pins, with one book stored."""
+    began = datetime(2026, 10, 2, tzinfo=UTC) + timedelta(minutes=minute)
+    sha = store.put_blob(file)
+    run = records.insert(
+        store,
+        RunRecord(
+            run_id=f"{hyp_id}-{minute}",
+            hyp_id=hyp_id,
+            tag=f"20261002-{minute}",
+            lane="op",
+            dir=f"runs/op/{hyp_id}",
+            base_sha=sha,
+            hypothesis_sha=sha,
+            program_sha=sha,
+            snapshot_id=snapshot,
+            criteria_version=criteria,
+            card_budget_s=60.0,
+            baseline_wall_s=1.0,
+            baseline_peak_mem_gb=1.0,
+            started_at=began,
+            ended_at=None if open_ else began + timedelta(seconds=30),
+        ),
+    )
+    records.record_signature(store, run, store.put_blob(run.run_id.encode()), BOOK, 1.0, UNDER)
+    return run
+
+
+def stored(store: StateStore) -> list[tuple[str, str]]:
+    """Every stored book, as the run that wrote it and the reading it was measured under.
+
+    `a_judged_run` stores each book under bytes that spell its run's id."""
+    rows = store.connection.execute(
+        "SELECT blobs.data, signatures.measured_under FROM signatures"
+        " JOIN blobs ON blobs.sha = signatures.strategy_sha"
+    ).fetchall()
+    return sorted((bytes(row[0]).decode(), str(row[1])) for row in rows)
+
+
+@pytest.fixture
+def bare(tmp_path: Path) -> Iterator[StateStore]:
+    """A migrated store and nothing else: these rules read rows, not a workspace."""
+    with StateStore(tmp_path / "state.db") as opened:
+        opened.migrate()
+        yield opened
+
+
+def test_a_book_is_kept_only_while_some_run_can_be_given_its_pins(bare: StateStore) -> None:
+    """`matched_book` selects by a run's four pins and nothing else, so a book is reachable
+    while an open run carries them or a run begun now would: the registered file, this
+    kanso's criteria, and the snapshot the newest such run was given. Everything else goes,
+    and the books still reachable are found exactly as they were before."""
+    a_hypothesis(bare, "live", b"first file", b"second file")
+    a_judged_run(bare, "live", 1, b"first file", "s1")  # a file since re-pinned
+    a_judged_run(bare, "live", 2, b"second file", "s1")  # a snapshot a newer run moved past
+    newest = a_judged_run(bare, "live", 3, b"second file", "s2")
+    a_judged_run(bare, "live", 4, b"second file", "s3", "0.0.1+older")  # other criteria
+    records.record_signature(bare, newest, bare.put_blob(b"live-3"), BOOK, 2.0, "three folds")
+    a_hypothesis(bare, "open", b"open file")
+    still = a_judged_run(bare, "open", 1, b"open file", "s1", "0.0.1+older", open_=True)
+    a_hypothesis(bare, "gone", b"gone file", status="retired")
+    a_judged_run(bare, "gone", 1, b"gone file", "s2")
+
+    plan = records.superseded(bare, NOW)
+    assert (plan.rows, plan.kept) == (4, 3)
+    assert plan.size == 4 * len(json.dumps(BOOK, sort_keys=True))
+    with bare.transaction():
+        assert records.prune(bare, NOW) == plan.rows
+
+    assert stored(bare) == sorted(
+        [("live-3", UNDER), ("live-3", "three folds"), ("open-1", UNDER)]
+    ), "the newest run's books under every reading, and the open run's under its own pins"
+    for run, under in ((newest, UNDER), (newest, "three folds"), (still, UNDER)):
+        assert records.matched_book(bare, run, BOOK, 100, 1.0, 9.0, under) is not None
+    assert records.superseded(bare, NOW) == records.Superseded(rows=0, size=0, kept=3)
+
+
+def test_a_file_pinned_back_keeps_the_books_its_own_newest_run_stored(bare: StateStore) -> None:
+    """The newest run under the file registered *now*, not the newest run: re-pinning a
+    file's earlier bytes hands their pins out again, and their books with them."""
+    a_hypothesis(bare, "back", b"second file", b"first file")
+    a_judged_run(bare, "back", 1, b"first file", "s1")
+    a_judged_run(bare, "back", 2, b"second file", "s1")
+
+    with bare.transaction():
+        assert records.prune(bare, NOW) == 1
+    assert stored(bare) == [("back-1", UNDER)]

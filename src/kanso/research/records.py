@@ -64,6 +64,13 @@ refused against the second as well as the first. The comparison is
 by day rather than by instant because it is a fact about sessions, and a day is what two
 runs over the same window share. A stored signature is only ever compared with one read
 the same way, so the change of reading came with the migration that emptied the table.
+
+Nothing deletes a signature as research goes on, so the table keeps every book stored under
+pins the workspace has since moved past — a re-pinned file, an upgraded kanso, a newer
+snapshot, a retired hypothesis — and those can outgrow everything else the store holds:
+measured on 2026-10-02 in a live workspace, 3,025 MB of books in a 3,399 MB `state.db`, in
+17,105 rows of which 250 sat under pins a run could still be given. `superseded` names the
+rest and `prune` deletes it, for `kanso state prune` to call with the daemon held off.
 """
 
 from __future__ import annotations
@@ -72,7 +79,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from kanso.criteria.run import CardRun, day_of
 from kanso.errors import PreconditionError
@@ -84,6 +91,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "Match",
     "Signature",
+    "Superseded",
     "active",
     "best_of",
     "cards_of",
@@ -93,12 +101,14 @@ __all__ = [
     "n_trials",
     "next_tag",
     "now",
+    "prune",
     "record_card",
     "record_signature",
     "require_active",
     "runs_of",
     "set_best",
     "signature",
+    "superseded",
     "trial_metrics",
     "unset_best",
 ]
@@ -624,6 +634,81 @@ def _closest(held: Signature, rows: list[sqlite3.Row], pct: int, *, agreed: bool
         if found.pct >= pct and (closest is None or found.pct > closest.pct):
             closest = found
     return closest
+
+
+_LIVE_PINS: Final = (
+    "SELECT hyp_id, hypothesis_sha, snapshot_id, criteria_version FROM runs"
+    " WHERE ended_at IS NULL"
+    " UNION"
+    " SELECT runs.hyp_id, runs.hypothesis_sha, runs.snapshot_id, runs.criteria_version"
+    " FROM runs JOIN hypotheses ON hypotheses.hyp_id = runs.hyp_id"
+    " WHERE hypotheses.status != 'retired' AND runs.hypothesis_sha = hypotheses.hypothesis_sha"
+    " AND runs.criteria_version = :criteria"
+    " AND runs.started_at = (SELECT MAX(newer.started_at) FROM runs AS newer"
+    " WHERE newer.hyp_id = runs.hyp_id AND newer.hypothesis_sha = runs.hypothesis_sha"
+    " AND newer.criteria_version = runs.criteria_version)"
+)
+"""The pins a signature can still be selected under: see `superseded`."""
+
+_SUPERSEDED: Final = (
+    f"(hyp_id, hypothesis_sha, snapshot_id, criteria_version) NOT IN ({_LIVE_PINS})"
+)
+
+
+@dataclass(frozen=True)
+class Superseded:
+    """The stored books no run can select any more: how many, how large, and how many stay.
+
+    `size` is the bytes of the books themselves; the pages deleting them frees hold a
+    little more."""
+
+    rows: int
+    size: int
+    kept: int
+
+
+def superseded(store: StateStore, criteria: str) -> Superseded:
+    """The signatures stored under pins no run can be given, with `criteria` the criteria
+    version a run begun now would be pinned to (`criteria.library.criteria_version`).
+
+    `matched_book` selects by a run's own pins and nothing else, so a row is reachable only
+    while some run can carry its four. An open run carries its own until it ends, whatever
+    it was begun under. A run begun now carries the file its hypothesis is registered under
+    — `research begin` refuses any other — the criteria this kanso judges by, and the newest
+    snapshot that covers its universe; so of a hypothesis's ended runs only the newest under
+    that file and those criteria can share pins with the next one, and only when no newer
+    covering snapshot has been taken since — a newer one leaves its rows kept and
+    unreachable, which errs the safe way. A retired hypothesis begins nothing. Every row
+    under any other pins is superseded: under a file since re-pinned, a criteria version
+    since upgraded, a snapshot a newer run of the same file and criteria moved past, or a
+    retired hypothesis.
+
+    Superseded is not unrecoverable. Content addressing makes a pin a fact about bytes, so
+    re-pinning a file's earlier bytes, reinstalling an earlier kanso or `hyp resume` on a
+    retired hypothesis hands the old pins out again; a row pruned before that is a book the
+    next run re-earns one card at a time, which is what `0004_signatures_reread.sql` cost
+    every workspace once. Nothing already recorded depends on a row — no card, trial count,
+    best or certificate; only the redundancy check of cards still to come reads the table.
+
+    Every reading under a live pin is kept, since `record_signature` keeps them apart on
+    purpose, and two runs of one file and criteria begun at the same instant are both the
+    newest and both keep theirs.
+    """
+    row = store.connection.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(CAST(signature AS BLOB))), 0) AS size"
+        f" FROM signatures WHERE {_SUPERSEDED}",
+        {"criteria": criteria},
+    ).fetchone()
+    total = int(store.connection.execute("SELECT COUNT(*) FROM signatures").fetchone()[0])
+    return Superseded(rows=int(row["n"]), size=int(row["size"]), kept=total - int(row["n"]))
+
+
+def prune(store: StateStore, criteria: str) -> int:
+    """Delete the signatures `superseded` counts, and return how many went."""
+    cursor = store.connection.execute(
+        f"DELETE FROM signatures WHERE {_SUPERSEDED}", {"criteria": criteria}
+    )
+    return int(cursor.rowcount)
 
 
 def cards_of(store: StateStore, hyp_id: str) -> list[Card]:

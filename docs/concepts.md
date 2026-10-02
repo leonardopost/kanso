@@ -433,7 +433,9 @@ proposals were refused in a day by a rule whose words — signature, redundant, 
 `pct` — appeared nowhere in the 2,393 characters the proposer was given. Every fact the
 proposer is sent is named in that instruction, and a test reads the fact keys out of the
 driver's own source to keep it that way. Signatures live under the pins — the hypothesis
-file, the snapshot, the criteria — and a run under new pins starts with none. The number
+file, the snapshot, the criteria — and a run under new pins starts with none; the books
+under pins no run can be given again stay in `state.db` until `kanso state prune` deletes
+them. The number
 beside the book lives under one thing more, because those pins fix the question and the
 data and nothing about the arithmetic: `[research] capital`, `folds` and `return_period`,
 the venue model `[research] broker` and `portfolio.yaml` resolve, and the host version an
