@@ -1505,7 +1505,7 @@ def test_a_lane_that_ran_its_hold_holds_none_of_what_it_cost(
     [
         (document(warmup={"sessions": 3}), "warmup_prefix"),
         (HELD, "benchmark"),
-        (DOCUMENT, "_stage"),
+        (DOCUMENT, "_payload"),
     ],
     ids=["warmup", "benchmark", "baseline"],
 )

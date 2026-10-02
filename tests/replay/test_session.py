@@ -261,6 +261,37 @@ def test_the_two_paths_land_what_came_due_by_a_held_print_before_its_handler_ali
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_the_two_paths_agree_over_a_book_of_many_changes_an_instant_and_prints_that_share_one(
+    latency_ms: float,
+) -> None:
+    """A level-two book whose instants carry two or four changes, with prints a millisecond
+    after them, two to a nanosecond on some and one on others, and a sleeve that re-posts at
+    the touch on every call: both paths hand it the same batches and the same prints, and
+    agree order for order and fill for fill."""
+    from tests.nautilus.backtest.conftest import POSTER, ticking
+    from tests.nautilus.backtest.test_exit_flat import chasing_costs
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        costs=chasing_costs(latency_ms),
+    )
+    request = request_for(source=POSTER, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
+    sessions = [ticking(day) for day in (FORWARD[0], date(2024, 3, 4))]
+    book = tuple(point for changes, _ in sessions for point in changes)
+    printed = tuple(point for _, made in sessions for point in made)
+    node, engine = both(replace(request, venue_model=model), [instrument()], [book, printed])
+
+    assert not engine.crashed, engine.traceback_tail
+    assert engine.run.fills
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_the_two_paths_pay_a_stop_a_take_profit_in_flight_cut_alike(latency_ms: float) -> None:
     """A stop sent behind the sleeve's own take-profit still in flight is cut to nothing and
     owed; once the venue holds the take-profit open the owed stop cancels it and takes the
@@ -547,11 +578,14 @@ def test_a_cancel_held_behind_a_modify_every_point_goes_out_before_the_latest_is
     latency_ms: float,
 ) -> None:
     """Under a latency, the cancel an exit at market holds behind a modify goes out on the
-    next quote before either path has answered the latest modify, shorter than the second
-    between quotes or not; and for a sleeve that modifies on every quote the order then reads
-    `ACCEPTED`, not `PENDING_UPDATE`, the answer to an earlier modify having landed since.
-    Both paths stay flat and agree. Measured on the round before this test: a docstring said
-    the order read `PENDING_UPDATE` there at 2500 ms, and on both paths it read `ACCEPTED`."""
+    next quote, and for a sleeve that modifies on every quote the order then reads
+    `ACCEPTED`, not `PENDING_UPDATE`. A latency shorter than the second between quotes has
+    answered the latest modify by then — a quote feed is marked, so what came due by a quote
+    lands before its handler runs — and a longer one has not, only an earlier one. Both
+    paths stay flat and agree. Measured on the round before this test: a docstring said the
+    order read `PENDING_UPDATE` there at 2500 ms, and on both paths it read `ACCEPTED`; and
+    before a quote feed was always marked, the 20 ms modify was still unanswered there too,
+    because the quote was handed to the author before what it had made due landed."""
     from tests.nautilus.backtest import test_exit_flat
 
     sessions = (date(2024, 3, 4), date(2024, 3, 5))
@@ -561,7 +595,7 @@ def test_a_cancel_held_behind_a_modify_every_point_goes_out_before_the_latest_is
         data_requirements=["quote"],
         costs=test_exit_flat.chasing_costs(latency_ms),
     )
-    source = test_exit_flat.MODIFIED_EVERY_QUOTE + test_exit_flat.SEEN_AT_SEND
+    source = test_exit_flat.MODIFIED_EVERY_QUOTE + test_exit_flat.seen_at_send(latency_ms < 1_000)
     request = request_for(source=source, hyp=hyp)
     model = dict(request.venue_model)
     model["costs"] = {**dict(model["costs"]), **test_exit_flat.chasing_costs(latency_ms)}  # type: ignore[dict-item]

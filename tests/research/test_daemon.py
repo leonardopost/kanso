@@ -558,7 +558,7 @@ def test_what_a_dead_lane_held_with_no_run_goes_back_and_its_directory_with_it(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A lane killed in its baseline holds a claim, no run, and a lane directory with the
-    payload of a card nobody will read. The lane beside it is alive and keeps its claim."""
+    output of a card nobody will read. The lane beside it is alive and keeps its claim."""
     beginning = classify(ws, store, DOCUMENT)
     elsewhere = classify(ws, store, document(id="demo_two"))
     scheduler.enqueue(store, beginning)
@@ -567,7 +567,7 @@ def test_what_a_dead_lane_held_with_no_run_goes_back_and_its_directory_with_it(
     assert daemon.claim(store, "l2") == elsewhere
     left = lanes.prepare(lanes.lane_dir(ws, "l1", beginning))
     (left / ".card").mkdir()
-    (left / ".card" / "request.pkl").write_bytes(b"a window of points nobody will read")
+    (left / ".card" / "stderr.txt").write_bytes(b"what a card said that nobody will read")
     theirs = lanes.prepare(lanes.lane_dir(ws, "l2", elsewhere))
     monkeypatch.setattr(daemon, "_spawn", lambda *_a: FakeChild())
     killed = FakeChild(alive=False, code=-signal.SIGKILL)
@@ -923,7 +923,7 @@ def test_a_lane_killed_mid_card_is_started_again_and_resumes_its_run(
 
     The death is recorded as it happened, the lane is started again under its own name, the
     lane in its place resumes the run the dead one left — its first card is a card of that
-    run — and that card reclaims the payload the killed card left in the lane's `.card/`.
+    run — and that card reclaims what the killed card left in the lane's `.card/`.
     """
     ws = stopped
     hyp_id = classify(ws, store, DOCUMENT, SLOW_SEED)
@@ -933,7 +933,7 @@ def test_a_lane_killed_mid_card_is_started_again_and_resumes_its_run(
 
     supervisor = daemon.start(ws)
     lane = until(lambda: lane_process(supervisor, "l1"), "lane l1 to start")
-    until(lambda: (room / backtest.REQUEST_FILE).is_file() or None, "l1's card payload")
+    until(lambda: (room / backtest.OUTPUT_FILE).is_file() or None, "l1's card output")
     card = until(
         lambda: next((pid for pid, _ in children(lane) if running(pid)), None), "l1's card"
     )

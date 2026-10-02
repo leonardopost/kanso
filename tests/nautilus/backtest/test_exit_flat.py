@@ -908,7 +908,11 @@ def test_an_exit_at_market_is_paid_behind_a_modify_the_sleeve_sends_on_every_poi
     flat_within_the_session(run)
 
 
-SEEN_AT_SEND = b"""
+def seen_at_send(answered: bool) -> bytes:
+    """What MODIFIED_EVERY_QUOTE adds to fail the run unless, whenever a cancel held behind
+    its modify is sent, the order reads `ACCEPTED` with the latest modify answered or not as
+    `answered` says, and unless one was sent at all."""
+    return b"""
     def modify_order(self, order, quantity=None, price=None, *args, **kwargs):
         self.asked = price
         super().modify_order(order, quantity, price, *args, **kwargs)
@@ -917,16 +921,13 @@ SEEN_AT_SEND = b"""
         for held in self._behind_modify.values():
             current = self._current(held)
             seen = (current.status_string(), current.price == self.asked)
-            assert seen == ("ACCEPTED", False), seen
+            assert seen == ("ACCEPTED", %s), seen
             self.checked = True
         super()._send_behind_modify()
 
     def on_stop(self):
         assert getattr(self, "checked", False), "no cancel was held behind a modify"
-"""
-"""What MODIFIED_EVERY_QUOTE adds to fail the run unless, whenever a cancel held behind its
-modify is sent, the order reads `ACCEPTED` with the latest modify still unanswered, and unless
-one was sent at all."""
+""" % str(answered).encode()
 
 
 @pytest.mark.parametrize("last", ["session", "window"])

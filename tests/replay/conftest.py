@@ -148,8 +148,8 @@ class Config(KansoConfig):
 
 
 class Strategy(KansoStrategy):
-    """Takes the offer on the book's second change, and sells at market on the first print
-    it handles while long."""
+    """Takes the offer once the book's opening instant, both sides at once, is handed to it,
+    and sells at market on the first print it handles while long."""
 
     config_cls = Config
 
@@ -159,7 +159,7 @@ class Strategy(KansoStrategy):
 
     def on_order_book_deltas(self, deltas) -> None:
         self.seen += 1
-        if self.seen == 2:
+        if self.seen == 1:
             self.submit_entry(deltas.instrument_id, "BUY", qty=100, price=10.02)
 
     def on_trade_tick(self, tick) -> None:

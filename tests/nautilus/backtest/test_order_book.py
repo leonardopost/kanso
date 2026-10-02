@@ -136,8 +136,9 @@ def test_an_intent_sent_from_the_book_handler_carries_the_changes_own_instant(
     request_for,
 ) -> None:
     """A sleeve that holds only the book stamps what it sends with the change it is handling
-    — its second, fifth and thirtieth — where every such intent used to carry the last
-    print's instant, which for a sleeve that sees no print is zero."""
+    — its second, fifth and thirtieth call, the book's opening instant of two changes being
+    the first — where every such intent used to carry the last print's instant, which for a
+    sleeve that sees no print is zero."""
     from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS, book
 
     day = RESEARCH[0]
@@ -150,4 +151,78 @@ def test_an_intent_sent_from_the_book_handler_carries_the_changes_own_instant(
     assert not result.crashed, result.traceback_tail
 
     base = midnight_ns(day) + BOOK_OPEN_NS
-    assert [(intent[0] - base) // SECOND_NS for intent in result.intents] == [0, 3, 28]
+    assert [(intent[0] - base) // SECOND_NS for intent in result.intents] == [1, 4, 29]
+
+
+SEEN: list[tuple[int, float | None, float | None]] = []
+"""Every call `WATCHING` was handed, written from inside the run."""
+
+WATCHING = b"""
+import sys
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Records every call it is handed: the changes in it, and the book the cache shows.\"\"\"
+
+    config_cls = Config
+
+    def on_order_book_deltas(self, deltas) -> None:
+        book = self.cache.order_book(deltas.instrument_id)
+        bid, ask = book.best_bid_price(), book.best_ask_price()
+        sys.modules["tests.nautilus.backtest.test_order_book"].SEEN.append(
+            (
+                len(deltas.deltas),
+                None if bid is None else float(bid),
+                None if ask is None else float(ask),
+            )
+        )
+"""
+
+
+def test_the_author_never_sees_a_book_mid_batch(request_for) -> None:
+    """An instant that deletes the best offer and adds the next one a cent up reaches the
+    author once, with both changes, and the book it reads is the book after both: never
+    without an offer, as it was between the two when a change was a call."""
+    day = RESEARCH[0]
+    moved = midnight_ns(day) + 14 * 3_600 * SECOND_NS + SECOND_NS
+    changes = [
+        *deltas(day, shown=500),
+        make_delta(_id(), BookAction.DELETE, OrderSide.SELL, 1_002, 0, 2, 2, 0, moved, moved),
+        make_delta(_id(), BookAction.ADD, OrderSide.SELL, 1_003, 400, 2, 2, 0, moved, moved),
+    ]
+    document = hypothesis().model_dump(mode="json")
+    document.update(resolution="tick", data_requirements=["book"])
+    request = request_for(
+        RESEARCH, source=WATCHING, hypothesis_=Hypothesis.model_validate(document)
+    )
+    SEEN.clear()
+
+    result = execute(request, [instrument()], [tuple(changes)])
+
+    assert not result.crashed, result.traceback_tail
+    assert SEEN == [(2, 10.0, 10.02), (2, 10.0, 10.03)]
+
+
+def test_a_window_with_prints_and_no_book_for_a_name_is_refused(request_for) -> None:
+    """A hypothesis that holds the book, handed a window of prints with no change to the
+    book: its venue would match against no book at all, so the run is refused, naming the
+    name and the load that fixes it. The engine refuses this of each stream it runs; a
+    window is checked whole, because one chunk of it may hold an hour's last prints alone."""
+    import pytest
+
+    from kanso.errors import PreconditionError
+
+    document = hypothesis().model_dump(mode="json")
+    document.update(resolution="tick", data_requirements=["book", "trade"])
+    request = request_for(RESEARCH, source=JOINING, hypothesis_=Hypothesis.model_validate(document))
+
+    with pytest.raises(PreconditionError, match="no book change for DEMO.XNAS") as refused:
+        execute(request, [instrument()], [tuple(prints(RESEARCH[0]))])
+
+    assert "kanso data load" in str(refused.value.remedy)

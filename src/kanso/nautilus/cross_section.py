@@ -4,14 +4,28 @@ The engine delivers by `ts_init` and, at a tie, keeps insertion order. A sleeve 
 trades several instruments therefore used to handle the first name against a book the
 later names had not yet moved, and a market submitted into the second filled at its
 previous close. This module is the repair: after the existing stable `ts_init` sort,
-consecutive points that share an availability instant *and* a grain are a cohort.
-When any cohort has more than one point, every cohort — including an incomplete
-instant of one name — is followed by one marker per point. The venue sees the whole
-cohort first; each marker then flushes one buffered handler and the engine settles,
-so the next handler sees the fills.
+consecutive points that share an availability instant *and* a grain are a cohort, and
+every cohort of a held kind — a bar, a quote, a trade, a custom point — is followed by one
+marker per point. The venue sees the whole cohort first; each marker then flushes one
+buffered handler and the engine settles, so the next handler sees the fills.
 
-A stream whose every cohort is a single point is left unmarked. Direct `add_data`
-tests stay on the old dispatcher.
+**A book's changes of one instant are one batch.** The changes one instrument's book made
+at one instant are delivered as one `OrderBookDeltas` (`batched`): the venue applies the
+batch whole and matches once, the data engine publishes it whole after its book has taken
+all of it, and the author's `on_order_book_deltas` is called once with every change of the
+instant — never with a book that has lost its best ask and not yet been handed the next
+one. A book handler is never held, so no marker follows a book cohort: the venue was
+settled after the batch itself, and a marker after it would flush nothing.
+
+**Whether a feed is marked is a property of the hypothesis** (`coincident`), so it cannot
+depend on where a card's window was cut into chunks: a feed of several names, or one that
+holds prints, quotes or a book, is marked in every chunk whether or not that chunk holds an
+instant two points share. Any other stream is marked when some cohort in it holds two or
+more points, and a stream of single-point cohorts that is not coincident is left unmarked —
+direct `add_data` tests stay on the old dispatcher. A single-point cohort is dispatched the
+same marked or not at zero latency; under a latency a command that came due at the point
+lands before the author's handler for it when it is marked and after it when it is not,
+which is why the choice cannot be left to the chunk.
 
 Engine facts this module relies on (nautilus_trader 1.231.0): `DataEngine._handle_data`
 publishes only `CustomData` among custom types and logs `unrecognized type` for a
@@ -23,23 +37,42 @@ the node's default, whose subscribe is a no-op, and the topic is already bound.
 `sort_data` is a stable sort on `ts_init`, so markers
 inserted last at an instant stay last when the engine concatenates homogeneous
 `add_data` runs. The name is `KansoCrossSection` because the serializable-type
-registry is keyed by bare class name across the process.
+registry is keyed by bare class name across the process. `OrderBookDeltas(instrument_id,
+deltas)` takes its `ts_init`, `ts_event` and `flags` from its last delta; the backtest
+engine hands it to `SimulatedExchange.process_order_book_deltas`, which applies every delta
+and then matches once, and a data engine that does not buffer deltas publishes it whole on
+the instrument's deltas topic, after the book updater it subscribed at priority 10 has
+applied it (both re-checked by `kanso.nautilus.facts`).
 """
 
 from collections.abc import Sequence
 from itertools import chain
+from typing import TYPE_CHECKING
 
 from nautilus_trader.core.data import Data
 from nautilus_trader.model.custom import customdataclass
-from nautilus_trader.model.data import Bar, CustomData, DataType, QuoteTick, TradeTick
+from nautilus_trader.model.data import (
+    Bar,
+    CustomData,
+    DataType,
+    OrderBookDelta,
+    OrderBookDeltas,
+    QuoteTick,
+    TradeTick,
+)
 
 from kanso.nautilus.costs import BookPolicy
+
+if TYPE_CHECKING:
+    from kanso.schemas import Hypothesis
 
 __all__ = [
     "KansoCrossSection",
     "MARKER_TYPE",
     "arm",
+    "batched",
     "book",
+    "coincident",
     "is_marker",
     "ordered",
     "warm",
@@ -60,6 +93,22 @@ MARKER_TYPE = DataType(KansoCrossSection)
 BAR = "bar"
 QUOTE = "quote"
 TRADE = "trade"
+BOOK = "book"
+
+TICK_KINDS = frozenset({QUOTE, TRADE, BOOK})
+"""The data requirements whose points share instants as a rule rather than by accident."""
+
+
+def coincident(hyp: "Hypothesis") -> bool:
+    """Whether a hypothesis's feed is marked however its instants fall.
+
+    A universe of more than one name, or a requirement of prints, quotes or a book: a feed
+    where several points of one instant are the rule. Measured on two perpetual swaps over 82 days,
+    no hour of either held no millisecond that two prints shared, and 88-89 % of prints
+    shared theirs. Deciding it here rather than from the points is what keeps a card the
+    same however its window was cut into chunks.
+    """
+    return len(hyp.universe) > 1 or bool(TICK_KINDS.intersection(hyp.data_requirements))
 
 
 def is_marker(point: object) -> bool:
@@ -142,37 +191,76 @@ def deliver_from(strategy: object, from_ns: int) -> None:
     strategy._fed_from_ns = from_ns  # type: ignore[attr-defined]
 
 
-def ordered(groups: Sequence[Sequence[object]]) -> tuple[object, ...]:
+def batched(group: Sequence[object]) -> tuple[object, ...]:
+    """One series with each instrument's book changes of one instant as one batch.
+
+    A run of consecutive `OrderBookDelta` points of one instrument at one `ts_init` becomes
+    one `OrderBookDeltas`, in the order the run held them; every other point passes as it
+    is. The flags are left as loaded: nothing downstream buffers on `F_LAST`.
+    """
+    if not any(isinstance(point, OrderBookDelta) for point in group):
+        return tuple(group)
+    out: list[object] = []
+    run: list[OrderBookDelta] = []
+    for point in group:
+        if isinstance(point, OrderBookDelta):
+            if run and (
+                point.ts_init != run[0].ts_init or point.instrument_id != run[0].instrument_id
+            ):
+                out.append(OrderBookDeltas(run[0].instrument_id, run))
+                run = []
+            run.append(point)
+            continue
+        if run:
+            out.append(OrderBookDeltas(run[0].instrument_id, run))
+            run = []
+        out.append(point)
+    if run:
+        out.append(OrderBookDeltas(run[0].instrument_id, run))
+    return tuple(out)
+
+
+def ordered(groups: Sequence[Sequence[object]], *, coincident: bool = False) -> tuple[object, ...]:
     """Every point of every group in the order an engine would deliver them, marked.
 
+    Each group's book changes are batched per instrument and instant first (`batched`).
     The engine sorts its accumulated stream by `ts_init` with a stable sort, so points
     sharing an instant keep the order their groups were added in. Sorting the
     concatenation the same way reproduces that exactly; `with_cross_section` then
     inserts the flush markers that make a coincident grain one book.
     """
     return with_cross_section(
-        tuple(sorted(chain.from_iterable(groups), key=lambda point: int(point.ts_init)))  # type: ignore[attr-defined]
+        tuple(
+            sorted(
+                chain.from_iterable(batched(group) for group in groups),
+                key=lambda point: int(point.ts_init),  # type: ignore[attr-defined]
+            )
+        ),
+        coincident=coincident,
     )
 
 
-def with_cross_section(points: Sequence[object]) -> tuple[object, ...]:
-    """Insert one flush marker per point of every cohort, when any cohort is a cross-section.
+def with_cross_section(points: Sequence[object], *, coincident: bool = False) -> tuple[object, ...]:
+    """Insert one flush marker per point of every held cohort, when the stream is marked.
 
     Markers already in the input are dropped first, so applying this twice is applying
-    it once. A stream of only single-point cohorts is returned unchanged, object identity
-    included. When any cohort has two or more points, size-one cohorts get a marker too:
-    an incomplete instant in an otherwise multi-instrument feed still has to flush, or
-    its handler waits for a marker that never comes.
+    it once. A stream is marked when it is `coincident` or when any cohort has two or more
+    points, and then size-one cohorts get a marker too: an incomplete instant in an
+    otherwise multi-instrument feed still has to flush, or its handler waits for a marker
+    that never comes. A book cohort gets none, because its handler is never held. An
+    unmarked stream is returned unchanged, object identity included.
     """
     plain = tuple(point for point in points if not is_marker(point))
     if not plain:
         return ()
     cohorts = tuple(_cohorts(plain))
-    if all(len(cohort) == 1 for cohort in cohorts):
+    if not coincident and all(len(cohort) == 1 for cohort in cohorts):
         return plain
     out: list[object] = []
     for cohort in cohorts:
         out.extend(cohort)
+        if isinstance(cohort[0], (OrderBookDelta, OrderBookDeltas)):
+            continue
         ts = int(cohort[0].ts_init)  # type: ignore[attr-defined]
         out.extend(_marker(ts) for _ in cohort)
     return tuple(out)
