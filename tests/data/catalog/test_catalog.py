@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date
 
 import pytest
@@ -21,6 +22,7 @@ from tests.data.catalog.conftest import (
     bars,
     define,
     equity,
+    quote,
     quotes,
     trade,
 )
@@ -450,3 +452,191 @@ def test_an_adjusted_series_clashes_with_the_unadjusted_one_it_shares_a_file_wit
         )
     assert raised.value.remedy is not None
     assert "--replace" in raised.value.remedy
+
+
+# --- a write a batch at a time --------------------------------------------------
+
+
+def prints(start: date = JAN1, count: int = 5, per_instant: int = 3, lag_ns: int = 0) -> list:
+    """`per_instant` prints at each day's close: several points share every instant."""
+    return [
+        trade(AAPL, day, lag_ns, seq)
+        for day in [date.fromordinal(start.toordinal() + n) for n in range(count)]
+        for seq in range(per_instant)
+    ]
+
+
+TRADES = Ref(type="trade", resolution=None)
+
+
+def test_a_batched_write_cuts_between_instants_and_reads_back_as_one_dataset(
+    ws: FakeWorkspace, other_ws: FakeWorkspace
+) -> None:
+    """Fifteen prints, three to an instant, in batches of four: no instant is split, every
+    file holds whole instants, and the store reads back what a whole write reads back."""
+    batched = cat.write(ws, iter(prints()), ref=TRADES, source="synthetic", batch=4)
+    whole = cat.write(other_ws, prints(), ref=TRADES, source="synthetic")
+
+    assert len(batched.files) == 3
+    assert batched.manifest.row_count == whole.manifest.row_count == 15
+    assert batched.manifest.span == whole.manifest.span == (JAN1, date(2024, 1, 5))
+    assert batched.manifest.dataset_id == whole.manifest.dataset_id
+    assert batched.manifest.checksum == cat._checksum(m.data_path(ws), batched.files)
+    assert m.read_manifest(ws, batched.manifest.dataset_id) == batched.manifest
+    read = cat.open_catalog(ws).trade_ticks()
+    assert [t.to_dict(t) for t in read] == [
+        t.to_dict(t) for t in cat.open_catalog(other_ws).trade_ticks()
+    ]
+    intervals = sorted(cat.open_catalog(ws).get_intervals(TradeTick, AAPL))
+    assert len(intervals) == 3
+    assert all(a[1] < b[0] for a, b in zip(intervals, intervals[1:], strict=False))
+
+
+def test_a_refusal_in_a_later_batch_leaves_no_file_and_no_manifest(ws: FakeWorkspace) -> None:
+    late = prints(count=2) + prints(date(2024, 1, 3), count=1, lag_ns=-1)
+    with pytest.raises(ValidationError, match="cannot precede"):
+        cat.write(ws, iter(late), ref=TRADES, source="synthetic", batch=3)
+
+    assert not [p for p in m.data_path(ws).rglob("*") if p.is_file()]
+    assert m.manifests(ws) == {}
+
+
+def test_a_batched_write_refuses_points_that_go_back_in_time(ws: FakeWorkspace) -> None:
+    backwards = prints(date(2024, 1, 2), count=1) + prints(JAN1, count=1)
+    with pytest.raises(ValidationError, match="availability order"):
+        cat.write(ws, iter(backwards), ref=TRADES, source="synthetic", batch=2)
+    assert m.manifests(ws) == {}
+
+
+def test_a_batched_write_of_nothing_is_refused(ws: FakeWorkspace) -> None:
+    with pytest.raises(ValidationError, match="no points were served"):
+        cat.write(ws, iter(()), ref=TRADES, source="synthetic", batch=2)
+
+
+def test_a_batched_write_holds_one_series_in_every_batch(ws: FakeWorkspace) -> None:
+    mixed = prints(count=2) + [quote(AAPL, date(2024, 1, 3))]
+    with pytest.raises(ValidationError, match="holds one series"):
+        cat.write(ws, iter(mixed), ref=TRADES, source="synthetic", batch=3)
+    assert not [p for p in m.data_path(ws).rglob("*") if p.is_file()]
+
+
+def test_a_batched_write_checks_the_declared_instrument(ws: FakeWorkspace) -> None:
+    with pytest.raises(ValidationError, match="declares"):
+        cat.write(ws, iter(prints()), ref=Ref(MSFT, "trade", None), source="x", batch=4)
+
+
+def test_a_batched_delayed_dataset_still_needs_its_rule(ws: FakeWorkspace) -> None:
+    with pytest.raises(ValidationError, match="must name the rule"):
+        cat.write(
+            ws,
+            iter(quotes(JAN1, 3, lag_ns=FIFTEEN_MINUTES)),
+            ref=Ref(type="quote", resolution=None, publication="delayed"),
+            source="synthetic",
+            batch=2,
+        )
+
+
+def test_a_batched_write_is_refused_the_clash_a_whole_write_is(ws: FakeWorkspace) -> None:
+    """The clash is checked once, over the span asked for, before the first file."""
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+    with pytest.raises(PreconditionError, match="overlaps"):
+        cat.write(ws, iter(prints()), ref=TRADES, source="synthetic", batch=4)
+    with pytest.raises(PreconditionError, match="not a dataset this workspace holds"):
+        cat.write(ws, iter(prints()), ref=TRADES, source="x", batch=4, supersedes="nope")
+
+    again = cat.write(ws, iter(prints()), ref=TRADES, source="x", batch=4, replace=True)
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert len(cat.open_catalog(ws).trade_ticks()) == 15
+
+
+def test_a_batched_write_that_produces_no_bytes_is_refused(ws: FakeWorkspace) -> None:
+    written = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+    m.remove_manifest(ws, written.manifest.dataset_id)
+    with pytest.raises(PreconditionError, match="wrote no bytes"):
+        cat.write(ws, iter(prints()), ref=TRADES, source="synthetic", batch=100)
+
+
+def broken(after: int) -> Iterator[TradeTick]:
+    """A source that serves `after` days of prints and then raises, as a loader that meets a
+    refused message part-way through a day does."""
+    yield from prints(count=after)
+    raise ValidationError("the source refused a message part-way")
+
+
+def kept(ws: FakeWorkspace, held: cat.Written) -> None:
+    """`held` is in the store as it was written: its manifest, its files, its prints."""
+    assert m.manifests(ws) == {held.manifest.dataset_id: held.manifest}
+    assert cat._checksum(m.data_path(ws), held.files) == held.manifest.checksum
+    assert len(cat.open_catalog(ws).trade_ticks()) == 15
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_batched_replace_that_fails_later_keeps_the_dataset_it_replaced(
+    ws: FakeWorkspace,
+) -> None:
+    """The replace removes the held dataset before the first file, so a failure two batches
+    later must put it back: files, prints and manifest."""
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    with pytest.raises(ValidationError, match="part-way"):
+        cat.write(ws, broken(2), ref=TRADES, source="x", batch=3, replace=True)
+
+    kept(ws, held)
+
+
+def test_a_batched_supersede_that_fails_later_keeps_the_pinned_dataset(
+    ws: FakeWorkspace,
+) -> None:
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+    define(ws)
+    snap.freeze(ws)
+
+    with pytest.raises(ValidationError, match="part-way"):
+        cat.write(
+            ws, broken(2), ref=TRADES, source="x", batch=3, supersedes=held.manifest.dataset_id
+        )
+
+    kept(ws, held)
+    with pytest.raises(PreconditionError, match="named by a snapshot"):
+        cat.write(ws, iter(prints()), ref=TRADES, source="x", batch=4, replace=True)
+
+
+def test_an_interrupted_batched_replace_keeps_the_dataset_it_replaced(ws: FakeWorkspace) -> None:
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    def interrupted() -> Iterator[TradeTick]:
+        yield from prints(count=2)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        cat.write(ws, interrupted(), ref=TRADES, source="x", batch=3, replace=True)
+
+    kept(ws, held)
+
+
+def test_a_whole_replace_the_engine_fails_to_write_keeps_the_dataset_it_replaced(
+    ws: FakeWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    def failing(self: object, data: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(cat.ParquetDataCatalog, "write_data", failing)
+    with pytest.raises(OSError, match="no space"):
+        cat.write(ws, prints(), ref=TRADES, source="x", replace=True)
+    monkeypatch.undo()
+
+    kept(ws, held)
+
+
+def test_a_replace_that_is_written_lets_the_old_files_go(ws: FakeWorkspace) -> None:
+    cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    again = cat.write(ws, iter(prints()), ref=TRADES, source="x", batch=4, replace=True)
+
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+    root = m.data_path(ws)
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet")) == list(
+        again.files
+    )

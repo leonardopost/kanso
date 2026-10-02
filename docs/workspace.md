@@ -1046,6 +1046,14 @@ end: 2026-09-28
 ```
 
 ```yaml
+loader: okx_book                 # the book, kept exact to `levels` deep, from the daily archives
+instruments: [BTC-USDT-SWAP]
+start: 2026-09-28
+end: 2026-09-28
+levels: 3                        # required, 1 to 400; okx_book only
+```
+
+```yaml
 loader: okx_funding              # the realised rate at each settlement
 instruments: [BTC-USDT-SWAP]
 start: 2026-09-01
@@ -1059,6 +1067,9 @@ $ kanso data load --loader okx_funding --spec funding.yaml
 A range reaching before what the exchange serves — about three months of funding, about
 six of `1s` bars — or into a UTC day that has not ended is refused naming the day to use
 (exit 3); `docs/adapters.md` gives each loader's source, horizon, units and rate limits.
+`okx_trades` and `okx_book` write each UTC day as a dataset of its own, with its own
+manifest, so a range of them is as many datasets as days, and `data show` joins them into
+one span.
 
 **A perpetual's funding is data it requires.** A held perpetual pays or is paid funding at
 every settlement, so a hypothesis whose universe holds one lists `funding` in

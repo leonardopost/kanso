@@ -102,13 +102,17 @@ def spec(**over: Any) -> dict[str, Any]:
 # --- the adapter hands them out -------------------------------------------------
 
 
-def test_the_three_loaders_are_handed_out_as_factories_that_send_nothing(ws: Workspace) -> None:
+def test_the_four_loaders_are_handed_out_as_factories_that_send_nothing(ws: Workspace) -> None:
+    from kanso.nautilus.adapters.okx.book import OkxBookLoader
+
     factories = registry.adapter_loaders(ws)
 
-    built = {name: factories[name]() for name in ("okx_bars", "okx_trades", "okx_funding")}
+    names = ("okx_bars", "okx_trades", "okx_book", "okx_funding")
+    built = {name: factories[name]() for name in names}
     assert {name: type(loader) for name, loader in built.items()} == {
         "okx_bars": OkxBarsLoader,
         "okx_trades": OkxTradesLoader,
+        "okx_book": OkxBookLoader,
         "okx_funding": OkxFundingLoader,
     }
     assert all(isinstance(loader, Loader) for loader in built.values())
@@ -1042,6 +1046,6 @@ def test_the_recordings_say_where_they_came_from() -> None:
     assert names == set(HISTORY_PROVENANCE["files"])
     assert HISTORY_PROVENANCE["authentication"].startswith("none")
     for entry in HISTORY_PROVENANCE["files"].values():
-        assert entry["recorded_at"].startswith("2026-09-30T1")
+        assert entry["recorded_at"].startswith(("2026-09-30T1", "2026-10-02T0"))
         assert entry["url"].startswith(f"https://{entry['host']}/")
         assert entry["host"] in {"us.okx.com", "static.okx.com"}

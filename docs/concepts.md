@@ -1012,7 +1012,8 @@ unfilled.
 
 **An order that joins a level waits behind what the level showed.** A hypothesis that
 requires `book` loads the exchange's level-two changes beside its prints — one `book` point
-per change to one level, as a market-by-order or market-by-price file spells it — and both
+per change to one level, as a market-by-order or market-by-price file spells it, or as the
+OKX package's `okx_book` derives it from the exchange's daily archives — and both
 venues keep a book from them with the engine's queue position on: a resting order that
 joins a displayed level is filled only after the size shown ahead of it has traded through,
 print by print, so joining the touch is as honest as improving it. Measured through the

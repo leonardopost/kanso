@@ -9,6 +9,9 @@ its file name and is served its bytes and its recorded status unchanged.
 listing, the archives themselves and funding — recorded by driving the loaders against the
 exchange; its own `provenance.json` gives each answer's url, parameters, host, status and
 instant, and `History` serves an answer only for exactly the request it was recorded for.
+A request for a file that names a `Range` is answered as the file host was measured
+answering one on 2026-10-02 — 206 and the bytes of the range, fewer when it runs past the
+end, and 416 when it starts at or past the end — from the recorded file.
 
 `fixtures/account/` holds the real account's own answers to the two signed reads `doctor
 --check-adapters` sends — the fee tier and the account configuration — on 2026-09-30, in
@@ -96,6 +99,13 @@ def recorded_for(url: str, params: Mapping[str, str]) -> str | None:
     return None
 
 
+RANGE_NOT_SATISFIABLE = b"<html><body>Sorry, invalid request</body></html>"
+"""The file host's body for a range that starts at the end of a file, measured on
+2026-10-02 at 07:51 UTC with `Range: bytes=10663558-` on the 10,663,558-byte AEON-USDT-SWAP
+2026-09-01 book archive: HTTP 416 from CloudFront, `content-type: text/html`,
+`content-range: bytes */10663558`, and these 49 bytes. The loaders read the status alone."""
+
+
 @dataclass
 class History:
     """A transport serving the recorded answer to each request the loaders send, and
@@ -105,12 +115,21 @@ class History:
 
     asked: list[tuple[str, dict[str, str]]] = field(default_factory=list)
 
-    def __call__(self, url: str, params: Mapping[str, str]) -> Response:
+    def __call__(
+        self, url: str, params: Mapping[str, str], headers: Mapping[str, str] | None = None
+    ) -> Response:
         self.asked.append((url, dict(params)))
         name = recorded_for(url, params)
         if name is None:
             raise AssertionError(f"nothing was recorded for {url} {dict(params)}")
-        return answer(name)
+        served = answer(name)
+        wanted = (headers or {}).get("Range")
+        if wanted is None:
+            return served
+        first, _, last = wanted.removeprefix("bytes=").partition("-")
+        if int(first) >= len(served.body):
+            return Response(416, RANGE_NOT_SATISFIABLE)
+        return Response(206, served.body[int(first) : int(last) + 1])
 
 
 ACCOUNT = FIXTURES / "account"

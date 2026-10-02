@@ -71,8 +71,11 @@ def test_the_exchange_s_public_reference_is_listed_needing_no_credential(
     okx = next(item for item in document["adapters"] if item["id"] == "okx")
     assert (okx["kind"], okx["provider"]) == ("data", "builtin")
     assert (okx["credentials"], okx["credential_origins"]) == ([], {})
-    assert okx["capabilities"] == ["reference", "bars", "trades", "funding"]
-    assert (okx["quota"], okx["loaders"]) == ("5/s", ["okx_bars", "okx_funding", "okx_trades"])
+    assert okx["capabilities"] == ["reference", "bars", "trades", "book", "funding"]
+    assert (okx["quota"], okx["loaders"]) == (
+        "5/s",
+        ["okx_bars", "okx_book", "okx_funding", "okx_trades"],
+    )
     assert not [note for note in document["notes"] if "okx" in note]
 
 

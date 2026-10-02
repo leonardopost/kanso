@@ -579,7 +579,7 @@ one.
 
 ### The public history
 
-Three loaders read the exchange's public history into the catalog. They send no credential —
+Four loaders read the exchange's public history into the catalog. They send no credential —
 the same client as the reference, a `User-Agent` and nothing else, on the table's host and
 quota — so, like the reference, they are enabled by `[adapters.okx]` with a `region`, and a
 workspace without the table makes no request. `kanso data adapters` lists their ids under
@@ -589,6 +589,7 @@ workspace without the table makes no request. `kanso data adapters` lists their 
 |---|---|---|---|
 | `okx_bars` | `bar` | `GET /api/v5/market/history-candles` | by bar size: `1m` reached back past 2021-01-01; `1s` reached 2026-03-14 and not 2026-03-01, a window that moves with the calendar |
 | `okx_trades` | `trade` | the daily trade archives `GET /api/v5/public/market-data-history?module=1` lists, fetched from the exchange's file host | `BTC-USDT-SWAP`'s reach through 2022 and none is listed for 2021; the newest UTC day served is two behind today |
+| `okx_book` | `book` | the daily 400-level order-book archives `GET /api/v5/public/market-data-history?module=4` lists, fetched from the exchange's file host | `BTC-USDT-SWAP`'s first archive is of 2022-12-21 and every day is listed from 2022-12-31 (measured 2026-10-02); the archives of 2026-08-31 and 2026-09-01 were last modified 18 minutes after their day ended |
 | `okx_funding` | `funding` | `GET /api/v5/public/funding-rate-history` | about three months: `BTC-USDT-SWAP`'s oldest settlement was 2026-06-29 08:00 UTC |
 
 A spec names the exchange's swaps and a range of UTC days of `ts_event`; the venue is the
@@ -599,8 +600,11 @@ loader: okx_bars
 instruments: [BTC-USDT-SWAP]     # the exchange's instId, or BTC-USDT-SWAP.OKX
 start: 2026-09-28
 end: 2026-09-28
-resolution: 1m                   # okx_bars only; okx_trades and okx_funding refuse one
+resolution: 1m                   # okx_bars only; the others refuse one
 ```
+
+`okx_book` reads one more key, which it requires and the others refuse: `levels`, from 1 to
+400, the depth of each side kept exact (`#### okx_book`).
 
 ```
 $ kanso data instruments resolve BTC-USDT-SWAP.OKX --as-of 2026-09-30
@@ -714,14 +718,120 @@ exchange publishes instead: one zip a day, listed with a URL on the exchange's f
   deleting the directory costs a download and nothing else. A `BTC-USDT-SWAP` archive was 6
   to 18 MB a day in late September 2026 and about 1 MB in January 2023.
 
-The loader reads one archive at a time, but every path that writes a dataset — `kanso data
-load`, `data backfill` and `data sync` — gathers all the points it will write before writing
-any of them: `load` its whole span, `backfill` and `sync` each 30-day chunk whole. That one
-day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, took `kanso data load` 82 and 87
-seconds in two runs on 2026-09-30, the first at a peak of 1.8 GB resident, where the loader
-alone, with no write path, streamed it in 62 seconds at 207 MB; so a backfill chunk of a
-liquid swap's prints holds about thirty times that.
-Load a liquid swap's trades one day to a spec (backlog entry 109).
+**A dataset holds one day.** `okx_trades` declares `chunk_days: 1`, so `kanso data load`,
+`data backfill` and `data sync` write each UTC day of a range as a dataset of its own, with
+its own manifest, and hand the catalog the prints as the loader streams them, at most
+250,000 to a write. Every path used to gather its whole span before writing, and one
+day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, peaked at 1.8 GB resident on
+2026-09-30. Written a batch at a time, the same day — 2026-09-28, the same two archives,
+3,562,610 prints — loaded on 2026-10-02 at a peak of 0.41 GB resident, in 187 seconds of
+wall time and 65 of CPU on a shared machine, niced, downloads included.
+
+#### `okx_book`
+
+The exchange publishes a day of each swap's book, 400 levels a side, as one archive a day:
+`<instId>-L2orderbook-400lv-<YYYY-MM-DD>.tar.gz`, listed by the same endpoint as the trade
+archives under `module=4`. Measured against `us.okx.com` and its file host on 2026-10-02:
+
+- **The listing** dates each archive by the **UTC** midnight of the day it is named for —
+  not the exchange's, as a trade archive is — and `begin` and `end` sent at the UTC
+  midnights of two days list exactly those days, both included. Ten days answer; eleven
+  answer HTTP 400, code `50076`, so ranges are asked ten days at a time, each after the
+  same two-second pause as the trade listing.
+- **The archive** is a gzip of one tar member, `<name>.data`, of newline-delimited JSON:
+  one message a line with exactly the keys `instId`, `action`, `ts`, `asks` and `bids`;
+  `ts` the exchange's epoch milliseconds, each level `[price, size, orders]` as strings, its
+  size in **contracts**, and `"0"` removing the level. The archive named for UTC day `D`
+  holds `D`'s messages, 00:00:00.00x to 23:59:59.9xx UTC. Its first message is a full
+  `snapshot`, another follows every fifteen minutes — 96 a day — and the rest are `update`s,
+  as often as every 10 ms. `AEON-USDT-SWAP` on 2026-09-01 was 10,663,558 bytes, 10.2 MiB
+  — the unit the listing's `sizeMB` is in, which said 10.17 — and 486,916 messages; a
+  `BTC-USDT-SWAP` day is 273 to 423 MiB and about 5.9 million. No two
+  messages of that AEON day shared a `ts`, and over 19 swaps on 2026-09-01 and `BTC` and
+  `SOL` on 2026-07-15 no book was crossed after a message.
+- **The download.** The engine's HTTP client refuses an answer over 100 MiB — `BTC-USDT-SWAP`
+  2026-06-21, 286,582,314 bytes, was refused whole — so an archive is asked for in ranges of
+  64 MiB, which the file host answers with 206 and the bytes, a short last piece, and 416 for
+  a range that starts at the end, each piece written to disk as it arrives. The host's
+  `etag` is the MD5 of the bytes, but the engine's client hands back no header, so each
+  archive is read through once before it is used — the gzip's CRC and length, the tar, one
+  member of the expected name.
+
+**What a message becomes.** A spec names the depth `K` the engine's book is kept exact to:
+
+```yaml
+loader: okx_book
+instruments: [AEON-USDT-SWAP]    # the exchange's instId, or AEON-USDT-SWAP.OKX
+start: 2026-09-01
+end: 2026-09-01
+levels: 3                        # required, 1 to 400: the best K levels of each side
+```
+
+After each message, side by side — bids, then asks — the loader compares the archive's best
+`K` levels with what it has handed the engine, and emits a `DELETE` for a price the engine
+holds better than the archive's `K`-th that the archive no longer shows, then an `UPDATE` for
+each of the best `K` whose size moved, then an `ADD` for each the engine does not hold. A
+level pushed past `K` by better ones is **not** deleted: it stays in the engine's book at
+the size it last had, so an order resting there keeps its place in the queue, and it is
+updated or deleted if the window comes back over it. Nothing is ever a `CLEAR` or flagged
+`F_SNAPSHOT` — the engine resets every resting order's queue on either — so a fifteen-minute
+snapshot is diffed against the book like any update (on 2026-09-01 the one at 00:15 agreed
+with the book the updates had built at every depth, and became no change at all). Each
+message's changes share `ts_event` = `ts_init` = its `ts`, the instant the exchange stamped
+it, and the last carries `F_LAST`; a message that moves nothing in the best `K` becomes
+nothing. Prices and sizes are read at the definition's precision, exactly or refused.
+
+**A day opens from the day before.** Day `D`'s first message meets the book as day `D - 1`
+left it. A level the opening snapshot does not show at all is deleted — the exchange holds no
+order there, so nothing was ahead of an order resting on it — and then every level of the
+best `K`, and every deeper level the book held that the snapshot still shows, is added at the
+snapshot's size. No level the exchange still shows is deleted at midnight, so an order
+resting past `K` keeps its place in the queue across it (at `K` = 3 on 2026-09-01, 351 of
+the levels 2026-08-31 closed with past the best three were still shown, and are kept). A run
+that starts on `D` gets the additions on an empty book, and one that ran through `D - 1` has
+its sizes restated — an `ADD` of a level the engine holds replaces its size and leaves its
+queue alone — so on either the engine's best `K` equal the archive's after every message:
+checked on `AEON-USDT-SWAP` 2026-09-01 opened from 2026-08-31, all 486,916 messages, at `K`
+= 3 and at `K` = 10, both ways. What a day closes with is kept
+in `catalog/.cache/okx/book/<instId>/`, a small JSON file per day and depth; a load whose
+first day's predecessor is not kept there downloads that day's archive, runs it to its close
+without writing anything, and keeps the result. An archive is deleted once its day has been
+read; one left by a load that stopped part-way is used by the next.
+
+**Use `levels: 3`, and rest inside the spread or in the best three.** Below `K` the book holds
+levels at whatever size they had when they left the window, so a queue there is not modelled,
+and every level of depth costs changes: at `K` = 3 the AEON day was 209,580 changes from
+124,279 of its messages, at `K` = 10 437,794 from 199,015.
+
+**Measured** with `kanso data load` on 2026-10-02 (`/usr/bin/time -l`, the shared machine
+niced), each day downloading its own archive and the day before's. Both loads ran under the
+day opening this version replaced, which deleted every level past `K` at midnight; the
+present opening changes the AEON day from 209,367 changes to 209,580, measured with the
+loader's own code over the same two archives, and the BTC count was not taken again:
+
+| swap, day | `levels` | changes | archives | wall | CPU | peak resident |
+|---|---|---|---|---|---|---|
+| `AEON-USDT-SWAP` 2026-09-01 | 3 | 209,367 | 12.6 + 10.2 MiB | 50 s | 17 s | 0.34 GB |
+| `BTC-USDT-SWAP` 2026-06-22 | 10 | 10,803,349 | 273 + 423 MiB | 20 min | 8.4 min | 0.43 GB |
+
+A day is one dataset (`chunk_days: 1`) written to the catalog 250,000 changes at a time, so
+the peak follows the batch and a 64 MiB piece of the archive, not the day: written whole,
+the 10.8 million changes of that `BTC-USDT-SWAP` day would have held near 8 GB, at the 204
+bytes a change and 561-byte transient the engine's write was measured holding. A liquid
+day is slow to load: of that day's 1,202 seconds, 507 were CPU — reading every message of
+two days' archives and building the changes — and the rest the process spent off a CPU,
+through the download of 696 MiB in 64 MiB pieces, the catalog's writes and a shared machine
+running it niced. Load a liquid swap's days before a run needs them, not while lanes run.
+
+**Refused** (exit 3): an archive of more or other than one member named for it, naming the
+archive; and, naming the archive and the message's `ts`, a day not opened by a snapshot, a
+message with another key, an action other than `snapshot` or `update`, another swap's
+`instId`, a `ts` that goes back or falls outside the archive's day, a level the definition's
+precision cannot hold, or a message after which the book is crossed or locked. A range with a UTC day the exchange lists no archive for is
+refused at `discover` naming the days; an archive answered other than as above, or whose
+bytes do not read through, stops the load (exit 1) and is not kept — running it again downloads it
+again. The listing's `module=5` (5000 levels, from 2025-11-01) and `module=6` (tick by tick,
+served on a plain-`http` link) are not read.
 
 #### `okx_funding`
 

@@ -332,6 +332,79 @@ def test_data_load_refuses_trade_days_the_archives_do_not_serve(
     assert "UTC days 2026-09-29 are not served" in payload(result)["error"]
 
 
+AEON_ENTRY = """AEON-USDT-SWAP.OKX:
+  nautilus_id: AEON-USDT-SWAP.OKX
+  asset_class: CRYPTOCURRENCY
+  manual: true
+  corporate_actions: none
+  override:
+    instrument_class: swap
+    base_currency: AEON
+    quote_currency: USDT
+    settlement_currency: USDT
+    multiplier: "10"
+    price_increment: "0.00001"
+    size_increment: "1"
+    lot_size: "1"
+"""
+"""AEON as the exchange's listing gave it to the operator's workspace on 2026-10-02 (see
+`tests/nautilus/adapters/okx/test_book.py`)."""
+
+
+def test_data_load_writes_a_book_and_prints_a_dataset_a_day(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """okx_book and okx_trades declare a day per dataset: two days of prints are two
+    datasets with a manifest each, and a day of the book is one, its points the changes the
+    recorded excerpt makes to the top three."""
+    listing, history = Replay(), History()
+    monkeypatch.setattr(
+        reference,
+        "pyo3_transport",
+        lambda rate, **_: (
+            lambda url, params, headers=None: (
+                history(url, params, headers) if recorded_for(url, params) else listing(url, params)
+            )
+        ),
+    )
+    root = resolving(workspace)
+    (root / "instruments.yaml").write_text(AEON_ENTRY, encoding="utf-8")
+    resolved = at(
+        runner, root, "data", "instruments", "resolve", "USDC-USDT-SWAP.OKX",
+        "AEON-USDT-SWAP.OKX", "--as-of", "2026-09-30", "--json",
+    )  # fmt: skip
+    assert resolved.exit_code == Exit.OK, resolved.stdout
+    specs = {
+        "okx_trades": "instruments: [USDC-USDT-SWAP]\nstart: 2026-09-26\nend: 2026-09-27\n",
+        "okx_book": "instruments: [AEON-USDT-SWAP]\nstart: 2026-09-01\nend: 2026-09-01\n"
+        "levels: 3\n",
+    }
+    loaded: dict[str, list[dict[str, object]]] = {}
+    for loader, text in specs.items():
+        spec = root / f"{loader}.yaml"
+        spec.write_text(f"loader: {loader}\n{text}", encoding="utf-8")
+        result = at(runner, root, "data", "load", "--loader", loader, "--spec", spec, "--json")
+        assert result.exit_code == Exit.OK, result.stdout
+        loaded[loader] = payload(result)["datasets"]
+
+    assert [(one["span"], one["rows"]) for one in loaded["okx_trades"]] == [
+        (["2026-09-26", "2026-09-26"], 214),
+        (["2026-09-27", "2026-09-27"], 288),
+    ]
+    [day] = loaded["okx_book"]
+    assert (day["dataset_id"], day["span"]) == (
+        "AEON_USDT_SWAP.OKX-book-none-raw-20260901",
+        ["2026-09-01", "2026-09-01"],
+    )
+    assert day["rows"] > 0 and day["publication"] == "realtime"
+    shown = payload(at(runner, root, "data", "show", "--json"))["series"]
+    assert {(one["instrument"], one["type"]) for one in shown} == {
+        ("USDC-USDT-SWAP.OKX", "trade"),
+        ("AEON-USDT-SWAP.OKX", "book"),
+    }
+    assert not [url for url, params in history.asked if "key" in str(params).lower()]
+
+
 # -- the account's own tier -----------------------------------------------------------
 
 
