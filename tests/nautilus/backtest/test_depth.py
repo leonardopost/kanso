@@ -369,37 +369,50 @@ def test_level_one_is_handed_on_every_instant_the_top_moved_and_never_partway(
     assert 10.03 not in [top[2] for _, top in handed]
 
 
-def test_level_one_of_a_feed_whose_every_instant_is_one_change_is_handed_at_once(
-    request_for,
-) -> None:
-    """With no instant of two changes the feed is unmarked, every change is an instant, and
-    its level one is handed from the change itself rather than from a marker."""
-    deltas = [delta for delta in book() if int(delta.ts_init) != _base(RESEARCH[0]) + 130 * MS_NS]
-    opening = [delta for delta in deltas if int(delta.ts_init) == _base(RESEARCH[0])]
-    spread = [
-        OrderBookDelta(
-            delta.instrument_id,
-            delta.action,
-            delta.order,
-            0,
-            0,
-            int(delta.ts_init) - (len(opening) - index) * MS_NS,
-            int(delta.ts_init) - (len(opening) - index) * MS_NS,
-        )
-        for index, delta in enumerate(opening)
-    ]
-    deltas = [*spread, *deltas[len(opening) :]]
-    run(
-        request_for(RESEARCH, source=PROBE, hypothesis_=depth_hypothesis()),
-        [tuple(deltas)],
-    )
-    handed = [
-        (data_time, (tick.bid_price.as_double(), tick.ask_price.as_double()))
-        for kind, data_time, tick in seen(PROBE)
-        if kind == "top"
-    ]
+CLOCKED = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
-    assert [(stamp, (top[0], top[2])) for stamp, top in expected_tops(deltas)] == handed
+SEEN = []
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Records the engine's own instant at every view, level one and print it is handed.\"\"\"
+
+    config_cls = Config
+
+    def on_order_book_deltas(self, deltas) -> None:
+        SEEN.append(("depth", self.clock.timestamp_ns(), deltas))
+
+    def on_quote_tick(self, tick) -> None:
+        SEEN.append(("top", self.clock.timestamp_ns(), tick))
+
+    def on_trade_tick(self, tick) -> None:
+        SEEN.append(("trade", self.clock.timestamp_ns(), tick))
+"""
+
+
+def test_level_one_is_handed_at_the_instant_its_batch_is_applied(request_for) -> None:
+    """A book hypothesis is marked and no marker follows a book batch, so level one waited
+    for the next point of the feed: the top the change at 30 ms made was handed at the print
+    at 50. It is handed while the engine is at the change itself, before any later point."""
+    deltas, prints_ = book(), prints()
+    run(
+        request_for(RESEARCH, source=CLOCKED, hypothesis_=depth_hypothesis()),
+        [tuple(deltas), tuple(prints_)],
+    )
+    records = seen(CLOCKED)
+    tops = [(index, at, tick) for index, (kind, at, tick) in enumerate(records) if kind == "top"]
+
+    assert [int(tick.ts_init) for _, _, tick in tops] == [
+        stamp for stamp, _ in expected_tops(deltas)
+    ]
+    for index, at, tick in tops:
+        assert at == int(tick.ts_init), "level one was handed at a later point than its change"
+        assert all(stamp <= at for _, stamp, _ in records[:index])
 
 
 def test_a_rule_that_reads_level_one_fills_alike_whatever_the_grid(request_for) -> None:
@@ -502,11 +515,11 @@ class Modifier(KansoModifier):
 """.encode()
 
 
-def test_level_one_of_a_marked_instant_is_handed_at_its_marker(request_for) -> None:
+def test_level_one_is_handed_at_the_change_that_moved_it(request_for) -> None:
     """The instant at 130 ms takes the best offer away and puts 10.01 in its place. Its level
-    one is handed at the flush marker after its two changes, so a taker of the new offer
-    fills at 130 ms with no latency and at 150 ms, the next point, with 10 ms; were it handed
-    only at the next change, at 150 ms, those would be 150 and 250."""
+    one is handed with its batch of two changes, so a taker of the new offer fills at 130 ms
+    with no latency and at 150 ms, the next point, with 10 ms; were it handed only at the
+    next change, at 150 ms, those would be 150 and 250."""
     base = _base(RESEARCH[0])
     filled = {}
     for latency_ms in (0.0, 10.0):
@@ -522,35 +535,63 @@ def test_level_one_of_a_marked_instant_is_handed_at_its_marker(request_for) -> N
     assert filled == {0.0: [130], 10.0: [150]}
 
 
-def test_an_owed_exit_is_paid_on_a_change_the_author_is_not_shown(request_for) -> None:
-    """BOOK_ONLY exits at market once, on its thirtieth view, and never asks again; the
-    market exit it cancelled its resting one for is refused by the latency, so the exit is
-    owed. Every change after the thirtieth is to a bid below the one level shown, so the
-    author is shown nothing more, and the harness still asks for the owed exit on each of
-    those changes: the position is closed rather than held to the end of the window."""
-    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS, chasing_costs
+def owed_exit(day: date, *, shown: bool, latency_ms: float = 20.0) -> tuple[list[Any], Hypothesis]:
+    """A book that BOOK_ONLY exits at market on, on its thirtieth view, under a latency that
+    refuses the exit while the cancel of its resting one is in flight, so the exit is owed:
+    a change a second, the first thirty to the one offer shown, the rest to the offer when
+    `shown` and otherwise to a bid below the one level shown."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_OPEN_NS, chasing_costs
 
-    base = midnight_ns(RESEARCH[0]) + BOOK_OPEN_NS
+    base = midnight_ns(day) + BOOK_OPEN_NS
     changes = [
         make_delta(_id(), BookAction.ADD, OrderSide.BUY, 1_000, 500, 1, 2, 0, base, base),
         make_delta(_id(), BookAction.ADD, OrderSide.SELL, 1_002, 500, 2, 2, 0, base, base),
     ]
     for second in range(1, 80):
         ts = base + second * 1_000_000_000
-        if second <= 30:
+        if second <= 30 or shown:
             change = (OrderSide.SELL, 1_002, 500 + second)  # level one moves: a view
         else:
             change = (OrderSide.BUY, 998, 100 + second)  # below level one: no view
         side, ticks, size = change
         changes.append(make_delta(_id(), BookAction.UPDATE, side, ticks, size, 2, 2, 0, ts, ts))
     document = depth_hypothesis(levels=1).model_dump(mode="json", by_alias=True)
-    document.update(data_requirements=["book"], costs=chasing_costs(20.0))
-    result = run(
-        request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=Hypothesis.model_validate(document)),
-        [tuple(changes)],
-    )
+    document.update(data_requirements=["book"], costs=chasing_costs(latency_ms))
+    return changes, Hypothesis.model_validate(document)
+
+
+def test_an_owed_exit_is_paid_on_a_change_the_author_is_not_shown(request_for) -> None:
+    """BOOK_ONLY exits at market once, on its thirtieth view, and never asks again; the
+    market exit it cancelled its resting one for is refused by the latency, so the exit is
+    owed. Every change after the thirtieth is to a bid below the one level shown, so the
+    author is shown nothing more, and the harness still asks for the owed exit on each of
+    those changes: the position is closed rather than held to the end of the window."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY
+
+    changes, hyp = owed_exit(RESEARCH[0], shown=False)
+    result = run(request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=hyp), [tuple(changes)])
 
     assert [(fill.side, fill.qty) for fill in result.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+
+
+def test_an_owed_exit_is_stamped_with_the_change_it_is_paid_on(request_for) -> None:
+    """The cancel sent at the change at 30 s lands after the handlers of the change at 31 s,
+    so the owed exit is paid at the change at 32 s, the first point after it landed, and is
+    stamped with that change: not with the grid instant 100 ms before it, which the view
+    handed on the same change carries, and not with the change at 31 s, whose level one used
+    to wait for the next point. It reaches the venue a latency later, at the next change."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS
+
+    changes, hyp = owed_exit(RESEARCH[0], shown=True)
+    result = run(request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=hyp), [tuple(changes)])
+    base = midnight_ns(RESEARCH[0]) + BOOK_OPEN_NS
+
+    assert [((intent[0] - base) // MS_NS, intent[2], intent[4]) for intent in result.intents] == [
+        (1_900, "BUY", "LIMIT"),
+        (4_900, "SELL", "LIMIT"),
+        (32_000, "SELL", "MARKET"),
+    ]
+    assert [(fill.ts_ns - base) // MS_NS for fill in result.run.fills] == [3_000, 33_000]
 
 
 def _bars(day: date, at_ms: tuple[int, ...]) -> list[Bar]:

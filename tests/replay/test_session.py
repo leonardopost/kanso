@@ -252,6 +252,52 @@ def test_the_two_paths_show_a_depth_sleeve_the_same_book_alike(latency_ms: float
     assert node.run.fills == engine.run.fills
 
 
+@pytest.mark.parametrize(("latency_ms", "filled_ms"), [(0.0, 130), (10.0, 150)])
+def test_the_two_paths_hand_level_one_at_the_change_that_moved_it_alike(
+    latency_ms: float, filled_ms: int
+) -> None:
+    """The change at 130 ms puts a better offer in; a taker of it reads level one alone, and
+    on both paths is handed it with the change's batch rather than at the next point, so it
+    fills at that change with no latency and at the next point, 150 ms, with 10 ms."""
+    from tests.nautilus.backtest.test_depth import QUOTE_TAKER, _base, book
+
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book"],
+        depth={"every_ms": 100, "levels": 3},
+    )
+    request = request_for(source=QUOTE_TAKER, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), "latency_ms": latency_ms}  # type: ignore[arg-type]
+    day = FORWARD[0]
+    node, engine = both(replace(request, venue_model=model), [instrument()], [tuple(book(day))])
+    base = _base(day)
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(fill.ts_ns - base) // 1_000_000 for fill in engine.run.fills] == [filled_ms]
+
+
+def test_the_two_paths_stamp_an_exit_owed_under_depth_with_its_change_alike() -> None:
+    """The owed exit is paid on the change after its cancel landed and stamped with that
+    change, on both paths, not with the grid instant of the view handed on it."""
+    from tests.nautilus.backtest.test_depth import owed_exit
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS, chasing_costs
+
+    day = FORWARD[0]
+    changes, hyp = owed_exit(day, shown=True)
+    request = request_for(source=BOOK_ONLY, hyp=hyp)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), **chasing_costs(20.0)}  # type: ignore[dict-item]
+    node, engine = both(replace(request, venue_model=model), [instrument()], [tuple(changes)])
+    base = midnight_ns(day) + BOOK_OPEN_NS
+
+    assert node.intents == engine.intents
+    assert node.run.fills == engine.run.fills
+    assert [(intent[0] - base) // 1_000_000 for intent in engine.intents][-1] == 32_000
+
+
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_the_two_paths_land_what_came_due_by_a_held_print_before_its_handler_alike(
     latency_ms: float,

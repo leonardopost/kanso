@@ -610,7 +610,8 @@ the changes since the view before it, stamped with that instant (`data_time` rea
 the first point of data published after it, and only when something it shows moved. Its
 `on_quote_tick` is handed level one — the best bid and offer with their sizes — once for every
 instant whose changes, all applied, left the top where it was not, never partway through
-an instant. Neither is delayed again: an order sent from either reaches the venue
+an instant and never later than it: at the change itself, stamped with it, before any later
+point of the feed. Neither is delayed again: an order sent from either reaches the venue
 `costs.latency_ms` after the point that carried the call, as every order does, because the
 latency is the whole round trip, feed and order together. The quote is a signal and moves
 nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
@@ -622,6 +623,10 @@ the card crashes naming the call; it reads its host's prices from the context it
 with. A strategy that reads level one alone sends and fills the same on any grid,
 since the venue is handed every change whatever the strategy is shown. The same harness code
 runs on both code paths, and a deployed stage is configured with the key as its card was.
+An exit the harness still owes the strategy — an exit at market a cancel in flight cut — is
+asked for again on every change of the book, whether or not the strategy is shown anything
+there, and one paid on a change is stamped with that change, after level one is handed,
+never with the earlier grid instant of a view handed on it.
 
 `levels` is 1 to 400, the depth of the sampled channel the key models (measured on
 2026-10-02 against OKX's: 400 levels a side every 100 ms; its archives hold 5,000 a side at

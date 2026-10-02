@@ -618,7 +618,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._depth_shown: dict[str, tuple[dict[Price, Quantity], dict[Price, Quantity]]] = {}
         self._depth_seen_ns = -1
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
-        self._top_due: dict[str, tuple[InstrumentId, int, int]] = {}
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1163,9 +1162,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the node).
 
         Under `depth` the change is the harness's and not the author's: it goes into the
-        harness's own copy of the book and the author is handed what `_show_book` shows of
-        it — the grid's view and level one — while the owed exits are asked for on every
-        change as before.
+        harness's own copy of the book and the author is handed what is due of it — the
+        grid's view and level one (`_take_depth`) — while the owed exits are asked for on
+        every change as before, stamped with the change.
         """
         if self._cfg.depth is not None and not historical:
             self._take_depth(deltas)
@@ -1184,59 +1183,66 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _take_depth(self, deltas: Any) -> None:
         """Keep a change of the book under `depth`, showing the author only what is due.
 
-        What came due before this change is shown first: level one of an instant already
-        complete, then the grid's view, which therefore never holds this change or any
-        later one. The change goes into the harness's book; level one of its instant is
-        shown at once on a feed whose every instant is one change, and otherwise at the
-        flush marker after the instant's changes, or at the next change of another
-        instrument or instant, whichever comes first — never partway through an instant.
+        The grid's view that came due before this change is shown first, so it never holds
+        this change or any later one. The change then goes into the harness's book, and
+        level one is shown at once if the change moved it: the runner hands every change one
+        instrument's book made at one instant as one batch on both paths
+        (`kanso.nautilus.cross_section.batched`), so the batch is the whole instant and level
+        one is never shown partway through one. A book batch is never held for a flush
+        marker, and none follows it, so waiting for anything after the batch would hand
+        level one at the next point of the feed rather than at the change.
+
+        The exits owed are asked for last, with `data_time` the change's: the change is
+        where the venue's state that makes them due — a cancel that has landed, a fill that
+        has cut what is left — is known, whether or not the author was shown anything of it.
+        `_show_view` asks for none, because the grid's view is stamped with an instant
+        before the change it is shown on.
         """
-        ts_init = int(deltas.ts_init)
         instrument_id = deltas.instrument_id
         key = instrument_id.value
-        self._show_top(unless=(key, ts_init))
-        self._show_depth(ts_init)
+        ts_event = int(deltas.ts_event)
+        self._show_depth(int(deltas.ts_init))
         book = self._depth_books.get(key)
         if book is None:
             book = self._depth_books[key] = (_Ladder(1), _Ladder(-1))
         _apply(book, deltas)
-        self._top_due[key] = (instrument_id, int(deltas.ts_event), ts_init)
-        if not self._hold_until_cross_section:
-            self._show_top()
-        self._data_time = int(deltas.ts_event)
+        self._show_top(instrument_id, book, ts_event, int(deltas.ts_init))
+        self._data_time = ts_event
         if self.is_running and not self._warming():
             self._send_behind_modify()
             self._pay_owed()
 
     def _show_book(self, ts_init: int) -> None:
-        """Show the author what came due of the book before a point published at `ts_init`."""
+        """Show the author the grid's view that came due before a point published at
+        `ts_init`; the point's own dispatch asks for the exits owed."""
         if self._cfg.depth is not None:
-            self._show_top()
             self._show_depth(ts_init)
 
-    def _show_top(self, unless: tuple[str, int] | None = None) -> None:
-        """Hand level one of every instant whose changes are complete and moved the top.
+    def _show_top(
+        self,
+        instrument_id: InstrumentId,
+        book: tuple[_Ladder, _Ladder],
+        ts_event: int,
+        ts_init: int,
+    ) -> None:
+        """Hand level one of a book just changed, when both sides hold a level and the top
+        is unlike the one last shown.
 
-        `unless` names the instrument and instant still being changed. The quote is stamped
-        with the instant of the change and is a signal only: it moves no last price, no mark
-        and no quoted spread, as the book it is read from moves none.
+        The quote is stamped with the instant of the change and is a signal only: it moves
+        no last price, no mark and no quoted spread, as the book it is read from moves none.
         """
-        for key, (instrument_id, ts_event, ts_init) in list(self._top_due.items()):
-            if (key, ts_init) == unless:
-                continue
-            del self._top_due[key]
-            bids, asks = self._depth_books[key]
-            bid, ask = bids.best(), asks.best()
-            if bid is None or ask is None:
-                continue
-            top = (bid[0], bid[1], ask[0], ask[1])
-            if top == self._top_shown.get(key):
-                continue
-            self._top_shown[key] = top
-            self._show_view(
-                QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init),
-                ts_event,
-            )
+        bids, asks = book
+        bid, ask = bids.best(), asks.best()
+        if bid is None or ask is None:
+            return
+        key = instrument_id.value
+        top = (bid[0], bid[1], ask[0], ask[1])
+        if top == self._top_shown.get(key):
+            return
+        self._top_shown[key] = top
+        self._show_view(
+            QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init), ts_event
+        )
 
     def _show_depth(self, ts_init: int) -> None:
         """Hand the book as of the last grid instant before `ts_init`, once per grid instant.
@@ -1270,21 +1276,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._show_view(OrderBookDeltas(instrument_id, made), grid)
 
     def _show_view(self, data: QuoteTick | OrderBookDeltas, data_time: int) -> None:
-        """Hand the author a view of the book, inside the envelope every handler runs in."""
+        """Hand the author a view of the book stamped `data_time`, the cancels held behind a
+        modify sent before it as before any handler. The exits owed are not asked for here
+        but by the point the view is shown on, stamped with that point (`_take_depth`)."""
         self._data_time = data_time
-        live = self.is_running and not self._warming()
-        if live:
+        if self.is_running and not self._warming():
             self._send_behind_modify()
         if isinstance(data, QuoteTick):
             super().handle_quote_tick(data, False)
         else:
             super().handle_order_book_deltas(data, False)
-        if live:
-            self._pay_owed()
 
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):
-            self._show_top()
             if self._pending:
                 self._flush_one()
             if not self._pending:
