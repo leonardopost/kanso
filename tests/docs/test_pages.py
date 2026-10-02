@@ -18,6 +18,7 @@ from kanso.classify import catalogue
 from kanso.config import Config, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.models.wire import REQUEST_TIMEOUT_S
+from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.research import driver
 from tests.cli.test_doctor import CHECKS
 
@@ -331,6 +332,34 @@ def test_the_wait_the_workspace_page_states_is_the_one_the_client_waits() -> Non
     stated = re.search(r"waits \*\*(\w+) minutes\*\*", models)
     assert stated is not None
     assert spelled(stated.group(1)) * 60 == REQUEST_TIMEOUT_S
+
+
+def test_the_pages_say_a_run_asks_no_vendor_about_what_the_store_holds() -> None:
+    """Five lanes beginning together each asked the reference for every instrument, and the
+    exchange throttled four of them out of their runs; the pages say a run reads the store."""
+    instruments = prose(section(page("workspace.md"), "`instruments.yaml`"))
+    assert "A run asks the reference adapter nothing about an instrument the store holds." in (
+        instruments
+    )
+    assert "`hyp validate` and `hyp add` build the definition in memory to check it" in (
+        instruments
+    )
+    snapshot = prose(section(page("concepts.md"), "Snapshot"))
+    assert "a run asks no reference adapter about an instrument its snapshot pins" in snapshot
+
+
+def test_the_throttle_wait_the_adapters_page_states_is_the_one_the_client_waits() -> None:
+    """The reference and the public history wait out a throttle through one client."""
+    waits = [f"{PAUSE_S * attempt:g}" for attempt in range(1, RETRIES)]
+    stated = f"is asked again after {', '.join(waits[:-1])} and {waits[-1]} seconds"
+    okx = prose(section(page("adapters.md"), "The OKX adapter"))
+    assert okx.count(stated) == 2
+    fifth = re.search(r"does not lift by the (\w+) attempt", okx)
+    assert fifth is not None
+    assert _ORDINALS.index(fifth.group(1)) + 1 == RETRIES
+
+
+_ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth")
 
 
 def test_the_lane_memory_floor_the_workspace_page_states_is_the_one_the_package_clamps_to() -> None:

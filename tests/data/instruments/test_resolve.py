@@ -18,6 +18,7 @@ from kanso.data.instruments import (
     definition_checksum,
     read_store,
     resolve_universe,
+    run_definitions,
     write_store,
 )
 from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
@@ -528,6 +529,47 @@ def test_current_definitions_keep_the_newest_dated_definition_of_each_id(ws: Wor
     assert set(current) == {"AAPL.XNAS", "MSFT.XNAS"}
     assert definition_checksum(current["AAPL.XNAS"]) == definition_checksum(newer)
     assert len(read_store(ws)) == 3
+
+
+# --- what a run is priced under -----------------------------------------------
+
+
+def test_a_run_reads_the_store_and_asks_no_adapter_for_what_it_holds(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolved as of one day and asked about as of another, which the cache does not
+    answer: the store's definition is the one a card is priced under all the same."""
+    probe, configured = resolve_then_stale(ws, monkeypatch)
+
+    held = run_definitions(configured, ["MSFT.XNAS"], date(2024, 1, 2))
+
+    assert probe.asked == []
+    assert definition_checksum(held["MSFT.XNAS"]) == definition_checksum(equity("MSFT.XNAS"))
+
+
+def test_a_run_reads_the_newest_dated_definition_as_its_card_does(ws: Workspace) -> None:
+    older = equity(increment="0.01", as_of=date(2024, 1, 2))
+    newer = equity(increment="0.05", as_of=date(2025, 3, 3))
+    write_store(ws, [newer, older])
+
+    held = run_definitions(ws, ["AAPL.XNAS"], date(2024, 1, 2))
+
+    assert definition_checksum(held["AAPL.XNAS"]) == definition_checksum(newer)
+
+
+def test_only_an_id_the_store_does_not_hold_reaches_the_adapter_and_nothing_is_written(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe, configured = resolve_then_stale(ws, monkeypatch)
+    probe.answers["AAPL.XNAS"] = equity()
+    before = ws.path("instruments.yaml").read_bytes()
+
+    held = run_definitions(configured, ["MSFT.XNAS", "AAPL.XNAS"], AS_OF)
+
+    assert probe.asked == [("AAPL.XNAS",)]
+    assert set(held) == {"MSFT.XNAS", "AAPL.XNAS"}
+    assert set(current_definitions(ws)) == {"MSFT.XNAS"}
+    assert ws.path("instruments.yaml").read_bytes() == before
 
 
 def test_a_write_the_engine_skipped_is_a_failure(
