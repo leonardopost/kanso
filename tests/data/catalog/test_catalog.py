@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date
 
 import pytest
@@ -553,3 +554,89 @@ def test_a_batched_write_that_produces_no_bytes_is_refused(ws: FakeWorkspace) ->
     m.remove_manifest(ws, written.manifest.dataset_id)
     with pytest.raises(PreconditionError, match="wrote no bytes"):
         cat.write(ws, iter(prints()), ref=TRADES, source="synthetic", batch=100)
+
+
+def broken(after: int) -> Iterator[TradeTick]:
+    """A source that serves `after` days of prints and then raises, as a loader that meets a
+    refused message part-way through a day does."""
+    yield from prints(count=after)
+    raise ValidationError("the source refused a message part-way")
+
+
+def kept(ws: FakeWorkspace, held: cat.Written) -> None:
+    """`held` is in the store as it was written: its manifest, its files, its prints."""
+    assert m.manifests(ws) == {held.manifest.dataset_id: held.manifest}
+    assert cat._checksum(m.data_path(ws), held.files) == held.manifest.checksum
+    assert len(cat.open_catalog(ws).trade_ticks()) == 15
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_batched_replace_that_fails_later_keeps_the_dataset_it_replaced(
+    ws: FakeWorkspace,
+) -> None:
+    """The replace removes the held dataset before the first file, so a failure two batches
+    later must put it back: files, prints and manifest."""
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    with pytest.raises(ValidationError, match="part-way"):
+        cat.write(ws, broken(2), ref=TRADES, source="x", batch=3, replace=True)
+
+    kept(ws, held)
+
+
+def test_a_batched_supersede_that_fails_later_keeps_the_pinned_dataset(
+    ws: FakeWorkspace,
+) -> None:
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+    define(ws)
+    snap.freeze(ws)
+
+    with pytest.raises(ValidationError, match="part-way"):
+        cat.write(
+            ws, broken(2), ref=TRADES, source="x", batch=3, supersedes=held.manifest.dataset_id
+        )
+
+    kept(ws, held)
+    with pytest.raises(PreconditionError, match="named by a snapshot"):
+        cat.write(ws, iter(prints()), ref=TRADES, source="x", batch=4, replace=True)
+
+
+def test_an_interrupted_batched_replace_keeps_the_dataset_it_replaced(ws: FakeWorkspace) -> None:
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    def interrupted() -> Iterator[TradeTick]:
+        yield from prints(count=2)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        cat.write(ws, interrupted(), ref=TRADES, source="x", batch=3, replace=True)
+
+    kept(ws, held)
+
+
+def test_a_whole_replace_the_engine_fails_to_write_keeps_the_dataset_it_replaced(
+    ws: FakeWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    def failing(self: object, data: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(cat.ParquetDataCatalog, "write_data", failing)
+    with pytest.raises(OSError, match="no space"):
+        cat.write(ws, prints(), ref=TRADES, source="x", replace=True)
+    monkeypatch.undo()
+
+    kept(ws, held)
+
+
+def test_a_replace_that_is_written_lets_the_old_files_go(ws: FakeWorkspace) -> None:
+    cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    again = cat.write(ws, iter(prints()), ref=TRADES, source="x", batch=4, replace=True)
+
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+    root = m.data_path(ws)
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet")) == list(
+        again.files
+    )

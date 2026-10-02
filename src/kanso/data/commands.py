@@ -12,7 +12,11 @@ towards now, or from a named dataset's, which is how the dataset in front of a g
 extended on purpose. Both are chunked, and the manifest each chunk writes is its
 checkpoint: an interrupted run resumes at the first chunk with no manifest, and a repeated
 run finds nothing missing and fetches nothing. A chunk a source serves nothing for leaves
-no manifest, so it is recorded in the event log instead and is not asked for twice.
+no manifest, so it is recorded in the event log instead and is not asked for twice — unless
+it lies after the last day its series serves. A source publishes a day late, so an empty
+answer there says only that it has not published yet: it is recorded nowhere and asked
+again by the next sync or backfill, which is what keeps a day-at-a-time loader synced to
+today from leaving the days its source had yet to publish as a hole nothing asks for.
 
 A loader may declare `chunk_days`, the most days of its data one dataset may hold, because a
 day of its points is as much as a write should hold at once. For such a loader every verb
@@ -368,7 +372,8 @@ def load(
             except KansoError as exc:
                 if not written:
                     raise
-                raise _stopped(exc, over, loader_id, spec, written) from exc
+                last = max(ref.span[1] for ref in plan)
+                raise _stopped(exc, over, loader_id, spec, last, written) from exc
     result = Load(loader=loader_id, spec=spec, written=tuple(written))
     store.event(
         LOADED,
@@ -405,11 +410,17 @@ def _stopped(
     ref: DatasetRef,
     loader_id: str,
     spec: Path,
+    last: date,
     written: Sequence[catalog.Written],
 ) -> KansoError:
-    """A later chunk's refusal, saying what was written before it and how to finish."""
+    """A later chunk's refusal, saying what was written before it and how to finish.
+
+    The backfill it names runs to `last`, the spec's last day, because a backfill writes
+    nothing past its `--to`: it asks for the stopped chunk and every one after it, and for
+    nothing already written.
+    """
     resume = (
-        f"`kanso data backfill --loader {loader_id} --spec {spec} --to {ref.span[1]}` "
+        f"`kanso data backfill --loader {loader_id} --spec {spec} --to {last}` "
         f"writes {ref.span[0]} and the rest of the range"
     )
     return KansoError(
@@ -660,14 +671,17 @@ def backfill(
             notes.append(f"{ref.instrument} {ref.type}: nothing missing before {wanted_end}")
             continue
         per_day = _rows_per_day(mine.datasets)
+        served_to = spans[-1][1] if spans else None
         for target in merge(targets):
             for chunk in chunked(target, per or CHUNK_DAYS):
                 over = dataclass_replace(ref, span=(chunk.start, chunk.end))
-                fetches.append(
-                    _estimate(over, per_day, rate)
-                    if dry_run
-                    else _fetch(ws, store, loader, over, source=loader.id)
-                )
+                if dry_run:
+                    fetches.append(_estimate(over, per_day, rate))
+                    continue
+                fetched = _fetch(ws, store, loader, over, source=loader.id, served_to=served_to)
+                fetches.append(fetched)
+                if fetched.outcome == "written":
+                    served_to = max(served_to or chunk.end, chunk.end)
 
     result = Backfill(
         loader=loader_id,
@@ -705,22 +719,27 @@ def _fetch(
     ref: DatasetRef,
     *,
     source: str,
+    served_to: date | None,
     supersedes: str | None = None,
 ) -> Fetch:
     """Fetch the chunk `ref` spans and write it, unless it was already asked and served nothing.
 
     An empty answer is recorded against the series, as the range that was asked: it is the
     checkpoint that keeps the chunk from being asked twice, and between two served spans it
-    is what coverage counts.
+    is what coverage counts. A chunk after `served_to`, the last day the series serves, is
+    the exception both ways: its empty answer is neither read nor recorded, because there
+    it means the source has not published the days yet, and the next run asks again.
     """
     chunk = Chunk(*ref.span)
     subject = series_subject((ref.instrument, ref.type, ref.resolution))
-    if _already_empty(store, subject, chunk):
+    ahead = served_to is not None and chunk.start > served_to
+    if not ahead and _already_empty(store, subject, chunk):
         return Fetch(ref.instrument, ref.type, ref.resolution, chunk, outcome="empty")
     points = iter(loader.load(ref, ref.span))
     first = next(points, None)
     if first is None:
-        store.event(EMPTY_CHUNK, subject, {"start": str(chunk.start), "end": str(chunk.end)})
+        if not ahead:
+            store.event(EMPTY_CHUNK, subject, {"start": str(chunk.start), "end": str(chunk.end)})
         return Fetch(ref.instrument, ref.type, ref.resolution, chunk, outcome="empty")
     written = catalog.write(
         ws,
@@ -833,6 +852,7 @@ def sync(
             continue
         loader = loader_for(ws, manifest.source)
         latest = manifest
+        served_to = max(m.end for m in held.values() if m.filed_under == manifest.filed_under)
         mine: list[Fetch] = []
         for chunk in chunked(window, chunk_days(loader) or CHUNK_DAYS):
             fetched = _fetch(
@@ -841,6 +861,7 @@ def sync(
                 loader,
                 ref_of(latest, (chunk.start, chunk.end)),
                 source=latest.source,
+                served_to=served_to,
                 supersedes=latest.dataset_id,
             )
             mine.append(fetched)
@@ -848,6 +869,7 @@ def sync(
                 # Each successor supersedes the one before it, so a multi-chunk sync is a
                 # chain of datasets rather than one dataset rewritten several times.
                 latest = manifests(ws)[fetched.dataset_id]
+                served_to = max(served_to, latest.end)
         fetches += mine
         if all(item.outcome == "empty" for item in mine):
             notes.append(

@@ -65,7 +65,8 @@ EMPTY_CHUNK: Final = "data_chunk_empty"
 `data backfill` and `data sync` append one per empty chunk, filed under the series and
 never the dataset, with the range as `{"start": ..., "end": ...}`. The range is asked once,
 and it is never coverage: what an answer says is what the source holds, not whether the
-market opened."""
+market opened. A chunk after the last day its series serves is never recorded, because an
+empty answer there means the source has not published it yet."""
 
 CATALOG_DIR: Final = "catalog"
 """The store's directory in the workspace."""

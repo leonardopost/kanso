@@ -106,14 +106,13 @@ def test_a_failure_on_a_later_day_keeps_the_days_before_it_and_names_the_resume(
     assert "2 dataset(s) before it were" in error["error"]
     assert "the source has no 2024-01-04" in error["error"]
     assert error["remedy"].startswith("ask again later; then `kanso data backfill")
-    assert f"--spec {spec} --to 2024-01-04`" in error["remedy"]
+    resume = f"`kanso data backfill --loader synthetic --spec {spec} --to {WEEK['end']}`"
+    assert f"then {resume} writes 2024-01-04 and the rest of the range" in error["remedy"]
     assert [str(m.start) for m in held(workspace)] == DAYS[:2]
 
     daily.refuse = None
-    resumed = at(
-        runner, workspace, "data", "backfill", "--loader", "synthetic", "--spec", spec,
-        "--to", WEEK["end"], "--json",
-    )  # fmt: skip
+    command = resume.strip("`").split()[1:]
+    resumed = at(runner, workspace, *command, "--json")
 
     assert resumed.exit_code == Exit.OK, resumed.stdout
     chunks = payload(resumed)["chunks"]
@@ -226,3 +225,61 @@ def test_backfill_and_sync_cut_by_the_loader_s_days(
         (day, day) for day in ("2024-01-06", "2024-01-07", "2024-01-08", "2024-01-09")
     ]
     assert len(held(workspace)) == 4
+
+
+@dataclass
+class Lagging(Daily):
+    """The day-a-dataset loader over a source that has published only to `newest`, and
+    serves nothing after it — as `okx_trades` and `okx_book` serve a day past the newest
+    archive the exchange lists."""
+
+    newest: date = date(2024, 1, 3)
+
+    def load(self, ref: DatasetRef, window: tuple[date, date]) -> Iterable[object]:
+        if window[0] > self.newest:
+            self.asked += 1
+            return iter(())
+        return super().load(ref, window)
+
+
+def test_days_a_sync_met_before_they_were_published_are_asked_again(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sync to Friday when the source has published to Wednesday answers Thursday and
+    Friday empty. Once it publishes them, the next sync writes them, and nothing is left for
+    a backfill: no day of the week was recorded as answered empty."""
+    from kanso.state import StateStore
+
+    lagging = Lagging()
+    monkeypatch.setattr("kanso.data.commands.loader_for", lambda ws, loader_id: lagging)
+    write_instruments(workspace)
+    assert at(runner, workspace, "data", "instruments", "resolve").exit_code == Exit.OK
+    spec = write_spec(workspace, "january.yaml", start="2024-01-02", end="2024-01-31")
+
+    def backfill(to: str) -> Any:
+        return payload(
+            at(
+                runner, workspace, "data", "backfill", "--loader", "synthetic", "--spec", spec,
+                "--to", to, "--json",
+            )
+        )  # fmt: skip
+
+    assert [c["outcome"] for c in backfill("2024-01-02")["chunks"]] == ["written"]
+    one = payload(at(runner, workspace, "data", "sync", "--to", WEEK["end"], "--json"))
+    lagging.newest = date(2024, 1, 31)
+    two = payload(at(runner, workspace, "data", "sync", "--to", "2024-01-09", "--json"))
+    three = backfill("2024-01-09")
+
+    assert [(c["start"], c["outcome"]) for c in one["chunks"]] == [
+        ("2024-01-03", "written"),
+        ("2024-01-04", "empty"),
+        ("2024-01-05", "empty"),
+    ]
+    assert [(c["start"], c["outcome"]) for c in two["chunks"]][:2] == [
+        ("2024-01-04", "written"),
+        ("2024-01-05", "written"),
+    ]
+    assert three["chunks"] == []
+    assert {str(m.start) for m in held(workspace)} >= {*DAYS, "2024-01-08", "2024-01-09"}
+    with StateStore(workspace / "state.db") as store:
+        assert store.events(kind="data_chunk_empty") == []

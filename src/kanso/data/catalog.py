@@ -53,11 +53,21 @@ from the last, so the store reads the batches back as one series; the clash with
 is checked once, over the span requested, before the first file. The manifest is one, over
 every file the write produced, and a failure in any batch removes every file the write had
 already produced and records nothing, so a dataset is written whole or not at all.
+
+**A replaced dataset is kept until its replacement is written.** A replace or a supersede
+removes the held dataset before the first new file is written, because the engine keeps its
+files' intervals disjoint; a batched write has by then read one batch of a stream that may
+still fail. So the files a removal could touch are first linked aside, under
+`catalog/.replaced/`, and a write that fails — a refused point in a later batch, a loader
+that raises, an interrupt — puts them and their manifests back as they were before it
+removes the aside. Only a write that records its manifest lets them go.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -90,6 +100,9 @@ if TYPE_CHECKING:  # pragma: no cover - kept out of the runtime import graph
 NANOS_PER_SECOND = 1_000_000_000
 DAY_END_NANOS = 86_400 * NANOS_PER_SECOND - 1
 """The last nanosecond of a UTC day, so a dated window closes inclusively."""
+
+ASIDE_DIR: Final = ".replaced"
+"""Where a write keeps what a replace removed, beside the engine's tree, until it is done."""
 
 WRITE_BATCH: Final = 250_000
 """Points per `write_data` call on a batched write: about 0.2 GB of engine objects and
@@ -240,16 +253,21 @@ def write(
         )
     replaced = _clear(ws, held, dataset, ref, served, replace, data_cls, identifier, supersedes)
 
-    catalog = open_catalog(ws)
-    before = _tree(data_path(ws))
-    catalog.write_data(ordered)
-    files = _new_files(before, _tree(data_path(ws)))
-    if not files:
-        raise PreconditionError(
-            f"dataset {dataset!r} wrote no bytes: the store already holds files for this "
-            "availability range",
-            remedy="run `kanso data show` and load with --replace to rewrite the span",
-        )
+    root = data_path(ws)
+    before = _tree(root)
+    try:
+        open_catalog(ws).write_data(ordered)
+        files = _new_files(before, _tree(root))
+        if not files:
+            raise PreconditionError(
+                f"dataset {dataset!r} wrote no bytes: the store already holds files for this "
+                "availability range",
+                remedy="run `kanso data show` and load with --replace to rewrite the span",
+            )
+    except BaseException:
+        _undo(ws, before, [held[name] for name in replaced])
+        raise
+    _let_go(ws)
 
     return _record(
         ws,
@@ -356,17 +374,17 @@ def _write_batched(
             span = served_span(current)
             first_day, last_day = min(first_day, span[0]), max(last_day, span[1])
             current = next(batches, None)
+        files = _new_files(before, _tree(root))
+        if not files:
+            raise PreconditionError(
+                f"dataset for {ref.instrument} {ref.type} wrote no bytes: the store already "
+                "holds files for this availability range",
+                remedy="run `kanso data show` and load with --replace to rewrite the span",
+            )
     except BaseException:
-        for name in set(_tree(root)) - set(before):
-            (root / name).unlink(missing_ok=True)
+        _undo(ws, before, [held[name] for name in replaced])
         raise
-    files = _new_files(before, _tree(root))
-    if not files:
-        raise PreconditionError(
-            f"dataset for {ref.instrument} {ref.type} wrote no bytes: the store already holds "
-            "files for this availability range",
-            remedy="run `kanso data show` and load with --replace to rewrite the span",
-        )
+    _let_go(ws)
     served = (first_day, last_day)
     return _record(
         ws,
@@ -546,10 +564,51 @@ def _clear(
             remedy="pass --replace to delete and rewrite the overlapped span",
         )
     catalog = open_catalog(ws)
+    _set_aside(ws, catalog, data_cls)
     for manifest in clashing:
         _delete(catalog, data_cls, identifier, manifest.span)
         remove_manifest(ws, manifest.dataset_id)
     return tuple(sorted(m.dataset_id for m in clashing))
+
+
+def _set_aside(ws: Workspace, catalog: ParquetDataCatalog, data_cls: type) -> None:
+    """Link every file the store holds of `data_cls` under `catalog/.replaced/`.
+
+    Those are all the files a removal of `data_cls` can touch, and a link costs no bytes: the
+    removal unlinks the store's name and the aside one keeps the file, until `_let_go`
+    drops it or `_undo` links it back.
+    """
+    aside = catalog_path(ws) / ASIDE_DIR
+    shutil.rmtree(aside, ignore_errors=True)
+    root = data_path(ws)
+    for name in catalog.get_file_list_from_data_cls(data_cls):
+        path = Path(name)
+        kept = aside / path.relative_to(root)
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        os.link(path, kept)
+
+
+def _undo(ws: Workspace, before: dict[str, tuple[int, int]], removed: Sequence[Manifest]) -> None:
+    """A failed write taken back: the files it produced removed, and what its replace
+    removed put back, files and manifests, as they were before it began."""
+    root = data_path(ws)
+    for name in set(_tree(root)) - set(before):
+        (root / name).unlink(missing_ok=True)
+    aside = catalog_path(ws) / ASIDE_DIR
+    if removed and aside.is_dir():
+        for kept in aside.rglob("*"):
+            home = root / kept.relative_to(aside)
+            if kept.is_file() and not home.exists():
+                home.parent.mkdir(parents=True, exist_ok=True)
+                os.link(kept, home)
+    for manifest in removed:
+        write_manifest(ws, manifest)
+    _let_go(ws)
+
+
+def _let_go(ws: Workspace) -> None:
+    """What a write set aside, dropped once the write is recorded or undone."""
+    shutil.rmtree(catalog_path(ws) / ASIDE_DIR, ignore_errors=True)
 
 
 def _delete(
