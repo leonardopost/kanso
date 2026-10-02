@@ -744,8 +744,9 @@ archives under `module=4`. Measured against `us.okx.com` and its file host on 20
   size in **contracts**, and `"0"` removing the level. The archive named for UTC day `D`
   holds `D`'s messages, 00:00:00.00x to 23:59:59.9xx UTC. Its first message is a full
   `snapshot`, another follows every fifteen minutes — 96 a day — and the rest are `update`s,
-  as often as every 10 ms. `AEON-USDT-SWAP` on 2026-09-01 was 10.7 MB and
-  486,916 messages; a `BTC-USDT-SWAP` day is 273 to 423 MB and about 5.9 million. No two
+  as often as every 10 ms. `AEON-USDT-SWAP` on 2026-09-01 was 10,663,558 bytes, 10.2 MiB
+  — the unit the listing's `sizeMB` is in, which said 10.17 — and 486,916 messages; a
+  `BTC-USDT-SWAP` day is 273 to 423 MiB and about 5.9 million. No two
   messages of that AEON day shared a `ts`, and over 19 swaps on 2026-09-01 and `BTC` and
   `SOL` on 2026-07-15 no book was crossed after a message.
 - **The download.** The engine's HTTP client refuses an answer over 100 MiB — `BTC-USDT-SWAP`
@@ -781,11 +782,17 @@ it, and the last carries `F_LAST`; a message that moves nothing in the best `K` 
 nothing. Prices and sizes are read at the definition's precision, exactly or refused.
 
 **A day opens from the day before.** Day `D`'s first message meets the book as day `D - 1`
-left it: every level `D - 1` closed with outside `D`'s opening best `K` is deleted, and the
-best `K` are added. A run that starts on `D` gets the additions on an empty book, and one that
-ran through `D - 1` loses exactly what `D - 1` left behind, so on either the engine's best `K`
-equal the archive's after every message — checked on `AEON-USDT-SWAP` 2026-09-01 opened from
-2026-08-31, all 486,916 messages, at `K` = 3 and at `K` = 10. What a day closes with is kept
+left it. A level the opening snapshot does not show at all is deleted — the exchange holds no
+order there, so nothing was ahead of an order resting on it — and then every level of the
+best `K`, and every deeper level the book held that the snapshot still shows, is added at the
+snapshot's size. No level the exchange still shows is deleted at midnight, so an order
+resting past `K` keeps its place in the queue across it (at `K` = 3 on 2026-09-01, 351 of
+the levels 2026-08-31 closed with past the best three were still shown, and are kept). A run
+that starts on `D` gets the additions on an empty book, and one that ran through `D - 1` has
+its sizes restated — an `ADD` of a level the engine holds replaces its size and leaves its
+queue alone — so on either the engine's best `K` equal the archive's after every message:
+checked on `AEON-USDT-SWAP` 2026-09-01 opened from 2026-08-31, all 486,916 messages, at `K`
+= 3 and at `K` = 10, both ways. What a day closes with is kept
 in `catalog/.cache/okx/book/<instId>/`, a small JSON file per day and depth; a load whose
 first day's predecessor is not kept there downloads that day's archive, runs it to its close
 without writing anything, and keeps the result. An archive is deleted once its day has been
@@ -793,29 +800,34 @@ read; one left by a load that stopped part-way is used by the next.
 
 **Use `levels: 3`, and rest inside the spread or in the best three.** Below `K` the book holds
 levels at whatever size they had when they left the window, so a queue there is not modelled,
-and every level of depth costs changes: at `K` = 3 the AEON day was 209,367 changes from
-124,279 of its messages, at `K` = 10 437,687 from 199,015.
+and every level of depth costs changes: at `K` = 3 the AEON day was 209,580 changes from
+124,279 of its messages, at `K` = 10 437,794 from 199,015.
 
 **Measured** with `kanso data load` on 2026-10-02 (`/usr/bin/time -l`, the shared machine
-niced), each day downloading its own archive and the day before's:
+niced), each day downloading its own archive and the day before's. Both loads ran under the
+day opening this version replaced, which deleted every level past `K` at midnight; the
+present opening changes the AEON day from 209,367 changes to 209,580, measured with the
+loader's own code over the same two archives, and the BTC count was not taken again:
 
 | swap, day | `levels` | changes | archives | wall | CPU | peak resident |
 |---|---|---|---|---|---|---|
-| `AEON-USDT-SWAP` 2026-09-01 | 3 | 209,367 | 12.6 + 10.2 MB | 50 s | 17 s | 0.34 GB |
-| `BTC-USDT-SWAP` 2026-06-22 | 10 | 10,803,349 | 273 + 423 MB | 20 min | 8.2 min | 0.43 GB |
+| `AEON-USDT-SWAP` 2026-09-01 | 3 | 209,367 | 12.6 + 10.2 MiB | 50 s | 17 s | 0.34 GB |
+| `BTC-USDT-SWAP` 2026-06-22 | 10 | 10,803,349 | 273 + 423 MiB | 20 min | 8.4 min | 0.43 GB |
 
 A day is one dataset (`chunk_days: 1`) written to the catalog 250,000 changes at a time, so
 the peak follows the batch and a 64 MiB piece of the archive, not the day: written whole,
 the 10.8 million changes of that `BTC-USDT-SWAP` day would have held near 8 GB, at the 204
-bytes a change and 561-byte transient the engine's write was measured holding. Most of a
-liquid day's load is CPU — reading every message of two days' archives and building the
-changes — so load a liquid swap's days before a run needs them, not while lanes run.
+bytes a change and 561-byte transient the engine's write was measured holding. A liquid
+day is slow to load: of that day's 1,202 seconds, 507 were CPU — reading every message of
+two days' archives and building the changes — and the rest the process spent off a CPU,
+through the download of 696 MiB in 64 MiB pieces, the catalog's writes and a shared machine
+running it niced. Load a liquid swap's days before a run needs them, not while lanes run.
 
-**Refused**, each naming the archive and the message's `ts` (exit 3): an archive of more or
-other than one member named for it; a day not opened by a snapshot; a message with another
-key, an action other than `snapshot` or `update`, another swap's `instId`, a `ts` that goes
-back or falls outside the archive's day, a level the definition's precision cannot hold, or
-after which the book is crossed. A range with a UTC day the exchange lists no archive for is
+**Refused** (exit 3): an archive of more or other than one member named for it, naming the
+archive; and, naming the archive and the message's `ts`, a day not opened by a snapshot, a
+message with another key, an action other than `snapshot` or `update`, another swap's
+`instId`, a `ts` that goes back or falls outside the archive's day, a level the definition's
+precision cannot hold, or a message after which the book is crossed or locked. A range with a UTC day the exchange lists no archive for is
 refused at `discover` naming the days; an archive answered other than as above, or whose
 bytes do not read through, stops the load (exit 1) and is not kept — running it again downloads it
 again. The listing's `module=5` (5000 levels, from 2025-11-01) and `module=6` (tick by tick,

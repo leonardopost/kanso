@@ -19,12 +19,13 @@ the exchange's epoch milliseconds as a string, and each level is `[price, size, 
 strings, its size in **contracts** — `"0"` removes the level. The file named for UTC day `D`
 holds `D`'s messages from 00:00:00.00x to 23:59:59.9xx UTC, so one archive is one UTC day.
 The first message is a full `snapshot` of the book; a snapshot follows every fifteen minutes,
-96 a day; the rest are `update`s. On `AEON-USDT-SWAP` 2026-09-01 — 10,663,558 bytes,
-486,916 messages, 83.7 MB unpacked — no two messages shared a `ts`, `ts` never went back,
+96 a day; the rest are `update`s. On `AEON-USDT-SWAP` 2026-09-01 — 10,663,558 bytes (10.2
+MiB, the unit the listing's `sizeMB` is in: it said 10.17), 486,916 messages, 79.9 MiB
+unpacked — no two messages shared a `ts`, `ts` never went back,
 the snapshots fell at lines 1, 4,782 (00:15:00.008), 13,239, ... and 481,641, and the book
 was never crossed after a message; over 19 swaps on 2026-09-01 and `BTC-USDT-SWAP` and
 `SOL-USDT-SWAP` on 2026-07-15 no top of book was crossed either. A `BTC-USDT-SWAP` day is
-273-423 MB and about 5.9 million messages, more than the engine's client accepts in one
+273-423 MiB and about 5.9 million messages, more than the engine's client accepts in one
 answer, so an archive is fetched in ranges (`PIECE`): the file host answers a `Range` with
 206 and those bytes, the last piece short, and 416 for a range that starts at the end. It
 sent an `etag` equal to the MD5 of the bytes, but the engine's client hands back no header,
@@ -55,14 +56,20 @@ a message that changes nothing inside `M`'s view emits nothing. Prices and sizes
 the definition's precision, exactly or refused (`history.units`).
 
 **A day opens from the day before.** The first message of day `D` meets `M` as day `D - 1`
-closed it — or empty, when `D - 1` is not listed — and emits a `DELETE` for every price of
-`M` outside the opening `W` and an `ADD` for every level of `W`, after which `M` is `W`
-whatever the engine held. A run that starts on `D` has an empty book, gets the `ADD`s, and
-its `DELETE`s do nothing; a run continuing from `D - 1` loses exactly the levels `D - 1` left
-behind. Either way its book equals `M` after every message: replayed into the engine's own
-`OrderBook`, the top `K` equalled the archive's after all 486,916 messages of 2026-09-01
-opened from 2026-08-31, at `K` = 3 (209,367 changes from 124,279 messages) and at `K` = 10
-(437,687 from 199,015). `M` as each day closes is kept in the adapter's cache,
+closed it — or empty, when `D - 1` is not listed. It emits a `DELETE` for every price of `M`
+the opening snapshot does not show at all — the exchange holds no order there, so nothing is
+ahead of an order resting on it — and then an `ADD`, at the snapshot's size, for every level
+of the opening `W` and every deeper level of `M` the snapshot still shows, best first; `M` is
+then exactly those levels. So no level the exchange still shows is deleted at midnight, and
+an order resting past `K` keeps its place across it. A run that starts on `D` has an empty
+book: the `ADD`s build it and the `DELETE`s do nothing. A run continuing from `D - 1` holds
+`M`: the `DELETE`s remove what the exchange no longer shows and the `ADD`s restate the rest,
+which an `ADD` of a held price does without touching its queue. Either way its book equals
+`M` after every message: replayed into the engine's own `OrderBook` both ways, the top `K`
+equalled the archive's after all 486,916 messages of 2026-09-01 opened from 2026-08-31, at
+`K` = 3 (209,580 changes from 124,279 messages; the opening 142 `DELETE`s and 357 `ADD`s,
+none of a level the snapshot showed) and at `K` = 10 (437,794 from 199,015). `M` as each day
+closes is kept in the adapter's cache,
 `catalog/.cache/okx/book/<instId>/<day>-k<K>-p<price precision>-s<size precision>.json`;
 a load whose first day's predecessor is missing there downloads that archive, runs it to its
 close without writing a point, keeps the model and deletes the archive.
@@ -77,15 +84,17 @@ is refused at `discover`, naming the days. A `load` that `data sync` asks past t
 archive stops there; one that meets an unlisted day between listed ones stops with its name.
 A message that is not one of the measured shape — another key, an action other than
 `snapshot` or `update`, another swap's `instId`, a day not opened by a snapshot, a `ts` going
-back or outside the archive's day, a number the precision cannot hold, a crossed book — is
-refused naming the archive and the message's `ts`.
+back or outside the archive's day, a number the precision cannot hold, a crossed or locked
+book — is refused naming the archive and the message's `ts`; an archive of any other layout
+than one member of its own name is refused naming the archive.
 
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
 `OrderMatchingEngine.process_order_book_delta` clears every queue position on a `CLEAR` or a
 delta flagged `F_SNAPSHOT`, and the queue at a price on a `DELETE` there. An `L2_MBP`
 `OrderBook` adds the level on an `UPDATE` of a price it does not hold, ignores a `DELETE` of
-one it does not hold, and replaces the size on an `ADD` of one it does; an `ADD` or `UPDATE`
+one it does not hold, and replaces the size on an `ADD` of one it does — and neither an `ADD`
+nor an `UPDATE` touches a queue position; an `ADD` or `UPDATE`
 of size zero is refused when the delta is built, so a `DELETE` carries size zero.
 `nautilus_pyo3.HttpResponse.headers` was measured empty for the file host's answer.
 """
@@ -238,14 +247,17 @@ def _follow(book: _Side, model: _Side, depth: int) -> list[Change]:
 
 
 def _open(book: _Side, model: _Side, depth: int) -> list[Change]:
-    """A day's opening: every level the day before left that the opening window does not
-    hold goes, and the whole window is added, so `model` is the window afterwards."""
+    """A day's opening, the module docstring's rule: a `DELETE` for every price `model`
+    holds that the opening snapshot does not, then an `ADD` at the snapshot's size for every
+    level of the window and every deeper level `model` holds that the snapshot still shows,
+    best first, so `model` is those levels afterwards."""
     window = book.keys[:depth]
-    inside = set(window)
-    out: list[Change] = [(BookAction.DELETE, key, 0) for key in model.keys if key not in inside]
-    out += [(BookAction.ADD, key, book.sizes[key]) for key in window]
-    model.sizes = {key: book.sizes[key] for key in window}
-    model.keys = list(window)
+    gone = [key for key in model.keys if key not in book.sizes]
+    kept = sorted({*window, *(key for key in model.keys if key in book.sizes)})
+    out: list[Change] = [(BookAction.DELETE, key, 0) for key in gone]
+    out += [(BookAction.ADD, key, book.sizes[key]) for key in kept]
+    model.sizes = {key: book.sizes[key] for key in kept}
+    model.keys = kept
     return out
 
 

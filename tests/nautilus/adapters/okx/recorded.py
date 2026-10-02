@@ -93,6 +93,13 @@ def recorded_for(url: str, params: Mapping[str, str]) -> str | None:
     return None
 
 
+RANGE_NOT_SATISFIABLE = b"<html><body>Sorry, invalid request</body></html>"
+"""The file host's body for a range that starts at the end of a file, measured on
+2026-10-02 at 07:51 UTC with `Range: bytes=10663558-` on the 10,663,558-byte AEON-USDT-SWAP
+2026-09-01 book archive: HTTP 416 from CloudFront, `content-type: text/html`,
+`content-range: bytes */10663558`, and these 49 bytes. The loaders read the status alone."""
+
+
 @dataclass
 class History:
     """A transport serving the recorded answer to each request the loaders send, and
@@ -115,5 +122,5 @@ class History:
             return served
         first, _, last = wanted.removeprefix("bytes=").partition("-")
         if int(first) >= len(served.body):
-            return Response(416, b"<Error><Code>InvalidRange</Code></Error>")
+            return Response(416, RANGE_NOT_SATISFIABLE)
         return Response(206, served.body[int(first) : int(last) + 1])

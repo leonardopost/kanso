@@ -50,7 +50,7 @@ from kanso.nautilus.adapters.okx.reference import Response
 from kanso.nautilus.adapters.okx.trades import Archive, OkxTradesLoader
 from kanso.workspace import Workspace, init
 
-from .recorded import HISTORY, History, answer
+from .recorded import HISTORY, RANGE_NOT_SATISFIABLE, History, answer
 
 AS_OF = date(2026, 10, 2)
 """The day the listing answers and the archives were recorded."""
@@ -412,6 +412,45 @@ def test_a_level_pushed_past_the_depth_is_not_deleted(ws: Workspace) -> None:
     assert "0.06254" in asks[3:]
 
 
+def side(*levels: tuple[int, int]) -> Any:
+    return book._Side(levels)
+
+
+def test_a_level_past_the_depth_that_the_archive_drops_is_left_where_it_is() -> None:
+    """Built in the test, as keys: the model holds 5 past a depth of three, and the archive
+    drops it while showing 4 deeper still. Nothing inside the window moved, so nothing is
+    emitted, and 5 stays in the model, as it stays in the engine's book."""
+    model = side((1, 5), (2, 5), (3, 5), (5, 9))
+
+    assert book._follow(side((1, 5), (2, 5), (3, 5), (4, 1)), model, 3) == []
+    assert (model.keys, model.sizes[5]) == ([1, 2, 3, 5], 9)
+
+
+def test_a_level_past_the_depth_is_deleted_once_the_window_reaches_it_and_it_is_gone() -> None:
+    """The archive's side falls to two levels, so the window's worst is no edge: every
+    price the model holds that the archive does not is deleted, 5 among them."""
+    model = side((1, 5), (2, 5), (3, 5), (5, 9))
+
+    assert book._follow(side((1, 5), (4, 1)), model, 3) == [
+        (BookAction.DELETE, 2, 0),
+        (BookAction.DELETE, 3, 0),
+        (BookAction.DELETE, 5, 0),
+        (BookAction.ADD, 4, 1),
+    ]
+    assert model.keys == [1, 4]
+
+
+def test_a_message_s_changes_go_deletes_then_updates_then_adds() -> None:
+    model = side((1, 5), (2, 5), (3, 5))
+
+    assert book._follow(side((0, 1), (2, 6), (3, 5)), model, 3) == [
+        (BookAction.DELETE, 1, 0),
+        (BookAction.UPDATE, 2, 6),
+        (BookAction.ADD, 0, 1),
+    ]
+    assert (model.keys, model.sizes) == ([0, 2, 3], {0: 1, 2: 6, 3: 5})
+
+
 def test_a_fifteen_minute_snapshot_that_agrees_with_the_book_changes_nothing(
     ws: Workspace,
 ) -> None:
@@ -449,13 +488,19 @@ def test_a_snapshot_that_disagrees_becomes_ordinary_changes(ws: Workspace) -> No
 
 
 def test_the_day_opens_from_the_model_the_day_before_closed_with(ws: Workspace) -> None:
-    """2026-09-01 opened from the recorded 2026-08-31 excerpt's close: every level that
-    close held outside the opening top three is deleted, and the top three are added."""
+    """2026-09-01 opened from the recorded 2026-08-31 excerpt's close: a level that close held
+    is deleted only when the opening snapshot does not show it at all; the top three, and
+    every deeper level the close held that the snapshot still shows, are added at the
+    snapshot's size. A level just past the depth keeps its place in the queue at midnight."""
     replay = History()
     points = loaded(ws, transport=replay)
     kept = json.loads((root(ws) / INST / "2026-08-31-k3-p5-s0.json").read_text())
     opening = by_message(points)[1_788_220_800_004 * 1_000_000]
     first = json.loads(excerpt(NAME01)[0])
+    shown = {
+        OrderSide.BUY: {ticks(p, 5): ticks(s, 0) for p, s, _ in first["bids"]},
+        OrderSide.SELL: {ticks(p, 5): ticks(s, 0) for p, s, _ in first["asks"]},
+    }
     window = {
         OrderSide.BUY: {ticks(p, 5) for p, _, _ in first["bids"][:3]},
         OrderSide.SELL: {ticks(p, 5) for p, _, _ in first["asks"][:3]},
@@ -468,12 +513,62 @@ def test_the_day_opens_from_the_model_the_day_before_closed_with(ws: Workspace) 
     for side in (OrderSide.BUY, OrderSide.SELL):
         mine = [p for p in opening if p.order.side is side]
         deleted = {ticks(str(p.order.price), 5) for p in mine if p.action is BookAction.DELETE}
-        added = {ticks(str(p.order.price), 5) for p in mine if p.action is BookAction.ADD}
-        assert deleted == closed[side] - window[side]
-        assert added == window[side]
+        added = {
+            ticks(str(p.order.price), 5): int(p.order.size)
+            for p in mine
+            if p.action is BookAction.ADD
+        }
+        assert deleted == closed[side] - set(shown[side])
+        assert set(added) == window[side] | (closed[side] & set(shown[side]))
+        assert all(added[price] == shown[side][price] for price in added)
         assert len(mine) == len(deleted) + len(added)
-    assert len(closed[OrderSide.BUY]) > 3 and len(closed[OrderSide.SELL]) > 3
+        assert (closed[side] - window[side]) & set(shown[side]), "no level past the depth kept"
+    assert [p.action for p in opening] == sorted(
+        (p.action for p in opening), key=[BookAction.DELETE, BookAction.ADD].index
+    )
     assert [url for url, _ in replay.asked if url.startswith(FILES)] == [URL31, URL01]
+
+
+def test_a_day_s_opening_deletes_only_what_the_snapshot_does_not_show() -> None:
+    """Built in the test, as keys, at a depth of three: the day before closed holding 6 and
+    7 past the window. The opening snapshot shows 6 and not 7, so 7 goes with 1 and 3, and 6
+    is restated at its size beside the window — deletes first, then additions, best first."""
+    model = side((1, 5), (2, 5), (3, 5), (6, 2), (7, 3))
+
+    assert book._open(side((0, 4), (2, 5), (4, 1), (6, 1), (8, 1)), model, 3) == [
+        (BookAction.DELETE, 1, 0),
+        (BookAction.DELETE, 3, 0),
+        (BookAction.DELETE, 7, 0),
+        (BookAction.ADD, 0, 4),
+        (BookAction.ADD, 2, 5),
+        (BookAction.ADD, 4, 1),
+        (BookAction.ADD, 6, 1),
+    ]
+    assert (model.keys, model.sizes) == ([0, 2, 4, 6], {0: 4, 2: 5, 4: 1, 6: 1})
+
+
+def test_a_day_continued_from_the_day_before_reaches_the_archive_s_top(ws: Workspace) -> None:
+    """The engine's book fed 2026-08-31's changes and then 2026-09-01's equals the archive's
+    top three after every message of 09-01, as one that starts empty on 09-01 does."""
+    root(ws).mkdir(parents=True)
+    for name in (NAME31, NAME01):
+        (root(ws) / name).write_bytes((HISTORY / name).read_bytes())
+    loader = opened(ws)
+    series = Series(INST, 5, 0, "us.okx.com", None, 3)
+    model = (book._Side(), book._Side())
+    before = list(loader._day(None, series, Archive(AUG31, NAME31, URL31), model, emit=True))
+    engine = OrderBook(before[0].instrument_id, BookType.L2_MBP)
+    for batch in by_message(before).values():
+        engine.apply_deltas(OrderBookDeltas(batch[0].instrument_id, batch))
+    grouped = by_message(
+        list(loader._day(None, series, Archive(SEP1, NAME01, URL01), model, emit=True))
+    )
+
+    for ts_ms, expected in archive_tops(NAME01, 3).items():
+        batch = grouped.get(ts_ms * 1_000_000)
+        if batch:
+            engine.apply_deltas(OrderBookDeltas(batch[0].instrument_id, batch))
+        assert top(engine, 3) == expected, ts_ms
 
 
 def test_a_day_opened_on_an_empty_book_reaches_the_same_top(
@@ -514,6 +609,22 @@ def test_the_model_is_kept_and_the_archives_are_deleted_once_read(ws: Workspace)
 
     assert [url for url, _ in again.asked if url.startswith(FILES)] == [URL01]
     assert [p.to_dict(p) for p in second] == [p.to_dict(p) for p in first]
+
+
+def test_a_model_is_kept_per_depth(ws: Workspace) -> None:
+    """A model holds the levels past its own depth, so a load at ten levels never opens from
+    the one a load at three kept: it rebuilds 2026-08-31's at ten."""
+    loaded(ws, 3)
+    again = History()
+    loaded(ws, 10, transport=again)
+
+    assert sorted(path.name for path in (root(ws) / INST).iterdir()) == [
+        "2026-08-31-k10-p5-s0.json",
+        "2026-08-31-k3-p5-s0.json",
+        "2026-09-01-k10-p5-s0.json",
+        "2026-09-01-k3-p5-s0.json",
+    ]
+    assert [url for url, _ in again.asked if url.startswith(FILES)] == [URL31, URL01]
 
 
 def test_a_kept_model_that_does_not_read_is_refused_naming_the_file(ws: Workspace) -> None:
@@ -570,11 +681,14 @@ def setting(key: str, value: Any) -> Callable[[dict[str, Any]], Any]:
         (lambda: edited(1, setting("instId", "GRVT-USDT-SWAP")), "is a message of 'GRVT"),
         (lambda: edited(1, setting("ts", "1788220800003")), "or before the one before it"),
         (lambda: edited(1, setting("ts", "1788307200000")), "falls outside 2026-09-01"),
+        (lambda: edited(-1, setting("ts", "1788307200000")), "falls outside 2026-09-01"),
         (lambda: edited(1, setting("ts", "17882208.5")), "whose ts is '17882208.5'"),
         (lambda: edited(1, setting("asks", {})), "a side that is not a list of levels"),
         (lambda: edited(1, setting("asks", [["0.062565", "1", "1"]])), "at the definition"),
         (lambda: edited(1, setting("asks", [["0.06256", "1"]])), "at the definition"),
         (lambda: edited(1, setting("asks", [["0.06256", "-1", "1"]])), "at the definition"),
+        (lambda: edited(1, setting("bids", [["0", "1", "1"]])), "at the definition"),
+        (lambda: edited(-1, setting("asks", [["0.06262", "5", "1"]])), "leaves the book crossed"),
         (lambda: edited(1, setting("asks", [["0.06240", "5", "1"]])), "leaves the book crossed"),
         (lambda: [*excerpt(NAME01)[:2], b"<html>\n"], "followed by a line that is not JSON"),
         (lambda: [*excerpt(NAME01)[:2], b"[1, 2]\n"], "a message with the keys list"),
@@ -591,6 +705,28 @@ def test_a_message_not_of_the_measured_shape_is_refused_by_its_ts(
     assert refused.value.message.startswith(f"okx: {NAME01}: the message at ts ")
     assert refusal in refused.value.message
     assert refused.value.code is Exit.VALIDATION
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        lambda: edited(1, setting("ts", "1788220800004")),
+        lambda: edited(-1, setting("ts", "1788307199999")),
+        lambda: edited(0, lambda message: message["asks"].insert(0, ["0.06250", "0", "0"])),
+    ],
+    ids=["a ts equal to the one before", "the day's last millisecond", "a zero in a snapshot"],
+)
+def test_a_message_at_the_edge_of_the_measured_shape_is_read(
+    ws: Workspace, lines: Callable[[], list[bytes]]
+) -> None:
+    """Each archive is the recorded excerpt with one line changed in the test: two messages
+    sharing a ts, a message at 23:59:59.999, a snapshot level of size zero. Each is read,
+    and the zero in a snapshot changes nothing."""
+    cached(ws, lines())
+    edge = loaded(ws)
+
+    opening = by_message(edge)[1_788_220_800_004 * 1_000_000]
+    assert "0.06250" not in {str(p.order.price) for p in opening}
 
 
 @pytest.mark.parametrize(
@@ -693,6 +829,20 @@ def test_an_archive_answered_other_than_200_stops_the_load(ws: Workspace) -> Non
     with pytest.raises(KansoError, match=f"the archive {NAME01} answered HTTP 404") as refused:
         loaded(ws, transport=missing)
     assert refused.value.code is Exit.ERROR
+
+
+def test_an_archive_whose_first_range_is_refused_stops_the_load(ws: Workspace) -> None:
+    """A 416 ends an archive only after a first piece: one for the first range is a refusal,
+    never an empty archive."""
+    replay = History()
+
+    def refused(url: str, params: dict[str, str], headers: Any = None) -> Response:
+        if url == URL01:
+            return Response(416, RANGE_NOT_SATISFIABLE)
+        return replay(url, params, headers)
+
+    with pytest.raises(KansoError, match=f"the archive {NAME01} answered HTTP 416"):
+        loaded(ws, transport=refused)
 
 
 def test_a_day_missing_between_listed_archives_stops_the_load(
