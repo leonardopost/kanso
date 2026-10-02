@@ -53,6 +53,7 @@ def test_help_lists_the_command_set(runner: CliRunner) -> None:
         "cert",
         "inbox",
         "status",
+        "state",
     ):
         assert command in result.stdout
 
@@ -67,6 +68,7 @@ def test_help_lists_the_command_set(runner: CliRunner) -> None:
         ("status",),
         ("research", "status"),
         ("inbox",),
+        ("state", "prune", "--dry-run"),
     ],
 )
 def test_json_is_accepted_before_and_after_the_command(

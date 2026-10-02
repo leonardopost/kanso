@@ -106,6 +106,19 @@ def usable(store: StateStore, path: Path) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class Footprint:
+    """The database's size in bytes, and the bytes of it held by free pages."""
+
+    size: int
+    free: int
+
+    @property
+    def used(self) -> int:
+        """The bytes a rewrite of the database keeps."""
+        return self.size - self.free
+
+
+@dataclass(frozen=True, slots=True)
 class Event:
     """One row of the append-only event log."""
 
@@ -371,6 +384,35 @@ class StateStore:
             " ORDER BY name"
         ).fetchall()
         return [str(row[0]) for row in rows]
+
+    # -- the file ----------------------------------------------------------------
+
+    def footprint(self) -> Footprint:
+        """How large the database is, and how much of that is free pages, as SQLite counts."""
+        page = int(self.connection.execute("PRAGMA page_size").fetchone()[0])
+        pages = int(self.connection.execute("PRAGMA page_count").fetchone()[0])
+        free = int(self.connection.execute("PRAGMA freelist_count").fetchone()[0])
+        return Footprint(size=page * pages, free=page * free)
+
+    def backup(self, path: Path) -> None:
+        """Write a consistent copy of the database to `path`, which must not exist yet.
+
+        `VACUUM INTO` reads one snapshot of the database and writes it whole, free pages
+        left out, so the copy opens as an ordinary `state.db` and the WAL it was read through
+        is folded in. SQLite refuses a target that already holds anything, so a backup can
+        never be written over another.
+        """
+        self.connection.execute("VACUUM INTO ?", (str(path),))
+
+    def vacuum(self) -> None:
+        """Rewrite the database without its free pages and give the space back to the disk.
+
+        In WAL mode the rewritten pages are appended to the log, so the file shrinks only
+        when they are checkpointed: the truncating checkpoint that follows does that, and
+        empties the log, once no other connection is reading an older snapshot.
+        """
+        self.connection.execute("VACUUM")
+        self.connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     # -- content addressing ------------------------------------------------------
 
