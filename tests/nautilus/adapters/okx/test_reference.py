@@ -8,8 +8,9 @@ named the exchange asks it nothing. A linear USDT swap resolves into a `CryptoPe
 whose contract terms are the row's and whose fees are zero, and it validates on a USDT
 account. An inverse contract, a suspended one, one not yet listed and one the exchange does
 not list are each refused by name, per id. An answer that is not the API's is the call's
-failure, not an id's. And the request carries a User-Agent and nothing else, and every
-request to the API is held to the table's rate, however many threads send.
+failure, not an id's, and a throttle is waited out before it is one. And the request carries
+a User-Agent and nothing else, and every request to the API is held to the table's rate,
+however many threads send.
 """
 
 from __future__ import annotations
@@ -54,7 +55,16 @@ from kanso.nautilus.adapters.okx.reference import (
 from kanso.workspace import Workspace, init
 from tests.hyp.conftest import DOCUMENT, write_hypothesis
 
-from .recorded import FIXTURES, PROVENANCE, Replay, recorded, row
+from .recorded import (
+    FIXTURES,
+    HISTORY_PROVENANCE,
+    PROVENANCE,
+    THROTTLED,
+    Replay,
+    answer,
+    recorded,
+    row,
+)
 
 AS_OF = date(2026, 9, 30)
 """The day the recordings were made."""
@@ -306,6 +316,51 @@ def test_an_answer_that_is_not_the_api_s_stops_the_call(ws: Workspace) -> None:
     assert stopped.value.message == (
         f"okx: {INSTRUMENTS} did not answer as the exchange's API does (HTTP 403: error code: 1010)"
     )
+
+
+def throttle() -> Response:
+    """The exchange's throttle as it was recorded: HTTP 429 and
+    `{"msg":"Too Many Requests","code":"50011"}`, verbatim, from the archive listing
+    (`fixtures/history/provenance.json`). The instruments listing answered the same status,
+    code and message to four of five lanes that asked it within one second on 2026-10-01 —
+    each lane's `lane_failed` event quotes it — and that body was not kept."""
+    return answer(next(name for name in HISTORY_PROVENANCE["files"] if name.startswith(THROTTLED)))
+
+
+def test_a_throttle_is_waited_out_and_the_id_resolves(ws: Workspace) -> None:
+    """Throttled twice, then the recorded row: the id resolves, after a growing pause."""
+    replay = Replay()
+    served = iter([throttle(), throttle()])
+    pauses: list[float] = []
+
+    def sometimes(url: str, params: Any) -> Response:
+        return next(served, None) or replay(url, params)
+
+    found = ADAPTER.provider(ws, transport=sometimes, pause=pauses.append).resolve([BTC], AS_OF)
+
+    assert type(found[BTC]).__name__ == "CryptoPerpetual"
+    assert pauses == [reference.PAUSE_S, 2 * reference.PAUSE_S]
+    assert len(replay.asked) == 1
+
+
+def test_a_throttle_that_does_not_lift_stops_the_call(ws: Workspace) -> None:
+    asked: list[str] = []
+    pauses: list[float] = []
+
+    def throttling(url: str, params: Any) -> Response:
+        asked.append(params["instId"])
+        return throttle()
+
+    with pytest.raises(KansoError) as stopped:
+        ADAPTER.provider(ws, transport=throttling, pause=pauses.append).resolve([BTC], AS_OF)
+
+    assert stopped.value.code is Exit.ERROR
+    assert stopped.value.message == (
+        f"okx: {INSTRUMENTS} did not answer as the exchange's API does "
+        "(HTTP 429, code 50011: Too Many Requests)"
+    )
+    assert asked == ["BTC-USDT-SWAP"] * reference.RETRIES
+    assert pauses == [2.0, 4.0, 6.0, 8.0]
 
 
 @pytest.mark.parametrize(
