@@ -206,6 +206,7 @@ DENIED_NUMPY_FILE: Final = frozenset(
 DENIED_CLOCK: Final = frozenset(
     {
         "clock",
+        "_clock",
         "set_timer",
         "set_timer_ns",
         "set_time_alert",
@@ -220,11 +221,15 @@ DENIED_CLOCK: Final = frozenset(
         "local_now",
     }
 )
-"""The component clock and its timer API, reachable only as an attribute."""
+"""The component clock and its timer API, reachable only as an attribute — the clock under
+both the names the engine gives it, `clock` and `_clock` (nautilus_trader 1.231.0). It reads
+the instant the engine is at, which in a backtest is the point being matched and under
+`depth` every change of the book, where the author is handed `data_time`."""
 
-DENIED_SCHEDULE: Final = frozenset({"cache"})
-"""The one route by which a `strategy.py` can hold an instrument, and so its `info.splits`:
-every split of that instrument's life, which is the certification window and beyond."""
+DENIED_SCHEDULE: Final = frozenset({"cache", "request_instrument", "request_instruments"})
+"""The routes by which a `strategy.py` can hold an instrument, and so its `info.splits`:
+every split of that instrument's life, which is the certification window and beyond — the
+cache, and the engine's requests for an instrument, which the data engine answers."""
 
 DENIED_STALE_BASIS: Final = frozenset(
     {
@@ -251,9 +256,15 @@ leaves in the share count the position opened in and which nothing can rewrite."
 DENIED_HISTORY: Final = frozenset(
     {
         "request_bars",
+        "request_aggregated_bars",
         "request_quote_ticks",
         "request_trade_ticks",
+        "request_order_book_snapshot",
+        "request_order_book_deltas",
+        "request_order_book_depth",
+        "request_funding_rates",
         "request_data",
+        "request_join",
         "_trading_from_ns",
         "_delivered_ns",
         "_fed_from_ns",
@@ -261,7 +272,9 @@ DENIED_HISTORY: Final = frozenset(
         "_undelivered",
     }
 )
-"""The engine's history requests, and the harness's warmup gate: the three attributes it
+"""The engine's history requests — every `request_*` an engine actor holds but the two for an
+instrument (`DENIED_SCHEDULE`), the book's among them, which under `depth` would hand the
+author a book the account is not served — and the harness's warmup gate: the three attributes it
 reads and the two methods that combine them. History reaches a strategy only as the prefix
 its hypothesis declares, delivered like the window's own points; a request would be a
 second route to the catalog, and the gate's own state — or its answer — a clock that says
@@ -294,7 +307,6 @@ DENIED_DEPTH: Final = frozenset(
         "_depth_shown",
         "_depth_seen_ns",
         "_top_shown",
-        "_top_due",
         "_take_depth",
         "_show_view",
         "_show_book",

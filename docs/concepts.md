@@ -867,10 +867,14 @@ own proposer reward-hacking its way to a better number, layered with the data is
 the card subprocess. It is not a sandbox against a hostile actor and does not claim to be
 one.
 
-The engine's history requests — `request_bars` and its quote, trade and custom siblings —
-are denied with the rest: history reaches a strategy only as the `warmup` prefix its
-hypothesis declares, which the runner resolves and feeds before the window, and a request
-would be a second route to the catalog that no window bounds. The state the harness keeps
+The engine's history requests — `request_bars` and every other `request_*` an engine actor
+holds, a book's snapshot, deltas and depth among them — are denied with the rest: history
+reaches a strategy only as the `warmup` prefix its hypothesis declares, which the runner
+resolves and feeds before the window, and a request would be a second route to the catalog
+that no window bounds. `request_instrument` and `request_instruments` are denied with the
+cache, as the other route to an instrument and its splits. The component clock is denied under
+both the names the engine gives it, `clock` and `_clock`: it reads the instant the engine is
+at, which under `depth` is every change of the book, where a strategy reads `data_time`. The state the harness keeps
 for a `book` policy — the instant it cuts return periods from, the period it is in, the
 cushion and the last end it settled — is denied the same way: it is a clock of where the
 window opens and a record of what the book made before this month, and a strategy reads

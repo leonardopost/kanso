@@ -251,6 +251,59 @@ def test_every_route_the_engine_gives_to_the_bus_or_a_book_is_refused_under_dept
         assert scan(f"self.{name}", depth=True), f".{name} reaches the book under depth"
 
 
+def test_every_request_and_every_clock_the_engine_gives_an_actor_is_refused() -> None:
+    """Read off the engine rather than off the sets, so a request or a clock it adds is
+    refused the day it is added: every `request_*` hands the author history, a book the
+    account is not served — a snapshot, the deltas or the depth of a book — or an instrument
+    with its splits, and the clock, under either name, the instant the engine is at, which
+    under `depth` is every change of the book. Measured on nautilus_trader 1.231.0: twelve
+    requests and `clock` and `_clock`, on `Strategy` and `Actor` alike."""
+    from nautilus_trader.common.actor import Actor
+    from nautilus_trader.trading.strategy import Strategy
+
+    routes = {
+        name
+        for cls in (Strategy, Actor)
+        for name in dir(cls)
+        if name.startswith("request_") or "clock" in name
+    }
+
+    assert routes >= {
+        "clock",
+        "_clock",
+        "request_order_book_snapshot",
+        "request_order_book_deltas",
+        "request_order_book_depth",
+        "request_instrument",
+    }
+    for name in sorted(routes):
+        for depth in (False, True):
+            assert scan(f"self.{name}", depth=depth), f".{name} was allowed"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "at = self._clock.timestamp_ns()",
+        "self.request_order_book_snapshot(InstrumentId.from_str('DEMO.XNAS'), limit=10)",
+        "self.request_order_book_depth(InstrumentId.from_str('DEMO.XNAS'), depth=10)",
+        'shown = "{0._clock}".format(self)',
+    ],
+)
+def test_a_depth_sleeve_is_refused_the_clock_and_a_book_of_its_own_asking(line: str) -> None:
+    """Two routes past the view a `depth` sleeve is handed: the engine's instant, which there
+    is the instant of every change, and a book asked for rather than subscribed."""
+    source = (
+        "from nautilus_trader.model.identifiers import InstrumentId\n"
+        "class Strategy:\n"
+        "    def on_order_book_deltas(self, deltas):\n"
+        f"        {line}\n"
+    )
+
+    assert scan(source, depth=True)
+    assert scan(source)
+
+
 def test_an_attached_construct_under_depth_may_not_subscribe_the_book() -> None:
     source = (
         "from nautilus_trader.model.identifiers import InstrumentId\n"
