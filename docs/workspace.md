@@ -363,6 +363,8 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
+`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
+a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 118).
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —

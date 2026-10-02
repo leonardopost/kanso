@@ -32,7 +32,14 @@ from the capital and the risk limits injected from the hypothesis, leaving room 
 round-trip cost the runner will apply. This is where per-strategy exposure is enforced,
 because the engine has nowhere else to enforce it: `RiskEngineConfig` offers exactly one
 limit, `max_notional_per_order` keyed by instrument, which is a per-order backstop and
-knows nothing of a position, a strategy or a book.
+knows nothing of a position, a strategy or a book. An entry the author built is refused at
+`submit_order` when the book cannot fund it, and `cancel_order`, `cancel_orders` and
+`cancel_all_orders` are kanso's own so that an exit owed or a cancel held back is kept.
+`modify_order` is not: it is the engine's, and a modify that grows an entry's quantity, or
+moves a resting entry to a price at which it opens more, is held neither to the room nor to
+what the book funds — the room reads the order at its new size and price from its next read
+on. A sizing rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`);
+an unsized one may call it (`docs/backlog.md` row 118).
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
