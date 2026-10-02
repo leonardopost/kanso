@@ -406,7 +406,11 @@ a sleeve whose exit rests at the ask reads the whole position there until the ex
 exit sized from it is cut to what the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
-equity curve strikes at each period end, and one a strategy may size from. `strategy_integrity` discards a `strategy.py`
+equity curve strikes at each period end, and one a strategy may size from. Reading it on every
+bar costs what the sleeve's orders gained since the last read, however long they have lived,
+so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
+does not save memory either, since the engine keeps every order's events for the run
+(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns
 (`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second

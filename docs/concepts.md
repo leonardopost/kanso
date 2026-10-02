@@ -549,7 +549,17 @@ ex-date the venue restates the held leg at the day's first point, which may be t
 until the held leg prints again its last price is restated by the split's ratio, for the balance
 and for the room. `position_size` still judges a position against the capital
 (`docs/backlog.md`), and under a `sizing` rule the budget is funded by definition (row 76).
-`self.balance` reads the number.
+`self.balance` reads the number, and a read costs what the sleeve's orders gained since the
+last one rather than what they hold: each event of each order — a fill, and the two a modify
+adds — is folded in once, as the engine hands it to the sleeve, so a sleeve may read it on
+every bar while it moves a resting order on every bar. Read whole each time, such an order
+cost its whole history on every read and the square of it over a card — measured on a crypto
+workspace, a card that re-priced its resting orders on every five-second bar ran 2.4 minutes
+per simulated day and was killed. The engine keeps every event of every order for the whole
+run, closed or not, so a card's memory still grows with every modify, and re-posting the
+order saves none of it: one resting order moved on each of 30,000 one-second bars left the
+engine holding 60,001 events, and the same sleeve cancelling it for a fresh one every 2,000
+moves left it holding 60,043 across fifteen orders, at the same peak.
 
 **A `book` policy changes the equity a card is measured on** (`docs/workspace.md` has the
 keys). The runner applies it once, at each period end of the extraction, in one order: the

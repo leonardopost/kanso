@@ -73,6 +73,8 @@ BINDINGS = {
     "flight as it is, and cancels both",
     "nautilus_pyo3.HttpClient holds a request that names a key to its default quota, and "
     "one key's quota is shared by every thread that sends under it",
+    "an order's events grow only at its end, and its strategy is handed each one as the "
+    "order's last when the order takes it",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
