@@ -9,6 +9,9 @@ its file name and is served its bytes and its recorded status unchanged.
 listing, the archives themselves and funding — recorded by driving the loaders against the
 exchange; its own `provenance.json` gives each answer's url, parameters, host, status and
 instant, and `History` serves an answer only for exactly the request it was recorded for.
+A request for a file that names a `Range` is answered as the file host was measured
+answering one on 2026-10-02 — 206 and the bytes of the range, fewer when it runs past the
+end, and 416 when it starts at or past the end — from the recorded file.
 """
 
 from __future__ import annotations
@@ -99,9 +102,18 @@ class History:
 
     asked: list[tuple[str, dict[str, str]]] = field(default_factory=list)
 
-    def __call__(self, url: str, params: Mapping[str, str]) -> Response:
+    def __call__(
+        self, url: str, params: Mapping[str, str], headers: Mapping[str, str] | None = None
+    ) -> Response:
         self.asked.append((url, dict(params)))
         name = recorded_for(url, params)
         if name is None:
             raise AssertionError(f"nothing was recorded for {url} {dict(params)}")
-        return answer(name)
+        served = answer(name)
+        wanted = (headers or {}).get("Range")
+        if wanted is None:
+            return served
+        first, _, last = wanted.removeprefix("bytes=").partition("-")
+        if int(first) >= len(served.body):
+            return Response(416, b"<Error><Code>InvalidRange</Code></Error>")
+        return Response(206, served.body[int(first) : int(last) + 1])

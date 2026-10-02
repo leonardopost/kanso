@@ -1,6 +1,7 @@
-"""The exchange's public history as catalog data: what the three loaders share.
+"""The exchange's public history as catalog data: what the four loaders share.
 
-`okx_bars` (`bars.py`), `okx_trades` (`trades.py`) and `okx_funding` (`funding.py`) are
+`okx_bars` (`bars.py`), `okx_trades` (`trades.py`), `okx_book` (`book.py`) and
+`okx_funding` (`funding.py`) are
 `kanso.data.Loader`s over the public API of the host `[adapters.okx]` names, returned by the
 adapter's `loaders(ws)` as factories. None sends a credential — the same User-Agent-only
 client the public reference uses, on the table's quota — so, like the reference, they are
@@ -14,6 +15,7 @@ instruments: [BTC-USDT-SWAP]     # the exchange's instId, or BTC-USDT-SWAP.OKX
 start: 2026-09-28
 end: 2026-09-28
 resolution: 1m                   # okx_bars only; the others refuse one
+levels: 3                        # okx_book only, and required there; the others refuse one
 ```
 
 The venue is the exchange's own, so no spec states one, and an id on another venue is
@@ -43,9 +45,9 @@ loader's own `pause` — the archive listing is paced below its measured limit
 that is not the API's success, and a throttle that does not lift, stops the call, because
 nothing about the data was established by it.
 
-Every dataset is `realtime`: a bar is public at its close, a print when it prints and a
-funding payment when it settles, so `ts_init` equals `ts_event` and no publication rule is
-involved.
+Every dataset is `realtime`: a bar is public at its close, a print when it prints, a book
+change when the exchange stamps it and a funding payment when it settles, so `ts_init`
+equals `ts_event` and no publication rule is involved.
 """
 
 from __future__ import annotations
@@ -162,6 +164,7 @@ class HistorySpec(KansoModel):
     start: date
     end: date
     resolution: Duration | None = None
+    levels: int | None = Field(default=None, ge=1, le=400)
 
     @model_validator(mode="after")
     def _ordered(self) -> HistorySpec:
@@ -190,7 +193,8 @@ class Series:
 
     Strings only and no credential — the manifest records them verbatim. `host` is where
     the series was first read from, for the record; a load reads from the host the
-    workspace names, since every regional host serves the same public history.
+    workspace names, since every regional host serves the same public history. `levels` is
+    a book's depth, and only a book series has one.
     """
 
     inst_id: str
@@ -198,6 +202,7 @@ class Series:
     size_precision: int
     host: str
     resolution: str | None = None
+    levels: int | None = None
 
     @property
     def instrument(self) -> str:
@@ -205,12 +210,15 @@ class Series:
         return instrument_id(self.inst_id)
 
     def params(self) -> dict[str, str]:
-        return {
+        params = {
             "inst_id": self.inst_id,
             "price_precision": str(self.price_precision),
             "size_precision": str(self.size_precision),
             "host": self.host,
         }
+        if self.levels is not None:
+            params["levels"] = str(self.levels)
+        return params
 
     @classmethod
     def of(cls, ref: DatasetRef, loader_id: str) -> Series:
@@ -229,6 +237,7 @@ class Series:
             size_precision=int(params["size_precision"]),
             host=params.get("host", ""),
             resolution=ref.resolution,
+            levels=int(params["levels"]) if "levels" in params else None,
         )
 
 
@@ -248,6 +257,8 @@ class HistoryLoader:
     type: ClassVar[str]
     vendor_dataset: ClassVar[str]
     aggregated: ClassVar[bool] = False
+    leveled: ClassVar[bool] = False
+    """A book's loader: its spec must state `levels`, and no other loader's may."""
 
     workspace: Workspace
     transport: Transport | None = None
@@ -271,7 +282,7 @@ class HistoryLoader:
         client = self.client()
         found: list[DatasetRef] = []
         for name in dict.fromkeys(parsed.instruments):
-            series = self._series(inst_id_of(name), parsed.resolution, client)
+            series = self._series(inst_id_of(name), parsed.resolution, client, parsed.levels)
             self.measure(client, series, window)
             found.append(self._ref(series, window))
         return found
@@ -331,8 +342,21 @@ class HistoryLoader:
                 f"the spec names {spec.resolution!r}",
                 remedy="drop `resolution`, or load bars with okx_bars",
             )
+        if self.leveled and spec.levels is None:
+            raise ValidationError(
+                f"levels: {self.id} loads a book kept exact to a depth, and the spec names none",
+                remedy="add `levels: 3` (or another depth from 1 to 400)",
+            )
+        if not self.leveled and spec.levels is not None:
+            raise ValidationError(
+                f"levels: {self.id} loads {self.type} points, which have no depth, and the "
+                f"spec names {spec.levels}",
+                remedy="drop `levels`, or load the book with okx_book",
+            )
 
-    def _series(self, inst_id: str, resolution: str | None, client: PublicClient) -> Series:
+    def _series(
+        self, inst_id: str, resolution: str | None, client: PublicClient, levels: int | None
+    ) -> Series:
         """The series of one swap, at the precision of the definition the catalog holds."""
         from kanso.data.instruments import current_definitions
 
@@ -352,6 +376,7 @@ class HistoryLoader:
             size_precision=int(definition.size_precision),
             host=client.base_url,
             resolution=resolution,
+            levels=levels,
         )
 
     def _ref(self, series: Series, span: tuple[date, date]) -> DatasetRef:
@@ -372,11 +397,13 @@ class HistoryLoader:
 def loaders(ws: Workspace) -> dict[str, Callable[[], Loader]]:
     """Every public-history loader for `ws`, as a factory per id; nothing is built here."""
     from kanso.nautilus.adapters.okx.bars import OkxBarsLoader
+    from kanso.nautilus.adapters.okx.book import OkxBookLoader
     from kanso.nautilus.adapters.okx.funding import OkxFundingLoader
     from kanso.nautilus.adapters.okx.trades import OkxTradesLoader
 
     return {
         OkxBarsLoader.id: lambda: OkxBarsLoader(workspace=ws),
         OkxTradesLoader.id: lambda: OkxTradesLoader(workspace=ws),
+        OkxBookLoader.id: lambda: OkxBookLoader(workspace=ws),
         OkxFundingLoader.id: lambda: OkxFundingLoader(workspace=ws),
     }

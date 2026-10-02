@@ -177,21 +177,25 @@ def _offset_ms() -> int:
     return int(EXCHANGE_DAY.total_seconds() * 1000)
 
 
-def _archives(data: tuple[Any, ...]) -> Iterator[Archive]:
+def _archives(
+    data: tuple[Any, ...], suffix: str = ".zip", shift: timedelta = EXCHANGE_DAY
+) -> Iterator[Archive]:
     """The archives a listing names: one swap's, since a family holds one swap. A file of
     another instrument would be refused row by row, by the name every row carries. A file
     name is joined onto the cache directory and a URL is fetched, so an entry whose name is
-    not a bare `.zip` name, or whose URL is not `https`, is refused rather than followed."""
+    not a bare `suffix` name, or whose URL is not `https`, is refused rather than followed.
+    Each is dated `shift` after its `dateTs`: a trade archive by the exchange's day, a book
+    archive (`book.py`) by the UTC day its `dateTs` opens."""
     blocks = [block for block in data if isinstance(block, Mapping)]
     for block in blocks:
         for detail in block.get("details") or ():
             for entry in detail.get("groupDetails") or ():
                 opened = datetime.fromtimestamp(int(entry["dateTs"]) / 1000, tz=UTC)
                 name, url = str(entry["filename"]), str(entry["url"])
-                if Path(name).name != name or name.startswith(".") or not name.endswith(".zip"):
+                if Path(name).name != name or name.startswith(".") or not name.endswith(suffix):
                     raise ValidationError(
                         f"okx: the archive listing names a file {name!r}, which is not a bare "
-                        "zip name",
+                        f"{suffix.lstrip('.')} name",
                         remedy="the exchange changed its listing; measure it again",
                     )
                 if urlsplit(url).scheme != "https":
@@ -199,7 +203,7 @@ def _archives(data: tuple[Any, ...]) -> Iterator[Archive]:
                         f"okx: the archive listing serves {name} from a URL that is not https",
                         remedy="the exchange changed its listing; measure it again",
                     )
-                yield Archive((opened + EXCHANGE_DAY).date(), name, url)
+                yield Archive((opened + shift).date(), name, url)
 
 
 @dataclass
@@ -209,6 +213,8 @@ class OkxTradesLoader(HistoryLoader):
     id: ClassVar[str] = "okx_trades"
     type: ClassVar[str] = "trade"
     vendor_dataset: ClassVar[str] = f"{ARCHIVES}?module={TRADES_MODULE}"
+    chunk_days: ClassVar[int] = 1
+    """A liquid swap's day is millions of prints, so a dataset holds one day of them."""
 
     def measure(self, client: PublicClient, series: Series, window: tuple[date, date]) -> None:
         """Refuse a window some UTC day of which the listed archives do not serve in full."""

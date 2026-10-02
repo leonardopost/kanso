@@ -128,8 +128,8 @@ def test_the_adapter_is_discovered_beside_the_broker_and_needs_no_credential(
     assert ADAPTER.kind == "data"
     assert ADAPTER.credentials == ()
     assert ADAPTER.credential_origins(fresh) == {}
-    assert set(ADAPTER.loaders(fresh)) == {"okx_bars", "okx_trades", "okx_funding"}
-    assert ADAPTER.capabilities.names() == ("reference", "bars", "trades", "funding")
+    assert set(ADAPTER.loaders(fresh)) == {"okx_bars", "okx_trades", "okx_book", "okx_funding"}
+    assert ADAPTER.capabilities.names() == ("reference", "bars", "trades", "book", "funding")
     assert ADAPTER.capabilities.payload()["credential"] == (
         "none: the listing and the history are public"
     )
@@ -621,6 +621,28 @@ def test_every_api_request_names_the_table_s_quota_and_the_listing_its_own_as_we
         {"keys": None, "timeout_secs": reference.DOWNLOAD_TIMEOUT_S},
     ]
     assert reference.QUOTA_KEY not in reference.KEYED_QUOTAS
+
+
+def test_a_range_is_sent_as_a_header_only_when_one_is_asked_for() -> None:
+    """A book archive is larger than the engine's client accepts in one answer, so it is
+    asked for in ranges; nothing else sends a header beyond the client's User-Agent."""
+    quoted: list[dict[str, Any]] = []
+
+    class Answered:
+        status = 206
+        body = b"x"
+
+    class Client:
+        async def request(self, method: Any, url: str, params: dict[str, str], **keyed: Any) -> Any:
+            quoted.append(keyed)
+            return Answered()
+
+    client = PublicClient(US, pyo3_transport(3, factory=lambda rate: Client()))
+    archive = "https://static.okx.com/cdn/okx/match/orderbook/pro/L2/400lv/daily/x.tar.gz"
+    client.fetch(archive, headers={"Range": "bytes=0-9"})
+    client.fetch(archive)
+
+    assert [one.get("headers") for one in quoted] == [{"Range": "bytes=0-9"}, None]
 
 
 def test_the_engine_s_client_holds_requests_from_several_threads_to_the_table_s_rate() -> None:

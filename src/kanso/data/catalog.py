@@ -43,11 +43,11 @@ about data rather than about a machine.
 **A dataset too large to hold is written in batches.** By default a write gathers every
 point and sorts it before writing any, which is right for a series of bars and fatal for a
 liquid instrument's day of book changes: the engine's `write_data` holds about 204 bytes a
-book delta and a 561-byte-a-delta transient on top while it converts them, so one day of
-`BTC-USDT-SWAP` at ten levels — about 8.5 million changes — would peak near 6.5 GB written
+book delta and a 561-byte-a-delta transient on top while it converts them, so a day of about
+8.5 million changes — a liquid perpetual's, ten levels deep — would peak near 6.5 GB written
 whole. Asked for `batch`, the write takes the points as they come, in `ts_init` order, and
-hands the engine at most `batch` of them at a time, cutting only between two instants so
-no instant is split across two files. Each batch is checked as a whole write is — availability,
+hands the engine at most `batch` of them at a time, cutting only between two instants so no
+instant is split across two files. Each batch is checked as a whole write is — availability,
 a delayed dataset's rule, one series — and each becomes one file whose interval is disjoint
 from the last, so the store reads the batches back as one series; the clash with held data
 is checked once, over the span requested, before the first file. The manifest is one, over

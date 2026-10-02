@@ -1,8 +1,8 @@
 {
-  "source": "OKX public REST API and its archive file host, as the okx_bars, okx_trades and okx_funding loaders asked them",
+  "source": "OKX public REST API and its archive file host, as the okx_bars, okx_trades, okx_book and okx_funding loaders asked them",
   "authentication": "none: public endpoints, requested with no credential header of any kind",
   "user_agent": "kanso/0.13.0",
-  "recorded_with": "the loaders themselves over reference.pyo3_transport (the engine's HttpClient), each answer saved as it arrived, on 2026-09-30 between 16:21 and 16:27 UTC, and the two 1Wutc answers at 17:47 UTC; the machine's clock read 2026-09-30, so the loaders ran with as_of 2026-09-30",
+  "recorded_with": "the loaders themselves over reference.pyo3_transport (the engine's HttpClient), each answer saved as it arrived, on 2026-09-30 between 16:21 and 16:27 UTC, and the two 1Wutc answers at 17:47 UTC; the machine's clock read 2026-09-30, so the loaders ran with as_of 2026-09-30; the answers recorded on 2026-10-02 for okx_book, and two more trade-archive listings, say how they were recorded in their own entries",
   "names": "an API answer is named for its endpoint and its parameters, sorted; an archive keeps its own filename",
   "files": {
     "USDC-USDT-SWAP-trades-2023-03-19.zip": {
@@ -490,6 +490,170 @@
       "recorded_at": "2026-09-30T17:47:36Z",
       "body": "verbatim",
       "note": "the same drive's page for Tuesday 2026-09-29: no week opens in [2026-09-22, 2026-09-23), so the day holds no 1w bar"
+    },
+    "AEON-USDT-SWAP-L2orderbook-400lv-2026-08-31.tar.gz": {
+      "url": "https://static.okx.com/cdn/okx/match/orderbook/pro/L2/400lv/daily/20260831/AEON-USDT-SWAP-L2orderbook-400lv-2026-08-31.tar.gz",
+      "params": {},
+      "host": "static.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-02T05:21:27Z",
+      "body": "excerpt",
+      "served": {
+        "bytes": 13162775,
+        "sha256": "5212152dbc47bfebfe7acf0689a9312dca856269454a61f6225051d9cd929d64",
+        "md5": "22837abb0bd609c841333b56ae10f89b",
+        "etag": "22837abb0bd609c841333b56ae10f89b",
+        "last_modified": "Tue, 01 Sep 2026 00:18:51 GMT",
+        "member": "AEON-USDT-SWAP-L2orderbook-400lv-2026-08-31.data",
+        "member_lines": 575961
+      },
+      "excerpt": {
+        "lines": [
+          571775,
+          575961
+        ],
+        "member": "AEON-USDT-SWAP-L2orderbook-400lv-2026-08-31.data",
+        "member_bytes": 725445,
+        "member_sha256": "a380de4a6d9909b9772b46ee34d5cbd0d8eec60a449bb532de5c2a23ad64eb94",
+        "bytes": 89034,
+        "sha256": "f356125159ad5efaaf4c928fa613fca27f59edc306076231eec3cb38ca42fa29"
+      },
+      "recorded_with": "downloaded whole with a GET of the url and no credential (the served bytes' MD5 equals the etag the host sent); lines cut from the served member and re-packed with tarfile/gzip under the member's own name and attributes, gzip mtime 0; no line edited",
+      "note": "the day's last snapshot (line 571,775, 23:45:00.004 UTC) to its last message, which is what the next day opens from"
+    },
+    "AEON-USDT-SWAP-L2orderbook-400lv-2026-09-01.tar.gz": {
+      "url": "https://static.okx.com/cdn/okx/match/orderbook/pro/L2/400lv/daily/20260901/AEON-USDT-SWAP-L2orderbook-400lv-2026-09-01.tar.gz",
+      "params": {},
+      "host": "static.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-02T04:17:57Z",
+      "body": "excerpt",
+      "served": {
+        "bytes": 10663558,
+        "sha256": "e8790da64f30304de189f02877aeff9719f6ffb488d5d357ede19fecf8df717a",
+        "md5": "b5011cf56080b0631d111b44f83dbda5",
+        "etag": "b5011cf56080b0631d111b44f83dbda5",
+        "last_modified": "Wed, 02 Sep 2026 00:17:50 GMT",
+        "member": "AEON-USDT-SWAP-L2orderbook-400lv-2026-09-01.data",
+        "member_lines": 486916
+      },
+      "excerpt": {
+        "lines": [
+          1,
+          5000
+        ],
+        "member": "AEON-USDT-SWAP-L2orderbook-400lv-2026-09-01.data",
+        "member_bytes": 914026,
+        "member_sha256": "392aa80c5bf967a0e63fff1b0dc0a8232a7dd4a858a5e6e0fa02d7ec34ee1398",
+        "bytes": 118744,
+        "sha256": "e5e1481fe726854c4c28cd480187b099136c26e9e526a043ae7b30e423ec66a5"
+      },
+      "recorded_with": "downloaded whole with a GET of the url and no credential (the served bytes' MD5 equals the etag the host sent); lines cut from the served member and re-packed with tarfile/gzip under the member's own name and attributes, gzip mtime 0; no line edited",
+      "note": "the day's opening snapshot (line 1), its first fifteen-minute snapshot (line 4,782, ts 1788221700008, 00:15:00.008 UTC) and the 218 updates after it"
+    },
+    "market-data-history__begin-1788134400000_dateAggrType-daily_end-1788220800000_instFamilyList-AEON-USDT_instType-SWAP_module-4.json": {
+      "url": "https://us.okx.com/api/v5/public/market-data-history",
+      "params": {
+        "module": "4",
+        "instType": "SWAP",
+        "instFamilyList": "AEON-USDT",
+        "dateAggrType": "daily",
+        "begin": "1788134400000",
+        "end": "1788220800000"
+      },
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-02T06:43:09Z",
+      "body": "verbatim",
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "recorded_with": "the loaders' own listing functions (book.listed_books, trades.listed) over a urllib transport sending this browser User-Agent, at least 2.05 s apart, no credential"
+    },
+    "market-data-history__begin-1788220800000_dateAggrType-daily_end-1788220800000_instFamilyList-AEON-USDT_instType-SWAP_module-4.json": {
+      "url": "https://us.okx.com/api/v5/public/market-data-history",
+      "params": {
+        "module": "4",
+        "instType": "SWAP",
+        "instFamilyList": "AEON-USDT",
+        "dateAggrType": "daily",
+        "begin": "1788220800000",
+        "end": "1788220800000"
+      },
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-02T06:43:06Z",
+      "body": "verbatim",
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "recorded_with": "the loaders' own listing functions (book.listed_books, trades.listed) over a urllib transport sending this browser User-Agent, at least 2.05 s apart, no credential"
+    },
+    "market-data-history__begin-1788220800000_dateAggrType-daily_end-1788998400000_instFamilyList-AEON-USDT_instType-SWAP_module-4.json": {
+      "url": "https://us.okx.com/api/v5/public/market-data-history",
+      "params": {
+        "module": "4",
+        "instType": "SWAP",
+        "instFamilyList": "AEON-USDT",
+        "dateAggrType": "daily",
+        "begin": "1788220800000",
+        "end": "1788998400000"
+      },
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-02T06:43:11Z",
+      "body": "verbatim",
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "recorded_with": "the loaders' own listing functions (book.listed_books, trades.listed) over a urllib transport sending this browser User-Agent, at least 2.05 s apart, no credential",
+      "note": "ten UTC days, 2026-09-01..2026-09-10, asked at their UTC midnights: ten archives, one a day"
+    },
+    "market-data-history__begin-1788220800000_dateAggrType-daily_end-1789084800000_instFamilyList-AEON-USDT_instType-SWAP_module-4.json": {
+      "url": "https://us.okx.com/api/v5/public/market-data-history",
+      "params": {
+        "module": "4",
+        "instType": "SWAP",
+        "instFamilyList": "AEON-USDT",
+        "dateAggrType": "daily",
+        "begin": "1788220800000",
+        "end": "1789084800000"
+      },
+      "host": "us.okx.com",
+      "status": 400,
+      "recorded_at": "2026-10-02T06:43:14Z",
+      "body": "verbatim",
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "recorded_with": "a urllib GET with this browser User-Agent, no credential, 2.05 s after the request before it",
+      "note": "eleven UTC days, 2026-09-01..2026-09-11, asked once by hand to see whether module 4 refuses what module 1 refuses"
+    },
+    "market-data-history__begin-1790265600000_dateAggrType-daily_end-1790524800000_instFamilyList-USDC-USDT_instType-SWAP_module-1.json": {
+      "url": "https://us.okx.com/api/v5/public/market-data-history",
+      "params": {
+        "module": "1",
+        "instType": "SWAP",
+        "instFamilyList": "USDC-USDT",
+        "dateAggrType": "daily",
+        "begin": "1790265600000",
+        "end": "1790524800000"
+      },
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-02T06:43:16Z",
+      "body": "verbatim",
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "recorded_with": "the loaders' own listing functions (book.listed_books, trades.listed) over a urllib transport sending this browser User-Agent, at least 2.05 s apart, no credential"
+    },
+    "market-data-history__begin-1790352000000_dateAggrType-daily_end-1790524800000_instFamilyList-USDC-USDT_instType-SWAP_module-1.json": {
+      "url": "https://us.okx.com/api/v5/public/market-data-history",
+      "params": {
+        "module": "1",
+        "instType": "SWAP",
+        "instFamilyList": "USDC-USDT",
+        "dateAggrType": "daily",
+        "begin": "1790352000000",
+        "end": "1790524800000"
+      },
+      "host": "us.okx.com",
+      "status": 200,
+      "recorded_at": "2026-10-02T06:43:19Z",
+      "body": "verbatim",
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "recorded_with": "the loaders' own listing functions (book.listed_books, trades.listed) over a urllib transport sending this browser User-Agent, at least 2.05 s apart, no credential"
     }
   }
 }
