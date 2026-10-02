@@ -2018,6 +2018,7 @@ def watched(
     env: Mapping[str, str] | None,
     budget_s: float | None,
     mem_cap_gb: float | None,
+    stoppable: bool = True,
 ) -> tuple[str | None, float, float]:
     """Start a child in a session of its own, watch it as a card is watched, and say how
     it ended: the breach that killed it (`None` when it exited by itself), the peak resident
@@ -2025,9 +2026,10 @@ def watched(
 
     Whatever it writes to a stream goes to `errors`. `env` is the environment it starts
     with, the parent's own when `None`. The watch is `_watch`'s: the wall-time and
-    resident-memory bounds, this process's stop, and the `wanted` checks it is inside. A
-    card is one child watched this way and a stall's certification another
-    (`kanso.certify.child`).
+    resident-memory bounds, this process's stop unless the child is not `stoppable`, and
+    the `wanted` checks it is inside. A card is one child watched this way, a stall's
+    certification another (`kanso.certify.child`), and a monitor's demotion a third that a
+    stop leaves to finish (`kanso.portfolio.child`).
     """
     started = time.monotonic()
     with errors.open("wb") as stream:
@@ -2040,7 +2042,7 @@ def watched(
             stderr=stream,
             start_new_session=True,
         )
-        breach, peak_gb = _watch(child, budget_s, mem_cap_gb)
+        breach, peak_gb = _watch(child, budget_s, mem_cap_gb, stoppable)
     return breach, peak_gb, time.monotonic() - started
 
 
@@ -2072,11 +2074,11 @@ def _refuse_if_unwanted() -> None:
 
 
 def _watch(
-    child: Any, budget_s: float | None, mem_cap_gb: float | None
+    child: Any, budget_s: float | None, mem_cap_gb: float | None, stoppable: bool = True
 ) -> tuple[str | None, float]:
     """Wait for the child, killing its process group when it overruns either bound, when
-    this process has been told to stop, or when a `wanted` check refuses — which is raised
-    once the child is reaped."""
+    this process has been told to stop and the child is `stoppable`, or when a `wanted`
+    check refuses — which is raised once the child is reaped."""
     started = time.monotonic()
     checked = asked = started
     breach: str | None = None
@@ -2086,7 +2088,7 @@ def _watch(
             child.returncode = os.waitstatus_to_exitcode(status)
             return breach, usage.ru_maxrss * _MAXRSS_BYTES / GIB
         now = time.monotonic()
-        if _INTERRUPT.is_set():
+        if stoppable and _INTERRUPT.is_set():
             breach = INTERRUPTED
         elif budget_s is not None and now - started > budget_s:
             breach = BUDGET
