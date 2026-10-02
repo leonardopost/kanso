@@ -14,6 +14,14 @@ checkpoint: an interrupted run resumes at the first chunk with no manifest, and 
 run finds nothing missing and fetches nothing. A chunk a source serves nothing for leaves
 no manifest, so it is recorded in the event log instead and is not asked for twice.
 
+A loader may declare `chunk_days`, the most days of its data one dataset may hold, because a
+day of its points is as much as a write should hold at once. For such a loader every verb
+cuts by it — `load` included, so a spec's range is written as one dataset and one manifest
+per chunk, in order — and the write takes the points as the loader streams them, a batch
+at a time (`catalog.write`, `WRITE_BATCH`), so memory follows the batch and not the day. A
+`load` that fails on a later chunk leaves the chunks before it written, each with its
+manifest, and its refusal names the day it stopped on and the backfill that resumes there.
+
 A dataset a snapshot pins is immutable, which the catalog enforces at the write. Backfill
 and sync never rewrite one: a backfilled chunk covers days no held dataset covers, and a
 sync writes a successor dataset recording `supersedes`.
@@ -33,6 +41,7 @@ backfill does not ask for again. `kanso.data.manifest` states the rule.
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -60,11 +69,12 @@ from kanso.data.manifest import (
     holes,
     manifests,
     merge,
+    overlaps,
     series_subject,
     settled,
 )
 from kanso.data.snapshot import Snapshot
-from kanso.errors import PreconditionError, ValidationError
+from kanso.errors import KansoError, PreconditionError, ValidationError
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -313,18 +323,52 @@ def load(
     then takes its place, recorded as its successor, and every snapshot naming the old one
     stops supporting a certification. A spec that discovers several datasets may supersede
     only the one named; the rest are written as any load writes them.
+
+    A loader declaring `chunk_days` has each discovered dataset written as one dataset per
+    chunk of that many days, in order. `supersedes` then goes to one of them: the first
+    chunk of the named dataset's series that overlaps it, else that series' first chunk,
+    else the first chunk written — so the successor is recorded once, on the dataset that
+    takes its place. A failure on a later chunk leaves the earlier ones written and is
+    refused naming the chunk, with the backfill that writes the rest.
     """
     document = read_spec(spec)
     _declared(document, loader_id, spec)
     loader = loader_for(ws, loader_id)
     written: list[catalog.Written] = []
-    for ref in loader.discover(document):
-        points = list(loader.load(ref, ref.span))
-        written.append(
-            catalog.write(
-                ws, points, ref=ref, source=loader_id, replace=replace, supersedes=supersedes
+    per = chunk_days(loader)
+    refs = loader.discover(document)
+    if per is None:
+        for ref in refs:
+            points = list(loader.load(ref, ref.span))
+            written.append(
+                catalog.write(
+                    ws, points, ref=ref, source=loader_id, replace=replace, supersedes=supersedes
+                )
             )
-        )
+    else:
+        plan = [
+            dataclass_replace(ref, span=(chunk.start, chunk.end))
+            for ref in refs
+            for chunk in chunked(ref.span, per)
+        ]
+        heir = _heir(ws, plan, supersedes)
+        for index, over in enumerate(plan):
+            try:
+                written.append(
+                    catalog.write(
+                        ws,
+                        loader.load(over, over.span),
+                        ref=over,
+                        source=loader_id,
+                        replace=replace,
+                        supersedes=supersedes if index == heir else None,
+                        batch=catalog.WRITE_BATCH,
+                    )
+                )
+            except KansoError as exc:
+                if not written:
+                    raise
+                raise _stopped(exc, over, loader_id, spec, written) from exc
     result = Load(loader=loader_id, spec=spec, written=tuple(written))
     store.event(
         LOADED,
@@ -332,6 +376,48 @@ def load(
         {"spec": str(spec), "datasets": [item.manifest.dataset_id for item in written]},
     )
     return result
+
+
+def chunk_days(loader: Loader) -> int | None:
+    """The days a loader writes to one dataset at most, when it declares any."""
+    days = getattr(loader, "chunk_days", None)
+    return days if isinstance(days, int) and days > 0 else None
+
+
+def _heir(ws: Workspace, plan: Sequence[DatasetRef], supersedes: str | None) -> int | None:
+    """Which chunk of a chunked load records `supersedes`, as `load` says."""
+    if supersedes is None:
+        return None
+    named = manifests(ws).get(supersedes)
+    if named is None:
+        return 0
+    mine = [
+        index
+        for index, ref in enumerate(plan)
+        if (ref.instrument, ref.type, ref.resolution) == named.filed_under
+    ]
+    over = [index for index in mine if overlaps(plan[index].span, named.span)]
+    return (over or mine or [0])[0]
+
+
+def _stopped(
+    exc: KansoError,
+    ref: DatasetRef,
+    loader_id: str,
+    spec: Path,
+    written: Sequence[catalog.Written],
+) -> KansoError:
+    """A later chunk's refusal, saying what was written before it and how to finish."""
+    resume = (
+        f"`kanso data backfill --loader {loader_id} --spec {spec} --to {ref.span[1]}` "
+        f"writes {ref.span[0]} and the rest of the range"
+    )
+    return KansoError(
+        f"{ref.instrument} {ref.type}: {ref.span[0]}..{ref.span[1]} was not written, and the "
+        f"{len(written)} dataset(s) before it were, each with its manifest: {exc.message}",
+        exc.code,
+        remedy=f"{exc.remedy}; then {resume}" if exc.remedy else resume,
+    )
 
 
 # --- snapshot -----------------------------------------------------------------
@@ -543,6 +629,7 @@ def backfill(
     clamps: list[str] = []
     notes: list[str] = []
     rate = bytes_per_row(ws)
+    per = chunk_days(loader)
 
     for ref in loader.discover(document):
         floor = ref.span[0]
@@ -574,7 +661,7 @@ def backfill(
             continue
         per_day = _rows_per_day(mine.datasets)
         for target in merge(targets):
-            for chunk in chunked(target):
+            for chunk in chunked(target, per or CHUNK_DAYS):
                 over = dataclass_replace(ref, span=(chunk.start, chunk.end))
                 fetches.append(
                     _estimate(over, per_day, rate)
@@ -630,11 +717,19 @@ def _fetch(
     subject = series_subject((ref.instrument, ref.type, ref.resolution))
     if _already_empty(store, subject, chunk):
         return Fetch(ref.instrument, ref.type, ref.resolution, chunk, outcome="empty")
-    points = list(loader.load(ref, ref.span))
-    if not points:
+    points = iter(loader.load(ref, ref.span))
+    first = next(points, None)
+    if first is None:
         store.event(EMPTY_CHUNK, subject, {"start": str(chunk.start), "end": str(chunk.end)})
         return Fetch(ref.instrument, ref.type, ref.resolution, chunk, outcome="empty")
-    written = catalog.write(ws, points, ref=ref, source=source, supersedes=supersedes)
+    written = catalog.write(
+        ws,
+        itertools.chain((first,), points),
+        ref=ref,
+        source=source,
+        supersedes=supersedes,
+        batch=None if chunk_days(loader) is None else catalog.WRITE_BATCH,
+    )
     return Fetch(
         instrument=ref.instrument,
         type=ref.type,
@@ -739,7 +834,7 @@ def sync(
         loader = loader_for(ws, manifest.source)
         latest = manifest
         mine: list[Fetch] = []
-        for chunk in chunked(window):
+        for chunk in chunked(window, chunk_days(loader) or CHUNK_DAYS):
             fetched = _fetch(
                 ws,
                 store,

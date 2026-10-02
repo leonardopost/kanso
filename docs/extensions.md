@@ -307,6 +307,15 @@ LOADERS = {"house_bars": HouseBars()}
 
 A spec then names it like any other: `kanso data load --loader house_bars --spec house.yaml`.
 
+A source whose single day is more than a write should hold — a liquid instrument's prints
+or book changes, millions a day — declares `chunk_days: ClassVar[int] = 1` beside `id`. Then
+`kanso data load`, `data backfill` and `data sync` write every chunk of that many days as a
+dataset of its own, with its own manifest, and hand the catalog the points as `load`
+streams them, at most 250,000 to a write and never splitting an instant, so memory follows
+the batch and not the day. Such a loader's `load` must yield in `ts_init` order, since
+nothing is held back to sort: a point that goes back is refused (exit 3). A loader that
+declares nothing is written as before, one dataset for what a spec names, gathered whole.
+
 ### A custom data type
 
 Three market-data types are built in — `bar`, `quote` and `trade` — and everything else is

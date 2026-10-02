@@ -14,6 +14,13 @@ points. It answers three questions and one optional fourth:
   Arrow schema, or `None` when the loader has no such path. The catalog writer prefers
   it, because writing tables costs far less than writing one Python object per row.
 
+A loader may also declare `chunk_days`, a class attribute naming the most days of its data
+one dataset holds. `kanso data load`, `backfill` and `sync` then write each such chunk of a
+range as a dataset of its own, with its own manifest, and hand the catalog the loader's
+points as they stream, a batch at a time — so a source whose single day is millions of
+points is loaded in the memory of a batch rather than of the range. A loader that declares
+none is written as before: one dataset for what a spec names, its points gathered first.
+
 Two rules bind every loader, including the ones a vendor adapter or a workspace
 extension provides.
 
@@ -128,6 +135,8 @@ class Loader(Protocol):
     """
 
     id: ClassVar[str]
+    """Optional and not part of the check: `chunk_days: ClassVar[int]`, read by the data
+    commands with `getattr`, as the module docstring says."""
 
     def discover(self, spec: Mapping[str, object]) -> list[DatasetRef]:
         """The datasets `spec` names, in a stable order."""
