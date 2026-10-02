@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -426,14 +427,54 @@ def test_the_provider_is_named_at_the_path_it_imports_from() -> None:
     assert "`kanso.data.instruments.ResolveError`" in page("extensions.md")
 
 
+def resolves(dotted: str) -> bool:
+    """Whether a dotted path names an attribute of its parent module or a module of its own.
+
+    A submodule is an attribute of its package only once something has imported it, so the
+    attribute alone would make the answer depend on which tests ran first. A name that is
+    neither is refused; a module that exists and fails to import raises rather than reading
+    as absent.
+    """
+    module, _, attribute = dotted.rpartition(".")
+    if hasattr(importlib.import_module(module), attribute):
+        return True
+    try:
+        importlib.import_module(dotted)
+    except ModuleNotFoundError as error:
+        if error.name != dotted:
+            raise
+        return False
+    return True
+
+
 def test_every_dotted_kanso_path_the_docs_name_resolves() -> None:
     found = set()
     for path in [*DOCS.glob("*.md"), ROOT / "README.md"]:
         found.update(re.findall(r"`(kanso\.[a-z_]+(?:\.[A-Za-z_]+)+)`", path.read_text()))
     assert found
     for dotted in sorted(found):
-        module, _, attribute = dotted.rpartition(".")
-        assert hasattr(importlib.import_module(module), attribute), dotted
+        assert resolves(dotted), dotted
+
+
+def test_a_submodule_resolves_before_anything_imported_it_and_nothing_else_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured 2026-10-02: `kanso.certify.child` failed under `pytest tests/docs` alone and
+    passed in the suite, because only the suite had imported it first."""
+    package = tmp_path / "kanso_docs_probe"
+    package.mkdir()
+    (package / "__init__.py").write_text("NAMED = 1\n")
+    (package / "child.py").write_text("")
+    monkeypatch.syspath_prepend(tmp_path)
+    try:
+        assert not hasattr(importlib.import_module("kanso_docs_probe"), "child")
+        assert resolves("kanso_docs_probe.child")
+        assert resolves("kanso_docs_probe.NAMED")
+        assert not resolves("kanso_docs_probe.absent")
+        assert not resolves("kanso_docs_probe.child.Absent")
+    finally:
+        for name in ("kanso_docs_probe.child", "kanso_docs_probe"):
+            sys.modules.pop(name, None)
 
 
 # -- docs/maintainers.md --------------------------------------------------------------
