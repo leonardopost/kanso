@@ -701,12 +701,13 @@ def test_an_attached_construct_is_refused_a_book_of_its_own_under_depth(
 
 
 @pytest.mark.parametrize("every_ms", [None, EVERY_MS])
-def test_a_marked_chunk_after_an_unmarked_one_is_handed_as_one_window_hands_it(
+def test_a_book_run_chunked_by_day_is_handed_as_one_window_hands_it(
     request_for, every_ms: int | None
 ) -> None:
-    """The second day holds an instant of two changes and the first none, so a run chunked
-    by day starts unmarked and is armed for markers on the second chunk. It hands the author
-    what one chunk of both days hands, every print of the second day included."""
+    """The second day holds an instant of two changes and the first none. A book hypothesis
+    is marked by rule, so the run chunked by day is held for markers from its first chunk,
+    which no instant of its own would mark, and hands the author what one chunk of both
+    days hands, every print of the second day included."""
     first, second = date(2024, 1, 2), date(2024, 1, 3)
     unmarked = [
         OrderBookDelta(

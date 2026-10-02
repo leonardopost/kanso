@@ -986,7 +986,10 @@ def execute_chunked(
     first chunk on — even a first chunk holding no marker, such as the book changes of an
     hour before the first print, because a sleeve subscribes to markers when it starts, on
     the first chunk — which is the same dispatch the whole window gets because a chunk
-    boundary falls between instants, never inside one.
+    boundary falls between instants, never inside one. A feed the rule leaves unmarked is
+    marked chunk by chunk, where two points of one series share an instant, and a sleeve
+    that started on a chunk with none subscribes the markers when a chunk that has them
+    comes (`KansoStrategy._bind_markers`).
 
     Engine facts this relies on (nautilus_trader 1.231.0): `run(streaming=True)` pauses
     after the data it holds is exhausted without finalising; `clear_data` drops the stream
