@@ -206,9 +206,9 @@ def test_a_stop_leaves_a_demotion_to_finish(
     strategy_id = on_live(ws, store)
     watch = backtest._watch
 
-    def stopped_once_running(process: Any, *args: Any) -> tuple[str | None, float]:
+    def stopped_once_running(process: Any, *args: Any, **fed: Any) -> tuple[str | None, float]:
         backtest.interrupt()
-        return watch(process, *args)
+        return watch(process, *args, **fed)
 
     monkeypatch.setattr(backtest, "_watch", stopped_once_running)
     try:

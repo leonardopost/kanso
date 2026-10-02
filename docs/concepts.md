@@ -157,8 +157,8 @@ peak a daily sleeve will never approach, and every lane is charged for it until 
 otherwise.
 
 **A lane's share bounds what the lane runs in its children.** The lane process itself holds
-the engine, its store and, while it stages a run, one session of the window at a time, and
-it makes no run in its own process: every card, the baseline, a host-alone run and the hold
+the engine, its store and, while a card runs, one read of the window and the chunk of it
+being written to the child (Card, below), and it makes no run in its own process: every card, the baseline, a host-alone run and the hold
 a benchmark objective differences against — once per run, over the research window — are
 staged into a child it watches, and what a child cost goes when the child exits. A card's
 child is killed once its resident memory passes the lane's share, floored at three times
@@ -193,9 +193,10 @@ certification's parity on a node did not exit within a minute of a `SIGTERM`, an
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
 before every card, and the first two are compared against the blobs the run pinned. The one
-thing kanso writes beside them is `.card/`, the directory a card's points travel to its
-child through, which exists while the card runs and is emptied by the next card when a
-killed lane left it behind.
+thing kanso writes beside them is `.card/`, where a card's child writes its report and its
+output — the window itself travels on the child's standard input and is never on disk —
+which exists while the card runs and is emptied by the next card when a killed lane left it
+behind.
 
 A lane writes no log of its own. What a run did — every card, its metric, its verdict and
 each change of status — is recorded in `state.db`, as the card rows and the `events` table
@@ -283,6 +284,36 @@ out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach.
+
+**The window streams to the child.** The parent starts the child first and hands it the
+window on its standard input while it runs: it reads the catalog an hour at a time when the
+hypothesis requires prints, quotes or a book and a day at a time otherwise, cuts each read
+into chunks of at most 250,000 points — always between instants, so every point of an
+instant is in one chunk — and reads the next chunk only once the last is wholly written. The
+child runs a chunk before it reads the next, so the child holds the chunk it is running and
+the parent the read that chunk was cut from — an hour of prints, quotes or a book, a day of
+anything else — until every chunk of it is written; nothing of the window is ever on disk.
+Where a window is cut changes nothing. Prints, quotes and book changes are read in the order
+the catalog's files hold them, because the catalog's own sorted query leaves the points of one
+instant in an order that depends on the span asked for: on a day of OKX BTC-USDT-SWAP prints,
+79 of 524,932 instants came back in a different order read by the hour than read whole, and a
+card trading on twenty minutes of them sent 9,064 orders read by the hour and 9,060 read
+whole. Read from the files, the day's prints and its 10.8 million book changes come back in
+the same order either way. The suite reads a catalog of prints that share instants unevenly
+by the hour and whole, and runs one tick window read by the day, by the hour and by the hour
+cut to seven points a chunk, one whose first hour holds book changes and no print, and one
+daily window cut to a bar a chunk; each is the card the whole window gives when it is run in
+one process. Measured on a day of BTC's book and prints on 2026-10-02: a fresh child holds about 0.2 GB of its own and 0.66–0.81 KB per point of the
+chunk it runs, about 0.4 GB at the cap, and caps of 10,000, 50,000 and 200,000 points and
+none gave the identical card at about 10 ms of CPU an extra chunk. Read and staged a day at
+a time as before, the same day of a three-level book was estimated at 4.5 GB in the child and
+4.8 GB in the parent, and a 45-day window at 22.8 GB on disk before the card began. A card's
+clock starts with its child, before the window is read, so its `wall_s` and its time budget
+count whatever part of the read the run did not overlap. A refusal the parent makes while it
+streams — a `wanted` check, a stop, an overlay grain the catalog does not hold, a window that
+holds nothing but its warmup — kills the child first and is raised as the refusal it is; a
+child whose stream stops before its end refuses it, and never reports the part it was
+handed as a card.
 
 **Return periods are cut on the UTC clock.** The window opens at 00:00Z of its first day,
 and from there the runner cuts one `[research] return_period` after another — a day by
@@ -905,6 +936,36 @@ instrument sees every instrument's last close for that instant; a fill against a
 instrument of the instant is at that close. A limit placed in that handler sees only the
 close, not the rest of the bar's range. An instant a name does not print is incomplete:
 the silent leg still trades at the last price that was public, which is not lookahead.
+
+**A book's changes of one instant are one batch.** The changes one instrument's book made at
+one `ts_init` reach the venue and the sleeve as one `OrderBookDeltas`: the venue applies all
+of them before it matches, and `on_order_book_deltas` is called once per instrument and
+instant, with every change of it and the cache's book already past all of them. A change at
+a time, as a book used to be delivered, called the author with the book half-moved — after
+the old best offer's delete and before the new one's add — and the venue matched against
+every state in between, so a resting buy could fill against an offer that existed only
+between two changes of one instant (`kanso.nautilus.facts` measures both). A book handler is
+never held, so no marker follows a batch, and under a `latency_ms` a command that comes due at
+a change lands after the sleeve's handler for that change: the engine hands the batch to the
+venue and the sleeve before it settles the commands due then, so the handler sees the order
+sent, and the next point's handler sees it on the book — a print at the same instant, held
+behind its marker, already sees it there. Both paths alike. Book changes of several instruments at one instant
+are still handed over one instrument at a time: a book cohort is not a cross-section
+(`docs/backlog.md`). A strategy that counted its book calls counts instants now, and a
+`best` struck on a book hypothesis before this is not comparable with a card after it.
+
+**Whether a feed is marked is the hypothesis's.** It used to be read off the points: a stream
+was marked when some instant held two points of one kind. A card read its window a day at a
+time and a replay read it whole, so the two could decide differently, and a card cut finer
+would have depended on where it was cut. A feed is now marked whenever its universe holds
+more than one name or it requires prints, quotes or a book, and any other feed when some
+instant holds two points of a kind. At zero latency a lone point is dispatched the same
+marked or not. Under a `latency_ms`, a command that came due by a lone print or quote now
+lands before the author's handler for it, as it always did for a point that shared its
+instant: a modify sent on one quote with 20 ms to travel is answered before the handler of a
+quote a second later runs. On real tick data this changes nothing — measured on two OKX
+swaps over 82 days, no hour went by without a millisecond two prints shared, and 88–89 % of
+prints shared theirs.
 
 A live data client that polls several series independently must emit the same
 per-`(ts_init, kind)` markers. A single marker at the end of a poll that covered more

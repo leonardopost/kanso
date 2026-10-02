@@ -1011,9 +1011,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._consult_due()
 
     def handle_order_book_deltas(self, deltas: object, historical: bool = False) -> None:
-        """Hand a change to the book to the author, then ask again for any exit still owed.
+        """Hand the book's changes of one instant to the author, then ask again for any exit
+        still owed.
 
-        The change is the data event the author is acting on, so `data_time` is its
+        The runner delivers every change one instrument's book made at one instant as one
+        batch (`kanso.nautilus.cross_section.batched`), so the author is called once per
+        instrument and instant, with the cache's book already holding all of it, and never
+        with a book that has lost its best level and not yet been handed the next. The
+        batch is the data event the author is acting on, so `data_time` is its
         `ts_event` before `on_order_book_deltas` runs, as a bar's is before `on_bar`: an
         order sent from there is stamped with the change, not with the last print. A book
         change reaches `on_order_book_deltas` and no other handler here, so a sleeve
