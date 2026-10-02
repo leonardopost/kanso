@@ -235,7 +235,6 @@ def test_a_day_of_bars_without_its_book_is_refused_too(request_for) -> None:
     import pytest
 
     from kanso.errors import PreconditionError
-    from kanso.nautilus.backtest import book_held
 
     from .conftest import bars
 
@@ -245,4 +244,4 @@ def test_a_day_of_bars_without_its_book_is_refused_too(request_for) -> None:
     daily = tuple(bars(RESEARCH))[:1]
 
     with pytest.raises(PreconditionError, match=r"no book change for DEMO\.XNAS on 2024-01-0"):
-        book_held(request, [daily])
+        execute(request, [instrument()], [daily])

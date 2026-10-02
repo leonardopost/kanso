@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from kanso.nautilus.backtest import _load_stream, checked, execute, run
 from kanso.nautilus.cross_section import batched, coincident, is_marker, ordered, with_cross_section
 from kanso.nautilus.session import run_node
+from kanso.replay.record import Spool
 from kanso.replay.run import ENGINE, NODE, _execute
 from tests.nautilus.backtest.conftest import (
     INSTRUMENT,
@@ -115,19 +117,28 @@ def test_an_incomplete_instant_still_trades_the_silent_leg_at_last_public_close(
     assert [fill.px for fill in card.fills[:-1]] == [float(bar.close) for bar in other]
 
 
-def test_released_counts_catalog_points_not_flush_markers(request_for) -> None:
+def test_released_counts_catalog_points_not_flush_markers(request_for, tmp_path: Path) -> None:
     """Session `released` is a market-point count; slicing the marked feed by it drops bars."""
     demo, other = bars(DAYS), bars(DAYS, OTHER)
     request = request_for(source=CROSS_SLEEVE, hypothesis_=_hyp())
     instruments, groups = tuple(_instruments()), tuple(_groups())
-    node = _execute(request, instruments, groups, mode=NODE, speed=0.0)
-    engine = _execute(request, instruments, groups, mode=ENGINE, speed=0.0)
+    node = _execute(
+        request, instruments, iter([groups]), mode=NODE, speed=0.0, sink=Spool(tmp_path / "node")
+    )
+    engine = _execute(
+        request,
+        instruments,
+        iter([groups]),
+        mode=ENGINE,
+        speed=0.0,
+        sink=Spool(tmp_path / "engine"),
+    )
 
     assert node.released == engine.released == len(demo) + len(other)
     assert node.intents == engine.intents
 
 
-def test_a_book_instant_is_released_as_one_point_on_both_paths(request_for) -> None:
+def test_a_book_instant_is_released_as_one_point_on_both_paths(request_for, tmp_path: Path) -> None:
     """A session counts what it delivered: the changes one book made at one instant are one
     batch, and so one point of the count, on the node as on the engine."""
     from tests.nautilus.backtest.conftest import POSTER, TICK_DAYS, tick_groups, tick_hypothesis
@@ -135,8 +146,17 @@ def test_a_book_instant_is_released_as_one_point_on_both_paths(request_for) -> N
     request = request_for(source=POSTER, hypothesis_=tick_hypothesis())
     groups = tuple(tick_groups())
     instruments = (instrument(),)
-    node = _execute(request, instruments, groups, mode=NODE, speed=0.0)
-    engine = _execute(request, instruments, groups, mode=ENGINE, speed=0.0)
+    node = _execute(
+        request, instruments, iter([groups]), mode=NODE, speed=0.0, sink=Spool(tmp_path / "node")
+    )
+    engine = _execute(
+        request,
+        instruments,
+        iter([groups]),
+        mode=ENGINE,
+        speed=0.0,
+        sink=Spool(tmp_path / "engine"),
+    )
 
     book, prints = groups
     instants = {int(change.ts_init) for change in book}  # type: ignore[attr-defined]
@@ -478,11 +498,13 @@ def test_a_sleeve_started_on_an_unmarked_chunk_is_flushed_on_a_marked_one(reques
     ex-date do; here two settlements of nothing. Chunked by day, the first day holds no such
     instant and the sleeve starts unmarked; the second does, and the sleeve, held for
     markers from then on, subscribes them then, or every point of the second day waits for
-    a flush that never reaches it. It is handed what one chunk of both days hands."""
+    a flush that never reaches it. It is handed what one chunk of both days hands, on the
+    research path and on a node handed the days a chunk at a time alike."""
     import sys
     from hashlib import sha256
 
     from kanso.nautilus.backtest import execute_chunked
+    from kanso.nautilus.session import run_node_chunked
     from tests.nautilus.backtest.test_depth import _bars, _settlements
 
     first, second = date(2024, 1, 2), date(2024, 1, 3)
@@ -495,18 +517,24 @@ def test_a_sleeve_started_on_an_unmarked_chunk_is_flushed_on_a_marked_one(reques
     assert not any(map(is_marker, ordered(days[0])))
     assert any(map(is_marker, ordered(days[1])))
 
-    def handed(chunks: list[tuple[tuple[object, ...], ...]], tag: str) -> list[tuple[str, int]]:
+    def handed(
+        chunks: list[tuple[tuple[object, ...], ...]], tag: str, *, node: bool = False
+    ) -> list[tuple[str, int]]:
         source = STAMPS + f"# {tag}\n".encode()
-        result = execute_chunked(
-            request_for(RESEARCH, source=source, hypothesis_=hyp), [instrument()], chunks
-        )
+        request = request_for(RESEARCH, source=source, hypothesis_=hyp)
+        if node:
+            result = run_node_chunked(request, [instrument()], iter(chunks)).result
+        else:
+            result = execute_chunked(request, [instrument()], chunks)
         assert not result.crashed, result.traceback_tail
         return list(sys.modules[f"kanso_sleeve_{sha256(source).hexdigest()[:12]}"].SEEN)
 
     whole = handed([(days[0][0] + days[1][0], days[0][1] + days[1][1])], "one")
     by_day = handed(days, "two")
+    on_a_node = handed(days, "three", node=True)
 
     assert by_day == whole
+    assert on_a_node == whole
     assert [kind for kind, _ in by_day] == [
         *("bar", "data", "bar", "bar"),
         *("bar", "bar", "data", "data", "bar"),

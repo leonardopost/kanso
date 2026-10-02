@@ -21,14 +21,17 @@ session clock means resuming a nanosecond early or late.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 import sqlite3
+import uuid
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import IO, TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import Field
 
@@ -44,11 +47,13 @@ __all__ = [
     "INTENTS_FILE",
     "SESSIONS_DIR",
     "SESSION_FILE",
+    "SPOOL_PREFIX",
     "STREAM_FILE",
     "Intent",
     "Mode",
     "Point",
     "Session",
+    "Spool",
     "insert",
     "intents_of",
     "list_sessions",
@@ -57,6 +62,7 @@ __all__ = [
     "session_dir",
     "session_id",
     "sessions_path",
+    "spooled",
     "stream_of",
     "write",
 ]
@@ -65,6 +71,8 @@ SESSIONS_DIR: Final = "sessions"
 SESSION_FILE: Final = "session.yaml"
 STREAM_FILE: Final = "stream.jsonl"
 INTENTS_FILE: Final = "intents.jsonl"
+SPOOL_PREFIX: Final = ".spool-"
+"""What a stream still being recorded is named with: a dot file, never a session directory."""
 
 Mode = Literal["node", "engine", "paper", "live"]
 
@@ -223,23 +231,72 @@ def session_dir(ws: Workspace, identifier: str) -> Path:
     return sessions_path(ws) / identifier
 
 
+class Spool:
+    """A session's stream, written line by line while the session runs.
+
+    A replay releases its window a chunk at a time and holds none of it once a chunk has
+    run, so the stream it records cannot be handed to `write` as a sequence at the end: it
+    is written here as it is released, to a file in the sessions directory whose name no
+    session can take, and `write` moves that file into the session it belongs to. Leaving
+    the block without that — a refusal, a crash — removes the file.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.count = 0
+        self._handle: IO[str] | None = None
+
+    def add(self, point: Any) -> None:
+        """Record one released data object as its stream line."""
+        if self._handle is None:
+            self._handle = self.path.open("w", encoding="utf-8")
+        self._handle.write(json.dumps(Point.of(point).dumps(), sort_keys=True) + "\n")
+        self.count += 1
+
+    def close(self) -> None:
+        """Finish the file, creating it empty when nothing was released."""
+        if self._handle is None:
+            self.path.touch()
+        else:
+            self._handle.close()
+            self._handle = None
+
+
+@contextlib.contextmanager
+def spooled(ws: Workspace) -> Iterator[Spool]:
+    """A stream to record a running session into, gone after the block unless written."""
+    directory = sessions_path(ws)
+    directory.mkdir(parents=True, exist_ok=True)
+    spool = Spool(directory / f"{SPOOL_PREFIX}{uuid.uuid4().hex}.jsonl")
+    try:
+        yield spool
+    finally:
+        spool.close()
+        spool.path.unlink(missing_ok=True)
+
+
 def write(
     ws: Workspace,
     session: Session,
-    points: Iterable[Point],
+    points: Iterable[Point] | Spool,
     intents: Iterable[Intent],
 ) -> Session:
     """Write the session and its stream, taking the first id no other session holds.
 
     A session is never overwritten: the id carries a counter until it names a directory
     that does not exist, so a repeated replay of one target in one second is two records
-    rather than one record twice.
+    rather than one record twice. A stream recorded while the session ran (`Spool`) is
+    moved into place rather than written again.
     """
     resolved = _free(ws, session)
     directory = session_dir(ws, resolved.session_id)
     directory.mkdir(parents=True)
     write_yaml(resolved, directory / SESSION_FILE)
-    _write_lines(directory / STREAM_FILE, (point.dumps() for point in points))
+    if isinstance(points, Spool):
+        points.close()
+        os.replace(points.path, directory / STREAM_FILE)
+    else:
+        _write_lines(directory / STREAM_FILE, (point.dumps() for point in points))
     _write_lines(directory / INTENTS_FILE, (intent.dumps() for intent in intents))
     return resolved
 

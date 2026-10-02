@@ -55,9 +55,10 @@ def test_a_stall_certifies_in_a_child_and_runs_none_of_it_in_the_lane(
     def refused(*_: object, **__: object) -> Any:
         raise AssertionError("the lane ran what its certification child is for")
 
-    for name in ("run", "execute", "execute_chunked", "window_data"):
+    for name in ("run", "execute", "execute_chunked", "window_data", "window_chunks"):
         monkeypatch.setattr(backtest, name, refused)
-    monkeypatch.setattr(session, "run_node", refused)
+    for name in ("run_node", "run_node_chunked"):
+        monkeypatch.setattr(session, name, refused)
     watched = backtest.watched
     caps: list[float | None] = []
 

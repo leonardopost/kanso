@@ -136,7 +136,9 @@ it, and `kanso hyp resume` brings that one back.
 **A plan that names `parity_replay` makes `cert run` replay.** That gate is the comparison
 of the two code paths over the certification window, so the runner replays the subject on
 the node path and on the engine path and hands the gate what the comparison found; the two
-sessions it wrote stay in `sessions/` to be read. A replay that cannot be set up at all
+sessions it wrote stay in `sessions/` to be read. Each path streams the certification window
+in a card's chunks (`kanso replay run`), so the replay holds a read and a chunk of it rather
+than the window. A replay that cannot be set up at all
 leaves the gate without its evidence, and the certificate records that nothing compared the
 paths rather than claiming that they agreed. Neither path throttles what a strategy submits: the
 engine's risk engine would deny the hundred-and-first order inside one second of its clock,
@@ -266,7 +268,7 @@ operator instruction; acknowledging an inbox entry is not one.
 
 | command | what it does |
 |---|---|
-| `kanso replay run (--strategy STRATEGY[@V] \| --hyp ID [--sha S]) [--from D] [--to D] [--speed N] [--mode node\|engine]` | replay one target over the catalog and write `sessions/<id>/`: the record, the points released and the order intents that came back. `node` is the live code path — a trading node, kanso's replay data client, a simulated execution client — and `engine` is the research one. The range defaults to the target's forward window through the last day the catalog serves. A target whose hypothesis declares a `warmup` is fed the sessions before the range on both paths, with every order dropped until the range opens; the session records the range's points and nothing it warmed on |
+| `kanso replay run (--strategy STRATEGY[@V] \| --hyp ID [--sha S]) [--from D] [--to D] [--speed N] [--mode node\|engine]` | replay one target over the catalog and write `sessions/<id>/`: the record, the points released and the order intents that came back. `node` is the live code path — a trading node, kanso's replay data client, a simulated execution client — and `engine` is the research one. The range defaults to the target's forward window through the last day the catalog serves. A target whose hypothesis declares a `warmup` is fed the sessions before the range on both paths, with every order dropped until the range opens; the session records the range's points and nothing it warmed on. Both paths read the range as a card's child is streamed its window — an hour at a time for prints, quotes or a book and a day otherwise, cut into chunks of at most 250,000 points between instants — and run a chunk before reading the next, so a replay holds one read and one chunk of its range, never the whole of it, and writes the stream to `sessions/` as it is released |
 | `kanso replay parity (…)` | replay on both code paths over the same days and compare the order intents element by element — instant, instrument, side, quantity, order type and, for an order that names one, price — reporting the first divergence with its index and its field, or that the two agreed. `--ts-ns` is the instant tolerance in nanoseconds, and it exists to be set to zero |
 | `kanso replay show [SESSION]` | one session, or every session this workspace holds |
 
