@@ -281,7 +281,7 @@ class OkxBarsLoader(HistoryLoader):
         }
         if before is not None:
             params["before"] = str(before)
-        rows = answered(client, CANDLES, params, self.pause)
+        rows = answered(client, CANDLES, params)
         return tuple(row for row in rows if isinstance(row, list))
 
 

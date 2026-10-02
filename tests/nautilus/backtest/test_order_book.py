@@ -130,3 +130,24 @@ def test_an_order_that_joins_a_level_waits_for_the_size_the_book_showed_ahead_of
     three prints; on the top-of-book venue the same order is filled by the first print."""
     assert _seconds_of_fills(("book", "trade"), request_for) == [7, 8, 9]
     assert _seconds_of_fills(("trade",), request_for) == [2, 3, 4]
+
+
+def test_an_intent_sent_from_the_book_handler_carries_the_changes_own_instant(
+    request_for,
+) -> None:
+    """A sleeve that holds only the book stamps what it sends with the change it is handling
+    — its second, fifth and thirtieth — where every such intent used to carry the last
+    print's instant, which for a sleeve that sees no print is zero."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS, book
+
+    day = RESEARCH[0]
+    document = hypothesis().model_dump(mode="json")
+    document.update(resolution="tick", data_requirements=["book"])
+    hyp = Hypothesis.model_validate(document)
+    result = execute(
+        request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=hyp), [instrument()], [tuple(book(day))]
+    )
+    assert not result.crashed, result.traceback_tail
+
+    base = midnight_ns(day) + BOOK_OPEN_NS
+    assert [(intent[0] - base) // SECOND_NS for intent in result.intents] == [0, 3, 28]

@@ -6,37 +6,42 @@ import json
 import shutil
 import subprocess
 import sys
-from dataclasses import fields, replace
-from datetime import date
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, fields, replace
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Final
+from typing import ClassVar, Final
 
 import pytest
 
 from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
 from kanso.criteria.objectives import wf_sharpe_net
-from kanso.data import snapshot
-from kanso.errors import PreconditionError, ValidationError
+from kanso.data import instruments, snapshot
+from kanso.data.instruments import current_definitions, definition_checksum, read_cache
+from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
 from kanso.hyp import show
 from kanso.nautilus import backtest
 from kanso.research import lanes, loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
-from kanso.schemas import Hypothesis, RunRecord
+from kanso.schemas import Hypothesis, InstrumentsFile, Resolved, RunRecord, write_yaml
 from kanso.state import StateStore
-from kanso.workspace import Workspace
+from kanso.workspace import Workspace, find
 
 from .conftest import (
     DOCUMENT,
     ENVELOPE,
     FLAT,
     HYP_ID,
+    INSTRUMENT,
     PROGRAM,
     RAISING,
     READING,
     RESEARCH,
     REVERTING,
+    VENUE,
     WEAK,
     classify,
     document,
@@ -1185,6 +1190,102 @@ def test_an_unwarmed_run_has_no_prefix_anywhere(ws: Workspace, store: StateStore
 
     assert setup.prefix is None
     assert loop._warmup_spans(setup) == ()
+
+
+# --- the definitions a run is priced under ---------------------------------------
+
+
+@dataclass
+class Throttled:
+    """A reference provider that answers every question with the vendor's throttle.
+
+    It stands in for an exchange that five lanes starting together have pushed over its
+    rate limit, without being one: whatever asks it anything fails as those lanes did.
+    """
+
+    id: ClassVar[str] = "throttled"
+    asked: list[tuple[str, ...]] = field(default_factory=list)
+
+    def resolve(self, ids: Sequence[str], as_of: date) -> dict[str, object]:
+        self.asked.append(tuple(ids))
+        raise KansoError("throttled: the listing did not answer (HTTP 429)", Exit.ERROR)
+
+    def sources(self, instrument_id: str) -> dict[str, str]:  # pragma: no cover - never asked
+        return {}
+
+
+def resolved_elsewhere(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Workspace, Throttled]:
+    """The workspace as a reference adapter leaves it, with that adapter no longer answering.
+
+    The instrument's entry records a resolution through the adapter as of a day after the
+    research window opens — the day `kanso data instruments resolve` was run, as an operator
+    runs it — so the cache answers no question dated at the window's start, and the store
+    holds the definition the snapshot pins.
+    """
+    held = current_definitions(ws)[INSTRUMENT]
+    entry = (
+        read_cache(ws)
+        .root[INSTRUMENT]
+        .model_copy(
+            update={
+                "manual": False,
+                "resolved": Resolved(
+                    adapter=Throttled.id,
+                    as_of=date(2024, 3, 1),
+                    at=datetime(2024, 3, 1, 18, tzinfo=UTC),
+                    checksum=definition_checksum(held),
+                ),
+            }
+        )
+    )
+    write_yaml(InstrumentsFile({INSTRUMENT: entry}), ws.path("instruments.yaml"))
+    config = ws.path("kanso.toml")
+    config.write_text(
+        config.read_text(encoding="utf-8") + f'\n[data]\nreference = "{Throttled.id}"\n',
+        encoding="utf-8",
+    )
+    provider = Throttled()
+    monkeypatch.setitem(instruments.PROVIDERS, Throttled.id, lambda _: provider)
+    return find(ws.root), provider
+
+
+def test_a_run_begins_and_cards_with_its_reference_adapter_unreachable(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A card is priced under the definitions the store holds, which the snapshot pins, so
+    beginning a run and carding it ask the vendor nothing: five lanes starting together made
+    one request per instrument each, and the exchange throttled four of them out of their
+    runs within a second. The hypothesis was registered while the vendor answered —
+    registration validates the universe, and that is the operator's command, not a lane's."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    configured, provider = resolved_elsewhere(ws, monkeypatch)
+
+    run = loop.begin(configured, store, hyp_id)
+    edit(configured, run, REVERTING)
+    loop.card(configured, store, hyp_id, "buy the trough")
+
+    assert provider.asked == []
+    assert statuses(store, hyp_id) == ["keep", "keep"]
+
+
+def test_lanes_setting_up_together_ask_the_reference_nothing(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Six setups at once, each on a store of its own as a lane process holds one."""
+    configured, provider = resolved_elsewhere(ws, monkeypatch)
+    hyp = Hypothesis.model_validate(DOCUMENT)
+
+    def lane(_: int) -> loop.Setup:
+        with StateStore(configured.path("state.db")) as own:
+            return loop._setup(configured, own, hyp)
+
+    with ThreadPoolExecutor(6) as pool:
+        setups = list(pool.map(lane, range(6)))
+
+    assert provider.asked == []
+    assert {setup.venue_model.venue for setup in setups} == {VENUE}
 
 
 # --- a benchmark -------------------------------------------------------------
