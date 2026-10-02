@@ -713,12 +713,12 @@ and a cancel that arrives after a fill finds the order filled. The venue acts on
 the first point of data after its delay has passed, and only after matching that point, so
 the delay a run models is never shorter than the one stated and at tick resolution
 exceeds it by one point. On a feed of prints, quotes or a book, and on any grain of several
-names, a print, a quote or a bar reaches the sleeve through a flush marker, and a command due
-at it lands before the sleeve's handler for it, on both code paths (`docs/concepts.md`,
-Delivery). A change to the book is never held: the sleeve's `on_order_book_deltas` for it runs
-before a command due at that change lands, and sees the order sent and not yet on the book;
-the next point's handler sees it there. It models the round trip from
-the strategy to the exchange's book through the account and route it will trade on, and it
+names, a print, a quote or a bar reaches the sleeve through a flush marker at its instant,
+and the command lands before the sleeve's handler for it on both code paths
+(`docs/concepts.md`, Delivery). A change to the book is never held: the sleeve's
+`on_order_book_deltas` for it runs before a command due at that change lands, and sees the
+order sent and not yet on the book; the next point's handler sees it there. It models the
+round trip from the strategy to the exchange's book through the account and route it will trade on, and it
 is measured there, on real orders, rather than assumed. State the whole round trip: a feed
 that reaches the strategy late and an order that reaches the book late add up, and a rule
 that reacts to a point and posts lands the same instant either way, so one number carries

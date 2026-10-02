@@ -54,16 +54,17 @@ writer.
 **The SQL query does not keep an instant's points in file order; a query handed its files
 does.** `query` reads a built-in type through DataFusion with `ORDER BY ts_init`, and that
 sort is not stable: the points of one instant come back in an order that depends on the span
-asked for. Measured on a day of OKX BTC-USDT-SWAP prints, 79 of 524,932 instants came back
-reordered read an hour at a time against read whole — trade ids 848, 849, 850, 851 in the file,
-848, 850, 849, 851 in the hour — and a synthetic file of 30,000 prints holding 1 to 40 to an
-instant came back out of file order read whole. Given `files=`, `query` takes the dataset
-path for every type: it reads the files in the order given, each in its own row order,
-filters `ts_init` inclusively at both ends and sorts only when the rows are out of
-`ts_init` order, with a stable sort. `filter_files(data_cls, get_file_list_from_data_cls(data_cls),
-[identifier], start, end)` names one identifier's files that intersect a span, and their
-names, the interval each covers, sort in time order. kanso reads quotes, prints and book
-changes that way (`kanso.nautilus.backtest._in_file_order`).
+asked for. Measured on a day of one crypto venue's BTC/USDT perpetual-swap prints, 79 of
+524,932 instants came back reordered read an hour at a time against read whole — trade ids
+848, 849, 850, 851 in the file, 848, 850, 849, 851 in the hour — and a synthetic file of
+30,000 prints holding 1 to 40 to an instant came back out of file order read whole. Given
+`files=`, `query` takes the dataset path for every type: it reads the files in the order
+given, each in its own row order, filters `ts_init` inclusively at both ends and sorts only
+when the rows are out of `ts_init` order, with a stable sort. `filter_files(data_cls,
+get_file_list_from_data_cls(data_cls), [identifier], start, end)` names one identifier's
+files that intersect a span, and their names, the interval each covers, sort in time order.
+kanso reads quotes, prints and book changes that way
+(`kanso.nautilus.backtest._in_file_order`).
 
 Availability timestamps
 -----------------------

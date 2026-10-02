@@ -742,17 +742,17 @@ def _in_file_order(
 
     The catalog's query for a built-in type sorts on `ts_init` in SQL, and that sort is not
     stable: which order it leaves the points of one instant in depends on the span asked
-    for. Measured on 2026-10-02 on a day of OKX BTC-USDT-SWAP prints (2026-06-22, 524,932
-    instants): read whole and read an hour at a time, 79 instants came back in different
-    orders — trade ids 848, 849, 850, 851 in the file and the day read, 848, 850, 849, 851
-    in the hour read — and a card of a sleeve that trades on prints made 9,060 intents
-    over twenty minutes of them read whole and 9,064 read by the hour. Handed the file list
-    instead, the catalog reads with its dataset path, which keeps each file's rows in order,
-    takes the files in the order given and sorts stably when they overlap, so the stream is
-    the vendor's order and the same at any read length: on the same day, both the prints and
-    the 10,803,349 book changes came back exactly in file order an hour at a time, in the
-    time the SQL path took. The files are one directory's, named by the interval they
-    cover, so their names sort in time order.
+    for. Measured on 2026-10-02 on a day of one crypto venue's BTC/USDT perpetual-swap
+    prints (2026-06-22, 524,932 instants): read whole and read an hour at a time, 79
+    instants came back in different orders — trade ids 848, 849, 850, 851 in the file and
+    the day read, 848, 850, 849, 851 in the hour read — and a card of a sleeve that trades
+    on prints made 9,060 intents over twenty minutes of them read whole and 9,064 read by
+    the hour. Handed the file list instead, the catalog reads with its dataset path, which
+    keeps each file's rows in order, takes the files in the order given and sorts stably
+    when they overlap, so the stream is the vendor's order and the same at any read length:
+    on the same day, both the prints and the 10,803,349 book changes came back exactly in
+    file order an hour at a time, in the time the SQL path took. The files are one
+    directory's, named by the interval they cover, so their names sort in time order.
 
     Engine facts this relies on (nautilus_trader 1.231.0): `query(..., files=...)` takes the
     dataset path for every type; `filter_files` keeps the files of an identifier that
