@@ -31,7 +31,7 @@ and where each resolves from, and reaches nothing to say so.
 | `kanso data adapters` | what is registered: id, kind, capabilities, quota, loader ids, and per credential the name and where it resolves from — never a value. No network I/O |
 | `kanso data adapters --check` | what your key *actually reaches*: one authenticated lookup first, then one entitlement probe per dataset and one history-floor measurement per entitled price series. It reports the number of requests it made, and exits 2 if a configured key does not authenticate |
 | `kanso doctor` | the same registration facts, graded. Green whether or not an adapter is configured; each broker's `[adapters.<id>]` table is read through that broker's own model, and one it refuses fails the `execution` check |
-| `kanso doctor --check-adapters` | the same probe, graded. A dataset your plan excludes is reported and never graded down — it is a subscription, not a fault in the workspace; a credential that does not authenticate is the one failure |
+| `kanso doctor --check-adapters` | the same probe, graded. A dataset your plan excludes is reported and never graded down — it is a subscription, not a fault in the workspace; a credential that does not authenticate fails. Each broker is also asked what its account says of the terms its venue declaration states: OKX reads the real account's fee tier, account mode and position mode when its three names resolve, and fails a workspace that charges the account less than it pays (*The account's own tier*, below) |
 | `kanso portfolio clients` | the execution half: every client a stage may name, what each declares, which adapter provides it, which stages it may be configured on, and where each credential resolves from. Then what `deploy` would refuse each stage for. No network I/O |
 
 `--check` asks a different question from the plain command, and the difference is the whole
@@ -741,16 +741,83 @@ costed at a spread of zero. The rates are charged once, by the runner, like ever
 the public reference hands kanso instruments whose own maker and taker rates are zero, so the
 simulated venue charges nothing on top.
 
-The rates are the exchange's published Regular (Lv1) perpetual schedule, and were measured
-on the operator's account on 2026-09-30 with `GET /api/v5/account/trade-fee?instType=SWAP`:
-level `Lv1`, maker `-0.0002`, taker `-0.0005` (the exchange signs a fee the account pays
-as negative). The same call for `SPOT` answered 0.70 %, the Australian retail spot
-schedule, which is not declared because the package declares perpetuals. **The tier is
-declared, not fetched:** a card is costed before any account is opened, and a tier is a
-fact about one account on one day. An account on another tier states its own rates under
-`venues.OKX.costs` in `portfolio.yaml`, and the origin is recorded as `venue_override`. The
-same account read `posMode` as `net_mode`; the client will require net mode when it
-connects.
+**The rates are the exchange's global Regular (Lv1) perpetual tier**, from its published
+schedule, and nothing more: the exchange serves accounts through regional entities, each
+with a Regular tier of its own, so the declaration is right for an account on the global
+entity and can be wrong for any other. Measured with an operator's read-only key on an
+account of the Australian entity, served by `us.okx.com`:
+
+| day | account mode (`acctLv`) | `GET /api/v5/account/trade-fee?instType=SWAP` | in basis points |
+|---|---|---|---|
+| 2026-09-30 | `1`, spot mode | level `Lv1`, maker `-0.0002`, taker `-0.0005` | maker 2, taker 5: the global tier |
+| 2026-10-01 | `2`, futures mode | level `Lv1`, maker `-0.0005`, taker `-0.0007`, on `maker`/`taker`, `makerU`/`takerU` and `makerUSDC`/`takerUSDC` alike | maker 5, taker 7: the Australian entity's |
+
+The exchange signs a fee the account pays as negative. On 2026-10-01 the account's fee page
+showed the same — Futures 0.0500 % maker, 0.0700 % taker — so the first day's answer, taken
+for the account's tier, was the global one, and a workspace costed on the declaration charged
+that account 3 bp too little on every fill that rested and 2 bp on every one that took. The
+same call for `SPOT` answered 0.70 %, the Australian retail spot schedule, which is not
+declared because the package declares perpetuals. The account read `posMode` as
+`net_mode` on both days; the client will require net mode when it connects.
+
+**The tier is declared, not fetched:** a card is costed before any account is opened, and a
+tier is a fact about one account on one day. An account on another tier states its own rates
+under `venues.OKX.costs` in `portfolio.yaml`, and the origin is recorded as
+`venue_override`. Which rates those are, `kanso doctor --check-adapters` reads from the
+account itself.
+
+### The account's own tier
+
+`kanso doctor --check-adapters` reads the real account (`okx`, the three `KANSO_OKX_*`
+names without `DEMO`) when all three resolve and `[adapters.okx]` states a region. It is the
+only command that sends this exchange a credential. Two signed, read-only requests on the
+table's host:
+
+| request | what is read |
+|---|---|
+| `GET /api/v5/account/trade-fee?instType=SWAP` | the USDT-margined `takerU` and `makerU` — or `taker` and `maker` when either is not a number — and the fee `level` |
+| `GET /api/v5/account/config` | `acctLv`, the account mode, and `posMode`, the position mode |
+
+Each is signed as the exchange documents: `OK-ACCESS-KEY`, `OK-ACCESS-PASSPHRASE`,
+`OK-ACCESS-TIMESTAMP` and `OK-ACCESS-SIGN`, the base64 HMAC-SHA256 of the timestamp, the
+method and the path with its query, keyed by the secret. The key and passphrase travel in
+those headers and nowhere else; the secret is never sent; no credential is in a url or in
+anything `doctor` prints. The names are resolved with kanso's own resolver, from `.env` and
+then the environment — never from the engine's `OKX_*` variables. The demo account is not
+read: its money is simulated.
+
+What the account pays is set against what a fill on `OKX` is charged before a hypothesis's
+own `costs`: the declaration, with any `venues.OKX.costs` rate in `portfolio.yaml` over it,
+field by field. The `adapters` check lists both, with the account's `level`, `acctLv` and
+`posMode`, and grades them:
+
+| the account | grade |
+|---|---|
+| pays what is charged, on both sides | `ok` |
+| pays more than is charged on either side | `fail` — every card is costed below what the account pays |
+| pays less than is charged on both sides | `warn` — conservative, and perhaps a stress you meant |
+| is in spot mode (`acctLv` 1) | `fail`, whatever it answered — it trades no perpetual, and its answer for swaps changed when its mode did |
+| answers either request with anything but the API's success | `fail`, naming the request and the answer; check the three names and that `region` is the account's entity's host |
+
+Where the rates differ, the lines to state are printed, ready to merge into
+`portfolio.yaml` — for the account measured above:
+
+```
+okx: state this in portfolio.yaml, merged into any venues.OKX entry already there:
+  venues:
+    OKX:
+      costs:
+        commission_bps: 7
+        maker_bps: 5
+```
+
+Nothing is written for you, and a hypothesis that states its own `commission_bps` or
+`maker_bps` keeps charging it, so change it there too. With any of the three names unset
+the check sends nothing and lists the declaration, what `portfolio.yaml` states and what
+is charged, and which names did not resolve; with the keys set and no `region`, it sends
+nothing and warns, because a key is accepted only by its own entity's host. The fee
+answer's `feeGroup`, the per-group rates the exchange documents beside the account-wide
+ones, is not read (`docs/backlog.md` entry 114).
 
 ## Writing your own
 

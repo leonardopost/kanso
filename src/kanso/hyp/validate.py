@@ -92,7 +92,6 @@ from kanso.schemas import (
     ConstructRef,
     Hypothesis,
     ObjectiveRef,
-    Portfolio,
     StrategyFile,
     VenueDeclaration,
     VenueModel,
@@ -128,7 +127,6 @@ FUNDING: Final = "funding"
 
 STRATEGIES: Final = "strategies"
 STRATEGY_FILE: Final = "strategy.yaml"
-PORTFOLIO_FILE: Final = "portfolio.yaml"
 
 CLASSIFICATION: Final = ("construct", "objective", "constraints")
 """The three fields classification writes; they are written and validated together."""
@@ -229,7 +227,9 @@ def venue_models(
     falls back to the shipped defaults, which the resolved model records as its origin: a
     missing adapter must not silently change the numbers a card is measured with.
     """
-    overrides = _venue_overrides(ws)
+    from kanso.portfolio.files import venue_overrides  # `kanso.portfolio` imports this module
+
+    overrides = venue_overrides(ws)
     quotes = QUOTE_TYPE in hyp.data_requirements
     research = ws.config.research
     broker = research.broker
@@ -335,13 +335,6 @@ def _currencies(settles: str, books: str) -> str:
 
 def _venue_of(instrument: Any) -> str:
     return str(instrument.id.venue.value)
-
-
-def _venue_overrides(ws: Workspace) -> Mapping[str, Any]:
-    path = ws.path(PORTFOLIO_FILE)
-    if not path.is_file():
-        return {}
-    return load_yaml(Portfolio, path).venues or {}
 
 
 def _check_id(hyp: Hypothesis) -> None:

@@ -32,17 +32,25 @@ cannot be claimed in `kanso.nautilus.facts`, which may not name a broker, so eac
 states its own as `engine_facts`, and `facts.verify()` collects them through this registry
 and re-establishes them after its own: `kanso doctor` grades a broker's binding exactly as
 it grades the core's.
+
+**What an account says of its own terms is the broker's to read.** A declaration states a
+venue's costs for every account of that broker, and an account may be charged otherwise —
+an exchange's regional entities each carry a fee tier of their own. So a broker may read the
+account its credentials open and set what it says against the declaration and the operator's
+`venues.<MIC>` entry, which the core hands it; `kanso doctor --check-adapters` is the one
+caller, and the answer is an `AccountCheck` the core grades without knowing whose it is.
 """
 
 from __future__ import annotations
 
 import importlib
 import pkgutil
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
-    from kanso.schemas import ExecutionClientSpec, VenueDeclaration
+    from kanso.schemas import ExecutionClientSpec, VenueDeclaration, VenueOverride
     from kanso.workspace import Workspace
 
 PACKAGE = "kanso.nautilus.adapters"
@@ -58,6 +66,7 @@ EngineClaim = tuple[str, Callable[[], tuple[bool, str]]]
 __all__ = [
     "BROKER_ATTR",
     "PACKAGE",
+    "AccountCheck",
     "BrokerAdapter",
     "EngineClaim",
     "broker_of",
@@ -66,6 +75,24 @@ __all__ = [
     "packaged",
     "venue_declaration",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class AccountCheck:
+    """What one broker's account says of its terms, graded as a doctor check grades.
+
+    `requests` is how many requests reading it took — zero when nothing was sent — so an
+    operator sees the probe is bounded and a test can assert it. `detail` is the one phrase
+    the `adapters` check carries when the grade is not `ok`; `items` are the lines it lists.
+    No credential is in any of them.
+    """
+
+    broker: str
+    status: Literal["ok", "warn", "fail"]
+    detail: str
+    requests: int = 0
+    items: tuple[str, ...] = ()
+    remedy: str | None = None
 
 
 @runtime_checkable
@@ -106,6 +133,14 @@ class BrokerAdapter(Protocol):
 
     def venue_declaration(self, venue: str) -> VenueDeclaration | None:
         """What this broker declares about a venue it serves, or `None` for one it does not."""
+        ...
+
+    def check_account(
+        self, ws: Workspace, overrides: Mapping[str, VenueOverride]
+    ) -> AccountCheck | None:
+        """The account's own terms against the declaration and the operator's `venues`
+        entries, or `None` when this broker reads nothing of its account. Asked only by
+        `kanso doctor --check-adapters`; with no credential resolved it sends nothing."""
         ...
 
 
