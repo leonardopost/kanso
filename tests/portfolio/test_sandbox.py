@@ -46,7 +46,7 @@ from nautilus_trader.execution.messages import (
 )
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import Bar
-from nautilus_trader.model.enums import BookType, OrderSide
+from nautilus_trader.model.enums import BookType, OrderSide, OrderStatus
 from nautilus_trader.model.events import OrderDenied
 from nautilus_trader.model.identifiers import (
     ClientId,
@@ -63,6 +63,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso.data.types.corporate_action import CorporateAction
 from kanso.errors import ValidationError
 from kanso.nautilus import actions, backtest, sandbox, session
+from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection, is_marker, ordered
 from kanso.nautilus.venue import venue_configs
 from tests.replay.conftest import (
     CAPITAL,
@@ -276,6 +277,15 @@ def kernel() -> Iterator[Any]:
 def venue() -> BacktestVenueConfig:
     """The one venue this hypothesis trades, as both code paths are configured from it."""
     return venue_configs(hypothesis(), venue_model(), CAPITAL)[0]
+
+
+def with_latency(configured: BacktestVenueConfig, latency_ms: float) -> BacktestVenueConfig:
+    """The same venue, built from a venue model that states this round trip."""
+    model = venue_model()
+    stated = model.model_copy(
+        update={"costs": model.costs.model_copy(update={"latency_ms": latency_ms})}
+    )
+    return venue_configs(hypothesis(), stated, CAPITAL)[0]
 
 
 def turn(kernel: Any) -> None:
@@ -605,6 +615,64 @@ def test_attach_subscribes_each_venue_to_its_own_bars_above_a_strategy(kernel: A
 
     assert [one.priority for one in subscribed] == [sandbox.MARKET_FIRST]
     assert sandbox.MARKET_FIRST > 0
+
+
+def test_attach_subscribes_each_venue_to_the_markers_of_a_marked_window_above_a_strategy(
+    kernel: Any,
+) -> None:
+    """The research path settles every venue after every point, the flush markers included,
+    so a command that came due by a held point lands before the marker hands that point to
+    the author; the venue listens for the marker where the sleeve does, and ahead of it."""
+    marked = ordered([bars(WINDOW), bars(WINDOW, "OTHR")])
+    assert any(is_marker(point) for point in marked)
+
+    made = sandbox.attach(kernel, [venue()], marked)
+
+    subscribed = kernel.msgbus.subscriptions(f"data.{MARKER_TYPE.topic}")
+    assert [one.priority for one in subscribed] == [sandbox.MARKET_FIRST]
+    assert [one.handler for one in subscribed] == [made[0].on_marker]
+
+
+def test_attach_binds_no_marker_where_the_window_holds_none(kernel: Any) -> None:
+    """A single-instrument window of one grain is unmarked, and the venue is left as it was."""
+    sandbox.attach(kernel, [venue()], bars(WINDOW))
+
+    assert kernel.msgbus.subscriptions(sandbox.MARKER_TOPIC) == []
+
+
+def test_a_marker_lands_what_came_due_by_its_instant_under_a_latency(kernel: Any) -> None:
+    """Under a latency a point advances the exchange only to the point before it, so what
+    came due by a held point would land on the next point the venue sees, after the sleeve
+    had already been handed the held one. A marker settles the exchange at its own instant,
+    which is where the research path settles after every point, so the order lands before
+    the sleeve's handler for the point the marker flushes."""
+    kernel.cache.add_instrument(instrument())
+    client = sandbox.SimulatedVenue(kernel, with_latency(venue(), 20.0))
+    client.connect()
+    first, second = bars(WINDOW)[:2]
+    client.on_data(first)
+    factory = OrderFactory(trader_id=TRADER, strategy_id=StrategyId("S-1"), clock=TestClock())
+    order = factory.market(InstrumentId.from_str(INSTRUMENT), OrderSide.BUY, Quantity.from_int(1))
+    kernel.cache.add_order(order)
+    client.submit_order(
+        SubmitOrder(
+            trader_id=TRADER,
+            strategy_id=StrategyId("S-1"),
+            order=order,
+            command_id=UUID4(),
+            ts_init=0,
+        )
+    )
+
+    client.on_marker(KansoCrossSection(n=1, ts_event=first.ts_init, ts_init=first.ts_init))
+    assert not order.is_closed, "sent on the first bar, the order is in flight for 20 ms"
+    client.on_data(second)
+    assert not order.is_closed, "the next point settles only to the first bar's instant"
+
+    client.on_marker(KansoCrossSection(n=1, ts_event=second.ts_init, ts_init=second.ts_init))
+
+    assert order.status == OrderStatus.FILLED
+    assert client.test_clock.timestamp_ns() == second.ts_init
 
 
 def test_attach_binds_nothing_where_the_window_holds_no_bar(kernel: Any) -> None:

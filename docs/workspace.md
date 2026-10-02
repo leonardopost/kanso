@@ -82,7 +82,7 @@ never edits the file.
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
-| `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` — and the instrument store by `instruments resolve` alone: a validation, a registration and a card resolve in memory | no |
+| `catalog/` | `data load`, `sync`, `backfill`, `snapshot`, `instruments resolve` — and the instrument store by `instruments resolve` alone: a validation and a registration resolve in memory, and a run reads the store | no |
 | `runs/` | `research begin`, the daemon | no |
 | `sessions/` | replay, parity, stage nodes | no |
 | `certificates/` | `cert plan`, `cert run` | no |
@@ -712,7 +712,10 @@ between: a print that would have filled the order in that interval finds it not 
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
 the first point of data after its delay has passed, and only after matching that point, so
 the delay a run models is never shorter than the one stated and at tick resolution
-exceeds it by one point. It models the round trip from
+exceeds it by one point. On a feed whose instants coincide — every level-two book, any grain
+of several names — that point reaches the sleeve through a flush marker, and the command
+lands before the sleeve's handler for it on both code paths (`docs/concepts.md`,
+Delivery). It models the round trip from
 the strategy to the exchange's book through the account and route it will trade on, and it
 is measured there, on real orders, rather than assumed. State the whole round trip: a feed
 that reaches the strategy late and an order that reaches the book late add up, and a rule
@@ -901,12 +904,21 @@ hypothesis may name it by its qualified id, and the vendor is still asked for it
 spelling. An entry with no key for the configured adapter is asked for as it was named.
 
 An edit to `override` reaches the store at the next `kanso data instruments resolve` and
-never before: `hyp validate`, `hyp add` and every card build the definition in memory to
-check it, and a run is priced under what the store holds. Resolved as of a date the store
-already holds a definition for, an edited override is a correction of that definition, and
-a correction is explicit — the plain command refuses by name (exit 2) and `--refresh`
-replaces it. Resolved as of another date it is added beside what is held, since what an
-instrument was on each date is its own fact.
+never before: `hyp validate` and `hyp add` build the definition in memory to check it, and a
+run is priced under what the store holds. Resolved as of a date the store already holds a
+definition for, an edited override is a correction of that definition, and a correction is
+explicit — the plain command refuses by name (exit 2) and `--refresh` replaces it. Resolved
+as of another date it is added beside what is held, since what an instrument was on each
+date is its own fact.
+
+A run asks the reference adapter nothing about an instrument the store holds. `research
+begin` and every card build the venue model from the definitions a card is priced under —
+the newest-dated the store holds of each instrument, which are what the run's snapshot pins
+— whatever date the cache was resolved as of, so lanes starting together send the vendor no
+request at all, and a vendor that is down or throttling stops no run. An edited `override`
+therefore changes no run until it is resolved and snapshotted. Only an id the store holds no
+definition of is resolved, in memory, and a run over one is refused by name when its
+snapshot is chosen.
 
 `manual: true` suppresses resolution entirely and requires you to supply the constructor
 fields yourself. That is the path the file loaders, the synthetic loader and the demo take,
@@ -1089,7 +1101,8 @@ A workspace whose entries are all `manual` may still name a reference adapter in
 reference` without setting that adapter's key: the adapter is built only once resolution
 finds an id the cache and the manual entries cannot answer, and building it is what
 resolves the credential. Name the vendor you will eventually resolve through; you need it
-configured on the day you first ask it something.
+configured on the day you first ask it something. A research run is never that day for an
+instrument the store already holds.
 
 The registry of record is the catalog's instrument store, not this file — `kanso data
 instruments show <ID>` reads the store and renders the definition a run would use, the

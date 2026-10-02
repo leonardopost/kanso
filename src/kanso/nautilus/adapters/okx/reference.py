@@ -21,12 +21,21 @@ where the unnarrowed page carries all 494 swaps in half a megabyte; `instType` i
 error (HTTP 400, code `51000`), as is a lower-case one; and an id the exchange does not list
 answers HTTP 200 with code `51001` and no rows. So an id is asked for on its own, an unknown
 id is that id's failure and never the endpoint's, and a malformed one is refused per id too.
-Every other answer — a throttle, a gateway error, a body that is not the API's envelope —
-stops the call: nothing about the id was established by it. That includes `51000` under HTTP
-200, which the exchange was seen to answer once, transiently, for a well-formed id in review
-of this adapter (seven repeats answered code `0`): only the 400 marks an id malformed. A fault
-below any answer — a refused connection, a timeout — stops the call too, with a network
-remedy.
+Every other answer — a gateway error, a body that is not the API's envelope, a throttle that
+does not lift — stops the call: nothing about the id was established by it. That includes
+`51000` under HTTP 200, which the exchange was seen to answer once, transiently, for a
+well-formed id in review of this adapter (seven repeats answered code `0`): only the 400
+marks an id malformed. A fault below any answer — a refused connection, a timeout — stops the
+call too, with a network remedy.
+
+**A throttle is waited out, a few times.** HTTP 429 with code `50011` is the exchange's
+answer to a request over its rate, and it says nothing about what was asked, so every
+request to the API that draws one is asked again after a growing pause — `PAUSE_S` times the
+attempt, up to `RETRIES` attempts — before the last answer is read as the call's. The
+listing drew it on 2026-10-01 from four of five lanes that asked it within one second,
+`HTTP 429, code 50011: Too Many Requests`, the status, code and message of the archive
+listing's throttle recorded on 2026-09-30. The quota cannot prevent it: it holds one process
+to the table's rate, and those five lanes were five processes, each within its own.
 
 **The fields, as the recorded rows carry them.** A linear swap's row leaves `baseCcy` and
 `quoteCcy` empty; the contract's own currency is `ctValCcy` (`BTC`) and the quote is the
@@ -84,6 +93,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -115,7 +125,10 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "ADAPTER",
     "INSTRUMENTS",
+    "PAUSE_S",
     "QUOTA_KEY",
+    "RETRIES",
+    "THROTTLED",
     "USER_AGENT",
     "Answer",
     "OkxReference",
@@ -137,8 +150,13 @@ SWAP: Final = "SWAP"
 OK: Final = "0"
 NOT_LISTED: Final = "51001"
 BAD_PARAMETER: Final = "51000"
+THROTTLED: Final = "50011"
 """The exchange's own codes, measured: success, an id it does not list (under HTTP 200),
-and a parameter it rejects (under HTTP 400)."""
+a parameter it rejects (under HTTP 400) and a request over its rate (under HTTP 429)."""
+
+RETRIES: Final = 5
+PAUSE_S: Final = 2.0
+"""Attempts at a throttled request, and the pause before the next, times the attempt."""
 
 LIVE: Final = "live"
 LINEAR_TYPE: Final = "linear"
@@ -286,6 +304,11 @@ class Answer:
         """The exchange rejected the id asked for as a parameter."""
         return self.status == 400 and self.code == BAD_PARAMETER
 
+    @property
+    def throttled(self) -> bool:
+        """The exchange refused the request for its rate, not for anything it asked."""
+        return self.status == 429 or self.code == THROTTLED
+
     def said(self) -> str:
         """What came back, in one phrase and without the body."""
         code = "" if self.code is None else f", code {self.code}"
@@ -309,10 +332,14 @@ def _answer(response: Response) -> Answer:
 
 @dataclass(frozen=True, slots=True)
 class PublicClient:
-    """The public API on one regional host, through one transport, with no credential."""
+    """The public API on one regional host, through one transport, with no credential.
+
+    `pause` is how a throttle is waited out, and how the suite waits for none.
+    """
 
     base_url: str
     transport: Transport
+    pause: Callable[[float], None] = time.sleep
 
     def swaps(self, inst_id: str | None = None) -> Answer:
         """The swap listing, narrowed to one `instId` when one is given."""
@@ -322,8 +349,18 @@ class PublicClient:
         return self.get(INSTRUMENTS, params)
 
     def get(self, path: str, params: Mapping[str, str]) -> Answer:
-        """One public endpoint's answer, read as the API's envelope."""
-        return _answer(self.fetch(f"{self.base_url}{path}", params, name=path))
+        """One public endpoint's answer, read as the API's envelope, a throttle waited out.
+
+        A throttled request is asked again after `PAUSE_S` times the attempt, up to
+        `RETRIES` attempts; the last answer is returned whatever it is, for the caller to
+        read as it reads any other.
+        """
+        for attempt in range(1, RETRIES + 1):
+            answer = _answer(self.fetch(f"{self.base_url}{path}", params, name=path))
+            if not answer.throttled or attempt == RETRIES:
+                break
+            self.pause(PAUSE_S * attempt)
+        return answer
 
     def fetch(
         self, url: str, params: Mapping[str, str] | None = None, *, name: str = ""
@@ -511,15 +548,23 @@ class ReferenceAdapter:
     capabilities: Capabilities = Capabilities()
     credentials: tuple[str, ...] = ()
 
-    def client(self, ws: Workspace, *, transport: Transport | None = None) -> PublicClient:
+    def client(
+        self,
+        ws: Workspace,
+        *,
+        transport: Transport | None = None,
+        pause: Callable[[float], None] = time.sleep,
+    ) -> PublicClient:
         """The listing on the table's regional host, refusing a table that states none.
 
-        `transport` is how the suite serves recorded bodies: nothing else passes one.
+        `transport` is how the suite serves recorded bodies, and `pause` how it waits out a
+        throttle without waiting; a loader passes its own `pause`, nothing else passes one.
         """
         settings = table(ws)
         return PublicClient(
             base_url=base_url(settings.require_region()),
             transport=transport or pyo3_transport(settings.rate_per_second),
+            pause=pause,
         )
 
     def configured(self, ws: Workspace) -> bool:
@@ -546,9 +591,15 @@ class ReferenceAdapter:
 
         return loaders(ws)
 
-    def provider(self, ws: Workspace, *, transport: Transport | None = None) -> OkxReference:
+    def provider(
+        self,
+        ws: Workspace,
+        *,
+        transport: Transport | None = None,
+        pause: Callable[[float], None] = time.sleep,
+    ) -> OkxReference:
         """The instrument provider `[data] reference = "okx"` names."""
-        return OkxReference(self.client(ws, transport=transport))
+        return OkxReference(self.client(ws, transport=transport, pause=pause))
 
     def survey(self, ws: Workspace, *, transport: Transport | None = None) -> Survey:
         """One public request, the swap listing: does the host answer, and what it lists.

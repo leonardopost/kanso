@@ -131,6 +131,27 @@ def test_an_instant_outside_the_tolerance_fails() -> None:
     assert "ts_event" in str(result.evidence["divergence"])
 
 
+def test_two_instants_microseconds_apart_agree_at_a_millisecond_and_part_under_it() -> None:
+    """The one timestamp an intent carries is the one the tolerance is applied to. These
+    are the instants a certificate reported on 2026-10-01, 39,168 ns apart: a plan whose
+    tolerance is a millisecond reads them as one decision, and only a tolerance under the
+    gap reads them as two."""
+    node = (intent(ts_event=1_789_999_840_408_464_384),)
+    engine = (intent(ts_event=1_789_999_840_408_425_216),)
+    at_a_millisecond = judged(compared(node, engine, ts_ns=1_000_000), ts_ns=1_000_000)
+
+    assert at_a_millisecond.passed
+    assert at_a_millisecond.evidence["max_ts_delta_ns"] == 39_168
+    assert at_a_millisecond.evidence["divergence"] is None
+
+    under_the_gap = judged(compared(node, engine, ts_ns=1_000_000), ts_ns=39_167)
+
+    assert not under_the_gap.passed
+    assert "ts_event is 1789999840408464384 on the node path" in str(
+        under_the_gap.evidence["divergence"]
+    )
+
+
 def test_the_plans_tolerance_judges_and_not_the_one_the_replay_ran_at() -> None:
     """The comparison travels with both sequences, so the gate asks its own question."""
     node = (intent(ts_event=1_000),)

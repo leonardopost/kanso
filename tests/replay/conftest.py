@@ -139,6 +139,34 @@ class Strategy(KansoStrategy):
             self.posted = want
 '''
 
+PRINT_EXIT = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Takes the offer on the book's second change, and sells at market on the first print
+    it handles while long."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.seen = 0
+        self.sold = False
+
+    def on_order_book_deltas(self, deltas) -> None:
+        self.seen += 1
+        if self.seen == 2:
+            self.submit_entry(deltas.instrument_id, "BUY", qty=100, price=10.02)
+
+    def on_trade_tick(self, tick) -> None:
+        if not self.sold and self.held(tick.instrument_id) > 0:
+            self.sold = self.submit_exit(tick.instrument_id) is not None
+'''
+
 FLAT = b'''
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 

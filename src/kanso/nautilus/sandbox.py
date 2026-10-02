@@ -64,6 +64,23 @@ the first point on or after its delay, once that point has been matched, exactly
 research path, and `advance_past_latency` lands what a node's flatten sent after the
 window's last point.
 
+**The venue is settled at every flush marker too, because the research path settles there.**
+A feed whose instants coincide — every level-two book, any grain of several names — carries
+kanso's cross-section markers, and a sleeve hands a bar, a quote, a trade or a custom point to
+its author only when the marker that follows it arrives (`kanso.nautilus.cross_section`). The
+backtest loop settles every venue after every point, the markers included, so under a latency
+a command that came due by a held point lands *before* the marker hands that point to the
+author. This client's own subscription never sees a marker, and the drain it rode on the
+next point came after the flush: the author's handler for the held point ran a fill or a
+cancel short, and decided a point later than the research path did. Measured on a synthetic
+level-two book under 20 ms: a sleeve that sells on the first print it handles while long sold
+on the print after the one its entry came due at. An operator's `parity_replay` of a book
+hypothesis under 20 ms failed the same way: every earlier intent agreed, and the node's
+instant was the later one. So
+`attach` subscribes each venue to the marker topic, above a sleeve, and `on_marker` settles
+the exchange at the marker's own instant — which is also where the research path drains a
+command due at a custom point's instant, one this client's market subscription never sees.
+
 **The exchange is cost-neutral because of the instrument, not because of the venue.** Both
 paths run a `MakerTakerFeeModel`, because `SimulatedExchange` will not accept no fee model
 and `BacktestEngine.add_venue` substitutes that one for the `None` kanso hands it. What makes
@@ -105,6 +122,9 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 * `ExecutionEngine.process(event)` applies an order event immediately;
   `LiveExecutionEngine.process` overrides it to put the event on a queue consumed by its own
   task.
+* A custom type subscribed without an instrument is published under `data.<DataType.topic>`
+  (`common/data_topics.pyx`), the topic a sleeve's own `subscribe_data(MARKER_TYPE)` binds, so
+  a venue subscribed there sees every marker the sleeve sees, and nothing else.
 * A live execution client subscribes `on_data` to `data.*.{venue}.*` when it connects;
   `on_data` feeds `Instrument`, `InstrumentStatus`, `InstrumentClose`, the three order-book
   types, `QuoteTick`, `TradeTick` and `Bar` into the exchange and then advances it to the
@@ -169,11 +189,13 @@ from nautilus_trader.model.instruments import Instrument
 
 from kanso.errors import ValidationError
 from kanso.nautilus import actions
+from kanso.nautilus.cross_section import MARKER_TYPE, is_marker
 
 __all__ = [
     "ACCOUNT_SUFFIX",
     "BAR_TOPIC",
     "EXEC_EVENTS",
+    "MARKER_TOPIC",
     "MARKET_FIRST",
     "ROUTES",
     "SimulatedVenue",
@@ -193,6 +215,9 @@ subscribes only once the trader starts it.
 
 BAR_TOPIC: Final = "data.bars."
 """The prefix the data engine publishes every bar under, followed by the bar type."""
+
+MARKER_TOPIC: Final = f"data.{MARKER_TYPE.topic}"
+"""Where the data engine publishes a cross-section flush marker: the topic the sleeve binds."""
 
 EXEC_EVENTS: Final = "ExecEngine.process"
 """Where every execution event a simulated venue generates is addressed.
@@ -545,6 +570,20 @@ class SimulatedVenue(LiveExecutionClient):
         if self._latency_ns <= 0:
             self.exchange.process(data.ts_init)
 
+    def on_marker(self, marker: Data) -> None:
+        """Settle the exchange at a flush marker's instant, before the sleeve flushes on it.
+
+        The research path settles every venue after every point, markers included, so a
+        command that came due by a held point lands before the marker hands that point to
+        the author; this is that settle, run above the sleeve's own marker handler. The
+        marker's instant is the held point's, so under a latency what came due by it lands
+        now rather than on the next point this venue sees, and the instant becomes the one
+        the next command is stamped from. Without a latency nothing is queued and the clock
+        alone moves, as it does for a point of an unrouted kind.
+        """
+        self.exchange.process(marker.ts_init)
+        self._last_ts = marker.ts_init
+
     def advance_past_latency(self) -> None:
         """Land every command still in flight after the last point, against that point's book.
 
@@ -563,7 +602,8 @@ def attach(
     venues: Sequence[BacktestVenueConfig],
     points: Sequence[Any],
 ) -> tuple[SimulatedVenue, ...]:
-    """One simulated venue per configured venue, registered and bound to this window's bars.
+    """One simulated venue per configured venue, registered and bound to this window's bars
+    and, when the window is marked, to its flush markers.
 
     Returns the clients in the order the venues were given, so a caller can reach an
     exchange afterwards — to read the book a position was marked at, or to check that a
@@ -571,11 +611,16 @@ def attach(
     """
     made: list[SimulatedVenue] = []
     topics = bar_topics(points)
+    marked = any(is_marker(point) for point in points)
     for venue in venues:
         client = SimulatedVenue(kernel, venue)
         kernel.exec_engine.register_client(client)
         kernel.exec_engine.register_venue_routing(client, Venue(venue.name))
         for topic in topics.get(venue.name, ()):
             kernel.msgbus.subscribe(topic=topic, handler=client.on_data, priority=MARKET_FIRST)
+        if marked:
+            kernel.msgbus.subscribe(
+                topic=MARKER_TOPIC, handler=client.on_marker, priority=MARKET_FIRST
+            )
         made.append(client)
     return tuple(made)
