@@ -14,8 +14,10 @@ at one instant are delivered as one `OrderBookDeltas` (`batched`): the venue app
 batch whole and matches once, the data engine publishes it whole after its book has taken
 all of it, and the author's `on_order_book_deltas` is called once with every change of the
 instant — never with a book that has lost its best ask and not yet been handed the next
-one. A book handler is never held, so no marker follows a book cohort: the venue was
-settled after the batch itself, and a marker after it would flush nothing.
+one. A book handler is never held, so no marker follows a book cohort. The engine hands the
+batch to the venue and then to the data engine, which runs the handler, before it settles the
+commands due at that instant, so under a latency a command due at a change lands after the
+author's handler for it — unlike a held print's or quote's, which lands before.
 
 **Whether a feed is marked is a property of the hypothesis** (`coincident`), so it cannot
 depend on where a card's window was cut into chunks: a feed of several names, or one that

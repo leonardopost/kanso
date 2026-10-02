@@ -176,6 +176,7 @@ def run_node(
     and never resumed into.
     """
     marks = backtest.checked(request, instruments, groups)
+    backtest.book_held(request, groups)
     points = ordered(groups, coincident=coincident(request.hyp))
     opens, _ = request.bounds
     backtest._seed_globals(request.snapshot_id)

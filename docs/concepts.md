@@ -290,12 +290,20 @@ window on its standard input while it runs: it reads the catalog an hour at a ti
 hypothesis requires prints, quotes or a book and a day at a time otherwise, cuts each read
 into chunks of at most 250,000 points — always between instants, so every point of an
 instant is in one chunk — and reads the next chunk only once the last is wholly written. The
-child runs a chunk before it reads the next, so one chunk is running in the child and one
-is in the parent, and nothing of the window is ever on disk. Where a window is cut changes
-nothing: the suite runs one tick window read by the day, by the hour and by the hour cut to
-seven points a chunk, and one daily window cut to a bar a chunk, and each is the card the
-whole window gives when it is run in one process. Measured on a day of BTC's book and prints
-on 2026-10-02: a fresh child holds about 0.2 GB of its own and 0.66–0.81 KB per point of the
+child runs a chunk before it reads the next, so the child holds the chunk it is running and
+the parent the read that chunk was cut from — an hour of prints, quotes or a book, a day of
+anything else — until every chunk of it is written; nothing of the window is ever on disk.
+Where a window is cut changes nothing. Prints, quotes and book changes are read in the order
+the catalog's files hold them, because the catalog's own sorted query leaves the points of one
+instant in an order that depends on the span asked for: on a day of OKX BTC-USDT-SWAP prints,
+79 of 524,932 instants came back in a different order read by the hour than read whole, and a
+card trading on twenty minutes of them sent 9,064 orders read by the hour and 9,060 read
+whole. Read from the files, the day's prints and its 10.8 million book changes come back in
+the same order either way. The suite reads a catalog of prints that share instants unevenly
+by the hour and whole, and runs one tick window read by the day, by the hour and by the hour
+cut to seven points a chunk, one whose first hour holds book changes and no print, and one
+daily window cut to a bar a chunk; each is the card the whole window gives when it is run in
+one process. Measured on a day of BTC's book and prints on 2026-10-02: a fresh child holds about 0.2 GB of its own and 0.66–0.81 KB per point of the
 chunk it runs, about 0.4 GB at the cap, and caps of 10,000, 50,000 and 200,000 points and
 none gave the identical card at about 10 ms of CPU an extra chunk. Read and staged a day at
 a time as before, the same day of a three-level book was estimated at 4.5 GB in the child and
@@ -922,7 +930,11 @@ a time, as a book used to be delivered, called the author with the book half-mov
 the old best offer's delete and before the new one's add — and the venue matched against
 every state in between, so a resting buy could fill against an offer that existed only
 between two changes of one instant (`kanso.nautilus.facts` measures both). A book handler is
-never held, so no marker follows a batch. Book changes of several instruments at one instant
+never held, so no marker follows a batch, and under a `latency_ms` a command that comes due at
+a change lands after the sleeve's handler for that change: the engine hands the batch to the
+venue and the sleeve before it settles the commands due then, so the handler sees the order
+sent, and the next point's handler sees it on the book — a print at the same instant, held
+behind its marker, already sees it there. Both paths alike. Book changes of several instruments at one instant
 are still handed over one instrument at a time: a book cohort is not a cross-section
 (`docs/backlog.md`). A strategy that counted its book calls counts instants now, and a
 `best` struck on a book hypothesis before this is not comparable with a card after it.

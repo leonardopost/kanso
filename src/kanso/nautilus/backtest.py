@@ -32,8 +32,9 @@ the catalog and streams the points to the child on its standard input, so a card
 route to data outside its window even if its code looked for one. The window travels in
 chunks cut between instants — reads of an hour for a feed of prints, quotes or a book and
 of a day otherwise, each cut to at most `CHUNK_POINTS` points — and the parent reads the
-next chunk only once the last is written, so neither process ever holds more than a chunk
-of it and nothing of it is ever on disk. The parent supervises wall time and
+next chunk only once the last is written, so the parent holds one read of the window, which
+it keeps until every chunk cut from it is written, and the child holds the chunk it runs;
+nothing of the window is ever on disk. The parent supervises wall time and
 resident memory and kills the process group on breach; resident memory is bounded by
 supervision rather than by `setrlimit`, which does not bound RSS on Linux and is rejected
 for address space on macOS. The peak comes from the reaped child's own resource usage.
@@ -112,7 +113,7 @@ from itertools import chain
 from math import fsum
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final
+from typing import IO, Any, Final
 
 from kanso.criteria import CardRun, Fill, FundingPayment, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
@@ -143,6 +144,7 @@ __all__ = [
     "MEMORY",
     "RunRequest",
     "RunResult",
+    "book_held",
     "booked",
     "checked",
     "child_env",
@@ -708,12 +710,17 @@ def _refuse_missing_grain(request: RunRequest, loaded: Mapping[str, int]) -> Non
 def _market_points(
     catalog: Any, requirement: str, instrument: Any, resolution: str, start: int, end: int
 ) -> tuple[object, ...]:
-    """One instrument's bars, quotes or trades over the window.
+    """One instrument's bars, quotes, trades or book changes over the window.
 
     Bars are asked for by the bar type the sleeve subscribes to, spelled by the strategy
     module itself, so the runner loads exactly the grain the strategy will receive rather
     than every grain the catalog happens to hold for that instrument. The `wanted` checks
     are asked first, as before every catalog query for points.
+
+    Quotes, trades and book changes are read in the order the catalog's files hold them
+    (`_in_file_order`), because those are the series whose points share instants as a rule,
+    and the order of the points of one instant is part of what a card is handed. A bar
+    series holds one bar an instant, so its order is its `ts_init` alone.
     """
     from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
@@ -724,8 +731,42 @@ def _market_points(
         identifier = str(_bar_type(instrument.id, resolution))
         return tuple(catalog.query(Bar, identifiers=[identifier], start=start, end=end))
     data_cls = {QUOTE: QuoteTick, BOOK: OrderBookDelta}.get(requirement, TradeTick)
-    identifier = str(instrument.id)
-    return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
+    return _in_file_order(catalog, data_cls, str(instrument.id), start, end)
+
+
+def _in_file_order(
+    catalog: Any, data_cls: type, identifier: str, start: int, end: int
+) -> tuple[object, ...]:
+    """One instrument's points of `data_cls` with `start <= ts_init <= end`, the points of
+    one instant in the order its files hold them, whatever span is asked for.
+
+    The catalog's query for a built-in type sorts on `ts_init` in SQL, and that sort is not
+    stable: which order it leaves the points of one instant in depends on the span asked
+    for. Measured on 2026-10-02 on a day of OKX BTC-USDT-SWAP prints (2026-06-22, 524,932
+    instants): read whole and read an hour at a time, 79 instants came back in different
+    orders — trade ids 848, 849, 850, 851 in the file and the day read, 848, 850, 849, 851
+    in the hour read — and a card of a sleeve that trades on prints made 9,060 intents
+    over twenty minutes of them read whole and 9,064 read by the hour. Handed the file list
+    instead, the catalog reads with its dataset path, which keeps each file's rows in order,
+    takes the files in the order given and sorts stably when they overlap, so the stream is
+    the vendor's order and the same at any read length: on the same day, both the prints and
+    the 10,803,349 book changes came back exactly in file order an hour at a time, in the
+    time the SQL path took. The files are one directory's, named by the interval they
+    cover, so their names sort in time order.
+
+    Engine facts this relies on (nautilus_trader 1.231.0): `query(..., files=...)` takes the
+    dataset path for every type; `filter_files` keeps the files of an identifier that
+    intersect the span; and the dataset path filters on `ts_init` inclusively at both ends,
+    as the SQL path does (re-checked by `kanso.nautilus.facts`).
+    """
+    files = sorted(
+        catalog.filter_files(
+            data_cls, catalog.get_file_list_from_data_cls(data_cls), [identifier], start, end
+        )
+    )
+    if not files:
+        return ()
+    return tuple(catalog.query(data_cls, start=start, end=end, files=files))
 
 
 Scope = tuple[frozenset[str], dict[str, set[date]]]
@@ -927,10 +968,14 @@ def execute_chunked(
     once the chunk is ordered, and the ordered stream once it has run, so the next chunk
     is unpickled beside nothing of this one. Every chunk is checked as the whole window
     was: a point outside the window is refused, and so is a split the window holds and no
-    definition schedules. The cross-section markers are the chunk's own and follow the
-    hypothesis's rule (`kanso.nautilus.cross_section.coincident`), and the sleeve is held
-    for them from the first chunk on, which is the same dispatch the whole window gets
-    because a chunk boundary falls between instants, never inside one.
+    definition schedules, and under a hypothesis that holds the book, a UTC day holding a
+    name's market data and no change of its book (`_refuse_unbooked`). The cross-section
+    markers are the chunk's own and follow the hypothesis's rule
+    (`kanso.nautilus.cross_section.coincident`), and the sleeve is held for them from the
+    first chunk on — even a first chunk holding no marker, such as the book changes of an
+    hour before the first print, because a sleeve subscribes to markers when it starts, on
+    the first chunk — which is the same dispatch the whole window gets because a chunk
+    boundary falls between instants, never inside one.
 
     Engine facts this relies on (nautilus_trader 1.231.0): `run(streaming=True)` pauses
     after the data it holds is exhausted without finalising; `clear_data` drops the stream
@@ -1008,8 +1053,8 @@ def execute_chunked(
         opens, closes = request.delivered
         marked = coincident(request.hyp)
         book = BOOK in request.hyp.data_requirements
-        fed: set[str] = set()
-        changed: set[str] = set()
+        fed: dict[int, set[Any]] = {}
+        changed: dict[int, set[Any]] = {}
         ran = False
         for groups in chunks:
             splits.unscheduled(instruments, chain.from_iterable(groups), request.span)
@@ -1018,9 +1063,11 @@ def execute_chunked(
             marks.take(points)
             if not points:
                 continue
+            if book:
+                _refuse_unbooked(request, fed, changed, before=int(points[0].ts_init))  # type: ignore[attr-defined]
+                _book_days(points, fed, changed)
             strategy._hold_until_cross_section = marked or any(is_marker(p) for p in points)
-            fed.update(name for name in map(_instrument_of, points) if name is not None)
-            changed |= _load_stream(engine, points, book=book)
+            _load_stream(engine, points, book=book)
             del points
             engine.run(start=opens, end=closes - 1, streaming=True)
             ran = True
@@ -1029,7 +1076,7 @@ def execute_chunked(
             engine.clear_data()
         marks.check()
         if book:
-            _refuse_unbooked(request, fed - changed)
+            _refuse_unbooked(request, fed, changed)
         if ran:
             engine.end()
         card = _extract(request, engine, marks)
@@ -1047,18 +1094,86 @@ def execute_chunked(
     )
 
 
-def _refuse_unbooked(request: RunRequest, unbooked: Iterable[str]) -> None:
-    """A hypothesis that holds the book, over a window holding a name's points and none of
-    its book's changes, is refused: its venue would match that name against no book at all.
-    The engine makes this refusal of each stream it runs; a card's window is many streams,
-    and a chunk without a change is not a window without one (`_load_stream`)."""
-    missing = sorted(unbooked)
+def book_held(request: RunRequest, groups: Sequence[Sequence[object]]) -> None:
+    """Refuse a window handed whole, as `execute_chunked` refuses one chunk by chunk, when
+    the hypothesis holds the book and a UTC day of it holds a name's market data and no
+    change of that name's book (`_refuse_unbooked`). The replay path asks this of its window
+    before it builds a node, so a replay refuses what a card refuses."""
+    from kanso.nautilus.cross_section import BOOK
+
+    if BOOK not in request.hyp.data_requirements:
+        return
+    fed: dict[int, set[Any]] = {}
+    changed: dict[int, set[Any]] = {}
+    for group in groups:
+        _book_days(group, fed, changed)
+    _refuse_unbooked(request, fed, changed)
+
+
+def _book_days(
+    points: Sequence[object], fed: dict[int, set[Any]], changed: dict[int, set[Any]]
+) -> None:
+    """Add to `fed` the instruments each UTC day of this stream holds market data for — bars,
+    quotes, prints or book changes — and to `changed` those whose book it changed that day;
+    both keyed by the day's number since the epoch."""
+    from nautilus_trader.model.data import (
+        Bar,
+        OrderBookDelta,
+        OrderBookDeltas,
+        QuoteTick,
+        TradeTick,
+    )
+
+    for point in points:
+        kind = type(point)
+        if kind is OrderBookDeltas or kind is OrderBookDelta:
+            name = point.instrument_id  # type: ignore[attr-defined]
+            changed.setdefault(int(point.ts_init) // NS_PER_DAY, set()).add(name)  # type: ignore[attr-defined]
+        elif kind is Bar:
+            name = point.bar_type.instrument_id  # type: ignore[attr-defined]
+        elif kind is TradeTick or kind is QuoteTick:
+            name = point.instrument_id  # type: ignore[attr-defined]
+        else:
+            continue
+        fed.setdefault(int(point.ts_init) // NS_PER_DAY, set()).add(name)  # type: ignore[attr-defined]
+
+
+def _refuse_unbooked(
+    request: RunRequest,
+    fed: dict[int, set[Any]],
+    changed: dict[int, set[Any]],
+    *,
+    before: int | None = None,
+) -> None:
+    """A hypothesis that holds the book is refused a UTC day that holds a name's market data
+    and none of its book's changes: its venue would match that day's prints against the book
+    the day before left, or against none. Asked of every day before `before` — a chunk's
+    first instant, once every chunk of those days has been seen — and of every day once the
+    window has run; the days asked are let go.
+
+    The engine refuses a stream holding an instrument's data and none of its book data, and
+    a run fed a day at a time was refused that way a day at a time. A card read an hour at a
+    time is fed streams of an hour, of which a quiet one can hold prints after the book's
+    last change, so the engine's check is turned off for those (`_load_stream`) and made
+    here, a day at a time, as it was.
+    """
+    days = sorted(day for day in fed if before is None or day < int(before) // NS_PER_DAY)
+    missing: dict[str, list[date]] = {}
+    for day in days:
+        for name in fed.pop(day) - changed.pop(day, set()):
+            missing.setdefault(str(name), []).append(day_of(day * NS_PER_DAY))
     if missing:
+        named = "; ".join(
+            f"{name} on {', '.join(str(day) for day in found)}"
+            for name, found in sorted(missing.items())
+        )
+        first = min(day for found in missing.values() for day in found)
+        last = max(day for found in missing.values() for day in found)
         raise PreconditionError(
-            f"data: {request.hyp.id} holds the book, and the window "
-            f"{request.span[0]}..{request.span[1]} holds no book change for "
-            f"{', '.join(missing)}",
-            remedy="load the book for the window with `kanso data load`, then take a snapshot",
+            f"data: {request.hyp.id} holds the book, and the catalog holds market data and no "
+            f"book change for {named}",
+            remedy=f"load the book for {', '.join(sorted(missing))} over {first}..{last} with "
+            "`kanso data load`, then take a snapshot",
         )
 
 
@@ -1390,9 +1505,8 @@ def _ordered(groups: Sequence[Sequence[object]], *, coincident: bool = False) ->
     return ordered(groups, coincident=coincident)
 
 
-def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -> set[str]:
-    """Add the ordered stream in homogeneous type runs, then sort once; return the
-    instruments whose book this stream changed.
+def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -> None:
+    """Add the ordered stream in homogeneous type runs, then sort once.
 
     The engine assumes one type per `add_data` call. Markers are `CustomData` and need
     `CLIENT_ID`; bars, quotes and trades do not. Consecutive same-type runs keep the
@@ -1403,10 +1517,10 @@ def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -
     book this stream does not change is added without the engine's validation, whose one
     consequence here is that it refuses to run a stream holding an instrument's prints and
     none of its book changes. A chunk of a window can be exactly that — the prints after the
-    last change of an hour — so the refusal is the window's, made once every chunk has run
-    (`execute_chunked`), not the chunk's. Nothing else validation does is lost: the venue's
-    market-data client was registered when the venue was added, and every instrument was
-    added before any point.
+    last change of an hour — so the refusal is made of each UTC day instead, as it was when a
+    run was fed a day at a time (`_refuse_unbooked`). Nothing else validation does is lost:
+    the venue's market-data client was registered when the venue was added, and every
+    instrument was added before any point.
     """
     from nautilus_trader.model.data import (
         Bar,
@@ -1418,7 +1532,7 @@ def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -
     from nautilus_trader.model.identifiers import ClientId
 
     if not points:
-        return set()
+        return
     booked = {
         str(point.instrument_id)
         for point in points
@@ -1444,7 +1558,6 @@ def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -
         run.append(point)
     add(run)
     engine.sort_data()
-    return booked
 
 
 # --- the extraction ----------------------------------------------------------
@@ -1997,11 +2110,13 @@ def _stream(
     one after it is one chunk of the window's points grouped one type per group, and the
     last is `END`. The window is read a span at a time — an hour of a window of prints,
     quotes or a book, a day of any other, aligned to UTC midnight — and each read is cut
-    into chunks of at most `CHUNK_POINTS` points between instants (`_cut`), so neither the
-    parent nor the child holds more than a read and a chunk of it. Measured on 2026-10-02
-    before this: a day of one perpetual swap's three-level book and prints, read and pickled a day
-    at a time, was 4.5 GB in the child and 4.8 GB in the parent, and a 45-day window of it
-    was 22.8 GB on disk before the card began.
+    into chunks of at most `CHUNK_POINTS` points between instants (`_cut`): the parent holds
+    the read until every chunk cut from it is written, and the child the chunk it runs, so
+    neither holds more than a read and a chunk of it. Estimated on 2026-10-02 before this,
+    from bytes per object times rows rather than from a card run: a day of one perpetual
+    swap's three-level book and prints, read and pickled a day at a time, would have been
+    4.5 GB in the child and 4.8 GB in the parent, and a 45-day window of it 22.8 GB on disk
+    before the card began.
 
     The refusals only the whole window can make are made once it has been read, before
     `END`: an overlay grain the catalog does not hold, and a window it holds nothing for.
@@ -2054,9 +2169,10 @@ def _cut(groups: Sequence[Sequence[object]], cap: int) -> Iterator[tuple[tuple[o
     together are walked in order and a chunk closes at the last instant that keeps it at
     or under `cap` — or after its first instant, when that instant alone holds more — so
     every point of an instant is in one chunk. Each group keeps its own order and its
-    place among the groups, which is what the engine's stable sort orders an instant by,
-    so a window cut anywhere is delivered exactly as it is whole; a group a chunk holds
-    nothing of is left out of it.
+    place among the groups, which is what the engine's stable sort orders an instant by;
+    and a read returns an instant's points in the same order whatever span it covers
+    (`_in_file_order`), so a window cut anywhere is delivered exactly as it is whole. A
+    group a chunk holds nothing of is left out of it.
     """
     if sum(len(group) for group in groups) <= cap:
         if groups:
@@ -2173,13 +2289,12 @@ def watched(
             start_new_session=True,
         )
         pipe = child.stdin
-        fed = None if pipe is None or feed is None else _Feed(pipe.fileno(), feed)
+        fed = None if pipe is None or feed is None else _Feed(pipe, feed)
         try:
             breach, peak_gb = _watch(child, budget_s, mem_cap_gb, feed=fed)
         finally:
-            if pipe is not None and fed is not None:
+            if fed is not None:
                 fed.close()
-                pipe.close()
     return breach, peak_gb, time.monotonic() - started
 
 
@@ -2192,13 +2307,18 @@ class _Feed:
     thread that opened it. A step writes at most `FEED_BYTES` of the record in hand, once
     the pipe will take some of it, or waits up to the poll for it to; only once a record is
     wholly written is the next one asked for, so the parent holds one record beside the read
-    it was cut from and the child one chunk beside the next it unpickles. The pipe is closed
-    once the stream ends. A child that stops reading — it crashed, or ended itself — breaks
-    the pipe, and the feed then goes quiet and leaves the watch to reap it.
+    it was cut from and the child one chunk beside the next it unpickles. The feed owns the
+    pipe, and closes it the moment the stream ends, so the child reads the end of its input
+    there whether or not the stream's last record was `END` — a stream that stopped short is
+    refused by the child (`_chunks`) rather than waited on. A child that stops reading — it
+    crashed, or ended itself — breaks the pipe, and the feed then closes it, goes quiet and
+    leaves the watch to reap the child.
     """
 
-    def __init__(self, fd: int, payload: Iterator[bytes]) -> None:
+    def __init__(self, pipe: IO[bytes], payload: Iterator[bytes]) -> None:
+        fd = pipe.fileno()
         os.set_blocking(fd, False)
+        self._pipe = pipe
         self._fd = fd
         self._ready = select.poll()  # not `select.select`, which refuses a descriptor past 1023
         self._ready.register(fd, select.POLLOUT)
@@ -2230,9 +2350,12 @@ class _Feed:
         self._pending = self._pending[written:]
 
     def close(self) -> None:
-        """Stop writing, and let go of the stream and whatever it still holds."""
+        """Stop writing, close the pipe, and let go of the stream and whatever it still
+        holds. Closing twice is closing once."""
         self._done = True
         self._pending = memoryview(b"")
+        with contextlib.suppress(BrokenPipeError):  # nothing is buffered; a gone reader is gone
+            self._pipe.close()
         close = getattr(self._payload, "close", None)
         if close is not None:
             close()

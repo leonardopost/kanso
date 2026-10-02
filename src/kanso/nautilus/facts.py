@@ -51,6 +51,20 @@ exposes `get_schema`, `list_schemas`, `ArrowSerializer.serialize_batch` and
 directory layout directly. The engine offers the schemas; it does not offer the
 writer.
 
+**The SQL query does not keep an instant's points in file order; a query handed its files
+does.** `query` reads a built-in type through DataFusion with `ORDER BY ts_init`, and that
+sort is not stable: the points of one instant come back in an order that depends on the span
+asked for. Measured on a day of OKX BTC-USDT-SWAP prints, 79 of 524,932 instants came back
+reordered read an hour at a time against read whole — trade ids 848, 849, 850, 851 in the file,
+848, 850, 849, 851 in the hour — and a synthetic file of 30,000 prints holding 1 to 40 to an
+instant came back out of file order read whole. Given `files=`, `query` takes the dataset
+path for every type: it reads the files in the order given, each in its own row order,
+filters `ts_init` inclusively at both ends and sorts only when the rows are out of
+`ts_init` order, with a stable sort. `filter_files(data_cls, get_file_list_from_data_cls(data_cls),
+[identifier], start, end)` names one identifier's files that intersect a span, and their
+names, the interval each covers, sort in time order. kanso reads quotes, prints and book
+changes that way (`kanso.nautilus.backtest._in_file_order`).
+
 Availability timestamps
 -----------------------
 Every `Data` carries two nanosecond timestamps, `ts_event` (the economic
@@ -1716,6 +1730,68 @@ def _check_catalog_orders_by_ts_init() -> tuple[bool, str]:
     )
 
 
+def _check_files_keep_an_instant_in_file_order() -> tuple[bool, str]:
+    """Write 30,000 prints holding 1 to 40 to an instant, ten seconds apart, and read them
+    back through `query(files=...)` whole and in five spans cut at instants."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    equity: Any = _sample_equity()
+    second = 1_000_000_000
+    stamps: list[int] = []
+    cohort = 0
+    while len(stamps) < 30_000:
+        stamps += [second * (1 + 10 * cohort)] * (1 + cohort * 7_919 % 40)
+        cohort += 1
+    stamps = stamps[:30_000]
+    prints = [
+        TradeTick(
+            equity.id,
+            Price(10.0, 2),
+            Quantity.from_int(1),
+            AggressorSide.BUYER,
+            TradeId(str(index)),
+            ts,
+            ts,
+        )
+        for index, ts in enumerate(stamps)
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        catalog = ParquetDataCatalog(directory)
+        catalog.write_data([equity])
+        catalog.write_data(prints)
+        identifier = str(equity.id)
+
+        def read(start: int, end: int) -> list[str]:
+            files = sorted(
+                catalog.filter_files(
+                    TradeTick,
+                    catalog.get_file_list_from_data_cls(TradeTick),
+                    [identifier],
+                    start,
+                    end,
+                )
+            )
+            found = catalog.query(TradeTick, start=start, end=end, files=files)
+            return [str(point.trade_id) for point in found]
+
+        cuts = [stamps[0], *(stamps[len(stamps) * k // 5] for k in range(1, 5)), stamps[-1] + 1]
+        whole = read(stamps[0], stamps[-1])
+        spans = [read(start, end - 1) for start, end in zip(cuts, cuts[1:], strict=False)]
+    in_file = [str(index) for index in range(len(stamps))]
+    pieced = [trade for span in spans for trade in span]
+    holds = whole == in_file and pieced == in_file
+    return holds, (
+        f"{len(stamps)} prints, 1 to 40 an instant, read through query(files=...): whole "
+        f"{'in' if whole == in_file else 'out of'} file order, and in five spans cut at "
+        f"instants {'in' if pieced == in_file else 'out of'} file order, "
+        f"{len(pieced)} prints in all"
+    )
+
+
 def _check_engine_orders_by_ts_init() -> tuple[bool, str]:
     from nautilus_trader.backtest.engine import BacktestDataIterator
 
@@ -3047,6 +3123,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "the catalog filters and orders every query by ts_init",
         _check_catalog_orders_by_ts_init,
+    ),
+    (
+        "a catalog query handed its files returns the points of one instant in file order, "
+        "whatever span it reads, with ts_init inclusive at both ends",
+        _check_files_keep_an_instant_in_file_order,
     ),
     (
         "the backtest engine sorts, merges and clocks its data stream by ts_init",

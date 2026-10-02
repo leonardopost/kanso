@@ -574,6 +574,84 @@ def _tick_store(root: Path) -> Path:
     return catalog(root, [point for group in tick_groups() for point in group], [instrument()])
 
 
+def _session(day: Any, *, booked: bool, shift: int = 0) -> list[object]:
+    """A book opened at noon, 10.00 bid and 10.02 offered (plus `shift` cents), when
+    `booked`; and nineteen prints of 30 seven minutes apart after it, buyers' at the offer and
+    sellers' at the bid in turn, so the session's last two hours hold prints and no change."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide, BookAction, OrderSide
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    from kanso.criteria.run import midnight_ns
+    from kanso.data.loaders.points import make_delta
+
+    from .conftest import SECOND_NS, SYMBOL, _venue
+
+    ident = InstrumentId(Symbol(SYMBOL), _venue())
+    base = midnight_ns(day) + 12 * 3_600 * SECOND_NS
+    bid, ask = 1_000 + shift, 1_002 + shift
+    made: list[object] = []
+    if booked:
+        made += [
+            make_delta(ident, BookAction.ADD, OrderSide.BUY, bid, 50, 0, 2, 0, base, base),
+            make_delta(ident, BookAction.ADD, OrderSide.SELL, ask, 50, 0, 2, 0, base, base),
+        ]
+    for event in range(1, 20):
+        ts = base + event * 420 * SECOND_NS + 1_000_000
+        px, side = (bid, AggressorSide.SELLER) if event % 2 == 0 else (ask, AggressorSide.BUYER)
+        made.append(
+            TradeTick(
+                ident,
+                Price(px / 100, 2),
+                Quantity.from_int(30),
+                side,
+                TradeId(f"{day:%m%d}-{event}"),
+                ts_event=ts,
+                ts_init=ts,
+            )
+        )
+    return made
+
+
+def test_a_day_of_prints_without_its_book_is_refused_however_the_window_is_read(
+    tmp_path: Path, lane: Path, request_for
+) -> None:
+    """A book hypothesis whose window holds a day's prints and none of that day's book changes
+    — its book archive missing, and the market three dollars on — is refused that day, read
+    whole or an hour at a time, rather than matched against the book the day before left.
+    Measured before this: streamed an hour or a day at a time, the card ran, and its venue
+    matched the second day's prints against the first day's book. Hours of prints after a
+    day's last change, inside a day that holds its book, are not refused."""
+    from kanso.errors import PreconditionError
+
+    from .conftest import POSTER, TICK_DAYS, catalog, instrument, tick_hypothesis
+
+    first, second = TICK_DAYS
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(0.0))
+    whole_day = catalog(tmp_path / "first", _session(first, booked=True), [instrument()])
+    gap = catalog(
+        tmp_path / "gap",
+        [*_session(first, booked=True), *_session(second, booked=False, shift=300)],
+        [instrument()],
+    )
+
+    alone = run_subprocess(request, whole_day, lane)
+    assert not alone.crashed, alone.traceback_tail
+    assert alone.run.fills, "the first day trades, its last two hours prints alone"
+
+    with pytest.raises(PreconditionError, match=f"no book change for DEMO.XNAS on {second}"):
+        run(request, gap)
+    carded = run_subprocess(request, gap, lane)
+
+    assert carded.crashed
+    assert carded.traceback_tail is not None and f"DEMO.XNAS on {second}" in carded.traceback_tail
+    assert carded.remedy == (
+        f"load the book for DEMO.XNAS over {second}..{second} with `kanso data load`, "
+        "then take a snapshot"
+    )
+
+
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identical_card(
     tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch, latency_ms: float
@@ -623,6 +701,47 @@ def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identic
     assert len(carded["hour"][2]) == 10, "five hours a session"
     assert max(carded["hour, seven points"][2]) <= 7
     assert len(carded["hour, seven points"][2]) > len(carded["hour"][2])
+
+
+def test_a_tick_window_whose_first_hour_holds_only_book_changes_gives_the_identical_card(
+    tmp_path: Path, lane: Path, request_for
+) -> None:
+    """A book that opens an hour before the first print: read an hour at a time, the card's
+    first chunk is two book changes and no marker, and the sleeve still has to be held for
+    the markers of every chunk after it, because it subscribes to them as it starts. Held only
+    from the first chunk that carries a marker, the same card made two fills and two orders
+    fewer than the window run whole."""
+    from nautilus_trader.model.enums import BookAction, OrderSide
+
+    from kanso.data.loaders.points import make_delta
+
+    from .conftest import (
+        POSTER,
+        SECOND_NS,
+        TICK_DAYS,
+        catalog,
+        instrument,
+        tick_hypothesis,
+        ticking,
+    )
+
+    book, made = ticking(TICK_DAYS[0])
+    opens = int(book[0].ts_init) - 3_600 * SECOND_NS  # type: ignore[attr-defined]
+    ident = book[0].instrument_id  # type: ignore[attr-defined]
+    book = [
+        make_delta(ident, BookAction.ADD, OrderSide.BUY, 1_000, 50, 0, 2, 0, opens, opens),
+        make_delta(ident, BookAction.ADD, OrderSide.SELL, 1_002, 50, 0, 2, 0, opens, opens),
+        *book[2:],
+    ]
+    store = catalog(tmp_path / "early", [*book, *made], [instrument()])
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(20.0))
+
+    whole = run(request, store)
+    carded = run_subprocess(request, store, lane)
+
+    assert whole.run.fills
+    assert not carded.crashed, carded.traceback_tail
+    assert (carded.run, carded.intents) == (whole.run, whole.intents)
 
 
 def test_a_bar_window_cut_below_a_day_gives_the_identical_card(
@@ -827,10 +946,9 @@ def test_the_parent_reads_a_chunk_only_once_the_last_one_is_written() -> None:
 
     reader = threading.Thread(target=slow_reader)
     reader.start()
-    feed = runner._Feed(write_fd, payload())
+    feed = runner._Feed(os.fdopen(write_fd, "wb"), payload())
     while not feed._done:
         feed.step(0.01)
-    os.close(write_fd)
     reader.join(timeout=30)
     os.close(read_fd)
 
@@ -855,12 +973,60 @@ def test_a_feed_whose_reader_is_gone_goes_quiet() -> None:
 
     read_fd, write_fd = os.pipe()
     os.close(read_fd)
-    feed = runner._Feed(write_fd, payload())
+    pipe = os.fdopen(write_fd, "wb")
+    feed = runner._Feed(pipe, payload())
     feed.step(0.01)
     feed.step(0.01)
-    os.close(write_fd)
 
     assert feed._done and closed == [True]
+    assert pipe.closed
+
+
+def test_a_feed_closes_the_pipe_the_moment_its_stream_ends() -> None:
+    """The child reads the end of its input as soon as the stream ends, whether or not the
+    stream's last record was `END`, so a stream that stopped short is refused by the child
+    rather than waited on. Before this the pipe stayed open until the child had exited, and a
+    stream with no `END` left the child waiting on its input until it was killed."""
+    from kanso.nautilus import backtest as runner
+
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    pipe = os.fdopen(write_fd, "wb")
+    feed = runner._Feed(pipe, iter([b"a record"]))
+    while not feed._done:
+        feed.step(0.01)
+
+    try:
+        assert os.read(read_fd, 64) == b"a record"
+        assert os.read(read_fd, 64) == b"", "the reader is at the end of its input"
+    finally:
+        os.close(read_fd)
+    feed.close()
+    assert pipe.closed
+
+
+def test_a_card_whose_stream_ends_without_its_end_is_refused_not_waited_on(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stream that ends without `END` closes the child's input, and the child refuses the
+    window as cut short; the card does not run on to its time budget."""
+    import pickle
+
+    from kanso.nautilus import backtest as runner
+
+    stream = runner._stream
+
+    def short(*args: Any) -> Any:
+        for record in stream(*args):
+            if pickle.loads(record) != runner.END:
+                yield record
+
+    monkeypatch.setattr(runner, "_stream", short)
+    carded = run_subprocess(request_for(budget_s=30.0), store, lane)
+
+    assert carded.crashed
+    assert carded.reason != runner.BUDGET
+    assert carded.traceback_tail is not None and "stopped before its end" in carded.traceback_tail
 
 
 def test_a_stream_cut_before_its_end_is_not_a_card(

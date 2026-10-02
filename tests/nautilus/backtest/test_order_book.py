@@ -212,8 +212,9 @@ def test_the_author_never_sees_a_book_mid_batch(request_for) -> None:
 def test_a_window_with_prints_and_no_book_for_a_name_is_refused(request_for) -> None:
     """A hypothesis that holds the book, handed a window of prints with no change to the
     book: its venue would match against no book at all, so the run is refused, naming the
-    name and the load that fixes it. The engine refuses this of each stream it runs; a
-    window is checked whole, because one chunk of it may hold an hour's last prints alone."""
+    name, the day and the load that fixes it. The engine refuses this of each stream it
+    runs; a window is checked a UTC day at a time, because one chunk of it may hold an hour's
+    last prints alone."""
     import pytest
 
     from kanso.errors import PreconditionError
@@ -222,7 +223,26 @@ def test_a_window_with_prints_and_no_book_for_a_name_is_refused(request_for) -> 
     document.update(resolution="tick", data_requirements=["book", "trade"])
     request = request_for(RESEARCH, source=JOINING, hypothesis_=Hypothesis.model_validate(document))
 
-    with pytest.raises(PreconditionError, match="no book change for DEMO.XNAS") as refused:
+    with pytest.raises(PreconditionError, match="no book change for DEMO.XNAS on ") as refused:
         execute(request, [instrument()], [tuple(prints(RESEARCH[0]))])
 
     assert "kanso data load" in str(refused.value.remedy)
+
+
+def test_a_day_of_bars_without_its_book_is_refused_too(request_for) -> None:
+    """Bars are market data a book hypothesis's venue matches against the book, as prints
+    are: a day holding a name's bar and no change of its book is refused the same way."""
+    import pytest
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus.backtest import book_held
+
+    from .conftest import bars
+
+    document = hypothesis().model_dump(mode="json")
+    document.update(data_requirements=["bar", "book"])
+    request = request_for(RESEARCH, hypothesis_=Hypothesis.model_validate(document))
+    daily = tuple(bars(RESEARCH))[:1]
+
+    with pytest.raises(PreconditionError, match=r"no book change for DEMO\.XNAS on 2024-01-0"):
+        book_held(request, [daily])

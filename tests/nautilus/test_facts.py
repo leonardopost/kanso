@@ -76,6 +76,8 @@ BINDINGS = {
     "an OrderBookDeltas is applied whole by the simulated exchange and matched once",
     "the data engine publishes an OrderBookDeltas whole, after its book has applied it, "
     "and a lone OrderBookDelta as a batch of one",
+    "a catalog query handed its files returns the points of one instant in file order, "
+    "whatever span it reads, with ts_init inclusive at both ends",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
