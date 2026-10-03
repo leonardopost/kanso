@@ -20,6 +20,7 @@ from tests.replay.conftest import (
     FLAT,
     RAISING,
     REVERTING,
+    bars,
     composed,
     document,
     hypothesis,
@@ -245,16 +246,18 @@ def test_a_warmed_stage_trades_from_its_first_session_and_claims_only_the_window
     ws: Workspace, store: StateStore
 ) -> None:
     from kanso.replay import record
+    from kanso.replay.record import Point
 
     deployable(ws, store, "warm", sleeve=REVERTING, doc=WARMED)
 
     made = deploy(ws, store, "paper")
 
     assert made.session is not None
-    stream = record.stream_of(ws, made.session.session_id)
-    assert made.session.released == len(stream) == 31, "March, and not a day of February"
-    assert stream[0].ts_event == bar_close_ns(1) < stream[0].ts_init
-    assert made.session.clock_ns == stream[-1].ts_init
+    march = bars((date(2024, 3, 1), date(2024, 3, 31)))
+    assert made.session.released == 31, "March, and not a day of February"
+    assert made.session.stream_sha256 == record.digest(Point.of(bar) for bar in march)
+    assert march[0].ts_event == bar_close_ns(1) < march[0].ts_init
+    assert made.session.clock_ns == march[-1].ts_init
     assert made.results[0].run.window[0].isoformat() == "2024-03-01"
     assert first_intent_of(ws, made.session.session_id) == bar_close_ns(1), (
         "warmed on February's last three sessions it buys March's first bar, a trough; "
@@ -286,6 +289,7 @@ def test_a_restart_warms_on_the_sessions_at_or_before_its_clock(
 ) -> None:
     """Restarted flat mid-window, the node re-warms on what it replayed and trades on."""
     from kanso.replay import record
+    from kanso.replay.record import Point
 
     deployable(ws, store, "warm", sleeve=REVERTING, doc=WARMED)
     deploy(ws, store, "paper")
@@ -294,10 +298,11 @@ def test_a_restart_warms_on_the_sessions_at_or_before_its_clock(
     made = deploy(ws, store, "paper")
 
     assert made.session is not None
-    stream = record.stream_of(ws, made.session.session_id)
-    assert made.session.released == len(stream) == 16, "March 16 through 31"
-    assert stream[0].ts_init > MARCH_15_CLOSE_NS
-    assert made.session.clock_ns == stream[-1].ts_init
+    rest = bars((date(2024, 3, 16), date(2024, 3, 31)))
+    assert made.session.released == 16, "March 16 through 31"
+    assert made.session.stream_sha256 == record.digest(Point.of(bar) for bar in rest)
+    assert rest[0].ts_init > MARCH_15_CLOSE_NS
+    assert made.session.clock_ns == rest[-1].ts_init
     assert first_intent_of(ws, made.session.session_id) == bar_close_ns(17), (
         "warmed on the 13th to the 15th it sees the fall through the 17th and buys; cold "
         "it would have its third close on the 18th and the next trough on the 21st"

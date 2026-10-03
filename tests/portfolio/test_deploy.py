@@ -402,6 +402,7 @@ def test_a_stage_session_stream_omits_flush_markers(ws: Workspace, store: StateS
     from kanso.nautilus.node import StageRun
     from kanso.portfolio.deploy import _session
     from kanso.replay import record
+    from kanso.replay.record import Point
     from kanso.schemas import Stage
     from tests.nautilus.strategy.conftest import DEMO, HEDGE, bar
 
@@ -419,9 +420,7 @@ def test_a_stage_session_stream_omits_flush_markers(ws: Workspace, store: StateS
     )
 
     written = _session(ws, store, "paper", Stage(exec="sandbox", capital=100_000.0), (), ran)
-    stream = record.stream_of(ws, written.session_id)
 
-    assert written.released == 2
-    assert len(stream) == 2
-    assert {point.type for point in stream} == {"Bar"}
-    assert [point.instrument for point in stream] == [str(DEMO), str(HEDGE)]
+    assert len(points) > len(market) == written.released == 2
+    assert written.stream_sha256 == record.digest(Point.of(point) for point in (first, second))
+    assert written.stream_sha256 != record.digest(Point.of(point) for point in points)

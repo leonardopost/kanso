@@ -65,6 +65,9 @@ ModeOption = Annotated[str, typer.Option("--mode", metavar="MODE", help="`node` 
 MODE, LABEL = 8, 24
 """Widths of the mode and target columns of the human session list."""
 
+UNHASHED = "not recorded"
+"""What a session written before kanso kept the stream's digest shows in its place."""
+
 
 @app.command("run")
 def run_command(
@@ -198,8 +201,8 @@ def _parity(
     data: dict[str, Any] = found.payload()
     lines = (
         field("parity", "identical" if found.divergence is None else found.divergence.render()),
-        field("node", f"{found.node} · {len(found.node_orders)} intent(s)"),
-        field("engine", f"{found.engine} · {len(found.engine_orders)} intent(s)"),
+        field("node", _path(found.node, found.node_released, len(found.node_orders))),
+        field("engine", _path(found.engine, found.engine_released, len(found.engine_orders))),
         field("compared", f"{found.compared} · tolerance {found.ts_ns} ns"),
         field("widest", f"{found.max_ts_delta_ns} ns apart"),
     )
@@ -237,8 +240,13 @@ def _target(strategy: str | None) -> tuple[str | None, int | None]:
     return target(strategy)
 
 
+def _path(session_id: str, released: int, intents: int) -> str:
+    """One code path's half of a parity result: its session, what it was fed, what it sent."""
+    return f"{session_id} · {released} point(s) · {intents} intent(s)"
+
+
 def _session_dir(ws: Workspace, session: Session) -> Any:
-    """Where a session's record and its two streams live."""
+    """Where a session's record and its intents live."""
     from kanso.replay.record import session_dir
 
     return session_dir(ws, session.session_id)
@@ -252,7 +260,10 @@ def _session_lines(ws: Workspace, session: Session) -> tuple[str, ...]:
             "range",
             f"{session.from_}..{session.to} · speed {session.speed:g} · exec {session.exec_}",
         ),
-        field("stream", f"{session.released} point(s) · {session.intents} intent(s)"),
+        field(
+            "stream", f"{session.released} point(s) · sha256 {session.stream_sha256 or UNHASHED}"
+        ),
         indent(", ".join(session.instruments)),
+        field("intents", str(session.intents)),
         field("written", _session_dir(ws, session)),
     )

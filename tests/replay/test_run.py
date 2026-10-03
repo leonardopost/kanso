@@ -14,6 +14,7 @@ from kanso import replay
 from kanso.criteria.run import midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.replay import record
+from kanso.replay.record import Point
 from kanso.replay.run import REPLAYED
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -23,10 +24,16 @@ from tests.replay.conftest import (
     FORWARD_START,
     INSTRUMENT,
     RAISING,
+    bars,
     carded,
     composed,
     document,
 )
+
+
+def stream(window: tuple[date, date] = FORWARD) -> str:
+    """The digest of the daily bars a replay of this window releases, in feed order."""
+    return record.digest(Point.of(bar) for bar in bars(window))
 
 
 def test_replays_the_forward_window_by_default(
@@ -56,14 +63,12 @@ def test_a_replay_trades_and_records_its_intents(
 def test_the_stream_is_the_points_that_were_released(
     ws: Workspace, store: StateStore, carded_hyp: str
 ) -> None:
-    """Every released point is on the record, in availability order."""
+    """Every released point is in the digest, in availability order, and none is written."""
     session = replay.run(ws, store, hyp=carded_hyp)
-    stream = record.stream_of(ws, session.session_id)
 
-    assert len(stream) == session.released
-    assert [point.ts_init for point in stream] == sorted(point.ts_init for point in stream)
-    assert {point.type for point in stream} == {"Bar"}
-    assert session.clock_ns == stream[-1].ts_init
+    assert session.stream_sha256 == stream()
+    assert session.clock_ns == bars(FORWARD)[-1].ts_init
+    assert not (record.session_dir(ws, session.session_id) / "stream.jsonl").exists()
 
 
 def test_both_paths_replay_their_window_in_a_card_s_chunks_and_agree(
@@ -71,7 +76,9 @@ def test_both_paths_replay_their_window_in_a_card_s_chunks_and_agree(
 ) -> None:
     """Neither path reads its window whole: each is handed the chunks a card's child is
     streamed, read a day at a time here and cut to one bar a chunk, and the two still
-    submit the same orders and record the same stream as a replay of uncut days does.
+    submit the same orders and record the digest of the same stream as a replay of uncut
+    days does, the window's own; and the parity leaves each session its record and its
+    intents, with no stream written anywhere under `sessions/`.
 
     Measured before this on a perpetual swap's three-level book and prints: `kanso replay
     parity` over one day of BTC reached a 6.0 GB footprint and was stopped, and two days of a
@@ -98,27 +105,37 @@ def test_both_paths_replay_their_window_in_a_card_s_chunks_and_agree(
 
     assert found.identical and found.compared > 0
     assert set(chunks) == {1} and len(chunks) == 2 * uncut[replay.NODE].released
+    assert found.node_stream == found.engine_stream == stream()
     for mode, session_id in ((replay.NODE, found.node), (replay.ENGINE, found.engine)):
         assert record.intents_of(ws, session_id) == record.intents_of(ws, uncut[mode].session_id)
-        assert record.stream_of(ws, session_id) == record.stream_of(ws, uncut[mode].session_id)
-    assert not [path for path in record.sessions_path(ws).iterdir() if path.is_file()], (
-        "a stream spooled while the session ran is moved into it, not left beside it"
-    )
+        assert record.read(ws, session_id).stream_sha256 == uncut[mode].stream_sha256 == stream()
+    directory = record.sessions_path(ws)
+    sessions = {found.node, found.engine} | {made.session_id for made in uncut.values()}
+    assert sorted(path.name for path in directory.iterdir()) == sorted(sessions)
+    for held in directory.iterdir():
+        assert sorted(path.name for path in held.iterdir()) == [
+            record.INTENTS_FILE,
+            record.SESSION_FILE,
+        ], "a session keeps its record and its intents, and no stream is written beside them"
 
 
-def test_a_replay_refused_part_way_leaves_no_spooled_stream(
+def test_a_replay_refused_part_way_leaves_nothing_in_sessions(
     ws: Workspace, store: StateStore, carded_hyp: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A window refused after the session has begun recording leaves no session and no file
-    of the stream it had begun: the refusal is what the operator gets."""
+    """A window refused after three days have been released leaves no session and nothing
+    of the stream it had taken: the refusal is what the operator gets. Nothing is on disk
+    at the moment of the refusal either, which is what a replay killed there would leave."""
     from kanso.nautilus import backtest
 
     read = backtest._window_points
     reads: list[int] = []
+    held: list[list[str]] = []
 
     def refusing(*args: object) -> object:
         reads.append(1)
         if len(reads) > 3:
+            directory = record.sessions_path(ws)
+            held.append(sorted(p.name for p in directory.iterdir()) if directory.exists() else [])
             raise PreconditionError("the fourth day is not wanted", remedy="run nothing")
         return read(*args)  # type: ignore[arg-type]
 
@@ -128,6 +145,7 @@ def test_a_replay_refused_part_way_leaves_no_spooled_stream(
         with pytest.raises(PreconditionError, match="the fourth day is not wanted"):
             replay.run(ws, store, hyp=carded_hyp, mode=mode)
 
+    assert held == [[], []]
     assert replay.sessions(ws) == []
     assert not record.sessions_path(ws).exists() or not list(record.sessions_path(ws).iterdir())
 
@@ -254,8 +272,9 @@ def test_a_strategy_that_raises_stops_the_node_and_says_so(
     assert session.intents == 0
     assert events[0].detail["crashed"] is True
     assert 0 < session.released < (FORWARD[1] - FORWARD[0]).days + 1
-    assert len(record.stream_of(ws, session.session_id)) == session.released
-    assert session.clock_ns == record.stream_of(ws, session.session_id)[-1].ts_init
+    reached = bars(FORWARD)[: session.released]
+    assert session.stream_sha256 == record.digest(Point.of(bar) for bar in reached)
+    assert session.clock_ns == reached[-1].ts_init
 
 
 def test_a_strategy_that_trades_nothing_replays_cleanly(ws: Workspace, store: StateStore) -> None:
@@ -389,7 +408,7 @@ def test_a_session_can_be_replayed_from_its_own_record(
 
     assert again.session_id != first.session_id
     assert record.intents_of(ws, again.session_id) == record.intents_of(ws, first.session_id)
-    assert record.stream_of(ws, again.session_id) == record.stream_of(ws, first.session_id)
+    assert again.stream_sha256 == first.stream_sha256
     assert again.clock_ns == first.clock_ns
 
 
@@ -406,13 +425,13 @@ def test_a_warmed_target_is_fed_its_prefix_and_records_only_the_range(
     engine = replay.run(ws, store, hyp=warmed, mode=replay.ENGINE)
 
     for session in (node, engine):
-        stream = record.stream_of(ws, session.session_id)
-        assert session.released == len(stream) == (FORWARD[1] - FORWARD[0]).days + 1
-        assert stream[0].ts_init >= midnight_ns(FORWARD_START)
-        assert session.clock_ns == stream[-1].ts_init
+        assert session.released == (FORWARD[1] - FORWARD[0]).days + 1
+        assert session.stream_sha256 == stream(), "the range's own bars, not the prefix's"
+        assert session.clock_ns == bars(FORWARD)[-1].ts_init
+    assert bars(FORWARD)[0].ts_init >= midnight_ns(FORWARD_START)
     assert node.intents == engine.intents > 0
     first = min(intent.ts_event for intent in record.intents_of(ws, node.session_id))
-    assert first == record.stream_of(ws, node.session_id)[0].ts_event, (
+    assert first == bars(FORWARD)[0].ts_event, (
         "warmed, the rule trades the range's first bar, a trough; cold it would wait for "
         "its third close and the next trough, four sessions on"
     )

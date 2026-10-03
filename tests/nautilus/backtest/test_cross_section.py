@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from kanso.nautilus.backtest import _load_stream, checked, execute, run
 from kanso.nautilus.cross_section import batched, coincident, is_marker, ordered, with_cross_section
 from kanso.nautilus.session import run_node
-from kanso.replay.record import Spool
+from kanso.replay.record import Stream
 from kanso.replay.run import ENGINE, NODE, _execute
 from tests.nautilus.backtest.conftest import (
     INSTRUMENT,
@@ -117,28 +116,21 @@ def test_an_incomplete_instant_still_trades_the_silent_leg_at_last_public_close(
     assert [fill.px for fill in card.fills[:-1]] == [float(bar.close) for bar in other]
 
 
-def test_released_counts_catalog_points_not_flush_markers(request_for, tmp_path: Path) -> None:
+def test_released_counts_catalog_points_not_flush_markers(request_for) -> None:
     """Session `released` is a market-point count; slicing the marked feed by it drops bars."""
     demo, other = bars(DAYS), bars(DAYS, OTHER)
     request = request_for(source=CROSS_SLEEVE, hypothesis_=_hyp())
     instruments, groups = tuple(_instruments()), tuple(_groups())
-    node = _execute(
-        request, instruments, iter([groups]), mode=NODE, speed=0.0, sink=Spool(tmp_path / "node")
-    )
-    engine = _execute(
-        request,
-        instruments,
-        iter([groups]),
-        mode=ENGINE,
-        speed=0.0,
-        sink=Spool(tmp_path / "engine"),
-    )
+    fed = Stream(), Stream()
+    node = _execute(request, instruments, iter([groups]), mode=NODE, speed=0.0, sink=fed[0])
+    engine = _execute(request, instruments, iter([groups]), mode=ENGINE, speed=0.0, sink=fed[1])
 
-    assert node.released == engine.released == len(demo) + len(other)
+    assert node.released == engine.released == fed[0].count == len(demo) + len(other)
+    assert fed[0].sha256 == fed[1].sha256
     assert node.intents == engine.intents
 
 
-def test_a_book_instant_is_released_as_one_point_on_both_paths(request_for, tmp_path: Path) -> None:
+def test_a_book_instant_is_released_as_one_point_on_both_paths(request_for) -> None:
     """A session counts what it delivered: the changes one book made at one instant are one
     batch, and so one point of the count, on the node as on the engine."""
     from tests.nautilus.backtest.conftest import POSTER, TICK_DAYS, tick_groups, tick_hypothesis
@@ -146,21 +138,14 @@ def test_a_book_instant_is_released_as_one_point_on_both_paths(request_for, tmp_
     request = request_for(source=POSTER, hypothesis_=tick_hypothesis())
     groups = tuple(tick_groups())
     instruments = (instrument(),)
-    node = _execute(
-        request, instruments, iter([groups]), mode=NODE, speed=0.0, sink=Spool(tmp_path / "node")
-    )
-    engine = _execute(
-        request,
-        instruments,
-        iter([groups]),
-        mode=ENGINE,
-        speed=0.0,
-        sink=Spool(tmp_path / "engine"),
-    )
+    fed = Stream(), Stream()
+    node = _execute(request, instruments, iter([groups]), mode=NODE, speed=0.0, sink=fed[0])
+    engine = _execute(request, instruments, iter([groups]), mode=ENGINE, speed=0.0, sink=fed[1])
 
     book, prints = groups
     instants = {int(change.ts_init) for change in book}  # type: ignore[attr-defined]
-    assert node.released == engine.released == len(instants) + len(prints)
+    assert node.released == engine.released == fed[0].count == len(instants) + len(prints)
+    assert fed[0].sha256 == fed[1].sha256
     assert len(instants) < len(book) and len(TICK_DAYS) == 2
     assert node.intents == engine.intents
 

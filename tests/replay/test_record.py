@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, date, datetime
 
 import pytest
@@ -10,7 +11,7 @@ from nautilus_trader.model.data import Bar
 from kanso.errors import PreconditionError, ValidationError
 from kanso.replay import record
 from kanso.replay.record import Intent, Point, Session
-from kanso.schemas import load_yaml
+from kanso.schemas import dump_yaml, load_yaml, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.replay.conftest import FORWARD, INSTRUMENT, bars
@@ -113,50 +114,106 @@ def test_a_speed_below_zero_is_not_a_session() -> None:
         session(speed=-1.0)
 
 
-# --- the stream ---------------------------------------------------------------
+# --- the stream and the intents -----------------------------------------------
 
 
-def test_the_stream_round_trips(ws: Workspace) -> None:
-    """A released point reads back with both of its timestamps and its instrument."""
+def test_the_stream_is_recorded_by_its_digest_and_never_written(ws: Workspace) -> None:
+    """The record carries the digest; the directory holds the record and the intents only."""
     points = [Point.of(bar) for bar in bars(FORWARD)[:3]]
 
-    written = record.write(ws, session(), points, [])
+    written = record.write(ws, session(), points, [intent()])
 
-    assert record.stream_of(ws, written.session_id) == tuple(points)
+    assert written.stream_sha256 == record.digest(points)
+    assert record.read(ws, written.session_id).stream_sha256 == written.stream_sha256
+    held = record.session_dir(ws, written.session_id)
+    assert sorted(path.name for path in held.iterdir()) == [
+        record.INTENTS_FILE,
+        record.SESSION_FILE,
+    ]
 
 
-def test_a_stream_spooled_while_the_session_ran_is_moved_into_it(ws: Workspace) -> None:
-    """A replay records what it releases as it releases it; the session it writes holds
-    exactly those lines, the file they were spooled to is gone, and the listing never took
-    the spool for a session."""
-    released = bars(FORWARD)[:3]
+def test_the_digest_is_the_sha256_of_the_stream_file_kanso_used_to_write() -> None:
+    """One sorted-key JSON line per point, exactly, so a kept `stream.jsonl` checks out with
+    `shasum -a 256` against the digest a session now records in its place."""
+    points = [
+        Point(ts_init=5, ts_event=4, type="Bar", instrument=INSTRUMENT),
+        Point(ts_init=9, ts_event=9, type="Custom"),
+    ]
+    held = (
+        b'{"instrument": "DEMO.XNAS", "ts_event": 4, "ts_init": 5, "type": "Bar"}\n'
+        b'{"instrument": null, "ts_event": 9, "ts_init": 9, "type": "Custom"}\n'
+    )
 
-    with record.spooled(ws) as stream:
-        for bar in released:
-            stream.add(bar)
-        assert record.list_sessions(ws) == []
-        written = record.write(ws, session(), stream, [])
+    assert record.digest(points) == hashlib.sha256(held).hexdigest()
+
+
+def test_the_digest_holds_the_order_and_every_point() -> None:
+    """Two streams of the same points in another order, or one point short, are not the same."""
+    points = [Point.of(bar) for bar in bars(FORWARD)[:3]]
+
+    assert record.digest(points) != record.digest(points[::-1])
+    assert record.digest(points) != record.digest(points[:2])
+    assert record.digest([]) == hashlib.sha256(b"").hexdigest()
+
+
+LEGACY = """\
+schema: 1
+session_id: 20261001T025018Z-node-9994868
+mode: node
+target: cx_cascade85@b1d8638
+instruments:
+- ETH-USDT-SWAP.OKX
+- SOL-USDT-SWAP.OKX
+from: '2026-08-15'
+to: '2026-09-15'
+speed: 0.0
+exec: sandbox
+released: 2212224
+intents: 2392
+clock_ns: 1789516795000000000
+started_at: '2026-10-01T02:50:18.130054Z'
+ended_at: '2026-10-01T03:05:50.008641Z'
+"""
+"""A session record kanso 0.13.1.dev3 wrote on an operator's workspace on 2026-10-01, two of
+its four instruments kept: no digest, the stream beside it in a 0.5 GB `stream.jsonl`."""
+
+
+def test_a_session_from_before_the_digest_reads_back_without_one() -> None:
+    """A record an earlier kanso wrote has no digest and is still a session."""
+    found = parse_yaml(Session, LEGACY)
+
+    assert found.stream_sha256 is None
+    assert found.released == 2_212_224
+    assert "stream_sha256" not in dump_yaml(found)
+
+
+def test_a_stream_taken_while_the_session_ran_is_recorded_by_its_digest(ws: Workspace) -> None:
+    """A replay takes what it releases a chunk at a time: the count and the digest are those
+    of the whole stream, nothing reaches `sessions/` until the session is written, and the
+    session written holds the digest, never the stream."""
+    released = [Point.of(bar) for bar in bars(FORWARD)[:3]]
+    stream = record.Stream()
+
+    for chunk in (released[:1], released[1:]):
+        for point in chunk:
+            stream.add(point)
+    assert not record.sessions_path(ws).exists()
+    written = record.write(ws, session(released=3), stream, [])
 
     assert stream.count == 3
-    assert record.stream_of(ws, written.session_id) == tuple(Point.of(bar) for bar in released)
-    assert sorted(path.name for path in record.sessions_path(ws).iterdir()) == [written.session_id]
+    assert stream.sha256 == record.digest(released)
+    assert record.read(ws, written.session_id).stream_sha256 == stream.sha256
+    assert [path.name for path in record.sessions_path(ws).iterdir()] == [written.session_id]
+    assert sorted(path.name for path in record.session_dir(ws, written.session_id).iterdir()) == [
+        record.INTENTS_FILE,
+        record.SESSION_FILE,
+    ]
 
 
-def test_a_session_that_released_nothing_spools_an_empty_stream(ws: Workspace) -> None:
-    with record.spooled(ws) as stream:
-        written = record.write(ws, session(), stream, [])
+def test_a_session_that_released_nothing_records_the_empty_digest(ws: Workspace) -> None:
+    written = record.write(ws, session(released=0), record.Stream(), [])
 
-    assert record.stream_of(ws, written.session_id) == ()
-
-
-def test_a_spool_never_written_is_removed(ws: Workspace) -> None:
-    """Leaving the block without writing the session — a refusal, a crash — leaves nothing."""
-    with pytest.raises(RuntimeError), record.spooled(ws) as stream:
-        stream.add(bars(FORWARD)[0])
-        raise RuntimeError("the run failed")
-
-    assert not stream.path.exists()
-    assert list(record.sessions_path(ws).iterdir()) == []
+    assert written.stream_sha256 == hashlib.sha256(b"").hexdigest()
 
 
 def test_the_intents_round_trip(ws: Workspace) -> None:
@@ -210,13 +267,13 @@ def test_a_custom_point_is_read_through_its_wrapper() -> None:
     assert made.instrument == INSTRUMENT
 
 
-def test_a_missing_stream_file_is_refused(ws: Workspace) -> None:
-    """A session whose stream was deleted says so rather than reading as empty."""
+def test_a_missing_intents_file_is_refused(ws: Workspace) -> None:
+    """A session whose intents were deleted says so rather than reading as empty."""
     written = record.write(ws, session(), [], [])
-    (record.session_dir(ws, written.session_id) / record.STREAM_FILE).unlink()
+    (record.session_dir(ws, written.session_id) / record.INTENTS_FILE).unlink()
 
     with pytest.raises(PreconditionError, match="is missing"):
-        record.stream_of(ws, written.session_id)
+        record.intents_of(ws, written.session_id)
 
 
 # --- the row ------------------------------------------------------------------
