@@ -870,14 +870,14 @@ remedy: load the book for DEMO.XNAS over 2024-01-03..2024-01-03 with `kanso data
 ```
 
 The venue would otherwise match that day's prints against the book the day before left. A
-card reports the refusal as a crash carrying that remedy, and `kanso research begin` refuses a
-baseline that met it (exit 2). Hours of prints after a day's last change of the book, in a
-day that has one, are not refused, and neither is a name whose changes all follow another
-name's in what the engine is handed at once: the engine's own check counts the first point
-of each batch it is handed, and refused such a name with its book on every day — measured on 2026-10-03 on five OKX
-books, a chunk of six seconds held 49 changes and 18 prints of `BCH-USDT-SWAP.OKX` and none
-of the changes began a batch — so kanso makes the check itself, of every point, and the
-engine's is off.
+card reports the refusal as a crash carrying that remedy, and `kanso research begin`
+refuses a baseline that met it (exit 2). Hours of prints after a day's last change of the
+book, in a day that has one, are not refused, and neither is a name whose changes all
+follow another name's in what the engine is handed at once: the engine's own check counts
+the first point of each batch it is handed, and refused such a name with its book on every
+day — measured on 2026-10-03 on five OKX books, a chunk of six seconds held 49 changes and
+18 prints of `BCH-USDT-SWAP.OKX` and none of the changes began a batch — so kanso makes the
+check itself, of every point, and the engine's is off.
 
 `kanso hyp validate PATH` says whether it is admissible and changes nothing either way:
 

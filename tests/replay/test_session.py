@@ -526,6 +526,44 @@ def test_the_two_paths_agree_over_a_book_window_handed_in_chunks(
     assert node.released == len(fed)
 
 
+@pytest.mark.parametrize("path", ["whole", "chunked", "node"])
+def test_a_name_with_no_book_beside_one_with_its_book_is_still_refused(path: str) -> None:
+    """The engine's own check is off for a held book's market data, so it is kanso's alone
+    that refuses a name with prints and no book: beside a name whose book is in the stream,
+    the quiet name's prints with none of its changes are refused on each path, naming that
+    name alone, its first day and the load that fixes it."""
+    from tests.nautilus.backtest.conftest import POSTER, QUIET, quiet, ticking
+
+    days = (FORWARD[0], date(2024, 3, 4))
+    hyp = hypothesis(
+        universe=[INSTRUMENT, f"{QUIET}.XNAS"],
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+    )
+    request = request_for(source=POSTER, hyp=hyp)
+    busy = [ticking(day) for day in days]
+    groups = [
+        tuple(point for changes, _ in busy for point in changes),
+        tuple(point for _, made in busy for point in made),
+        tuple(point for day in days for point in quiet(day)[1]),
+    ]
+    names = [instrument(), instrument(QUIET)]
+    chunks = list(backtest._cut(groups, 7))
+    run = {
+        "whole": lambda: backtest.execute(request, names, groups),
+        "chunked": lambda: backtest.execute_chunked(request, names, chunks),
+        "node": lambda: session.run_node_chunked(request, names, iter(chunks)),
+    }[path]
+
+    with pytest.raises(
+        PreconditionError, match=f"no book change for {QUIET}.XNAS on {days[0]}"
+    ) as refused:
+        run()
+    assert INSTRUMENT not in str(refused.value)
+    assert f"load the book for {QUIET}.XNAS over {days[0]}.." in str(refused.value.remedy)
+
+
 def test_a_venue_is_bound_to_the_markers_a_later_chunk_first_carries() -> None:
     """A level-two window cut to one point a chunk: the first chunk carries no flush marker
     and a later one does, so the node's venue is bound to the markers only when that chunk
