@@ -82,6 +82,8 @@ BINDINGS = {
     "whatever span it reads, with ts_init inclusive at both ends",
     "an order's events grow only at its end, and its strategy is handed each one as the "
     "order's last when the order takes it",
+    "a level-two venue refuses to run a name it holds data and no book data for, and "
+    "counts only the first point of each validated add_data call",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

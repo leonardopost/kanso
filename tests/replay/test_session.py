@@ -476,17 +476,25 @@ def test_the_two_paths_agree_over_a_book_of_many_changes_an_instant_and_prints_t
     assert node.run.fills == engine.run.fills
 
 
+@pytest.mark.parametrize("two", [False, True], ids=["one name", "two names"])
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
-def test_the_two_paths_agree_over_a_book_window_handed_in_chunks(latency_ms: float) -> None:
+def test_the_two_paths_agree_over_a_book_window_handed_in_chunks(
+    latency_ms: float, two: bool
+) -> None:
     """The same book and prints cut into chunks of at most seven points between instants, as
     a card's child is streamed them: the live path handed them a chunk at a time submits and
     fills what the research path does, chunked or whole, and records as released exactly the
-    window's points in the order the whole window would have released them."""
+    window's points in the order the whole window would have released them. With two names,
+    the second a quiet one whose book changes never begin a batch and some of whose chunks
+    hold its prints and none of its changes (`conftest.quiet`), which the research path
+    refused to run before, whole or chunked."""
     from kanso.replay.record import Point
-    from tests.nautilus.backtest.conftest import POSTER, ticking
+    from tests.nautilus.backtest.conftest import POSTER, QUIET, tick_groups
     from tests.nautilus.backtest.test_exit_flat import chasing_costs
 
+    universe = [INSTRUMENT, f"{QUIET}.XNAS"] if two else [INSTRUMENT]
     hyp = hypothesis(
+        universe=universe,
         resolution="tick",
         horizon="1d",
         data_requirements=["book", "trade"],
@@ -496,20 +504,18 @@ def test_the_two_paths_agree_over_a_book_window_handed_in_chunks(latency_ms: flo
     model = dict(request.venue_model)
     model["costs"] = {**dict(model["costs"]), **chasing_costs(latency_ms)}  # type: ignore[dict-item]
     request = replace(request, venue_model=model)
-    sessions = [ticking(day) for day in (FORWARD[0], date(2024, 3, 4))]
-    groups = [
-        tuple(point for changes, _ in sessions for point in changes),
-        tuple(point for _, made in sessions for point in made),
-    ]
+    groups = tick_groups((FORWARD[0], date(2024, 3, 4)), two=two)
+    names = [instrument()] + ([instrument(QUIET)] if two else [])
     chunks = list(backtest._cut(groups, 7))
     released: list[object] = []
 
-    whole = backtest.execute(request, [instrument()], groups)
-    engine = backtest.execute_chunked(request, [instrument()], chunks)
-    node = session.run_node_chunked(request, [instrument()], iter(chunks), sink=released.extend)
+    whole = backtest.execute(request, names, groups)
+    engine = backtest.execute_chunked(request, names, chunks)
+    node = session.run_node_chunked(request, names, iter(chunks), sink=released.extend)
 
     assert len(chunks) > 10 and max(sum(map(len, chunk)) for chunk in chunks) <= 7
-    assert not node.result.crashed and whole.run.fills
+    assert not node.result.crashed
+    assert {fill.instrument_id for fill in whole.run.fills} == set(universe)
     assert (engine.run, engine.intents) == (whole.run, whole.intents)
     assert node.intents == engine.intents
     assert node.result.run == engine.run
@@ -518,6 +524,44 @@ def test_the_two_paths_agree_over_a_book_window_handed_in_chunks(latency_ms: flo
         Point.of(point) for point in fed
     ]
     assert node.released == len(fed)
+
+
+@pytest.mark.parametrize("path", ["whole", "chunked", "node"])
+def test_a_name_with_no_book_beside_one_with_its_book_is_still_refused(path: str) -> None:
+    """The engine's own check is off for a held book's market data, so it is kanso's alone
+    that refuses a name with prints and no book: beside a name whose book is in the stream,
+    the quiet name's prints with none of its changes are refused on each path, naming that
+    name alone, its first day and the load that fixes it."""
+    from tests.nautilus.backtest.conftest import POSTER, QUIET, quiet, ticking
+
+    days = (FORWARD[0], date(2024, 3, 4))
+    hyp = hypothesis(
+        universe=[INSTRUMENT, f"{QUIET}.XNAS"],
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+    )
+    request = request_for(source=POSTER, hyp=hyp)
+    busy = [ticking(day) for day in days]
+    groups = [
+        tuple(point for changes, _ in busy for point in changes),
+        tuple(point for _, made in busy for point in made),
+        tuple(point for day in days for point in quiet(day)[1]),
+    ]
+    names = [instrument(), instrument(QUIET)]
+    chunks = list(backtest._cut(groups, 7))
+    run = {
+        "whole": lambda: backtest.execute(request, names, groups),
+        "chunked": lambda: backtest.execute_chunked(request, names, chunks),
+        "node": lambda: session.run_node_chunked(request, names, iter(chunks)),
+    }[path]
+
+    with pytest.raises(
+        PreconditionError, match=f"no book change for {QUIET}.XNAS on {days[0]}"
+    ) as refused:
+        run()
+    assert INSTRUMENT not in str(refused.value)
+    assert f"load the book for {QUIET}.XNAS over {days[0]}.." in str(refused.value.remedy)
 
 
 def test_a_venue_is_bound_to_the_markers_a_later_chunk_first_carries() -> None:

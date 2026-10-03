@@ -538,13 +538,13 @@ class Config(KansoConfig):
 
 
 class Strategy(KansoStrategy):
-    """Rests 100 at the best bid when flat and offers what it holds at the best ask,
-    re-posted whenever that side's best price moves; it also counts what it is handed."""
+    """Rests 100 at a name's best bid when flat in it and offers what it holds at its best
+    ask, re-posted whenever that side's best price moves; it also counts what it is handed."""
 
     config_cls = Config
 
     def on_start(self):
-        self.posted = None
+        self.posted = {}
         self.books = 0
         self.prints = 0
 
@@ -563,16 +563,17 @@ class Strategy(KansoStrategy):
             return
         held = self.held(instrument_id)
         want = ("BUY", float(bid)) if held <= 0 else ("SELL", float(ask))
-        if want == self.posted:
+        if want == self.posted.get(instrument_id):
             return
         self.cancel_all_orders(instrument_id)
         if want[0] == "BUY":
             sent = self.submit_entry(instrument_id, "BUY", qty=100, price=want[1])
         else:
             sent = self.submit_exit(instrument_id, price=want[1])
-        self.posted = want if sent is not None else None
+        self.posted[instrument_id] = want if sent is not None else None
 '''
-"""A sleeve that rests at the touch of a level-two book, on the book and on every print."""
+"""A sleeve that rests at the touch of each name's level-two book, on the book and on every
+print."""
 
 TICK_DAYS = (date(2024, 1, 2), date(2024, 1, 3))
 """The two sessions the tick feed below covers, inside the research window."""
@@ -645,18 +646,73 @@ def ticking(day: date, symbol: str = SYMBOL) -> tuple[list[object], list[TradeTi
     return book, made
 
 
-def tick_hypothesis(latency_ms: float = 20.0) -> Hypothesis:
-    """`hypothesis()` on a level-two book and its prints, under a latency."""
-    document = hypothesis().model_dump(mode="json")
+QUIET = "OTHR"
+"""The second name of a two-name book window: `quiet` beside `ticking`."""
+
+
+def quiet(day: date, symbol: str = QUIET) -> tuple[list[object], list[TradeTick]]:
+    """A quiet name's session beside `ticking`'s: its book changes a microsecond after the
+    busy name's, at the open and at every fifth event, and it prints two milliseconds after
+    every event — a buyer's print of 30 at the offer on odd events, a seller's at the bid on
+    even ones.
+
+    Its book opens 50 bid at 20.00 and 50 offered at 20.02 and is only ever resized. Its
+    changes always follow the busy name's with no print between, so they never begin a run
+    of book changes; its prints, on instants of their own, begin runs of their own between
+    flush markers; and a read of an hour cut to a few points holds its prints and none of
+    its changes.
+    """
+    from nautilus_trader.model.enums import BookAction, OrderSide
+
+    from kanso.data.loaders.points import make_delta
+
+    ident = InstrumentId(Symbol(symbol), _venue())
+    base = midnight_ns(day) + 12 * 3_600 * SECOND_NS
+    late = 1_000
+
+    def both(action: BookAction, size: int, ts: int) -> list[object]:
+        return [
+            make_delta(ident, action, side, px, size, 0, 2, 0, ts + late, ts + late)
+            for side, px in ((OrderSide.BUY, 2_000), (OrderSide.SELL, 2_002))
+        ]
+
+    book = both(BookAction.ADD, 50, base)
+    made: list[TradeTick] = []
+    for event in range(1, TICK_EVENTS):
+        ts = base + event * TICK_STEP_NS
+        if event % 5 == 0:
+            book += both(BookAction.UPDATE, 50 + event, ts)
+        px, side = (2_000, AggressorSide.SELLER) if event % 2 == 0 else (2_002, AggressorSide.BUYER)
+        made.append(
+            TradeTick(
+                ident,
+                Price(px / 100, 2),
+                Quantity.from_int(30),
+                side,
+                TradeId(f"{symbol}-{day:%m%d}-{event}"),
+                ts_event=ts + 2_000_000,
+                ts_init=ts + 2_000_000,
+            )
+        )
+    return book, made
+
+
+def tick_hypothesis(
+    latency_ms: float = 20.0, universe: Sequence[str] = (INSTRUMENT,)
+) -> Hypothesis:
+    """`hypothesis()` over `universe` on a level-two book and its prints, under a latency."""
+    document = hypothesis(universe=universe).model_dump(mode="json")
     document.update(resolution="tick", data_requirements=["book", "trade"])
     document["costs"] = {**document["costs"], "latency_ms": latency_ms}
     return Hypothesis.model_validate(document)
 
 
-def tick_groups(days: Sequence[date] = TICK_DAYS) -> list[tuple[object, ...]]:
-    """The book and the prints of `days`, one type per group, as a catalog serves them."""
-    sessions = [ticking(day) for day in days]
+def tick_groups(days: Sequence[date] = TICK_DAYS, *, two: bool = False) -> list[tuple[object, ...]]:
+    """The book and the prints of `days`, one type and one name per group, books first and
+    names in order, as a catalog serves them; with `two`, the quiet name's after the busy
+    one's."""
+    named = [[ticking(day) for day in days]] + ([[quiet(day) for day in days]] if two else [])
     return [
-        tuple(point for book, _ in sessions for point in book),
-        tuple(point for _, made in sessions for point in made),
+        *(tuple(point for book, _ in sessions for point in book) for sessions in named),
+        *(tuple(point for _, made in sessions for point in made) for sessions in named),
     ]

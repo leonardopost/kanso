@@ -290,6 +290,27 @@ def test_the_pages_say_the_venue_is_settled_at_a_marker_as_the_research_path_set
     assert "`handle_order_book_deltas` stamps `data_time`" in backlog
 
 
+def test_the_pages_say_kanso_checks_each_name_s_book_itself_of_every_point() -> None:
+    """The engine's check that a level-two venue holds each name's book counts one point of
+    each batch it is handed, and refused a quiet name with its book on every day; the
+    workspace page says kanso makes that check itself, the concepts page names the window
+    of two names every chunking is held to, and the engine fact is one `doctor` re-checks."""
+    from kanso.nautilus import facts
+
+    workspace = prose(page("workspace.md"))
+    assert (
+        "neither is a name whose changes all follow another name's in what the engine is handed"
+        in workspace
+    )
+    assert "so kanso makes the check itself, of every point, and the engine's is off" in workspace
+    concepts = prose(section(page("concepts.md"), "Card"))
+    assert "and of two whose quieter one's book changes always follow the other's" in concepts
+    assert any(
+        "counts only the first point of each validated add_data call" in claim
+        for claim, _ in facts.claims()
+    )
+
+
 def test_the_pages_say_a_day_s_volume_is_struck_with_the_instrument_s_multiplier() -> None:
     """A bar counts the instrument's unit and a fill is `qty x px x multiplier`; the pages
     say the capacity gate reads a day's volume in the same unit, and the backlog row that

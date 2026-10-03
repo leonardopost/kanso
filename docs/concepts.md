@@ -301,9 +301,10 @@ card trading on twenty minutes of them sent 9,064 orders read by the hour and 9,
 whole. Read from the files, the day's prints and its 10.8 million book changes come back in
 the same order either way. The suite reads a catalog of prints that share instants unevenly
 by the hour and whole, and runs one tick window read by the day, by the hour and by the hour
-cut to seven points a chunk, one whose first hour holds book changes and no print, and one
-daily window cut to a bar a chunk; each is the card the whole window gives when it is run in
-one process. Measured on a day of BTC's book and prints on 2026-10-02: a fresh child holds about 0.2 GB of its own and 0.66–0.81 KB per point of the
+cut to seven points a chunk — of one name, and of two whose quieter one's book changes
+always follow the other's and some of whose chunks hold its prints and none of its changes —
+one whose first hour holds book changes and no print, and one daily window cut to a bar a
+chunk; each is the card the whole window gives when it is run in one process. Measured on a day of BTC's book and prints on 2026-10-02: a fresh child holds about 0.2 GB of its own and 0.66–0.81 KB per point of the
 chunk it runs, about 0.4 GB at the cap, and caps of 10,000, 50,000 and 200,000 points and
 none gave the identical card at about 10 ms of CPU an extra chunk. Read and staged a day at
 a time as before, the same day of a three-level book was estimated at 4.5 GB in the child and
@@ -322,13 +323,13 @@ before the next is read, and the live path releases each into the node once the 
 has been released and the node has gone quiet. Between two chunks both do the same things in
 the same order — the fills so far are priced at the chunk's quotes, the sleeve is held for the
 next chunk's markers, the venue is bound to what it carries — so a range is replayed the same
-however it is cut, and the two paths agree at a tolerance of zero over a window of book
-changes and prints cut to seven points a chunk, as over one handed whole. What a session
-records of its stream is a count and a digest (`docs/workspace.md`, `sessions/`), folded in
-as each chunk is released, so the digest of a range cut into chunks is the digest of the
-range run whole and nothing is written until the replay has finished. So a replay holds one
-read and one chunk of its range, never the whole, and keeps none of it on disk. Measured on
-2026-10-02 on one day of OKX BTC-USDT-SWAP's
+however it is cut, and the two paths agree at a tolerance of zero over a window of one
+name's or two names' book changes and prints cut to seven points a chunk, as over one handed
+whole. What a session records of its stream is a count and a digest (`docs/workspace.md`,
+`sessions/`), folded in as each chunk is released, so the digest of a range cut into chunks is
+the digest of the range run whole and nothing is written until the replay has finished. So a
+replay holds one read and one chunk of its range, never the whole, and keeps none of it on
+disk. Measured on 2026-10-02 on one day of OKX BTC-USDT-SWAP's
 three-level book and prints (5,668,044 points released): `kanso replay parity` gave
 `identical` on 2,556 intents in 874 s at 0.88 GB resident, where the acceptance build that
 read the day whole, earlier that day, reached a 6.0 GB footprint and was stopped; on two days
