@@ -84,6 +84,10 @@ engine denies the hundred-and-first order submitted inside one second of its clo
 `RiskEngineConfig.max_order_submit_rate` says otherwise, and modifies the same way, and a
 denied order is closed — so the research path runs at the same rate as the node paths, one
 no replay reaches, or the two would size the next entry from different rooms.
+
+A level-two venue refuses to run a name it holds market data and no book data for, and it
+learns which names those are from `add_data`: a validated call counts the name of its first
+point alone, an unvalidated call none (re-checked by `kanso.nautilus.facts`).
 """
 
 from __future__ import annotations
@@ -1192,8 +1196,9 @@ def _refuse_unbooked(
     The engine refuses a stream holding an instrument's data and none of its book data, and
     a run fed a day at a time was refused that way a day at a time. A card read an hour at a
     time is fed streams of an hour, of which a quiet one can hold prints after the book's
-    last change, so the engine's check is turned off for those (`_load_stream`) and made
-    here, a day at a time, as it was.
+    last change, and the engine reads which names a stream holds off the first point of each
+    batch it is handed, so it also refuses a name whose changes never begin one. Its check is
+    turned off (`_load_stream`) and made here, of every point, a day at a time, as it was.
     """
     days = sorted(day for day in fed if before is None or day < int(before) // NS_PER_DAY)
     missing: dict[str, list[date]] = {}
@@ -1552,14 +1557,20 @@ def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -
     insertion order `sort_data`'s stable sort then preserves, so a marker that follows
     its cohort in the ordered stream still follows it after the sort.
 
-    Under `book` — a hypothesis that holds a level-two book — a run of an instrument whose
-    book this stream does not change is added without the engine's validation, whose one
-    consequence here is that it refuses to run a stream holding an instrument's prints and
-    none of its book changes. A chunk of a window can be exactly that — the prints after the
-    last change of an hour — so the refusal is made of each UTC day instead, as it was when a
-    run was fed a day at a time (`_refuse_unbooked`). Nothing else validation does is lost:
-    the venue's market-data client was registered when the venue was added, and every
-    instrument was added before any point.
+    Under `book` — a hypothesis that holds a level-two book — market data is added without
+    the engine's validation, whose one consequence here is that it refuses to run a stream
+    holding an instrument's market data and none of its book changes. It reads that off the
+    first point of each call alone (`kanso.nautilus.facts`), and a run of one type holds
+    several names: a quiet name whose changes always follow another's, so never begin a run,
+    and whose prints begin runs of their own between flush markers, is refused though its
+    book is in the stream. Measured on 2026-10-03 on five crypto perpetuals' books and prints
+    read an hour at a time: one was refused on the last six seconds of an hour, a chunk that
+    held 49 of its changes and 18 of its prints, none of the changes first in a run.
+    A chunk can also hold the prints after a name's last change of an hour. So the refusal is
+    made of each UTC day instead, of every point, as it was when a run was fed a day at a
+    time (`_refuse_unbooked`). Nothing else validation does is lost: the venue's market-data
+    client was registered when the venue was added, and every instrument was added before
+    any point.
     """
     from nautilus_trader.model.data import (
         Bar,
@@ -1572,20 +1583,13 @@ def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -
 
     if not points:
         return
-    booked = {
-        str(point.instrument_id)
-        for point in points
-        if isinstance(point, (OrderBookDelta, OrderBookDeltas))
-    }
 
     def add(run: Sequence[object]) -> None:
-        first = run[0]
-        plain = type(first) in (Bar, QuoteTick, TradeTick, OrderBookDelta, OrderBookDeltas)
-        name = _instrument_of(first)
+        plain = type(run[0]) in (Bar, QuoteTick, TradeTick, OrderBookDelta, OrderBookDeltas)
         engine.add_data(
             list(run),
             client_id=None if plain else ClientId(CLIENT_ID),
-            validate=not (book and plain and name not in booked),
+            validate=not (book and plain),
             sort=False,
         )
 

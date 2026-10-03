@@ -489,6 +489,18 @@ copy of a book by exactly these rules (`kanso.nautilus.strategy`), because the c
 copy is already past the change a handler is handling, so the view an author is handed is
 the venue's book only while the engine keeps to them.
 
+**The engine's check that a level-two venue holds each name's book reads one point a call.**
+`BacktestEngine.add_data` with `validate` records the instrument of the call's first point
+as holding data and, when that point is a book change, as holding book data, and no other
+point's; `run` raises `InvalidConfiguration` for an instrument of an `L2_MBP` venue recorded
+as holding data and not book data; unvalidated, a call records nothing, and `clear_data`
+forgets both. Measured: two names' book changes handed as one call, the first name's ahead,
+then the second name's print alone — refused for the second name, whose change was in the
+stream. A stream of several names is handed in runs of one type (`add_data` assumes one
+type a call), and a quiet name's changes can follow another's in every run, so kanso adds a
+held book's market data unvalidated and makes the refusal itself, of every point, a UTC day
+at a time (`kanso.nautilus.backtest._refuse_unbooked`).
+
 Claims a broker adapter makes
 -----------------------------
 A broker package binds to the engine's own adapter for that broker, and this module may
@@ -1669,6 +1681,89 @@ def _check_a_book_batch_is_published_whole() -> tuple[bool, str]:
         "(deltas per call, best offer the cache showed) fed a change at a time, and as "
         f"{whole} fed as one OrderBookDeltas per instant: the data engine publishes a batch "
         "whole, after its own book has applied every change in it"
+    )
+
+
+def _probe_book_check(*, validate: bool) -> str | None:
+    """Two names on a level-two venue, handed as kanso hands a stream: one call of book
+    changes, the first name's ahead of the second's, then the second name's print alone, all
+    added with `validate`. What `run` raised, or `None` when it ran."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import BookOrder, OrderBookDelta, TradeTick
+    from nautilus_trader.model.enums import (
+        AccountType,
+        AggressorSide,
+        BookAction,
+        BookType,
+        OmsType,
+        OrderSide,
+    )
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId, Venue
+    from nautilus_trader.model.instruments import Equity
+    from nautilus_trader.model.objects import Currency, Money, Price, Quantity
+
+    first: Any = _sample_equity()
+    second = Equity(
+        instrument_id=InstrumentId.from_str("MSFT.XNAS"),
+        raw_symbol=Symbol("MSFT"),
+        currency=Currency.from_str("USD"),
+        price_precision=2,
+        price_increment=Price.from_str("0.01"),
+        lot_size=Quantity.from_int(1),
+        ts_event=0,
+        ts_init=0,
+    )
+
+    def change(name: Any, ts: int) -> object:
+        order = BookOrder(OrderSide.BUY, Price(10.0, 2), Quantity.from_int(100), 0)
+        return OrderBookDelta(name.id, BookAction.ADD, order, 0, 0, ts, ts)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            book_type=BookType.L2_MBP,
+        )
+        engine.add_instrument(first)
+        engine.add_instrument(second)
+        engine.add_data([change(first, 1), change(second, 2)], validate=validate, sort=False)
+        printed = TradeTick(
+            second.id,
+            Price(10.0, 2),
+            Quantity.from_int(10),
+            AggressorSide.SELLER,
+            TradeId("T-1"),
+            3,
+            3,
+        )
+        engine.add_data([printed], validate=validate, sort=False)
+        engine.sort_data()
+        return _raises(engine.run)
+    finally:
+        engine.dispose()
+
+
+def _check_the_book_check_reads_the_first_point_of_a_call() -> tuple[bool, str]:
+    """Why kanso adds a held book's market data unvalidated and refuses a day without a
+    name's book itself: the engine's own check counts a call's first name and no other."""
+    checked = _probe_book_check(validate=True)
+    unchecked = _probe_book_check(validate=False)
+    holds = (
+        checked is not None
+        and checked.startswith("InvalidConfiguration")
+        and "MSFT.XNAS" in checked
+        and unchecked is None
+    )
+    return holds, (
+        "two names on an L2_MBP venue, handed one call of book changes, AAPL's then MSFT's, and "
+        f"then MSFT's print alone: validated, run raised {checked!r}, though MSFT's change was "
+        f"in the stream; unvalidated, it {'ran' if unchecked is None else 'raised ' + unchecked}"
     )
 
 
@@ -3484,6 +3579,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "the data engine publishes an OrderBookDeltas whole, after its book has applied it, "
         "and a lone OrderBookDelta as a batch of one",
         _check_a_book_batch_is_published_whole,
+    ),
+    (
+        "a level-two venue refuses to run a name it holds data and no book data for, and "
+        "counts only the first point of each validated add_data call",
+        _check_the_book_check_reads_the_first_point_of_a_call,
     ),
     (
         "closing a position costs the same whatever was closed before it",

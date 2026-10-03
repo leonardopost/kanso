@@ -567,11 +567,13 @@ def _gone(pid: int) -> bool:
     return False
 
 
-def _tick_store(root: Path) -> Path:
-    """A catalog of the two tick sessions of `conftest.ticking`."""
-    from .conftest import catalog, instrument, tick_groups
+def _tick_store(root: Path, *, two: bool = False) -> Path:
+    """A catalog of the two tick sessions of `conftest.ticking`, and with `two` of
+    `conftest.quiet` beside them."""
+    from .conftest import QUIET, catalog, instrument, tick_groups
 
-    return catalog(root, [point for group in tick_groups() for point in group], [instrument()])
+    names = [instrument()] + ([instrument(QUIET)] if two else [])
+    return catalog(root, [point for group in tick_groups(two=two) for point in group], names)
 
 
 def _session(day: Any, *, booked: bool, shift: int = 0) -> list[object]:
@@ -652,9 +654,15 @@ def test_a_day_of_prints_without_its_book_is_refused_however_the_window_is_read(
     )
 
 
+@pytest.mark.parametrize("two", [False, True], ids=["one name", "two names"])
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identical_card(
-    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch, latency_ms: float
+    tmp_path: Path,
+    lane: Path,
+    request_for,
+    monkeypatch: pytest.MonkeyPatch,
+    latency_ms: float,
+    two: bool,
 ) -> None:
     """A window of book changes and prints, several to an instant on some instants and one
     on others, read a day at a time, an hour at a time, and an hour at a time cut to seven
@@ -662,22 +670,37 @@ def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identic
 
     Seven points cut inside an hour, and leave chunks whose every instant holds one point of
     its kind — a feed that would go unmarked if whether it is marked were read off the
-    chunk, and whose prints would then be handled before a command due at them landed."""
+    chunk, and whose prints would then be handled before a command due at them landed.
+
+    With two names, the second a quiet one whose book changes always follow the first's
+    (`conftest.quiet`), and chunks that hold its prints and none of its changes. The engine
+    reads the names a stream holds off the first point of each batch it is handed, so before
+    this it refused to run the quiet name, whose changes began no batch and whose prints
+    began their own, even handed the window whole — as it refused one of five OKX books on
+    2026-10-03."""
+    from nautilus_trader.model.data import OrderBookDelta, TradeTick
+
     from kanso.nautilus import backtest as runner
 
-    from .conftest import POSTER, tick_hypothesis
+    from .conftest import INSTRUMENT, POSTER, QUIET, tick_hypothesis
 
-    store = _tick_store(tmp_path / "ticks")
-    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(latency_ms))
+    store = _tick_store(tmp_path / "ticks", two=two)
+    quiet = f"{QUIET}.XNAS"
+    universe = (INSTRUMENT, quiet) if two else (INSTRUMENT,)
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(latency_ms, universe))
     whole = run(request, store)
-    assert whole.run.fills, "the poster trades, so the comparison compares something"
+    traded = {fill.instrument_id for fill in whole.run.fills}
+    assert traded == set(universe), "each name trades, so the comparison compares something"
 
     cut = runner._cut
     chunks: list[int] = []
+    alone: list[bool] = []
 
     def counted(groups: Any, cap: int) -> Any:
         for chunk in cut(groups, cap):
             chunks.append(sum(len(group) for group in chunk))
+            held = {(type(p), str(p.instrument_id)) for group in chunk for p in group}
+            alone.append((TradeTick, quiet) in held and (OrderBookDelta, quiet) not in held)
             yield chunk
 
     monkeypatch.setattr(runner, "_cut", counted)
@@ -688,6 +711,7 @@ def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identic
         ("hour, seven points", runner.READ_TICK_NS, 7),
     ):
         chunks.clear()
+        alone.clear()
         monkeypatch.setattr(runner, "READ_TICK_NS", read_ns)
         monkeypatch.setattr(runner, "CHUNK_POINTS", cap)
         result = run_subprocess(request, store, lane)
@@ -701,6 +725,7 @@ def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identic
     assert len(carded["hour"][2]) == 10, "five hours a session"
     assert max(carded["hour, seven points"][2]) <= 7
     assert len(carded["hour, seven points"][2]) > len(carded["hour"][2])
+    assert any(alone) is two, "a chunk holds the quiet name's prints and none of its changes"
 
 
 def test_a_tick_window_whose_first_hour_holds_only_book_changes_gives_the_identical_card(
