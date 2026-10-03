@@ -28,7 +28,7 @@ from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, session
 from kanso.nautilus.session import Replayed
 from kanso.replay import record
-from kanso.replay.record import Intent, Session, Spool
+from kanso.replay.record import Intent, Point, Session, Stream
 from kanso.replay.target import Target, resolve
 from kanso.schemas.venue import SANDBOX
 
@@ -87,27 +87,27 @@ def run(
     request = target.request(window)
     instruments, chunks = backtest.window_chunks(request, target.catalog)
     started = record.now()
-    with record.spooled(ws) as stream:
-        replayed = _execute(request, instruments, chunks, mode=mode, speed=speed, sink=stream)
-        result = replayed.result
-        made = Session.model_validate(
-            {
-                "session_id": record.session_id(mode, target.label, window, started),
-                "mode": mode,
-                "target": target.label,
-                "instruments": list(target.universe),
-                "from": window[0],
-                "to": window[1],
-                "speed": speed,
-                "exec": SANDBOX.id,
-                "released": stream.count,
-                "intents": len(result.intents),
-                "clock_ns": replayed.clock_ns,
-                "started_at": started,
-                "ended_at": record.now(),
-            }
-        )
-        written = record.write(ws, made, stream, (Intent.of(row) for row in result.intents))
+    stream = Stream()
+    replayed = _execute(request, instruments, chunks, mode=mode, speed=speed, sink=stream)
+    result = replayed.result
+    made = Session.model_validate(
+        {
+            "session_id": record.session_id(mode, target.label, window, started),
+            "mode": mode,
+            "target": target.label,
+            "instruments": list(target.universe),
+            "from": window[0],
+            "to": window[1],
+            "speed": speed,
+            "exec": SANDBOX.id,
+            "released": stream.count,
+            "intents": len(result.intents),
+            "clock_ns": replayed.clock_ns,
+            "started_at": started,
+            "ended_at": record.now(),
+        }
+    )
+    written = record.write(ws, made, stream, (Intent.of(row) for row in result.intents))
     record.insert(store, written)
     store.event(
         REPLAYED,
@@ -174,16 +174,17 @@ def _execute(
     *,
     mode: str,
     speed: float,
-    sink: Spool,
+    sink: Stream,
 ) -> Replayed:
     """The chosen code path over this window's points, a chunk at a time.
 
     Both paths are handed the window in the chunks a card's child is streamed
-    (`backtest.window_chunks`), and each records what it released into `sink` as a chunk
-    of it runs, so neither holds the window whole and the stream on disk is the feed. The
-    research path has no feed to stop short, so it always reaches the end of the window
-    and its session clock is the last point of it. Both paths are fed a warmed target's
-    prefix and neither counts it: what was released is the range's own points.
+    (`backtest.window_chunks`), and each folds what it released into `sink` as a chunk of
+    it runs, so neither holds the window whole and the digest the session records is of
+    the feed itself. The research path has no feed to stop short, so it always reaches the
+    end of the window and its session clock is the last point of it. Both paths are fed a
+    warmed target's prefix and neither counts it: what was released is the range's own
+    points.
     """
     opens = request.bounds[0]
     clock: int | None = None
@@ -191,7 +192,7 @@ def _execute(
     def released(points: Sequence[object]) -> None:
         nonlocal clock
         for point in session.measured(points, opens):
-            sink.add(point)
+            sink.add(Point.of(point))
             clock = int(point.ts_init)
 
     if mode == NODE:

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from kanso import replay
-from kanso.replay.parity import Intent, Parity, compare
+from kanso.replay import record
+from kanso.replay.parity import RELEASED, STREAM, Intent, Parity, compare, of_sessions
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.replay.conftest import (
@@ -13,6 +16,7 @@ from tests.replay.conftest import (
     FLAT,
     HOLDING,
     RAISING,
+    bars,
     carded,
     composed,
     document,
@@ -129,6 +133,40 @@ def test_the_payload_is_one_json_object(ws: Workspace, store: StateStore, carded
     assert payload["ts_ns"] == 0
 
 
+def test_both_paths_were_released_the_same_stream_and_the_payload_says_which(
+    ws: Workspace, store: StateStore, carded_hyp: str
+) -> None:
+    """The count and the digest each session recorded travel into the evidence, so a
+    certificate shows what both paths were fed even once the sessions are gone."""
+    result = replay.parity(ws, store, hyp=carded_hyp)
+    payload = result.payload()
+    node = replay.show(ws, result.node)
+
+    assert result.fed is None
+    assert payload["node_released"] == payload["engine_released"] == node.released > 0
+    assert payload["node_stream"] == payload["engine_stream"] == node.stream_sha256
+    assert node.stream_sha256 is not None
+
+
+def test_two_sessions_released_different_points_diverge_on_the_stream(ws: Workspace) -> None:
+    """Read back from disk: the same orders over different data are not agreement."""
+    from tests.replay.test_record import session
+
+    days = [record.Point.of(bar) for bar in bars((date(2024, 3, 1), date(2024, 3, 2)))]
+    orders = [intent()]
+    node = record.write(ws, session(mode="node", released=2), days, orders)
+    engine = record.write(ws, session(mode="engine", released=2), days[::-1], orders)
+
+    result = of_sessions(ws, node, engine)
+
+    assert not result.identical
+    assert result.compared == 1
+    assert result.divergence == result.fed
+    assert result.divergence is not None
+    assert result.divergence.field == STREAM
+    assert result.divergence.render().startswith("stream: stream_sha256 is ")
+
+
 # --- the comparison itself ----------------------------------------------------
 
 
@@ -193,6 +231,52 @@ def test_a_price_that_differs_is_a_divergence() -> None:
 
     assert divergence is not None
     assert divergence.field == "price"
+
+
+def fed(node: tuple[int, str | None], engine: tuple[int, str | None]) -> Parity:
+    """The same single order on both paths, released what each of these says."""
+    return Parity(
+        node="n",
+        engine="e",
+        ts_ns=0,
+        node_orders=(intent(),),
+        engine_orders=(intent(),),
+        max_ts_delta_ns=0,
+        node_released=node[0],
+        engine_released=engine[0],
+        node_stream=node[1],
+        engine_stream=engine[1],
+    ).at(0)
+
+
+def test_a_path_released_fewer_points_diverges_whatever_it_submitted() -> None:
+    """A count that differs is the first divergence, and no tolerance reaches it."""
+    result = fed((9, "a" * 64), (10, "a" * 64))
+
+    assert not result.identical
+    assert not result.at(10**9).identical
+    assert result.divergence is not None
+    assert result.divergence.index is None
+    assert result.divergence.field == RELEASED
+    assert (
+        result.divergence.render()
+        == "stream: released is 9 on the node path and 10 on the engine path"
+    )
+
+
+def test_the_same_count_of_other_points_diverges_on_the_digest() -> None:
+    result = fed((10, "a" * 64), (10, "b" * 64))
+
+    assert result.divergence is not None
+    assert result.divergence.field == STREAM
+    assert result.payload()["divergence"] == result.divergence.render()
+
+
+def test_a_session_without_a_digest_is_compared_on_its_count_alone() -> None:
+    """A session written before the digest has none; its count is all there is to compare."""
+    assert fed((10, None), (10, "a" * 64)).identical
+    assert fed((10, None), (10, None)).identical
+    assert not fed((10, None), (11, None)).identical
 
 
 def test_a_verdict_can_be_asked_again_at_another_tolerance() -> None:

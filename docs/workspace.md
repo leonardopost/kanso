@@ -1676,23 +1676,72 @@ be standing when the long-running node arrives.
 
 ## `sessions/`
 
-One directory per run of a node: `session.yaml`, the points released (`stream.jsonl`) and the
-order intents that came back (`intents.jsonl`). A book's changes of one instrument at one
-instant are released as one point, so they are one line of the stream. Replay writes one, a parity comparison writes
-two — one per code path — and a deployment that actually runs a node writes one. They are the
-evidence behind a `parity_replay` gate and behind a stage's realised window. The sessions a
-warmed target was fed before its range are not among the points released, and `clock_ns` is
-never inside them: a session claims what it was asked for, and a stage resumes into its
-window rather than into its prefix.
+One directory per run of a node: `session.yaml` and the order intents that came back
+(`intents.jsonl`). Replay writes one, a parity comparison writes two — one per code path —
+and a deployment that actually runs a node writes one. They are the evidence behind a
+`parity_replay` gate and behind a stage's realised window. The sessions a warmed target was
+fed before its range are not among the points released, and `clock_ns` is never inside
+them: a session claims what it was asked for, and a stage resumes into its window rather
+than into its prefix.
 
-They accumulate and nothing prunes them; the directory is gitignored. `kanso replay show`
-lists what is on disk, so deleting a session directory removes it from the listing cleanly —
-the certificate that cites it still stands, it just no longer has the stream to show you.
+**The points a session released are recorded, not kept.** `released` counts them and
+`stream_sha256` is the sha256 of their stream: one JSON object per point — `instrument`,
+`ts_event`, `ts_init`, `type`, keys sorted — and a newline. That stream is the window's
+catalog points in feed order, cut where the feed stopped: an input both code paths were
+handed, every point of which the catalog already holds. Written out it was most of every
+session and nothing read it — measured on 2026-10-02 at 0.5 to 0.8 GB a parity pair for a
+month of five-second bars on a dozen names and 1.5 GB a pair on a level-two book, the node's
+copy and the engine's byte for byte the same. The digest keeps what those copies proved:
+`kanso replay parity` and the `parity_replay` gate compare the two paths' counts and digests
+before their orders, and two paths released different points fail whatever they submitted.
+To see the points themselves, replay the session over its range again; on the same catalog
+it releases the same stream, and the digest says whether it did. A book's changes of one
+instrument at one instant are released as one point, so they are one line of that stream.
 
-A replay writes its stream while it runs, to `sessions/.spool-<random>.jsonl`, and moves
-that file into its session directory when it writes the record; a replay that is refused or
-fails part-way removes it. One killed outright leaves it behind: nothing reads a spool, and
-it is yours to delete once no replay is running.
+A replay takes the digest as it runs. It streams its range in a card's chunks
+(`kanso replay run`), and each path folds what a chunk released into the digest as the
+chunk is released, so a replay holds neither its stream nor its window whole, and the
+digest of a range streamed a chunk at a time is the digest of the same range run whole.
+Nothing is written until the replay has finished: one refused, failed or killed part-way
+leaves nothing in `sessions/`.
+
+**The intents are kept whole.** They are what parity compares — field by field, with an
+instant tolerance a digest cannot honour — and what a reader opens to find where two paths
+parted. They are what a session costs: 15 KB to 13 MB a session on the same two workspaces,
+by how often the strategy trades.
+
+A `session.yaml` with no `stream_sha256` was written by an earlier kanso, which kept the
+stream beside it as `stream.jsonl`. Nothing reads that file, and its sha256 is the digest a
+session of the same points records now — on the demo, the 40,950-line stream kanso 0.13.0
+wrote for the certification window's engine replay hashes under `shasum -a 256` to the
+`stream_sha256` both paths record for it — so deleting it loses nothing kanso uses. From the
+workspace root:
+
+```bash
+rm sessions/*/stream.jsonl
+```
+
+A `.spool-<random>.jsonl` directly under `sessions/` was left by a development build after
+0.13.0 that wrote the stream there while a replay ran and moved it into the session at the
+end; one killed part-way left it behind. Nothing reads one either:
+
+```bash
+rm sessions/.spool-*.jsonl
+```
+
+**What a certificate's citation rests on.** Its `parity_replay` evidence names the two
+sessions (`node`, `engine`) and carries what was compared: each path's count and digest
+(`node_released`, `node_stream`, …), each path's intent count, the widest instant apart and
+the first divergence. `kanso cert show` prints it. So the citation stays meaningful without
+the directories — the verdict and what it was taken over are in the certificate — and what a
+cited session adds is its intents, which are what lets the comparison be read again.
+
+Sessions accumulate and nothing prunes them; the directory is gitignored. `kanso replay show`
+lists what is on disk, so deleting a session directory removes it from the listing cleanly.
+One no certificate names — a replay run by hand, a certification interrupted before it wrote
+— is evidence for nothing kanso keeps; one a certificate names takes that certificate's
+intents with it. Delete a directory only when nothing is running: a certification writes
+the node's session before the engine's, and compares the two once both are on disk.
 
 ## `escalations/inbox.md`
 

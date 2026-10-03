@@ -325,8 +325,11 @@ the same order — the fills so far are priced at the chunk's quotes, the sleeve
 next chunk's markers, the venue is bound to what it carries — so a range is replayed the same
 however it is cut, and the two paths agree at a tolerance of zero over a window of one
 name's or two names' book changes and prints cut to seven points a chunk, as over one handed
-whole. The stream a session records is written as it is released. So a replay holds one read and one chunk of
-its range, never the whole. Measured on 2026-10-02 on one day of OKX BTC-USDT-SWAP's
+whole. What a session records of its stream is a count and a digest (`docs/workspace.md`,
+`sessions/`), folded in as each chunk is released, so the digest of a range cut into chunks is
+the digest of the range run whole and nothing is written until the replay has finished. So a
+replay holds one read and one chunk of its range, never the whole, and keeps none of it on
+disk. Measured on 2026-10-02 on one day of OKX BTC-USDT-SWAP's
 three-level book and prints (5,668,044 points released): `kanso replay parity` gave
 `identical` on 2,556 intents in 874 s at 0.88 GB resident, where the acceptance build that
 read the day whole, earlier that day, reached a 6.0 GB footprint and was stopped; on two days
@@ -1220,11 +1223,11 @@ engine version — every gate with the numbers it decided on, or the reason it j
 $ kanso cert run demo_mr
 verdict    demo_mr · f729a53 · pass
 gates      5 judged · 5 pass · 0 fail · 0 skipped
-           pass  embargoed_window      certification=10.149870877220001, min_fraction=0.5, objective=net_edge_bps, research=9.98672990339711
+           pass  embargoed_window      certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
-           pass  parity_replay         compared=850, divergence=None, engine=20260906T010234Z-engine-6ca3f78, engine_intents=850, identical=True, max_ts_delta_ns=0, node=20260906T010230Z-node-6ca3f78, node_intents=850, ts_ns=0
-           pass  cost_stress           metric_a=5.146082462396991, metric_b=0.14229404757397998, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
-           pass  bootstrap             limit_pct=15.0, mdd_p95=0.38450757237500577, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204389, 12.394500908889786]
+           pass  parity_replay         compared=850, divergence=None, engine=20261002T225814Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261002T225809Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
+           pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
+           pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
 objective  net_edge_bps 10.149871 ± 0.603055
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
