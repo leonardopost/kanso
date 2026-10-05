@@ -229,3 +229,13 @@ def test_hours_are_minutes_after_midnight() -> None:
     assert hours_minutes("00:00-24:00") == (0, 1440)
     with pytest.raises(ValidationError, match="is not HH:MM-HH:MM"):
         hours_minutes("9:30-16:00")
+
+
+def test_a_verdict_no_cell_could_pass_is_refused() -> None:
+    from kanso.schemas.screen import p_floor
+
+    assert p_floor(3) == 0.25 and p_floor(1) == 1.0
+    verdict = {"alpha": 0.01, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 3}
+    with pytest.raises(ValidationError, match="smallest p 3 session"):
+        build(verdict=verdict)
+    build(verdict={**verdict, "min_sessions": 8})

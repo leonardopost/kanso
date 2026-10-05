@@ -65,6 +65,15 @@ _NS: Final = {
 _HOURS: Final = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])-([01][0-9]|2[0-4]):([0-5][0-9])$")
 
 
+def p_floor(sessions: int) -> float:
+    """The smallest p a session sign-flip null can give over this many sessions.
+
+    The observed signs and their negation both reach the observed |t|, so of the 2^S sign
+    vectors at least two do: no draw count reads a p below 2^(1 - S).
+    """
+    return float(2.0 ** (1 - sessions))
+
+
 def span_ns(text: str, field: str = "span") -> int:
     """`"250ms"` to 250,000,000 nanoseconds; a lag keeps its sign."""
     match = _SPAN.match(text)
@@ -294,13 +303,24 @@ class ScreenVerdict(KansoModel):
     """The floors a cell is judged against, declared before any number is read.
 
     There is no default for any of them: a screen with no `verdict` measures everything and
-    judges nothing.
+    judges nothing. One whose `alpha` is below the smallest p `min_sessions` sessions can give
+    (`p_floor`) is refused, because no cell could pass it.
     """
 
     alpha: float = Field(gt=0, lt=1)
     min_margin_bp: float = Field(allow_inf_nan=False)
     min_events_per_day: float = Field(ge=0, allow_inf_nan=False)
     min_sessions: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _passable(self) -> ScreenVerdict:
+        floor = p_floor(self.min_sessions)
+        if self.alpha < floor:
+            raise ValueError(
+                f"alpha: {self.alpha:g} is below {floor:.3g}, the smallest p {self.min_sessions} "
+                f"session(s) can give, so no cell could pass; raise min_sessions or alpha"
+            )
+        return self
 
 
 class Screen(Versioned):

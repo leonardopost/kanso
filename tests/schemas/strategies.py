@@ -772,7 +772,7 @@ def screens(draw: st.DrawFn) -> Screen:
                 alpha=st.floats(0.001, 0.2),
                 min_margin_bp=st.floats(-5, 50),
                 min_events_per_day=st.floats(0, 500),
-                min_sessions=st.integers(1, 250),
+                min_sessions=st.integers(12, 250),
             )
         ),
     )

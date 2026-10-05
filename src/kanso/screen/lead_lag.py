@@ -13,13 +13,15 @@ the realised one, of returns that are not demeaned (`correlation`).
 
 **Without a grid** (`estimator: hy`), each series moves at its own instants and nothing is
 sampled. The value is the Hayashi–Yoshida covariance of the two sequences of returns, b's
-intervals moved back by the lag, over the product of the two realised variances:
+intervals moved back by the lag, scaled to a correlation:
 
     HY(k) = sum over i, j of da_i db_j 1{(t_i-1, t_i] meets (u_j-1 - k, u_j - k]}
 
 so every pair of returns whose intervals overlap once b is moved back by k counts, and none
-other. A grid at a fine step mostly samples prices that have not moved, which shrinks a
-correlation towards zero as the step shrinks (the Epps effect); this has no step to shrink.
+other, over the two realised variances measured on one clock, the sparser series' instants
+(`_variance`). A grid at a fine step mostly samples prices that have not moved, which shrinks a
+correlation towards zero as the step shrinks (the Epps effect); the covariance has no step to
+shrink.
 Several points at one instant are one point, the last, because an interval of no length
 holds no return. The sum is taken interval by interval with a cumulative sum, so a session
 of n and m points costs n log m.
@@ -149,10 +151,30 @@ def hayashi_yoshida(
     first = np.maximum(np.searchsorted(shifted, a_times[:-1], side="right"), 1)
     last = np.minimum(np.searchsorted(shifted, a_times[1:], side="left"), len(b_times) - 1)
     overlapping = np.where(last >= first, cumulative[last] - cumulative[first - 1], 0.0)
-    scale = float(np.sqrt(np.add.reduce(da * da) * np.add.reduce(db * db)))
+    clock = a_times if len(a_times) <= len(b_times) else b_times
+    scale = float(
+        np.sqrt(_variance(a_times, a_levels, clock) * _variance(b_times, b_levels, clock))
+    )
     if scale == 0.0:
         return float("nan")
     return float(np.add.reduce(da * overlapping) / scale)
+
+
+def _variance(times: np.ndarray, levels: np.ndarray, clock: np.ndarray) -> float:
+    """A series' realised variance on `clock`: its level as of each instant, differenced.
+
+    Both series of a Hayashi–Yoshida correlation are scaled on the sparser one's instants.
+    Each one's variance on its own instants is measured at another frequency, and prints that
+    come in runs inside a second carry less variance tick by tick than a second does: measured
+    on 2026-09-22 on an exchange's BTC perpetual, the prints' own realised variance was 1.71e-4
+    and the one-second bars' 3.75e-4, which read the prints against their own bars as a
+    correlation of 1.49. On one clock the two variances measure one thing, and a series against
+    itself reads one.
+    """
+    index = np.searchsorted(times, clock, side="right") - 1
+    sampled = levels[index[index >= 0]]
+    steps = np.diff(sampled)
+    return float(np.add.reduce(steps * steps))
 
 
 def _lagged(a: np.ndarray, b: np.ndarray, steps: int) -> float:

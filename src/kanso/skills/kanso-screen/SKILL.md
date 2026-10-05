@@ -23,6 +23,7 @@ A screen measures declared relationships between declared series over a declared
 
 ## Declare the verdict before you run
 - Write `verdict: {alpha, min_margin_bp, min_events_per_day, min_sessions}` before `kanso screen run`, from the campaign's own target: what `ceiling_bp_day` would make the mechanism worth a lane.
+- Sessions are the unit: S sessions can give no p below 2^(1−S), and a verdict asking for less is refused. Screen at least seven sessions for an alpha of 0.05, more for a stricter one.
 - Never edit thresholds after reading numbers. New bytes are a new result; the old one stays, and `kanso screen show <id>` lists both.
 
 ## Get the data; missing data is never a reason to stop

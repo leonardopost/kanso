@@ -288,7 +288,10 @@ lead a screen finds is a lead in what was public.
 returns are not demeaned, because a session's mean return is noise and taking it out of a few
 biases the correlation towards −1/(n−1). Without one (`hy`), the Hayashi–Yoshida covariance of
 the two series' own returns, every pair of intervals that overlap once one series is moved back
-by the lag: a grid at a fine step mostly samples prices that have not moved and shrinks a
+by the lag, scaled by both series' realised variances on one clock — the sparser one's instants,
+because prints that come in runs carry less variance tick by tick than a second does, and
+scaled each on its own clock an exchange's BTC prints read 1.49 against their own one-second
+bars: a grid at a fine step mostly samples prices that have not moved and shrinks a
 correlation towards zero as the step shrinks, and this has no step to shrink, so it is the one
 for prints against prints. A lead shorter than a second between two sources whose timestamps
 mean different things — an exchange's own instant and a consolidated tape's, or one nobody
@@ -334,7 +337,9 @@ roughly independent of each other. Lag zero is refused: the same instant's co-mo
 lead.
 
 **Thresholds are declared, never defaulted.** A screen with no `verdict` measures everything and
-judges nothing. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
+judges nothing. Sign flips over S sessions can give no p below 2^(1−S) — the observed signs and their
+negation both reach the observed t — so a verdict whose `alpha` is below what its `min_sessions`
+allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
 judge — and the verdict is part of the file's bytes, so loosening it after reading a number is a
 new screen with a new result, beside the old one.
 

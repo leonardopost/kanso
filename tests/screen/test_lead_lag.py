@@ -195,3 +195,21 @@ def test_hy_reads_nothing_when_a_side_is_too_short_flat_or_absent() -> None:
     empty = {"a": Series(ts=np.zeros(0, np.int64), price=np.zeros(0)), "b": asynchronous(1)["b"]}
     values, _ = lead_lag.session(HY, measure, empty, (0, 10**15), True, {})
     assert all(math.isnan(value) for value in values)
+
+
+def test_a_series_against_its_own_coarser_sampling_reads_one_and_not_more() -> None:
+    # Prints that come in runs inside a second carry less variance tick by tick than a
+    # second does: scaled by their own realised variances the two read above one, as an
+    # exchange's prints against its own one-second bars once read 1.49.
+    rng = np.random.default_rng(3)
+    steps = np.repeat(rng.normal(scale=1e-4, size=20_000), 5) * rng.uniform(0.5, 1.5, 100_000)
+    times = np.arange(1, 100_001, dtype=np.int64) * 200 * MS
+    levels = np.cumsum(steps)
+    seconds = times[4::5]
+    coarse = levels[4::5]
+
+    value = lead_lag.hayashi_yoshida(times, levels, seconds, coarse, 0)
+
+    own = np.sqrt(np.sum(np.diff(levels) ** 2) * np.sum(np.diff(coarse) ** 2))
+    assert value == pytest.approx(1.0, abs=0.02)
+    assert np.sum(np.diff(coarse) ** 2) / own > 1.5
