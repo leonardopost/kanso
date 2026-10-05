@@ -9,6 +9,7 @@ worth autoresearch's tokens — is decided by whoever reads it; a screen never r
 
 from __future__ import annotations
 
+from kanso.screen.data import Fetched, LegPlan, fetch, plan
 from kanso.screen.files import (
     SCREEN_FILE,
     SCREENS,
@@ -23,10 +24,14 @@ from kanso.screen.library import catalogue, check, screen_version
 __all__ = [
     "SCREENS",
     "SCREEN_FILE",
+    "Fetched",
+    "LegPlan",
     "Validated",
     "catalogue",
     "check",
     "check_id",
+    "fetch",
+    "plan",
     "scaffold",
     "screen_dir",
     "screen_version",

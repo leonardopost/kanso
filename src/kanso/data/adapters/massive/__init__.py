@@ -26,7 +26,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from datetime import date
+from typing import TYPE_CHECKING, Any, Final
 
 from kanso import creds
 from kanso.data.adapters.massive.client import (
@@ -181,6 +182,49 @@ class MassiveAdapter:
     kind: str = KIND
     capabilities: Capabilities = CAPABILITIES
     credentials: tuple[str, ...] = CREDENTIALS
+    timestamps: str = "consolidated_tape"
+    """A print's or a quote's `ts_init` is the consolidated tape's instant (`sip_timestamp`),
+    and a bar's is its close: the tape's clock, not any venue's own."""
+
+    def serves(self, ws: Workspace, definition: object, resolution: str | None) -> tuple[str, ...]:
+        """What a screen can fetch through this adapter for one instrument definition.
+
+        A US equity's bars, prints and quotes — the request path's three, which take a
+        symbol and the operator's venue — and nothing for any other class: a screen leg is
+        a market series, and the fundamentals loaders are not one.
+        """
+        from nautilus_trader.model.enums import AssetClass
+
+        if getattr(definition, "asset_class", None) != AssetClass.EQUITY:
+            return ()
+        if str(getattr(definition, "quote_currency", "")) != "USD":
+            return ()
+        return ("bar", "trade", "quote")
+
+    def spec_for(
+        self,
+        ws: Workspace,
+        definition: Any,
+        kind: str,
+        resolution: str | None,
+        start: date,
+        end: date,
+    ) -> tuple[str, dict[str, object]]:
+        """The request-path loader and spec that fetch one series of one equity."""
+        loader = {"bar": "massive_bars", "trade": "massive_trades", "quote": "massive_quotes"}
+        ident = definition.id
+        spec: dict[str, object] = {
+            "loader": loader[kind],
+            "asset_class": "stocks",
+            "instruments": [str(ident.symbol)],
+            "venue": str(ident.venue),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "price_precision": int(getattr(definition, "price_precision", 2)),
+        }
+        if kind == "bar":
+            spec["resolution"] = resolution
+        return loader[kind], spec
 
     def config(self, ws: Workspace) -> MassiveConfig:
         """The `[adapters.massive]` table, validated by this adapter's own model."""

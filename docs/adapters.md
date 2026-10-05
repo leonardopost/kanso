@@ -178,6 +178,16 @@ established, which is a fifth answer and not one of the four above.
 
 That is the offer, not your plan. Run `kanso data adapters --check` for the second.
 
+### What it declares to a screen
+
+`timestamps` is `consolidated_tape`: a print's and a quote's `ts_init` is the tape's instant
+(`sip_timestamp`), and a bar's is its close, on the tape's clock rather than any venue's own.
+`serves` answers `bar`, `trade` and `quote` for an instrument the store defines as a US equity
+— a definition of asset class equity quoted in USD — and nothing for any other, and
+`spec_for` writes the request-path spec those three loaders take: `asset_class: stocks`, the
+symbol, the instrument's own venue, the window and, for bars, the resolution. A screen that
+fetches through it needs `KANSO_MASSIVE_API_KEY`, as any request-path load does.
+
 ### Loaders
 
 | loader | serves | transport |
@@ -846,6 +856,16 @@ measured by walking the history back to an empty page — two requests for a swa
 every eight hours — and the first whole UTC day served is the oldest settlement's day when
 it fell at midnight, the next day otherwise.
 
+### What it declares to a screen
+
+`timestamps` is `exchange`: a print's and a book change's `ts_init` is the exchange's own
+instant, and a bar's is its close on that clock. `serves` answers `trade` and `book` for a
+swap on this venue, and `bar` beside them when the leg's bar size is one the candle endpoint
+serves; nothing for an instrument on any other venue. `spec_for` writes the public-history
+spec of `okx_bars`, `okx_trades` or `okx_book` for the window, a book exact to one level —
+a screen reads the touch and nothing deeper. No credential is sent; `[adapters.okx]` must
+name a region, as for any load.
+
 ### The venue it declares
 
 Instruments trade on the venue `OKX`, the exchange's own, and an instrument id is the
@@ -964,6 +984,18 @@ connects, which is the point of their being declarations. A workspace extension 
 clients in an `EXEC_CLIENTS` table instead, exactly as it declares gates, and names the ids
 in `PROVIDES["exec_clients"]` so that shadowing one that ships is reported — a packaged id
 wins, so an extension that claimed one would be registered nowhere.
+
+Three more members are optional, and are what a screen asks (`docs/concepts.md`, Screen):
+`timestamps`, a word saying what the adapter's points' `ts_init` is — `exchange` for an
+exchange's own instant, `consolidated_tape` for a tape's, or what else it is; `serves(ws,
+definition, resolution)`, the leg types — `bar`, `trade`, `quote`, `book` — the adapter can
+fetch for one instrument definition at that bar size; and `spec_for(ws, definition, kind,
+resolution, start, end)`, the loader id and the spec document that fetch is made with. A
+screen plans a leg its catalog lacks onto the first adapter, by id, that serves it, and
+fetches it with `kanso data backfill`'s own machinery from the spec it was given. An adapter
+that declares none of the three serves no screen and is otherwise unchanged; nothing is
+asked of it to answer them — no credential, no request — so a plan is made in a workspace
+holding none.
 
 Two things are worth copying rather than reinventing.
 

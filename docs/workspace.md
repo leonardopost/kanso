@@ -72,6 +72,7 @@ never edits the file.
 | `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
 | `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
 | `screens/<id>/screen.yaml` | `screen new` | **yes** |
+| `screens/<id>/specs/` | `screen run`, the loader specs its fetches were made with | no — a record of what was fetched |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
 | `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |

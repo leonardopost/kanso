@@ -526,6 +526,12 @@ class HouseAdapter:
     def provider(self, ws): ...  # a kanso.data.instruments.InstrumentProvider, or None
     def survey(self, ws): ...  # measured reach: Survey
 
+    # Optional, and what a screen asks of it (docs/adapters.md):
+    timestamps: str = "exchange"  # what a point's ts_init is
+
+    def serves(self, ws, definition, resolution): ...  # leg types it can fetch: ("bar", "trade")
+    def spec_for(self, ws, definition, kind, resolution, start, end): ...  # (loader id, spec)
+
 
 ADAPTER = HouseAdapter()
 ADAPTERS = {"house": ADAPTER}

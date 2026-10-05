@@ -69,7 +69,25 @@ def _new(ws: Workspace, screen_id: str, hyp_id: str | None) -> Report:
 def _validate(ws: Workspace, path: Path) -> Report:
     with store(ws) as opened:
         valid = screen.validate(ws, opened, path)
-    return Report(data=_summary(valid, path), lines=_summary_lines(valid, path))
+        plans = screen.plan(ws, opened, valid.screen, valid.window)
+    data = {**_summary(valid, path), "data": [item.payload() for item in plans]}
+    return Report(data=data, lines=_summary_lines(valid, path) + _plan_lines(plans))
+
+
+def _plan_lines(plans: tuple[screen.LegPlan, ...]) -> tuple[str, ...]:
+    """One line per series the screen reads: what it is and what getting it takes."""
+    lines: list[str] = []
+    for item in plans:
+        grain = f" {item.resolution}" if item.resolution else ""
+        head = f"{','.join(item.legs)}  {item.instrument} {item.type}{grain} · {item.state}"
+        if item.state == "fetchable":
+            ready = "configured" if item.configured else "not configured"
+            spans = ", ".join(f"{start}..{end}" for start, end in item.missing)
+            head += f" · {item.loader} via {item.adapter} ({ready}) · {spans}"
+        lines.append(field("data", head) if not lines else indent(head))
+        if item.state == "unserved" and item.reason:
+            lines.append(indent(f"  {item.reason}"))
+    return tuple(lines)
 
 
 def _summary(valid: screen.Validated, path: Path) -> dict[str, Any]:
