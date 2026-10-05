@@ -119,7 +119,7 @@ def test_the_screen_skill_names_what_the_screen_reads_and_refuses() -> None:
     from kanso.schemas.screen import ScreenVerdict
 
     text = skill(PACKAGED, "kanso-screen")
-    for state in ("held", "fetchable", "unserved"):
+    for state in ("held", "fetchable", "unresolved", "unserved"):
         assert f"`{state}`" in text, state
     for floor in ScreenVerdict.model_fields:
         assert floor in text, floor

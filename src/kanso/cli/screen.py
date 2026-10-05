@@ -138,7 +138,7 @@ def _plan_lines(plans: tuple[screen.LegPlan, ...]) -> tuple[str, ...]:
             spans = ", ".join(f"{start}..{end}" for start, end in item.missing)
             head += f" · {item.loader} via {item.adapter} ({ready}) · {spans}"
         lines.append(field("data", head) if not lines else indent(head))
-        if item.state == "unserved" and item.reason:
+        if item.state in ("unresolved", "unserved") and item.reason:
             lines.append(indent(f"  {item.reason}"))
     return tuple(lines)
 

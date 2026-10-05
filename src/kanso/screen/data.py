@@ -1,14 +1,18 @@
 """The data a screen needs: what the catalog holds, what an adapter can fetch, and the fetch.
 
-**Missing data is fetched or built, never skipped.** Every leg is in one of three states:
+**Missing data is fetched or built, never skipped.** Every leg is in one of four states:
 
 * **held** — the catalog serves the leg's series on every day of the window its market opened;
 * **fetchable** — it does not, and a registered adapter declares that it serves the leg's
   instrument at the leg's type: the plan names the adapter and its loader, and `fetch`
   backfills the missing days through that loader, exactly as `kanso data backfill` would;
-* **unserved** — no registered adapter serves it, and the remedy is to build one: a data
-  adapter written as a workspace extension against the protocol `docs/extensions.md`
-  states, driven against the live source, then moved upstream.
+* **unresolved** — it is not held, and no definition of its instrument resolves, so no
+  adapter can yet be asked whether it serves it: the remedy is to resolve it, under the key
+  the reference adapter answers to, or by a manual entry — never to build an adapter, which
+  the instrument may well have already;
+* **unserved** — it resolves, and no registered adapter serves it, and the remedy is to build
+  one: a data adapter written as a workspace extension against the protocol
+  `docs/extensions.md` states, driven against the live source, then moved upstream.
 
 **What an adapter declares, and nothing it is asked.** Three optional members of the
 adapter protocol carry a screen's questions, so nothing here names a vendor: `serves`, the
@@ -20,7 +24,10 @@ none of them serves nothing here and is otherwise unchanged.
 **A leg's instrument is defined before it is fetched.** A definition the store does not
 hold is resolved the way `kanso data instruments resolve` resolves it — the manual entry, the
 cache, then the workspace's reference adapter — asked without recording in `plan`, and
-recorded in `fetch`. One no path resolves leaves the leg unserved, named.
+recorded in `fetch`. One no path resolves leaves the leg unresolved, with the refusal. A
+vendor whose keys carry no venue answers a qualified id it has never filed with a client
+error — measured live for a Nasdaq equity asked for as `SYMBOL.XNAS` — so the remedy names
+the resolve command and the id's symbol, the key such a vendor answers to.
 
 **The fetch writes what a backfill writes.** One spec per series under
 `screens/<id>/specs/`, then the backfill: chunked, each chunk's manifest its checkpoint,
@@ -50,7 +57,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
-State = Literal["held", "fetchable", "unserved"]
+State = Literal["held", "fetchable", "unresolved", "unserved"]
 
 SPECS: Final = "specs"
 """The directory under a screen's own where the specs its fetches were made with are kept."""
@@ -126,7 +133,7 @@ class Fetched:
 def plan(
     ws: Workspace, store: StateStore, screen: Screen, window: tuple[date, date]
 ) -> tuple[LegPlan, ...]:
-    """Every series the screen reads, held, fetchable or unserved over `window`."""
+    """Every series the screen reads, held, fetchable, unresolved or unserved over `window`."""
     known = registry.adapters(ext.discover(ws.root, ws.config.extensions_paths))
     held = {
         (item.instrument, item.type, item.resolution): item for item in commands.series(ws, store)
@@ -150,7 +157,20 @@ def plan(
             )
             continue
         missing = tuple(commands.missing(spans, window, closed))
-        server = None if definition is None else _server(ws, known, definition, kind, resolution)
+        if definition is None:
+            plans.append(
+                LegPlan(
+                    *key,
+                    legs,
+                    "unresolved",
+                    missing=missing,
+                    defined=False,
+                    timestamps=stamps,
+                    reason=reason,
+                )
+            )
+            continue
+        server = _server(ws, known, definition, kind, resolution)
         if server is None:
             plans.append(
                 LegPlan(
@@ -160,7 +180,7 @@ def plan(
                     missing=missing,
                     defined=instrument in defined,
                     timestamps=stamps,
-                    reason=reason or _unserved(instrument, kind, resolution),
+                    reason=_unserved(instrument, kind, resolution),
                 )
             )
             continue

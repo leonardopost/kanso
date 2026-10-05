@@ -131,7 +131,7 @@ def test_a_us_equity_the_catalog_lacks_is_fetchable_through_the_tape_vendor(
     assert "fetchable · massive_bars via massive (not configured)" in human.stdout
 
 
-def test_a_series_no_adapter_serves_is_unserved_and_says_to_build_one(
+def test_a_series_no_adapter_serves_is_unserved_and_one_never_defined_is_unresolved(
     runner: CliRunner, loaded: Path
 ) -> None:
     path = july(
@@ -147,10 +147,12 @@ def test_a_series_no_adapter_serves_is_unserved_and_says_to_build_one(
     assert book["state"] == "unserved"
     assert "no registered adapter serves DEMO.SIM as book" in book["reason"]
     assert "workspace extension" in book["reason"]
-    assert nope["state"] == "unserved" and nope["defined"] is False
+    assert nope["state"] == "unresolved" and nope["defined"] is False
     assert "no definition of NOPE.SIM resolves" in nope["reason"]
+    assert "workspace extension" not in nope["reason"]
     human = at(runner, loaded, "screen", "validate", path)
     assert "DEMO.SIM book · unserved" in human.stdout
+    assert "NOPE.SIM trade · unresolved" in human.stdout
 
 
 def test_a_fetch_backfills_what_was_missing_and_snapshots_it(loaded: Path, synthetic: None) -> None:

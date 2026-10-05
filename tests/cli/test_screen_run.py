@@ -206,6 +206,21 @@ def test_a_series_no_adapter_serves_is_refused_before_anything_is_read(
     assert "workspace extension" in payload(result)["remedy"]
 
 
+def test_an_instrument_no_definition_resolves_is_refused_with_the_resolve_command(
+    runner: CliRunner, loaded: Path
+) -> None:
+    other = {**OU, "legs": {"a": {"instrument": "NOPE.SIM", "type": "bar", "resolution": "1h"}}}
+
+    result = at(runner, loaded, "screen", "run", write_screen(loaded, other), "--json")
+
+    # Not "build an adapter": the instrument may be served already, and resolving it under
+    # the key its vendor files is what the operator has to do.
+    assert result.exit_code == Exit.PRECONDITION
+    assert "no definition of NOPE.SIM resolves" in payload(result)["error"]
+    assert "`kanso data instruments resolve NOPE`" in payload(result)["remedy"]
+    assert "workspace extension" not in payload(result)["remedy"]
+
+
 def test_a_snapshot_that_does_not_cover_is_not_pinned(
     runner: CliRunner, loaded: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

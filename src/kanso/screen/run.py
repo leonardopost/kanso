@@ -94,6 +94,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     screen, window = valid.screen, valid.window
     embargo.refuse_certification_data(ws, store, screen, window)
     plans = data.plan(ws, store, screen, window)
+    _refuse_unresolved(plans)
     _refuse_unserved(plans)
     fetched = data.fetch(ws, store, screen, window, plans)
     catalog = open_catalog(ws)
@@ -442,6 +443,20 @@ def _staleness(sessions_seen: Sequence[dict[str, float]]) -> dict[str, float]:
 
 def _trades(screen: Screen) -> bool:
     return any(isinstance(measure, Response) for measure in screen.measures)
+
+
+def _refuse_unresolved(plans: Sequence[data.LegPlan]) -> None:
+    unresolved = [item for item in plans if item.state == "unresolved"]
+    if unresolved:
+        reasons = "; ".join(item.reason or item.instrument for item in unresolved)
+        keys = " ".join(sorted({item.instrument.rsplit(".", 1)[0] for item in unresolved}))
+        raise PreconditionError(
+            f"the screen reads instruments no definition resolves: {reasons}",
+            remedy=f"resolve them under the keys the reference adapter answers to — "
+            f"`kanso data instruments resolve {keys}`, the ids' symbols, is what a vendor "
+            "whose keys carry no venue files — or give each a manual entry in "
+            "instruments.yaml, then run the screen again",
+        )
 
 
 def _refuse_unserved(plans: Sequence[data.LegPlan]) -> None:

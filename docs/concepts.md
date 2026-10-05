@@ -323,8 +323,10 @@ A spread's increments against their own past is mean reversion measured without 
 
 **Missing data is fetched, never skipped.** A series the catalog lacks is fetched through the
 adapter that declares it serves it, and a snapshot taken; data held but frozen by no snapshot is
-frozen; a series no adapter serves is refused, and the remedy is to build one
-(`docs/adapters.md`, the three declarations a screen asks).
+frozen; an instrument no definition resolves is refused, and the remedy is to resolve it — under
+the key the reference adapter files it by, which for a vendor whose keys carry no venue is the
+id's symbol, or by a manual entry; a series that resolves and that no adapter serves is refused,
+and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks).
 
 **The session is the unit of replication, and the family is the lattice.** A cell's evidence is
 one value per session — for `lead_lag`, the correlation of one series' returns with another's at

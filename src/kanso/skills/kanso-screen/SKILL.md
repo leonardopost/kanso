@@ -27,9 +27,10 @@ A screen measures declared relationships between declared series over a declared
 - Never edit thresholds after reading numbers. New bytes are a new result; the old one stays, and `kanso screen show <id>` lists both.
 
 ## Get the data; missing data is never a reason to stop
-- `kanso screen validate <path>` prints each series `held`, `fetchable` (with the adapter, its loader and whether it is configured) or `unserved`, and the venue model each hurdle is struck under. It fetches nothing.
+- `kanso screen validate <path>` prints each series `held`, `fetchable` (with the adapter, its loader and whether it is configured), `unresolved` or `unserved`, and the venue model each hurdle is struck under. It fetches nothing.
 - `kanso screen run <path>` fetches every fetchable series itself, resolves undefined instruments, and freezes a snapshot when what it holds has not been frozen.
-- `unserved` means no adapter serves that venue or type: build one. Write it as a workspace extension in `kanso_ext/` against the data-adapter protocol (`docs/extensions.md`), declaring `timestamps`, `serves` and `spec_for`; drive it against the live source and record the measured responses as its fixtures; run the screen again; move it upstream with skill `kanso-upstream`.
+- `unresolved` means no definition of the instrument resolves yet, which says nothing about whether an adapter serves it: resolve it first, under the key the reference adapter files it by (`kanso data instruments resolve MSTR` for `MSTR.XNAS`), or give it a manual entry in `instruments.yaml`, then validate again. Never build an adapter for an unresolved instrument.
+- `unserved` means it resolves and no adapter serves that venue or type: build one. Write it as a workspace extension in `kanso_ext/` against the data-adapter protocol (`docs/extensions.md`), declaring `timestamps`, `serves` and `spec_for`; drive it against the live source and record the measured responses as its fixtures; run the screen again; move it upstream with skill `kanso-upstream`.
 - Choose the finest data the mechanism needs (prints or the book for sub-second leads), even when bars are already held.
 
 ## Read the result
