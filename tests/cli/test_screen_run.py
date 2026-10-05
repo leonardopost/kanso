@@ -175,7 +175,7 @@ def test_a_free_window_on_data_a_hypothesis_certifies_on_is_refused(
     assert result.exit_code == Exit.PRECONDITION
     error = payload(result)
     assert "demo_mr certifies on" in error["error"] and INSTRUMENT in error["error"]
-    assert "end the window before 2024-03-31" in error["remedy"]
+    assert "end the window on or before 2024-03-31" in error["remedy"]
 
 
 def test_a_free_window_clear_of_every_certification_span_runs(

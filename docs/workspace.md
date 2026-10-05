@@ -69,8 +69,8 @@ never edits the file.
 | `kanso.toml` | `init` | **yes** — the whole file |
 | `.env` | `init` (empty, mode 600) | **yes** — kanso reads it at each use and writes it never |
 | `models.yaml` | `init` | **yes** |
-| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
-| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
+| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` and `screen draft` (a draft, in a directory each creates) | **yes**, between runs |
+| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore`, `screen draft` | **yes**, between runs |
 | `screens/<id>/screen.yaml` | `screen new` | **yes** |
 | `screens/<id>/specs/` | `screen run`, the loader specs its fetches were made with | no — a record of what was fetched |
 | `screens/<id>/<sha7>-s<snap7>-v<ver7>.yaml` | `screen run` | no — a rendering of the result `state.db` records |
@@ -81,7 +81,7 @@ never edits the file.
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | `hyp explore` or `screen draft` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |

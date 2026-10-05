@@ -62,33 +62,42 @@ def _refuse_one(
         return
     certification = hypothesis.windows.certification
     days = embargo_days(hypothesis.horizon)
-    opens = certification.start - timedelta(days=days)
-    if window[0] > certification.end or window[1] < opens:
+    if clear(window, certification.start, certification.end, days):
         return
+    latest = certification.start - timedelta(days=days)
     raise PreconditionError(
         f"window {window[0]}..{window[1]} meets the data {hypothesis.id} certifies on — "
         f"its certification {certification.start}..{certification.end} and the {days} "
         f"day(s) of embargo before it — on {', '.join(shared)}; a screen chooses ideas, and "
         f"the data that judges one may not have chosen it",
-        remedy=f"end the window before {opens} or begin it after {certification.end}",
+        remedy=f"end the window on or before {latest}, or begin it after {certification.end}",
     )
+
+
+def clear(window: tuple[date, date], start: date, end: date, days: int) -> bool:
+    """Whether data read over `window` may certify over `start..end` under `days` of embargo.
+
+    kanso's own rule for a hypothesis's windows: certification starts no sooner than the
+    embargo after the last day research read, so a window ending `days` before the start is
+    clear; a window wholly after the certification end is clear too.
+    """
+    return window[1] + timedelta(days=days) <= start or window[0] > end
 
 
 def refuse_screened(store: StateStore, hypothesis: Hypothesis) -> None:
     """Refuse a hypothesis that would certify on data a recorded screen read."""
     certification = hypothesis.windows.certification
     days = embargo_days(hypothesis.horizon)
-    opens = certification.start - timedelta(days=days)
     for read in screened(store):
         shared = sorted(set(read.instruments).intersection(hypothesis.universe))
-        if not shared or read.window[0] > certification.end or read.window[1] < opens:
+        if not shared or clear(read.window, certification.start, certification.end, days):
             continue
-        clear = read.window[1] + timedelta(days=days + 1)
+        earliest = read.window[1] + timedelta(days=days)
         raise ValidationError(
             f"windows.certification: {certification.start}..{certification.end}, and the "
             f"{days} day(s) of embargo before it, meet the window {read.window[0]}.."
             f"{read.window[1]} screen {read.screen} read on {', '.join(shared)}; data a "
             f"screen read helped choose an idea, and may not judge one",
-            remedy=f"start the certification window on or after {clear}, or certify on "
+            remedy=f"start the certification window on or after {earliest}, or certify on "
             "data no screen has read",
         )

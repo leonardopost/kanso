@@ -358,6 +358,15 @@ refuses a hypothesis whose certification window, with its embargo, meets a windo
 screen read for one of its instruments. Whichever arrives first, the data that chose an idea
 never judges it.
 
+**From a cell to a lane.** `kanso screen draft` writes one `response` cell as a draft
+hypothesis, registering nothing: its research window is the window the screen read, its
+certification window is the operator's and starts no sooner than the embargo after it, its
+`program.md` carries the cell's numbers, and its `strategy.py` is the cell's own rule as a
+sleeve. So the lane's first act, the baseline card, re-measures the screened cell through the
+runner with real fills — measured on the test workspace's fade, a margin of 17.7 bp an event
+in the screen and a net edge of 12.5 bp a trade on the baseline — and a large gap between the
+two is itself a finding before any proposal is paid for.
+
 **A screen never gates a lane.** `research begin` and `queue add` read no screen result.
 
 ## Card

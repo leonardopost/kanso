@@ -33,16 +33,20 @@ def test_a_hypothesis_certifying_on_screened_data_is_refused_at_validate_and_add
         assert result.exit_code == Exit.VALIDATION, result.stdout
         error = payload(result)
         assert "screen ou_rev read on DEMO.SIM" in error["error"]
-        assert "on or after 2024-03-31" in error["remedy"]
+        assert "on or after 2024-03-30" in error["remedy"]
 
 
 def test_a_certification_window_clear_of_the_embargo_after_a_screen_is_admitted(
     runner: CliRunner, loaded: Path
 ) -> None:
     run_screen(runner, loaded)
-    path = write_hypothesis(loaded, windows=certifying("2024-03-31"))
+    # The screen read to 2024-03-29 and the embargo is a day: the 30th is kanso's own
+    # earliest certification start, and the screen holds it back no further.
+    path = write_hypothesis(loaded, windows=certifying("2024-03-30"))
 
     assert at(runner, loaded, "hyp", "validate", path).exit_code == Exit.OK
+    late = write_hypothesis(loaded, windows=certifying("2024-03-29"))
+    assert at(runner, loaded, "hyp", "validate", late).exit_code == Exit.VALIDATION
 
 
 def test_a_hypothesis_on_other_instruments_is_not_held_to_a_screen_s_window(

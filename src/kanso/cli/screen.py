@@ -13,6 +13,7 @@ No command here calls a model, so none exits 2 for want of one.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -23,7 +24,7 @@ from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import ValidationError
 from kanso.schemas.screen import Cell, LeadLag, ScreenResult
-from kanso.screen import hurdle, records, run
+from kanso.screen import draft, hurdle, records, run
 from kanso.workspace import Workspace
 
 app = typer.Typer(
@@ -75,6 +76,25 @@ def show_command(
 ) -> None:
     """Show a screen's results, newest first, one cell in full, or every screen."""
     emit(as_json or global_json(ctx), lambda: _show(open_workspace(ctx), screen_id, cell))
+
+
+@app.command("draft")
+def draft_command(
+    ctx: typer.Context,
+    screen_id: IdArgument,
+    cell: Annotated[str, typer.Option("--cell", metavar="C", help="A response cell.")],
+    new_id: Annotated[str, typer.Option("--as", metavar="NEW", help="The new hypothesis id.")],
+    certify: Annotated[
+        str | None,
+        typer.Option("--certify", metavar="A..B", help="The certification window; no default."),
+    ] = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Write a draft hypothesis from one response cell; register nothing."""
+    emit(
+        as_json or global_json(ctx),
+        lambda: _draft(open_workspace(ctx), screen_id, cell, new_id, certify),
+    )
 
 
 # -- command bodies ---------------------------------------------------------------
@@ -275,3 +295,30 @@ def _cell_line(cell: Cell) -> str:
         f"{judged}{cell.key}  mean {cell.mean:+.4g} ± {cell.se:.2g} · t {cell.t:+.2f}"
         f" · p {cell.p:.4g} · {cell.sessions} session(s)"
     )
+
+
+def _draft(ws: Workspace, screen_id: str, cell: str, new_id: str, certify: str | None) -> Report:
+    span = None if certify is None else _span(certify)
+    with store(ws) as opened:
+        written = draft.draft(ws, opened, screen_id, cell, new_id, span)
+    path = written.directory / "hypothesis.yaml"
+    lines = (
+        field("drafted", f"{written.hyp_id} · from {screen_id}, cell {cell}"),
+        field("dir", written.directory),
+        field("next", f"kanso hyp validate {path}, then `kanso hyp add` and `kanso classify`"),
+    )
+    return Report(data=written.payload(), lines=lines)
+
+
+def _span(text: str) -> tuple[date, date]:
+    """`YYYY-MM-DD..YYYY-MM-DD`, refused when it is not one or ends before it starts."""
+    start, separator, end = text.partition("..")
+    try:
+        span = (date.fromisoformat(start), date.fromisoformat(end))
+    except ValueError:
+        span = None
+    if not separator or span is None or span[1] < span[0]:
+        raise ValidationError(
+            f"--certify: {text!r} is not a window", remedy="write YYYY-MM-DD..YYYY-MM-DD"
+        )
+    return span
