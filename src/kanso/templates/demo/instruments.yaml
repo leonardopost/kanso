@@ -15,3 +15,14 @@ DEMO.SIM:
     lot_size: "1"
   attributes: {}
   sources: {}
+LAGD.SIM:
+  nautilus_id: LAGD.SIM
+  asset_class: EQUITY
+  manual: true
+  corporate_actions: none
+  override:
+    currency: USD
+    price_increment: "0.01"
+    lot_size: "1"
+  attributes: {}
+  sources: {}

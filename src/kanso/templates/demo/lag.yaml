@@ -1,0 +1,17 @@
+# demo_lag.yaml — a second synthetic loader spec rendered by `kanso init --demo`, for the screen in
+# screens/demo_lag/. LAGD is generated on its own seed with DEMO's parameters and takes 0.6 of DEMO's
+# shock one bar late, so its one-minute returns repeat DEMO's a minute later: a lead the screen has
+# something to find in. DEMO itself is demo.yaml's and is not generated twice.
+loader: synthetic
+model: ou
+seed: 8
+instruments: [LAGD]                # rendered into instruments.yaml as LAGD.SIM by --demo
+resolution: 1m
+start: 2024-01-02
+end: 2025-09-01                    # demo.yaml's span: a follower is drawn over its leader's span
+spread_bps: 2
+volume: 5000
+leader_seed: 7                     # demo.yaml's seed
+leader_index: 0                    # DEMO is demo.yaml's first instrument
+lag_steps: 1
+coupling: 0.6

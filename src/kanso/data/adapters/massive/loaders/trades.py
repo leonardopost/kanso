@@ -134,3 +134,7 @@ class MassiveTradesLoader(RequestLoader):
 
     id: ClassVar[str] = "massive_trades"
     kind: ClassVar[Kind] = TRADES_KIND
+    chunk_days: ClassVar[int] = 1
+    """A liquid name's day is millions of prints — measured, 3.4 million TQQQ quotes and 1.4
+    million NVDA prints on 2026-09-14 — so a dataset holds one day, written as it streams, and
+    a walk that fails loses that day and no other."""

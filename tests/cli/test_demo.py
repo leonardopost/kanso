@@ -15,6 +15,7 @@ ledger `status` reports.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +45,7 @@ def demo(tmp_path_factory: pytest.TempPathFactory) -> Path:
     assert run(runner, "init", root, "--demo").exit_code == Exit.OK
     loaded = at(runner, root, "data", "load", "--loader", "synthetic", "--spec", root / "demo.yaml")
     assert loaded.exit_code == Exit.OK, loaded.stdout
-    resolve = ("data", "instruments", "resolve", "--as-of", "2024-01-02")
+    resolve = ("data", "instruments", "resolve", "DEMO.SIM", "--as-of", "2024-01-02")
     assert at(runner, root, *resolve).exit_code == Exit.OK
     assert at(runner, root, "data", "snapshot").exit_code == Exit.OK
     registered = at(runner, root, "hyp", "add", root / "hypotheses" / DEMO_ID / "hypothesis.yaml")
@@ -154,3 +155,45 @@ def test_every_command_of_the_demo_sequence_prints_one_object_under_json(
         result = at(runner, demo, *args, "--json")
         assert result.exit_code == Exit.OK, (args, result.stdout)
         assert isinstance(json.loads(result.stdout), dict), args
+
+
+def test_the_demo_screen_finds_the_lead_it_plants(
+    runner: CliRunner, demo: Path, tmp_path: Path
+) -> None:
+    """LAGD takes 0.6 of DEMO's shock a minute late; the shipped screen reads it back.
+
+    A known answer, run on every commit: the lead at one minute and nowhere else, and a
+    response that clears the round trip, with the data step the screen does itself.
+    """
+    root = tmp_path / "ws"
+    shutil.copytree(demo, root, symlinks=True)
+    spec = root / "demo_lag.yaml"
+    assert at(runner, root, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
+    resolve = ("data", "instruments", "resolve", "LAGD.SIM", "--as-of", "2024-01-02")
+    assert at(runner, root, *resolve).exit_code == Exit.OK
+
+    result = at(runner, root, "screen", "run", root / "screens/demo_lag/screen.yaml", "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    document = payload(result)
+    assert document["verdict"]["worth_a_lane"] is True
+    shown = at(runner, root, "screen", "show", "demo_lag", "--json")
+    assert shown.exit_code == Exit.OK
+    lead = payload(
+        at(runner, root, "screen", "show", "demo_lag", "--cell", "lead_lag/demo>lagd/1m", "--json")
+    )
+    assert lead["judged"] == "pass" and abs(lead["mean"] - 0.6) < 0.05
+    for lag in ("-1m", "2m", "5m"):
+        other = payload(
+            at(
+                runner,
+                root,
+                "screen",
+                "show",
+                "demo_lag",
+                "--cell",
+                f"lead_lag/demo>lagd/{lag}",
+                "--json",
+            )
+        )
+        assert abs(other["mean"]) < 0.05, lag

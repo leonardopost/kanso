@@ -65,6 +65,22 @@ from kanso.schemas import (
     embargo_days,
     parse_duration,
 )
+from kanso.schemas.screen import (
+    Cell,
+    Clock,
+    Derived,
+    Hours,
+    LeadLag,
+    Leg,
+    Response,
+    Screen,
+    ScreenResult,
+    ScreenVerdict,
+    SeriesRead,
+    Spread,
+    Summary,
+    Trigger,
+)
 
 SAFE_TEXT = st.text(
     alphabet=st.characters(min_codepoint=32, max_codepoint=126), min_size=1, max_size=40
@@ -668,4 +684,158 @@ def sessions(draw: st.DrawFn) -> Session:
         clock_ns=draw(st.none() | st.integers(0, 2**63 - 1)),
         started_at=draw(TIMESTAMPS),
         ended_at=draw(st.none() | TIMESTAMPS),
+    )
+
+
+SCREEN_LEGS = st.from_regex(r"\Al[a-z0-9]{0,6}\Z")
+SCREEN_INSTRUMENTS = st.sampled_from(["BTC-USDT-SWAP.OKX", "MARA.XNAS", "DEMO.SIM"])
+
+
+@st.composite
+def screens(draw: st.DrawFn) -> Screen:
+    """A valid screen: free or bound, with or without derived legs, groups and a verdict."""
+    names = draw(st.lists(SCREEN_LEGS, min_size=2, max_size=4, unique=True))
+    legs: dict[str, Leg] = {}
+    for name in names:
+        kind = draw(st.sampled_from(["bar", "trade", "quote", "book"]))
+        legs[name] = Leg(
+            instrument=draw(SCREEN_INSTRUMENTS),
+            type=kind,
+            resolution="1s" if kind == "bar" else None,
+        )
+    derived: dict[str, Derived] = {}
+    if draw(st.booleans()):
+        derived["d_pair"] = Derived(
+            spread=Spread(
+                long=names[0],
+                short=names[1],
+                hedge="ols",
+                fit=draw(st.sampled_from(["window", "first_fold"])),
+            )
+        )
+    if draw(st.booleans()):
+        derived["d_basket"] = Derived(basket={names[0]: 0.5, names[1]: -0.5})
+    followers = [*names[1:], *derived]
+    groups = {"g_lead": [names[0]], "g_follow": followers}
+    lags = draw(
+        st.lists(
+            st.integers(-3600, 3600).filter(lambda n: n != 0), min_size=1, max_size=5, unique=True
+        )
+    )
+    horizons = draw(st.lists(st.integers(1, 3600), min_size=1, max_size=4, unique=True))
+    measures: list[LeadLag | Response] = [
+        LeadLag.model_validate(
+            {
+                "id": "lead_lag",
+                "from": "g_lead",
+                "to": "g_follow",
+                "estimator": draw(st.sampled_from(["grid", "hy"])),
+                "lags": [f"{lag}s" for lag in lags],
+            }
+        ),
+        Response(
+            id="response",
+            trigger=Trigger(leg=names[0], move_bp=[10.0, 20.0], within="2s")
+            if draw(st.booleans())
+            else Trigger(leg=names[0], z=[2.0], lookback="30m"),
+            followers="g_follow",
+            side=draw(st.sampled_from(["with", "against"])),
+            horizons=[f"{horizon}s" for horizon in horizons],
+            latency_ms=draw(st.floats(0, 1000, allow_nan=False)),
+        ),
+    ]
+    bound = draw(st.booleans())
+    start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
+    return Screen(
+        id=draw(HYP_IDS),
+        title=draw(SAFE_TEXT),
+        thesis=draw(SAFE_TEXT),
+        hyp=draw(HYP_IDS) if bound else None,
+        window=None if bound else DateWindow(start=start, end=start + timedelta(days=30)),
+        legs=legs,
+        derived=derived,
+        groups=groups,
+        clock=Clock(
+            grid="1s",
+            hours=draw(
+                st.sampled_from(["overlap", Hours(tz="America/New_York", span="09:30-16:00")])
+            ),
+        ),
+        measures=measures,
+        costs=None
+        if bound
+        else draw(st.none() | st.just({"OKX": CostsOverride(commission_bps=5)})),
+        verdict=draw(
+            st.none()
+            | st.builds(
+                ScreenVerdict,
+                alpha=st.floats(0.001, 0.2),
+                min_margin_bp=st.floats(-5, 50),
+                min_events_per_day=st.floats(0, 500),
+                min_sessions=st.integers(12, 250),
+            )
+        ),
+    )
+
+
+FINITE = st.floats(-1e6, 1e6, allow_nan=False)
+
+
+@st.composite
+def screen_cells(draw: st.DrawFn) -> Cell:
+    judged = draw(st.sampled_from([None, "pass", "fail", "thin"]))
+    return Cell(
+        measure=draw(st.integers(0, 4)),
+        id=draw(st.sampled_from(["lead_lag", "response"])),
+        key=draw(SAFE_TEXT),
+        params={"from": "a", "to": "b", "lag": "1s"},
+        mean=draw(FINITE),
+        se=draw(st.floats(0, 1e6)),
+        t=draw(FINITE),
+        p=draw(st.floats(1e-5, 1.0)),
+        sessions=draw(st.integers(0, 500)),
+        folds=draw(st.lists(st.none() | FINITE, min_size=2, max_size=6)),
+        folds_same_sign=draw(st.integers(0, 6)),
+        staleness={"a": draw(st.floats(0, 1))},
+        in_sample_fit=draw(st.booleans()),
+        clock_bound=draw(st.booleans()),
+        judged=judged,
+        reason=None if judged in (None, "pass") else draw(SAFE_TEXT),
+    )
+
+
+@st.composite
+def screen_results(draw: st.DrawFn) -> ScreenResult:
+    start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
+    cells = draw(st.lists(screen_cells(), max_size=4))
+    declared = draw(st.booleans())
+    return ScreenResult(
+        screen=draw(HYP_IDS),
+        sha="a" * 64,
+        snapshot="b" * 64,
+        version="0.14.0+0123456789ab",
+        window=DateWindow(start=start, end=start + timedelta(days=30)),
+        hyp=draw(st.none() | HYP_IDS),
+        draws=draw(st.integers(99, 99_999)),
+        folds=draw(st.integers(2, 8)),
+        assumption="sessions are roughly independent of each other",
+        created_at=datetime(2026, 10, 5, 1, 2, 3, tzinfo=UTC),
+        wall_s=draw(st.floats(0, 1e5)),
+        peak_mem_gb=draw(st.floats(0, 64)),
+        series=[
+            SeriesRead(
+                instrument="DEMO.SIM",
+                type="bar",
+                resolution="1h",
+                legs=["a"],
+                timestamps="exchange",
+            )
+        ],
+        cells=cells,
+        summary=Summary(
+            declared=declared,
+            worth_a_lane=draw(st.booleans()) if declared else None,
+            passed=draw(st.integers(0, 9)),
+            best=[cell.key for cell in cells[:1]],
+        ),
     )

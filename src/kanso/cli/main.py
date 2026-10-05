@@ -35,6 +35,7 @@ from kanso.cli import monitor as monitor_commands
 from kanso.cli import portfolio as portfolio_commands
 from kanso.cli import replay as replay_commands
 from kanso.cli import research as research_commands
+from kanso.cli import screen as screen_commands
 from kanso.cli import state as state_commands
 from kanso.cli import status as status_commands
 from kanso.cli import strat as strat_commands
@@ -66,6 +67,7 @@ env_app = typer.Typer(help="The host envelope.", no_args_is_help=True)
 app.add_typer(skills_app, name="skills")
 app.add_typer(env_app, name="env")
 app.add_typer(data_commands.app, name="data")
+app.add_typer(screen_commands.app, name="screen")
 app.add_typer(hyp_commands.app, name="hyp")
 app.add_typer(research_commands.app, name="research")
 app.add_typer(models_commands.app, name="models")

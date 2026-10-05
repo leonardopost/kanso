@@ -17,8 +17,9 @@ clash: shadowing is reported, and which definition wins is not decided here.
 
 A kind a registry cannot read is refused here rather than collected, so that a declaration
 which could never take effect is a message at the declaration instead of a silence at the
-command that wanted it. Gates and objectives are the two: certification plans from, and
-judges by, the library in the package, and no workspace path reaches it.
+command that wanted it. Gates, objectives and a screen's measures are the three:
+certification plans from, and judges by, the criteria library in the package, a screen
+measures by the measure library in the package, and no workspace path reaches either.
 
 **Every process that touches a hypothesis's data imports the extensions first.** A custom
 data type exists in a process only once the extension that registers it has been imported
@@ -56,19 +57,21 @@ wins, so an extension declaring it would be registered nowhere and its author wo
 no way to find out.
 """
 
-REFUSED = ("gates", "objectives")
+REFUSED = ("gates", "objectives", "measures")
 """The kinds a workspace may not provide, refused where they are declared.
 
-A plan is drawn from, and judged by, the criteria library in the package: no function
-that builds the toolbox takes a workspace, so an extension's gate or objective would be
-registered nowhere while `doctor` read green and the extension read loaded. Refusing the
-declaration is what turns that silence into a sentence at the file the author wrote.
+A plan is drawn from, and judged by, the criteria library in the package, and a screen
+measures by the measure library beside it: no function that builds either takes a
+workspace, so an extension's gate, objective or measure would be registered nowhere while
+`doctor` read green and the extension read loaded. Refusing the declaration is what turns
+that silence into a sentence at the file the author wrote.
 """
 
 REFUSAL = (
     "PROVIDES declares {kinds}, which a workspace cannot provide: the toolbox a plan is "
-    "drawn from and judged by is the package's own library, so a gate or an objective is "
-    "written in the package (docs/extensions.md)"
+    "drawn from and judged by, and the measures a screen measures by, are the package's own "
+    "libraries, so a gate, an objective or a measure is written in the package "
+    "(docs/extensions.md)"
 )
 """What an author is told about a refused kind, and where the two files that make one are
 described."""

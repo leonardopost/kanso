@@ -61,6 +61,7 @@ TABLES: Final = (
     "plans",
     "queue",
     "runs",
+    "screen_results",
     "sessions",
     "signatures",
     "snapshots",

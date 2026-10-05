@@ -563,3 +563,44 @@ def test_funding_reproduces_byte_for_byte_and_moves_no_other_series(
 def test_funding_on_a_weekday_calendar_is_refused(synthetic_spec: dict[str, Any]) -> None:
     with pytest.raises(ValidationError, match="funding is settled round the clock"):
         LOADER.discover({**synthetic_spec, "types": ["bar", "funding"]})
+
+
+def closes(spec: dict[str, Any]) -> list[float]:
+    (ref,) = [ref for ref in LOADER.discover(spec) if ref.type == "bar"]
+    return [float(bar.close) for bar in LOADER.load(ref, ref.span)]
+
+
+def test_a_follower_repeats_its_leader_s_moves_a_step_later(
+    synthetic_spec: dict[str, Any],
+) -> None:
+    import numpy as np
+
+    base = {**synthetic_spec, "instruments": ["DEMO"], "types": ["bar"], "sigma_bps": 40}
+    leader = np.diff(np.log(closes(base)))
+    follower_spec = {
+        **base,
+        "seed": 8,
+        "instruments": ["LAGD"],
+        "leader_seed": base["seed"],
+        "coupling": 0.9,
+        "lag_steps": 1,
+    }
+    follower = np.diff(np.log(closes(follower_spec)))
+
+    led = np.corrcoef(leader[:-1], follower[1:])[0, 1]
+    same = np.corrcoef(leader, follower)[0, 1]
+    assert led > 0.7 and abs(same) < 0.2
+    ref = LOADER.discover(follower_spec)[0]
+    assert ref.request_params is not None
+    assert ref.request_params["leader_seed"] == "7" and ref.request_params["coupling"] == "0.9"
+    assert _spec_of(ref).leader_seed == 7
+
+
+@pytest.mark.parametrize(
+    "changes", [{"leader_seed": 7}, {"coupling": 0.5}, {"leader_seed": 7, "coupling": 0.0}]
+)
+def test_a_leader_and_a_coupling_come_together(
+    synthetic_spec: dict[str, Any], changes: dict[str, Any]
+) -> None:
+    with pytest.raises(ValidationError, match="stated together, or neither is"):
+        SyntheticSpec.model_validate({**synthetic_spec, **changes})

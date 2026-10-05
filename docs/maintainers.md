@@ -40,11 +40,12 @@ a test CI never runs and a promise nobody keeps.
 Capabilities are prototyped as **workspace extensions** (`kanso_ext/`, same interfaces as
 built-ins: `Construct`, `Loader`, `register_custom_type`, `ExecutionClientSpec`, and the data
 and broker adapter protocols) and moved upstream with the `kanso-upstream` skill (copy, real
-tests, branch, PR with the workspace evidence). `Gate` and `Objective` are the two exceptions
-to prototyping: no workspace registry reads either — the toolbox a plan is drawn from and
-judged by is the package's own library — so `PROVIDES` refuses both kinds and one is written
-here from the start. Built-in additions land in
-`src/kanso/criteria/library/` (gate/objective YAML + `impl`),
+tests, branch, PR with the workspace evidence). `Gate`, `Objective` and a screen's measure
+are the three exceptions to prototyping: no workspace registry reads any of them — the toolbox
+a plan is drawn from and judged by, and the measures a screen measures by, are the package's
+own libraries — so `PROVIDES` refuses all three kinds and one is written here from the start. Built-in additions land in
+`src/kanso/criteria/library/` (gate/objective YAML + `impl`), `src/kanso/screen/library/`
+(measure YAML, its implementation in `kanso.screen`),
 `src/kanso/classify/constructs/`, `src/kanso/data/loaders/`, `src/kanso/data/types/`,
 `src/kanso/data/adapters/<vendor>/` or `src/kanso/nautilus/adapters/<broker>/`, each with
 tests and a line in `docs/`. `docs/extensions.md` is the interface reference for both sides.

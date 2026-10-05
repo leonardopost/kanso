@@ -110,3 +110,20 @@ def test_the_data_skill_names_funding_as_realised_and_required_of_a_perpetual() 
     assert "a spot leg beside it is asked for none" in text
     assert "the runner books each settlement on what the card held before it" in text
     assert "`types: [bar, funding]`" in text
+
+
+def test_the_screen_skill_names_what_the_screen_reads_and_refuses() -> None:
+    """The skill an agent writes a screen from names every state a series can be in, every
+    verdict floor, the three declarations an adapter it builds must make, and the field
+    the followers are spelt with — never `on`, which YAML reads as true."""
+    from kanso.schemas.screen import ScreenVerdict
+
+    text = skill(PACKAGED, "kanso-screen")
+    for state in ("held", "fetchable", "unresolved", "unserved"):
+        assert f"`{state}`" in text, state
+    for floor in ScreenVerdict.model_fields:
+        assert floor in text, floor
+    for member in ("timestamps", "serves", "spec_for"):
+        assert f"`{member}`" in text, member
+    assert "`followers`" in text and "never `on`" in text
+    assert "kanso screen draft" in text and "--certify" in text

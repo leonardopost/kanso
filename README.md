@@ -153,7 +153,7 @@ kanso init demo --demo
 cd demo
 kanso doctor
 kanso data load --loader synthetic --spec demo.yaml
-kanso data instruments resolve --as-of 2024-01-02
+kanso data instruments resolve DEMO.SIM --as-of 2024-01-02
 kanso data snapshot
 kanso hyp add hypotheses/demo_mr/hypothesis.yaml
 kanso classify demo_mr
@@ -229,6 +229,36 @@ because neither act has a decision left in it. `parity_replay` found both code p
 released the same 40,950 points — one count, one digest — and compared 850 order intents
 from the live path against 850 from the research one at a tolerance of zero nanoseconds.
 Live is `down` and stays down until a person types `--as`.
+
+A lane spends a model call a card, so whether an idea is worth one is worth measuring first,
+with none. The demo ships a second series, `LAGD`, that takes 0.6 of `DEMO`'s one-minute shock a
+minute late, and a screen that asks whether it does and whether trading on it clears the round
+trip:
+
+```bash
+kanso data load --loader synthetic --spec demo_lag.yaml
+kanso data instruments resolve LAGD.SIM --as-of 2024-01-02
+kanso screen run screens/demo_lag/screen.yaml
+```
+
+```
+$ kanso screen run screens/demo_lag/screen.yaml   # its trailing written line is elided
+screen     demo_lag · d0cf979 · snapshot 48a3092
+window     2024-01-02..2024-03-28
+cells      8
+verdict    worth a lane: yes · 3 pass · 5 fail · 0 thin
+           pass · response/demo/20bp/1m/lagd/1m  ceiling +144.9 bp/day · margin +9.2 bp (gross +14.2, hurdle 5) · 15.7 a day · t +31.41 · p 0.0001
+           pass · response/demo/20bp/1m/lagd/5m  ceiling +111.8 bp/day · margin +8.397 bp (gross +13.4, hurdle 5) · 13.3 a day · t +18.72 · p 0.0001
+           pass · lead_lag/demo>lagd/1m  mean +0.596 ± 0.0041 · t +145.89 · p 0.0001 · 63 session(s)
+cost       0.4s · 0.26 GB
+```
+
+The planted 0.6 reads back as 0.596 at one minute, and following a 20 bp move of `DEMO` in
+`LAGD` clears the 5 bp round trip by 9.2 bp an event, about sixteen times a day. The screen
+froze the snapshot it needed itself; on data the catalog lacks it fetches through whichever
+adapter serves it. `kanso screen draft demo_lag --cell response/demo/20bp/1m/lagd/1m --as
+<id> --certify <window>` writes that cell as a draft hypothesis whose seed strategy is its
+rule (`docs/concepts.md`, Screen).
 
 ## Your own workspace
 

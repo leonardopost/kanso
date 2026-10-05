@@ -69,8 +69,11 @@ never edits the file.
 | `kanso.toml` | `init` | **yes** — the whole file |
 | `.env` | `init` (empty, mode 600) | **yes** — kanso reads it at each use and writes it never |
 | `models.yaml` | `init` | **yes** |
-| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
-| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
+| `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` and `screen draft` (a draft, in a directory each creates) | **yes**, between runs |
+| `hypotheses/<id>/program.md` | `hyp new`, `hyp explore`, `screen draft` | **yes**, between runs |
+| `screens/<id>/screen.yaml` | `screen new` | **yes** |
+| `screens/<id>/specs/` | `screen run`, the loader specs its fetches were made with | no — a record of what was fetched |
+| `screens/<id>/<sha7>-s<snap7>-v<ver7>.yaml` | `screen run` | no — a rendering of the result `state.db` records |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
 | `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
@@ -78,7 +81,7 @@ never edits the file.
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
 | `instruments.yaml` | `data instruments resolve` | **four fields only** — see below |
 | `portfolio.yaml` | `init`, then certification, `deploy`, `promote`, `demote`, `strat retire` | **stages and limits only** |
-| `hypotheses/<id>/strategy.py` | `hyp explore` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
+| `hypotheses/<id>/strategy.py` | `hyp explore` or `screen draft` for a draft, then research, after every keep that moves the hypothesis's best | no — it is the best-so-far |
 | `hypotheses/<id>/results.tsv` | research, rendered from state | no |
 | `envelope.yaml` | `env detect` | no — `[env]` in `kanso.toml` is the override |
 | `state.db` | kanso | no |
@@ -163,11 +166,17 @@ remedy: run `kanso skills sync` and `kanso env detect` to refresh this workspace
 `init --force`, because the file it would overwrite is the one you have been editing.
 
 The rendered file is the reference for the keys and their defaults: each is commented where
-it is defined. The sections are `[extensions]`, `[skills]`, `[research]`, `[certify]`,
-`[data]`, `[env]`, `[monitor]`, `[webhook]`, and `[adapters.<id>]`; `[data]` is rendered
+it is defined. The sections are `[extensions]`, `[skills]`, `[research]`, `[screen]`,
+`[certify]`, `[data]`, `[env]`, `[monitor]`, `[webhook]`, and `[adapters.<id>]`; `[data]` is rendered
 commented out, header included, because its two keys — `reference`, naming the adapter that
 resolves instruments (default `none`), and `adjusted` (default `false`) — are the defaults
 until a vendor is configured, and the table you then append is not declared twice.
+
+`[screen] draws` is how many session sign flips a screen's null is drawn from (`docs/concepts.md`,
+Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
+nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.
+A measure over S sessions whose 2^S vectors of signs are no more than `draws` takes each of them
+once instead, and its p is exact — seven sessions under the default are 128 vectors.
 
 The two top-level keys are written by `init` and read by nothing: `kanso_version` records
 the kanso that scaffolded the workspace, and `schema_version` is not the schema guard —
@@ -951,6 +960,76 @@ for, and it clears `best` so the history says what happened.
 `results.tsv` is rendered from state after every card, so restoring a lane from the best
 never loses a row. Deleting it loses nothing.
 
+## `screens/<id>/`
+
+`screen.yaml` is **yours**: what a screen measures, written by you or by an agent following the
+`kanso-screen` skill, from the template `kanso screen new` renders. It holds the question and
+nothing about the answer, so its bytes can be content-addressed, as a hypothesis's are. The
+template's comments are its field reference; `kanso screen validate` is its admissibility check.
+
+A screen is **bound** or **free**. `hyp: <id>` binds it to a registered hypothesis: its window
+is that hypothesis's research window, read from the pinned bytes, its costs are the
+hypothesis's, and every leg must be an instrument of its universe read at a type and grain it
+researches. A free screen states `window` instead, and may state `costs` per venue.
+
+| key | what it holds |
+|---|---|
+| `legs` | name → `{instrument, type, resolution?}`: a catalog instrument id, read as `bar` (with its `resolution`), `trade`, `quote` or `book` |
+| `derived` | name → exactly one of `basket` (weights over legs), `spread` (`long`, `short`, `hedge: fixed` with `beta`, or `hedge: ols` with `fit: window` or `fit: first_fold`) or `gap` (`a`, `b`: one asset on two venues) |
+| `groups` | name → a list of legs and derived legs, for a measure to name at once |
+| `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
+| `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`) or `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) |
+| `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a `response` cell `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3) |
+| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis |
+
+Each parameter of a measure has the range the measure library declares, and `kanso screen
+validate` refuses one outside it (exit 3):
+
+| measure | parameter | from | to |
+|---|---|---|---|
+| `lead_lag` | `lag` | `1ms` | `1d` |
+| `lead_lag` | `lags` (how many) | `1` | `64` |
+| `response` | `move_bp` | `0.1` | `10000` |
+| `response` | `within` | `1ms` | `1d` |
+| `response` | `z` | `0.5` | `20` |
+| `response` | `lookback` | `1s` | `30d` |
+| `response` | `horizon` | `1ms` | `1d` |
+| `response` | `horizons` (how many) | `1` | `32` |
+| `response` | `latency_ms` | `0` | `60000` |
+
+A result is rendered beside the screen as `<sha7>-s<snap7>-v<ver7>.yaml` — the screen's bytes,
+the snapshot and the measure library's version, the three pins its record in `state.db` is
+keyed by. It is a rendering: editing it changes nothing, and `kanso screen show` reads the
+record. The loader specs a run's fetches were made with are kept under `specs/`.
+
+A result holds one entry per cell:
+
+| field | what it is |
+|---|---|
+| `key`, `params` | the cell: its measure, legs and lattice point |
+| `mean`, `se`, `t`, `sessions` | across the sessions the cell held a value in. For `lead_lag`, the correlation at the lag. For `response`, a session's value is the sum of its events' drift-adjusted signal — the follower's signed move at its mid, less its session drift over the hold, in bp at one notional an event — so `mean` is bp a day of a follow, before any cost |
+| `p` | family-wise over the measure's cells, by session sign-flip max-T; with 2^S sign vectors no more than `[screen] draws`, exact |
+| `folds`, `folds_same_sign` | the means inside each calendar fold of the window, and how many share the sign of the whole. For `lead_lag`, the same quantity as `mean`. For `response`, **net** bp a day — gross less the hurdle — sharing the sign of `ceiling_bp_day`: so a cell can show a significant follow in `p` and every fold negative, a real move a taker cannot earn |
+| `staleness` | a `grid` lead only: per leg, the share of grid intervals it did not print in; Hayashi–Yoshida and response cells have none |
+| `clock_bound` | a lead under a second between legs whose timestamp kinds differ, or are undeclared: it may be the gap between two clocks |
+| `in_sample_fit` | the cell reads a spread fitted on the window it is judged on |
+| `response.events`, `events_per_day`, `unfilled` | events scored, a day over the sessions the cell was live, and events with no follower point to enter or leave at, counted and scored nowhere |
+| `response.gross_bp`, `hurdle_bp`, `margin_bp` | per event: what a taker made (a quote or book follower buys the ask and sells the bid), the round trip charged, and the difference |
+| `response.ceiling_bp_day` | the margin summed a day over the live sessions: one notional on every event and no capacity limit, so a bound a search can approach and never exceed |
+| `response.hit_rate`, `drift_adjusted_bp` | the share of events whose gross was positive, and the drift-adjusted signal an event, the quantity `mean`, `t` and `p` test |
+| `judged`, `reason` | `pass`, `fail` or `thin` under the verdict, and every clause the cell missed |
+
+The summary says whether the result is `worth_a_lane` — a `response` cell passed; a lead alone
+names no trade — counts the cells each way, and ranks the passing ones in `best`: responses by
+`ceiling_bp_day`, then leads by |t| whichever way they point, so a negative lag, the reverse
+direction, can rank beside its mirror.
+
+Spans are `<n>(ms|s|m|h|d)` — finer than a hypothesis's grain, because a lead between two venues
+is measured in milliseconds — and a lag carries a sign, positive when `from` leads `to`. The
+followers of a response are `followers` and never `on`: YAML reads a bare `on` as the boolean
+true. Every list of a measure is a declared, finite lattice; its cells are the cross product,
+and `kanso screen validate` prints how many there are.
+
 ## `models.yaml`
 
 The LLM register and the routing table, and yours entirely. It holds **model ids, providers,
@@ -997,6 +1076,15 @@ resolution actually changed them. `sources` is the vendor's own key, by referenc
 and it is what that adapter is asked for: an entry may be filed under any key and a
 hypothesis may name it by its qualified id, and the vendor is still asked for its own
 spelling. An entry with no key for the configured adapter is asked for as it was named.
+
+An entry is resolved again through the adapter that resolved it, which `resolved.adapter`
+records. An id nothing has resolved is asked of the one adapter that declares its venue in
+`venues` (`docs/adapters.md`) — `ETH-USDT-SWAP.OKX` of the exchange's — and of `[data]
+reference` otherwise, an equity under its symbol. So a workspace
+may hold instruments from more than one source — a perpetual beside the equities a screen
+reads it against — and change `[data] reference` between them: each entry keeps the source
+that defined it, and a hypothesis on either validates. Asked of the other source instead, a
+vendor refuses an instrument it does not list, and the hypothesis could not be registered.
 
 An edit to `override` reaches the store at the next `kanso data instruments resolve` and
 never before: `hyp validate` and `hyp add` build the definition in memory to check it, and a
@@ -1331,6 +1419,16 @@ changes no other series of the spec, and a weekday spec that asks for it is refu
 $ kanso data load --loader synthetic --spec weekday_funding.yaml
 error: types: funding is settled round the clock and needs calendar 'continuous'; a weekday calendar has no settlements to generate
 ```
+
+A spec may plant a lead. `leader_seed` and `leader_index` name the shocks another spec draws
+for one of its instruments, and every instrument of this spec takes `coupling` of the leader's
+shock `lag_steps` bars late and the rest of its own, so its returns repeat the leader's that
+many bars later — `demo_lag.yaml` is the demo's (`LAGD` follows `DEMO` by a minute at 0.6). A
+shock is drawn a batch of the whole span at a time, so a follower redraws its leader's own
+shocks only over its leader spec's span, step for step: state the follower with the leader's
+`start`, `end`, `resolution` and model. A leader and a coupling above zero are stated together
+or not at all (exit 3), and a spec stating neither records neither, so every dataset generated
+before a leader could be stated keeps its request parameters and its snapshot id.
 
 Nothing else is generated.
 
@@ -1855,19 +1953,21 @@ re-linking — and moving or reinstalling the package breaks the links until you
 
 ## What `--demo` adds
 
-`kanso init <dir> --demo` fills in what a plain `init` leaves as a placeholder and adds three
+`kanso init <dir> --demo` fills in what a plain `init` leaves as a placeholder and adds five
 files, and between them they are the reason the demo runs end to end with no credential of any
 kind:
 
 | file | plain `init` | `--demo` |
 |---|---|---|
 | `models.yaml` | a commented skeleton with `<provider>` placeholders | the shipped `mock` protocol listed for every tier, so classification, proposal, alignment and planning cost nothing and reach nothing |
-| `instruments.yaml` | `{}` plus the field reference in comments | one `manual: true` entry, `DEMO.SIM`, so no reference adapter is needed |
+| `instruments.yaml` | `{}` plus the field reference in comments | two `manual: true` entries, `DEMO.SIM` and `LAGD.SIM`, so no reference adapter is needed |
 | `mock/responses.yaml` | — | the scripted answers that register reads, one per task class, with every `params` written as the list of `{name, value}` pairs a real model answers with and every `propose` answer carrying `tags` |
 | `demo.yaml` | — | a synthetic loader spec: a seeded mean-reverting series spanning the research, certification and forward windows |
 | `hypotheses/demo_mr/` | — | a hypothesis that ships already classified, with its `program.md` and the sleeve stub |
+| `demo_lag.yaml` | — | a second synthetic spec: `LAGD`, on its own seed and `demo.yaml`'s span, taking 0.6 of `DEMO`'s shock one bar late (`leader_seed`, `leader_index`, `lag_steps`, `coupling`) |
+| `screens/demo_lag/screen.yaml` | — | a free screen of `LAGD` against `DEMO` over the first quarter of 2024: a lead-lag and a response, with a declared verdict |
 
-Everything else `init` writes is the same either way. Delete the three added files and replace
+Everything else `init` writes is the same either way. Delete the five added files and replace
 the two rendered ones and you have an ordinary empty workspace.
 
 ## Moving, copying and backing up a workspace

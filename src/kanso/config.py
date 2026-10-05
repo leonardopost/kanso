@@ -65,6 +65,14 @@ class CertifyConfig(BaseModel):
     n_fail: int = Field(default=3, gt=0)
 
 
+class ScreenConfig(BaseModel):
+    """How finely a screen's null is drawn: a precision rule, which chooses nothing."""
+
+    model_config = _STRICT
+
+    draws: int = Field(default=9999, ge=99, le=99_999)
+
+
 class DataConfig(BaseModel):
     """Data policy: which adapter resolves instruments, and whether prices are adjusted."""
 
@@ -126,6 +134,7 @@ class Config(BaseModel):
     skills_targets: list[str] = Field(default_factory=list)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     certify: CertifyConfig = Field(default_factory=CertifyConfig)
+    screen: ScreenConfig = Field(default_factory=ScreenConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     env: EnvConfig = Field(default_factory=EnvConfig)
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)

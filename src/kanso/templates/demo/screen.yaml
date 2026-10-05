@@ -1,0 +1,26 @@
+# screen.yaml — rendered by `kanso init --demo`: does LAGD follow DEMO, and does trading LAGD on a
+# DEMO move clear the round trip? A free screen over the first quarter of 2024, which demo_mr
+# researches and certifies on none of. `kanso screen run screens/demo_lag/screen.yaml`.
+schema: 1
+id: demo_lag
+title: LAGD follows DEMO by a minute
+thesis: LAGD's one-minute returns repeat DEMO's a minute later, and following a DEMO move in LAGD clears the round trip
+window: {start: 2024-01-02, end: 2024-03-28}
+legs:
+  demo: {instrument: DEMO.SIM, type: bar, resolution: 1m}
+  lagd: {instrument: LAGD.SIM, type: bar, resolution: 1m}
+clock: {grid: 1m, hours: overlap}
+costs: {SIM: {commission_bps: 0.5, slippage_bps: 1, spread: fixed_bps, fixed_bps: 2}}
+measures:
+  - id: lead_lag
+    from: demo
+    to: lagd
+    estimator: grid
+    lags: [-1m, 1m, 2m, 5m]
+  - id: response
+    trigger: {leg: demo, move_bp: [20, 30], within: 1m}
+    followers: lagd
+    side: with
+    horizons: [1m, 5m]
+    latency_ms: 0
+verdict: {alpha: 0.05, min_margin_bp: 0.5, min_events_per_day: 1, min_sessions: 40}

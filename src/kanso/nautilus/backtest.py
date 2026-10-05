@@ -630,7 +630,7 @@ def _primary_points(
     resolution = grain if requirement == BAR else hyp.resolution
     return tuple(
         chain.from_iterable(
-            _market_points(catalog, requirement, held[name], resolution, start, end)
+            market_points(catalog, requirement, held[name], resolution, start, end)
             for name in sorted(hyp.universe)
         )
     )
@@ -685,14 +685,14 @@ def _window_points(
         if requirement == "bar":
             for resolution in grains:
                 for name in sorted(hyp.universe):
-                    found = _market_points(catalog, requirement, held[name], resolution, start, end)
+                    found = market_points(catalog, requirement, held[name], resolution, start, end)
                     found = _in_scope(found, name, scope)
                     if found:
                         loaded[resolution] += len(found)
                         groups.append(found)
             continue
         for name in sorted(hyp.universe):
-            found = _market_points(catalog, requirement, held[name], hyp.resolution, start, end)
+            found = market_points(catalog, requirement, held[name], hyp.resolution, start, end)
             found = _in_scope(found, name, scope)
             if found:
                 groups.append(found)
@@ -712,7 +712,7 @@ def _refuse_missing_grain(request: RunRequest, loaded: Mapping[str, int]) -> Non
             )
 
 
-def _market_points(
+def market_points(
     catalog: Any, requirement: str, instrument: Any, resolution: str, start: int, end: int
 ) -> tuple[object, ...]:
     """One instrument's bars, quotes, trades or book changes over the window.
@@ -726,6 +726,9 @@ def _market_points(
     (`_in_file_order`), because those are the series whose points share instants as a rule,
     and the order of the points of one instant is part of what a card is handed. A bar
     series holds one bar an instant, so its order is its `ts_init` alone.
+
+    A screen reads its legs through this function too (`kanso.screen.sessions`), so what a
+    screen measures is what a card of the same instrument and span is handed.
     """
     from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 

@@ -620,6 +620,14 @@ def test_a_number_is_read_exactly_or_not_at_all() -> None:
     assert [units(text, 2) for text in ("0.001", "abc", "NaN", "Infinity", "")] == [None] * 5
 
 
+def test_a_float_spelled_out_in_full_is_read_as_the_tick_it_is() -> None:
+    """Measured: GRVT-USDT-SWAP's archive for 2026-09-16 spells a price 0.16186999999999999."""
+    assert units("0.16186999999999999", 5) == 16187
+    assert units("0.16187000000000001", 5) == 16187
+    assert units("0.161875", 5) is None
+    assert units("0.1618749999999999", 5) is None
+
+
 def test_runs_are_how_a_refusal_names_many_days() -> None:
     days = [date(2023, 1, 1), date(2023, 1, 2), date(2023, 1, 3), date(2023, 1, 7)]
 

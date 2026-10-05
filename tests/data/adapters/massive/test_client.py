@@ -320,6 +320,91 @@ def test_a_failure_half_way_through_a_walk_is_not_the_end_of_the_data() -> None:
         list(reader.pages("/v3/reference/tickers"))
 
 
+def walk_with(
+    second: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> tuple[MassiveClient, Replay, list[float]]:
+    """A two-page walk whose second page answers each asking with the next of `second`: a
+    response, or an exception the transport raises."""
+    paused: list[float] = []
+    monkeypatch.setattr("kanso.data.adapters.massive.client.sleep", paused.append)
+    answers = iter(second)
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if url.endswith("/v3/trades/MSTR"):
+            return served([definition("AAPL")], next_url="https://x/second")
+        found = next(answers)
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+    reader, replay = client(answer)
+    return reader, replay, paused
+
+
+def asked_for_second(replay: Replay) -> int:
+    return sum(asked.url == "https://x/second" for asked in replay.asked)
+
+
+@pytest.mark.parametrize(
+    "stalls",
+    [
+        [TimeoutError("timed out")],
+        [body({"message": "later"}, 504), OSError("connection reset")],
+        [Response(200, b"{truncated")],
+    ],
+)
+def test_a_page_that_did_not_answer_is_asked_for_again_and_the_walk_completes(
+    stalls: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stalled page is the network's event, and its cursor names it exactly: asked again,
+    the walk reads every row once, as if it had never stalled."""
+    reader, replay, paused = walk_with([*stalls, served([definition("MSFT")])], monkeypatch)
+
+    rows = [row["ticker"] for row in reader.rows("/v3/trades/MSTR")]
+
+    assert rows == ["AAPL", "MSFT"]
+    assert asked_for_second(replay) == len(stalls) + 1
+    assert paused == [2.0, 8.0][: len(stalls)]
+
+
+def test_a_page_that_never_answers_fails_the_walk_after_three_askings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader, replay, paused = walk_with([TimeoutError("timed out")] * 3, monkeypatch)
+
+    with pytest.raises(TransportError, match="could not be reached"):
+        list(reader.rows("/v3/trades/MSTR"))
+
+    assert asked_for_second(replay) == 3
+    assert paused == [2.0, 8.0]
+
+
+def test_a_throttled_page_is_not_asked_for_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A throttle says the quota is set wrong; asking again would hide that."""
+    reader, replay, paused = walk_with([body({"message": "slow down"}, 429)], monkeypatch)
+
+    with pytest.raises(TransportError, match="did not answer"):
+        list(reader.rows("/v3/trades/MSTR"))
+
+    assert asked_for_second(replay) == 1 and paused == []
+
+
+def test_a_single_call_is_never_asked_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A probe that cannot reach the vendor reports that, at once."""
+    paused: list[float] = []
+    monkeypatch.setattr("kanso.data.adapters.massive.client.sleep", paused.append)
+
+    def stalled(url: str, params: Mapping[str, str]) -> Response:
+        raise TimeoutError("timed out")
+
+    reader, replay = client(stalled)
+
+    with pytest.raises(TransportError, match="could not be reached"):
+        reader.call("/v3/trades/MSTR")
+
+    assert len(replay.asked) == 1 and paused == []
+
+
 # --- the transport the engine provides -----------------------------------------
 
 

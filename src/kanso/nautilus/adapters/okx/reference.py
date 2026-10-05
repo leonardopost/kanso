@@ -563,6 +563,52 @@ class ReferenceAdapter:
     kind: str = "data"
     capabilities: Capabilities = Capabilities()
     credentials: tuple[str, ...] = ()
+    timestamps: str = "exchange"
+    """A print's and a book change's `ts_init` is the exchange's own instant, and a bar's is
+    its close on the exchange's clock."""
+    venues: tuple[str, ...] = (VENUE,)
+    """The venue whose instruments this adapter defines: an id qualified with it that nothing
+    has resolved is asked of this adapter, whatever `[data] reference` names."""
+
+    def serves(self, ws: Workspace, definition: object, resolution: str | None) -> tuple[str, ...]:
+        """What a screen can fetch through this adapter for one instrument definition.
+
+        A swap listed on this venue: its bars at a size the candle endpoint serves, its
+        prints and its book. Nothing for any other venue's instrument.
+        """
+        from kanso.nautilus.adapters.okx.bars import BAR_SIZES
+
+        ident = getattr(definition, "id", None)
+        if ident is None or str(ident.venue) != VENUE:
+            return ()
+        bars = ("bar",) if resolution is None or resolution in BAR_SIZES else ()
+        return (*bars, "trade", "book")
+
+    def spec_for(
+        self,
+        ws: Workspace,
+        definition: Any,
+        kind: str,
+        resolution: str | None,
+        start: date,
+        end: date,
+    ) -> tuple[str, dict[str, object]]:
+        """The public-history loader and spec that fetch one series of one swap.
+
+        A book is fetched exact to one level: a screen reads the touch and nothing deeper.
+        """
+        loader = {"bar": "okx_bars", "trade": "okx_trades", "book": "okx_book"}
+        spec: dict[str, object] = {
+            "loader": loader[kind],
+            "instruments": [str(definition.id)],
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        }
+        if kind == "bar":
+            spec["resolution"] = resolution
+        if kind == "book":
+            spec["levels"] = 1
+        return loader[kind], spec
 
     def client(
         self,

@@ -217,7 +217,7 @@ refuses by name — the snapshot, what it pins, what the store holds — when th
 have moved since the newest covering snapshot was taken.
 
 ```
-$ kanso data instruments resolve --as-of 2024-01-02
+$ kanso data instruments resolve DEMO.SIM --as-of 2024-01-02
 as of      2024-01-02
            DEMO.SIM → DEMO.SIM
 resolved   1 instrument(s)
@@ -254,6 +254,123 @@ stays a gap, which `kanso data show` also lists under `empty` so that why it per
 read, and which `data backfill` does not ask for twice. An instrument the store does not
 define, a market with no calendar on file and a day outside the span on file are read with
 every day open, so what the calendar cannot state costs a refusal and never pins a hole.
+
+## Screen
+
+A measurement of declared relationships between declared series, made before any lane is spent
+on the idea that rests on them: no strategy, no venue, no fill and no model call. It answers the
+question a lane cannot answer cheaply — is this worth tokens — with a base rate: the loop tunes a
+mechanism around an edge and cannot create one, and a screen costs CPU and no tokens.
+
+```
+$ kanso screen run screens/demo_lag/screen.yaml   # its trailing written line is elided
+screen     demo_lag · d0cf979 · snapshot 48a3092
+window     2024-01-02..2024-03-28
+cells      8
+verdict    worth a lane: yes · 3 pass · 5 fail · 0 thin
+           pass · response/demo/20bp/1m/lagd/1m  ceiling +144.9 bp/day · margin +9.2 bp (gross +14.2, hurdle 5) · 15.7 a day · t +31.41 · p 0.0001
+           pass · response/demo/20bp/1m/lagd/5m  ceiling +111.8 bp/day · margin +8.397 bp (gross +13.4, hurdle 5) · 13.3 a day · t +18.72 · p 0.0001
+           pass · lead_lag/demo>lagd/1m  mean +0.596 ± 0.0041 · t +145.89 · p 0.0001 · 63 session(s)
+cost       0.4s · 0.26 GB
+```
+
+*The demo's `LAGD` takes 0.6 of `DEMO`'s one-minute shock a minute late (`demo_lag.yaml`). The
+screen reads the lead back as 0.596 at one minute and nothing at −1, 2 or 5 minutes, and following
+a 20 bp move of `DEMO` in `LAGD` clears the 5 bp round trip by 9.2 bp an event, about sixteen
+times a day. The 30 bp cells fire too rarely to meet the verdict's one event a day.*
+
+**It reads what a card reads.** Every leg is read through the runner's own reader
+(`kanso.nautilus.backtest.market_points`), at its grain, the points of one instant in the order a
+card gets them, one session at a time, clamped to the window. Every instant is a `ts_init`: a
+lead a screen finds is a lead in what was public.
+
+**Two estimators.** On a grid, the realised correlation of returns sampled at the clock's step —
+returns are not demeaned, because a session's mean return is noise and taking it out of a few
+biases the correlation towards −1/(n−1). Without one (`hy`), the Hayashi–Yoshida covariance of
+the two series' own returns, every pair of intervals that overlap once one series is moved back
+by the lag, scaled by both series' realised variances on one clock — the sparser one's instants,
+because prints that come in runs carry less variance tick by tick than a second does, and
+scaled each on its own clock an exchange's BTC prints read 1.49 against their own one-second
+bars: a grid at a fine step mostly samples prices that have not moved and shrinks a
+correlation towards zero as the step shrinks, and this has no step to shrink, so it is the one
+for prints against prints. A lead shorter than a second between two sources whose timestamps
+mean different things — an exchange's own instant and a consolidated tape's, or one nobody
+declared — is marked `clock_bound`: it may be the difference between the clocks.
+
+**A response is set against the hurdle a card would pay.** A `response` cell fires on a
+trigger — a move of at least `move_bp` within `within`, or a z-score over a trailing `lookback`,
+cut at the session's open because the session is the unit — and enters the follower at its first point after the declared latency, exits at its first
+point after the horizon, one position at a time. Its gross is what a taker would have made — a
+quoted follower buys the ask and sells the bid it shows — and its hurdle is the round trip the
+venue model charges, struck by the runner's own `fill_cost`: commission, slippage, the sale's
+fees, the per-share commission, and the model's spread on a follower that crossed none. No
+spread is charged twice. The null is tested on the signal less the follower's session drift — at
+the follower's mid, so `p` says whether it follows at all, and the margin whether a taker earns
+the follow; a pass needs both — so a trending month whose triggers lean one way cannot pass for
+a reaction; the result reports the
+margin per event, the events a day, and `ceiling_bp_day` — what one notional on every event
+earned a day, with no capacity limit and no sizing: a bound on what a search of the mechanism
+could find, held against a campaign's target in the same units its lanes are scored in.
+
+**Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
+`basket` is a weighted sum of its legs' log prices, a `spread` is `log long − beta log short`,
+and a `gap` is one asset's price on two venues as a fraction of the second. Each is live only
+where all its legs are, moves at the union of their points, and trades leg by leg in its
+shares when it is a response's follower. A spread's beta is stated, or fitted by least squares
+of one leg's log price on the other's over the window (`fit: window`), in which case every cell
+reading it carries `in_sample_fit: true`, or over the window's first fold (`fit: first_fold`),
+which then scores no cell that reads it, so the later folds judge a hedge they did not choose.
+A spread's increments against their own past is mean reversion measured without a model: a
+`lead_lag` of the spread against itself.
+
+**Missing data is fetched, never skipped.** A series the catalog lacks is fetched through the
+adapter that declares it serves it, and a snapshot taken; data held but frozen by no snapshot is
+frozen; an instrument no definition resolves is refused, and the remedy is to resolve it — under
+the key the reference adapter files it by, which for a vendor whose keys carry no venue is the
+id's symbol, or by a manual entry; a series that resolves and that no adapter serves is refused,
+and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks).
+
+**The session is the unit of replication, and the family is the lattice.** A cell's evidence is
+one value per session — for `lead_lag`, the correlation of one series' returns with another's at
+a lag, on a grid — reported as the mean across sessions and the standard error of their spread.
+Each measure's cells are judged together by max-T over session sign flips: one shared vector of
+signs per draw, `[screen] draws` draws, seeded from the screen's bytes, the snapshot and the
+measure's index. So forty lags of one pair are one family, not forty chances, and the same pins
+give the same numbers. Every result states the one assumption that rests on: that sessions are
+roughly independent of each other. Lag zero is refused: the same instant's co-movement is not a
+lead.
+
+**Thresholds are declared, never defaulted.** A screen with no `verdict` measures everything and
+judges nothing. Sign flips over S sessions can give no p below 2^(1−S) — the observed signs and their
+negation both reach the observed t. When the 2^S vectors are no more than the draws, each is taken
+once and p is exact; when they are more, the draws estimate it, and an estimate that fell below
+2^(1−S) reads the floor. So a verdict whose `alpha` is below what its `min_sessions`
+allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
+judge — and the verdict is part of the file's bytes, so loosening it after reading a number is a
+new screen with a new result, beside the old one.
+
+**A result is immutable.** It is keyed by the screen's bytes, the snapshot and the measure
+library's version; the same three again return it as it was.
+
+**The embargo holds.** A free screen's window is refused when it meets, for any registered
+hypothesis holding one of its instruments, the span from that hypothesis's certification start
+less its embargo to its certification end: a screen chooses ideas, and the data that judges an
+idea may not have chosen it. A bound screen reads its own hypothesis's research window and
+nothing else. The embargo binds the other way as well: `kanso hyp validate`, and so `hyp add`,
+refuses a hypothesis whose certification window, with its embargo, meets a window a recorded
+screen read for one of its instruments. Whichever arrives first, the data that chose an idea
+never judges it.
+
+**From a cell to a lane.** `kanso screen draft` writes one `response` cell as a draft
+hypothesis, registering nothing: its research window is the window the screen read, its
+certification window is the operator's and starts no sooner than the embargo after it, its
+`program.md` carries the cell's numbers, and its `strategy.py` is the cell's own rule as a
+sleeve. So the lane's first act, the baseline card, re-measures the screened cell through the
+runner with real fills — measured on the demo's lead, a margin of 9.20 bp an event in the screen
+and a net edge of 9.14 bp a trade on the drafted baseline — and a large gap between the two is
+itself a finding before any proposal is paid for.
+
+**A screen never gates a lane.** `research begin` and `queue add` read no screen result.
 
 ## Card
 
