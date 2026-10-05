@@ -27,6 +27,13 @@ contain. Three rules follow, and each of them costs something that was worth pay
   are produced, and the whole path is generated over the dataset's span before any
   window is applied, so a window never changes what the points in it are.
 
+**A follower.** A spec may state a leader — `leader_seed` and `leader_index` naming the shocks
+another spec draws for one of its instruments — with a `coupling` and a `lag_steps`: each of
+its own instruments then takes that share of the leader's shock `lag_steps` late. With the
+leader's spec's other parameters — its span among them, step for step, because a shock is drawn
+a batch of the whole span at a time — its returns repeat the leader's that many bars later, which is
+a lead a screen has something to find in, planted without loading the leader twice.
+
 The two models are the two shapes a test needs. `ou` is mean-reverting: `p` is pulled
 back towards `theta` by `kappa` of the gap each step, which is what a mean-reversion
 hypothesis has something to find in. `gbm` is a random walk with drift, which is what a
@@ -122,6 +129,10 @@ CONTINUOUS_SESSION: Final[dict[str, str]] = {
 """What a `continuous` calendar fixes: one session per calendar day, midnight to midnight
 UTC. `24:00` is not a clock time, so the session span is taken as a day rather than parsed."""
 
+LEADER_FIELDS: Final = frozenset({"leader_seed", "leader_index", "lag_steps", "coupling"})
+"""What a spec states only to follow a leader, recorded in no manifest of a spec that does not,
+so every dataset generated before a leader could be stated keeps the map it always had."""
+
 GeneratedType = Literal["bar", "quote", "trade", "funding"]
 DEFAULT_TYPES: Final[tuple[GeneratedType, ...]] = ("bar",)
 """What a spec generates when it names no types: the grain a hypothesis usually asks for."""
@@ -152,6 +163,10 @@ class SyntheticSpec(KansoModel):
     timezone: str = "America/New_York"
     session_start: str = "09:30"
     session_end: str = "16:00"
+    leader_seed: int | None = Field(default=None, ge=0)
+    leader_index: int = Field(default=0, ge=0)
+    lag_steps: int = Field(default=1, ge=1)
+    coupling: float = Field(default=0.0, ge=0, le=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -192,6 +207,10 @@ class SyntheticSpec(KansoModel):
             )
         if self.step <= timedelta(0):
             raise ValueError(f"resolution: {self.resolution} must be longer than zero")
+        if (self.leader_seed is None) != (self.coupling == 0):
+            raise ValueError(
+                "leader_seed: a leader and a coupling above zero are stated together, or neither is"
+            )
         if self.steps_per_session == 0:
             raise ValueError(
                 f"resolution: {self.resolution} is longer than the "
@@ -335,6 +354,8 @@ def _request_params(spec: SyntheticSpec) -> dict[str, str]:
     for key, value in spec.model_dump(mode="json").items():
         if key == "calendar" and value == DEFAULT_CALENDAR:
             continue
+        if key in LEADER_FIELDS and spec.leader_seed is None:
+            continue
         if isinstance(value, list):
             encoded[key] = ",".join(str(item) for item in value)
         else:
@@ -390,7 +411,7 @@ def _path(spec: SyntheticSpec, index: int, count: int) -> list[int]:
     """The mid path in whole ticks, one value per step, over the whole span."""
     unit = 10**spec.price_precision
     floor = 1.0 / unit
-    shocks = _shocks(_streams(spec, index)[0], count)
+    shocks = _followed(spec, _shocks(_streams(spec, index)[0], count))
     price = spec.start_price
     sigma = spec.sigma_bps / 10_000.0
     drift = spec.mu_bps / 10_000.0
@@ -405,6 +426,31 @@ def _path(spec: SyntheticSpec, index: int, count: int) -> list[int]:
             price = floor
         ticks.append(math.floor(price * unit + 0.5))
     return ticks
+
+
+def _followed(spec: SyntheticSpec, own: list[float]) -> list[float]:
+    """The shocks with a leader's mixed in, `lag_steps` late, when the spec states a leader.
+
+    The leader's shocks are the ones a spec seeded `leader_seed` draws for its instrument at
+    `leader_index` over this spec's steps: a spawned child is keyed by its position alone, so
+    they are the same whatever else that spec lists — but a shock adds twelve uniforms drawn a
+    batch of the whole span at a time, so only a spec over the leader spec's span, step for
+    step, redraws the leader's own shocks. A follower is stated with its leader's span.
+
+    Step t takes `coupling` of the leader's shock at t - lag and the rest of its own, scaled by
+    one constant square root so the variance stays one; before the lag there is nothing to
+    follow and the shock is its own.
+    """
+    if spec.leader_seed is None:
+        return own
+    leader = np.random.SeedSequence(spec.leader_seed).spawn(spec.leader_index + 1)
+    lead = _shocks(leader[spec.leader_index].spawn(5)[0], len(own))
+    rest = math.sqrt(1.0 - spec.coupling * spec.coupling)
+    lag = spec.lag_steps
+    return [
+        spec.coupling * lead[step - lag] + rest * shock if step >= lag else shock
+        for step, shock in enumerate(own)
+    ]
 
 
 def _selected(

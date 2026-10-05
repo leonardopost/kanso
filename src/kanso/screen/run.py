@@ -7,7 +7,8 @@ The order is the contract.
 2. **Get the data.** A series no adapter serves is refused, naming the venue and type to
    build an adapter for; every fetchable one is fetched through the adapter that serves it
    and a snapshot taken (`kanso.screen.data`). Nothing is skipped.
-3. **Pin** the newest snapshot covering every series over the window (`kanso.screen.pin`).
+3. **Pin** the newest snapshot covering every series over the window (`kanso.screen.pin`),
+   taking one when what is held has not been frozen yet.
    The screen's bytes, that snapshot and the measure library's version are the result's key;
    a result already recorded under them is returned as it was, and nothing is read.
 4. **Measure**, one session at a time: every leg of the session is read once through the
@@ -97,7 +98,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     fetched = data.fetch(ws, store, screen, window, plans)
     catalog = open_catalog(ws)
     held = sessions.definitions(catalog, screen)
-    snapshot = pin.covering(ws, screen, window, held)
+    snapshot = pin.covering(ws, store, screen, window, held)
     version = screen_version()
     stored = records.stored(store, valid.sha, snapshot.snapshot_id, version)
     if stored is not None:

@@ -86,9 +86,11 @@ for that kind:
 | `exec_clients` | `EXEC_CLIENTS`, a sequence of `ExecutionClientSpec` |
 | `data_types` | a `register_custom_type` call made while the module is imported |
 
-Two kinds are **refused**: `gates` and `objectives`. No registry reads either, so declaring
-one is refused where it is written rather than collected and forgotten — the section below
-says where a gate goes instead.
+Three kinds are **refused**: `gates`, `objectives` and `measures`. No registry reads any of
+them, so declaring one is refused where it is written rather than collected and forgotten —
+the section below says where a gate goes instead, and a screen's measure goes the same way:
+a YAML entry in `src/kanso/screen/library/` and its implementation in `kanso.screen`, because
+a screen's verdict means the package's arithmetic or it means nothing.
 
 A kind outside those five, or an id list written as a bare string, is reported as an
 unusable declaration and the rest of the table is still read. Neither that nor a refused
@@ -178,7 +180,8 @@ boom            loaded · kanso_ext/boom
 
 ## A gate or an objective goes in the package
 
-`PROVIDES` refuses `gates` and `objectives`. Certification plans from, and judges by, the
+`PROVIDES` refuses `gates`, `objectives` and `measures`; the last is a screen's, and goes in
+`src/kanso/screen/library/` on the same terms. Certification plans from, and judges by, the
 toolbox in the package: one YAML file per item under `src/kanso/criteria/library/`, naming
 the implementation it resolves, and nothing that builds that toolbox takes a workspace. A
 declaration is therefore refused where it is written:
@@ -187,7 +190,8 @@ declaration is therefore refused where it is written:
 $ kanso ext show
 paths      kanso_ext
 house_rules     loaded · kanso_ext/house_rules.py
-                PROVIDES declares gates, objectives, which a workspace cannot provide: the toolbox a plan is drawn from and judged by is the package's own library, so a gate or an objective is written in the package (docs/extensions.md)
+                PROVIDES declares gates, objectives, which a workspace cannot provide: the toolbox a plan is drawn from and judged by, and the measures a screen measures by, are the package's own libraries, so a gate, an objective or a measure is written in the package (docs/extensions.md)
+                declares nothing
 1/1 loaded · 0 registered · 0 shadowed · 0 absent
 ```
 

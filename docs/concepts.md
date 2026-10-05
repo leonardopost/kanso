@@ -217,7 +217,7 @@ refuses by name — the snapshot, what it pins, what the store holds — when th
 have moved since the newest covering snapshot was taken.
 
 ```
-$ kanso data instruments resolve --as-of 2024-01-02
+$ kanso data instruments resolve DEMO.SIM --as-of 2024-01-02
 as of      2024-01-02
            DEMO.SIM → DEMO.SIM
 resolved   1 instrument(s)
@@ -263,20 +263,21 @@ question a lane cannot answer cheaply — is this worth tokens — with a base r
 mechanism around an edge and cannot create one, and a screen costs CPU and no tokens.
 
 ```
-$ kanso screen run screens/ou_rev/screen.yaml
-screen     ou_rev · dc2affd · snapshot 524d901
-window     2024-01-02..2024-03-29
-cells      3
-verdict    worth a lane: no · 1 pass · 0 fail · 2 thin
-           pass · lead_lag/a>a/1h  mean -0.2189 ± 0.064 · t -3.41 · p 0.0015 · 64 session(s)
-cost       0.3s · 0.26 GB
+$ kanso screen run screens/demo_lag/screen.yaml   # its trailing written line is elided
+screen     demo_lag · d0cf979 · snapshot 48a3092
+window     2024-01-02..2024-03-28
+cells      8
+verdict    worth a lane: yes · 3 pass · 5 fail · 0 thin
+           pass · response/demo/20bp/1m/lagd/1m  ceiling +144.9 bp/day · margin +9.2 bp (gross +14.2, hurdle 5) · 15.7 a day · t +31.41 · p 0.0001
+           pass · response/demo/20bp/1m/lagd/5m  ceiling +111.8 bp/day · margin +8.397 bp (gross +13.4, hurdle 5) · 13.3 a day · t +18.72 · p 0.0001
+           pass · lead_lag/demo>lagd/1m  mean +0.596 ± 0.0041 · t +145.89 · p 0.0001 · 63 session(s)
+cost       0.4s · 0.26 GB
 ```
 
-*That screen measured the hourly OU path of the test workspace against itself at one, two and
-three hours: its returns revert: a pull of half its gap an hour is a lag-one reversion of −0.25 in theory, and
-the screen reads −0.22. At six hourly bars
-a session, two and three hours hold too few pairs a session to be a correlation, and the cells
-say so rather than reading a number.*
+*The demo's `LAGD` takes 0.6 of `DEMO`'s one-minute shock a minute late (`demo_lag.yaml`). The
+screen reads the lead back as 0.596 at one minute and nothing at −1, 2 or 5 minutes, and following
+a 20 bp move of `DEMO` in `LAGD` clears the 5 bp round trip by 9.2 bp an event, about sixteen
+times a day. The 30 bp cells fire too rarely to meet the verdict's one event a day.*
 
 **It reads what a card reads.** Every leg is read through the runner's own reader
 (`kanso.nautilus.backtest.market_points`), at its grain, the points of one instant in the order a
@@ -306,16 +307,6 @@ margin per event, the events a day, and `ceiling_bp_day` — what one notional o
 earned a day, with no capacity limit and no sizing: a bound on what a search of the mechanism
 could find, held against a campaign's target in the same units its lanes are scored in.
 
-```
-$ kanso screen run screens/ou_fade/screen.yaml
-screen     ou_fade · f3d9549 · snapshot 524d901
-window     2024-01-02..2024-03-29
-cells      6
-verdict    worth a lane: yes · 2 pass · 4 fail · 0 thin
-           pass · response/a/40bp/1h/a/1h  ceiling +19.34 bp/day · margin +17.68 bp (gross +22.68, hurdle 5) · 1.09 a day · t +5.29 · p 0.0001
-           pass · response/a/20bp/1h/a/1h  ceiling +16.83 bp/day · margin +9.617 bp (gross +14.62, hurdle 5) · 1.75 a day · t +4.18 · p 0.0003
-```
-
 **Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
 `basket` is a weighted sum of its legs' log prices, a `spread` is `log long − beta log short`,
 and a `gap` is one asset's price on two venues as a fraction of the second. Each is live only
@@ -328,8 +319,9 @@ A spread's increments against their own past is mean reversion measured without 
 `lead_lag` of the spread against itself.
 
 **Missing data is fetched, never skipped.** A series the catalog lacks is fetched through the
-adapter that declares it serves it, and a snapshot taken; a series no adapter serves is refused,
-and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks).
+adapter that declares it serves it, and a snapshot taken; data held but frozen by no snapshot is
+frozen; a series no adapter serves is refused, and the remedy is to build one
+(`docs/adapters.md`, the three declarations a screen asks).
 
 **The session is the unit of replication, and the family is the lattice.** A cell's evidence is
 one value per session — for `lead_lag`, the correlation of one series' returns with another's at
@@ -363,9 +355,9 @@ hypothesis, registering nothing: its research window is the window the screen re
 certification window is the operator's and starts no sooner than the embargo after it, its
 `program.md` carries the cell's numbers, and its `strategy.py` is the cell's own rule as a
 sleeve. So the lane's first act, the baseline card, re-measures the screened cell through the
-runner with real fills — measured on the test workspace's fade, a margin of 17.7 bp an event
-in the screen and a net edge of 12.5 bp a trade on the baseline — and a large gap between the
-two is itself a finding before any proposal is paid for.
+runner with real fills — measured on the demo's lead, a margin of 9.20 bp an event in the screen
+and a net edge of 9.14 bp a trade on the drafted baseline — and a large gap between the two is
+itself a finding before any proposal is paid for.
 
 **A screen never gates a lane.** `research begin` and `queue add` read no screen result.
 

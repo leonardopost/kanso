@@ -296,6 +296,8 @@ def _write_env(root: Path) -> None:
 
 def _write_demo(root: Path) -> None:
     _write_new(root / "demo.yaml", _template("demo/loader.yaml"))
+    _write_new(root / "demo_lag.yaml", _template("demo/lag.yaml"))
+    _write_new(root / "screens" / "demo_lag" / "screen.yaml", _template("demo/screen.yaml"))
     _write_new(root / "mock" / "responses.yaml", _template("demo/responses.yaml"))
     hyp = root / "hypotheses" / "demo_mr"
     _write_new(hyp / "hypothesis.yaml", _template("demo/hypothesis.yaml"))

@@ -115,3 +115,28 @@ def test_fading_the_spread_pays_both_legs_round_trips_in_their_shares(
         run_screen(runner, paired, pair("first_fold", [fade])), found["key"], runner, paired
     )
     assert later["in_sample_fit"] is False and later["sessions"] < found["sessions"]
+
+
+def test_data_held_but_never_frozen_is_frozen_by_the_screen(
+    runner: CliRunner, loaded: Path
+) -> None:
+    from kanso.data.snapshot import snapshots
+    from kanso.workspace import find
+
+    entries = yaml.safe_load((loaded / "instruments.yaml").read_text(encoding="utf-8"))
+    entries[OTHER] = {**entries[INSTRUMENT], "nautilus_id": OTHER}
+    (loaded / "instruments.yaml").write_text(yaml.safe_dump(entries), encoding="utf-8")
+    spec = loaded / "other.yaml"
+    spec.write_text(yaml.safe_dump({**SPEC, "instruments": ["OTHR"], "seed": 11}), encoding="utf-8")
+    assert (
+        at(runner, loaded, "data", "instruments", "resolve", "--as-of", "2024-01-02").exit_code == 0
+    )
+    assert (
+        at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
+    )
+    taken = len(snapshots(find(loaded)))
+
+    document = run_screen(runner, loaded, pair("window", [SELF]))
+
+    assert document["cells"] == 1
+    assert len(snapshots(find(loaded))) == taken + 1

@@ -257,7 +257,7 @@ def test_a_declared_data_type_nothing_registered_is_absent(
 def test_a_declared_gate_or_objective_is_refused_and_names_the_page(
     runner: CliRunner, workspace: Path
 ) -> None:
-    """The two kinds no registry reads, refused at the declaration rather than listed.
+    """The three kinds no registry reads, refused at the declaration rather than listed.
 
     A plan is drawn from, and judged by, the criteria library in the package, and nothing
     that builds it takes a workspace. So a collected gate would read as `doctor` green and
@@ -265,7 +265,11 @@ def test_a_declared_gate_or_objective_is_refused_and_names_the_page(
     toolbox does not hold. Here the extension imported and the declaration did not read,
     which is the state this command exists to distinguish.
     """
-    module(workspace, "house_rules", 'PROVIDES = {"gates": ["g"], "objectives": ["o"]}\n')
+    module(
+        workspace,
+        "house_rules",
+        'PROVIDES = {"gates": ["g"], "objectives": ["o"], "measures": ["m"]}\n',
+    )
 
     result = at(runner, workspace, "ext", "show")
     document = payload(at(runner, workspace, "ext", "show", "--json"))
@@ -276,7 +280,7 @@ def test_a_declared_gate_or_objective_is_refused_and_names_the_page(
     assert found["loaded"] is True
     assert "which a workspace cannot provide" in str(found["error"])
     assert "docs/extensions.md" in str(found["error"])
-    assert "gates, objectives" in result.stdout
+    assert "gates, measures, objectives" in result.stdout
     assert document["counts"] == {
         "extensions": 1,
         "loaded": 1,

@@ -1372,6 +1372,16 @@ $ kanso data load --loader synthetic --spec weekday_funding.yaml
 error: types: funding is settled round the clock and needs calendar 'continuous'; a weekday calendar has no settlements to generate
 ```
 
+A spec may plant a lead. `leader_seed` and `leader_index` name the shocks another spec draws
+for one of its instruments, and every instrument of this spec takes `coupling` of the leader's
+shock `lag_steps` bars late and the rest of its own, so its returns repeat the leader's that
+many bars later — `demo_lag.yaml` is the demo's (`LAGD` follows `DEMO` by a minute at 0.6). A
+shock is drawn a batch of the whole span at a time, so a follower redraws its leader's own
+shocks only over its leader spec's span, step for step: state the follower with the leader's
+`start`, `end`, `resolution` and model. A leader and a coupling above zero are stated together
+or not at all (exit 3), and a spec stating neither records neither, so every dataset generated
+before a leader could be stated keeps its request parameters and its snapshot id.
+
 Nothing else is generated.
 
 **Coverage counts only the days a market opened.** A backfill is chunked, and a chunk edge
@@ -1895,19 +1905,21 @@ re-linking — and moving or reinstalling the package breaks the links until you
 
 ## What `--demo` adds
 
-`kanso init <dir> --demo` fills in what a plain `init` leaves as a placeholder and adds three
+`kanso init <dir> --demo` fills in what a plain `init` leaves as a placeholder and adds five
 files, and between them they are the reason the demo runs end to end with no credential of any
 kind:
 
 | file | plain `init` | `--demo` |
 |---|---|---|
 | `models.yaml` | a commented skeleton with `<provider>` placeholders | the shipped `mock` protocol listed for every tier, so classification, proposal, alignment and planning cost nothing and reach nothing |
-| `instruments.yaml` | `{}` plus the field reference in comments | one `manual: true` entry, `DEMO.SIM`, so no reference adapter is needed |
+| `instruments.yaml` | `{}` plus the field reference in comments | two `manual: true` entries, `DEMO.SIM` and `LAGD.SIM`, so no reference adapter is needed |
 | `mock/responses.yaml` | — | the scripted answers that register reads, one per task class, with every `params` written as the list of `{name, value}` pairs a real model answers with and every `propose` answer carrying `tags` |
 | `demo.yaml` | — | a synthetic loader spec: a seeded mean-reverting series spanning the research, certification and forward windows |
 | `hypotheses/demo_mr/` | — | a hypothesis that ships already classified, with its `program.md` and the sleeve stub |
+| `demo_lag.yaml` | — | a second synthetic spec: `LAGD`, on its own seed and `demo.yaml`'s span, taking 0.6 of `DEMO`'s shock one bar late (`leader_seed`, `leader_index`, `lag_steps`, `coupling`) |
+| `screens/demo_lag/screen.yaml` | — | a free screen of `LAGD` against `DEMO` over the first quarter of 2024: a lead-lag and a response, with a declared verdict |
 
-Everything else `init` writes is the same either way. Delete the three added files and replace
+Everything else `init` writes is the same either way. Delete the five added files and replace
 the two rendered ones and you have an ordinary empty workspace.
 
 ## Moving, copying and backing up a workspace
