@@ -268,12 +268,13 @@ screen     ou_rev · dc2affd · snapshot 524d901
 window     2024-01-02..2024-03-29
 cells      3
 verdict    worth a lane: no · 1 pass · 0 fail · 2 thin
-           pass · lead_lag/a>a/1h  mean -0.3869 ± 0.067 · t -5.78 · p 0.0001 · 64 session(s)
+           pass · lead_lag/a>a/1h  mean -0.2189 ± 0.064 · t -3.41 · p 0.0015 · 64 session(s)
 cost       0.3s · 0.26 GB
 ```
 
 *That screen measured the hourly OU path of the test workspace against itself at one, two and
-three hours: its returns revert, at the smallest p ten thousand draws can give. At six hourly bars
+three hours: its returns revert: a pull of half its gap an hour is a lag-one reversion of −0.25 in theory, and
+the screen reads −0.22. At six hourly bars
 a session, two and three hours hold too few pairs a session to be a correlation, and the cells
 say so rather than reading a number.*
 
@@ -281,6 +282,16 @@ say so rather than reading a number.*
 (`kanso.nautilus.backtest.market_points`), at its grain, the points of one instant in the order a
 card gets them, one session at a time, clamped to the window. Every instant is a `ts_init`: a
 lead a screen finds is a lead in what was public.
+
+**Two estimators.** On a grid, the realised correlation of returns sampled at the clock's step —
+returns are not demeaned, because a session's mean return is noise and taking it out of a few
+biases the correlation towards −1/(n−1). Without one (`hy`), the Hayashi–Yoshida covariance of
+the two series' own returns, every pair of intervals that overlap once one series is moved back
+by the lag: a grid at a fine step mostly samples prices that have not moved and shrinks a
+correlation towards zero as the step shrinks, and this has no step to shrink, so it is the one
+for prints against prints. A lead shorter than a second between two sources whose timestamps
+mean different things — an exchange's own instant and a consolidated tape's, or one nobody
+declared — is marked `clock_bound`: it may be the difference between the clocks.
 
 **Missing data is fetched, never skipped.** A series the catalog lacks is fetched through the
 adapter that declares it serves it, and a snapshot taken; a series no adapter serves is refused,

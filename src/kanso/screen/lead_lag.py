@@ -8,7 +8,21 @@ session is the correlation of a's returns with b's returns k later:
 **On the grid** (`estimator: grid`), returns are changes of level between consecutive grid
 instants inside the cell's live span (`kanso.screen.grid`), and a lag is a whole number of
 grid steps — the schema refuses one that is not. A session gives a pair a value at a lag
-when at least `MIN_PAIRS` return pairs are defined and neither side is constant.
+when at least `MIN_PAIRS` return pairs are defined and neither side is flat. The correlation is
+the realised one, of returns that are not demeaned (`correlation`).
+
+**Without a grid** (`estimator: hy`), each series moves at its own instants and nothing is
+sampled. The value is the Hayashi–Yoshida covariance of the two sequences of returns, b's
+intervals moved back by the lag, over the product of the two realised variances:
+
+    HY(k) = sum over i, j of da_i db_j 1{(t_i-1, t_i] meets (u_j-1 - k, u_j - k]}
+
+so every pair of returns whose intervals overlap once b is moved back by k counts, and none
+other. A grid at a fine step mostly samples prices that have not moved, which shrinks a
+correlation towards zero as the step shrinks (the Epps effect); this has no step to shrink.
+Several points at one instant are one point, the last, because an interval of no length
+holds no return. The sum is taken interval by interval with a cumulative sum, so a session
+of n and m points costs n log m.
 
 A series against itself is its autocorrelation: a spread's increments against their own past,
 negative at short lags, is mean reversion measured without a fitted model.
@@ -66,6 +80,8 @@ def session(
     betas: Mapping[str, float],
 ) -> tuple[np.ndarray, list[dict[str, float]]]:
     """One session's value of every cell, NaN where it has none, and each cell's staleness."""
+    if measure.estimator == "hy":
+        return _asynchronous(screen, measure, series, span, overlap, betas)
     assert screen.clock.grid is not None
     step = span_ns(screen.clock.grid)
     values: list[float] = []
@@ -83,6 +99,62 @@ def session(
     return np.asarray(values, dtype=np.float64), stale
 
 
+def _asynchronous(
+    screen: Screen,
+    measure: LeadLag,
+    series: Mapping[str, Series],
+    span: tuple[int, int],
+    overlap: bool,
+    betas: Mapping[str, float],
+) -> tuple[np.ndarray, list[dict[str, float]]]:
+    """Every cell's Hayashi–Yoshida correlation in one session; no grid, so no staleness."""
+    values: list[float] = []
+    for a, b in pairs(screen, measure):
+        legs = tuple(dict.fromkeys(screen.legs_of(a) + screen.legs_of(b)))
+        live = grid.live(legs, series, span, overlap)
+        moves = [_moves(screen, name, series, live, betas) for name in (a, b)]
+        for lag in measure.lags:
+            values.append(hayashi_yoshida(*moves[0], *moves[1], span_ns(lag)))
+    return np.asarray(values, dtype=np.float64), [{} for _ in values]
+
+
+def _moves(
+    screen: Screen,
+    name: str,
+    series: Mapping[str, Series],
+    live: tuple[int, int] | None,
+    betas: Mapping[str, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """A series' instants inside the live span and its level at each, one point an instant."""
+    if live is None:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float64)
+    times = grid.instants(screen, name, series)
+    times = times[(times >= live[0]) & (times <= live[1])]
+    levels = grid.level(screen, name, series, times, betas)
+    last = np.ones(len(times), dtype=bool)
+    last[:-1] = times[1:] != times[:-1]
+    return times[last], levels[last]
+
+
+def hayashi_yoshida(
+    a_times: np.ndarray, a_levels: np.ndarray, b_times: np.ndarray, b_levels: np.ndarray, lag: int
+) -> float:
+    """corr of a's returns with b's returns `lag` nanoseconds later, by Hayashi–Yoshida."""
+    if len(a_times) <= MIN_PAIRS or len(b_times) <= MIN_PAIRS:
+        return float("nan")
+    da = np.diff(a_levels)
+    db = np.diff(b_levels)
+    shifted = b_times - lag
+    cumulative = np.concatenate(([0.0], np.cumsum(db)))
+    first = np.maximum(np.searchsorted(shifted, a_times[:-1], side="right"), 1)
+    last = np.minimum(np.searchsorted(shifted, a_times[1:], side="left"), len(b_times) - 1)
+    overlapping = np.where(last >= first, cumulative[last] - cumulative[first - 1], 0.0)
+    scale = float(np.sqrt(np.add.reduce(da * da) * np.add.reduce(db * db)))
+    if scale == 0.0:
+        return float("nan")
+    return float(np.add.reduce(da * overlapping) / scale)
+
+
 def _lagged(a: np.ndarray, b: np.ndarray, steps: int) -> float:
     """corr(a(t), b(t + steps)), over the instants both are defined."""
     count = len(a)
@@ -94,14 +166,20 @@ def _lagged(a: np.ndarray, b: np.ndarray, steps: int) -> float:
 
 
 def correlation(x: np.ndarray, y: np.ndarray) -> float:
-    """Pearson's correlation over the pairs both define; NaN when it is not a number."""
+    """The realised correlation over the pairs both define; NaN when it is not a number.
+
+    Returns are not demeaned. A session's mean return is noise around zero, and taking it
+    out of a few returns biases their correlation towards -1/(n-1): measured on the test
+    workspace's hourly path, six bars a session and a pull of half its gap an hour — a lag-one
+    reversion of -0.25 in theory — demeaning read -0.39 over 64 sessions, this reads -0.22,
+    and Hayashi–Yoshida, which also counts the return a lag leaves unpaired in its variance,
+    reads -0.16.
+    """
     both = ~(np.isnan(x) | np.isnan(y))
     x, y = x[both], y[both]
     if len(x) < MIN_PAIRS:
         return float("nan")
-    dx = x - np.add.reduce(x) / len(x)
-    dy = y - np.add.reduce(y) / len(y)
-    scale = float(np.sqrt(np.add.reduce(dx * dx) * np.add.reduce(dy * dy)))
+    scale = float(np.sqrt(np.add.reduce(x * x) * np.add.reduce(y * y)))
     if scale == 0.0:
         return float("nan")
-    return float(np.add.reduce(dx * dy) / scale)
+    return float(np.add.reduce(x * y) / scale)

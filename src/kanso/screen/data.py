@@ -58,6 +58,9 @@ SPECS: Final = "specs"
 UNKNOWN: Final = "unknown"
 """What a leg's timestamps are when nothing declared them: a file, or a generator."""
 
+MIXED: Final = "mixed"
+"""What a held series' timestamps are when its datasets came from sources that differ."""
+
 
 @dataclass(frozen=True)
 class LegPlan:
@@ -264,7 +267,7 @@ def _held_timestamps(
     }
     if not kinds:
         return UNKNOWN
-    return kinds.pop() if len(kinds) == 1 else "mixed"
+    return kinds.pop() if len(kinds) == 1 else MIXED
 
 
 def _unserved(instrument: str, kind: str, resolution: str | None) -> str:

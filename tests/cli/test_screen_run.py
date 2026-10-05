@@ -57,8 +57,8 @@ def test_a_run_measures_judges_records_and_renders(runner: CliRunner, loaded: Pa
     assert document["verdict"]["worth_a_lane"] is False
     best = document["best"][0]
     assert best["key"] == "lead_lag/a>a/1h" and best["judged"] == "pass"
-    assert best["mean"] < -0.2
-    assert best["p"] == pytest.approx(1 / 10_000)
+    assert best["mean"] < -0.1
+    assert best["p"] < 0.01
     assert best["folds_same_sign"] == 4 and best["staleness"] == {"a": 0.0}
     rendered = parse_yaml(ScreenResult, Path(document["result"]).read_text(encoding="utf-8"))
     assert rendered.assumption == "sessions are roughly independent of each other"
@@ -158,7 +158,8 @@ def test_a_cell_short_of_sessions_is_thin_and_a_weak_one_fails(
             for row in store.connection.execute("SELECT result FROM screen_results")
         ]
     judged = {cell.key: (cell.judged, cell.reason) for cell in result.cells}
-    assert judged["lead_lag/a>a/1h"] == ("fail", "p 0.0001 above alpha 5e-05")
+    verdict_of_1h, reason_of_1h = judged["lead_lag/a>a/1h"]
+    assert verdict_of_1h == "fail" and str(reason_of_1h).endswith("above alpha 5e-05")
     assert judged["lead_lag/a>a/2h"][0] == "thin"
     assert "under min_sessions 64" in str(judged["lead_lag/a>a/2h"][1])
     assert document["verdict"]["thin"] == 1
@@ -222,10 +223,6 @@ def test_a_series_no_adapter_serves_is_refused_before_anything_is_read(
                 ]
             },
             "does not measure `response` yet",
-        ),
-        (
-            {"measures": [{**OU["measures"][0], "estimator": "hy"}]},
-            "does not measure the `hy` estimator yet",
         ),
         (
             {
@@ -312,3 +309,42 @@ def test_a_refusal_names_each_series_as_the_store_files_it() -> None:
 
     assert _spelled(("BTC-USDT-SWAP.OKX", "trade", None)) == "BTC-USDT-SWAP.OKX trade"
     assert _spelled((INSTRUMENT, "bar", "1h")) == "DEMO.SIM bar 1h"
+
+
+def test_hy_without_a_grid_reads_the_same_reversion(runner: CliRunner, loaded: Path) -> None:
+    hy = {**OU["measures"][0], "estimator": "hy", "lags": ["1h"]}
+    document = run_screen(runner, loaded, {**OU, "clock": {"hours": "overlap"}, "measures": [hy]})
+
+    best = document["best"][0]
+    assert best["key"] == "lead_lag/a>a/1h" and best["judged"] == "pass"
+    assert best["mean"] < -0.1 and best["staleness"] == {}
+    assert best["clock_bound"] is False
+
+
+def test_a_sub_second_lead_between_clocks_that_differ_is_clock_bound() -> None:
+    from kanso.schemas.screen import Screen
+    from kanso.screen.lead_lag import CellKey
+    from kanso.screen.run import _clock_bound
+
+    spec = Screen.model_validate(
+        {
+            **OU,
+            "legs": {
+                "a": {"instrument": "A.OKX", "type": "trade"},
+                "b": {"instrument": "B.XNAS", "type": "trade"},
+            },
+            "derived": {"g": {"gap": {"a": "a", "b": "b"}}},
+            "clock": {"hours": "overlap"},
+            "measures": [
+                {"id": "lead_lag", "from": "a", "to": "b", "estimator": "hy", "lags": ["5ms"]}
+            ],
+        }
+    )
+    fast = CellKey("k", "a", "b", "5ms")
+    slow = CellKey("k", "a", "b", "1s")
+    same = {"a": "exchange", "b": "exchange"}
+    assert _clock_bound(spec, fast, {"a": "exchange", "b": "consolidated_tape"}) is True
+    assert _clock_bound(spec, fast, same) is False
+    assert _clock_bound(spec, fast, {"a": "exchange"}) is True
+    assert _clock_bound(spec, slow, {"a": "exchange", "b": "consolidated_tape"}) is False
+    assert _clock_bound(spec, CellKey("k", "g", "g", "-5ms"), {**same, "b": "mixed"}) is True

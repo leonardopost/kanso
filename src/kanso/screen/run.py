@@ -44,6 +44,7 @@ from kanso.schemas.screen import (
     ScreenVerdict,
     SeriesRead,
     Summary,
+    span_ns,
 )
 from kanso.screen import data, embargo, lead_lag, nulls, pin, records, sessions
 from kanso.screen.files import validate
@@ -54,6 +55,8 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.workspace import Workspace
 
 ASSUMPTION: Final = "sessions are roughly independent of each other"
+
+NS_PER_SECOND: Final = 1_000_000_000
 """What every result's inference rests on, stated in the result."""
 
 GIB: Final = 1024**3
@@ -89,7 +92,9 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     if stored is not None:
         return Outcome(stored, records.render(ws, stored), True, fetched)
     store.put_blob(path.read_bytes())
-    cells = _measure(ws, screen, window, catalog, held, valid.sha, snapshot.snapshot_id)
+    read = [_read(item, plans) for item in data.plan(ws, store, screen, window)]
+    stamps = {leg: item.timestamps for item in read for leg in item.legs}
+    cells = _measure(ws, screen, window, catalog, held, valid.sha, snapshot.snapshot_id, stamps)
     result = ScreenResult(
         screen=screen.id,
         sha=valid.sha,
@@ -104,7 +109,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         created_at=datetime.now(tz=UTC),
         wall_s=round(time.monotonic() - started, 3),
         peak_mem_gb=round(_peak_gb(), 3),
-        series=[_read(item, plans) for item in _held_plans(ws, store, screen, window)],
+        series=read,
         cells=cells,
         summary=_summary(screen.verdict, cells),
     )
@@ -120,6 +125,7 @@ def _measure(
     held: dict[str, Any],
     sha: str,
     snapshot_id: str,
+    stamps: dict[str, str],
 ) -> list[Cell]:
     """Every cell of every measure, judged across the window's sessions."""
     days = sessions.days(screen, window)
@@ -163,10 +169,25 @@ def _measure(
                         folds=folds,
                         folds_same_sign=_same_sign(folds, float(found.mean[row])),
                         staleness=_staleness([day[row] for day in stale[index]]),
+                        clock_bound=_clock_bound(screen, key, stamps),
                     ),
                 )
             )
     return cells
+
+
+def _clock_bound(screen: Screen, key: lead_lag.CellKey, stamps: dict[str, str]) -> bool:
+    """Whether a lead is shorter than a second between clocks that mean different things.
+
+    Two sources' `ts_init` are two clocks; when one is an exchange's own instant and the
+    other a tape's or a vendor's receipt, or nobody declared what one is, a sub-second lead
+    between them may be the difference between the clocks, and the result says so.
+    """
+    if abs(span_ns(key.lag)) >= NS_PER_SECOND:
+        return False
+    legs = screen.legs_of(key.source) + screen.legs_of(key.target)
+    kinds = {stamps.get(leg, data.UNKNOWN) for leg in legs}
+    return len(kinds) > 1 or bool(kinds & {data.UNKNOWN, data.MIXED})
 
 
 def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
@@ -237,11 +258,6 @@ def _refuse_unmeasured(screen: Screen) -> None:
                 f"measures.{index}: this build does not measure `response` yet",
                 remedy="screen lead_lag alone for now",
             )
-        if measure.estimator == "hy":
-            raise PreconditionError(
-                f"measures.{index}: this build does not measure the `hy` estimator yet",
-                remedy="use `estimator: grid` for now",
-            )
     for name, derived in screen.derived.items():
         if derived.spread is not None and derived.spread.hedge == "ols":
             raise PreconditionError(
@@ -259,13 +275,6 @@ def _refuse_unserved(plans: Sequence[data.LegPlan]) -> None:
             remedy="build a data adapter for them as a workspace extension "
             "(docs/extensions.md), then run the screen again",
         )
-
-
-def _held_plans(
-    ws: Workspace, store: StateStore, screen: Screen, window: tuple[date, date]
-) -> tuple[data.LegPlan, ...]:
-    """The plan once the data is in: every series held, with its clock."""
-    return data.plan(ws, store, screen, window)
 
 
 def _read(item: data.LegPlan, before: Sequence[data.LegPlan]) -> SeriesRead:
