@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
+
+from nautilus_trader.model.enums import AssetClass
 
 from kanso.data.adapters.massive import ADAPTER
 from tests.nautilus.backtest.conftest import instrument, perpetual
@@ -11,6 +14,8 @@ from tests.nautilus.backtest.conftest import instrument, perpetual
 def test_it_serves_a_us_equity_s_bars_prints_and_quotes_and_nothing_else(tmp_path) -> None:
     assert ADAPTER.serves(None, instrument("MARA"), "1s") == ("bar", "trade", "quote")
     assert ADAPTER.serves(None, perpetual(), "1s") == ()
+    euro = SimpleNamespace(asset_class=AssetClass.EQUITY, quote_currency="EUR")
+    assert ADAPTER.serves(None, euro, "1s") == ()
     assert ADAPTER.timestamps == "consolidated_tape"
 
 

@@ -41,7 +41,7 @@ SCREEN_FILE: Final = "screen.yaml"
 FREE_BINDING: Final = (
     "window: {start: , end: }           # YYYY-MM-DD; clear of every registered hypothesis's "
     "certification span on a shared instrument\n"
-    "# costs: {OKX: {commission_bps: 5}}  # optional, per venue: what the hurdle is struck "
+    "# costs: {XNAS: {commission_bps: 0.5}}  # optional, per venue: what the hurdle is struck "
     "under, beside the workspace's venue model"
 )
 """What a free screen's template states in place of a hypothesis."""
