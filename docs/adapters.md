@@ -287,6 +287,14 @@ tolerated is a setting that silently does nothing. It holds no credential.
 | `requests_per_second` | `90` | the rate limit every request in a command shares |
 | `timeout_s` | `30` | per-request timeout |
 
+`timeout_s` bounds one asking. Inside a REST cursor walk — every loader but `massive_bulk`,
+which reads the object store — a page that did not answer, whether it timed out, lost its
+connection, met a server error or came back unreadable, is asked for twice more, after 2 s
+and then 8 s, before the command fails with the network remedy: the cursor names the page
+exactly, so asking again neither skips nor repeats a row. A throttle is never asked again,
+because it says `requests_per_second` is set above what the plan serves, and neither is a
+probe's single request, because a probe that cannot reach the vendor should say so.
+
 The object store's host and bucket are not configurable: they are measured constants of the
 layout, and a wrong one is a mis-signed request rather than a redirect.
 

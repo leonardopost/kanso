@@ -9,8 +9,18 @@ a credential that has to be rotated.
 
 **One quota, enforced in the transport.** The rate limit belongs to the connection rather
 than to any caller, so it lives in the `nautilus_pyo3.HttpClient` that every request goes
-through, and a loader cannot forget it. There is no retry: a throttle means the quota is
+through, and a loader cannot forget it. A throttle is never retried: it means the quota is
 set wrong, and a client that quietly retried would hide that.
+
+**A page that did not answer is asked for again; nothing else is.** Inside a cursor walk, a
+page that timed out, lost its connection, met a server error or came back unreadable is
+asked for twice more, after `PAGE_BACKOFF_S`, before the walk fails. The cursor URL names the
+page exactly, so asking again can neither skip a row nor repeat one, and a walk of a busy
+series is hundreds of pages, where one stalled page is the network's event and not the
+walk's. Measured on 2026-10-05: three walks of ten sessions of MSTR prints were each lost to
+one 50,000-row page timing out — twice at a 30 s `timeout_s` and once at 120 s — and each
+resume walked the series from its first page again. A single `call`, which is what a probe
+makes, is never retried: a probe that cannot reach the vendor reports that.
 
 **The client never decides what an answer means.** It reduces each response to a
 `Signal` — rows, no rows, a refusal, a rejected request shape, or no answer at all — and
@@ -47,6 +57,7 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from time import sleep
 from typing import Any, Final, Protocol
 
 from pydantic import Field
@@ -83,6 +94,9 @@ DEFAULT_REQUESTS_PER_SECOND: Final = 90
 
 DEFAULT_TIMEOUT_S: Final = 30
 
+PAGE_BACKOFF_S: Final = (2.0, 8.0)
+"""The pauses before a page that did not answer is asked for the second and the third time."""
+
 MAX_PAGES: Final = 1_000
 """Pages one cursor walk may fetch. A universe page is a thousand rows, so this is a
 million rows: far past any legitimate answer, and a cheap guard against a cursor loop."""
@@ -110,6 +124,9 @@ ANSWERED: Final[frozenset[Signal]] = frozenset(
     {Signal.ROWS, Signal.NO_ROWS, Signal.REFUSED, Signal.BAD_REQUEST}
 )
 """The signals that are the source's answer. The rest are a failure to obtain one."""
+
+ASKED_AGAIN: Final[frozenset[Signal]] = frozenset({Signal.UNAVAILABLE, Signal.UNREADABLE})
+"""The responses a walk asks for again: no answer the source meant. Not a throttle."""
 
 
 class MassiveConfig(KansoModel):
@@ -371,10 +388,11 @@ class MassiveClient:
 
         A page that did not answer fails the walk rather than ending it: a timeout half
         way through a universe looks exactly like the end of the universe, and a loader
-        that mistook one for the other would record a short span as a complete one.
+        that mistook one for the other would record a short span as a complete one. It
+        fails only after it has been asked for again (`_page`).
         """
         seen: set[str] = set()
-        page = self.call(path, params)
+        page = self._page(path, params)
         for _ in range(max_pages):
             page.raise_for_transport()
             yield page
@@ -382,12 +400,29 @@ class MassiveClient:
             if following is None or page.signal is not Signal.ROWS or following in seen:
                 return
             seen.add(following)
-            page = self.call(following)
+            page = self._page(following, None)
         raise TransportError(
             f"massive: {path} returned more than {max_pages} pages, which is a cursor that "
             "does not end",
             remedy="narrow the request's range or filters",
         )
+
+    def _page(self, path: str, params: Mapping[str, str] | None) -> Call:
+        """One page of a walk, asked for again while no answer arrives, up to three times.
+
+        The last asking's outcome is returned or raised as it came, so a page that never
+        answered fails the walk exactly as it did before it was asked for again.
+        """
+        for pause in PAGE_BACKOFF_S:
+            try:
+                page = self.call(path, params)
+            except TransportError:
+                sleep(pause)
+                continue
+            if page.signal not in ASKED_AGAIN:
+                return page
+            sleep(pause)
+        return self.call(path, params)
 
     def rows(
         self, path: str, params: Mapping[str, str] | None = None
