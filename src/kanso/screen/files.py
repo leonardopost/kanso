@@ -51,13 +51,18 @@ _ID: Final = TypeAdapter(HypId)
 
 @dataclass(frozen=True)
 class Validated:
-    """An admissible screen: the file, its pin, the window it reads, the family per measure."""
+    """An admissible screen: the file, its pin, the window it reads, the family per measure.
+
+    `source` is the bytes that were validated and pinned. A run stores them, not the file as it
+    stands later: a fetch can take an hour, and a file edited meanwhile is another screen.
+    """
 
     screen: Screen
     sha: str
     window: tuple[date, date]
     hypothesis: Hypothesis | None
     cells: tuple[int, ...]
+    source: bytes = b""
 
 
 def screen_dir(ws: Workspace, screen_id: str) -> Path:
@@ -119,6 +124,7 @@ def validate(ws: Workspace, store: StateStore, path: Path) -> Validated:
         window=window,
         hypothesis=hypothesis,
         cells=cells(screen),
+        source=source,
     )
 
 

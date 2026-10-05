@@ -97,6 +97,34 @@ def test_two_workspaces_holding_the_same_bytes_measure_the_same_numbers(
     assert [cell.model_dump() for cell in one.cells] == [cell.model_dump() for cell in two.cells]
 
 
+def test_a_file_edited_while_its_run_fetches_is_recorded_as_the_bytes_validated(
+    runner: CliRunner, loaded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured: a screen edited during an hour's fetch lost its result to a foreign-key
+    failure, because the run stored the file as it stood after the fetch under the sha it had
+    validated before it."""
+    from hashlib import sha256
+
+    from kanso.screen import data
+
+    path = write_screen(loaded, OU)
+    validated = path.read_bytes()
+    fetch = data.fetch
+
+    def edit_then_fetch(*args: Any, **kwargs: Any) -> Any:
+        path.write_text(path.read_text(encoding="utf-8") + "# edited mid-run\n", encoding="utf-8")
+        return fetch(*args, **kwargs)
+
+    monkeypatch.setattr(data, "fetch", edit_then_fetch)
+
+    result = at(runner, loaded, "screen", "run", path, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert payload(result)["sha"] == sha256(validated).hexdigest()
+    with StateStore(find(loaded).path("state.db")) as store:
+        assert store.get_blob(sha256(validated).hexdigest()) == validated
+
+
 def test_show_reads_every_result_back_newest_first(runner: CliRunner, loaded: Path) -> None:
     run_screen(runner, loaded)
     run_screen(runner, loaded, {**OU, "title": "the same question, other bytes"})

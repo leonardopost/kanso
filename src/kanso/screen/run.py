@@ -104,7 +104,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     stored = records.stored(store, valid.sha, snapshot.snapshot_id, version)
     if stored is not None:
         return Outcome(stored, records.render(ws, stored), True, fetched)
-    store.put_blob(path.read_bytes())
+    store.put_blob(valid.source)
     read = [_read(item, plans) for item in data.plan(ws, store, screen, window)]
     stamps = {leg: item.timestamps for item in read for leg in item.legs}
     priced = hurdle.hurdles(ws, screen, valid.hypothesis, held) if _trades(screen) else None
