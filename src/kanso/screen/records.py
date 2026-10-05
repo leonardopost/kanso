@@ -9,6 +9,8 @@ a rendering of it, as a certificate's is.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -85,3 +87,28 @@ def render(ws: Workspace, result: ScreenResult) -> Path:
     digest = result.version.rpartition("+")[2][:7]
     path = directory / f"{result.sha[:7]}-s{result.snapshot[:7]}-v{digest}.yaml"
     return write_yaml(result, path)
+
+
+@dataclass(frozen=True)
+class Read:
+    """A span of data a recorded screen read, and the instruments it read it for."""
+
+    screen: str
+    window: tuple[date, date]
+    instruments: tuple[str, ...]
+
+
+def screened(store: StateStore) -> list[Read]:
+    """Every window a recorded result read, with its instruments, oldest first."""
+    rows = store.connection.execute(
+        "SELECT screen_id, window_start, window_end, instruments FROM screen_results"
+        " ORDER BY created_at"
+    ).fetchall()
+    return [
+        Read(
+            screen=str(row[0]),
+            window=(date.fromisoformat(str(row[1])), date.fromisoformat(str(row[2]))),
+            instruments=tuple(json.loads(row[3])),
+        )
+        for row in rows
+    ]

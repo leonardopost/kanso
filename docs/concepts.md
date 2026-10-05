@@ -353,7 +353,10 @@ library's version; the same three again return it as it was.
 hypothesis holding one of its instruments, the span from that hypothesis's certification start
 less its embargo to its certification end: a screen chooses ideas, and the data that judges an
 idea may not have chosen it. A bound screen reads its own hypothesis's research window and
-nothing else.
+nothing else. The embargo binds the other way as well: `kanso hyp validate`, and so `hyp add`,
+refuses a hypothesis whose certification window, with its embargo, meets a window a recorded
+screen read for one of its instruments. Whichever arrives first, the data that chose an idea
+never judges it.
 
 **A screen never gates a lane.** `research begin` and `queue add` read no screen result.
 

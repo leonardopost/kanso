@@ -120,6 +120,9 @@ CARD_STAGE: Final = "card"
 """The stage a hypothesis's own constraints run at; the rest are planned at certification."""
 
 QUOTE_TYPE: Final = "quote"
+
+STATE_DB: Final = "state.db"
+"""Where the workspace's state store lives, which records what every screen read."""
 """The data requirement a spread read from quotes needs."""
 
 FUNDING: Final = "funding"
@@ -163,7 +166,24 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_benchmark(hyp)
     _check_book(hyp, models)
     _check_classification(ws, hyp)
+    _check_screened(ws, hyp)
     return hyp
+
+
+def _check_screened(ws: Workspace, hyp: Hypothesis) -> None:
+    """A certification window may not meet data a recorded screen read on a shared instrument.
+
+    A workspace whose store does not exist yet, or predates screens, has recorded none.
+    """
+    from kanso.screen.embargo import refuse_screened  # `kanso.screen` imports this package
+    from kanso.state import StateStore
+
+    path = ws.path(STATE_DB)
+    if not path.is_file():
+        return
+    with StateStore(path) as store:
+        if "screen_results" in store.tables():
+            refuse_screened(store, hyp)
 
 
 def check_strategy(ws: Workspace, hyp_id: str) -> None:
