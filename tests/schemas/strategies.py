@@ -66,6 +66,7 @@ from kanso.schemas import (
     parse_duration,
 )
 from kanso.schemas.screen import (
+    Cell,
     Clock,
     Derived,
     Hours,
@@ -73,8 +74,11 @@ from kanso.schemas.screen import (
     Leg,
     Response,
     Screen,
+    ScreenResult,
     ScreenVerdict,
+    SeriesRead,
     Spread,
+    Summary,
     Trigger,
 )
 
@@ -752,7 +756,7 @@ def screens(draw: st.DrawFn) -> Screen:
         derived=derived,
         groups=groups,
         clock=Clock(
-            grid=draw(st.sampled_from(["1s", "5s", "1m"])),
+            grid="1s",
             hours=draw(
                 st.sampled_from(["overlap", Hours(tz="America/New_York", span="09:30-16:00")])
             ),
@@ -770,5 +774,68 @@ def screens(draw: st.DrawFn) -> Screen:
                 min_events_per_day=st.floats(0, 500),
                 min_sessions=st.integers(1, 250),
             )
+        ),
+    )
+
+
+FINITE = st.floats(-1e6, 1e6, allow_nan=False)
+
+
+@st.composite
+def screen_cells(draw: st.DrawFn) -> Cell:
+    judged = draw(st.sampled_from([None, "pass", "fail", "thin"]))
+    return Cell(
+        measure=draw(st.integers(0, 4)),
+        id=draw(st.sampled_from(["lead_lag", "response"])),
+        key=draw(SAFE_TEXT),
+        params={"from": "a", "to": "b", "lag": "1s"},
+        mean=draw(FINITE),
+        se=draw(st.floats(0, 1e6)),
+        t=draw(FINITE),
+        p=draw(st.floats(1e-5, 1.0)),
+        sessions=draw(st.integers(0, 500)),
+        folds=draw(st.lists(st.none() | FINITE, min_size=2, max_size=6)),
+        folds_same_sign=draw(st.integers(0, 6)),
+        staleness={"a": draw(st.floats(0, 1))},
+        in_sample_fit=draw(st.booleans()),
+        clock_bound=draw(st.booleans()),
+        judged=judged,
+        reason=None if judged in (None, "pass") else draw(SAFE_TEXT),
+    )
+
+
+@st.composite
+def screen_results(draw: st.DrawFn) -> ScreenResult:
+    start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
+    cells = draw(st.lists(screen_cells(), max_size=4))
+    declared = draw(st.booleans())
+    return ScreenResult(
+        screen=draw(HYP_IDS),
+        sha="a" * 64,
+        snapshot="b" * 64,
+        version="0.14.0+0123456789ab",
+        window=DateWindow(start=start, end=start + timedelta(days=30)),
+        hyp=draw(st.none() | HYP_IDS),
+        draws=draw(st.integers(99, 99_999)),
+        folds=draw(st.integers(2, 8)),
+        assumption="sessions are roughly independent of each other",
+        created_at=datetime(2026, 10, 5, 1, 2, 3, tzinfo=UTC),
+        wall_s=draw(st.floats(0, 1e5)),
+        peak_mem_gb=draw(st.floats(0, 64)),
+        series=[
+            SeriesRead(
+                instrument="DEMO.SIM",
+                type="bar",
+                resolution="1h",
+                legs=["a"],
+                timestamps="exchange",
+            )
+        ],
+        cells=cells,
+        summary=Summary(
+            declared=declared,
+            worth_a_lane=draw(st.booleans()) if declared else None,
+            passed=draw(st.integers(0, 9)),
+            best=[cell.key for cell in cells[:1]],
         ),
     )

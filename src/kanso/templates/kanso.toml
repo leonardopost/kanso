@@ -29,6 +29,9 @@ folds = 4                 # contiguous folds for metric / metric_se
 max_lines_per_keep = 40   # complexity rule: a keep growing strategy.py by more lines must clear max(min_delta, 2 × k_se × metric_se)
 baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s = max(60, 3 × baseline_wall_s)
 
+[screen]
+draws = 9999              # sign-flip draws of a screen's null; a precision rule like `folds`, it bounds the measurement and chooses nothing
+
 [certify]
 n_fail = 3                # escalate on every n-th consecutive certification failure (never ends it)
 

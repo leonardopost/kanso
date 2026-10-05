@@ -77,6 +77,11 @@ class LegPlan:
     reason: str | None = None
     spec: dict[str, object] = field(default_factory=dict)
 
+    @property
+    def key(self) -> tuple[str, str, str | None]:
+        """The series: instrument, type and resolution, as the store files it."""
+        return (self.instrument, self.type, self.resolution)
+
     def payload(self) -> dict[str, object]:
         return {
             "legs": list(self.legs),

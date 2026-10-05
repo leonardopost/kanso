@@ -27,13 +27,13 @@ screen's hypothesis says are checked where those live (`kanso.screen.files`).
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Final, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
 from kanso.errors import ValidationError
-from kanso.schemas.base import HypId, KansoModel, NonEmpty, Versioned
+from kanso.schemas.base import HypId, KansoModel, NonEmpty, Sha256, Versioned
 from kanso.schemas.duration import Duration, parse_duration
 from kanso.schemas.hypothesis import DateWindow
 from kanso.schemas.venue import CostsOverride, VenueCode
@@ -375,6 +375,12 @@ class Screen(Versioned):
             if self.clock.grid is None:
                 raise ValueError(f"clock.grid: measures.{index} samples on a grid and none is set")
             grid = span_ns(self.clock.grid, "clock.grid")
+            for lag in measure.lags:
+                if span_ns(lag) % grid:
+                    raise ValueError(
+                        f"measures.{index}.lags: {lag} is not a whole number of "
+                        f"{self.clock.grid} grid steps"
+                    )
             for leg in self.legs_of(measure.from_) + self.legs_of(measure.to):
                 resolution = self.legs[leg].resolution
                 if resolution is not None and _ns(resolution) > grid:
@@ -395,6 +401,86 @@ class Screen(Versioned):
                 if leg not in found:
                     found.append(leg)
         return tuple(found)
+
+
+Judged = Literal["pass", "fail", "thin"]
+
+
+class Cell(KansoModel):
+    """One cell of a result: what it measured, the evidence, and how it was judged.
+
+    `mean`, `se` and `t` are across the sessions the cell held a value in; `p` is its
+    family-wise p over its measure's cells. `folds` are the means of its sessions inside
+    each of the workspace's calendar folds of the window, `None` for a fold it held none in.
+    `staleness` is, per leg, the share of grid intervals the leg did not print in, averaged
+    over the sessions. `judged` is absent when the screen declared no verdict.
+    """
+
+    measure: int = Field(ge=0)
+    id: Literal["lead_lag", "response"]
+    key: NonEmpty
+    params: dict[NonEmpty, str | float]
+    mean: float = Field(allow_inf_nan=False)
+    se: float = Field(ge=0, allow_inf_nan=False)
+    t: float = Field(allow_inf_nan=False)
+    p: float = Field(gt=0, le=1)
+    sessions: int = Field(ge=0)
+    folds: list[Annotated[float, Field(allow_inf_nan=False)] | None]
+    folds_same_sign: int = Field(ge=0)
+    staleness: dict[NonEmpty, Annotated[float, Field(ge=0, le=1)]] = Field(default_factory=dict)
+    in_sample_fit: bool = False
+    clock_bound: bool = False
+    judged: Judged | None = None
+    reason: str | None = None
+
+
+class SeriesRead(KansoModel):
+    """One series a result read: what it is, the legs that read it, what its clock is."""
+
+    instrument: NonEmpty
+    type: LegType
+    resolution: Duration | None = None
+    legs: list[Name] = Field(min_length=1)
+    timestamps: NonEmpty
+
+
+class Summary(KansoModel):
+    """What a result says as a whole, when a verdict was declared.
+
+    `worth_a_lane` is whether a `response` cell passed: a lead with no margin is
+    information, not a trade. `best` names the passing cells, the strongest first.
+    """
+
+    declared: bool
+    worth_a_lane: bool | None = None
+    passed: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    thin: int = Field(default=0, ge=0)
+    best: list[NonEmpty] = Field(default_factory=list)
+
+
+class ScreenResult(Versioned):
+    """One measurement of one screen's bytes on one snapshot under one measure library.
+
+    Immutable: the same three pins again return this record rather than a second one.
+    """
+
+    screen: HypId
+    sha: Sha256
+    snapshot: Sha256
+    version: NonEmpty
+    window: DateWindow
+    hyp: HypId | None = None
+    hypothesis_sha: Sha256 | None = None
+    draws: int = Field(ge=1)
+    folds: int = Field(ge=1)
+    assumption: NonEmpty
+    created_at: datetime
+    wall_s: float = Field(ge=0, allow_inf_nan=False)
+    peak_mem_gb: float = Field(ge=0, allow_inf_nan=False)
+    series: list[SeriesRead]
+    cells: list[Cell]
+    summary: Summary
 
 
 def pairs(screen: Screen, measure: LeadLag) -> tuple[tuple[str, str], ...]:

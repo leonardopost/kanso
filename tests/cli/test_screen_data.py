@@ -211,3 +211,17 @@ def test_an_instrument_the_store_lacks_is_resolved_then_fetched(
         after = plan(ws, store, valid.screen, valid.window)
 
     assert [(item.state, item.defined) for item in after] == [("held", True), ("held", True)]
+
+
+def test_a_run_fetches_what_it_lacks_and_says_what_it_fetched(
+    runner: CliRunner, loaded: Path, synthetic: None
+) -> None:
+    lag = {**FREE["measures"][0], "from": "a", "to": "a", "lags": ["1h"]}
+    path = july(loaded, a=FREE["legs"]["a"])
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    path.write_text(yaml.safe_dump({**document, "measures": [lag]}), encoding="utf-8")
+
+    result = at(runner, loaded, "screen", "run", path)
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert "fetched    DEMO.SIM bar 1h · 2 request(s) · 138 rows" in result.stdout

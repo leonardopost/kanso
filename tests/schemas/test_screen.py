@@ -10,7 +10,15 @@ from hypothesis import given
 
 from kanso.errors import ValidationError
 from kanso.schemas import dump_yaml, parse_yaml
-from kanso.schemas.screen import LeadLag, Screen, cells, hours_minutes, pairs, span_ns
+from kanso.schemas.screen import (
+    LeadLag,
+    Screen,
+    ScreenResult,
+    cells,
+    hours_minutes,
+    pairs,
+    span_ns,
+)
 from tests.schemas import strategies as gen
 
 BASE: dict[str, Any] = {
@@ -60,6 +68,11 @@ def build(**changes: Any) -> Screen:
 @given(gen.screens())
 def test_a_screen_round_trips(value: Screen) -> None:
     assert parse_yaml(Screen, dump_yaml(value)) == value
+
+
+@given(gen.screen_results())
+def test_a_result_round_trips(value: ScreenResult) -> None:
+    assert parse_yaml(ScreenResult, dump_yaml(value)) == value
 
 
 def test_the_example_is_admissible_and_counts_its_cells() -> None:
@@ -152,6 +165,7 @@ def test_a_file_that_breaks_a_rule_is_refused_by_name(
     [
         ({"lags": ["0s"]}, "zero is refused"),
         ({"lags": ["1s", "1000ms"]}, "appears twice"),
+        ({"lags": ["1500ms"]}, "is not a whole number of 1s grid steps"),
         ({"from": "nobody"}, "'nobody' is not a declared leg or group"),
     ],
 )

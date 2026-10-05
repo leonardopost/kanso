@@ -73,6 +73,7 @@ never edits the file.
 | `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
 | `screens/<id>/screen.yaml` | `screen new` | **yes** |
 | `screens/<id>/specs/` | `screen run`, the loader specs its fetches were made with | no — a record of what was fetched |
+| `screens/<id>/<sha7>-s<snap7>-v<ver7>.yaml` | `screen run` | no — a rendering of the result `state.db` records |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
 | `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
@@ -165,11 +166,15 @@ remedy: run `kanso skills sync` and `kanso env detect` to refresh this workspace
 `init --force`, because the file it would overwrite is the one you have been editing.
 
 The rendered file is the reference for the keys and their defaults: each is commented where
-it is defined. The sections are `[extensions]`, `[skills]`, `[research]`, `[certify]`,
-`[data]`, `[env]`, `[monitor]`, `[webhook]`, and `[adapters.<id>]`; `[data]` is rendered
+it is defined. The sections are `[extensions]`, `[skills]`, `[research]`, `[screen]`,
+`[certify]`, `[data]`, `[env]`, `[monitor]`, `[webhook]`, and `[adapters.<id>]`; `[data]` is rendered
 commented out, header included, because its two keys — `reference`, naming the adapter that
 resolves instruments (default `none`), and `adjusted` (default `false`) — are the defaults
 until a vendor is configured, and the table you then append is not declared twice.
+
+`[screen] draws` is how many session sign flips a screen's null is drawn from (`docs/concepts.md`,
+Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
+nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.
 
 The two top-level keys are written by `init` and read by nothing: `kanso_version` records
 the kanso that scaffolded the workspace, and `schema_version` is not the schema guard —
@@ -973,6 +978,11 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
 | `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`) or `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) |
 | `verdict` | optional, never defaulted: `alpha`, `min_margin_bp`, `min_events_per_day`, `min_sessions` |
+
+A result is rendered beside the screen as `<sha7>-s<snap7>-v<ver7>.yaml` — the screen's bytes,
+the snapshot and the measure library's version, the three pins its record in `state.db` is
+keyed by. It is a rendering: editing it changes nothing, and `kanso screen show` reads the
+record. The loader specs a run's fetches were made with are kept under `specs/`.
 
 Spans are `<n>(ms|s|m|h|d)` — finer than a hypothesis's grain, because a lead between two venues
 is measured in milliseconds — and a lag carries a sign, positive when `from` leads `to`. The

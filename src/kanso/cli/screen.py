@@ -2,8 +2,11 @@
 
 `new` scaffolds `screens/<id>/screen.yaml`, bound to a registered hypothesis or free.
 `validate` says whether the file is admissible and what running it would measure — the legs,
-the window it reads and the cells of every measure, which is the family each measure's
-correction is over — and changes nothing.
+the window it reads, the cells of every measure, which is the family each measure's
+correction is over, and the data it needs — and changes nothing. `run` gets the data, pins,
+measures and records (`kanso.screen.run`); `show` reads results back.
+
+A low result is evidence, not a failure: `run` exits 0 whatever it measured.
 
 No command here calls a model, so none exits 2 for want of one.
 """
@@ -18,7 +21,9 @@ import typer
 from kanso import screen
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
-from kanso.schemas.screen import LeadLag
+from kanso.errors import ValidationError
+from kanso.schemas.screen import Cell, LeadLag, ScreenResult
+from kanso.screen import records, run
 from kanso.workspace import Workspace
 
 app = typer.Typer(
@@ -49,6 +54,27 @@ def new_command(
 def validate_command(ctx: typer.Context, path: PathArgument, as_json: JsonOption = False) -> None:
     """Say whether the file is admissible and what it would measure; change nothing."""
     emit(as_json or global_json(ctx), lambda: _validate(open_workspace(ctx), path))
+
+
+@app.command("run")
+def run_command(ctx: typer.Context, path: PathArgument, as_json: JsonOption = False) -> None:
+    """Get the data, pin, measure and record; the same pins return the stored result."""
+    emit(as_json or global_json(ctx), lambda: _run(open_workspace(ctx), path))
+
+
+@app.command("show")
+def show_command(
+    ctx: typer.Context,
+    screen_id: Annotated[
+        str | None, typer.Argument(metavar="ID", help="One screen (default: every screen).")
+    ] = None,
+    cell: Annotated[
+        str | None, typer.Option("--cell", metavar="C", help="One cell of the newest result.")
+    ] = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Show a screen's results, newest first, one cell in full, or every screen."""
+    emit(as_json or global_json(ctx), lambda: _show(open_workspace(ctx), screen_id, cell))
 
 
 # -- command bodies ---------------------------------------------------------------
@@ -125,3 +151,112 @@ def _summary_lines(valid: screen.Validated, path: Path) -> tuple[str, ...]:
     lines.append(field("cells", sum(valid.cells)))
     lines.append(field("verdict", "declared" if spec.verdict else "none declared"))
     return tuple(lines)
+
+
+def _run(ws: Workspace, path: Path) -> Report:
+    with store(ws) as opened:
+        outcome = run.run(ws, opened, path)
+    result = outcome.result
+    data: dict[str, Any] = {
+        **_result_summary(result),
+        "stored": outcome.stored,
+        "fetched": [item.payload() for item in outcome.fetched],
+        "best": [cell.model_dump(mode="json", exclude_none=True) for cell in _best(result)],
+        "result": str(outcome.path),
+    }
+    lines = [
+        field("screen", f"{result.screen} · {result.sha[:7]} · snapshot {result.snapshot[:7]}"),
+        field("window", f"{result.window.start}..{result.window.end}"),
+    ]
+    for item in outcome.fetched:
+        grain = f" {item.plan.resolution}" if item.plan.resolution else ""
+        lines.append(
+            field(
+                "fetched",
+                f"{item.plan.instrument} {item.plan.type}{grain} · {item.requests} request(s)"
+                f" · {item.rows} rows",
+            )
+        )
+    lines += [field("cells", len(result.cells)), field("verdict", _verdict(result))]
+    lines += [indent(_cell_line(cell)) for cell in _best(result)]
+    lines.append(field("cost", f"{result.wall_s:.1f}s · {result.peak_mem_gb:.2f} GB"))
+    lines.append(field("stored" if outcome.stored else "written", outcome.path))
+    return Report(data=data, lines=tuple(lines))
+
+
+def _show(ws: Workspace, screen_id: str | None, cell: str | None) -> Report:
+    with store(ws) as opened:
+        found = records.results(opened, screen_id)
+    if screen_id is None:
+        newest: dict[str, ScreenResult] = {}
+        for result in found:
+            newest.setdefault(result.screen, result)
+        rows = [field(name, _verdict(result)) for name, result in sorted(newest.items())]
+        data: dict[str, Any] = {
+            "screens": [_result_summary(result) for _, result in sorted(newest.items())]
+        }
+        return Report(data=data, lines=tuple(rows) or (field("screens", "none measured"),))
+    if not found:
+        raise ValidationError(
+            f"{screen_id!r} has no recorded result",
+            remedy=f"run `kanso screen run screens/{screen_id}/screen.yaml`",
+        )
+    if cell is not None:
+        match = next((item for item in found[0].cells if item.key == cell), None)
+        if match is None:
+            raise ValidationError(
+                f"{cell!r} is not a cell of {screen_id}'s newest result",
+                remedy=f"list them with `kanso screen show {screen_id} --json`",
+            )
+        document = match.model_dump(mode="json", exclude_none=True)
+        return Report(data=document, lines=(field("cell", _cell_line(match)),))
+    data = {"screen": screen_id, "results": [_result_summary(item) for item in found]}
+    lines = [
+        field(result.created_at.strftime("%Y-%m-%d"), f"{result.sha[:7]} · {_verdict(result)}")
+        for result in found
+    ]
+    return Report(data=data, lines=tuple(lines))
+
+
+def _result_summary(result: ScreenResult) -> dict[str, Any]:
+    return {
+        "screen": result.screen,
+        "sha": result.sha,
+        "snapshot": result.snapshot,
+        "version": result.version,
+        "window": [str(result.window.start), str(result.window.end)],
+        "hyp": result.hyp,
+        "created_at": result.created_at.isoformat(),
+        "cells": len(result.cells),
+        "verdict": result.summary.model_dump(mode="json"),
+        "wall_s": result.wall_s,
+        "peak_mem_gb": result.peak_mem_gb,
+    }
+
+
+def _best(result: ScreenResult, count: int = 5) -> list[Cell]:
+    """The cells worth reading first: the passing ones in rank, else the strongest by |t|."""
+    by_key = {cell.key: cell for cell in result.cells}
+    ranked = [by_key[key] for key in result.summary.best]
+    if not ranked:
+        ranked = sorted(result.cells, key=lambda cell: (-abs(cell.t), cell.key))
+    return ranked[:count]
+
+
+def _verdict(result: ScreenResult) -> str:
+    summary = result.summary
+    if not summary.declared:
+        return "none declared"
+    worth = "yes" if summary.worth_a_lane else "no"
+    return (
+        f"worth a lane: {worth} · {summary.passed} pass · {summary.failed} fail"
+        f" · {summary.thin} thin"
+    )
+
+
+def _cell_line(cell: Cell) -> str:
+    judged = f"{cell.judged} · " if cell.judged else ""
+    return (
+        f"{judged}{cell.key}  mean {cell.mean:+.4g} ± {cell.se:.2g} · t {cell.t:+.2f}"
+        f" · p {cell.p:.4g} · {cell.sessions} session(s)"
+    )

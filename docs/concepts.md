@@ -255,6 +255,63 @@ read, and which `data backfill` does not ask for twice. An instrument the store 
 define, a market with no calendar on file and a day outside the span on file are read with
 every day open, so what the calendar cannot state costs a refusal and never pins a hole.
 
+## Screen
+
+A measurement of declared relationships between declared series, made before any lane is spent
+on the idea that rests on them: no strategy, no venue, no fill and no model call. It answers the
+question a lane cannot answer cheaply — is this worth tokens — with a base rate: the loop tunes a
+mechanism around an edge and cannot create one, and a screen costs CPU and no tokens.
+
+```
+$ kanso screen run screens/ou_rev/screen.yaml
+screen     ou_rev · dc2affd · snapshot 524d901
+window     2024-01-02..2024-03-29
+cells      3
+verdict    worth a lane: no · 1 pass · 0 fail · 2 thin
+           pass · lead_lag/a>a/1h  mean -0.3869 ± 0.067 · t -5.78 · p 0.0001 · 64 session(s)
+cost       0.3s · 0.26 GB
+```
+
+*That screen measured the hourly OU path of the test workspace against itself at one, two and
+three hours: its returns revert, at the smallest p ten thousand draws can give. At six hourly bars
+a session, two and three hours hold too few pairs a session to be a correlation, and the cells
+say so rather than reading a number.*
+
+**It reads what a card reads.** Every leg is read through the runner's own reader
+(`kanso.nautilus.backtest.market_points`), at its grain, the points of one instant in the order a
+card gets them, one session at a time, clamped to the window. Every instant is a `ts_init`: a
+lead a screen finds is a lead in what was public.
+
+**Missing data is fetched, never skipped.** A series the catalog lacks is fetched through the
+adapter that declares it serves it, and a snapshot taken; a series no adapter serves is refused,
+and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks).
+
+**The session is the unit of replication, and the family is the lattice.** A cell's evidence is
+one value per session — for `lead_lag`, the correlation of one series' returns with another's at
+a lag, on a grid — reported as the mean across sessions and the standard error of their spread.
+Each measure's cells are judged together by max-T over session sign flips: one shared vector of
+signs per draw, `[screen] draws` draws, seeded from the screen's bytes, the snapshot and the
+measure's index. So forty lags of one pair are one family, not forty chances, and the same pins
+give the same numbers. Every result states the one assumption that rests on: that sessions are
+roughly independent of each other. Lag zero is refused: the same instant's co-movement is not a
+lead.
+
+**Thresholds are declared, never defaulted.** A screen with no `verdict` measures everything and
+judges nothing. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
+judge — and the verdict is part of the file's bytes, so loosening it after reading a number is a
+new screen with a new result, beside the old one.
+
+**A result is immutable.** It is keyed by the screen's bytes, the snapshot and the measure
+library's version; the same three again return it as it was.
+
+**The embargo holds.** A free screen's window is refused when it meets, for any registered
+hypothesis holding one of its instruments, the span from that hypothesis's certification start
+less its embargo to its certification end: a screen chooses ideas, and the data that judges an
+idea may not have chosen it. A bound screen reads its own hypothesis's research window and
+nothing else.
+
+**A screen never gates a lane.** `research begin` and `queue add` read no screen result.
+
 ## Card
 
 One experiment: store the lane's `strategy.py` as a blob under its sha256, run the backtest,
