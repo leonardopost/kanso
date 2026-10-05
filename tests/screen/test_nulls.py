@@ -64,3 +64,30 @@ def test_a_measure_with_no_session_reads_nothing() -> None:
     found = nulls.evidence(np.zeros((2, 0)), 99, 1)
     assert found.sessions.tolist() == [0, 0]
     assert found.p.tolist() == [1.0, 1.0]
+
+
+def test_few_sessions_are_enumerated_and_their_p_is_exact() -> None:
+    values = np.random.default_rng(3).normal(size=(4, 7))
+    values[1] += 5.0
+
+    found = [nulls.evidence(values, 9999, seeded) for seeded in (1, 2)]
+
+    # 2^7 = 128 vectors, no more than the draws: each is taken once, so no seed reaches p,
+    # and the observed signs and their negation are the only two that reach a planted |t|.
+    assert found[0].p.tobytes() == found[1].p.tobytes()
+    assert found[0].p[1] == 2 / 128
+
+
+def test_no_p_is_below_what_the_sessions_a_cell_holds_can_give() -> None:
+    values = np.random.default_rng(4).normal(size=(3, 14))
+    values[0] += 5.0
+    values[2, :10] = np.nan
+    values[2, 10:] = [9.0, 10.0, 11.0, 12.0]
+
+    drawn = np.asarray([nulls.evidence(values, 9999, seeded).p for seeded in range(1, 8)])
+
+    # 2^14 vectors are more than the draws, so p is estimated, and an estimate that fell
+    # below 2^(1 - 14) for a cell of 14 sessions, or 2^(1 - 4) for one of four, reads the
+    # floor: no assignment of signs gives less, however the draws fell.
+    assert drawn[:, 0].min() == 2.0**-13 and drawn[:, 2].min() == 2.0**-3
+    assert nulls.evidence(values[:, :7], 9999, 5).p[0] >= 2.0**-6

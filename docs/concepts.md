@@ -338,7 +338,9 @@ lead.
 
 **Thresholds are declared, never defaulted.** A screen with no `verdict` measures everything and
 judges nothing. Sign flips over S sessions can give no p below 2^(1−S) — the observed signs and their
-negation both reach the observed t — so a verdict whose `alpha` is below what its `min_sessions`
+negation both reach the observed t. When the 2^S vectors are no more than the draws, each is taken
+once and p is exact; when they are more, the draws estimate it, and an estimate that fell below
+2^(1−S) reads the floor. So a verdict whose `alpha` is below what its `min_sessions`
 allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
 judge — and the verdict is part of the file's bytes, so loosening it after reading a number is a
 new screen with a new result, beside the old one.

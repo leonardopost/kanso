@@ -175,6 +175,8 @@ until a vendor is configured, and the table you then append is not declared twic
 `[screen] draws` is how many session sign flips a screen's null is drawn from (`docs/concepts.md`,
 Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
 nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.
+A measure over S sessions whose 2^S vectors of signs are no more than `draws` takes each of them
+once instead, and its p is exact — seven sessions under the default are 128 vectors.
 
 The two top-level keys are written by `init` and read by nothing: `kanso_version` records
 the kanso that scaffolded the workspace, and `schema_version` is not the schema guard —

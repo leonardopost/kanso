@@ -16,6 +16,13 @@ session sign flips. One vector per draw is shared by every cell, so the cells' d
 is kept: forty lags of one pair are not forty independent chances. A flip leaves each
 value's square where it was, so only the signed sums are redrawn.
 
+**Exact when it can be.** S sessions have 2^S vectors of signs. When that is no more than
+the draws, every vector is taken once and a cell's p is the share of them whose maximum
+reaches its |t| — exact, with no draw involved. The observed signs and their negation both
+reach it, as does every vector that agrees with either on the sessions the cell holds, so no
+p is below 2^(1 − sessions held); a p estimated from draws is held to that floor too, since
+no assignment of signs can give less, however the draws fell.
+
 **Seeds come from the pins, never from global state.** Each measure draws from its own
 `numpy.random.Generator(PCG64(seed))`, the seed being the first eight bytes of the sha256
 of the screen's bytes, the snapshot and the measure's index. The same pins give the same
@@ -27,6 +34,7 @@ same bytes every time.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
@@ -65,19 +73,17 @@ def evidence(values: np.ndarray, draws: int, seeded: int) -> Evidence:
     filled = np.where(held, values, 0.0)
     counts = held.sum(axis=1)
     squares = np.add.reduce(filled * filled, axis=1)
-    observed_t = _t(np.add.reduce(filled, axis=1), squares, counts)
+    sessions = values.shape[1]
+    observed_t = _t(_sums(np.ones((1, sessions), dtype=np.int64), filled)[0], squares, counts)
+    magnitude = np.abs(observed_t)
     exceed = np.zeros(len(values), dtype=np.int64)
-    if len(values) and values.shape[1]:
-        generator = np.random.Generator(np.random.PCG64(seeded))
-        magnitude = np.abs(observed_t)
-        done = 0
-        while done < draws:
-            size = min(BATCH, draws - done)
-            signs = generator.integers(0, 2, size=(size, values.shape[1])) * 2 - 1
-            sums = np.add.reduce(signs[:, None, :] * filled[None, :, :], axis=2)
-            maxima = np.max(np.abs(_t(sums, squares[None, :], counts[None, :])), axis=1)
-            exceed += np.add.reduce(maxima[:, None] >= magnitude[None, :], axis=0)
-            done += size
+    exact = 2**sessions <= draws
+    vectors = _exhaustive(sessions) if exact else _drawn(sessions, draws, seeded)
+    for signs in vectors if len(values) else ():
+        maxima = np.max(np.abs(_t(_sums(signs, filled), squares[None, :], counts[None, :])), axis=1)
+        exceed += np.add.reduce(maxima[:, None] >= magnitude[None, :], axis=0)
+    estimated = exceed / 2**sessions if exact else (1 + exceed) / (draws + 1)
+    floor = np.power(2.0, 1.0 - np.maximum(counts, 1))
     mean = np.divide(
         np.add.reduce(filled, axis=1), counts, out=np.zeros(len(values)), where=counts > 0
     )
@@ -86,8 +92,31 @@ def evidence(values: np.ndarray, draws: int, seeded: int) -> Evidence:
         se=_se(np.add.reduce(filled, axis=1), squares, counts),
         t=observed_t,
         sessions=counts,
-        p=np.where(np.abs(observed_t) > 0, (1 + exceed) / (draws + 1), 1.0),
+        p=np.where(magnitude > 0, np.maximum(estimated, floor), 1.0),
     )
+
+
+def _sums(signs: np.ndarray, filled: np.ndarray) -> np.ndarray:
+    """Every cell's signed sum under each vector of signs, in one fixed order of reduction."""
+    return np.asarray(np.add.reduce(signs[:, None, :] * filled[None, :, :], axis=2))
+
+
+def _exhaustive(sessions: int) -> Iterator[np.ndarray]:
+    """Every vector of signs over `sessions`, `BATCH` at a time, the observed one first."""
+    bits = np.arange(sessions, dtype=np.int64)
+    for start in range(0, 2**sessions, BATCH):
+        index = np.arange(start, min(start + BATCH, 2**sessions), dtype=np.int64)
+        yield 1 - 2 * ((index[:, None] >> bits[None, :]) & 1)
+
+
+def _drawn(sessions: int, draws: int, seeded: int) -> Iterator[np.ndarray]:
+    """`draws` vectors of signs from the measure's own generator, `BATCH` at a time."""
+    generator = np.random.Generator(np.random.PCG64(seeded))
+    done = 0
+    while done < draws:
+        size = min(BATCH, draws - done)
+        yield generator.integers(0, 2, size=(size, sessions)) * 2 - 1
+        done += size
 
 
 def _se(sums: np.ndarray, squares: np.ndarray, counts: np.ndarray) -> np.ndarray:
