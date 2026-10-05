@@ -211,21 +211,6 @@ def test_a_series_no_adapter_serves_is_refused_before_anything_is_read(
     [
         (
             {
-                "measures": [
-                    {
-                        "id": "response",
-                        "trigger": {"leg": "a", "move_bp": [10], "within": "1h"},
-                        "followers": "a",
-                        "side": "with",
-                        "horizons": ["1h"],
-                        "latency_ms": 0,
-                    }
-                ]
-            },
-            "does not measure `response` yet",
-        ),
-        (
-            {
                 "legs": {**OU["legs"], "b": OU["legs"]["a"]},
                 "derived": {
                     "s": {"spread": {"long": "a", "short": "b", "hedge": "ols", "fit": "window"}}
@@ -348,3 +333,112 @@ def test_a_sub_second_lead_between_clocks_that_differ_is_clock_bound() -> None:
     assert _clock_bound(spec, fast, {"a": "exchange"}) is True
     assert _clock_bound(spec, slow, {"a": "exchange", "b": "consolidated_tape"}) is False
     assert _clock_bound(spec, CellKey("k", "g", "g", "-5ms"), {**same, "b": "mixed"}) is True
+
+
+FADE: dict[str, Any] = {
+    **OU,
+    "id": "ou_fade",
+    "clock": {"hours": "overlap"},
+    "costs": {
+        "SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "fixed_bps", "fixed_bps": 2}
+    },
+    "measures": [
+        {
+            "id": "response",
+            "trigger": {"leg": "a", "move_bp": [40], "within": "1h"},
+            "followers": "a",
+            "side": "against",
+            "horizons": ["1h"],
+            "latency_ms": 0,
+        }
+    ],
+    "verdict": {"alpha": 0.05, "min_margin_bp": 1, "min_events_per_day": 0.5, "min_sessions": 20},
+}
+
+
+def test_fading_a_move_of_the_reverting_path_clears_the_round_trip(
+    runner: CliRunner, loaded: Path
+) -> None:
+    document = run_screen(runner, loaded, FADE)
+
+    assert document["verdict"]["worth_a_lane"] is True
+    best = document["best"][0]
+    stats = best["response"]
+    assert best["key"] == "response/a/40bp/1h/a/1h" and best["judged"] == "pass"
+    assert stats["hurdle_bp"] == pytest.approx(5.0)
+    assert stats["margin_bp"] == pytest.approx(stats["gross_bp"] - 5.0)
+    assert stats["gross_bp"] > 5.0 and stats["ceiling_bp_day"] > 0
+    assert stats["events_per_day"] > 0.5
+    human = at(runner, loaded, "screen", "show", "ou_fade", "--cell", best["key"])
+    assert "ceiling" in human.stdout and "hurdle 5" in human.stdout
+
+
+@pytest.mark.parametrize(
+    ("verdict", "reason"),
+    [
+        ({"min_margin_bp": 500}, "under min_margin_bp 500"),
+        ({"min_events_per_day": 50}, "events a day, under min_events_per_day 50"),
+    ],
+)
+def test_a_response_short_of_its_margin_or_its_events_fails_naming_which(
+    runner: CliRunner, loaded: Path, verdict: dict[str, Any], reason: str
+) -> None:
+    document = run_screen(runner, loaded, {**FADE, "verdict": {**FADE["verdict"], **verdict}})
+
+    assert document["verdict"]["worth_a_lane"] is False
+    cell = document["best"][0]
+    assert cell["judged"] == "fail" and reason in cell["reason"]
+
+
+def test_validate_prints_the_model_the_hurdle_is_struck_under(
+    runner: CliRunner, loaded: Path
+) -> None:
+    result = at(runner, loaded, "screen", "validate", write_screen(loaded, FADE), "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    hurdle = payload(result)["hurdles"]["SIM"]
+    assert hurdle["costs"]["fixed_bps"] == 2 and hurdle["origin"] == "hypothesis"
+    assert (
+        "spread fixed 2 bp"
+        in at(runner, loaded, "screen", "validate", write_screen(loaded, FADE)).stdout
+    )
+
+
+def test_a_follower_with_no_spread_to_charge_is_refused(runner: CliRunner, loaded: Path) -> None:
+    result = at(
+        runner,
+        loaded,
+        "screen",
+        "validate",
+        write_screen(loaded, {**FADE, "costs": None}),
+        "--json",
+    )
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "fixed_bps" in payload(result)["remedy"] and "in the screen" in payload(result)["remedy"]
+
+
+def test_a_bound_screen_is_charged_its_hypothesis_s_costs(
+    runner: CliRunner, registered: Path
+) -> None:
+    bound = {key: value for key, value in FADE.items() if key not in ("window", "costs")}
+    document = run_screen(runner, registered, {**bound, "id": "mr_fade", "hyp": "demo_mr"})
+
+    assert document["best"][0]["response"]["hurdle_bp"] == pytest.approx(5.0)
+
+
+def test_a_model_that_takes_its_spread_from_quotes_cannot_price_a_bar_follower(
+    runner: CliRunner, loaded: Path
+) -> None:
+    mixed = {
+        **FADE,
+        "costs": None,
+        "legs": {**FADE["legs"], "b": {"instrument": INSTRUMENT, "type": "quote"}},
+        "groups": {"both": ["a", "b"]},
+        "measures": [{**FADE["measures"][0], "followers": "both"}],
+    }
+
+    result = at(runner, loaded, "screen", "validate", write_screen(loaded, mixed), "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "takes the spread from quotes" in payload(result)["error"]

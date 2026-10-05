@@ -406,6 +406,27 @@ class Screen(Versioned):
 Judged = Literal["pass", "fail", "thin"]
 
 
+class ResponseStats(KansoModel):
+    """What a `response` cell's events came to, across the sessions it was live in.
+
+    Per event: `gross_bp` a taker would have made, `hurdle_bp` the venue model's round trip,
+    `margin_bp` the two's difference, `drift_adjusted_bp` the signal the null is tested on.
+    `ceiling_bp_day` is the mean over live sessions of each session's summed margins: what one
+    notional, put on every event and holding nothing else, earned a day — no capacity limit,
+    no sizing, so a bound on what a search of the mechanism could find, never an estimate of it.
+    """
+
+    events: int = Field(ge=0)
+    events_per_day: float = Field(ge=0, allow_inf_nan=False)
+    gross_bp: float = Field(allow_inf_nan=False)
+    hurdle_bp: float = Field(ge=0, allow_inf_nan=False)
+    margin_bp: float = Field(allow_inf_nan=False)
+    ceiling_bp_day: float = Field(allow_inf_nan=False)
+    hit_rate: float = Field(ge=0, le=1)
+    unfilled: int = Field(ge=0)
+    drift_adjusted_bp: float = Field(allow_inf_nan=False)
+
+
 class Cell(KansoModel):
     """One cell of a result: what it measured, the evidence, and how it was judged.
 
@@ -430,6 +451,7 @@ class Cell(KansoModel):
     staleness: dict[NonEmpty, Annotated[float, Field(ge=0, le=1)]] = Field(default_factory=dict)
     in_sample_fit: bool = False
     clock_bound: bool = False
+    response: ResponseStats | None = None
     judged: Judged | None = None
     reason: str | None = None
 

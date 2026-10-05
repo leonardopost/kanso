@@ -977,7 +977,8 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `groups` | name → a list of legs and derived legs, for a measure to name at once |
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
 | `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`) or `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) |
-| `verdict` | optional, never defaulted: `alpha`, `min_margin_bp`, `min_events_per_day`, `min_sessions` |
+| `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a `response` cell `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day` |
+| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's |
 
 A result is rendered beside the screen as `<sha7>-s<snap7>-v<ver7>.yaml` — the screen's bytes,
 the snapshot and the measure library's version, the three pins its record in `state.db` is

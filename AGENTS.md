@@ -58,7 +58,9 @@ equity the runner strikes; the reserve it sizes with is a separate and deliberat
 estimate, and it charges nothing itself. The simulated venue charges nothing to keep it that
 way — and it charges nothing because kanso's resolved instruments leave their maker and
 taker rates at zero, not because the venue is configured fee-free, so an instrument that
-arrives with a non-zero rate double-counts silently.
+arrives with a non-zero rate double-counts silently. A screen's hurdle is the same arithmetic
+applied to no fill (`kanso.screen.hurdle`): it strikes a round trip with `fill_cost` on the
+resolved venue model, sets it beside a gross move, and books nothing.
 
 **The embargo is code.** A backtest request may name only a window the hypothesis declares,
 and the card path accepts only the research window. A card runs in a child process with no

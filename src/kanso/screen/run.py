@@ -39,6 +39,7 @@ from kanso.schemas.screen import (
     Cell,
     LeadLag,
     Response,
+    ResponseStats,
     Screen,
     ScreenResult,
     ScreenVerdict,
@@ -46,7 +47,17 @@ from kanso.schemas.screen import (
     Summary,
     span_ns,
 )
-from kanso.screen import data, embargo, lead_lag, nulls, pin, records, sessions
+from kanso.screen import (
+    data,
+    embargo,
+    hurdle,
+    lead_lag,
+    nulls,
+    pin,
+    records,
+    response,
+    sessions,
+)
 from kanso.screen.files import validate
 from kanso.screen.library import screen_version
 
@@ -94,7 +105,17 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     store.put_blob(path.read_bytes())
     read = [_read(item, plans) for item in data.plan(ws, store, screen, window)]
     stamps = {leg: item.timestamps for item in read for leg in item.legs}
-    cells = _measure(ws, screen, window, catalog, held, valid.sha, snapshot.snapshot_id, stamps)
+    priced = hurdle.hurdles(ws, screen, valid.hypothesis, held) if _trades(screen) else None
+    context = Context(
+        screen=screen,
+        sha=valid.sha,
+        snapshot_id=snapshot.snapshot_id,
+        draws=ws.config.screen.draws,
+        folds=ws.config.research.folds,
+        stamps=stamps,
+        betas={},
+    )
+    cells = _measure(ws, context, window, catalog, held, priced)
     result = ScreenResult(
         screen=screen.id,
         sha=valid.sha,
@@ -117,63 +138,163 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     return Outcome(result, records.render(ws, result), False, fetched)
 
 
+@dataclass(frozen=True)
+class Context:
+    """What every cell of one run is measured and judged under."""
+
+    screen: Screen
+    sha: str
+    snapshot_id: str
+    draws: int
+    folds: int
+    stamps: dict[str, str]
+    betas: dict[str, float]
+
+
 def _measure(
     ws: Workspace,
-    screen: Screen,
+    context: Context,
     window: tuple[date, date],
     catalog: Any,
     held: dict[str, Any],
-    sha: str,
-    snapshot_id: str,
-    stamps: dict[str, str],
+    hurdles: hurdle.Hurdles | None,
 ) -> list[Cell]:
-    """Every cell of every measure, judged across the window's sessions."""
+    """Every cell of every measure, judged across the window's sessions.
+
+    Every leg of a session is read once and handed to every measure; the session is let go
+    before the next is read.
+    """
+    screen = context.screen
     days = sessions.days(screen, window)
     bounds = sessions.window_ns(window)
     overlap = screen.clock.hours == "overlap"
     names = list(screen.legs)
-    columns: list[list[np.ndarray]] = [[] for _ in screen.measures]
+    columns: list[list[Any]] = [[] for _ in screen.measures]
     stale: list[list[list[dict[str, float]]]] = [[] for _ in screen.measures]
     for day in days:
         series = sessions.read(catalog, held, screen, names, day, window)
         opens, closes = sessions.hours_of(screen, day)
         span = (max(opens, bounds[0]), min(closes, bounds[1]))
         for index, measure in enumerate(screen.measures):
-            assert isinstance(measure, LeadLag)
-            values, staleness = lead_lag.session(screen, measure, series, span, overlap, {})
-            columns[index].append(values)
-            stale[index].append(staleness)
+            if isinstance(measure, LeadLag):
+                values, staleness = lead_lag.session(
+                    screen, measure, series, span, overlap, context.betas
+                )
+                columns[index].append(values)
+                stale[index].append(staleness)
+            else:
+                assert hurdles is not None
+                columns[index].append(
+                    response.session(screen, measure, series, span, overlap, context.betas, hurdles)
+                )
         del series
-    fold_of = _folds(days, window, ws.config.research.folds)
+    fold_of = _folds(days, window, context.folds)
     cells: list[Cell] = []
     for index, measure in enumerate(screen.measures):
-        assert isinstance(measure, LeadLag)
-        keys = lead_lag.cells(screen, measure)
-        matrix = np.column_stack(columns[index]) if days else np.zeros((len(keys), 0), np.float64)
-        found = nulls.evidence(matrix, ws.config.screen.draws, nulls.seed(sha, snapshot_id, index))
-        for row, key in enumerate(keys):
-            folds = _fold_means(matrix[row], fold_of, ws.config.research.folds)
-            cells.append(
-                _judged(
-                    screen.verdict,
-                    Cell(
-                        measure=index,
-                        id="lead_lag",
-                        key=key.name,
-                        params=key.params,
-                        mean=float(found.mean[row]),
-                        se=float(found.se[row]),
-                        t=float(found.t[row]),
-                        p=float(found.p[row]),
-                        sessions=int(found.sessions[row]),
-                        folds=folds,
-                        folds_same_sign=_same_sign(folds, float(found.mean[row])),
-                        staleness=_staleness([day[row] for day in stale[index]]),
-                        clock_bound=_clock_bound(screen, key, stamps),
-                    ),
-                )
+        if isinstance(measure, LeadLag):
+            cells += _lead_lag_cells(context, index, measure, columns[index], stale[index], fold_of)
+        else:
+            cells += _response_cells(context, index, measure, columns[index], fold_of)
+    return [_judged(screen.verdict, cell) for cell in cells]
+
+
+def _lead_lag_cells(
+    context: Context,
+    index: int,
+    measure: LeadLag,
+    days: list[np.ndarray],
+    stale: list[list[dict[str, float]]],
+    fold_of: np.ndarray,
+) -> list[Cell]:
+    keys = lead_lag.cells(context.screen, measure)
+    matrix = np.column_stack(days) if days else np.zeros((len(keys), 0), np.float64)
+    found = nulls.evidence(
+        matrix, context.draws, nulls.seed(context.sha, context.snapshot_id, index)
+    )
+    cells: list[Cell] = []
+    for row, key in enumerate(keys):
+        folds = _fold_means(matrix[row], fold_of, context.folds)
+        cells.append(
+            Cell(
+                measure=index,
+                id="lead_lag",
+                key=key.name,
+                params=key.params,
+                mean=float(found.mean[row]),
+                se=float(found.se[row]),
+                t=float(found.t[row]),
+                p=float(found.p[row]),
+                sessions=int(found.sessions[row]),
+                folds=folds,
+                folds_same_sign=_same_sign(folds, float(found.mean[row])),
+                staleness=_staleness([day[row] for day in stale]),
+                clock_bound=_clock_bound(context.screen, key, context.stamps),
             )
+        )
     return cells
+
+
+def _response_cells(
+    context: Context,
+    index: int,
+    measure: Response,
+    days: list[list[response.Tally | None]],
+    fold_of: np.ndarray,
+) -> list[Cell]:
+    keys = response.cells(context.screen, measure)
+    tallies = [[day[row] for day in days] for row in range(len(keys))]
+    signal = np.asarray(
+        [[np.nan if day is None else day.signal for day in row] for row in tallies],
+        dtype=np.float64,
+    ).reshape(len(keys), len(days))
+    found = nulls.evidence(
+        signal, context.draws, nulls.seed(context.sha, context.snapshot_id, index)
+    )
+    cells: list[Cell] = []
+    for row, key in enumerate(keys):
+        live = [day for day in tallies[row] if day is not None]
+        margins = np.asarray(
+            [np.nan if day is None else day.gross - day.hurdle for day in tallies[row]],
+            dtype=np.float64,
+        )
+        stats = _stats(live)
+        folds = _fold_means(margins, fold_of, context.folds)
+        cells.append(
+            Cell(
+                measure=index,
+                id="response",
+                key=key.name,
+                params=key.params,
+                mean=float(found.mean[row]),
+                se=float(found.se[row]),
+                t=float(found.t[row]),
+                p=float(found.p[row]),
+                sessions=int(found.sessions[row]),
+                folds=folds,
+                folds_same_sign=_same_sign(folds, stats.ceiling_bp_day),
+                response=stats,
+            )
+        )
+    return cells
+
+
+def _stats(live: Sequence[response.Tally]) -> ResponseStats:
+    """A cell's events, summed over the sessions it was live in."""
+    events = sum(day.events for day in live)
+    per = max(events, 1)
+    gross = sum(day.gross for day in live)
+    cost = sum(day.hurdle for day in live)
+    return ResponseStats(
+        events=events,
+        events_per_day=round(events / len(live), 6) if live else 0.0,
+        gross_bp=gross / per,
+        hurdle_bp=cost / per,
+        margin_bp=(gross - cost) / per,
+        ceiling_bp_day=(gross - cost) / len(live) if live else 0.0,
+        hit_rate=sum(day.hits for day in live) / per,
+        unfilled=sum(day.unfilled for day in live),
+        drift_adjusted_bp=sum(day.signal for day in live) / per,
+    )
 
 
 def _clock_bound(screen: Screen, key: lead_lag.CellKey, stamps: dict[str, str]) -> bool:
@@ -191,7 +312,12 @@ def _clock_bound(screen: Screen, key: lead_lag.CellKey, stamps: dict[str, str]) 
 
 
 def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
-    """The cell with its judgement, when the screen declared floors to judge it by."""
+    """The cell with its judgement, when the screen declared floors to judge it by.
+
+    Every cell needs `min_sessions` and a p at or under `alpha`; a `response` cell needs its
+    margin over the hurdle and its events a day to clear their floors too. The first clause a
+    cell misses is the reason it gives.
+    """
     if verdict is None:
         return cell
     if cell.sessions < verdict.min_sessions:
@@ -199,6 +325,16 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
         return cell.model_copy(update={"judged": "thin", "reason": reason})
     if cell.p > verdict.alpha:
         reason = f"p {cell.p:.4g} above alpha {verdict.alpha:g}"
+        return cell.model_copy(update={"judged": "fail", "reason": reason})
+    stats = cell.response
+    if stats is not None and stats.margin_bp < verdict.min_margin_bp:
+        reason = f"margin {stats.margin_bp:.4g} bp under min_margin_bp {verdict.min_margin_bp:g}"
+        return cell.model_copy(update={"judged": "fail", "reason": reason})
+    if stats is not None and stats.events_per_day < verdict.min_events_per_day:
+        reason = (
+            f"{stats.events_per_day:.4g} events a day, under min_events_per_day "
+            f"{verdict.min_events_per_day:g}"
+        )
         return cell.model_copy(update={"judged": "fail", "reason": reason})
     return cell.model_copy(update={"judged": "pass"})
 
@@ -208,7 +344,7 @@ def _summary(verdict: ScreenVerdict | None, cells: Sequence[Cell]) -> Summary:
     if verdict is None:
         return Summary(declared=False)
     passing = [cell for cell in cells if cell.judged == "pass"]
-    ranked = sorted(passing, key=lambda cell: (cell.id != "response", -abs(cell.t), cell.key))
+    ranked = sorted(passing, key=_rank)
     return Summary(
         declared=True,
         worth_a_lane=any(cell.id == "response" for cell in passing),
@@ -217,6 +353,13 @@ def _summary(verdict: ScreenVerdict | None, cells: Sequence[Cell]) -> Summary:
         thin=sum(cell.judged == "thin" for cell in cells),
         best=[cell.key for cell in ranked],
     )
+
+
+def _rank(cell: Cell) -> tuple[bool, float, str]:
+    """Responses first, by their ceiling; then leads, by the strength of their t."""
+    if cell.response is not None:
+        return (False, -cell.response.ceiling_bp_day, cell.key)
+    return (True, -abs(cell.t), cell.key)
 
 
 def _folds(days: Sequence[date], window: tuple[date, date], folds: int) -> np.ndarray:
@@ -250,14 +393,12 @@ def _staleness(sessions_seen: Sequence[dict[str, float]]) -> dict[str, float]:
     return {leg: round(sum(values) / len(values), 6) for leg, values in totals.items()}
 
 
+def _trades(screen: Screen) -> bool:
+    return any(isinstance(measure, Response) for measure in screen.measures)
+
+
 def _refuse_unmeasured(screen: Screen) -> None:
     """What this build cannot measure yet is refused before anything is read."""
-    for index, measure in enumerate(screen.measures):
-        if isinstance(measure, Response):
-            raise PreconditionError(
-                f"measures.{index}: this build does not measure `response` yet",
-                remedy="screen lead_lag alone for now",
-            )
     for name, derived in screen.derived.items():
         if derived.spread is not None and derived.spread.hedge == "ols":
             raise PreconditionError(

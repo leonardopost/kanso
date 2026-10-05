@@ -23,7 +23,7 @@ from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import ValidationError
 from kanso.schemas.screen import Cell, LeadLag, ScreenResult
-from kanso.screen import records, run
+from kanso.screen import hurdle, records, run
 from kanso.workspace import Workspace
 
 app = typer.Typer(
@@ -96,8 +96,15 @@ def _validate(ws: Workspace, path: Path) -> Report:
     with store(ws) as opened:
         valid = screen.validate(ws, opened, path)
         plans = screen.plan(ws, opened, valid.screen, valid.window)
-    data = {**_summary(valid, path), "data": [item.payload() for item in plans]}
-    return Report(data=data, lines=_summary_lines(valid, path) + _plan_lines(plans))
+    venues = hurdle.described(ws, valid.screen, valid.hypothesis)
+    data = {
+        **_summary(valid, path),
+        "data": [item.payload() for item in plans],
+        "hurdles": venues,
+    }
+    lines = _summary_lines(valid, path) + _plan_lines(plans)
+    lines += tuple(field("hurdle", f"{venue} · {model['line']}") for venue, model in venues.items())
+    return Report(data=data, lines=lines)
 
 
 def _plan_lines(plans: tuple[screen.LegPlan, ...]) -> tuple[str, ...]:
@@ -256,6 +263,14 @@ def _verdict(result: ScreenResult) -> str:
 
 def _cell_line(cell: Cell) -> str:
     judged = f"{cell.judged} · " if cell.judged else ""
+    if cell.response is not None:
+        stats = cell.response
+        return (
+            f"{judged}{cell.key}  ceiling {stats.ceiling_bp_day:+.4g} bp/day · margin "
+            f"{stats.margin_bp:+.4g} bp (gross {stats.gross_bp:+.4g}, hurdle "
+            f"{stats.hurdle_bp:.3g}) · {stats.events_per_day:.3g} a day · t {cell.t:+.2f}"
+            f" · p {cell.p:.4g}"
+        )
     return (
         f"{judged}{cell.key}  mean {cell.mean:+.4g} ± {cell.se:.2g} · t {cell.t:+.2f}"
         f" · p {cell.p:.4g} · {cell.sessions} session(s)"

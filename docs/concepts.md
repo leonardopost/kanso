@@ -293,6 +293,29 @@ for prints against prints. A lead shorter than a second between two sources whos
 mean different things — an exchange's own instant and a consolidated tape's, or one nobody
 declared — is marked `clock_bound`: it may be the difference between the clocks.
 
+**A response is set against the hurdle a card would pay.** A `response` cell fires on a
+trigger — a move of at least `move_bp` within `within`, or a z-score over a trailing `lookback`
+— and enters the follower at its first point after the declared latency, exits at its first
+point after the horizon, one position at a time. Its gross is what a taker would have made — a
+quoted follower buys the ask and sells the bid it shows — and its hurdle is the round trip the
+venue model charges, struck by the runner's own `fill_cost`: commission, slippage, the sale's
+fees, the per-share commission, and the model's spread on a follower that crossed none. No
+spread is charged twice. The null is tested on the signal less the follower's session drift, so
+a trending month whose triggers lean one way cannot pass for a reaction; the result reports the
+margin per event, the events a day, and `ceiling_bp_day` — what one notional on every event
+earned a day, with no capacity limit and no sizing: a bound on what a search of the mechanism
+could find, held against a campaign's target in the same units its lanes are scored in.
+
+```
+$ kanso screen run screens/ou_fade/screen.yaml
+screen     ou_fade · f3d9549 · snapshot 524d901
+window     2024-01-02..2024-03-29
+cells      6
+verdict    worth a lane: yes · 2 pass · 4 fail · 0 thin
+           pass · response/a/40bp/1h/a/1h  ceiling +19.34 bp/day · margin +17.68 bp (gross +22.68, hurdle 5) · 1.09 a day · t +5.29 · p 0.0001
+           pass · response/a/20bp/1h/a/1h  ceiling +16.83 bp/day · margin +9.617 bp (gross +14.62, hurdle 5) · 1.75 a day · t +4.18 · p 0.0003
+```
+
 **Missing data is fetched, never skipped.** A series the catalog lacks is fetched through the
 adapter that declares it serves it, and a snapshot taken; a series no adapter serves is refused,
 and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks).
