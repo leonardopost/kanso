@@ -532,6 +532,7 @@ class HouseAdapter:
 
     # Optional, and what a screen asks of it (docs/adapters.md):
     timestamps: str = "exchange"  # what a point's ts_init is
+    venues: tuple[str, ...] = ("XHSE",)  # venues whose instruments it defines and resolves
 
     def serves(self, ws, definition, resolution): ...  # leg types it can fetch: ("bar", "trade")
     def spec_for(self, ws, definition, kind, resolution, start, end): ...  # (loader id, spec)

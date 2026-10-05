@@ -967,8 +967,9 @@ def resolve_universe(
 
     Answers from the cache when it is fresh for exactly this date, from the entry when it is
     manual, and otherwise through a reference adapter: the one that resolved the entry
-    before, which its `resolved.adapter` records, and the workspace's configured `[data]
-    reference` for an id nothing has resolved yet. A workspace holds instruments from more
+    before, which its `resolved.adapter` records; for an id nothing has resolved yet, the one
+    adapter that declares the venue the id is qualified with; and otherwise the workspace's
+    configured `[data] reference`. A workspace holds instruments from more
     than one source — a crypto perpetual beside the equities it is screened against — and a
     vendor asked for another's instrument refuses it: measured, an equity vendor answers a
     crypto exchange's perpetual with a client error, which left every hypothesis on the
@@ -1220,15 +1221,41 @@ def _by_adapter(
     """The ids left unresolved, grouped by the reference adapter each is asked through.
 
     An entry an adapter resolved before is asked of that adapter again, so a definition keeps
-    its source; an id with no such record is asked of `[data] reference`.
+    its source; an id with no such record is asked of the adapter that declares its venue,
+    when exactly one does, and of `[data] reference` otherwise.
     """
     grouped: dict[str, dict[str, str]] = {}
+    owners: dict[str, str] | None = None
     for wanted, reason in unresolved.items():
         found = _lookup(file, wanted)
         recorded = None if isinstance(found, ResolveError) else found.resolved
-        adapter_id = ws.config.data.reference if recorded is None else recorded.adapter
+        if recorded is not None:
+            adapter_id = recorded.adapter
+        else:
+            owners = _venue_owners(ws) if owners is None else owners
+            venue = wanted.rsplit(".", 1)[1] if "." in wanted else ""
+            adapter_id = owners.get(venue, ws.config.data.reference)
         grouped.setdefault(adapter_id, {})[wanted] = reason
     return grouped
+
+
+def _venue_owners(ws: Workspace) -> dict[str, str]:
+    """Each venue exactly one registered adapter declares in its `venues`, and that adapter.
+
+    An adapter that defines one venue's instruments — an exchange's, whose ids carry its own
+    venue — declares it, so an id qualified with that venue reaches it before it was ever
+    resolved, in a workspace whose `[data] reference` is another source's. A venue two
+    adapters declare is nobody's, and is asked of `[data] reference`.
+    """
+    from kanso import ext
+    from kanso.data import registry
+
+    declared: dict[str, set[str]] = {}
+    known = registry.adapters(ext.discover(ws.root, ws.config.extensions_paths))
+    for adapter_id, adapter in known.items():
+        for venue in getattr(adapter, "venues", ()):
+            declared.setdefault(str(venue), set()).add(adapter_id)
+    return {venue: next(iter(ids)) for venue, ids in declared.items() if len(ids) == 1}
 
 
 def _reference_provider(ws: Workspace, adapter_id: str) -> InstrumentProvider | None:

@@ -92,7 +92,10 @@ parameter, where it would reach proxy logs and a manifest's recorded request."""
 DEFAULT_REQUESTS_PER_SECOND: Final = 90
 """The default quota: below the plan's published ceiling, so a burst never trips it."""
 
-DEFAULT_TIMEOUT_S: Final = 30
+DEFAULT_TIMEOUT_S: Final = 120
+"""A 50,000-row page of a liquid name's quotes or prints can take well over 30 s to arrive:
+measured on 2026-10-05, two walks of ETHA quotes failed at a 30 s timeout, and pages averaged
+9 s on TQQQ quotes. A page that stalls is asked for again (`MassiveClient.pages`)."""
 
 PAGE_BACKOFF_S: Final = (2.0, 8.0)
 """The pauses before a page that did not answer is asked for the second and the third time."""
@@ -377,7 +380,8 @@ class MassiveClient:
         except Exception as exc:  # every fault below the answer is one outcome
             raise TransportError(
                 f"massive: {path} could not be reached ({type(exc).__name__})",
-                remedy="check the network and the vendor's status page, then re-run",
+                remedy="check the network and the vendor's status page, then re-run; a page "
+                "that times out on a busy series may need a larger `[adapters.massive] timeout_s`",
             ) from exc
         return _read(path, asked, response)
 

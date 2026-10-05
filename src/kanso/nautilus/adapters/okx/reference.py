@@ -566,6 +566,9 @@ class ReferenceAdapter:
     timestamps: str = "exchange"
     """A print's and a book change's `ts_init` is the exchange's own instant, and a bar's is
     its close on the exchange's clock."""
+    venues: tuple[str, ...] = (VENUE,)
+    """The venue whose instruments this adapter defines: an id qualified with it that nothing
+    has resolved is asked of this adapter, whatever `[data] reference` names."""
 
     def serves(self, ws: Workspace, definition: object, resolution: str | None) -> tuple[str, ...]:
         """What a screen can fetch through this adapter for one instrument definition.

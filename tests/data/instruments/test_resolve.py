@@ -369,6 +369,26 @@ def test_an_entry_is_asked_again_of_the_adapter_that_resolved_it(
     assert entries["AAPL"].resolved is not None and entries["AAPL"].resolved.adapter == "other"
 
 
+def test_an_id_qualified_with_a_declared_venue_is_asked_of_that_adapter(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing has resolved it, and `[data] reference` is another source's: the adapter that
+    declares the id's venue answers it, and the reference is asked for the rest."""
+    probe = Probe(answers={"AAPL": equity()})
+    other = Other(answers={"MSFT.XNAS": equity("MSFT.XNAS")})
+    monkeypatch.setitem(instruments.PROVIDERS, Other.id, lambda _: other)
+    monkeypatch.setattr(instruments, "_venue_owners", lambda ws: {"XNAS": Other.id})
+
+    resolved = resolve_universe(probing(ws, probe, monkeypatch), ["AAPL", "MSFT.XNAS"], AS_OF)
+
+    assert other.asked == [("MSFT.XNAS",)] and probe.asked == [("AAPL",)]
+    assert set(resolved) == {"AAPL", "MSFT.XNAS"}
+
+
+def test_the_exchange_adapter_declares_its_own_venue(ws: Workspace) -> None:
+    assert instruments._venue_owners(ws).get("OKX") == "okx"
+
+
 def test_an_entry_whose_adapter_is_gone_names_that_adapter(
     ws: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -199,6 +199,11 @@ fetches through it needs `KANSO_MASSIVE_API_KEY`, as any request-path load does.
 | `massive_corporate_actions` | splits and dividends, as `CorporateAction` | REST |
 | `massive_financials` | periodic statements, as the `financial_statement` type (usable in a hypothesis's `data_requirements`) | REST |
 
+`massive_trades` and `massive_quotes` declare `chunk_days` 1: a liquid name's day is millions of
+ticks — 3.4 million TQQQ quotes and 1.4 million NVDA prints on 2026-09-14 — so every load,
+backfill and screen fetch writes one dataset a day as the pages stream in, and a walk that
+fails loses that day and no other.
+
 The bulk path is worth reaching for over long history where the store carries the class:
 whether it does is a fact about the store's *layout*, never about a plan, and whether your
 key can read it is measured with a one-byte ranged GET rather than by dragging a
@@ -285,7 +290,7 @@ tolerated is a setting that silently does nothing. It holds no credential.
 |---|---|---|
 | `base_url` | the vendor's API host | where REST requests go |
 | `requests_per_second` | `90` | the rate limit every request in a command shares |
-| `timeout_s` | `30` | per-request timeout |
+| `timeout_s` | `120` | per-request timeout; a 50,000-row page of a liquid name's quotes measured well over 30 s |
 
 `timeout_s` bounds one asking. Inside a REST cursor walk — every loader but `massive_bulk`,
 which reads the object store — a page that did not answer, whether it timed out, lost its
@@ -874,6 +879,10 @@ spec of `okx_bars`, `okx_trades` or `okx_book` for the window, a book exact to o
 a screen reads the touch and nothing deeper. No credential is sent; `[adapters.okx]` must
 name a region, as for any load.
 
+`venues` is `OKX`: an id qualified with it — `ETH-USDT-SWAP.OKX` — that nothing has resolved
+is resolved through this adapter whatever `[data] reference` names, so a workspace whose
+reference is an equity vendor resolves the perpetuals it screens against with no switch.
+
 ### The venue it declares
 
 Instruments trade on the venue `OKX`, the exchange's own, and an instrument id is the
@@ -993,15 +1002,17 @@ clients in an `EXEC_CLIENTS` table instead, exactly as it declares gates, and na
 in `PROVIDES["exec_clients"]` so that shadowing one that ships is reported — a packaged id
 wins, so an extension that claimed one would be registered nowhere.
 
-Three more members are optional, and are what a screen asks (`docs/concepts.md`, Screen):
+Four more members are optional, and are what a screen asks (`docs/concepts.md`, Screen):
 `timestamps`, a word saying what the adapter's points' `ts_init` is — `exchange` for an
 exchange's own instant, `consolidated_tape` for a tape's, or what else it is; `serves(ws,
 definition, resolution)`, the leg types — `bar`, `trade`, `quote`, `book` — the adapter can
 fetch for one instrument definition at that bar size; and `spec_for(ws, definition, kind,
 resolution, start, end)`, the loader id and the spec document that fetch is made with. A
-screen plans a leg its catalog lacks onto the first adapter, by id, that serves it, and
+fourth, `venues`, names the venues whose instruments the adapter defines: a qualified id on
+one that nothing has resolved is asked of it rather than of `[data] reference`, when it is
+the only adapter declaring that venue. A screen plans a leg its catalog lacks onto the first adapter, by id, that serves it, and
 fetches it with `kanso data backfill`'s own machinery from the spec it was given. An adapter
-that declares none of the three serves no screen and is otherwise unchanged; nothing is
+that declares none of them serves no screen and is otherwise unchanged; nothing is
 asked of it to answer them — no credential, no request — so a plan is made in a workspace
 holding none.
 
