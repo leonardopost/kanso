@@ -231,6 +231,17 @@ def fetch(
     return tuple(done)
 
 
+def resolve_remedy(instruments: Sequence[str]) -> str:
+    """What to run for instruments no definition resolves: the resolve command, by symbol."""
+    keys = " ".join(sorted({instrument.rsplit(".", 1)[0] for instrument in instruments}))
+    return (
+        f"resolve them under the keys the reference adapter answers to — `kanso data "
+        f"instruments resolve {keys}`, the ids' symbols, is what a vendor whose keys carry no "
+        "venue files — or give each a manual entry in instruments.yaml, then run the screen "
+        "again"
+    )
+
+
 def _series(screen: Screen) -> dict[tuple[str, str, str | None], tuple[str, ...]]:
     """Each distinct series the screen reads, with the legs that read it."""
     found: dict[tuple[str, str, str | None], list[str]] = {}

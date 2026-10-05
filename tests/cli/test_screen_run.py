@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 
 from kanso.errors import Exit
 from kanso.schemas import parse_yaml
-from kanso.schemas.screen import ScreenResult
+from kanso.schemas.screen import Screen, ScreenResult
 from kanso.screen import embargo, validate
 from kanso.state import StateStore
 from kanso.workspace import find
@@ -110,13 +110,27 @@ def test_show_reads_every_result_back_newest_first(runner: CliRunner, loaded: Pa
         at(runner, loaded, "screen", "show", "ou_rev", "--cell", "lead_lag/a>a/1h", "--json")
     )
     assert cell["key"] == "lead_lag/a>a/1h" and cell["judged"] == "pass"
+    assert {item["key"] for item in listed["cells"]} == {"lead_lag/a>a/1h", "lead_lag/a>a/2h"}
     human = at(runner, loaded, "screen", "show", "ou_rev")
     assert "worth a lane: no · 1 pass" in human.stdout
+    assert "cells" in human.stdout and "pass · lead_lag/a>a/1h" in human.stdout
     assert "ou_rev" in at(runner, loaded, "screen", "show").stdout
-    assert (
-        "pass · lead_lag/a>a/1h"
-        in at(runner, loaded, "screen", "show", "ou_rev", "--cell", "lead_lag/a>a/1h").stdout
-    )
+    detail = at(runner, loaded, "screen", "show", "ou_rev", "--cell", "lead_lag/a>a/1h").stdout
+    assert "pass · lead_lag/a>a/1h" in detail and "share the sign" in detail
+
+
+def test_a_response_cell_in_full_says_what_its_p_and_its_folds_measure(
+    runner: CliRunner, loaded: Path
+) -> None:
+    run_screen(runner, loaded, FADE)
+
+    detail = at(runner, loaded, "screen", "show", "ou_fade", "--cell", FADE_CELL).stdout
+
+    assert "drift-adjusted" in detail and "(what p tests)" in detail
+    assert "(net bp a day)" in detail
+
+
+FADE_CELL = "response/a/40bp/1h/a/1h"
 
 
 def test_show_refuses_what_it_does_not_hold(runner: CliRunner, loaded: Path) -> None:
@@ -128,6 +142,23 @@ def test_show_refuses_what_it_does_not_hold(runner: CliRunner, loaded: Path) -> 
     cell = at(runner, loaded, "screen", "show", "ou_rev", "--cell", "nope", "--json")
     assert cell.exit_code == Exit.VALIDATION
     assert "is not a cell" in payload(cell)["error"]
+    assert payload(cell)["remedy"] == "list them with `kanso screen show ou_rev`"
+
+
+def test_a_failing_cell_names_every_clause_it_missed() -> None:
+    from kanso.schemas.screen import ScreenVerdict
+    from kanso.screen.run import _judged
+
+    from .test_screen_draft import result_of
+
+    cell = result_of(Screen.model_validate(FADE), FADE_CELL).cells[0]
+    verdict = ScreenVerdict(alpha=0.005, min_margin_bp=10, min_events_per_day=5, min_sessions=12)
+
+    judged = _judged(verdict, cell)
+
+    assert judged.judged == "fail"
+    assert judged.reason is not None
+    assert [clause.split()[0] for clause in judged.reason.split("; ")] == ["p", "margin", "1"]
 
 
 def test_a_screen_with_no_verdict_judges_nothing(runner: CliRunner, loaded: Path) -> None:
@@ -299,7 +330,6 @@ def test_hy_without_a_grid_reads_the_same_reversion(runner: CliRunner, loaded: P
 
 
 def test_a_sub_second_lead_between_clocks_that_differ_is_clock_bound() -> None:
-    from kanso.schemas.screen import Screen
     from kanso.screen.lead_lag import CellKey
     from kanso.screen.run import _clock_bound
 

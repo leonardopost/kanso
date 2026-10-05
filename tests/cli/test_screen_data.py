@@ -226,4 +226,4 @@ def test_a_run_fetches_what_it_lacks_and_says_what_it_fetched(
     result = at(runner, loaded, "screen", "run", path)
 
     assert result.exit_code == Exit.OK, result.stdout
-    assert "fetched    DEMO.SIM bar 1h · 2 request(s) · 138 rows" in result.stdout
+    assert "fetched    DEMO.SIM bar 1h · 2 chunk(s) · 138 rows" in result.stdout

@@ -3,7 +3,7 @@
 This directory is a kanso workspace. kanso is the CLI; you are the operator agent. Skills in `.claude/skills/kanso-*` (or your tool's equivalent path) are thin procedures over CLI commands; use them by name.
 
 ## Session start
-1. `kanso doctor` — stop and report if not green.
+1. `kanso doctor` — stop and report if any check fails; a `warn` names something to report, and is not a stop.
 2. `kanso inbox` — escalations needing the operator: `misaligned`, `cert_failed`, `promotable`, `demoted`, `deploy_blocked`, `explored`.
 3. `kanso status` — lanes, cards/hour, best metric per hypothesis, spend today.
 

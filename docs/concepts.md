@@ -304,8 +304,10 @@ point after the horizon, one position at a time. Its gross is what a taker would
 quoted follower buys the ask and sells the bid it shows — and its hurdle is the round trip the
 venue model charges, struck by the runner's own `fill_cost`: commission, slippage, the sale's
 fees, the per-share commission, and the model's spread on a follower that crossed none. No
-spread is charged twice. The null is tested on the signal less the follower's session drift, so
-a trending month whose triggers lean one way cannot pass for a reaction; the result reports the
+spread is charged twice. The null is tested on the signal less the follower's session drift — at
+the follower's mid, so `p` says whether it follows at all, and the margin whether a taker earns
+the follow; a pass needs both — so a trending month whose triggers lean one way cannot pass for
+a reaction; the result reports the
 margin per event, the events a day, and `ceiling_bp_day` — what one notional on every event
 earned a day, with no capacity limit and no sizing: a bound on what a search of the mechanism
 could find, held against a campaign's target in the same units its lanes are scored in.

@@ -117,10 +117,12 @@ def _validate(ws: Workspace, path: Path) -> Report:
         valid = screen.validate(ws, opened, path)
         plans = screen.plan(ws, opened, valid.screen, valid.window)
     venues = hurdle.described(ws, valid.screen, valid.hypothesis)
+    unresolved = [item.instrument for item in plans if item.state == "unresolved"]
     data = {
         **_summary(valid, path),
         "data": [item.payload() for item in plans],
         "hurdles": venues,
+        **({"remedy": screen.data.resolve_remedy(unresolved)} if unresolved else {}),
     }
     lines = _summary_lines(valid, path) + _plan_lines(plans)
     lines += tuple(field("hurdle", f"{venue} · {model['line']}") for venue, model in venues.items())
@@ -140,6 +142,9 @@ def _plan_lines(plans: tuple[screen.LegPlan, ...]) -> tuple[str, ...]:
         lines.append(field("data", head) if not lines else indent(head))
         if item.state in ("unresolved", "unserved") and item.reason:
             lines.append(indent(f"  {item.reason}"))
+    unresolved = [item.instrument for item in plans if item.state == "unresolved"]
+    if unresolved:
+        lines.append(field("remedy", screen.data.resolve_remedy(unresolved)))
     return tuple(lines)
 
 
@@ -200,7 +205,7 @@ def _run(ws: Workspace, path: Path) -> Report:
         lines.append(
             field(
                 "fetched",
-                f"{item.plan.instrument} {item.plan.type}{grain} · {item.requests} request(s)"
+                f"{item.plan.instrument} {item.plan.type}{grain} · {item.requests} chunk(s)"
                 f" · {item.rows} rows",
             )
         )
@@ -233,16 +238,69 @@ def _show(ws: Workspace, screen_id: str | None, cell: str | None) -> Report:
         if match is None:
             raise ValidationError(
                 f"{cell!r} is not a cell of {screen_id}'s newest result",
-                remedy=f"list them with `kanso screen show {screen_id} --json`",
+                remedy=f"list them with `kanso screen show {screen_id}`",
             )
         document = match.model_dump(mode="json", exclude_none=True)
-        return Report(data=document, lines=(field("cell", _cell_line(match)),))
-    data = {"screen": screen_id, "results": [_result_summary(item) for item in found]}
+        return Report(data=document, lines=_cell_detail(match))
+    data = {
+        "screen": screen_id,
+        "results": [_result_summary(item) for item in found],
+        "cells": [item.model_dump(mode="json", exclude_none=True) for item in found[0].cells],
+    }
     lines = [
         field(result.created_at.strftime("%Y-%m-%d"), f"{result.sha[:7]} · {_verdict(result)}")
         for result in found
     ]
+    listed = [
+        _cell_line(item) + (f" · {item.reason}" if item.reason else "")
+        for item in _ranked(found[0])
+    ]
+    lines += [field("cells", listed[0]), *(indent(line) for line in listed[1:])] if listed else []
     return Report(data=data, lines=tuple(lines))
+
+
+def _ranked(result: ScreenResult) -> list[Cell]:
+    """Every cell of a result: the passing ones in the verdict's rank, then the rest by |t|."""
+    by_key = {cell.key: cell for cell in result.cells}
+    passing = [by_key[key] for key in result.summary.best]
+    rest = sorted(
+        (cell for cell in result.cells if cell.key not in set(result.summary.best)),
+        key=lambda cell: (-abs(cell.t), cell.key),
+    )
+    return passing + rest
+
+
+def _cell_detail(cell: Cell) -> tuple[str, ...]:
+    """One cell in full: its line, why it was judged so, its folds and what qualifies it."""
+    lines = [field("cell", _cell_line(cell))]
+    if cell.reason:
+        lines.append(field("reason", cell.reason))
+    if cell.response is not None:
+        stats = cell.response
+        lines.append(
+            field(
+                "events",
+                f"{stats.events} over {cell.sessions} session(s) · hit rate {stats.hit_rate:.3g}"
+                f" · unfilled {stats.unfilled} · drift-adjusted {stats.drift_adjusted_bp:+.4g} bp"
+                f" an event (what p tests)",
+            )
+        )
+        unit = "net bp a day"
+    else:
+        unit = "mean"
+    folds = ", ".join("—" if value is None else f"{value:+.4g}" for value in cell.folds)
+    lines.append(field("folds", f"{folds} ({unit}) · {cell.folds_same_sign} share the sign"))
+    if cell.staleness:
+        stale = ", ".join(f"{leg} {value:.3g}" for leg, value in sorted(cell.staleness.items()))
+        lines.append(field("staleness", stale))
+    flags = [
+        name
+        for name, on in (("clock_bound", cell.clock_bound), ("in_sample_fit", cell.in_sample_fit))
+        if on
+    ]
+    if flags:
+        lines.append(field("flags", ", ".join(flags)))
+    return tuple(lines)
 
 
 def _result_summary(result: ScreenResult) -> dict[str, Any]:

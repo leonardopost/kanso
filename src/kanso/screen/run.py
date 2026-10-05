@@ -363,27 +363,30 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
     """The cell with its judgement, when the screen declared floors to judge it by.
 
     Every cell needs `min_sessions` and a p at or under `alpha`; a `response` cell needs its
-    margin over the hurdle and its events a day to clear their floors too. The first clause a
-    cell misses is the reason it gives.
+    margin over the hurdle and its events a day to clear their floors too. A cell under
+    `min_sessions` is `thin`; otherwise every clause it misses is named in its reason, so a
+    cell that fails on p and on events a day says both.
     """
     if verdict is None:
         return cell
     if cell.sessions < verdict.min_sessions:
         reason = f"{cell.sessions} session(s), under min_sessions {verdict.min_sessions}"
         return cell.model_copy(update={"judged": "thin", "reason": reason})
+    missed: list[str] = []
     if cell.p > verdict.alpha:
-        reason = f"p {cell.p:.4g} above alpha {verdict.alpha:g}"
-        return cell.model_copy(update={"judged": "fail", "reason": reason})
+        missed.append(f"p {cell.p:.4g} above alpha {verdict.alpha:g}")
     stats = cell.response
     if stats is not None and stats.margin_bp < verdict.min_margin_bp:
-        reason = f"margin {stats.margin_bp:.4g} bp under min_margin_bp {verdict.min_margin_bp:g}"
-        return cell.model_copy(update={"judged": "fail", "reason": reason})
+        missed.append(
+            f"margin {stats.margin_bp:.4g} bp under min_margin_bp {verdict.min_margin_bp:g}"
+        )
     if stats is not None and stats.events_per_day < verdict.min_events_per_day:
-        reason = (
+        missed.append(
             f"{stats.events_per_day:.4g} events a day, under min_events_per_day "
             f"{verdict.min_events_per_day:g}"
         )
-        return cell.model_copy(update={"judged": "fail", "reason": reason})
+    if missed:
+        return cell.model_copy(update={"judged": "fail", "reason": "; ".join(missed)})
     return cell.model_copy(update={"judged": "pass"})
 
 
@@ -449,13 +452,9 @@ def _refuse_unresolved(plans: Sequence[data.LegPlan]) -> None:
     unresolved = [item for item in plans if item.state == "unresolved"]
     if unresolved:
         reasons = "; ".join(item.reason or item.instrument for item in unresolved)
-        keys = " ".join(sorted({item.instrument.rsplit(".", 1)[0] for item in unresolved}))
         raise PreconditionError(
             f"the screen reads instruments no definition resolves: {reasons}",
-            remedy=f"resolve them under the keys the reference adapter answers to — "
-            f"`kanso data instruments resolve {keys}`, the ids' symbols, is what a vendor "
-            "whose keys carry no venue files — or give each a manual entry in "
-            "instruments.yaml, then run the screen again",
+            remedy=data.resolve_remedy([item.instrument for item in unresolved]),
         )
 
 

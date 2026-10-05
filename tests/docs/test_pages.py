@@ -743,3 +743,23 @@ def test_the_pages_say_the_monitor_demotes_in_a_child() -> None:
     assert item.startswith("~~A monitor pass that demoted a version ran its stages' nodes in")
     assert "the monitor's own process~~ **closed.**" in item
     assert "a child makes the monitor's demotion now (row 122)" in rows["121"].split("|")[5]
+
+
+def test_the_screen_ranges_the_docs_state_are_the_library_s() -> None:
+    """`docs/workspace.md` tables every measure parameter's range; the library is the source,
+    so a range changed in one and not the other fails here."""
+    from kanso.screen.library import catalogue as measures
+
+    text = (DOCS / "workspace.md").read_text(encoding="utf-8")
+    stated = {
+        (measure, name): (low, high)
+        for measure, name, low, high in re.findall(
+            r"^\| `(lead_lag|response)` \| `(\w+)`[^|]*\| `([^`]+)` \| `([^`]+)` \|$", text, re.M
+        )
+    }
+    declared = {
+        (item.id, name): tuple(str(end) if isinstance(end, str) else f"{end:g}" for end in span)
+        for item in measures().values()
+        for name, span in item.ranges.items()
+    }
+    assert stated == declared

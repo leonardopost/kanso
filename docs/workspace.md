@@ -980,12 +980,49 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
 | `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`) or `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) |
 | `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a `response` cell `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3) |
-| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's |
+| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis |
+
+Each parameter of a measure has the range the measure library declares, and `kanso screen
+validate` refuses one outside it (exit 3):
+
+| measure | parameter | from | to |
+|---|---|---|---|
+| `lead_lag` | `lag` | `1ms` | `1d` |
+| `lead_lag` | `lags` (how many) | `1` | `64` |
+| `response` | `move_bp` | `0.1` | `10000` |
+| `response` | `within` | `1ms` | `1d` |
+| `response` | `z` | `0.5` | `20` |
+| `response` | `lookback` | `1s` | `30d` |
+| `response` | `horizon` | `1ms` | `1d` |
+| `response` | `horizons` (how many) | `1` | `32` |
+| `response` | `latency_ms` | `0` | `60000` |
 
 A result is rendered beside the screen as `<sha7>-s<snap7>-v<ver7>.yaml` — the screen's bytes,
 the snapshot and the measure library's version, the three pins its record in `state.db` is
 keyed by. It is a rendering: editing it changes nothing, and `kanso screen show` reads the
 record. The loader specs a run's fetches were made with are kept under `specs/`.
+
+A result holds one entry per cell:
+
+| field | what it is |
+|---|---|
+| `key`, `params` | the cell: its measure, legs and lattice point |
+| `mean`, `se`, `t`, `sessions` | across the sessions the cell held a value in. For `lead_lag`, the correlation at the lag. For `response`, a session's value is the sum of its events' drift-adjusted signal — the follower's signed move at its mid, less its session drift over the hold, in bp at one notional an event — so `mean` is bp a day of a follow, before any cost |
+| `p` | family-wise over the measure's cells, by session sign-flip max-T; with 2^S sign vectors no more than `[screen] draws`, exact |
+| `folds`, `folds_same_sign` | the means inside each calendar fold of the window, and how many share the sign of the whole. For `lead_lag`, the same quantity as `mean`. For `response`, **net** bp a day — gross less the hurdle — sharing the sign of `ceiling_bp_day`: so a cell can show a significant follow in `p` and every fold negative, a real move a taker cannot earn |
+| `staleness` | a `grid` lead only: per leg, the share of grid intervals it did not print in; Hayashi–Yoshida and response cells have none |
+| `clock_bound` | a lead under a second between legs whose timestamp kinds differ, or are undeclared: it may be the gap between two clocks |
+| `in_sample_fit` | the cell reads a spread fitted on the window it is judged on |
+| `response.events`, `events_per_day`, `unfilled` | events scored, a day over the sessions the cell was live, and events with no follower point to enter or leave at, counted and scored nowhere |
+| `response.gross_bp`, `hurdle_bp`, `margin_bp` | per event: what a taker made (a quote or book follower buys the ask and sells the bid), the round trip charged, and the difference |
+| `response.ceiling_bp_day` | the margin summed a day over the live sessions: one notional on every event and no capacity limit, so a bound a search can approach and never exceed |
+| `response.hit_rate`, `drift_adjusted_bp` | the share of events whose gross was positive, and the drift-adjusted signal an event, the quantity `mean`, `t` and `p` test |
+| `judged`, `reason` | `pass`, `fail` or `thin` under the verdict, and every clause the cell missed |
+
+The summary says whether the result is `worth_a_lane` — a `response` cell passed; a lead alone
+names no trade — counts the cells each way, and ranks the passing ones in `best`: responses by
+`ceiling_bp_day`, then leads by |t| whichever way they point, so a negative lag, the reverse
+direction, can rank beside its mirror.
 
 Spans are `<n>(ms|s|m|h|d)` — finer than a hypothesis's grain, because a lead between two venues
 is measured in milliseconds — and a lag carries a sign, positive when `from` leads `to`. The
@@ -1041,7 +1078,9 @@ hypothesis may name it by its qualified id, and the vendor is still asked for it
 spelling. An entry with no key for the configured adapter is asked for as it was named.
 
 An entry is resolved again through the adapter that resolved it, which `resolved.adapter`
-records; `[data] reference` is asked only for an id nothing has resolved yet. So a workspace
+records. An id nothing has resolved is asked of the one adapter that declares its venue in
+`venues` (`docs/adapters.md`) — `ETH-USDT-SWAP.OKX` of the exchange's — and of `[data]
+reference` otherwise, an equity under its symbol. So a workspace
 may hold instruments from more than one source — a perpetual beside the equities a screen
 reads it against — and change `[data] reference` between them: each entry keeps the source
 that defined it, and a hypothesis on either validates. Asked of the other source instead, a
