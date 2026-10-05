@@ -1040,6 +1040,13 @@ and it is what that adapter is asked for: an entry may be filed under any key an
 hypothesis may name it by its qualified id, and the vendor is still asked for its own
 spelling. An entry with no key for the configured adapter is asked for as it was named.
 
+An entry is resolved again through the adapter that resolved it, which `resolved.adapter`
+records; `[data] reference` is asked only for an id nothing has resolved yet. So a workspace
+may hold instruments from more than one source — a perpetual beside the equities a screen
+reads it against — and change `[data] reference` between them: each entry keeps the source
+that defined it, and a hypothesis on either validates. Asked of the other source instead, a
+vendor refuses an instrument it does not list, and the hypothesis could not be registered.
+
 An edit to `override` reaches the store at the next `kanso data instruments resolve` and
 never before: `hyp validate` and `hyp add` build the definition in memory to check it, and a
 run is priced under what the store holds. Resolved as of a date the store already holds a

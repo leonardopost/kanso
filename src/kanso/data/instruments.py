@@ -966,11 +966,17 @@ def resolve_universe(
     """Every id in the universe as the definition that held on `as_of`.
 
     Answers from the cache when it is fresh for exactly this date, from the entry when it is
-    manual, and otherwise through the workspace's configured reference adapter. Raises a
+    manual, and otherwise through a reference adapter: the one that resolved the entry
+    before, which its `resolved.adapter` records, and the workspace's configured `[data]
+    reference` for an id nothing has resolved yet. A workspace holds instruments from more
+    than one source — a crypto perpetual beside the equities it is screened against — and a
+    vendor asked for another's instrument refuses it: measured, an equity vendor answers a
+    crypto exchange's perpetual with a client error, which left every hypothesis on the
+    perpetual unregistrable in a workspace whose reference was the equity vendor. Raises a
     validation failure naming every id that could not be resolved and why, so one report
     covers the whole universe rather than one id per attempt.
 
-    The reference adapter is built only once an id is actually left unresolved. Building it
+    A reference adapter is built only once an id is actually left for it. Building it
     resolves that adapter's credential, so a universe the cache and the manual entries
     answer in full — the demo's, and every file-export workspace's — resolves under a named
     reference adapter whose key is unset, which is the difference between naming a vendor
@@ -1016,19 +1022,21 @@ def resolve_universe(
 
     _collect(ManualProvider(file).resolve(manual, as_of), resolved, failures)
 
-    provider = _reference_provider(ws) if unresolved else None
     updates: dict[str, InstrumentEntry] = {}
-    if provider is None:
-        absent = _no_provider(ws)
-        failures.extend(
-            ResolveError(wanted, f"{reason}, and {absent}") for wanted, reason in unresolved.items()
-        )
-    else:
-        asked = {wanted: _vendor_key(file, wanted, provider.id) for wanted in unresolved}
+    for adapter_id, reasons in _by_adapter(ws, file, unresolved).items():
+        provider = _reference_provider(ws, adapter_id)
+        if provider is None:
+            absent = _no_provider(ws, adapter_id)
+            failures.extend(
+                ResolveError(wanted, f"{reason}, and {absent}")
+                for wanted, reason in reasons.items()
+            )
+            continue
+        asked = {wanted: _vendor_key(file, wanted, provider.id) for wanted in reasons}
         answers = provider.resolve(sorted(set(asked.values())), as_of)
         answered = _reconstructed(file, _as_asked(answers, asked, provider.id))
         _collect(answered, resolved, failures)
-        updates = _cache_updates(file, answered, provider, as_of, asked)
+        updates.update(_cache_updates(file, answered, provider, as_of, asked))
 
     if failures:
         raise ValidationError(
@@ -1206,8 +1214,25 @@ def _comparable(value: object) -> str:
     return str(value)
 
 
-def _reference_provider(ws: Workspace) -> InstrumentProvider | None:
-    """The provider `[data] reference` names, from this table or from a registered adapter.
+def _by_adapter(
+    ws: Workspace, file: InstrumentsFile, unresolved: Mapping[str, str]
+) -> dict[str, dict[str, str]]:
+    """The ids left unresolved, grouped by the reference adapter each is asked through.
+
+    An entry an adapter resolved before is asked of that adapter again, so a definition keeps
+    its source; an id with no such record is asked of `[data] reference`.
+    """
+    grouped: dict[str, dict[str, str]] = {}
+    for wanted, reason in unresolved.items():
+        found = _lookup(file, wanted)
+        recorded = None if isinstance(found, ResolveError) else found.resolved
+        adapter_id = ws.config.data.reference if recorded is None else recorded.adapter
+        grouped.setdefault(adapter_id, {})[wanted] = reason
+    return grouped
+
+
+def _reference_provider(ws: Workspace, adapter_id: str) -> InstrumentProvider | None:
+    """The provider `adapter_id` offers, from this table or from a registered adapter.
 
     `PROVIDERS` is consulted first, so a workspace or a test can put a provider under an id
     and have it win; otherwise the adapter registry is asked, which is how a vendor package
@@ -1217,18 +1242,19 @@ def _reference_provider(ws: Workspace) -> InstrumentProvider | None:
     from kanso import ext
     from kanso.data import registry
 
-    factory = PROVIDERS.get(ws.config.data.reference)
+    factory = PROVIDERS.get(adapter_id)
     if factory is not None:
         return factory(ws)
     extensions = ext.discover(ws.root, ws.config.extensions_paths)
-    return registry.provider_for(ws, ws.config.data.reference, extensions)
+    return registry.provider_for(ws, adapter_id, extensions)
 
 
-def _no_provider(ws: Workspace) -> str:
-    configured = ws.config.data.reference
-    if configured == "none":
+def _no_provider(ws: Workspace, adapter_id: str) -> str:
+    if adapter_id == "none":
         return "no reference adapter is configured ([data] reference)"
-    return f"no reference adapter named {configured!r} is installed"
+    if adapter_id != ws.config.data.reference:
+        return f"the adapter that resolved it, {adapter_id!r}, is not installed"
+    return f"no reference adapter named {adapter_id!r} is installed"
 
 
 def _cache_updates(

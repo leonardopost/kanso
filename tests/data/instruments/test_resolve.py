@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -339,6 +339,44 @@ def test_a_cache_resolved_as_of_another_date_is_another_question(
     probe, configured = resolve_then_stale(ws, monkeypatch)
     resolve_universe(configured, ["MSFT"], date(2024, 6, 4))
     assert probe.asked == [("MSFT",)]
+
+
+class Other(Probe):
+    """A second source: what a workspace's reference becomes when it also holds another's."""
+
+    id: ClassVar[str] = "other"
+
+    def sources(self, instrument_id: str) -> dict[str, str]:
+        return {"other": instrument_id}
+
+
+def test_an_entry_is_asked_again_of_the_adapter_that_resolved_it(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace that holds two sources' instruments re-resolves each through its own: the
+    configured reference is asked only for an id nothing has resolved yet."""
+    probe, configured = resolve_then_stale(ws, monkeypatch)
+    probe.answers["MSFT"] = equity("MSFT.XNAS", as_of=date(2024, 6, 4))
+    other = Other(answers={"AAPL": equity("AAPL.XNAS", as_of=date(2024, 6, 4))})
+    monkeypatch.setitem(instruments.PROVIDERS, Other.id, lambda _: other)
+
+    resolved = resolve_universe(reading(configured, Other.id), ["MSFT", "AAPL"], date(2024, 6, 4))
+
+    assert probe.asked == [("MSFT",)] and other.asked == [("AAPL",)]
+    assert set(resolved) == {"MSFT", "AAPL"}
+    entries = cache(ws)
+    assert entries["MSFT"].resolved is not None and entries["MSFT"].resolved.adapter == "probe"
+    assert entries["AAPL"].resolved is not None and entries["AAPL"].resolved.adapter == "other"
+
+
+def test_an_entry_whose_adapter_is_gone_names_that_adapter(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, configured = resolve_then_stale(ws, monkeypatch)
+    monkeypatch.delitem(instruments.PROVIDERS, Probe.id)
+
+    with pytest.raises(ValidationError, match="the adapter that resolved it, 'probe', is not"):
+        resolve_universe(reading(configured, "some_vendor"), ["MSFT"], date(2024, 6, 4))
 
 
 def test_a_cache_the_store_no_longer_holds_is_no_cache(
