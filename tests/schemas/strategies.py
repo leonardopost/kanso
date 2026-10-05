@@ -65,6 +65,18 @@ from kanso.schemas import (
     embargo_days,
     parse_duration,
 )
+from kanso.schemas.screen import (
+    Clock,
+    Derived,
+    Hours,
+    LeadLag,
+    Leg,
+    Response,
+    Screen,
+    ScreenVerdict,
+    Spread,
+    Trigger,
+)
 
 SAFE_TEXT = st.text(
     alphabet=st.characters(min_codepoint=32, max_codepoint=126), min_size=1, max_size=40
@@ -668,4 +680,95 @@ def sessions(draw: st.DrawFn) -> Session:
         clock_ns=draw(st.none() | st.integers(0, 2**63 - 1)),
         started_at=draw(TIMESTAMPS),
         ended_at=draw(st.none() | TIMESTAMPS),
+    )
+
+
+SCREEN_LEGS = st.from_regex(r"\Al[a-z0-9]{0,6}\Z")
+SCREEN_INSTRUMENTS = st.sampled_from(["BTC-USDT-SWAP.OKX", "MARA.XNAS", "DEMO.SIM"])
+
+
+@st.composite
+def screens(draw: st.DrawFn) -> Screen:
+    """A valid screen: free or bound, with or without derived legs, groups and a verdict."""
+    names = draw(st.lists(SCREEN_LEGS, min_size=2, max_size=4, unique=True))
+    legs: dict[str, Leg] = {}
+    for name in names:
+        kind = draw(st.sampled_from(["bar", "trade", "quote", "book"]))
+        legs[name] = Leg(
+            instrument=draw(SCREEN_INSTRUMENTS),
+            type=kind,
+            resolution="1s" if kind == "bar" else None,
+        )
+    derived: dict[str, Derived] = {}
+    if draw(st.booleans()):
+        derived["d_pair"] = Derived(
+            spread=Spread(
+                long=names[0],
+                short=names[1],
+                hedge="ols",
+                fit=draw(st.sampled_from(["window", "first_fold"])),
+            )
+        )
+    if draw(st.booleans()):
+        derived["d_basket"] = Derived(basket={names[0]: 0.5, names[1]: -0.5})
+    followers = [*names[1:], *derived]
+    groups = {"g_lead": [names[0]], "g_follow": followers}
+    lags = draw(
+        st.lists(
+            st.integers(-3600, 3600).filter(lambda n: n != 0), min_size=1, max_size=5, unique=True
+        )
+    )
+    horizons = draw(st.lists(st.integers(1, 3600), min_size=1, max_size=4, unique=True))
+    measures: list[LeadLag | Response] = [
+        LeadLag.model_validate(
+            {
+                "id": "lead_lag",
+                "from": "g_lead",
+                "to": "g_follow",
+                "estimator": draw(st.sampled_from(["grid", "hy"])),
+                "lags": [f"{lag}s" for lag in lags],
+            }
+        ),
+        Response(
+            id="response",
+            trigger=Trigger(leg=names[0], move_bp=[10.0, 20.0], within="2s")
+            if draw(st.booleans())
+            else Trigger(leg=names[0], z=[2.0], lookback="30m"),
+            followers="g_follow",
+            side=draw(st.sampled_from(["with", "against"])),
+            horizons=[f"{horizon}s" for horizon in horizons],
+            latency_ms=draw(st.floats(0, 1000, allow_nan=False)),
+        ),
+    ]
+    bound = draw(st.booleans())
+    start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
+    return Screen(
+        id=draw(HYP_IDS),
+        title=draw(SAFE_TEXT),
+        thesis=draw(SAFE_TEXT),
+        hyp=draw(HYP_IDS) if bound else None,
+        window=None if bound else DateWindow(start=start, end=start + timedelta(days=30)),
+        legs=legs,
+        derived=derived,
+        groups=groups,
+        clock=Clock(
+            grid=draw(st.sampled_from(["1s", "5s", "1m"])),
+            hours=draw(
+                st.sampled_from(["overlap", Hours(tz="America/New_York", span="09:30-16:00")])
+            ),
+        ),
+        measures=measures,
+        costs=None
+        if bound
+        else draw(st.none() | st.just({"OKX": CostsOverride(commission_bps=5)})),
+        verdict=draw(
+            st.none()
+            | st.builds(
+                ScreenVerdict,
+                alpha=st.floats(0.001, 0.2),
+                min_margin_bp=st.floats(-5, 50),
+                min_events_per_day=st.floats(0, 500),
+                min_sessions=st.integers(1, 250),
+            )
+        ),
     )

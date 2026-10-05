@@ -40,8 +40,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kanso"]
-# Ship skills, templates, the criteria library and migrations inside the wheel.
-artifacts = ["src/kanso/skills/**", "src/kanso/templates/**", "src/kanso/criteria/library/**", "src/kanso/state/migrations/**"]
+# Ship skills, templates, the criteria and measure libraries and migrations inside the wheel.
+artifacts = ["src/kanso/skills/**", "src/kanso/templates/**", "src/kanso/criteria/library/**", "src/kanso/screen/library/**", "src/kanso/state/migrations/**"]
 
 [dependency-groups]
 dev = [

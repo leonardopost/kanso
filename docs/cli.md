@@ -45,6 +45,17 @@ current directory, from which discovery walks up to the nearest `kanso.toml`.
 
 Dates are written `YYYY-MM-DD`; anything else is a validation failure (exit 3).
 
+## Screens
+
+A screen measures, before any lane is spent, whether a relationship a hypothesis rests on is in
+the data and how large it is against the hurdle a trade would clear (`docs/concepts.md`,
+Screen). No command here calls a model, so none exits 2 for want of one.
+
+| command | what it does |
+|---|---|
+| `kanso screen new ID [--hyp H]` | scaffold `screens/<id>/screen.yaml` from the template — bound to the registered hypothesis `H` when it is named, free otherwise. Refused (exit 2) when the directory exists, because a screen is scaffolded once; an id that is not one is refused (exit 3) |
+| `kanso screen validate PATH` | say whether the file is admissible and what it would measure — its form, the window it reads, its legs and the cells of every measure, which is the family that measure's correction is over — and change nothing. Refused (exit 3): a file that breaks a rule of its own (a name declared twice or referenced and never declared, a derived leg that is not exactly one of a basket, a spread or a gap, lag zero, a value twice in a lattice, a grid finer than a bar leg it samples, a trigger that is neither a move nor a z-score), a parameter outside the range its measure's library entry declares, a file in another screen's directory, and a bound screen's leg that is outside its hypothesis's universe or read at a type or grain the hypothesis does not research. A bound screen whose hypothesis is not registered is refused (exit 2). A bound screen's window is its hypothesis's research window, read from the pinned bytes |
+
 ## Hypotheses
 
 | command | what it does |

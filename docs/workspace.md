@@ -71,6 +71,7 @@ never edits the file.
 | `models.yaml` | `init` | **yes** |
 | `hypotheses/<id>/hypothesis.yaml` | `hyp new`, `classify`, `hyp explore` (a draft, in a directory it creates) | **yes**, between runs |
 | `hypotheses/<id>/program.md` | `hyp new`, `hyp explore` | **yes**, between runs |
+| `screens/<id>/screen.yaml` | `screen new` | **yes** |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
 | `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
@@ -950,6 +951,33 @@ for, and it clears `best` so the history says what happened.
 
 `results.tsv` is rendered from state after every card, so restoring a lane from the best
 never loses a row. Deleting it loses nothing.
+
+## `screens/<id>/`
+
+`screen.yaml` is **yours**: what a screen measures, written by you or by an agent following the
+`kanso-screen` skill, from the template `kanso screen new` renders. It holds the question and
+nothing about the answer, so its bytes can be content-addressed, as a hypothesis's are. The
+template's comments are its field reference; `kanso screen validate` is its admissibility check.
+
+A screen is **bound** or **free**. `hyp: <id>` binds it to a registered hypothesis: its window
+is that hypothesis's research window, read from the pinned bytes, its costs are the
+hypothesis's, and every leg must be an instrument of its universe read at a type and grain it
+researches. A free screen states `window` instead, and may state `costs` per venue.
+
+| key | what it holds |
+|---|---|
+| `legs` | name → `{instrument, type, resolution?}`: a catalog instrument id, read as `bar` (with its `resolution`), `trade`, `quote` or `book` |
+| `derived` | name → exactly one of `basket` (weights over legs), `spread` (`long`, `short`, `hedge: fixed` with `beta`, or `hedge: ols` with `fit: window` or `fit: first_fold`) or `gap` (`a`, `b`: one asset on two venues) |
+| `groups` | name → a list of legs and derived legs, for a measure to name at once |
+| `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
+| `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`) or `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) |
+| `verdict` | optional, never defaulted: `alpha`, `min_margin_bp`, `min_events_per_day`, `min_sessions` |
+
+Spans are `<n>(ms|s|m|h|d)` — finer than a hypothesis's grain, because a lead between two venues
+is measured in milliseconds — and a lag carries a sign, positive when `from` leads `to`. The
+followers of a response are `followers` and never `on`: YAML reads a bare `on` as the boolean
+true. Every list of a measure is a declared, finite lattice; its cells are the cross product,
+and `kanso screen validate` prints how many there are.
 
 ## `models.yaml`
 

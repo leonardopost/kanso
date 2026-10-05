@@ -1,0 +1,5 @@
+id: lead_lag
+meaningful_when: "When two series may move one after the other: per session, the correlation of one's returns with the other's at each declared lag, sampled on the clock's grid or, for asynchronous prints, by the Hayashi-Yoshida estimator. A lead with no response margin is information, not a trade."
+ranges:
+  lag: [1ms, 1d]
+  lags: [1, 64]

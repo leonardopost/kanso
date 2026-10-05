@@ -1,0 +1,37 @@
+# screen.yaml — a measurement before a lane (docs/concepts.md, Screen). Pinned by the sha256 of its bytes when it runs;
+# results live in state.db and in the files kanso renders beside this one. Blank fields must be set before `kanso screen validate` passes.
+schema: 1
+id: "{{screen_id}}"
+title: ""
+thesis: ""                         # the relationship, falsifiable: who leads whom, by how long, how often
+{{binding}}
+legs:                              # name: {instrument: <catalog id>, type: bar|trade|quote|book, resolution: <bar size, bars only>}
+#  btc:  {instrument: BTC-USDT-SWAP.OKX, type: trade}
+#  mara: {instrument: MARA.XNAS, type: bar, resolution: 1s}
+# derived:                         # synthetic legs, each a function of legs
+#   miners: {basket: {mara: 0.5, riot: 0.5}}
+#   pair:   {spread: {long: coin, short: mstr, hedge: ols, fit: first_fold}}   # or hedge: fixed, beta: 1.2
+#   venues: {gap: {a: okx_btc, b: binance_btc}}
+# groups:                          # names for sets of legs, used by measures
+#   lead:   [btc]
+#   follow: [mara, miners]
+clock:
+  grid:                            # <n>(ms|s|m|h): the step a `grid` estimator samples on; no finer than a bar leg
+  hours: overlap                   # overlap | {tz: America/New_York, span: "09:30-16:00"}
+measures:                          # each from the library (kanso/screen/library/); every list is a declared, finite lattice
+#  - id: lead_lag
+#    from: lead
+#    to: follow
+#    estimator: grid               # grid | hy (asynchronous prints, no grid)
+#    lags: [-5s, 1s, 2s, 5s]       # never zero: the same instant's co-movement is not a lead
+#  - id: response
+#    trigger: {leg: btc, move_bp: [10, 20], within: 2s}   # or {leg: pair, z: [2, 3], lookback: 30m}
+#    followers: follow
+#    side: with                    # with | against
+#    horizons: [5s, 30s]
+#    latency_ms: 5                 # measured on the route you would trade through
+# verdict:                         # optional and never defaulted: declare it before you run, never after reading a result
+#   alpha: 0.05                    # family-wise, over every cell of a measure
+#   min_margin_bp: 1.0             # gross per event less the hurdle
+#   min_events_per_day: 20
+#   min_sessions: 20

@@ -1,0 +1,10 @@
+id: response
+meaningful_when: "When trading a follower on a trigger is the thesis: per event, the follower's signed return from its first point after the latency to its first point after the horizon, against the round trip the venue model charges, one position at a time."
+ranges:
+  move_bp: [0.1, 10000]
+  within: [1ms, 1d]
+  z: [0.5, 20]
+  lookback: [1s, 30d]
+  horizon: [1ms, 1d]
+  horizons: [1, 32]
+  latency_ms: [0, 60000]
