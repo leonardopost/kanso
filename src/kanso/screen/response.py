@@ -5,8 +5,10 @@ A cell is a trigger threshold, a follower and a horizon. In one session, in time
 1. **Fire.** The trigger is a condition evaluated at each of the trigger leg's points: a move —
    its level changed by at least `move_bp` since its level as of `within` earlier — or a
    z-score — its level at least `z` standard deviations from the mean of its points over the
-   trailing `lookback`, the point itself included and nothing after it. The event's sign is the
-   move's, or the z-score's. It fires at the `ts_init` of the point that met it.
+   trailing `lookback`, the point itself included and nothing after it — inside the session, so a
+   lookback longer than the session's history is cut at its open, the session being the unit.
+   The event's sign is the move's, or the z-score's. It fires at the `ts_init` of the point
+   that met it.
 2. **One position at a time.** An event that fires while the cell's previous event is still
    held — before its exit — is skipped: the simplest strategy that could harvest the cell.
 3. **Enter, hold, exit.** Entry is the follower's first point at or after the fire plus

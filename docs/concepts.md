@@ -294,8 +294,8 @@ mean different things — an exchange's own instant and a consolidated tape's, o
 declared — is marked `clock_bound`: it may be the difference between the clocks.
 
 **A response is set against the hurdle a card would pay.** A `response` cell fires on a
-trigger — a move of at least `move_bp` within `within`, or a z-score over a trailing `lookback`
-— and enters the follower at its first point after the declared latency, exits at its first
+trigger — a move of at least `move_bp` within `within`, or a z-score over a trailing `lookback`,
+cut at the session's open because the session is the unit — and enters the follower at its first point after the declared latency, exits at its first
 point after the horizon, one position at a time. Its gross is what a taker would have made — a
 quoted follower buys the ask and sells the bid it shows — and its hurdle is the round trip the
 venue model charges, struck by the runner's own `fill_cost`: commission, slippage, the sale's
@@ -315,6 +315,17 @@ verdict    worth a lane: yes · 2 pass · 4 fail · 0 thin
            pass · response/a/40bp/1h/a/1h  ceiling +19.34 bp/day · margin +17.68 bp (gross +22.68, hurdle 5) · 1.09 a day · t +5.29 · p 0.0001
            pass · response/a/20bp/1h/a/1h  ceiling +16.83 bp/day · margin +9.617 bp (gross +14.62, hurdle 5) · 1.75 a day · t +4.18 · p 0.0003
 ```
+
+**Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
+`basket` is a weighted sum of its legs' log prices, a `spread` is `log long − beta log short`,
+and a `gap` is one asset's price on two venues as a fraction of the second. Each is live only
+where all its legs are, moves at the union of their points, and trades leg by leg in its
+shares when it is a response's follower. A spread's beta is stated, or fitted by least squares
+of one leg's log price on the other's over the window (`fit: window`), in which case every cell
+reading it carries `in_sample_fit: true`, or over the window's first fold (`fit: first_fold`),
+which then scores no cell that reads it, so the later folds judge a hedge they did not choose.
+A spread's increments against their own past is mean reversion measured without a model: a
+`lead_lag` of the spread against itself.
 
 **Missing data is fetched, never skipped.** A series the catalog lacks is fetched through the
 adapter that declares it serves it, and a snapshot taken; a series no adapter serves is refused,

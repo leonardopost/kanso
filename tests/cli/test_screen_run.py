@@ -206,29 +206,6 @@ def test_a_series_no_adapter_serves_is_refused_before_anything_is_read(
     assert "workspace extension" in payload(result)["remedy"]
 
 
-@pytest.mark.parametrize(
-    ("change", "message"),
-    [
-        (
-            {
-                "legs": {**OU["legs"], "b": OU["legs"]["a"]},
-                "derived": {
-                    "s": {"spread": {"long": "a", "short": "b", "hedge": "ols", "fit": "window"}}
-                },
-            },
-            "does not fit an `ols` hedge yet",
-        ),
-    ],
-)
-def test_what_this_build_does_not_measure_yet_is_refused(
-    runner: CliRunner, loaded: Path, change: dict[str, Any], message: str
-) -> None:
-    result = at(runner, loaded, "screen", "run", write_screen(loaded, {**OU, **change}), "--json")
-
-    assert result.exit_code == Exit.PRECONDITION
-    assert message in payload(result)["error"]
-
-
 def test_a_snapshot_that_does_not_cover_is_not_pinned(
     runner: CliRunner, loaded: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

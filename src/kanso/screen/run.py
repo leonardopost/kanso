@@ -50,6 +50,7 @@ from kanso.schemas.screen import (
 from kanso.screen import (
     data,
     embargo,
+    fit,
     hurdle,
     lead_lag,
     nulls,
@@ -91,7 +92,6 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     valid = validate(ws, store, path)
     screen, window = valid.screen, valid.window
     embargo.refuse_certification_data(ws, store, screen, window)
-    _refuse_unmeasured(screen)
     plans = data.plan(ws, store, screen, window)
     _refuse_unserved(plans)
     fetched = data.fetch(ws, store, screen, window, plans)
@@ -113,7 +113,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         draws=ws.config.screen.draws,
         folds=ws.config.research.folds,
         stamps=stamps,
-        betas={},
+        betas=_fit(ws, screen, window, catalog, held),
     )
     cells = _measure(ws, context, window, catalog, held, priced)
     result = ScreenResult(
@@ -208,6 +208,9 @@ def _lead_lag_cells(
 ) -> list[Cell]:
     keys = lead_lag.cells(context.screen, measure)
     matrix = np.column_stack(days) if days else np.zeros((len(keys), 0), np.float64)
+    for row, key in enumerate(keys):
+        if _fits(context.screen, (key.source, key.target)) & {"first_fold"}:
+            matrix[row, fold_of == 0] = np.nan
     found = nulls.evidence(
         matrix, context.draws, nulls.seed(context.sha, context.snapshot_id, index)
     )
@@ -228,6 +231,7 @@ def _lead_lag_cells(
                 folds=folds,
                 folds_same_sign=_same_sign(folds, float(found.mean[row])),
                 staleness=_staleness([day[row] for day in stale]),
+                in_sample_fit="window" in _fits(context.screen, (key.source, key.target)),
                 clock_bound=_clock_bound(context.screen, key, context.stamps),
             )
         )
@@ -243,6 +247,11 @@ def _response_cells(
 ) -> list[Cell]:
     keys = response.cells(context.screen, measure)
     tallies = [[day[row] for day in days] for row in range(len(keys))]
+    for row, key in enumerate(keys):
+        if _fits(context.screen, (measure.trigger.leg, key.follower)) & {"first_fold"}:
+            tallies[row] = [
+                None if fold == 0 else day for day, fold in zip(tallies[row], fold_of, strict=True)
+            ]
     signal = np.asarray(
         [[np.nan if day is None else day.signal for day in row] for row in tallies],
         dtype=np.float64,
@@ -272,10 +281,47 @@ def _response_cells(
                 sessions=int(found.sessions[row]),
                 folds=folds,
                 folds_same_sign=_same_sign(folds, stats.ceiling_bp_day),
+                in_sample_fit="window"
+                in _fits(context.screen, (measure.trigger.leg, key.follower)),
                 response=stats,
             )
         )
     return cells
+
+
+def _fit(
+    ws: Workspace,
+    screen: Screen,
+    window: tuple[date, date],
+    catalog: Any,
+    held: dict[str, Any],
+) -> dict[str, float]:
+    """Every fitted spread's beta, from the sessions of its fit span (`kanso.screen.fit`)."""
+    spreads = fit.fitted(screen)
+    if not spreads:
+        return {}
+    days = sessions.days(screen, window)
+    fold_of = _folds(days, window, ws.config.research.folds)
+    bounds = sessions.window_ns(window)
+    overlap = screen.clock.hours == "overlap"
+    names = sorted({leg for spread in spreads.values() for leg in (spread.long, spread.short)})
+    moments = {name: fit.Moments() for name in spreads}
+    for day, fold in zip(days, fold_of.tolist(), strict=True):
+        wanted = [name for name, spread in spreads.items() if spread.fit == "window" or fold == 0]
+        if not wanted:
+            continue
+        series = sessions.read(catalog, held, screen, names, day, window)
+        opens, closes = sessions.hours_of(screen, day)
+        span = (max(opens, bounds[0]), min(closes, bounds[1]))
+        for name in wanted:
+            moments[name] = moments[name].merged(fit.session(spreads[name], series, span, overlap))
+    return {name: fit.beta(name, found) for name, found in moments.items()}
+
+
+def _fits(screen: Screen, names: Sequence[str]) -> set[str]:
+    """How the spreads these names read were fitted: `window`, `first_fold`, or neither."""
+    spreads = fit.fitted(screen)
+    return {str(spreads[name].fit) for name in names if name in spreads}
 
 
 def _stats(live: Sequence[response.Tally]) -> ResponseStats:
@@ -395,16 +441,6 @@ def _staleness(sessions_seen: Sequence[dict[str, float]]) -> dict[str, float]:
 
 def _trades(screen: Screen) -> bool:
     return any(isinstance(measure, Response) for measure in screen.measures)
-
-
-def _refuse_unmeasured(screen: Screen) -> None:
-    """What this build cannot measure yet is refused before anything is read."""
-    for name, derived in screen.derived.items():
-        if derived.spread is not None and derived.spread.hedge == "ols":
-            raise PreconditionError(
-                f"derived.{name}: this build does not fit an `ols` hedge yet",
-                remedy="state a fixed beta for now",
-            )
 
 
 def _refuse_unserved(plans: Sequence[data.LegPlan]) -> None:
