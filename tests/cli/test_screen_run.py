@@ -389,11 +389,9 @@ def test_validate_prints_the_model_the_hurdle_is_struck_under(
 
     assert result.exit_code == Exit.OK, result.stdout
     hurdle = payload(result)["hurdles"]["SIM"]
-    assert hurdle["costs"]["fixed_bps"] == 2 and hurdle["origin"] == "hypothesis"
-    assert (
-        "spread fixed 2 bp"
-        in at(runner, loaded, "screen", "validate", write_screen(loaded, FADE)).stdout
-    )
+    assert hurdle["costs"]["fixed_bps"] == 2 and hurdle["origin"] == "screen"
+    human = at(runner, loaded, "screen", "validate", write_screen(loaded, FADE)).stdout
+    assert "spread fixed 2 bp" in human and "sale fees 0 bp · from screen" in human
 
 
 def test_a_follower_with_no_spread_to_charge_is_refused(runner: CliRunner, loaded: Path) -> None:

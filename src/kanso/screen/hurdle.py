@@ -228,19 +228,26 @@ def described(
     found = hurdles(ws, screen, hypothesis, defined)
     return {
         venue: {
-            "line": _line(model),
+            "line": _line(model, _origin(screen, model)),
             "costs": model.costs.model_dump(mode="json", exclude_none=True),
-            "origin": model.origins.costs,
+            "origin": _origin(screen, model),
         }
         for venue, model in sorted(found.models.items())
     }
 
 
-def _line(model: VenueModel) -> str:
+def _origin(screen: Screen, model: VenueModel) -> str:
+    """Where the costs came from: a free screen's own `costs` stand where a hypothesis's would,
+    and are named for the file that stated them."""
+    origin = model.origins.costs
+    return "screen" if origin == "hypothesis" and screen.hyp is None else origin
+
+
+def _line(model: VenueModel, origin: str) -> str:
     costs = model.costs
     spread = "from quotes" if costs.spread == "quotes" else f"fixed {costs.fixed_bps:g} bp"
     return (
         f"commission {costs.commission_bps:g} bp + {costs.commission_per_share:g}/share, "
         f"slippage {costs.slippage_bps:g} bp, spread {spread}, sale fees "
-        f"{costs.sell_fee_bps:g} bp · from {model.origins.costs}"
+        f"{costs.sell_fee_bps:g} bp · from {origin}"
     )
