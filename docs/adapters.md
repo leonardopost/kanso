@@ -713,6 +713,11 @@ The REST endpoint for past prints answers 100 a request and about 80 days back, 
 `BTC-USDT-SWAP` was 3.56 million prints on 2026-09-28, so this loader reads the **daily archives** the
 exchange publishes instead: one zip a day, listed with a URL on the exchange's file host.
 
+- **A price may be spelled as a float's full expansion.** GRVT-USDT-SWAP's archives of
+  2026-09-14..24 spell prices such as `0.16186999999999999`, the double one step below the
+  tick 0.16187. A value spelled with sixteen or more significant digits and within a millionth
+  of a tick of the grid is read as that tick; a price truly between two ticks is refused, naming
+  the row.
 - **An archive's day is the exchange's, UTC+8.** The archive named `2023-01-01` holds the
   prints from 2022-12-31 15:59:41 UTC to 2023-01-01 15:59:51 UTC, and consecutive archives
   continue each other's trade ids. So a UTC day `D` is served by two archives, `D`'s and

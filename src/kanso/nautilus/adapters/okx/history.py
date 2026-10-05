@@ -120,11 +120,24 @@ def runs(dates: Sequence[date]) -> str:
     return ", ".join(str(run[0]) if len(run) == 1 else f"{run[0]}..{run[-1]}" for run in runs)
 
 
+FLOAT_DIGITS: Final = 16
+"""Significant digits from which a spelling is a binary float's expansion, not a price."""
+
+FLOAT_SLACK: Final = Decimal("1e-6")
+"""How far from the grid, in units, such a spelling may sit and still be the unit it is."""
+
+
 def units(text: object, precision: int) -> int | None:
     """`text` as a whole number of `10 ** -precision`, or `None` when it is not exactly one.
 
     Read as a decimal from the exchange's own spelling, so nothing is lost to a float, and
-    never rounded: a number the precision cannot hold is the caller's to refuse by name.
+    never rounded: a number the precision cannot hold is the caller's to refuse by name. One
+    spelling is not the exchange's number but a binary float's full expansion: measured, the
+    daily trade archive of GRVT-USDT-SWAP for 2026-09-16 spells a price `0.16186999999999999`,
+    the double one step below 0.16187, on every day it was read. A value spelled with the
+    sixteen or more significant digits only a float's expansion carries, and within a
+    millionth of a unit of the grid, is that unit; a number truly between two ticks is
+    refused as before.
     """
     try:
         value = Decimal(str(text))
@@ -133,9 +146,12 @@ def units(text: object, precision: int) -> int | None:
     if not value.is_finite():
         return None
     scaled = value.scaleb(precision)
-    if scaled != scaled.to_integral_value():
-        return None
-    return int(scaled)
+    nearest = scaled.to_integral_value()
+    if scaled != nearest:
+        expanded = len(value.as_tuple().digits) >= FLOAT_DIGITS
+        if not expanded or abs(scaled - nearest) >= FLOAT_SLACK:
+            return None
+    return int(nearest)
 
 
 def answered(client: PublicClient, path: str, params: Mapping[str, str]) -> tuple[Any, ...]:
