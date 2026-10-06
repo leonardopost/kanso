@@ -307,6 +307,7 @@ class Hypothesis(Versioned):
     horizon: Duration
     resolution: Resolution
     data_requirements: list[CatalogueId] = Field(min_length=1)
+    data_by_instrument: dict[NonEmpty, list[CatalogueId]] = Field(default_factory=dict)
     session_scope: SessionScope | None = None
     costs: CostsOverride | None = None
     capital: float | None = Field(default=None, gt=0)
@@ -357,6 +358,7 @@ class Hypothesis(Versioned):
             raise ValueError("horizon: must be longer than zero")
         self.windows.check_embargo(self.horizon)
         self._check_resolution()
+        self._check_by_instrument()
         self._check_scope()
         self._check_costs()
         self._check_book()
@@ -415,6 +417,41 @@ class Hypothesis(Versioned):
                 "depth: refuses 'quote' in data_requirements; under depth level one reaches "
                 "on_quote_tick from the book, and a quote series would be a second source of it"
             )
+
+    def _check_by_instrument(self) -> None:
+        """`data_by_instrument` narrows what a listed instrument must carry; it adds nothing.
+
+        A universe that mixes sources may hold a type for some instruments and not others —
+        a crypto exchange's prints beside the quotes of the equities that follow it, where
+        the exchange serves no quotes. A listed instrument is asked for its own list, which
+        must be a subset of `data_requirements`; an unlisted one for all of them; and a
+        required type nobody is asked for is a type the hypothesis does not need.
+        """
+        unknown = sorted(set(self.data_by_instrument) - set(self.universe))
+        if unknown:
+            raise ValueError(f"data_by_instrument: {', '.join(unknown)} is not in the universe")
+        for instrument, kinds in self.data_by_instrument.items():
+            if not kinds:
+                raise ValueError(f"data_by_instrument.{instrument}: names no type")
+            if len(set(kinds)) != len(kinds):
+                raise ValueError(f"data_by_instrument.{instrument}: repeats a type")
+            extra = sorted(set(kinds) - set(self.data_requirements))
+            if extra:
+                raise ValueError(
+                    f"data_by_instrument.{instrument}: {', '.join(extra)} is not in "
+                    "data_requirements; list it there, or drop it here"
+                )
+        asked = {kind for instrument in self.universe for kind in self.required_of(instrument)}
+        unused = sorted(set(self.data_requirements) - asked)
+        if unused:
+            raise ValueError(
+                f"data_requirements: no instrument is asked for {', '.join(unused)} once "
+                "data_by_instrument is read; drop it, or ask an instrument for it"
+            )
+
+    def required_of(self, instrument: str) -> tuple[str, ...]:
+        """The types `instrument` must carry: its own list, else every required type."""
+        return tuple(self.data_by_instrument.get(instrument, self.data_requirements))
 
     def _check_resolution(self) -> None:
         required = self.data_requirements

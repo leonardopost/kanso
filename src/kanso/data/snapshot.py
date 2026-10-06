@@ -190,6 +190,7 @@ def covering(
     resolution: str | None,
     windows: Windows,
     prefixes: Sequence[tuple[date, date]] = (),
+    by_instrument: Mapping[str, Sequence[str]] | None = None,
 ) -> Snapshot | None:
     """The newest snapshot covering the universe, pinning the instruments the store holds.
 
@@ -217,7 +218,7 @@ def covering(
     held = manifests(ws)
     defined = _definitions(ws, universe)
     closed = closures.by_instrument(defined.values())
-    asked = _asked(ws, universe, types)
+    asked = _asked(ws, universe, types, by_instrument or {})
     required = (
         *((window.start, window.end) for window in (windows.research, windows.certification)),
         *prefixes,
@@ -297,9 +298,13 @@ def _definitions(ws: Workspace, universe: Sequence[str]) -> dict[str, Any]:
 
 
 def _asked(
-    ws: Workspace, universe: Sequence[str], types: Sequence[str]
+    ws: Workspace,
+    universe: Sequence[str],
+    types: Sequence[str],
+    by_instrument: Mapping[str, Sequence[str]],
 ) -> dict[str, tuple[str, ...]]:
-    """The required types each instrument is asked for: all of them, bar `funding` off a perpetual.
+    """The required types each instrument is asked for: its own list from the hypothesis's
+    `data_by_instrument`, else all of them — and `funding` only of a perpetual.
 
     NautilusTrader 1.231.0: a stored definition reads back as the class it was written as,
     and a perpetual swap is `nautilus_trader.model.instruments.CryptoPerpetual`, the one
@@ -310,8 +315,9 @@ def _asked(
     from kanso.data.catalog import open_catalog
     from kanso.data.types.funding import TYPE_ID as FUNDING
 
+    own = {instrument: tuple(by_instrument.get(instrument, types)) for instrument in universe}
     if FUNDING not in types:
-        return {instrument: tuple(types) for instrument in universe}
+        return own
     perpetuals = {
         str(item.id)
         for item in open_catalog(ws).instruments(instrument_ids=list(universe))
@@ -319,7 +325,9 @@ def _asked(
     }
     return {
         instrument: tuple(
-            required for required in types if required != FUNDING or instrument in perpetuals
+            required
+            for required in own[instrument]
+            if required != FUNDING or instrument in perpetuals
         )
         for instrument in universe
     }

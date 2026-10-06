@@ -1101,7 +1101,13 @@ def begin(
         setup = _setup(ws, store, hyp)
         prefixes = _warmup_spans(setup)
     snapshot = covering(
-        ws, hyp.universe, hyp.data_requirements, hyp.resolution, hyp.windows, prefixes
+        ws,
+        hyp.universe,
+        hyp.data_requirements,
+        hyp.resolution,
+        hyp.windows,
+        prefixes,
+        hyp.data_by_instrument,
     )
     if snapshot is None:
         warmed = " and the warmup sessions before each" if prefixes else ""

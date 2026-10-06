@@ -265,6 +265,7 @@ class KansoConfig(StrategyConfig, frozen=True):
     clock without the host's `on_bar` running on that grain."""
 
     data_requirements: tuple[str, ...] = (BAR,)
+    data_by_instrument: tuple[tuple[str, tuple[str, ...]], ...] = ()
     session_scope: tuple[str, str, tuple[str, ...]] | None = None
     capital: float = 0.0
     max_position_pct: float = PERCENT
@@ -1003,8 +1004,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         from kanso.data.types import resolve_type
         from kanso.nautilus.backtest import CLIENT_ID
 
+        own = dict(self._cfg.data_by_instrument)
         for instrument_id in self.universe:
-            for requirement in self._cfg.data_requirements:
+            for requirement in own.get(str(instrument_id), self._cfg.data_requirements):
                 if requirement == BAR:
                     self.subscribe_bars(_bar_type(instrument_id, self._cfg.resolution))
                     for extra in self._cfg.extra_resolutions:

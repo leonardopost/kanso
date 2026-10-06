@@ -685,6 +685,8 @@ def _window_points(
         if requirement == "bar":
             for resolution in grains:
                 for name in sorted(hyp.universe):
+                    if requirement not in hyp.required_of(name):
+                        continue
                     found = market_points(catalog, requirement, held[name], resolution, start, end)
                     found = _in_scope(found, name, scope)
                     if found:
@@ -692,6 +694,8 @@ def _window_points(
                         groups.append(found)
             continue
         for name in sorted(hyp.universe):
+            if requirement not in hyp.required_of(name):
+                continue
             found = market_points(catalog, requirement, held[name], hyp.resolution, start, end)
             found = _in_scope(found, name, scope)
             if found:
@@ -890,6 +894,9 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             resolution=grains[0],
             extra_resolutions=extra,
             data_requirements=tuple(hyp.data_requirements),
+            data_by_instrument=tuple(
+                (name, tuple(kinds)) for name, kinds in sorted(hyp.data_by_instrument.items())
+            ),
             session_scope=None
             if scope is None
             else (scope.series, scope.flag, tuple(scope.always)),
