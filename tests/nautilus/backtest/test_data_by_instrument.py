@@ -12,7 +12,16 @@ from pathlib import Path
 from kanso.nautilus.backtest import window_data
 from kanso.schemas import Hypothesis
 
-from .conftest import INSTRUMENT, RESEARCH, catalog, hypothesis, instrument, quotes, trades
+from .conftest import (
+    INSTRUMENT,
+    RESEARCH,
+    bars,
+    catalog,
+    hypothesis,
+    instrument,
+    quotes,
+    trades,
+)
 
 OTHER = "OTHR.XNAS"
 
@@ -45,3 +54,23 @@ def test_the_runner_reads_each_instrument_only_what_it_is_asked_for(
     }
     assert ("QuoteTick", OTHER) not in loaded
     assert {("TradeTick", OTHER), ("QuoteTick", INSTRUMENT), ("TradeTick", INSTRUMENT)} <= loaded
+
+
+def test_an_instrument_not_asked_for_bars_has_none_read(request_for, tmp_path: Path) -> None:
+    held = catalog(
+        tmp_path / "catalog",
+        [*bars(RESEARCH), *trades(RESEARCH), *bars(RESEARCH, "OTHR"), *trades(RESEARCH, "OTHR")],
+        [instrument(), instrument("OTHR")],
+    )
+    base = hypothesis(universe=(INSTRUMENT, OTHER), data_requirements=("bar", "trade"))
+    asked = base.model_copy(update={"data_by_instrument": {OTHER: ["trade"]}})
+
+    _, groups = window_data(request_for(hypothesis_=asked), held)
+
+    loaded = {
+        (type(point).__name__, str(getattr(point, "bar_type", point).instrument_id))
+        for group in groups
+        for point in group
+    }
+    assert ("Bar", OTHER) not in loaded
+    assert {("TradeTick", OTHER), ("Bar", INSTRUMENT), ("TradeTick", INSTRUMENT)} <= loaded
