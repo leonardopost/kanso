@@ -159,8 +159,8 @@ def test_a_supersede_takes_the_place_of_the_pinned_dataset_it_names(ws: FakeWork
 
     assert later.replaced == (first.manifest.dataset_id,)
     assert later.manifest.supersedes == first.manifest.dataset_id
-    assert first.manifest.dataset_id not in cat.manifests(ws)
-    assert later.manifest.dataset_id in cat.manifests(ws)
+    assert first.manifest.dataset_id not in m.manifests(ws)
+    assert later.manifest.dataset_id in m.manifests(ws)
 
 
 def test_a_supersede_lifts_the_pin_of_the_dataset_it_names_and_no_other(
@@ -181,7 +181,7 @@ def test_a_supersede_lifts_the_pin_of_the_dataset_it_names_and_no_other(
             source="synthetic",
             supersedes=first.manifest.dataset_id,
         )
-    assert first.manifest.dataset_id in cat.manifests(ws)
+    assert first.manifest.dataset_id in m.manifests(ws)
 
 
 def test_the_pinned_refusal_names_the_supersede_that_would_lift_it(ws: FakeWorkspace) -> None:
@@ -452,6 +452,134 @@ def test_an_adjusted_series_clashes_with_the_unadjusted_one_it_shares_a_file_wit
         )
     assert raised.value.remedy is not None
     assert "--replace" in raised.value.remedy
+
+
+# --- what a write reads ----------------------------------------------------------
+
+UNREADABLE = "a write that opens this manifest fails: it is not one it can clash with\n"
+
+
+def unreadable(ws: FakeWorkspace, *held: cat.Written) -> None:
+    """Make each held dataset's manifest fail to parse, so a write that opens one fails."""
+    for written in held:
+        m.manifest_file(ws, written.manifest.dataset_id).write_text(UNREADABLE, encoding="utf-8")
+
+
+def test_a_write_opens_no_manifest_of_another_series(ws: FakeWorkspace) -> None:
+    """What a write can clash with is its own series — the instrument, type and resolution the
+    store files it under, adjusted or not — plus the dataset it names in `supersedes`. Every
+    other series' manifest is unreadable here, and every way of writing still succeeds, so
+    none of them opened one: what a write costs does not grow with what else is held."""
+    minutes = Ref(resolution="1m", span=(JAN1, JAN1))
+    others = [
+        cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic"),
+        cat.write(ws, quotes(JAN1, 5), ref=Ref(type="quote", resolution=None), source="synthetic"),
+        cat.write(ws, bars(JAN1, 1, spec="1-MINUTE-LAST-EXTERNAL"), ref=minutes, source="s"),
+    ]
+    held = write_bars(ws)
+    define(ws, AAPL, MSFT)
+    snap.freeze(ws)
+    unreadable(ws, *others)
+
+    later = write_bars(ws, start=date(2024, 1, 8), count=3)
+    batched = cat.write(
+        ws,
+        iter(bars(date(2024, 1, 11), 3)),
+        ref=Ref(span=(date(2024, 1, 11), date(2024, 1, 13))),
+        source="synthetic",
+        batch=2,
+    )
+    replaced = cat.write(
+        ws,
+        bars(date(2024, 1, 8), 3),
+        ref=Ref(span=(date(2024, 1, 8), date(2024, 1, 10))),
+        source="synthetic",
+        replace=True,
+    )
+    successor = cat.write(
+        ws, bars(JAN1, 5), ref=Ref(), source="synthetic", supersedes=held.manifest.dataset_id
+    )
+
+    assert replaced.replaced == (later.manifest.dataset_id,)
+    assert successor.replaced == (held.manifest.dataset_id,)
+    assert batched.manifest.span == (date(2024, 1, 11), date(2024, 1, 13))
+    for written in others:
+        path = m.manifest_file(ws, written.manifest.dataset_id)
+        assert path.read_text(encoding="utf-8") == UNREADABLE
+
+
+def test_a_write_opens_no_manifest_of_its_series_that_ends_before_it_begins(
+    ws: FakeWorkspace,
+) -> None:
+    """A dataset that ends before a write begins can neither overlap it nor share its id, and
+    an id carries its end, so a chunked load or a backfill written forwards opens none of
+    the chunks it already wrote: its cost does not grow with the series either."""
+    written: list[cat.Written] = []
+    for start in [date(2024, 1, 1 + 7 * n) for n in range(4)]:
+        unreadable(ws, *written)
+        chunk = (start, date.fromordinal(start.toordinal() + 6))
+        written.append(
+            cat.write(ws, iter(bars(start, 7)), ref=Ref(span=chunk), source="synthetic", batch=3)
+        )
+
+    assert len(cat.open_catalog(ws).bars()) == 28
+
+
+def test_a_write_still_refuses_the_clash_it_reads_by_name(ws: FakeWorkspace) -> None:
+    """Reading by name keeps every clash: the same span unadjusted and adjusted, an overlap
+    ending later than the write, and a `supersedes` that names no held dataset or no id."""
+    write_bars(ws)
+    with pytest.raises(PreconditionError, match="overlaps the held dataset"):
+        cat.write(
+            ws,
+            bars(date(2023, 12, 30), 3),
+            ref=Ref(adjusted=True, span=(date(2023, 12, 30), JAN1)),
+            source="vendor_file",
+            adjustment_basis="close 2024-06-01",
+        )
+    for named in ("AAPL.XNAS-bar-1d-raw-20240106", "not a dataset id"):
+        with pytest.raises(PreconditionError, match="not a dataset this workspace holds"):
+            cat.write(
+                ws,
+                bars(date(2024, 1, 8), 2),
+                ref=Ref(span=(date(2024, 1, 8), date(2024, 1, 9))),
+                source="synthetic",
+                supersedes=named,
+            )
+
+
+def test_a_file_another_series_gains_during_a_write_is_not_the_write_s(
+    ws: FakeWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write lists only the directory its series is filed in, so a file another series
+    gains meanwhile — another process loading another name — is neither recorded as this
+    dataset's bytes nor removed when this write fails."""
+    cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic")
+    elsewhere = next((m.data_path(ws) / "bar").glob("MSFT*")) / "gained.parquet"
+    engine = cat.ParquetDataCatalog.write_data
+
+    def alongside(self: cat.ParquetDataCatalog, data: list[object]) -> None:
+        engine(self, data)
+        elsewhere.write_bytes(b"another series' bytes")
+
+    monkeypatch.setattr(cat.ParquetDataCatalog, "write_data", alongside)
+    written = write_bars(ws)
+    elsewhere.unlink()
+
+    assert written.files == (
+        "bar/AAPL.XNAS-1-DAY-LAST-EXTERNAL/"
+        "2024-01-01T16-00-00-000000000Z_2024-01-05T16-00-00-000000000Z.parquet",
+    )
+    assert cat._checksum(m.data_path(ws), written.files) == written.manifest.checksum
+
+    def failing(self: cat.ParquetDataCatalog, data: list[object]) -> None:
+        elsewhere.write_bytes(b"another series' bytes")
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(cat.ParquetDataCatalog, "write_data", failing)
+    with pytest.raises(OSError, match="no space"):
+        write_bars(ws, start=date(2024, 1, 8), count=2)
+    assert elsewhere.is_file()
 
 
 # --- a write a batch at a time --------------------------------------------------

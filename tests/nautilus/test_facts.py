@@ -80,6 +80,8 @@ BINDINGS = {
     "and a lone OrderBookDelta as a batch of one",
     "a catalog query handed its files returns the points of one instant in file order, "
     "whatever span it reads, with ts_init inclusive at both ends",
+    "write_data files a series in the one directory class_to_filename and "
+    "urisafe_identifier name, and delete_data_range of an identifier touches no other",
     "an order's events grow only at its end, and its strategy is handed each one as the "
     "order's last when the order takes it",
     "a level-two venue refuses to run a name it holds data and no book data for, and "
