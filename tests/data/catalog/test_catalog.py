@@ -6,6 +6,8 @@ from collections.abc import Iterator
 from datetime import date
 
 import pytest
+from nautilus_trader.core.data import Data
+from nautilus_trader.model.custom import customdataclass
 from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
 
 from kanso.data import catalog as cat
@@ -20,6 +22,7 @@ from tests.data.catalog.conftest import (
     Ref,
     bar,
     bars,
+    days,
     define,
     equity,
     quote,
@@ -768,3 +771,95 @@ def test_a_replace_that_is_written_lets_the_old_files_go(ws: FakeWorkspace) -> N
     assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet")) == list(
         again.files
     )
+
+
+# --- a series of no instrument --------------------------------------------------
+
+Breadth = customdataclass(
+    type("CatalogBreadth", (Data,), {"__annotations__": {"advancing": float}})
+)
+"""A market-wide series: no instrument, so the store files it in its class's directory alone.
+
+Built with `__annotations__` set to real objects, because the engine's decorator cannot read
+the postponed annotations this module declares."""
+
+BREADTH = Ref(instrument="MARKET", type="breadth", resolution=None)
+
+
+def breadth(advancing: float, start: date = JAN1, count: int = 5) -> list[Data]:
+    return [
+        Breadth(advancing=advancing, ts_event=cat.day_start_ns(day), ts_init=cat.day_start_ns(day))
+        for day in days(start, count)
+    ]
+
+
+def advancing(ws: FakeWorkspace) -> list[float]:
+    """What the store holds of the market-wide series over the reference span, in order."""
+    held = cat.load_window(ws, Breadth, None, BREADTH.span)
+    return [point.data.advancing for point in held.points]
+
+
+def test_a_series_of_no_instrument_is_replaced(ws: FakeWorkspace) -> None:
+    """The engine's removal, asked for no identifier, reaches only the per-instrument
+    directories of a class and never the files in the class's own, so a replace removed
+    nothing and its write was refused as having produced no bytes."""
+    first = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+
+    again = cat.write(ws, breadth(2.0), ref=BREADTH, source="synthetic", replace=True)
+
+    assert again.replaced == (first.manifest.dataset_id,)
+    assert advancing(ws) == [2.0] * 5
+    assert m.manifests(ws) == {again.manifest.dataset_id: again.manifest}
+    root = m.data_path(ws)
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet")) == list(
+        again.files
+    )
+
+
+def test_a_pinned_series_of_no_instrument_is_superseded(ws: FakeWorkspace) -> None:
+    """Pinned beside an instrument's data, as a market-wide series is: a snapshot needs a
+    definition of an instrument its datasets name."""
+    first = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+    write_bars(ws)
+    define(ws)
+    snap.freeze(ws)
+
+    later = cat.write(
+        ws, breadth(2.0), ref=BREADTH, source="synthetic", supersedes=first.manifest.dataset_id
+    )
+
+    assert later.replaced == (first.manifest.dataset_id,)
+    assert advancing(ws) == [2.0] * 5
+
+
+def test_a_replace_of_a_series_of_no_instrument_that_fails_keeps_what_it_replaced(
+    ws: FakeWorkspace,
+) -> None:
+    held = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+
+    def broken() -> Iterator[Data]:
+        yield from breadth(2.0, count=3)
+        raise ValidationError("the source refused a message part-way")
+
+    with pytest.raises(ValidationError, match="part-way"):
+        cat.write(ws, broken(), ref=BREADTH, source="x", batch=1, replace=True)
+
+    assert m.manifests(ws) == {held.manifest.dataset_id: held.manifest}
+    assert advancing(ws) == [1.0] * 5
+    assert cat._checksum(m.data_path(ws), held.files) == held.manifest.checksum
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_replace_removes_its_own_instrument_s_files_and_no_other_s(ws: FakeWorkspace) -> None:
+    """Two names' prints of the same days sit in two directories of one class; replacing
+    one name's leaves every file of the other's as it was."""
+    other = cat.write(
+        ws, [trade(MSFT, day) for day in days(JAN1, 5)], ref=Ref(MSFT, "trade", None), source="s"
+    )
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    again = cat.write(ws, prints(), ref=TRADES, source="x", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert cat._checksum(m.data_path(ws), other.files) == other.manifest.checksum
+    assert len(cat.open_catalog(ws).trade_ticks(instrument_ids=[MSFT])) == 5

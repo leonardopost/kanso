@@ -59,12 +59,19 @@ manifests it can clash with and no others — its series', filed under the same 
 type and resolution, adjusted or not, that end on or after the span it writes begins, found
 by their names — and the one `supersedes` names, by its own file. It finds the files it
 produced by listing the one directory the engine files the series in, and sets aside only
-the files a removal of the series can reach. `nautilus_trader 1.231.0` files a series under
+that directory's files. `nautilus_trader 1.231.0` files a series under
 `data/<class_to_filename(class)>/<urisafe_identifier(identifier)>`, and a series of no
-instrument in the class's own directory, whose removal reaches every identifier's beside it.
+instrument in the class's own directory.
 Measured on a workspace of 13,293 manifests and 18,465 files, reading every manifest took
 8.9 s and walking the whole tree 0.68 s, twice — about ten seconds a dataset, which a
 backfill paid on every chunk.
+
+**A replace removes whole files of its own series, and kanso removes them.** The files
+that go are the ones in the series' directory whose interval meets a clashing dataset's
+span, read off their names. The engine's `delete_data_range` is not asked: given no
+identifier it runs on each instrument's directory of the class and never on the class's
+own, so it removed every instrument's files over the span and none of a series of no
+instrument, whose replace was then refused as having written no bytes.
 
 **A replaced dataset is kept until its replacement is written.** A replace or a supersede
 removes the held dataset before the first new file is written, because the engine keeps its
@@ -588,25 +595,25 @@ def _clear(
             remedy="pass --replace to delete and rewrite the overlapped span",
         )
     catalog = open_catalog(ws)
-    _set_aside(ws, data_cls, identifier)
+    home = _filed_in(data_path(ws), data_cls, identifier)
+    _set_aside(ws, home)
     for manifest in clashing:
-        _delete(catalog, data_cls, identifier, manifest.span)
+        _delete(catalog, home, data_cls, manifest.span)
         remove_manifest(ws, manifest.dataset_id)
     return tuple(sorted(m.dataset_id for m in clashing))
 
 
-def _set_aside(ws: Workspace, data_cls: type, identifier: str | None) -> None:
-    """Link every file a removal of the series can touch under `catalog/.replaced/`.
+def _set_aside(ws: Workspace, home: Path) -> None:
+    """Link every file in `home`, a series' directory, under `catalog/.replaced/`.
 
-    Those are the files under the directory the series is filed in — every identifier's of
-    `data_cls` for a series of no instrument, whose removal the engine runs on each — and a
-    link costs no bytes: the removal unlinks the store's name and the aside one keeps the
-    file, until `_let_go` drops it or `_undo` links it back.
+    Those are all the files a removal of the series can touch, and a link costs no bytes:
+    the removal unlinks the store's name and the aside one keeps the file, until `_let_go`
+    drops it or `_undo` links it back.
     """
     aside = catalog_path(ws) / ASIDE_DIR
     shutil.rmtree(aside, ignore_errors=True)
     root = data_path(ws)
-    for path in _filed_in(root, data_cls, identifier).rglob("*.parquet"):
+    for path in home.glob("*.parquet"):
         kept = aside / path.relative_to(root)
         kept.parent.mkdir(parents=True, exist_ok=True)
         os.link(path, kept)
@@ -638,23 +645,19 @@ def _let_go(ws: Workspace) -> None:
 
 
 def _delete(
-    catalog: ParquetDataCatalog, data_cls: type, identifier: str | None, span: tuple[date, date]
+    catalog: ParquetDataCatalog, home: Path, data_cls: type, span: tuple[date, date]
 ) -> None:
-    """Remove the files holding a dataset's span.
+    """Remove the files in `home`, a series' directory, that hold a dataset's span.
 
-    The engine addresses its files by availability interval and keeps those intervals
-    disjoint, so one file belongs to one dataset; the files removed are the ones whose
-    interval meets the dataset's served span.
+    The engine names each file by the availability interval it holds and keeps a series'
+    intervals disjoint, so one file belongs to one dataset: the files removed, whole, are
+    the ones whose interval meets the dataset's served span, as `filter_files` reads it off
+    their names, inclusive at both ends.
     """
     start, end = window_ns(span)
-    intervals = [
-        interval
-        for interval in catalog.get_intervals(data_cls, identifier)
-        if interval[0] <= end and start <= interval[1]
-    ]
-
-    for interval in intervals:
-        catalog.delete_data_range(data_cls, identifier, interval[0], interval[1])
+    held = sorted(str(path) for path in home.glob("*.parquet"))
+    for name in catalog.filter_files(data_cls, held, None, start, end):
+        Path(name).unlink()
 
 
 def _filed_in(root: Path, data_cls: type, identifier: str | None) -> Path:
