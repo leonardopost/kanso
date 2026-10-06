@@ -74,6 +74,7 @@ from kanso.data.manifest import (
     manifests,
     merge,
     overlaps,
+    read_manifest,
     series_subject,
     settled,
 )
@@ -868,7 +869,7 @@ def sync(
             if fetched.outcome == "written" and fetched.dataset_id is not None:
                 # Each successor supersedes the one before it, so a multi-chunk sync is a
                 # chain of datasets rather than one dataset rewritten several times.
-                latest = manifests(ws)[fetched.dataset_id]
+                latest = read_manifest(ws, fetched.dataset_id)
                 served_to = max(served_to, latest.end)
         fetches += mine
         if all(item.outcome == "empty" for item in mine):
