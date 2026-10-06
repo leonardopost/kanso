@@ -459,3 +459,38 @@ def test_depth_refuses_a_quote_series_beside_its_own_level_one() -> None:
 def test_depth_survives_the_round_trip(hyp: Hypothesis) -> None:
     again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
     assert again.depth == hyp.depth
+
+
+MIXED: dict[str, Any] = {
+    "universe": ["ETH-USD.COINBASE", "BMNR.XNYS"],
+    "resolution": "trade",
+    "data_requirements": ["trade", "quote"],
+}
+
+
+def test_an_instrument_may_be_asked_for_a_subset_of_the_types() -> None:
+    """A crypto exchange's prints beside an equity's quotes: one universe, two sources."""
+    hyp = build(**MIXED, data_by_instrument={"ETH-USD.COINBASE": ["trade"]})
+
+    assert hyp.required_of("ETH-USD.COINBASE") == ("trade",)
+    assert hyp.required_of("BMNR.XNYS") == ("trade", "quote")
+
+
+@pytest.mark.parametrize(
+    ("by_instrument", "message"),
+    [
+        ({"SOL-USD.COINBASE": ["trade"]}, "is not in the universe"),
+        ({"ETH-USD.COINBASE": []}, "names no type"),
+        ({"ETH-USD.COINBASE": ["trade", "trade"]}, "repeats a type"),
+        ({"ETH-USD.COINBASE": ["bar"]}, "is not in data_requirements"),
+        (
+            {"ETH-USD.COINBASE": ["trade"], "BMNR.XNYS": ["trade"]},
+            "no instrument is asked for quote",
+        ),
+    ],
+)
+def test_a_list_that_adds_or_leaves_a_type_is_refused(
+    by_instrument: dict[str, list[str]], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        build(**MIXED, data_by_instrument=by_instrument)

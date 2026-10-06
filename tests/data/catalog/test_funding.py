@@ -23,7 +23,7 @@ from kanso.data.types import Funding
 from kanso.errors import ValidationError
 from kanso.schemas import InstrumentEntry
 from kanso.schemas.hypothesis import Windows
-from tests.data.catalog.conftest import FakeWorkspace, Ref, bars
+from tests.data.catalog.conftest import FakeWorkspace, Ref, bars, quotes
 
 PERP = "BTCUSDT-PERP.SIM"
 SPOT = "BTCUSDT.SIM"
@@ -181,3 +181,23 @@ def test_a_spot_leg_is_still_asked_for_every_other_type(ws: FakeWorkspace) -> No
     snap.freeze(ws)
 
     assert snap.covering(ws, [SPOT, PERP], ["bar", "funding"], "1d", WINDOWS) is None
+
+
+def test_an_instrument_listed_by_type_is_asked_for_its_own_list_alone(ws: FakeWorkspace) -> None:
+    """A universe whose second leg has quotes and whose first has none: covered once the first
+    is listed for bars alone, and not before."""
+    cat.open_catalog(ws).write_data([spot(), perpetual()])
+    load_bars(ws, SPOT, PERP)
+    cat.write(
+        ws,
+        quotes(JAN1, DAYS, instrument=PERP),
+        ref=Ref(instrument=PERP, type="quote", resolution=None, span=span()),
+        source="synthetic",
+    )
+    taken = snap.freeze(ws)
+
+    assert snap.covering(ws, [SPOT, PERP], ["bar", "quote"], "1d", WINDOWS) is None
+    found = snap.covering(
+        ws, [SPOT, PERP], ["bar", "quote"], "1d", WINDOWS, by_instrument={SPOT: ["bar"]}
+    )
+    assert found is not None and found.snapshot_id == taken.snapshot_id

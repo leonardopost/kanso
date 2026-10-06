@@ -262,6 +262,11 @@ def test_the_draft_s_grain_and_mechanism_follow_from_the_cell(
         mechanism,
     )
     assert found.horizon == "1s"
+    # The leg read as prints is asked for prints alone: its source may serve no quotes.
+    mixed = legs["a"] != legs["b"]
+    assert found.data_by_instrument == (
+        {INSTRUMENT: [legs["a"]], "OTHR.SIM": [legs["b"]]} if mixed else {}
+    )
 
 
 def test_two_bar_grains_are_not_one_hypothesis(loaded: Path) -> None:

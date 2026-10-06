@@ -504,6 +504,25 @@ are unchanged: the upper bound of every window is what it was, and only the data
 before it widens. An attached construct declares the same `warmup` as its host, or
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
+**`data_by_instrument` narrows what one instrument must carry.** A universe that mixes
+sources can hold a type for some instruments and not others: a crypto exchange's prints beside
+the quotes of the US equities that follow it, where the exchange serves no historical quotes.
+`data_requirements` lists every type the hypothesis reads, and `data_by_instrument` gives a
+listed instrument its own subset:
+
+```yaml
+data_requirements: [quote, trade]
+data_by_instrument:                # optional; an instrument not listed is asked for every type
+  ETH-USD.COINBASE: [trade]        # the signal: the exchange's prints alone
+```
+
+A run's snapshot must cover each instrument for its own list only, the runner reads it nothing
+else, and the strategy is subscribed to nothing else, so backtest, replay and a stage node see
+the same data. Each list is a non-empty subset of `data_requirements`; an instrument outside
+the universe, a type outside the list, or a type in `data_requirements` no instrument is then
+asked for is refused at `hyp validate` (exit 3). `funding` is still asked of a perpetual alone.
+`kanso screen draft` writes it whenever the cell's two legs read different types.
+
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
 fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
 at a time, the card holds a session of them beside what it has folded, and a session over

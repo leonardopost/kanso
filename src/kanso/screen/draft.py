@@ -196,8 +196,15 @@ def _hypothesis(
         )
     types: list[str] = sorted({str(leg.type) for leg in legs})
     resolution = next(iter(grains)) if grains else ("trade" if "trade" in types else "quote")
+    own: dict[str, list[str]] = {}
+    for leg in legs:
+        own.setdefault(leg.instrument, [])
+        if leg.type not in own[leg.instrument]:
+            own[leg.instrument].append(str(leg.type))
     if _perpetual(ws, universe):
         types.append("funding")
+        own = {name: [*kinds, "funding"] for name, kinds in own.items()}
+    mixed = any(len(kinds) < len(types) for kinds in own.values())
     if measure.side == "against":
         mechanism = "mean_reversion"
     else:
@@ -214,6 +221,11 @@ def _hypothesis(
         "horizon": horizon,
         "resolution": resolution,
         "data_requirements": types,
+        **(
+            {"data_by_instrument": {name: sorted(kinds) for name, kinds in own.items()}}
+            if mixed
+            else {}
+        ),
         "risk_limits": template["risk_limits"],
         "windows": {
             "research": {"start": result.window.start, "end": result.window.end},
