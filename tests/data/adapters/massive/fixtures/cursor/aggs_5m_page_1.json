@@ -1,0 +1,42 @@
+{
+ "ticker": "SPY",
+ "queryCount": 5000,
+ "resultsCount": 1197,
+ "adjusted": false,
+ "results": [
+  {
+   "v": 5733,
+   "vw": 588.8439,
+   "o": 588.22,
+   "c": 589,
+   "h": 589.25,
+   "l": 588.12,
+   "t": 1735808400000,
+   "n": 172
+  },
+  {
+   "v": 3947,
+   "vw": 589.233,
+   "o": 589,
+   "c": 589.47,
+   "h": 589.47,
+   "l": 589,
+   "t": 1735808700000,
+   "n": 97
+  },
+  {
+   "v": 1459,
+   "vw": 589.6971,
+   "o": 589.72,
+   "c": 589.65,
+   "h": 589.8,
+   "l": 589.65,
+   "t": 1735809000000,
+   "n": 46
+  }
+ ],
+ "status": "OK",
+ "request_id": "86a44b2b2217b99570fa6b1a308ae13e",
+ "count": 1197,
+ "next_url": "https://api.massive.com/v2/aggs/ticker/SPY/range/5/minute/1736778000000/2026-10-06?cursor=YWRqdXN0ZWQ9ZmFsc2UmbGltaXQ9NTAwMCZzb3J0PWFzYw"
+}

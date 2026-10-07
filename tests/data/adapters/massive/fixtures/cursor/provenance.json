@@ -1,0 +1,28 @@
+{
+  "source": "Massive REST API (api.massive.com), the operator's Stocks Advanced plan",
+  "authentication": "the key in an `Authorization: Bearer` header; no key is in any url or body here",
+  "recorded_with": "kanso's own transport (the engine's HttpClient, nautilus_trader 1.231.0), from the operator's machine",
+  "files": {
+    "trades_page_1.json": {
+      "url": "https://api.massive.com/v3/trades/XLE?timestamp.gte=2026-10-06&timestamp.lte=2026-10-06&order=asc&limit=3",
+      "status": 200,
+      "recorded_at": "2026-10-07T23:10:19Z",
+      "body": "verbatim"
+    },
+    "trades_page_2.json": {
+      "url": "https://api.massive.com/v3/trades/XLE?cursor=YXA9MzYxMiZhcz0mbGltaXQ9MyZvcmRlcj1hc2Mmc29ydD10aW1lc3RhbXAmdGltZXN0YW1wLmd0ZT0yMDI2LTEwLTA2VDA4JTNBMDAlM0EwMi42NDAyODc5NDdaJnRpbWVzdGFtcC5sdGU9MjAyNi0xMC0wNg",
+      "status": 200,
+      "recorded_at": "2026-10-07T23:10:20Z",
+      "body": "verbatim",
+      "note": "page 1's next_url, sent exactly as served, with no parameter added",
+      "limit_resent": "the same next_url with limit=3 added was answered HTTP 200 with the identical three rows"
+    },
+    "aggs_5m_page_1.json": {
+      "url": "https://api.massive.com/v2/aggs/ticker/SPY/range/5/minute/2025-01-01/2026-10-06?adjusted=false&sort=asc",
+      "status": 200,
+      "recorded_at": "2026-10-07T23:10:21Z",
+      "body": "trimmed: the first 3 of the 1197 rows the page carried, in the order served; every other field, `next_url` included, as served",
+      "note": "a multiplier above one, asked with no limit as kanso asks it"
+    }
+  }
+}
