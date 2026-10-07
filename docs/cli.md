@@ -98,7 +98,7 @@ book are one book — one experiment as well when their numbers agree to within 
 hypothesis's own noise floor, which is the rest of the rule and is not configured here;
 `local_cards` and `structural_cards` are the lengths of the two
 phases; `reseed_after_stalls` is the spell of stalls on one best after which the next run
-starts elsewhere; `explore_after_stalls` (0, never, in the template) is the spell of stalls
+starts elsewhere; `explore_after_stalls` (5 in the template; 0 is never) is the spell of stalls
 on one best, since the last exploration, after which a daemon lane runs `hyp explore` on the
 stalled hypothesis once the driver has returned — a failure there is an `explored_failed`
 event and never the lane's. All are `[research]` keys of `kanso.toml`, and all are framework

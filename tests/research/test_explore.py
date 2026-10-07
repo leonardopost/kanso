@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 import yaml
 
+from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
 from kanso.hyp import show
 from kanso.inbox import unread
@@ -612,7 +613,8 @@ def test_a_lane_explores_only_when_the_knob_and_the_spell_say_so(
 ) -> None:
     explorer(ws, [answer()])
     stall(store, "a" * 64)
-    assert explore.after_stall(ws, store, researched, "l1") is None  # the template says never
+    never = tuned(ws, explore_after_stalls=0)
+    assert explore.after_stall(never, store, researched, "l1") is None  # zero is never
 
     workspace = tuned(ws, explore_after_stalls=1)
     written = explore.after_stall(workspace, store, researched, "l1")
@@ -621,6 +623,42 @@ def test_a_lane_explores_only_when_the_knob_and_the_spell_say_so(
     [event] = [event for event in store.events(subject=researched) if event.kind == "explored"]
     assert event.detail["lane"] == "l1"
     assert explore.after_stall(workspace, store, researched, "l1") is None  # the spell is spent
+
+
+def test_a_workspace_as_init_wrote_it_explores_at_the_fifth_stall_on_one_best(
+    ws: Workspace, store: StateStore, researched: str
+) -> None:
+    """The shipped default: a lane left to the template asks for another hill once five
+    stalls have ended on the same best since the last exploration, and not before."""
+    assert ws.config.research.explore_after_stalls == ResearchConfig().explore_after_stalls == 5
+    explorer(ws, [answer()])
+    for _ in range(4):
+        stall(store, "a" * 64)
+        assert explore.after_stall(ws, store, researched, "l1") is None
+
+    stall(store, "a" * 64)
+    written = explore.after_stall(ws, store, researched, "l1")
+
+    assert written is not None and written.hyp_id == CANDIDATE_ID
+
+
+def test_a_workspace_with_no_model_pays_an_event_per_spell_for_the_default(
+    ws: Workspace, store: StateStore, researched: str, recorded: Recorder
+) -> None:
+    """With no register the default costs a modelless workspace no call: one
+    `explored_failed` event at the fifth stall, then a fresh spell of five."""
+    ws.path("models.yaml").unlink()
+    calls = len(recorded.calls)
+    for _ in range(5):
+        stall(store, "a" * 64)
+        assert explore.after_stall(ws, store, researched, "l1") is None
+
+    assert len(recorded.calls) == calls
+    kinds = [e.kind for e in store.events(subject=researched)]
+    assert kinds.count(explore.EXPLORED_FAILED) == 1
+    assert explore.EXPLORED not in kinds
+    assert explore.due(store, researched, ws.config.research.explore_after_stalls) is False
+    assert not ws.path("hypotheses", CANDIDATE_ID).exists()
 
 
 def test_a_lane_s_exploration_that_fails_is_an_event_and_not_a_failure(

@@ -42,8 +42,8 @@ second exploration that writes the same bytes is refused as already stored. What
 is an `explored` event under the parent and an `explored` escalation under the new id,
 offering `hyp validate` and `hyp add`.
 
-**The trigger is the operator's, or a count the operator set.** `kanso hyp explore ID`
-runs it by hand. `[research] explore_after_stalls` — zero, never, in the template — runs
+**The trigger is the operator's, or a count in `kanso.toml`.** `kanso hyp explore ID`
+runs it by hand. `[research] explore_after_stalls` — five in the template, zero never — runs
 it in a daemon lane after a run that stalled, once the parent's newest stalls, counted
 since its last exploration, all ended on the same best and number at least that many.
 Either trigger's attempt, failed or not, starts the count over — a candidate written is an

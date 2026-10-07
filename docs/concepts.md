@@ -609,7 +609,7 @@ drift rewind in one run leaves what another run earned standing.
 
 A re-seed moves the climb to another foot of the same hill; **exploring** asks for another
 hill. `kanso hyp explore ID` — or a daemon lane, once `[research] explore_after_stalls`
-stalls on one best have passed since the last exploration (zero, never, is the template) —
+stalls on one best have passed since the last exploration (5 in the template; 0 is never) —
 calls the `explore` task class with what the hypothesis's research learned: its pinned
 `hypothesis.yaml` and `program.md`, its best `strategy.py`, the coverage of its cards by
 tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of

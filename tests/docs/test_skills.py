@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import get_args
 
-from kanso.config import EnvConfig
+from kanso.config import EnvConfig, ResearchConfig
 from kanso.schemas import CardStatus
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +88,13 @@ def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
         assert f"`{status}`" in text or f"**{status}**" in text, status
     assert "no card, no trial" not in text
     assert "so it is a trial, a `results.tsv` row and a coverage entry like any other" in text
+
+
+def test_the_research_skill_states_the_exploration_default_the_package_ships() -> None:
+    """The agent that reads this skill is the one an `explored` draft lands in front of."""
+    default = ResearchConfig().explore_after_stalls
+    text = skill(PACKAGED, "kanso-research")
+    assert f"`[research] explore_after_stalls` ({default} by default; 0 is never)" in text
 
 
 def test_the_data_skill_says_what_a_gap_and_an_answer_mean() -> None:
