@@ -9,6 +9,7 @@ page that drifts is a defect and this is where it fails.
 from __future__ import annotations
 
 import importlib
+import pkgutil
 import re
 import sys
 from pathlib import Path
@@ -120,6 +121,33 @@ def test_the_cli_page_says_the_transport_is_the_loader_the_spec_names() -> None:
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso data backfill")
     )
     assert "never for you" in row
+
+
+def chunked_loaders() -> set[str]:
+    """Every packaged loader that declares `chunk_days`, read off the classes that ship."""
+    found: set[str] = set()
+    for root in ("kanso.data.loaders", "kanso.data.adapters", "kanso.nautilus.adapters"):
+        package = importlib.import_module(root)
+        for info in pkgutil.walk_packages(package.__path__, f"{root}."):
+            for value in vars(importlib.import_module(info.name)).values():
+                loader_id = getattr(value, "id", None)
+                days = getattr(value, "chunk_days", None)
+                if isinstance(value, type) and isinstance(loader_id, str) and isinstance(days, int):
+                    found.add(loader_id)
+    return found
+
+
+def test_the_data_load_row_names_every_loader_that_declares_chunk_days() -> None:
+    """A loader that declares `chunk_days` is written a dataset per chunk, a batch at a time;
+    the row named the two OKX loaders and not the two Massive ones that declare a day too,
+    so an operator loading Massive ticks read that the span would be gathered whole."""
+    row = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso data load")
+    )
+    chunked = chunked_loaders()
+    assert {"massive_quotes", "massive_trades", "okx_book", "okx_trades"} <= chunked
+    for loader_id in sorted(chunked):
+        assert f"`{loader_id}`" in row, loader_id
 
 
 def scope_names() -> list[str]:
