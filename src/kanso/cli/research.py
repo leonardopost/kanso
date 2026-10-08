@@ -30,6 +30,7 @@ which one was meant is how the wrong subject gets certified.
 from __future__ import annotations
 
 import difflib
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 import typer
@@ -282,21 +283,52 @@ def _start(ws: Workspace) -> Report:
 
 
 def _stop(ws: Workspace) -> Report:
-    pid = daemon.stop(ws)
-    data: dict[str, Any] = {"running": False, "pid": pid}
-    lines = (
-        field("daemon", f"stopped · pid {pid}"),
-        # Nothing is ended and nothing is removed, so the next `start` resumes.
-        field("runs", "left open, with their lane directories"),
-    )
-    return Report(data=data, lines=lines)
+    stopped = daemon.stop(ws)
+    data: dict[str, Any] = stopped.payload()
+    lines = [field("daemon", "stopped" if stopped.pid is None else f"stopped · pid {stopped.pid}")]
+    if stopped.orphans:
+        orphans = ", ".join(child.label for child in stopped.orphans)
+        lines.append(
+            field("orphans", f"{orphans} · ended, still running after the daemon was gone")
+        )
+    if stopped.ending:
+        lines.append(
+            field(
+                "ending",
+                f"{_started_by(stopped.ending)} · still running; it ends itself, "
+                "and `kanso research status` names it until it has",
+            )
+        )
+    # No run is ended and nothing is removed, so the next `start` resumes.
+    lines.append(field("runs", "left open, with their lane directories"))
+    return Report(data=data, lines=tuple(lines))
+
+
+def stopped_line(children: Sequence[daemon.ChildPid], ending: Sequence[daemon.ChildPid]) -> str:
+    """A daemon that is not running: never a bare `stopped` beside a child of it still alive,
+    or beside a card one of them started that has yet to end itself."""
+    named = [child.label for child in children]
+    if ending:
+        named.append(_started_by(ending))
+    if not named:
+        return "stopped"
+    return "stopped · still running: " + ", ".join(named)
+
+
+def _started_by(ending: Sequence[daemon.ChildPid]) -> str:
+    """`what lane l1 (pid 4242) started`: a card, certification or demotion of a child gone."""
+    return ", ".join(f"what {child.label} started" for child in ending)
 
 
 def _status(ws: Workspace) -> Report:
     with store(ws) as opened:
         found = daemon.status(ws, opened)
     data: dict[str, Any] = found.payload()
-    running = f"running · pid {found.pid}" if found.running else "stopped"
+    running = (
+        f"running · pid {found.pid}"
+        if found.running
+        else stopped_line(found.children, found.ending)
+    )
     deaths = sum(item.deaths for item in found.restarts)
     lines = [
         field("daemon", running),

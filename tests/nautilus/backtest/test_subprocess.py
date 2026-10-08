@@ -456,6 +456,70 @@ def test_a_card_ends_itself_once_its_parent_is_gone(monkeypatch: pytest.MonkeyPa
     assert ended == [runner.ORPHANED]
 
 
+WAITS_FOR_GO = (
+    "import os, sys, time\n"
+    "print('up', flush=True)\n"
+    "while not os.path.exists(sys.argv[1]):\n"
+    "    time.sleep(0.01)\n"
+)
+"""A child that says it is up and then waits until it is told to go."""
+
+
+def test_a_lock_handed_down_is_held_until_the_child_holding_it_exits(tmp_path: Path) -> None:
+    """A lane hands its `.work` lock down to every card it starts, so a `stop` can see the
+    card exit (`kanso.research.daemon`): with the lane's own descriptor closed, the card's
+    still holds the lock, and it lets go only as the card exits."""
+    import fcntl
+    import sys
+    import threading
+    import time
+
+    from kanso.nautilus import backtest as runner
+
+    lock, go, said = tmp_path / "l1.4242.work", tmp_path / "go", tmp_path / "said.txt"
+
+    def held() -> bool:
+        with lock.open("rb") as reader:
+            try:
+                fcntl.flock(reader.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError:
+                return True
+        return False
+
+    lane = lock.open("ab")
+    fcntl.flock(lane.fileno(), fcntl.LOCK_EX)
+    ended: list[str | None] = []
+
+    def a_card() -> None:
+        with runner.handed_down(lane.fileno()):
+            breach, _peak, _wall = runner.watched(
+                [sys.executable, "-c", WAITS_FOR_GO, str(go)],
+                cwd=tmp_path,
+                errors=said,
+                env=None,
+                budget_s=60.0,
+                mem_cap_gb=None,
+            )
+        ended.append(breach)
+
+    watcher = threading.Thread(target=a_card)
+    watcher.start()
+    try:
+        deadline = time.monotonic() + 30.0
+        while not (said.is_file() and said.read_text() == "up\n"):
+            assert time.monotonic() < deadline, "the card never came up"
+            time.sleep(0.01)
+        lane.close()  # the lane is gone; only the card holds the descriptor now
+        assert held(), "the card did not inherit the lock"
+    finally:
+        lane.close()
+        go.touch()
+        watcher.join(timeout=30.0)
+    assert ended == [None]
+    assert not held(), "the lock outlived the card"
+    assert runner._HANDED == [], "nothing is handed down outside the block"
+
+
 def test_a_card_whose_lane_is_killed_does_not_outlive_it(
     store: Path, lane: Path, request_for, tmp_path: Path
 ) -> None:
