@@ -891,8 +891,8 @@ loader's own code over the same two archives, and the BTC count was not taken ag
 | `AEON-USDT-SWAP` 2026-09-01 | 3 | 209,367 | 12.6 + 10.2 MiB | 50 s | 17 s | 0.34 GB |
 | `BTC-USDT-SWAP` 2026-06-22 | 10 | 10,803,349 | 273 + 423 MiB | 20 min | 8.4 min | 0.43 GB |
 
-A day is one dataset (`chunk_days: 1`) written to the catalog 250,000 changes at a time, so
-the peak follows the batch and a 64 MiB piece of the archive, not the day: written whole,
+A day is one dataset (`chunk_days: 1`) written to the catalog a batch at a time, each closed
+at the first new instant once it holds 250,000 changes, so the peak follows the batch and a 64 MiB piece of the archive, not the day: written whole,
 the 10.8 million changes of that `BTC-USDT-SWAP` day would have held near 8 GB, at the 204
 bytes a change and 561-byte transient the engine's write was measured holding. A liquid
 day is slow to load: of that day's 1,202 seconds, 507 were CPU — reading every message of

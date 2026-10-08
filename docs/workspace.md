@@ -521,9 +521,13 @@ data_by_instrument:                # optional, and scope: adding or changing it 
   ETH-USD.COINBASE: [trade]        # the signal: the exchange's prints alone
 ```
 
-A run's snapshot must cover each instrument for its own list only, the runner reads it nothing
-else, and the strategy is subscribed to nothing else, so backtest, replay and a stage node see
-the same data. Each list is a non-empty subset of `data_requirements`; an instrument outside
+A run's snapshot must cover each instrument for its own list only. Of the market data — bars,
+quotes, prints and a book — the runner reads a listed instrument nothing else and the strategy
+is subscribed to nothing else, so backtest, replay and a stage node see the same data. A custom
+type is narrowed by coverage alone: the runner reads its points for every name of the universe
+the catalog holds them under, and a strategy subscribes to the type rather than to an
+instrument, so leaving a custom type off one instrument's list relaxes what the snapshot must
+hold for it, not what the strategy is handed. Each list is a non-empty subset of `data_requirements`; an instrument outside
 the universe, a type outside the list, or a type in `data_requirements` no instrument is then
 asked for is refused at `hyp validate` (exit 3). `funding` is still asked of a perpetual alone.
 `kanso screen draft` writes it whenever the cell's two legs read different types. An
@@ -574,7 +578,10 @@ added it, before either was scope, so a row pinned before they joined holds neit
 pins. Its re-pin compares against what the file it pinned states, read back from the state
 store, exactly as `costs` is; only when the store no longer holds those bytes, or this kanso
 cannot read them as a hypothesis, does a missing key read as unchanged. A hypothesis whose
-file still scopes the same way keeps its best across the upgrade.
+file still scopes the same way keeps its best across the upgrade — and so does one whose
+`session_scope` moved under 0.12.0 to 0.13.x, when no re-pin cleared on it, though its best
+was measured under the scope before. End its run if one is active, and `kanso research begin
+ID --from-workspace` starts it over under the file as it is.
 
 **`benchmark` is yours, and it is scope.** A strategy trading one instrument can show a
 healthy Sharpe by holding that instrument through a rising market. Declaring a benchmark
@@ -968,13 +975,16 @@ comparable to each other; re-pinning underneath it would silently change the que
 cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
-`universe`, the `resolution`, the `data_requirements`, `construct.id`, `sizing`,
-`objective.id`, `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification counts, since a draft
-has no construct and the best was earned as one — and the event log records `best_cleared`
-naming the field that moved. `kanso
-classify` re-pins on the same terms, so classifying onto another construct clears it too.
-The cards and their blobs stay in state, and `strategy.py` still holds the best-so-far
-bytes, so the next `research begin` starts from them.
+`universe`, the `resolution`, the `data_requirements`, `data_by_instrument` (an entry that
+narrows an instrument), `session_scope`, `construct.id`, `sizing`, `objective.id`,
+`warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification
+counts, since a draft has no construct and the best was earned as one — and the event log
+records `best_cleared` naming the field that moved. `kanso classify` re-pins on the same
+terms, so classifying onto another construct clears it too. The windows are not scope:
+moving the research window keeps `best`, and later cards are compared with a best measured
+over other days (`docs/backlog.md` row 149). The cards and their blobs stay in state, and
+`strategy.py` still holds the best-so-far bytes, so the next `research begin` starts from
+them.
 
 `program.md` is yours on the same terms: it is copied into the lane and pinned at
 `research begin`.

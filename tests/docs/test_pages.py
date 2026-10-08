@@ -164,6 +164,16 @@ def test_the_hyp_add_row_names_every_field_a_re_pin_clears_the_best_on() -> None
         assert name in row, name
 
 
+def test_the_workspace_page_names_every_field_a_re_pin_clears_the_best_on() -> None:
+    """The re-pin paragraph of the `hypotheses/<id>/` section is the page's own list; it
+    stopped at `depth` while `data_by_instrument` and `session_scope` cleared the best too."""
+    text = prose(page("workspace.md"))
+    start = text.index("A re-pin keeps `best` while the file still asks the same question.")
+    listed = text[start : text.index(" clears it ", start)]
+    for name in scope_names():
+        assert name in listed, name
+
+
 def test_the_cli_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:
     text = prose(page("cli.md"))
     assert "a stage's `speed` paces nothing yet" in text
