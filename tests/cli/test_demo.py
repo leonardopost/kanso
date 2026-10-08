@@ -23,8 +23,9 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from kanso.config import ResearchConfig
 from kanso.errors import Exit
-from kanso.research import records
+from kanso.research import loop, records
 from kanso.schemas import Card
 from kanso.state import StateStore
 
@@ -33,6 +34,17 @@ from .conftest import at, payload, run
 DEMO_ID = "demo_mr"
 CARDS = 3
 """What the demo's scripted register has to say before it wraps around."""
+
+CARD_FLOOR_S = float(ResearchConfig().baseline_budget_s)
+"""The card budget's floor while the demo researches: what the shipped baseline is allowed.
+
+The budget is `max(MIN_CARD_BUDGET_S, HEADROOM × baseline wall)` (`research/loop.py`), and
+which term is larger, and whether a card fits under it, depends on how fast the host runs.
+This test asserts the demo's flow, not its budgets (`tests/research/test_loop.py` holds
+those), so it lifts the floor to 1,800 s, some forty times the slowest demo card measured
+(42.9 s on an M2's efficiency cores): a slow runner cannot turn the scripted discard into a
+budget crash, and a card that hangs still ends.
+"""
 
 
 @pytest.fixture(scope="module")
@@ -89,8 +101,11 @@ def document(root: Path) -> dict[str, Any]:
 
 
 def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
-    runner: CliRunner, demo: Path
+    runner: CliRunner, demo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # `research run` begins the run in this process and strikes its card budget there, so this
+    # floor is the one every card of the run is watched against (`CARD_FLOOR_S`).
+    monkeypatch.setattr(loop, "MIN_CARD_BUDGET_S", CARD_FLOOR_S)
     assert at(runner, demo, "doctor", "--json").exit_code == Exit.OK
     before = calls(runner, demo)
 
@@ -120,6 +135,10 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
     assert driven.exit_code == Exit.OK, driven.stdout
     outcome = payload(driven)
     carded, log = ledger(demo)
+    with StateStore(demo / "state.db") as store:
+        opened = records.active(store, DEMO_ID)
+    # The lifted floor reached the run, so no host's speed decides which card is a crash.
+    assert opened is not None and opened.card_budget_s >= CARD_FLOOR_S, log
     assert outcome["proposed"] == CARDS, log
     # The demo's three scripted answers, in the order its own file documents.
     assert (outcome["keeps"], outcome["discards"], outcome["crashes"]) == (1, 1, 1), log
@@ -132,13 +151,14 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
     ], log
     # The crash is the one the script plants, not a card the host was too slow to finish.
     assert "rolling_sigma" in (carded[-1].crash_tail or ""), log
-    # A card's time budget is three times what the baseline took and never under 60 s. The demo's
-    # baseline is the stub, which trades nothing, and past it a card's wall grows with its fills,
-    # so a discard trading far more than the keep fits only under the floor and is killed on a
-    # host slow enough for the floor to stop binding (`docs/backlog.md` row 138: 2,445 trades to
-    # the keep's 1,003 took four times the baseline). Holding the discard to a fifth more than the
-    # keep's fills keeps its cost near the keep's; it narrows the margin, it guarantees none. The
-    # trade count is the proxy because it is deterministic and a wall time is not.
+    # The floor is lifted here, but an operator runs the demo under the shipped one: three times
+    # the baseline and never under 60 s. The demo's baseline is the stub, which trades nothing,
+    # and past it a card's wall grows with its fills, so a discard trading far more than the keep
+    # fits only under the floor and is killed on a host slow enough for the floor to stop binding
+    # (`docs/backlog.md` row 138: 2,445 trades to the keep's 1,003 took four times the baseline).
+    # Holding the script's discard to a fifth more than the keep's fills keeps its cost near the
+    # keep's on the operator's host; it narrows that margin, it guarantees none. The trade count
+    # is the proxy because it is deterministic and a wall time is not.
     _, kept, discarded, _ = carded
     assert discarded.n_trades <= 1.2 * kept.n_trades, log
     assert outcome["best_sha"] is not None
