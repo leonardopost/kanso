@@ -120,6 +120,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run a command outside any workspace | 2 · `not inside a kanso workspace` |
 | `kanso init` over an existing `kanso.toml` | 2 · a workspace is scaffolded once |
 | leave a typo in `kanso.toml` | 3 · `unknown key '<section>.<key>'`, from every command |
+| write a ticker that is a YAML boolean — `ON`, `OFF`, `YES`, `NO`, `TRUE`, `FALSE` — bare in a loader spec | 3 · naming the field and the ticker's place in it; quote it, `"ON"` (`catalog/`) |
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
@@ -1409,6 +1410,24 @@ that extends the end and a `backfill` that reaches further back both mint fresh 
 the dataset they follow in `supersedes`. The manifest records the span that was **served**,
 never the span that was asked for, because a source may answer a five-year request with two
 years, HTTP 200 and no warning.
+
+**A ticker that is a YAML boolean is quoted.** A spec is YAML, and PyYAML reads a bare `ON`,
+`OFF`, `YES`, `NO`, `TRUE` or `FALSE` — in lower, title or upper case — as a boolean, so
+`instruments: [DEMO, ON]` names `true` where ON Semiconductor was meant. Write
+`instruments: [DEMO, "ON"]`. Left bare, the spec is refused (exit 3), naming the field and the
+ticker's place in it:
+
+```
+$ kanso data backfill --loader synthetic --spec on.yaml
+error: instruments.1: true is a YAML boolean, not a string; YAML reads a bare ON, OFF, YES, NO, TRUE or FALSE as one
+remedy: quote the value in the YAML, e.g. "ON" rather than ON
+```
+
+`Y` and `N` are read as strings and need no quotes. Every YAML file kanso reads refuses a
+boolean the same way wherever a string belongs — a symbol under `sources` in
+`instruments.yaml`, a Massive spec's `tickers` override. A free-form map — a strategy's
+`config`, a gate's `params` — takes a boolean as a value like any other, so quote a word there
+that you mean as text.
 
 The synthetic loader, as `demo.yaml` drives it, generates the weekday sessions of a US equity
 venue, 09:30 to 16:00 in `America/New_York`; a spec that sets `calendar: continuous`
