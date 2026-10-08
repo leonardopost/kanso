@@ -319,8 +319,12 @@ def _check_scope(
 
     Certification reads the run's pinned hypothesis and composition the registry's; the
     two differ only between runs, when `hyp add` re-pinned the file. The fields compared are
-    exactly the ones a re-pin clears `best` on, so nothing the daemon composes is refused
-    here and a hand-run `strat compose` of an older certificate under a moved file is.
+    exactly the ones a re-pin clears `best` on, so a best the daemon certifies was earned
+    under the scope it composes in, and a hand-run `strat compose` of an older certificate
+    under a moved file is refused. The one exception is a best kept across a change made
+    before its field joined the scope — a `session_scope` moved under 0.12.0 to 0.13.x —
+    whose certificate, when it is pinned to the run before the change, is refused here too;
+    on the daemon's path that is a `deploy_blocked` escalation.
     """
     certified = parse_yaml(
         Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), HYPOTHESIS_FILE

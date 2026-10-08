@@ -623,6 +623,23 @@ def test_a_batched_write_cuts_between_instants_and_reads_back_as_one_dataset(
     assert all(a[1] < b[0] for a, b in zip(intervals, intervals[1:], strict=False))
 
 
+@pytest.mark.parametrize(
+    ("per_instant", "size", "sizes"),
+    [(3, 4, [6, 6, 3]), (3, 3, [3, 3, 3, 3, 3]), (7, 4, [7, 7, 7, 7, 7])],
+    ids=["past-the-size", "at-the-size", "an-instant-over-the-size"],
+)
+def test_a_batch_closes_at_the_first_new_instant_once_it_holds_its_size(
+    per_instant: int, size: int, sizes: list[int]
+) -> None:
+    """Five instants of prints: a batch is closed only once it holds `size` points and the
+    next point opens a new instant, so every batch but the last holds at least `size` and
+    runs past it for as long as its last instant does — never at most `size`."""
+    batches = list(cat._cut(iter(prints(per_instant=per_instant)), size))
+
+    assert [len(batch) for batch in batches] == sizes
+    assert sum(batches, []) == prints(per_instant=per_instant)
+
+
 def test_a_refusal_in_a_later_batch_leaves_no_file_and_no_manifest(ws: FakeWorkspace) -> None:
     late = prints(count=2) + prints(date(2024, 1, 3), count=1, lag_ns=-1)
     with pytest.raises(ValidationError, match="cannot precede"):

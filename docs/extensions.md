@@ -315,10 +315,11 @@ A source whose single day is more than a write should hold — a liquid instrume
 or book changes, millions a day — declares `chunk_days: ClassVar[int] = 1` beside `id`. Then
 `kanso data load`, `data backfill` and `data sync` write every chunk of that many days as a
 dataset of its own, with its own manifest, and hand the catalog the points as `load`
-streams them, at most 250,000 to a write and never splitting an instant, so memory follows
-the batch and not the day. Such a loader's `load` must yield in `ts_init` order, since
-nothing is held back to sort: a point that goes back is refused (exit 3). A loader that
-declares nothing is written as before, one dataset for what a spec names, gathered whole.
+streams them, a batch to a write, each closed at the first new instant once it holds 250,000
+points, so no instant is split and memory follows the batch and not the day. Such a
+loader's `load` must yield in `ts_init` order, since nothing is held back to sort: a point
+that goes back is refused (exit 3). A loader that declares nothing is written as before,
+one dataset for what a spec names, gathered whole.
 
 ### A custom data type
 

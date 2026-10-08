@@ -9,6 +9,7 @@ page that drifts is a defect and this is where it fails.
 from __future__ import annotations
 
 import importlib
+import pkgutil
 import re
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ import yaml
 from kanso.classify import catalogue
 from kanso.config import Config, ResearchConfig, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
+from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.research import driver
@@ -119,6 +121,57 @@ def test_the_cli_page_says_the_transport_is_the_loader_the_spec_names() -> None:
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso data backfill")
     )
     assert "never for you" in row
+
+
+def chunked_loaders() -> set[str]:
+    """Every packaged loader that declares `chunk_days`, read off the classes that ship."""
+    found: set[str] = set()
+    for root in ("kanso.data.loaders", "kanso.data.adapters", "kanso.nautilus.adapters"):
+        package = importlib.import_module(root)
+        for info in pkgutil.walk_packages(package.__path__, f"{root}."):
+            for value in vars(importlib.import_module(info.name)).values():
+                loader_id = getattr(value, "id", None)
+                days = getattr(value, "chunk_days", None)
+                if isinstance(value, type) and isinstance(loader_id, str) and isinstance(days, int):
+                    found.add(loader_id)
+    return found
+
+
+def test_the_data_load_row_names_every_loader_that_declares_chunk_days() -> None:
+    """A loader that declares `chunk_days` is written a dataset per chunk, a batch at a time;
+    the row named the two OKX loaders and not the two Massive ones that declare a day too,
+    so an operator loading Massive ticks read that the span would be gathered whole."""
+    row = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso data load")
+    )
+    chunked = chunked_loaders()
+    assert {"massive_quotes", "massive_trades", "okx_book", "okx_trades"} <= chunked
+    for loader_id in sorted(chunked):
+        assert f"`{loader_id}`" in row, loader_id
+
+
+def scope_names() -> list[str]:
+    """Every field a re-pin clears `best` on, as the pages spell it."""
+    spelled = {"construct": "construct.id", "objective": "objective.id"}
+    return [f"`{spelled.get(name, name)}`" for name in SCOPE]
+
+
+def test_the_hyp_add_row_names_every_field_a_re_pin_clears_the_best_on() -> None:
+    """The row is where an operator learns which edits cost the best; it left out `depth`,
+    which cleared it, and `session_scope`, which another page said cleared it."""
+    row = next(line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp add"))
+    for name in scope_names():
+        assert name in row, name
+
+
+def test_the_workspace_page_names_every_field_a_re_pin_clears_the_best_on() -> None:
+    """The re-pin paragraph of the `hypotheses/<id>/` section is the page's own list; it
+    stopped at `depth` while `data_by_instrument` and `session_scope` cleared the best too."""
+    text = prose(page("workspace.md"))
+    start = text.index("A re-pin keeps `best` while the file still asks the same question.")
+    listed = text[start : text.index(" clears it ", start)]
+    for name in scope_names():
+        assert name in listed, name
 
 
 def test_the_cli_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:
