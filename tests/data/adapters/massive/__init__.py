@@ -17,15 +17,25 @@ cost a live failure that the suite was green through: a path the source does not
 carrying a `Host` the sender sets for itself (`refuse_host`, which every request through
 `Replay` is now held to). A fixture that shrugs at one of those is a fixture that encodes
 a hope.
+
+`fixtures/cursor/` holds a cursor walk recorded from the live API on 2026-10-07 (UTC) with
+the operator's key, through kanso's own transport: two pages of XLE prints asked three to a
+page, the second fetched from the first's `next_url` exactly as served, and the first page
+of a 5-minute aggregate asked with no limit, trimmed to three rows.
+`fixtures/cursor/provenance.json` gives each one's url, status and instant, and says what
+the same cursor answered with the limit re-sent. `recorded` serves one by its file name.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
@@ -36,6 +46,10 @@ WARNING = (
     "Please upgrade your plan to access it."
 )
 """The vendor's one sentence for four different conditions. No code reads it."""
+
+CURSOR = Path(__file__).parent / "fixtures" / "cursor"
+
+CURSOR_PROVENANCE: dict[str, Any] = json.loads((CURSOR / "provenance.json").read_text("utf-8"))
 
 Answer = Callable[[str, Mapping[str, str]], Response]
 """How a test decides what a request gets back, from its URL and its parameters."""
@@ -165,6 +179,30 @@ def over_limit(ceiling: int) -> Response:
         },
         400,
     )
+
+
+def recorded(name: str) -> Response:
+    """One recorded answer from `fixtures/cursor/`: its body as served, its status as recorded."""
+    return Response(
+        status=int(CURSOR_PROVENANCE["files"][name]["status"]), body=(CURSOR / name).read_bytes()
+    )
+
+
+def next_url_of(name: str) -> str:
+    """The `next_url` a recorded page carries, exactly as the source served it."""
+    found: str = json.loads(recorded(name).body)["next_url"]
+    return found
+
+
+def encoded(url: str) -> dict[str, str]:
+    """The parameters a cursor URL's `cursor` carries inside it.
+
+    The source does not document the cursor's form; it was measured as unpadded URL-safe
+    base64 over a query string, which is all this reads, so a test can show what a cursor
+    continues without a reader of the product ever having to.
+    """
+    cursor = dict(parse_qsl(urlsplit(url).query))["cursor"]
+    return dict(parse_qsl(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()))
 
 
 def bar(day: date, *, close: float = 100.0) -> dict[str, Any]:
