@@ -244,6 +244,15 @@ systemd: `kanso research stop` really stops the service, and a crash brings it b
   and the supervisor entry point checks the same thing before it takes the lock or spawns
   anything — so an un-migrated workspace exits the supervisor with the one sentence that
   explains it, and the restart policy loops on that sentence until you migrate.
+- **Stop the daemon before you upgrade kanso, and start it after.** A running supervisor
+  keeps the code it started with, while a lane or the monitor it starts again — after the
+  OOM killer, a crash — imports the new, and the two need not agree: a new kanso with a
+  migration refuses the store until it is migrated, and from 0.14 a lane and the monitor
+  take their supervisor's pid on the command line, which a supervisor started under an
+  earlier kanso does not give them. Either way each child it started again would exit `1`
+  with a traceback and come back on a wait that doubles to five minutes, until the daemon
+  was restarted. Stop the service, or run `kanso research stop`; upgrade; run
+  `kanso doctor`; then start it.
 - **One daemon per workspace, and the lock is what says so.** A hand-run `kanso research
   start` and a running unit cannot coexist: whichever is second refuses, the CLI with exit 2
   and the bare supervisor with a traceback and exit 1.

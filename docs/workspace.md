@@ -139,6 +139,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
 | `research start` or `state prune` while a lane or the monitor of a daemon that is gone still runs | 2 · naming each; `kanso research stop` ends it |
+| `state prune` while a card, certification or demotion a lane or the monitor of a daemon that is gone started still runs | 2 · naming the lane or monitor that started it; `kanso research stop` waits for it to end |
 | `data load` over a dataset a snapshot names | 2 · **with or without `--replace`** |
 | `data load` over unpinned data | 2 · until you pass `--replace` |
 | `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
@@ -1649,7 +1650,10 @@ killed outright leaves its card to see the lane gone and end itself, which takes
 a second once it is running and longer while it is still starting; the `.work` lock is how
 that is seen rather than guessed. `research status` names a lane that is gone by what it
 started for as long as that still runs, and `research stop` waits on it — returning the
-moment it is let go, or, ten seconds after the last lane went, naming what still holds it.
+moment it is let go, or, ten seconds after the last lane went, naming what still holds it. A
+lane `research stop` kills itself, or with its supervisor's group, it waits for until the
+kernel has let go of that lane's `.lock`, since a lane read as alive has its card's `.work`
+read as its own, and a stop that read it then would return with the card still running.
 Here a lane was killed outright while a child it had started through the card path — one
 that never looks for its lane, so it outlasts the wait — slept on:
 
@@ -1668,6 +1672,19 @@ runs       left open, with their lane directories
 
 (exit 0 both, the stop after 11.45 s). With a child that exited eight seconds after it
 started, the same `stop` returned once it had, after 5.29 s, with no `ending` line.
+
+A certification or a demotion writes the store itself until it sees its parent gone, so
+`kanso state prune` refuses while one holds the `.work` of a lane or monitor that is gone.
+Here the monitor was killed outright inside a demotion that slept on:
+
+```
+$ kanso state prune
+error: still running from a daemon that is gone: what monitor (pid 74578) started
+remedy: run `kanso research stop`, which waits for it to end, then run this again
+```
+
+(exit 2). `research stop` then named it under `ending` after 11.39 s, and once it had exited
+the same prune ran.
 
 A child killed outright leaves its files with nobody holding them, which name nothing; the
 supervisor that buries the child removes them — its `.work` once nothing the child started

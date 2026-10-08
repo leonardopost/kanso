@@ -34,7 +34,7 @@ from kanso.schemas import parse_duration
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.certify.test_run import a_card, write_plan
-from tests.processes import children, ends, holding, running
+from tests.processes import CARDING, card_of, carding, children, ends, holding, running
 
 from .conftest import DOCUMENT, RESEARCH, REVERTING, classify, document
 from .mocked import ALIGNED, SEED, proposal, scripted, write_script
@@ -683,34 +683,52 @@ def test_a_supervisor_goes_within_one_grace_however_many_children_will_not_answe
 
 
 def test_a_daemon_that_will_not_answer_is_killed_with_every_process_in_its_group(
-    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+    ws: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The lanes and the monitor run in the supervisor's group: none survives its kill."""
+    """The lanes and the monitor run in the supervisor's group: none survives its kill, and
+    none is then taken for one that outlived its supervisor, however long the kernel takes to
+    let go of its lock — the stop waits for that, then for the card the lane left.
+
+    Reading the lanes as soon as the supervisor was gone, a lane killed with the group but
+    still holding its lock was named under `orphans`, as ended by a stop that never touched it.
+    """
+    said = tmp_path / "card.out"
     code = (
         "import signal, subprocess, sys, time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "lane = subprocess.Popen([sys.executable, '-c', "
-        "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'])\n"
+        "lane = subprocess.Popen([sys.executable, '-c', *sys.argv[1:]], stdout=subprocess.PIPE)\n"
+        "assert lane.stdout.readline() == b'held\\n'\n"
         "sys.stdout.write(f'{lane.pid}\\n'); sys.stdout.flush()\n"
         "time.sleep(60)\n"
     )
     supervisor = subprocess.Popen(
-        [sys.executable, "-c", code], stdout=subprocess.PIPE, start_new_session=True
+        [sys.executable, "-c", code, CARDING, str(ws.root), str(said)],
+        stdout=subprocess.PIPE,
+        start_new_session=True,
     )
     assert supervisor.stdout is not None
     lane = int(supervisor.stdout.readline())
+    card = card_of(said)
+    # Reaped the moment it dies, as `start`'s supervisor is by whatever adopted it.
+    threading.Thread(target=supervisor.wait, daemon=True).start()
     path = daemon.pid_path(ws)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{supervisor.pid}\n", encoding="utf-8")
     monkeypatch.setattr(daemon, "STOP_TIMEOUT_S", 0.2)
     try:
+        assert daemon.living(ws) == (daemon.ChildPid("l1", lane),)
+
         assert daemon.stop(ws) == daemon.Stopped(supervisor.pid, (), ())
 
+        assert not running(card), "stop returned while the card its lane started still ran"
+        assert (daemon.living(ws), daemon.ending(ws)) == ((), ())
         assert supervisor.wait(timeout=10) != 0
         assert ends(lane, within_s=10.0), "the lane outlived the supervisor it belonged to"
     finally:
         with contextlib.suppress(OSError):
             os.killpg(supervisor.pid, signal.SIGKILL)
+        with contextlib.suppress(OSError):
+            os.kill(card, signal.SIGKILL)
 
 
 def test_a_lane_whose_supervisor_is_gone_stops_as_though_told_to(
@@ -1194,6 +1212,34 @@ def test_a_child_that_outlived_its_daemon_is_reported_refused_past_and_ended(
             holder.wait()
 
 
+def test_a_stop_that_kills_a_lane_waits_for_it_to_go_before_it_reads_what_it_started(
+    ws: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane of a daemon that is gone that does not answer `SIGTERM` — waiting on a model, or
+    the monitor waiting on a demotion — is killed, and the card it was running is left to end
+    itself. The stop reads what is ending only once the lane has let go of its own lock: read
+    while it still held it, the lane is alive, its card's lock is its own, and nothing ends.
+
+    Reading straight after the kill, `stop` returned with nothing under `ending` while the
+    card still ran, which a `start` or a `state prune` right after would not have refused."""
+    monkeypatch.setattr(daemon, "GRACE_S", 2.0)
+    said = tmp_path / "card.out"
+    lane = carding(ws.root, said)
+    card = card_of(said)
+    try:
+        assert daemon.stop(ws) == daemon.Stopped(None, (daemon.ChildPid("l1", lane.pid),), ())
+
+        assert not running(card), "stop returned while the card its lane started still ran"
+        assert (daemon.living(ws), daemon.ending(ws)) == ((), ())
+        assert lane.wait(timeout=5.0) == -signal.SIGKILL, "the deaf lane had to be killed"
+    finally:
+        if lane.poll() is None:  # pragma: no cover - only when the stop failed
+            lane.kill()
+        lane.wait()
+        with contextlib.suppress(OSError):
+            os.kill(card, signal.SIGKILL)
+
+
 def test_a_lock_a_killed_child_left_names_nothing_and_a_supervisor_removes_it(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1326,9 +1372,9 @@ def test_a_pid_file_left_by_a_dead_process_is_not_a_daemon(ws: Workspace) -> Non
     path.write_text(f"{gone.pid}\n", encoding="utf-8")
     assert daemon.pid_of(ws) is None
     # Signalling a process that went away between the look and the send is not an error,
-    # and nor is killing the group of one that went.
+    # and nor is killing the group of one that went, which kills nothing.
     daemon._signal(gone.pid, signal.SIGTERM)
-    daemon._kill_group(gone.pid)
+    assert daemon._kill_group(ws, gone.pid) == ()
 
 
 def test_a_daemon_that_exits_at_once_is_reported_rather_than_waited_for(

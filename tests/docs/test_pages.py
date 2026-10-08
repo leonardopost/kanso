@@ -93,9 +93,15 @@ def test_the_cli_page_says_stop_sees_the_cards_it_left_end() -> None:
     assert "is named under `ending`" in stop
     assert "`stop` prints nothing until it is done" in stop
     assert "since the supervisor's pid is on its command line" in stop
+    # Read while a lane it had just killed still held its lock, they read as the lane's own.
+    assert "It reads them only once every lane and monitor it killed has let go of its own" in stop
+    assert "one killed with the supervisor's group is not one of them" in stop
     status = next(line for line in rows if line.startswith("| `kanso research status`"))
     assert "(`ending`, the same shape)" in status
+    prune = next(line for line in rows if line.startswith("| `kanso state prune"))
+    assert "a certification or a demotion writes the store itself" in prune
     assert "runs/<child>.<pid>.work" in page("workspace.md")
+    assert "Stop the daemon before you upgrade kanso" in prose(page("maintainers.md"))
 
 
 def test_the_cli_page_says_the_transport_is_the_loader_the_spec_names() -> None:

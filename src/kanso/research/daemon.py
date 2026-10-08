@@ -521,16 +521,19 @@ def stop(ws: Workspace) -> Stopped:
     grace, so a supervisor still here after `STOP_TIMEOUT_S` has not answered at all, and
     nothing it holds is worth waiting longer for. It is then killed with its process group,
     which holds every lane and the monitor, so a stop that has to insist still leaves no
-    child of the daemon running (`_kill_group`). A child still running once the supervisor
-    is gone — a supervisor that led no group, or one that was gone before the stop — is
-    ended here (`_end`), and a stop with no supervisor but such a child is a stop of that
-    child, not a refusal.
+    child of the daemon running (`_kill_group`); the stop waits for the kernel to release the
+    locks of the lanes and the monitor it killed that way, so none of them is then taken for
+    a child that outlived its supervisor. A child still running once the supervisor is gone
+    — a supervisor that led no group, or one that was gone before the stop — is ended here
+    (`_end`), and a stop with no supervisor but such a child is a stop of that child, not a
+    refusal.
 
     A card leads a session of its own, so a lane killed outright leaves it to see its lane
     gone and end itself. The stop waits for that on the lock each card inherited
-    (`_settle`), so it returns once every card, certification and demotion of the daemon has
-    exited — and, should one not have exited `ORPHAN_S` after the last lane went, names it
-    rather than returning as though it had.
+    (`_settle`), which it reads only once every lane it killed has let go of its own: a lane
+    read as alive has its card's lock read as its own. So it returns once every card,
+    certification and demotion of the daemon has exited — and, should one not have exited
+    `ORPHAN_S` after the last lane went, names it rather than returning as though it had.
     """
     pid = pid_of(ws)
     if pid is None and not living(ws) and not ending(ws):
@@ -541,8 +544,9 @@ def stop(ws: Workspace) -> Stopped:
     if pid is not None:
         _signal(pid, signal.SIGTERM)
         if not _gone(pid, STOP_TIMEOUT_S):
-            _kill_group(pid)
+            killed = _kill_group(ws, pid)
             _gone(pid, GRACE_S)
+            _released(ws, killed)
         pid_path(ws).unlink(missing_ok=True)
     orphans = _end(ws)
     return Stopped(pid, orphans, _settle(ws))
@@ -993,8 +997,11 @@ def held_off(ws: Workspace) -> Iterator[None]:
     the one the supervisor takes, so a daemon already running refuses the work here, and a
     `start` made while the work runs finds the lock held and its supervisor exits at once.
     A lane or the monitor of a daemon that is gone writes the store as surely as one of a
-    daemon running, so one still running refuses the work too. Nothing is written on the
-    file, so no `status` reads this process as a daemon.
+    daemon running, so one still running refuses the work too; and so does a certification
+    or a demotion one of them started, which writes the store itself until it sees its
+    parent gone (`kanso.certify.child`, `kanso.portfolio.child`), read off the lock it
+    inherited as `ending` reads it. Nothing is written on the file, so no `status` reads this
+    process as a daemon.
     """
     handle = _lock(ws)
     if handle is None:
@@ -1004,6 +1011,13 @@ def held_off(ws: Workspace) -> Iterator[None]:
         )
     with _released_on_refusal(handle):
         _refuse_outlived(ws, "run this again")
+        started = ending(ws)
+        if started:
+            named = ", ".join(f"what {child.label} started" for child in started)
+            raise PreconditionError(
+                f"still running from a daemon that is gone: {named}",
+                remedy="run `kanso research stop`, which waits for it to end, then run this again",
+            )
     try:
         yield
     finally:
@@ -1133,25 +1147,42 @@ def _end(ws: Workspace) -> tuple[ChildPid, ...]:
 
     They are signalled together and share one `GRACE_S`, as the supervisor's own children do
     (`_terminate`): a lane answers at its next safe point, killing a card it is watching. One
-    still holding its lock after that — waiting on a model, say — is killed, and a card it
-    was running is left to end itself, which `stop` then waits for (`_settle`).
+    still holding its lock after that — waiting on a model, say, or a monitor waiting on a
+    demotion — is killed, and a card it was running is left to end itself, which `stop` then
+    waits for (`_settle`). It returns only once each killed one has let go of its lock, since
+    until then `ending` reads it as alive and its card's lock as its own. Measured on
+    2026-10-08 on the development Mac, with a lane that ignored `SIGTERM` inside a card that
+    ended itself half a second after the lane was gone and a grace of 0.2 s: returning
+    straight after the kill, `stop` read nothing ending and returned in 0.22 s with the card
+    still running, ten times in ten; waiting, it returned in 0.76 to 0.79 s with the card gone.
     """
     left = living(ws)
     if not left:
         return left
     for child in left:
         _signal(child.pid, signal.SIGTERM)
-    deadline = time.monotonic() + GRACE_S
-    while _still(ws, left) and time.monotonic() < deadline:
-        time.sleep(_TICK)
+    _released(ws, left)
     for child in _still(ws, left):
         _signal(child.pid, signal.SIGKILL)
+    _released(ws, left)
     return left
 
 
 def _still(ws: Workspace, these: Sequence[ChildPid]) -> list[ChildPid]:
     """Which of `these` are still alive."""
     return [child for child in living(ws) if child in these]
+
+
+def _released(ws: Workspace, these: Sequence[ChildPid]) -> None:
+    """Wait up to `GRACE_S` for every one of `these` to let go of its lock.
+
+    The kernel releases a process's locks only as it closes its descriptors on the way out,
+    so the lock of one just killed is still held for a moment, and a reader in that moment
+    reads the child as alive.
+    """
+    deadline = time.monotonic() + GRACE_S
+    while _still(ws, these) and time.monotonic() < deadline:
+        time.sleep(_TICK)
 
 
 def _settle(ws: Workspace) -> tuple[ChildPid, ...]:
@@ -1210,24 +1241,35 @@ def _signal(pid: int, number: int) -> None:
         os.kill(pid, number)
 
 
-def _kill_group(pid: int) -> None:
-    """Kill a supervisor and every process in the group it leads.
+def _kill_group(ws: Workspace, pid: int) -> tuple[ChildPid, ...]:
+    """Kill a supervisor and every process in the group it leads, and return the lanes and
+    the monitor killed with it.
 
     `start` runs the supervisor in a session of its own, and a service manager starts it
     as a group leader too, so its group is the daemon: the supervisor, its lanes and its
     monitor, which it spawns without a group of their own. A supervisor that leads no group
     shares one with whatever started it, and that group is not the daemon's to kill, so it
-    is killed alone and its lanes stop on their own once it is gone (`worker`).
+    is killed alone and its lanes stop on their own once it is gone (`worker`). A lane or the
+    monitor of a daemon gone before this one is in that daemon's group, and is not returned.
     """
-    try:
-        leads = os.getpgid(pid) == pid
-    except OSError:
-        return
-    if leads:
-        with contextlib.suppress(OSError):
-            os.killpg(pid, signal.SIGKILL)
-    else:
+    group = _group_of(pid)
+    if group is None:
+        return ()
+    if group != pid:
         _signal(pid, signal.SIGKILL)
+        return ()
+    members = tuple(child for child in living(ws) if _group_of(child.pid) == pid)
+    with contextlib.suppress(OSError):
+        os.killpg(pid, signal.SIGKILL)
+    return members
+
+
+def _group_of(pid: int) -> int | None:
+    """The process group `pid` is in, or `None` once it is gone."""
+    try:
+        return os.getpgid(pid)
+    except OSError:
+        return None
 
 
 def _gone(pid: int, seconds: float) -> bool:

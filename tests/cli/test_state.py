@@ -9,6 +9,7 @@ the disk, the rewrite, and what each refusal leaves behind.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import sqlite3
 from collections.abc import Iterator
@@ -213,6 +214,32 @@ def test_prune_is_refused_while_a_lane_of_a_daemon_that_is_gone_still_runs(
         document["error"] == f"still running from a daemon that is gone: lane l1 (pid {lane.pid})"
     )
     assert document["remedy"] == "run `kanso research stop`, which ends it, then run this again"
+    assert books(ws / "state.db") == {"live": KEPT, "gone": GONE} and backups(ws) == []
+    released = daemon._lock(find(ws))
+    assert released is not None, "the refusal let go of the daemon's lock"
+    released.close()
+
+
+def test_prune_is_refused_while_what_a_child_of_a_daemon_that_is_gone_started_still_runs(
+    runner: CliRunner, ws: Path
+) -> None:
+    """A demotion the monitor started, or a certification a lane did, writes the store itself
+    until it sees its parent gone, which one killed outright leaves it to do: the lock it
+    inherited from its parent is what refuses the prune."""
+    work = daemon.work_path(find(ws), daemon.MONITOR, 4242)
+    work.parent.mkdir(parents=True, exist_ok=True)
+    with work.open("ab") as demotion:  # the monitor that handed it down is gone
+        fcntl.flock(demotion.fileno(), fcntl.LOCK_EX)
+        result = at(runner, ws, "state", "prune", "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    document = payload(result)
+    assert document["error"] == (
+        "still running from a daemon that is gone: what monitor (pid 4242) started"
+    )
+    assert document["remedy"] == (
+        "run `kanso research stop`, which waits for it to end, then run this again"
+    )
     assert books(ws / "state.db") == {"live": KEPT, "gone": GONE} and backups(ws) == []
     released = daemon._lock(find(ws))
     assert released is not None, "the refusal let go of the daemon's lock"
