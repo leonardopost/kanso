@@ -990,7 +990,7 @@ def test_a_delayed_dataset_whose_files_no_longer_hash_to_it_is_refused_with_noth
 def test_a_realtime_dataset_whose_files_no_longer_hash_to_it_is_replaced_by_its_span(
     ws: FakeWorkspace,
 ) -> None:
-    """A realtime point is public at its reference time, so a realtime dataset's files lie
+    """A realtime series whose points are public at their reference time has its files
     within its span: where no run hashes to its checksum, the files within its span are its
     own, and they go."""
     week = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
@@ -1009,8 +1009,9 @@ def test_a_realtime_dataset_whose_files_no_longer_hash_to_it_is_replaced_by_its_
 
 
 def recorded_with(ws: FakeWorkspace, held: cat.Written, other: cat.Written) -> m.Manifest:
-    """`held`'s manifest as kanso 0.13 recorded a write while `other`'s landed: it found what
-    it produced by listing the whole engine tree, so it hashed `other`'s file with its own."""
+    """`held`'s manifest as recorded by a write while `other`'s landed where it looked for what
+    it produced, so it hashed `other`'s file with its own: kanso 0.13 looked in the whole
+    engine tree, and a write still looks in its series' directory."""
     recorded = held.manifest.model_copy(
         update={"checksum": cat._checksum(m.data_path(ws), held.files + other.files)}
     )
@@ -1023,8 +1024,9 @@ def test_a_dataset_recorded_while_another_series_landed_is_replaced_by_its_span(
     ws: FakeWorkspace, supersede: bool
 ) -> None:
     """Nothing on disk is altered, yet no run of its own directory hashes to its checksum.
-    It is realtime, so the files within its span are its own: a replace, or a supersede of it
-    pinned, removes exactly its file and leaves the other name's."""
+    It is realtime, its bars public at their close, so the files within its span are its own:
+    a replace, or a supersede of it pinned, removes exactly its file and leaves the other
+    name's."""
     define(ws, AAPL, MSFT)
     definitions = held_files(ws)
     other = cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic")
@@ -1051,6 +1053,30 @@ def test_a_dataset_recorded_while_another_series_landed_is_replaced_by_its_span(
         again.manifest.dataset_id: again.manifest,
         other.manifest.dataset_id: other.manifest,
     }
+
+
+def test_a_dataset_recorded_while_a_write_of_its_series_landed_keeps_that_write_s_file(
+    ws: FakeWorkspace,
+) -> None:
+    """The second week was written while the first was, so the first's write hashed the
+    second's file with its own, and the two files are a run that hashes to its checksum. That
+    run holds the second week's points as well, more than the first recorded, so it is not
+    the first's: a replace of the first goes by its span and leaves the second week whole."""
+    first = write_bars(ws)
+    second = write_bars(ws, date(2024, 1, 8))
+    recorded = recorded_with(ws, first, second)
+
+    again = cat.write(ws, bars(JAN1, 5), ref=Ref(), source="synthetic", replace=True)
+
+    assert again.replaced == (recorded.dataset_id,)
+    assert held_files(ws) == sorted([*again.files, *second.files])
+    assert cat._checksum(m.data_path(ws), second.files) == second.manifest.checksum
+    assert m.manifests(ws) == {
+        again.manifest.dataset_id: again.manifest,
+        second.manifest.dataset_id: second.manifest,
+    }
+    held = cat.load_window(ws, Bar, BAR_TYPE, (date(2024, 1, 8), date(2024, 1, 12))).points
+    assert len(held) == second.manifest.row_count
 
 
 def delayed_prints(day: date = JAN1, count: int = 5) -> list[TradeTick]:
@@ -1179,7 +1205,7 @@ def test_a_file_that_lands_beside_a_write_s_is_not_hashed_with_them(
 
 def test_a_replace_leaves_a_file_the_engine_did_not_name(ws: FakeWorkspace) -> None:
     """Only a name of the engine's `<start>_<end>` form is one of its files; the engine reads
-    every other name as holding no interval, which meets every span."""
+    a name with no underscore as holding no interval, which meets every span."""
     held = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
     placed = m.data_path(ws) / held.files[0]
     hand = placed.with_name("notes.parquet")

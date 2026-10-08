@@ -71,20 +71,27 @@ backfill paid on every chunk.
 **A replace removes whole files of its own series, and kanso removes them.** A file's name
 is the availability interval it holds, first and last `ts_init`, and a dataset's span is
 economic, the days of its `ts_event`, so a span does not say which files are a dataset's: a
-delayed dataset's file runs into the next one's span. The checksum its manifest recorded
-does, where it was taken over files of the series' own directory that no other write of the
-series came between. The files that go for a clashing dataset are the run of the series'
-files, in name order and named as the engine names them, whose checksum is that one. No run
-matches a dataset whose files were altered or removed by hand; or one a replace on kanso
-0.13 or earlier removed or rewrote a file of, having chosen its files by span; or one whose
-files another write of the series interleaved with its own; or one kanso 0.13 or earlier
-recorded while another write ran in the workspace — that version listed the whole of
-`data/` to find what it wrote, so it hashed the other write's files, of any series, with its
-own, though nothing on disk was altered. Such a dataset's files are then the ones within its
-span, wherever that is known: it is realtime, so each of its points is public at its
-reference time and each of its files lies within its span; no file of the series runs across
-an edge of that span; and no dataset of the series before it is published otherwise, whose
-files could run into it. Where it is not known the dataset is refused before anything is
+delayed dataset's file runs into the next one's span. The checksum and the row count its
+manifest recorded do, where the checksum was taken over its own files and no other's. The
+files that go for a clashing dataset are the run of the series' files, in name order and
+named as the engine names them, whose checksum is that one and whose rows number its
+`row_count`. No run matches a dataset whose files were altered or removed by hand; or one a
+replace on kanso 0.13 or earlier removed or rewrote a file of, having chosen its files by
+span; or one whose files another write of the series came between; or one whose write hashed
+with its own the file another write of the series landed in its directory meanwhile, whose
+points its `row_count` does not count; or one kanso 0.13 or earlier recorded while another
+write ran in the workspace — that version listed the whole of `data/` to find what it wrote,
+so it hashed the other write's files, of any series, with its own, though nothing on disk was
+altered. Such a dataset's files are then the ones within its span, where that span can say
+so: it is realtime; no file of the series runs across an edge of that span; and no dataset of
+the series before it is published otherwise, whose files could lie within it. Realtime does
+not make a point's `ts_init` its `ts_event`: a loader may stamp the instant a tape carried a
+print, or a time its file states, after the reference time, so a realtime dataset's last
+points can be public after its last day ends. A file holding those and points of the day
+runs across the edge, and the dataset is refused. A file holding only those lies wholly after
+the span: that dataset's own replace by span leaves it behind, and a replace by span of the
+dataset after it takes it as that one's, as a removal by span on kanso 0.13 or earlier did on
+every replace. Where the span cannot say, the dataset is refused before anything is
 removed, and is replaced only once its manifest and its files are removed by hand — and
 superseded only by a load that then names no predecessor, because the dataset it would name
 is no longer held. The engine's `delete_data_range` is not asked: given no
@@ -692,24 +699,25 @@ def _owned(
     A file's name is the availability interval it holds, its first and last `ts_init`, and a
     dataset's span is economic, the days of its `ts_event`, so a span does not say which
     files are a dataset's: a delayed dataset's last points are published after the next
-    one's first day has begun, and its file meets that day. The checksum a dataset's manifest
-    recorded over the files its write produced does, wherever those files are a run: the
-    engine keeps a series' intervals disjoint and names that sort in time, so the files one
-    write produced in `home`, with no other write of the series between them, are a run of
-    the directory's engine-named files in name order. Such a dataset's files are the run
-    whose checksum is the one it recorded, and the run begins at or after the first instant
-    of its span, since no point is published before its reference time. Each file is hashed
-    once.
+    one's first day has begun, and its file meets that day. The checksum and the row count a
+    dataset's manifest recorded over the files its write produced do, wherever those files
+    are a run and no other's: the engine keeps a series' intervals disjoint and names that
+    sort in time, so the files one write produced in `home`, with no other write of the series
+    between them, are a run of the directory's engine-named files in name order. Such a
+    dataset's files are the run whose checksum is the one it recorded and whose rows number
+    its `row_count`, and the run begins at or after the first instant of its span, since no
+    point is published before its reference time. Each file is hashed once.
 
     No run matches a dataset whose files were altered or removed by hand; one a replace on
     kanso 0.13 or earlier removed or rewrote a file of, having chosen its files by span; one
-    whose files another write of the series interleaved with its own; and one kanso 0.13 or
-    earlier recorded while another write ran in the workspace, because that version listed
-    the whole engine tree to find what it wrote and hashed the other write's files, of any
-    series, with its own. Its files are then the ones within its span where `_unsettled`
-    finds nothing to say otherwise, and it is refused, before anything is removed, where it
-    does. A held dataset of the series that does not clash begins after a clashing one ends,
-    so no file of its lies within that one's span.
+    whose files another write of the series came between; one whose write hashed with its
+    own the file another write of the series landed in `home` meanwhile, a run `_run` tells
+    by its rows; and one kanso 0.13 or earlier recorded while another write ran in the
+    workspace, because that version listed the whole engine tree to find what it wrote and
+    hashed the other write's files, of any series, with its own. Its files are then the ones
+    within its span where `_unsettled` finds nothing to say otherwise, and it is refused,
+    before anything is removed, where it does. A later held dataset of the series that does
+    not clash begins after a clashing one ends, so no file of its lies within that one's span.
     """
     catalog = open_catalog(ws)
     root = data_path(ws)
@@ -750,11 +758,16 @@ def _unsettled(
 ) -> str | None:
     """Why the files `within` a dataset's span may not be all and only its own, or `None`.
 
-    They are when it is realtime, so each of its points is public at its reference time and
-    each of its files lies within its span; no file runs across an edge of the span, since such
-    a file holds points from outside it as well, and would go whole; and no dataset of `series`
-    that ends before it begins is published otherwise, since that dataset's files can lie
-    within this one's span.
+    They are when it is realtime, so none of its files lies before its span; no file runs
+    across an edge of the span, since such a file holds points from outside it as well, and
+    would go whole; and no dataset of `series` that ends before it begins is published
+    otherwise, since that dataset's files can lie within this one's span — save one file a
+    realtime dataset before it can leave there. Realtime does not make a point's `ts_init` its
+    `ts_event`: a loader may stamp the instant a tape carried a print, or a time its file
+    states, after the reference time, so a realtime dataset's last points can be public after
+    its last day ends, and a file holding only those lies wholly after its span. Nothing here
+    tells that file from one of the dataset after it: that dataset's own replace by span leaves
+    it behind, and the next one's takes it as its own.
     """
     if manifest.publication != "realtime":
         return (
@@ -798,9 +811,10 @@ def _unknown_files(
         )
     return PreconditionError(
         f"{dataset}: no run of the files in {filed} hashes to the checksum its manifest "
-        f"recorded, and {why}, so which of them are its own is not known and none is "
-        "removed. Its files were altered or removed by hand, or damaged by a replace on kanso "
-        "0.13 or earlier, or interleaved with another write's; or kanso 0.13 or earlier "
+        f"recorded and holds its {manifest.row_count} rows, and {why}, so which of them are "
+        "its own is not known and none is removed. Its files were altered or removed by hand, "
+        "or damaged by a replace on kanso 0.13 or earlier, or another write of its series came "
+        "between them or landed a file while it was written; or kanso 0.13 or earlier "
         "recorded it while another write ran in this workspace and hashed that write's files "
         "with its own",
         remedy=f"remove {CATALOG_DIR}/{MANIFESTS_DIR}/{dataset}.yaml and {dataset}'s files in "
@@ -811,10 +825,16 @@ def _unknown_files(
 def _run(
     root: Path, names: Sequence[str], manifest: Manifest, hashed: dict[str, bytes]
 ) -> Sequence[str] | None:
-    """The first run of `names`, in order, whose checksum is `manifest`'s, or `None`.
+    """The run of `names`, in order, whose checksum is `manifest`'s, if its files hold the
+    `row_count` points the manifest recorded, and otherwise `None`.
 
-    Runs are tried as their last file is reached, so the search reads no file past the
-    dataset's own last; `hashed` keeps each file's digest for the next dataset's search.
+    The checksum alone is not enough. A write records as its own every engine-named file
+    that appears in its series' directory while it writes, so the file of another write of
+    the series that landed meanwhile is hashed with its own, and the two are then a run that
+    hashes to its checksum; but its `row_count` is what the write was handed, which that
+    run's files exceed. Runs are tried as their last file is reached, so the search reads no
+    file past the dataset's own last; `hashed` keeps each file's digest for the next
+    dataset's search.
     """
     runs: list[Any] = []
     for last, name in enumerate(names):
@@ -824,8 +844,21 @@ def _run(
         for begin, run in enumerate(runs):
             _bind(run, name, hashed[name])
             if run.hexdigest() == manifest.checksum:
-                return names[begin : last + 1]
+                found = names[begin : last + 1]
+                return found if _rows(root, found) == manifest.row_count else None
     return None
+
+
+def _rows(root: Path, files: Sequence[str]) -> int:
+    """How many points `files` hold, read off each parquet file's footer and not its data.
+
+    The engine names no count of a file's rows, so this reads the footer with `pyarrow`,
+    the library `nautilus_trader 1.231.0`'s catalog writes the files with; kanso declares no
+    dependency on it.
+    """
+    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
+    return sum(int(pq.read_metadata(root / name).num_rows) for name in files)
 
 
 def _filed_in(root: Path, data_cls: type, identifier: str | None) -> Path:

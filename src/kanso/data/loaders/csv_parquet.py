@@ -369,7 +369,8 @@ def _rows(entry: FileSpec) -> Iterator[Mapping[str, object]]:
 
 def _parquet_rows(path: Path) -> Iterator[Mapping[str, object]]:
     # pyarrow is NautilusTrader's own dependency, present wherever the catalog is; kanso
-    # declares none on it and reaches it only here, to honour this loader's name.
+    # declares none on it and reaches it here, to honour this loader's name, and in the
+    # catalog, to count a written file's rows off its footer.
     import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
     table = pq.read_table(path)
