@@ -8,6 +8,14 @@ free-form by contract.
 A failed validation leaves this package as `kanso.errors.ValidationError` (exit 3) whose
 message names the offending field and the reason, whether the model was built directly or
 validated from a mapping.
+
+One reason is rewritten. A string field given a boolean is, in a file an operator wrote, a
+bare word YAML read as one: PyYAML's safe loader (6.0.3, measured) reads `on`, `off`,
+`yes`, `no`, `true` and `false` in lower, title or upper case as booleans — though not `y`
+or `n` — so the ticker `ON` arrives as `True`. The refusal names the field, says the value
+is a YAML boolean, and carries the remedy, to quote it. It is done here rather than where
+the YAML is read because a loader spec is read as a plain mapping and validated later, by
+the loader, so this is the one place every such failure passes.
 """
 
 from __future__ import annotations
@@ -17,7 +25,7 @@ from typing import Annotated, Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, StringConstraints
 from pydantic import ValidationError as PydanticValidationError
-from pydantic_core import PydanticUndefined
+from pydantic_core import ErrorDetails, PydanticUndefined
 
 from kanso.errors import ValidationError
 
@@ -43,6 +51,8 @@ FreeForm = dict[str, Any]
 
 _PREFIXES = ("Value error, ", "Assertion failed, ")
 
+_YAML_BOOLEAN_REMEDY: Final = 'quote the value in the YAML, e.g. "ON" rather than ON'
+
 
 def render_errors(exc: PydanticValidationError) -> str:
     """One line per error, each naming the field path and the reason."""
@@ -52,8 +62,23 @@ def render_errors(exc: PydanticValidationError) -> str:
         msg = err["msg"]
         for prefix in _PREFIXES:
             msg = msg.removeprefix(prefix)
+        if _yaml_boolean(err):
+            msg = (
+                f"{str(err['input']).lower()} is a YAML boolean, not a string; YAML reads "
+                "a bare ON, OFF, YES, NO, TRUE or FALSE as one"
+            )
         parts.append(f"{loc}: {msg}" if loc else msg)
     return "; ".join(parts)
+
+
+def _yaml_boolean(err: ErrorDetails) -> bool:
+    return err["type"] == "string_type" and isinstance(err["input"], bool)
+
+
+def _refused(exc: PydanticValidationError) -> ValidationError:
+    """The refusal a failed validation leaves as, with the remedy for a YAML boolean."""
+    boolean = any(_yaml_boolean(err) for err in exc.errors())
+    return ValidationError(render_errors(exc), _YAML_BOOLEAN_REMEDY if boolean else None)
 
 
 _inside = ContextVar("kanso_schema_validating", default=False)
@@ -73,7 +98,7 @@ class KansoModel(BaseModel):
         try:
             super().__init__(**data)
         except PydanticValidationError as exc:
-            raise ValidationError(render_errors(exc)) from None
+            raise _refused(exc) from None
         finally:
             _inside.reset(token)
 
@@ -83,7 +108,7 @@ class KansoModel(BaseModel):
         try:
             return super().model_validate(obj, **kwargs)
         except PydanticValidationError as exc:
-            raise ValidationError(render_errors(exc)) from None
+            raise _refused(exc) from None
         finally:
             _inside.reset(token)
 
@@ -99,7 +124,7 @@ class KansoRootModel(RootModel[Any]):
             else:
                 super().__init__(root)
         except PydanticValidationError as exc:
-            raise ValidationError(render_errors(exc)) from None
+            raise _refused(exc) from None
         finally:
             _inside.reset(token)
 
@@ -109,7 +134,7 @@ class KansoRootModel(RootModel[Any]):
         try:
             return super().model_validate(obj, **kwargs)
         except PydanticValidationError as exc:
-            raise ValidationError(render_errors(exc)) from None
+            raise _refused(exc) from None
         finally:
             _inside.reset(token)
 
