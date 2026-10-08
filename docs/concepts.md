@@ -407,7 +407,7 @@ starts from the hypothesis's best, or from the card a re-seed names, so its base
 already includes that strategy's fills. A hypothesis's first run starts from the workspace's
 `strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
 nothing and a card that trades spends the headroom on its fills: in the sample above the keep
-and the discard each took about 2.7 times the baseline's wall (row 138 of `docs/backlog.md`).
+and the discard each took about 2.7 times the baseline's wall (row 139 of `docs/backlog.md`).
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog an hour at a time when the

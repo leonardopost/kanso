@@ -5,7 +5,7 @@ synthetic bars, freeze a snapshot, register the idea, classify it, then hand it 
 driver — run here as one test because what it proves is that the pieces fit, which no
 one of them can prove alone. One step differs from what a person runs: the research runs
 under a card floor no operator can set (`CARD_FLOOR_S`), so whether the shipped budget fits
-the demo's cards on a given host is row 138 of `docs/backlog.md`, not this test's to say.
+the demo's cards on a given host is row 139 of `docs/backlog.md`, not this test's to say.
 
 Everything a model says comes from the demo's own scripted register, whose three answers
 are a keep, a discard and a crash in that order; nothing here resolves a provider key or
@@ -159,7 +159,7 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
     # the baseline and never under 60 s. The demo's baseline is the stub, which trades nothing,
     # and past it a card's wall grows with its fills, so a discard trading far more than the keep
     # fits only under the floor and is killed on a host slow enough for the floor to stop binding
-    # (`docs/backlog.md` row 138: 2,445 trades to the keep's 1,003 took four times the baseline).
+    # (`docs/backlog.md` row 139: 2,445 trades to the keep's 1,003 took four times the baseline).
     # Holding the script's discard to a fifth more than the keep's fills keeps its cost near the
     # keep's on the operator's host; it narrows that margin, it guarantees none. The trade count
     # is the proxy because it is deterministic and a wall time is not.
