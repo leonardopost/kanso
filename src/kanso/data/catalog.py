@@ -68,12 +68,17 @@ Measured on a workspace of 13,293 manifests and 18,465 files, reading every mani
 8.9 s and walking the whole tree 0.68 s, twice — about ten seconds a dataset, which a
 backfill paid on every chunk.
 
-**A replace removes whole files of its own series, and kanso removes them.** The files
-that go are the ones in the series' directory whose interval meets a clashing dataset's
-span, read off their names. The engine's `delete_data_range` is not asked: given no
-identifier it runs on each instrument's directory of the class and never on the class's
-own, so it removed every instrument's files over the span and none of a series of no
-instrument, whose replace was then refused as having written no bytes.
+**A replace removes whole files of its own series, and kanso removes them.** A file's name
+is the availability interval it holds, first and last `ts_init`, and a dataset's span is
+economic, the days of its `ts_event`, so a span does not say which files are a dataset's: a
+delayed dataset's file runs into the next one's span. The checksum its manifest recorded
+does. The files that go for a clashing dataset are the run of the series' files, in name
+order and named as the engine names them, whose checksum is that one, and a dataset no run
+matches — its files altered since it was written — is refused before anything is removed.
+The engine's `delete_data_range` is not asked: given no identifier it runs on each
+instrument's directory of the class and never on the class's own, so it would remove every
+instrument's files over the span and none of a series of no instrument, whose replace would
+then be refused as having written no bytes.
 
 **A replaced dataset is kept until its replacement is written.** A replace or a supersede
 removes the held dataset before the first new file is written, because the engine keeps its
@@ -88,6 +93,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -101,6 +107,8 @@ from nautilus_trader.persistence.funcs import class_to_filename, urisafe_identif
 
 from kanso.data import publication
 from kanso.data.manifest import (
+    CATALOG_DIR,
+    DATA_DIR,
     DatasetRefLike,
     Manifest,
     as_publication,
@@ -126,6 +134,14 @@ DAY_END_NANOS = 86_400 * NANOS_PER_SECOND - 1
 
 ASIDE_DIR: Final = ".replaced"
 """Where a write keeps what a replace removed, beside the engine's tree, until it is done."""
+
+ENGINE_FILE: Final = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{9}Z_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{9}Z\.parquet"
+)
+"""The name the engine gives a file it writes: the first and the last `ts_init` it holds, to
+the nanosecond. A file named otherwise is not the engine's, and `filter_files` keeps a name
+it reads no interval off as meeting every span, so a replace looks only at names of this
+form."""
 
 WRITE_BATCH: Final = 250_000
 """Points per `write_data` call on a batched write: about 0.2 GB of engine objects and
@@ -598,11 +614,13 @@ def _clear(
             f"{served[0]}..{served[1]} overlaps the held dataset(s) {names}",
             remedy="pass --replace to delete and rewrite the overlapped span",
         )
-    catalog = open_catalog(ws)
-    home = _filed_in(data_path(ws), data_cls, identifier)
+    root = data_path(ws)
+    home = _filed_in(root, data_cls, identifier)
+    owned = _owned(open_catalog(ws), root, home, data_cls, clashing)
     _set_aside(ws, home)
+    for name in sorted(owned):
+        (root / name).unlink()
     for manifest in clashing:
-        _delete(catalog, home, data_cls, manifest.span)
         remove_manifest(ws, manifest.dataset_id)
     return tuple(sorted(m.dataset_id for m in clashing))
 
@@ -648,20 +666,72 @@ def _let_go(ws: Workspace) -> None:
     shutil.rmtree(catalog_path(ws) / ASIDE_DIR, ignore_errors=True)
 
 
-def _delete(
-    catalog: ParquetDataCatalog, home: Path, data_cls: type, span: tuple[date, date]
-) -> None:
-    """Remove the files in `home`, a series' directory, that hold a dataset's span.
+def _owned(
+    catalog: ParquetDataCatalog,
+    root: Path,
+    home: Path,
+    data_cls: type,
+    datasets: Sequence[Manifest],
+) -> set[str]:
+    """The files of `home`, a series' directory, that hold `datasets`, by path within `root`.
 
-    The engine names each file by the availability interval it holds and keeps a series'
-    intervals disjoint, so one file belongs to one dataset: the files removed, whole, are
-    the ones whose interval meets the dataset's served span, as `filter_files` reads it off
-    their names, inclusive at both ends.
+    A file's name is the availability interval it holds, its first and last `ts_init`, and a
+    dataset's span is economic, the days of its `ts_event`, so a span does not say which
+    files are a dataset's: a delayed dataset's last points are published after the next
+    one's first day has begun, and its file meets that day. The checksum a dataset's manifest
+    recorded over the files its write produced does. The engine keeps a series' intervals
+    disjoint and names that sort in time, and the files of one write follow one another, so
+    a dataset's files are the run of the directory's engine-named files, in name order, whose
+    checksum is the one it recorded, and the run begins at or after the first instant of its
+    span, since no point is published before its reference time. Each file is hashed once.
+
+    Refused, before anything is removed, when no run matches a dataset — its files altered,
+    removed or rewritten since it was recorded, or interleaved with another write's —
+    because a removal chosen any other way can reach another dataset's files and leave its
+    manifest claiming them.
     """
-    start, end = window_ns(span)
-    held = sorted(str(path) for path in home.glob("*.parquet"))
-    for name in catalog.filter_files(data_cls, held, None, start, end):
-        Path(name).unlink()
+    names = sorted(
+        path.relative_to(root).as_posix()
+        for path in home.glob("*.parquet")
+        if ENGINE_FILE.fullmatch(path.name)
+    )
+    hashed: dict[str, bytes] = {}
+    owned: set[str] = set()
+    for manifest in datasets:
+        first = day_start_ns(manifest.start)
+        sooner = set(catalog.filter_files(data_cls, names, None, None, first - 1))
+        run = _run(root, [name for name in names if name not in sooner], manifest, hashed)
+        if run is None:
+            filed = f"{CATALOG_DIR}/{DATA_DIR}/{home.relative_to(root).as_posix()}"
+            raise PreconditionError(
+                f"{manifest.dataset_id}: no run of the files in {filed} hashes to the checksum "
+                "its manifest recorded, so which of them are its own is not known and none is "
+                "removed",
+                remedy=f"inspect {filed}: put back the files {manifest.dataset_id} was written "
+                "with, or remove its manifest and its files by hand",
+            )
+        owned.update(run)
+    return owned
+
+
+def _run(
+    root: Path, names: Sequence[str], manifest: Manifest, hashed: dict[str, bytes]
+) -> Sequence[str] | None:
+    """The first run of `names`, in order, whose checksum is `manifest`'s, or `None`.
+
+    Runs are tried as their last file is reached, so the search reads no file past the
+    dataset's own last; `hashed` keeps each file's digest for the next dataset's search.
+    """
+    runs: list[Any] = []
+    for last, name in enumerate(names):
+        if name not in hashed:
+            hashed[name] = hashlib.sha256((root / name).read_bytes()).digest()
+        runs.append(hashlib.sha256())
+        for begin, run in enumerate(runs):
+            _bind(run, name, hashed[name])
+            if run.hexdigest() == manifest.checksum:
+                return names[begin : last + 1]
+    return None
 
 
 def _filed_in(root: Path, data_cls: type, identifier: str | None) -> Path:
@@ -701,7 +771,12 @@ def _checksum(root: Path, files: Sequence[str]) -> str:
     """A digest over the written bytes, each hashed under its path within the store."""
     digest = hashlib.sha256()
     for name in sorted(files):
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(hashlib.sha256((root / name).read_bytes()).digest())
+        _bind(digest, name, hashlib.sha256((root / name).read_bytes()).digest())
     return digest.hexdigest()
+
+
+def _bind(digest: Any, name: str, content: bytes) -> None:
+    """One file folded into a checksum: its path within the store, then its bytes' digest."""
+    digest.update(name.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(content)

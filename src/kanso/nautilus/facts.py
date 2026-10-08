@@ -70,11 +70,14 @@ kanso reads quotes, prints and book changes that way
 `write_data` files a series' points under `data/<class_to_filename(class)>/` and then
 `urisafe_identifier(identifier)` — the bar type of a bar, the instrument id of anything else
 instrument-scoped — and a series of no instrument in the class's directory itself; both
-functions are public in `nautilus_trader.persistence.funcs`. `filter_files(data_cls, paths,
-None, start, end)` keeps the paths whose interval, read off the name, meets the span, ends
-included. So a write finds what it produced by listing one directory, and a replace removes
-the files of that directory whose interval meets what it replaces
-(`kanso.data.catalog._filed_in`, `_delete`). It does not ask `delete_data_range`, which
+functions are public in `nautilus_trader.persistence.funcs`. Each file is named
+`<first ts_init>_<last ts_init>.parquet`, both to the nanosecond
+(`kanso.data.catalog.ENGINE_FILE`), and `filter_files(data_cls, paths, None, start, end)`
+keeps the paths whose interval, read off the name, meets the span, ends included, an end
+passed as `None` being open. So a write finds what it produced by listing one directory, and
+a replace looks for what it removes among that directory's files so named, leaving out with
+`filter_files(..., None, first - 1)` those that begin before a dataset's first instant
+(`kanso.data.catalog._filed_in`, `_owned`). It does not ask `delete_data_range`, which
 **cannot remove a series of no instrument**: given no identifier it runs once for each
 instrument's directory of the class and never on the class's own, so it removes every
 instrument's points of the class over the span and leaves the series' files where they are.
@@ -2108,13 +2111,16 @@ def _sale(name: str, ts: int) -> Any:
 
 def _check_a_series_is_filed_in_its_own_directory() -> tuple[bool, str]:
     """Write a bar, two names' prints at one instant and a point of a custom type of no
-    instrument into one catalog, see which files each write created, and ask `filter_files`
-    which of a series' files meet spans touching, and just missing, the instant it holds."""
+    instrument into one catalog, see which files each write created and what it named them,
+    and ask `filter_files` which of a series' files meet spans touching, and just missing,
+    the instant it holds, closed and open at either end."""
     from pathlib import Path
 
     from nautilus_trader.model.data import Bar, TradeTick
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
     from nautilus_trader.persistence.funcs import class_to_filename, urisafe_identifier
+
+    from kanso.data.catalog import ENGINE_FILE
 
     bar: Any = _sample_bar()
     wide = _define_custom_type({"value": float})()
@@ -2136,6 +2142,7 @@ def _check_a_series_is_filed_in_its_own_directory() -> tuple[bool, str]:
             return filed if identifier is None else filed / urisafe_identifier(identifier)
 
         placed: list[str] = []
+        named: list[str] = []
         filed = True
         for point, cls, identifier in series:
             before = files()
@@ -2144,30 +2151,34 @@ def _check_a_series_is_filed_in_its_own_directory() -> tuple[bool, str]:
             placed.append(
                 f"{cls.__name__} in {sorted(p.parent.relative_to(root).as_posix() for p in new)}"
             )
+            named.extend(sorted(p.name for p in new))
             filed = filed and len(new) == 1 and {p.parent for p in new} == {home(cls, identifier)}
 
-        def meeting(cls: type, identifier: str | None, start: int, end: int) -> int:
+        def meeting(cls: type, identifier: str | None, start: int | None, end: int | None) -> int:
             held = sorted(str(path) for path in home(cls, identifier).glob("*.parquet"))
             return len(catalog.filter_files(cls, held, None, start, end))
 
-        spans = [(5, 5), (0, 4), (6, 10)]
+        spans = [(5, 5), (0, 4), (6, 10), (None, 5), (None, 4), (5, None), (6, None)]
         prints = [meeting(TradeTick, "AAPL.XNAS", *span) for span in spans]
         market = [meeting(wide, None, *span) for span in [(7, 7), (0, 6), (8, 10)]]
-    holds = filed and prints == [1, 0, 0] and market == [1, 0, 0]
+    form = all(ENGINE_FILE.fullmatch(name) for name in named)
+    holds = filed and form and prints == [1, 0, 0, 1, 0, 1, 0] and market == [1, 0, 0]
     return holds, (
-        f"write_data filed {'; '.join(placed)}; filter_files kept {prints} of the print's "
-        f"directory over {spans} and {market} of the series of no instrument's over its own "
-        "instant, the instants before it and the instants after it"
+        f"write_data filed {'; '.join(placed)}, named {named}; filter_files kept {prints} of "
+        f"the print's directory over {spans} and {market} of the series of no instrument's "
+        "over its own instant, the instants before it and the instants after it"
     )
 
 
 def _check_delete_with_no_identifier_removes_a_series_of_no_instrument() -> tuple[bool, str]:
-    """Write a point of a custom type of no instrument, and two names' prints, and ask the
-    engine to remove each class over every instant without naming an identifier."""
+    """Write a point of a custom type of no instrument, and two names' prints, ask the
+    engine to remove each class over every instant without naming an identifier, and see
+    whose files are left."""
     from pathlib import Path
 
     from nautilus_trader.model.data import TradeTick
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+    from nautilus_trader.persistence.funcs import class_to_filename
 
     wide = _define_custom_type({"value": float})()
     with tempfile.TemporaryDirectory() as directory:
@@ -2177,13 +2188,15 @@ def _check_delete_with_no_identifier_removes_a_series_of_no_instrument() -> tupl
         catalog.write_data([_sale("AAPL.XNAS", 5), _sale("MSFT.XNAS", 5)])
         catalog.delete_data_range(wide, None, 0, 10)
         catalog.delete_data_range(TradeTick, None, 0, 10)
-        left = sorted(path.parent.relative_to(root).as_posix() for path in root.rglob("*.parquet"))
-    holds = not left
+        left = sorted({p.parent.relative_to(root).as_posix() for p in root.rglob("*.parquet")})
+    market = class_to_filename(wide)
+    prints_removed = 2 - len([name for name in left if name != market])
+    holds = market not in left
     return holds, (
         "delete_data_range(cls, None, 0, 10) of a series of no instrument and of two names' "
-        f"prints left files in {left}: it runs on each instrument's directory of a class, so it "
-        "removed both names' prints, and never on the class's own, where a series of no "
-        "instrument is filed"
+        f"prints removed the prints of {prints_removed} of the 2 names and "
+        f"{'none' if market in left else 'all'} of the series of no instrument's files, "
+        f"which are filed in the class's own directory; files are left in {left}"
     )
 
 
@@ -3526,8 +3539,8 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     ),
     (
         "write_data files a series in the one directory class_to_filename and "
-        "urisafe_identifier name, and filter_files names its files whose interval meets a "
-        "span, ends included",
+        "urisafe_identifier name, each file named by its first and last ts_init, and "
+        "filter_files names its files whose interval meets a span, ends included or open",
         _check_a_series_is_filed_in_its_own_directory,
     ),
     (

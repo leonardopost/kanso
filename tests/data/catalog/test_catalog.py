@@ -863,3 +863,142 @@ def test_a_replace_removes_its_own_instrument_s_files_and_no_other_s(ws: FakeWor
     assert again.replaced == (held.manifest.dataset_id,)
     assert cat._checksum(m.data_path(ws), other.files) == other.manifest.checksum
     assert len(cat.open_catalog(ws).trade_ticks(instrument_ids=[MSFT])) == 5
+
+
+# --- the files a replace removes ------------------------------------------------
+
+THREE_DAYS = 3 * 86_400 * cat.NANOS_PER_SECOND
+
+
+def released(advancing: float, start: date, count: int = 5) -> list[Data]:
+    """A market-wide series each of whose days is released three days after it."""
+    return [
+        Breadth(
+            advancing=advancing,
+            ts_event=cat.day_start_ns(day),
+            ts_init=cat.day_start_ns(day) + THREE_DAYS,
+        )
+        for day in days(start, count)
+    ]
+
+
+def released_ref(start: date, count: int = 5) -> Ref:
+    end = date.fromordinal(start.toordinal() + count - 1)
+    return Ref(
+        instrument="MARKET",
+        type="breadth",
+        resolution=None,
+        span=(start, end),
+        publication="delayed",
+        publication_rule="economic_release",
+    )
+
+
+def held_files(ws: FakeWorkspace) -> list[str]:
+    root = m.data_path(ws)
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet"))
+
+
+def test_a_replace_keeps_the_dataset_whose_release_runs_into_its_span(ws: FakeWorkspace) -> None:
+    """A file's name is the availability it holds and a dataset's span is economic: the
+    first week's file runs to the 8th, into the second week's span, and a replace of the
+    second week that chose its files by that span removed the first week's and kept its
+    manifest."""
+    week = cat.write(ws, released(1.0, JAN1), ref=released_ref(JAN1), source="s")
+    jan6 = date(2024, 1, 6)
+    held = cat.write(ws, released(1.0, jan6), ref=released_ref(jan6), source="s")
+
+    again = cat.write(ws, released(2.0, jan6), ref=released_ref(jan6), source="s", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert cat._checksum(m.data_path(ws), week.files) == week.manifest.checksum
+    assert held_files(ws) == sorted(week.files + again.files)
+    assert m.manifests(ws) == {
+        week.manifest.dataset_id: week.manifest,
+        again.manifest.dataset_id: again.manifest,
+    }
+
+
+def late_print(day: date, seconds: int) -> TradeTick:
+    """A print `seconds` into `day`, carried under the fifteen-minute delayed entitlement."""
+    ts_event = cat.day_start_ns(day) + seconds * cat.NANOS_PER_SECOND
+    return TradeTick.from_dict(
+        {
+            **TradeTick.to_dict(trade(AAPL, day)),
+            "ts_event": ts_event,
+            "ts_init": ts_event + FIFTEEN_MINUTES,
+        }
+    )
+
+
+def test_a_replace_keeps_the_day_whose_evening_print_is_published_on_it(
+    ws: FakeWorkspace,
+) -> None:
+    """A print at 23:50 is public at 00:05 the next day, so the 2nd's file meets the 3rd's
+    span and the 3rd's own file does not: a replace of the 3rd by its span removed the 2nd's
+    print and left the 3rd's old one beside the new."""
+    jan2, jan3 = date(2024, 1, 2), date(2024, 1, 3)
+
+    def ref(day: date) -> Ref:
+        return Ref(
+            type="trade",
+            resolution=None,
+            span=(day, day),
+            publication="delayed",
+            publication_rule="delayed_trade",
+        )
+
+    evening = 23 * 3600 + 50 * 60
+    first = cat.write(ws, [late_print(jan2, evening)], ref=ref(jan2), source="s")
+    held = cat.write(ws, [late_print(jan3, evening)], ref=ref(jan3), source="s")
+
+    again = cat.write(ws, [late_print(jan3, 12 * 3600)], ref=ref(jan3), source="s", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert cat._checksum(m.data_path(ws), first.files) == first.manifest.checksum
+    assert held_files(ws) == sorted(first.files + again.files)
+    held_prints = cat.open_catalog(ws).trade_ticks(instrument_ids=[AAPL])
+    assert [p.ts_event for p in held_prints] == [
+        late_print(jan2, evening).ts_event,
+        late_print(jan3, 12 * 3600).ts_event,
+    ]
+
+
+def test_a_replace_whose_dataset_s_files_no_longer_hash_to_it_removes_nothing(
+    ws: FakeWorkspace,
+) -> None:
+    """The second week's file is altered by hand: no run of the series' files hashes to its
+    checksum, so kanso cannot tell which are its own and refuses before removing the first
+    week's either."""
+    week = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+    jan6 = date(2024, 1, 6)
+    later = cat.write(ws, breadth(1.0, jan6), ref=Ref("MARKET", "breadth", None), source="s")
+    (m.data_path(ws) / later.files[0]).write_bytes(b"altered")
+
+    with pytest.raises(PreconditionError, match="hashes to the checksum") as refused:
+        cat.write(
+            ws, breadth(2.0, count=10), ref=Ref("MARKET", "breadth", None), source="s", replace=True
+        )
+
+    assert later.manifest.dataset_id in str(refused.value)
+    assert "catalog/data/" in (refused.value.remedy or "")
+    assert cat._checksum(m.data_path(ws), week.files) == week.manifest.checksum
+    assert held_files(ws) == sorted(week.files + later.files)
+    assert set(m.manifests(ws)) == {week.manifest.dataset_id, later.manifest.dataset_id}
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_replace_leaves_a_file_the_engine_did_not_name(ws: FakeWorkspace) -> None:
+    """Only a name of the engine's `<start>_<end>` form is one of its files; the engine reads
+    every other name as holding no interval, which meets every span."""
+    held = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+    placed = m.data_path(ws) / held.files[0]
+    hand = placed.with_name("notes.parquet")
+    hand.write_bytes(b"kept")
+
+    again = cat.write(ws, breadth(2.0), ref=BREADTH, source="synthetic", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert hand.read_bytes() == b"kept"
+    assert cat.ENGINE_FILE.fullmatch(placed.name)
+    assert not cat.ENGINE_FILE.fullmatch(hand.name)

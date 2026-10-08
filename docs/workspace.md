@@ -140,6 +140,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `research start` twice in one workspace | 2 · the pid file is the lock |
 | `data load` over a dataset a snapshot names | 2 · **with or without `--replace`** |
 | `data load` over unpinned data | 2 · until you pass `--replace` |
+| `data load --replace` or `--supersedes` over a dataset whose files no longer hash to the checksum its manifest recorded | 2 · nothing is removed: which files are its own is not known, and a removal by span can reach the dataset beside it |
 | `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
 | `data instruments resolve` that would change a definition the store holds for the same date | 2 · a correction is explicit: `--refresh` |
 | `research begin` after the store's definitions moved from what the newest covering snapshot pins | 2 · by name; `kanso data snapshot` pins what is held now |
