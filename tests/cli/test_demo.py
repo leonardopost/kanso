@@ -24,6 +24,9 @@ import yaml
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.research import records
+from kanso.schemas import Card
+from kanso.state import StateStore
 
 from .conftest import at, payload, run
 
@@ -56,6 +59,26 @@ def demo(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def calls(runner: CliRunner, root: Path) -> int:
     """How many model calls today's ledger holds, as `status` reports it."""
     return int(payload(at(runner, root, "status", "--json"))["spend_today"]["calls"])
+
+
+def ledger(root: Path) -> tuple[list[Card], str]:
+    """The hypothesis's cards, oldest first, and the log an operator reads.
+
+    The log is `results.tsv` followed by the tail every crashed card recorded, so an
+    assertion that carries it as its message says which card went wrong and why: a card
+    killed for its time budget and one that raised read the same in the counts alone.
+    """
+    log = (root / "hypotheses" / DEMO_ID / "results.tsv").read_text(encoding="utf-8")
+    with StateStore(root / "state.db") as store:
+        carded = records.cards_of(store, DEMO_ID)
+    tails = [f"{card.sha7} crash_tail: {card.crash_tail}" for card in carded if card.crash_tail]
+    return carded, "\n".join([log, *tails])
+
+
+def scripted(root: Path) -> list[str]:
+    """The descriptions of the demo's scripted proposals, in the order the mock answers them."""
+    script = yaml.safe_load((root / "mock" / "responses.yaml").read_text(encoding="utf-8"))
+    return [str(answer["desc"]) for answer in script["propose"]]
 
 
 def document(root: Path) -> dict[str, Any]:
@@ -96,9 +119,26 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
 
     assert driven.exit_code == Exit.OK, driven.stdout
     outcome = payload(driven)
-    assert outcome["proposed"] == CARDS
+    carded, log = ledger(demo)
+    assert outcome["proposed"] == CARDS, log
     # The demo's three scripted answers, in the order its own file documents.
-    assert (outcome["keeps"], outcome["discards"], outcome["crashes"]) == (1, 1, 1)
+    assert (outcome["keeps"], outcome["discards"], outcome["crashes"]) == (1, 1, 1), log
+    keep, discard, crash = scripted(demo)
+    assert [(card.status, card.desc) for card in carded] == [
+        ("discard", "baseline"),
+        ("keep", keep),
+        ("discard", discard),
+        ("crash", crash),
+    ], log
+    # The crash is the one the script plants, not a card the host was too slow to finish.
+    assert "rolling_sigma" in (carded[-1].crash_tail or ""), log
+    # A card's time budget is three times what the baseline took and never under 60 s, and the
+    # baseline trades nothing, so a card's cost past it is mostly its fills. The keep is what shows
+    # a host fast enough for the demo; a discard trading far more than the keep fits only under
+    # the floor, and is killed on any host slow enough for it to reach the floor
+    # (`docs/backlog.md` row 138: 2,445 trades to the keep's 1,003 took four times the baseline).
+    _, kept, discarded, _ = carded
+    assert discarded.n_trades <= 1.5 * kept.n_trades, log
     assert outcome["best_sha"] is not None
     assert outcome["best_metric"] > 0
 
