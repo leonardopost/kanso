@@ -80,19 +80,19 @@ propose:
       +        elif z > -self.kanso_config.exit_z and self.long:
       +            self.submit_exit(bar.bar_type.instrument_id)
       +            self.long = False
-  - desc: "narrow the entry threshold to 1 sigma"
+  - desc: "exit at 1 sigma rather than half a sigma"
     tags: [parameter_only]
     diff: |2
       --- a/strategy.py
       +++ b/strategy.py
-      @@ -16,7 +16,7 @@
-           """Numeric fields here are the parameters the param_plateau gate perturbs."""
+      @@ -17,7 +17,7 @@
        
            lookback: int = 60
-      -    entry_z: float = 2.0
-      +    entry_z: float = 1.0
-           exit_z: float = 0.5
+           entry_z: float = 2.0
+      -    exit_z: float = 0.5
+      +    exit_z: float = 1.0
            notional: float = 10_000.0
+       
        
   - desc: "scale by a rolling sigma helper that does not exist (intentional crash)"
     tags: [sizing_volatility]

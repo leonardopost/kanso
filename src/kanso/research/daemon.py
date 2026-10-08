@@ -701,7 +701,12 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
     in a child the lane watches as it watches a card (`kanso.certify.child`), so the lane is
     left holding none of what its windows cost. What that exploration
     does, failure included, is its own events (`research/explore.py`) and never a
-    `lane_failed`.
+    `lane_failed`. The lane itself is held while it explores, and claims nothing: the
+    `explore` class is routed to the top tier, so its ladder is two attempts, each waiting up
+    to `REQUEST_TIMEOUT_S` (420 s) for an answer — about fourteen minutes at worst, once per
+    spell — and a supervisor that died meanwhile is noticed only when the call returns. A
+    `research stop` is not delayed by it: the lane is killed after the shared grace and the
+    call with it.
 
     A lane told to stop starts nothing more: the driver asks before every proposal and
     every card, and an exploration is not begun either. The same holds once `supervisor`,

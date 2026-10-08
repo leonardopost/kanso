@@ -6,6 +6,8 @@ from collections.abc import Iterator
 from datetime import date
 
 import pytest
+from nautilus_trader.core.data import Data
+from nautilus_trader.model.custom import customdataclass
 from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
 
 from kanso.data import catalog as cat
@@ -20,6 +22,7 @@ from tests.data.catalog.conftest import (
     Ref,
     bar,
     bars,
+    days,
     define,
     equity,
     quote,
@@ -159,8 +162,8 @@ def test_a_supersede_takes_the_place_of_the_pinned_dataset_it_names(ws: FakeWork
 
     assert later.replaced == (first.manifest.dataset_id,)
     assert later.manifest.supersedes == first.manifest.dataset_id
-    assert first.manifest.dataset_id not in cat.manifests(ws)
-    assert later.manifest.dataset_id in cat.manifests(ws)
+    assert first.manifest.dataset_id not in m.manifests(ws)
+    assert later.manifest.dataset_id in m.manifests(ws)
 
 
 def test_a_supersede_lifts_the_pin_of_the_dataset_it_names_and_no_other(
@@ -181,7 +184,7 @@ def test_a_supersede_lifts_the_pin_of_the_dataset_it_names_and_no_other(
             source="synthetic",
             supersedes=first.manifest.dataset_id,
         )
-    assert first.manifest.dataset_id in cat.manifests(ws)
+    assert first.manifest.dataset_id in m.manifests(ws)
 
 
 def test_the_pinned_refusal_names_the_supersede_that_would_lift_it(ws: FakeWorkspace) -> None:
@@ -454,6 +457,134 @@ def test_an_adjusted_series_clashes_with_the_unadjusted_one_it_shares_a_file_wit
     assert "--replace" in raised.value.remedy
 
 
+# --- what a write reads ----------------------------------------------------------
+
+UNREADABLE = "a write that opens this manifest fails: it is not one it can clash with\n"
+
+
+def unreadable(ws: FakeWorkspace, *held: cat.Written) -> None:
+    """Make each held dataset's manifest fail to parse, so a write that opens one fails."""
+    for written in held:
+        m.manifest_file(ws, written.manifest.dataset_id).write_text(UNREADABLE, encoding="utf-8")
+
+
+def test_a_write_opens_no_manifest_of_another_series(ws: FakeWorkspace) -> None:
+    """What a write can clash with is its own series — the instrument, type and resolution the
+    store files it under, adjusted or not — plus the dataset it names in `supersedes`. Every
+    other series' manifest is unreadable here, and every way of writing still succeeds, so
+    none of them opened one: what a write costs does not grow with what else is held."""
+    minutes = Ref(resolution="1m", span=(JAN1, JAN1))
+    others = [
+        cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic"),
+        cat.write(ws, quotes(JAN1, 5), ref=Ref(type="quote", resolution=None), source="synthetic"),
+        cat.write(ws, bars(JAN1, 1, spec="1-MINUTE-LAST-EXTERNAL"), ref=minutes, source="s"),
+    ]
+    held = write_bars(ws)
+    define(ws, AAPL, MSFT)
+    snap.freeze(ws)
+    unreadable(ws, *others)
+
+    later = write_bars(ws, start=date(2024, 1, 8), count=3)
+    batched = cat.write(
+        ws,
+        iter(bars(date(2024, 1, 11), 3)),
+        ref=Ref(span=(date(2024, 1, 11), date(2024, 1, 13))),
+        source="synthetic",
+        batch=2,
+    )
+    replaced = cat.write(
+        ws,
+        bars(date(2024, 1, 8), 3),
+        ref=Ref(span=(date(2024, 1, 8), date(2024, 1, 10))),
+        source="synthetic",
+        replace=True,
+    )
+    successor = cat.write(
+        ws, bars(JAN1, 5), ref=Ref(), source="synthetic", supersedes=held.manifest.dataset_id
+    )
+
+    assert replaced.replaced == (later.manifest.dataset_id,)
+    assert successor.replaced == (held.manifest.dataset_id,)
+    assert batched.manifest.span == (date(2024, 1, 11), date(2024, 1, 13))
+    for written in others:
+        path = m.manifest_file(ws, written.manifest.dataset_id)
+        assert path.read_text(encoding="utf-8") == UNREADABLE
+
+
+def test_a_write_opens_no_manifest_of_its_series_that_ends_before_it_begins(
+    ws: FakeWorkspace,
+) -> None:
+    """A dataset that ends before a write begins can neither overlap it nor share its id, and
+    an id carries its end, so a chunked load or a backfill written forwards opens none of
+    the chunks it already wrote: its cost does not grow with what it has written."""
+    written: list[cat.Written] = []
+    for start in [date(2024, 1, 1 + 7 * n) for n in range(4)]:
+        unreadable(ws, *written)
+        chunk = (start, date.fromordinal(start.toordinal() + 6))
+        written.append(
+            cat.write(ws, iter(bars(start, 7)), ref=Ref(span=chunk), source="synthetic", batch=3)
+        )
+
+    assert len(cat.open_catalog(ws).bars()) == 28
+
+
+def test_a_write_still_refuses_the_clash_it_reads_by_name(ws: FakeWorkspace) -> None:
+    """Reading by name keeps every clash: the same span unadjusted and adjusted, an overlap
+    ending later than the write, and a `supersedes` that names no held dataset or no id."""
+    write_bars(ws)
+    with pytest.raises(PreconditionError, match="overlaps the held dataset"):
+        cat.write(
+            ws,
+            bars(date(2023, 12, 30), 3),
+            ref=Ref(adjusted=True, span=(date(2023, 12, 30), JAN1)),
+            source="vendor_file",
+            adjustment_basis="close 2024-06-01",
+        )
+    for named in ("AAPL.XNAS-bar-1d-raw-20240106", "not a dataset id"):
+        with pytest.raises(PreconditionError, match="not a dataset this workspace holds"):
+            cat.write(
+                ws,
+                bars(date(2024, 1, 8), 2),
+                ref=Ref(span=(date(2024, 1, 8), date(2024, 1, 9))),
+                source="synthetic",
+                supersedes=named,
+            )
+
+
+def test_a_file_another_series_gains_during_a_write_is_not_the_write_s(
+    ws: FakeWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write lists only the directory its series is filed in, so a file another series
+    gains meanwhile — another process loading another name — is neither recorded as this
+    dataset's bytes nor removed when this write fails."""
+    cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic")
+    elsewhere = next((m.data_path(ws) / "bar").glob("MSFT*")) / "gained.parquet"
+    engine = cat.ParquetDataCatalog.write_data
+
+    def alongside(self: cat.ParquetDataCatalog, data: list[object]) -> None:
+        engine(self, data)
+        elsewhere.write_bytes(b"another series' bytes")
+
+    monkeypatch.setattr(cat.ParquetDataCatalog, "write_data", alongside)
+    written = write_bars(ws)
+    elsewhere.unlink()
+
+    assert written.files == (
+        "bar/AAPL.XNAS-1-DAY-LAST-EXTERNAL/"
+        "2024-01-01T16-00-00-000000000Z_2024-01-05T16-00-00-000000000Z.parquet",
+    )
+    assert cat._checksum(m.data_path(ws), written.files) == written.manifest.checksum
+
+    def failing(self: cat.ParquetDataCatalog, data: list[object]) -> None:
+        elsewhere.write_bytes(b"another series' bytes")
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(cat.ParquetDataCatalog, "write_data", failing)
+    with pytest.raises(OSError, match="no space"):
+        write_bars(ws, start=date(2024, 1, 8), count=2)
+    assert elsewhere.is_file()
+
+
 # --- a write a batch at a time --------------------------------------------------
 
 
@@ -640,3 +771,449 @@ def test_a_replace_that_is_written_lets_the_old_files_go(ws: FakeWorkspace) -> N
     assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet")) == list(
         again.files
     )
+
+
+# --- a series of no instrument --------------------------------------------------
+
+Breadth = customdataclass(
+    type("CatalogBreadth", (Data,), {"__annotations__": {"advancing": float}})
+)
+"""A market-wide series: no instrument, so the store files it in its class's directory alone.
+
+Built with `__annotations__` set to real objects, because the engine's decorator cannot read
+the postponed annotations this module declares."""
+
+BREADTH = Ref(instrument="MARKET", type="breadth", resolution=None)
+
+
+def breadth(advancing: float, start: date = JAN1, count: int = 5) -> list[Data]:
+    return [
+        Breadth(advancing=advancing, ts_event=cat.day_start_ns(day), ts_init=cat.day_start_ns(day))
+        for day in days(start, count)
+    ]
+
+
+def advancing(ws: FakeWorkspace) -> list[float]:
+    """What the store holds of the market-wide series over the reference span, in order."""
+    held = cat.load_window(ws, Breadth, None, BREADTH.span)
+    return [point.data.advancing for point in held.points]
+
+
+def test_a_series_of_no_instrument_is_replaced(ws: FakeWorkspace) -> None:
+    """The engine's removal, asked for no identifier, reaches only the per-instrument
+    directories of a class and never the files in the class's own, so a replace removed
+    nothing and its write was refused as having produced no bytes."""
+    first = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+
+    again = cat.write(ws, breadth(2.0), ref=BREADTH, source="synthetic", replace=True)
+
+    assert again.replaced == (first.manifest.dataset_id,)
+    assert advancing(ws) == [2.0] * 5
+    assert m.manifests(ws) == {again.manifest.dataset_id: again.manifest}
+    root = m.data_path(ws)
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet")) == list(
+        again.files
+    )
+
+
+def test_a_pinned_series_of_no_instrument_is_superseded(ws: FakeWorkspace) -> None:
+    """Pinned beside an instrument's data, as a market-wide series is: a snapshot needs a
+    definition of an instrument its datasets name."""
+    first = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+    write_bars(ws)
+    define(ws)
+    snap.freeze(ws)
+
+    later = cat.write(
+        ws, breadth(2.0), ref=BREADTH, source="synthetic", supersedes=first.manifest.dataset_id
+    )
+
+    assert later.replaced == (first.manifest.dataset_id,)
+    assert advancing(ws) == [2.0] * 5
+
+
+def test_a_replace_of_a_series_of_no_instrument_that_fails_keeps_what_it_replaced(
+    ws: FakeWorkspace,
+) -> None:
+    held = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+
+    def broken() -> Iterator[Data]:
+        yield from breadth(2.0, count=3)
+        raise ValidationError("the source refused a message part-way")
+
+    with pytest.raises(ValidationError, match="part-way"):
+        cat.write(ws, broken(), ref=BREADTH, source="x", batch=1, replace=True)
+
+    assert m.manifests(ws) == {held.manifest.dataset_id: held.manifest}
+    assert advancing(ws) == [1.0] * 5
+    assert cat._checksum(m.data_path(ws), held.files) == held.manifest.checksum
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_replace_removes_its_own_instrument_s_files_and_no_other_s(ws: FakeWorkspace) -> None:
+    """Two names' prints of the same days sit in two directories of one class; replacing
+    one name's leaves every file of the other's as it was."""
+    other = cat.write(
+        ws, [trade(MSFT, day) for day in days(JAN1, 5)], ref=Ref(MSFT, "trade", None), source="s"
+    )
+    held = cat.write(ws, prints(), ref=TRADES, source="synthetic")
+
+    again = cat.write(ws, prints(), ref=TRADES, source="x", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert cat._checksum(m.data_path(ws), other.files) == other.manifest.checksum
+    assert len(cat.open_catalog(ws).trade_ticks(instrument_ids=[MSFT])) == 5
+
+
+# --- the files a replace removes ------------------------------------------------
+
+THREE_DAYS = 3 * 86_400 * cat.NANOS_PER_SECOND
+
+
+def released(advancing: float, start: date, count: int = 5) -> list[Data]:
+    """A market-wide series each of whose days is released three days after it."""
+    return [
+        Breadth(
+            advancing=advancing,
+            ts_event=cat.day_start_ns(day),
+            ts_init=cat.day_start_ns(day) + THREE_DAYS,
+        )
+        for day in days(start, count)
+    ]
+
+
+def released_ref(start: date, count: int = 5) -> Ref:
+    end = date.fromordinal(start.toordinal() + count - 1)
+    return Ref(
+        instrument="MARKET",
+        type="breadth",
+        resolution=None,
+        span=(start, end),
+        publication="delayed",
+        publication_rule="economic_release",
+    )
+
+
+def held_files(ws: FakeWorkspace) -> list[str]:
+    root = m.data_path(ws)
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*.parquet"))
+
+
+def test_a_replace_keeps_the_dataset_whose_release_runs_into_its_span(ws: FakeWorkspace) -> None:
+    """A file's name is the availability it holds and a dataset's span is economic: the
+    first week's file runs to the 8th, into the second week's span, and a replace of the
+    second week that chose its files by that span removed the first week's and kept its
+    manifest."""
+    week = cat.write(ws, released(1.0, JAN1), ref=released_ref(JAN1), source="s")
+    jan6 = date(2024, 1, 6)
+    held = cat.write(ws, released(1.0, jan6), ref=released_ref(jan6), source="s")
+
+    again = cat.write(ws, released(2.0, jan6), ref=released_ref(jan6), source="s", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert cat._checksum(m.data_path(ws), week.files) == week.manifest.checksum
+    assert held_files(ws) == sorted(week.files + again.files)
+    assert m.manifests(ws) == {
+        week.manifest.dataset_id: week.manifest,
+        again.manifest.dataset_id: again.manifest,
+    }
+
+
+def late_print(day: date, seconds: int) -> TradeTick:
+    """A print `seconds` into `day`, carried under the fifteen-minute delayed entitlement."""
+    ts_event = cat.day_start_ns(day) + seconds * cat.NANOS_PER_SECOND
+    return TradeTick.from_dict(
+        {
+            **TradeTick.to_dict(trade(AAPL, day)),
+            "ts_event": ts_event,
+            "ts_init": ts_event + FIFTEEN_MINUTES,
+        }
+    )
+
+
+def test_a_replace_keeps_the_day_whose_evening_print_is_published_on_it(
+    ws: FakeWorkspace,
+) -> None:
+    """A print at 23:50 is public at 00:05 the next day, so the 2nd's file meets the 3rd's
+    span and the 3rd's own file does not: a replace of the 3rd by its span removed the 2nd's
+    print and left the 3rd's old one beside the new."""
+    jan2, jan3 = date(2024, 1, 2), date(2024, 1, 3)
+
+    def ref(day: date) -> Ref:
+        return Ref(
+            type="trade",
+            resolution=None,
+            span=(day, day),
+            publication="delayed",
+            publication_rule="delayed_trade",
+        )
+
+    evening = 23 * 3600 + 50 * 60
+    first = cat.write(ws, [late_print(jan2, evening)], ref=ref(jan2), source="s")
+    held = cat.write(ws, [late_print(jan3, evening)], ref=ref(jan3), source="s")
+
+    again = cat.write(ws, [late_print(jan3, 12 * 3600)], ref=ref(jan3), source="s", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert cat._checksum(m.data_path(ws), first.files) == first.manifest.checksum
+    assert held_files(ws) == sorted(first.files + again.files)
+    held_prints = cat.open_catalog(ws).trade_ticks(instrument_ids=[AAPL])
+    assert [p.ts_event for p in held_prints] == [
+        late_print(jan2, evening).ts_event,
+        late_print(jan3, 12 * 3600).ts_event,
+    ]
+
+
+def test_a_delayed_dataset_whose_files_no_longer_hash_to_it_is_refused_with_nothing_removed(
+    ws: FakeWorkspace,
+) -> None:
+    """The second week's file is altered by hand: no run of the series' files hashes to its
+    checksum, and its span cannot say which files are its own, since a delayed dataset's
+    files run past it. kanso refuses before removing the first week's either."""
+    week = cat.write(ws, released(1.0, JAN1), ref=released_ref(JAN1), source="s")
+    jan6 = date(2024, 1, 6)
+    later = cat.write(ws, released(1.0, jan6), ref=released_ref(jan6), source="s")
+    (m.data_path(ws) / later.files[0]).write_bytes(b"altered")
+
+    with pytest.raises(PreconditionError, match="its publication is delayed") as refused:
+        cat.write(ws, released(2.0, JAN1, 10), ref=released_ref(JAN1, 10), source="s", replace=True)
+
+    assert later.manifest.dataset_id in str(refused.value)
+    assert "hashes to the checksum" in str(refused.value)
+    assert "catalog/data/" in (refused.value.remedy or "")
+    assert cat._checksum(m.data_path(ws), week.files) == week.manifest.checksum
+    assert held_files(ws) == sorted(week.files + later.files)
+    assert set(m.manifests(ws)) == {week.manifest.dataset_id, later.manifest.dataset_id}
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_realtime_dataset_whose_files_no_longer_hash_to_it_is_replaced_by_its_span(
+    ws: FakeWorkspace,
+) -> None:
+    """A realtime series whose points are public at their reference time has its files
+    within its span: where no run hashes to its checksum, the files within its span are its
+    own, and they go."""
+    week = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+    jan6 = date(2024, 1, 6)
+    later = cat.write(ws, breadth(1.0, jan6), ref=Ref("MARKET", "breadth", None), source="s")
+    (m.data_path(ws) / later.files[0]).write_bytes(b"altered")
+    ten = Ref("MARKET", "breadth", None, span=(JAN1, date(2024, 1, 10)))
+
+    again = cat.write(ws, breadth(2.0, count=10), ref=ten, source="s", replace=True)
+
+    assert again.replaced == (week.manifest.dataset_id, later.manifest.dataset_id)
+    assert held_files(ws) == list(again.files)
+    assert m.manifests(ws) == {again.manifest.dataset_id: again.manifest}
+    held = cat.load_window(ws, Breadth, None, ten.span).points
+    assert [point.data.advancing for point in held] == [2.0] * 10
+
+
+def recorded_with(ws: FakeWorkspace, held: cat.Written, other: cat.Written) -> m.Manifest:
+    """`held`'s manifest as recorded by a write while `other`'s landed where it looked for what
+    it produced, so it hashed `other`'s file with its own: kanso 0.13 looked in the whole
+    engine tree, and a write still looks in its series' directory."""
+    recorded = held.manifest.model_copy(
+        update={"checksum": cat._checksum(m.data_path(ws), held.files + other.files)}
+    )
+    m.write_manifest(ws, recorded)
+    return recorded
+
+
+@pytest.mark.parametrize("supersede", [False, True], ids=["replace", "supersede"])
+def test_a_dataset_recorded_while_another_series_landed_is_replaced_by_its_span(
+    ws: FakeWorkspace, supersede: bool
+) -> None:
+    """Nothing on disk is altered, yet no run of its own directory hashes to its checksum.
+    It is realtime, its bars public at their close, so the files within its span are its own:
+    a replace, or a supersede of it pinned, removes exactly its file and leaves the other
+    name's."""
+    define(ws, AAPL, MSFT)
+    definitions = held_files(ws)
+    other = cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic")
+    held = write_bars(ws)
+    recorded = recorded_with(ws, held, other)
+    dataset = recorded.dataset_id
+    if supersede:
+        snap.freeze(ws)
+
+    again = cat.write(
+        ws,
+        bars(JAN1, 5),
+        ref=Ref(),
+        source="synthetic",
+        replace=not supersede,
+        supersedes=dataset if supersede else None,
+    )
+
+    assert again.replaced == (dataset,)
+    assert again.files == held.files
+    assert held_files(ws) == sorted([*definitions, *held.files, *other.files])
+    assert cat._checksum(m.data_path(ws), other.files) == other.manifest.checksum
+    assert m.manifests(ws) == {
+        again.manifest.dataset_id: again.manifest,
+        other.manifest.dataset_id: other.manifest,
+    }
+
+
+def test_a_dataset_recorded_while_a_write_of_its_series_landed_keeps_that_write_s_file(
+    ws: FakeWorkspace,
+) -> None:
+    """The second week was written while the first was, so the first's write hashed the
+    second's file with its own, and the two files are a run that hashes to its checksum. That
+    run holds the second week's points as well, more than the first recorded, so it is not
+    the first's: a replace of the first goes by its span and leaves the second week whole."""
+    first = write_bars(ws)
+    second = write_bars(ws, date(2024, 1, 8))
+    recorded = recorded_with(ws, first, second)
+
+    again = cat.write(ws, bars(JAN1, 5), ref=Ref(), source="synthetic", replace=True)
+
+    assert again.replaced == (recorded.dataset_id,)
+    assert held_files(ws) == sorted([*again.files, *second.files])
+    assert cat._checksum(m.data_path(ws), second.files) == second.manifest.checksum
+    assert m.manifests(ws) == {
+        again.manifest.dataset_id: again.manifest,
+        second.manifest.dataset_id: second.manifest,
+    }
+    held = cat.load_window(ws, Bar, BAR_TYPE, (date(2024, 1, 8), date(2024, 1, 12))).points
+    assert len(held) == second.manifest.row_count
+
+
+def delayed_prints(day: date = JAN1, count: int = 5) -> list[TradeTick]:
+    return [late_print(each, 12 * 3600) for each in days(day, count)]
+
+
+DELAYED_PRINTS = Ref(
+    type="trade", resolution=None, publication="delayed", publication_rule="delayed_trade"
+)
+
+
+@pytest.mark.parametrize("supersede", [False, True], ids=["replace", "supersede"])
+def test_a_delayed_dataset_recorded_while_another_series_landed_is_refused_until_removed(
+    ws: FakeWorkspace, supersede: bool
+) -> None:
+    """The same record of a delayed dataset is refused with nothing removed, because its span
+    cannot say which files are its own. The remedy is one that works: removed by hand, its
+    replace is the same load again, and its supersede a load that names no predecessor,
+    since the dataset a supersede names must still be held."""
+    define(ws, AAPL, MSFT)
+    definitions = held_files(ws)
+    other = cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic")
+    held = cat.write(ws, delayed_prints(), ref=DELAYED_PRINTS, source="synthetic")
+    recorded = recorded_with(ws, held, other)
+    dataset = recorded.dataset_id
+    if supersede:
+        snap.freeze(ws)
+    named = dataset if supersede else None
+
+    def load(replace: bool, supersedes: str | None) -> cat.Written:
+        prints = delayed_prints()
+        return cat.write(
+            ws, prints, ref=DELAYED_PRINTS, source="s", replace=replace, supersedes=supersedes
+        )
+
+    with pytest.raises(PreconditionError, match="while another write ran") as refused:
+        load(not supersede, named)
+
+    remedy = refused.value.remedy or ""
+    assert dataset in str(refused.value)
+    assert f"catalog/manifests/{dataset}.yaml" in remedy
+    assert (f"without --supersedes {dataset}" in remedy) is supersede
+    assert held_files(ws) == sorted([*definitions, *held.files, *other.files])
+    assert m.manifests(ws) == {dataset: recorded, other.manifest.dataset_id: other.manifest}
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+    m.manifest_file(ws, dataset).unlink()
+    for name in held.files:
+        (m.data_path(ws) / name).unlink()
+    if supersede:
+        with pytest.raises(PreconditionError, match="not a dataset this workspace holds"):
+            load(False, named)
+    again = load(not supersede, None)
+
+    assert again.files == held.files
+    assert again.manifest.supersedes is None
+    assert cat._checksum(m.data_path(ws), other.files) == other.manifest.checksum
+
+
+def test_a_replace_by_span_is_refused_where_a_file_runs_across_its_edge(
+    ws: FakeWorkspace,
+) -> None:
+    """A dataset declared realtime whose points were published days after their reference
+    time has a file that runs past its span. Removing that file whole would take points from
+    outside the span, so with no run to say otherwise nothing is removed."""
+    jan6 = date(2024, 1, 6)
+    late = Ref("MARKET", "breadth", None, span=(jan6, date(2024, 1, 10)))
+    held = cat.write(ws, released(1.0, jan6), ref=late, source="s")
+    m.write_manifest(ws, held.manifest.model_copy(update={"checksum": "0" * 64}))
+
+    with pytest.raises(PreconditionError, match="runs across an edge of its span"):
+        cat.write(ws, breadth(2.0, jan6), ref=late, source="s", replace=True)
+
+    assert held_files(ws) == list(held.files)
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_replace_by_span_keeps_the_file_of_a_delayed_dataset_before_it(
+    ws: FakeWorkspace,
+) -> None:
+    """The 5th is released on the 8th, into the span of the realtime week after it, whose
+    file of the 6th and 7th and file of the 9th and 10th leave room for it. A removal by the
+    week's span would take the 5th's file with its own, so with no run to say which are the
+    week's, nothing is removed."""
+    jan5, jan6, jan8 = date(2024, 1, 5), date(2024, 1, 6), date(2024, 1, 8)
+    fifth = cat.write(ws, released(1.0, jan5, 1), ref=released_ref(jan5, 1), source="s")
+    week = Ref("MARKET", "breadth", None, span=(jan6, date(2024, 1, 10)))
+    points = [p for p in breadth(1.0, jan6) if cat.day_of(p.ts_event) != jan8]
+    held = cat.write(ws, iter(points), ref=week, source="s", batch=2)
+    m.write_manifest(ws, held.manifest.model_copy(update={"checksum": "0" * 64}))
+
+    with pytest.raises(PreconditionError, match=f"the publication of {fifth.manifest.dataset_id}"):
+        cat.write(ws, points, ref=week, source="s", replace=True)
+
+    assert len(held.files) == 2
+    assert held_files(ws) == sorted(fifth.files + held.files)
+    assert cat._checksum(m.data_path(ws), fifth.files) == fifth.manifest.checksum
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+
+def test_a_file_that_lands_beside_a_write_s_is_not_hashed_with_them(
+    ws: FakeWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write records the engine's files in its series' directory and no other name, which
+    are the files a replace searches: a desktop's `.DS_Store` landing there meanwhile is not
+    hashed into the checksum, so the dataset's own file still matches it later."""
+    home = cat._filed_in(m.data_path(ws), Breadth, None)
+    engine = cat.ParquetDataCatalog.write_data
+
+    def beside(self: cat.ParquetDataCatalog, data: list[object]) -> None:
+        engine(self, data)
+        (home / ".DS_Store").write_bytes(b"a desktop's")
+
+    monkeypatch.setattr(cat.ParquetDataCatalog, "write_data", beside)
+    held = cat.write(ws, released(1.0, JAN1), ref=released_ref(JAN1), source="s")
+    monkeypatch.undo()
+
+    assert len(held.files) == 1
+    assert cat._checksum(m.data_path(ws), held.files) == held.manifest.checksum
+
+    again = cat.write(ws, released(2.0, JAN1), ref=released_ref(JAN1), source="s", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert (home / ".DS_Store").read_bytes() == b"a desktop's"
+
+
+def test_a_replace_leaves_a_file_the_engine_did_not_name(ws: FakeWorkspace) -> None:
+    """Only a name of the engine's `<start>_<end>` form is one of its files; the engine reads
+    a name with no underscore as holding no interval, which meets every span."""
+    held = cat.write(ws, breadth(1.0), ref=BREADTH, source="synthetic")
+    placed = m.data_path(ws) / held.files[0]
+    hand = placed.with_name("notes.parquet")
+    hand.write_bytes(b"kept")
+
+    again = cat.write(ws, breadth(2.0), ref=BREADTH, source="synthetic", replace=True)
+
+    assert again.replaced == (held.manifest.dataset_id,)
+    assert hand.read_bytes() == b"kept"
+    assert cat.ENGINE_FILE.fullmatch(placed.name)
+    assert not cat.ENGINE_FILE.fullmatch(hand.name)

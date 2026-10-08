@@ -35,10 +35,10 @@ delivers by `ts_init`, so a point admitted with the wrong one is a leak of the f
 into every card that reads it.
 
 The checksum a manifest carries is taken over the bytes the write produced: the parquet
-files that appeared under the engine's tree, each hashed and bound to its path within the
-store. `nautilus_trader 1.231.0` writes those files deterministically, so the same points
-written twice into two stores hash the same, which is what makes a snapshot id a fact
-about data rather than about a machine.
+files that appeared in the directory the engine files the series in, each hashed and bound
+to its path within the store. `nautilus_trader 1.231.0` writes those files
+deterministically, so the same points written twice into two stores hash the same, which
+is what makes a snapshot id a fact about data rather than about a machine.
 
 **A dataset too large to hold is written in batches.** By default a write gathers every
 point and sorts it before writing any, which is right for a series of bars and fatal for a
@@ -54,6 +54,51 @@ is checked once, over the span requested, before the first file. The manifest is
 every file the write produced, and a failure in any batch removes every file the write had
 already produced and records nothing, so a dataset is written whole or not at all.
 
+**A write's cost grows with its own series, never with the store.** It opens no other
+series' manifest. It reads its series' manifests — filed under the same instrument, type and
+resolution, adjusted or not — that end on or after the day the span it writes begins, found
+by their names, and the one `supersedes` names, by its own file. Those are every manifest
+it can clash with, and more: a name carries a dataset's end and not its start, so a span
+written ahead of what the series holds reads every later dataset of it. It finds the files it
+produced by listing the one directory the engine files the series in, and sets aside only
+that directory's files. `nautilus_trader 1.231.0` files a series under
+`data/<class_to_filename(class)>/<urisafe_identifier(identifier)>`, and a series of no
+instrument in the class's own directory.
+Measured on a workspace of 13,293 manifests and 18,465 files, reading every manifest took
+8.9 s and walking the whole tree 0.68 s, twice — about ten seconds a dataset, which a
+backfill paid on every chunk.
+
+**A replace removes whole files of its own series, and kanso removes them.** A file's name
+is the availability interval it holds, first and last `ts_init`, and a dataset's span is
+economic, the days of its `ts_event`, so a span does not say which files are a dataset's: a
+delayed dataset's file runs into the next one's span. The checksum and the row count its
+manifest recorded do, where the checksum was taken over its own files and no other's. The
+files that go for a clashing dataset are the run of the series' files, in name order and
+named as the engine names them, whose checksum is that one and whose rows number its
+`row_count`. No run matches a dataset whose files were altered or removed by hand; or one a
+replace on kanso 0.13 or earlier removed or rewrote a file of, having chosen its files by
+span; or one whose files another write of the series came between; or one whose write hashed
+with its own the file another write of the series landed in its directory meanwhile, whose
+points its `row_count` does not count; or one kanso 0.13 or earlier recorded while another
+write ran in the workspace — that version listed the whole of `data/` to find what it wrote,
+so it hashed the other write's files, of any series, with its own, though nothing on disk was
+altered. Such a dataset's files are then the ones within its span, where that span can say
+so: it is realtime; no file of the series runs across an edge of that span; and no dataset of
+the series before it is published otherwise, whose files could lie within it. Realtime does
+not make a point's `ts_init` its `ts_event`: a loader may stamp the instant a tape carried a
+print, or a time its file states, after the reference time, so a realtime dataset's last
+points can be public after its last day ends. A file holding those and points of the day
+runs across the edge, and the dataset is refused. A file holding only those lies wholly after
+the span: that dataset's own replace by span leaves it behind, and a replace by span of the
+dataset after it takes it as that one's, as a removal by span on kanso 0.13 or earlier did on
+every replace. Where the span cannot say, the dataset is refused before anything is
+removed, and is replaced only once its manifest and its files are removed by hand — and
+superseded only by a load that then names no predecessor, because the dataset it would name
+is no longer held. The engine's `delete_data_range` is not asked: given no
+identifier it runs on each instrument's directory of the class and never on the class's own,
+so it would remove every instrument's files over the span and none of a series of no
+instrument, whose replace would then be refused as having written no bytes.
+
 **A replaced dataset is kept until its replacement is written.** A replace or a supersede
 removes the held dataset before the first new file is written, because the engine keeps its
 files' intervals disjoint; a batched write has by then read one batch of a stream that may
@@ -67,6 +112,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -76,18 +122,23 @@ from typing import TYPE_CHECKING, Any, Final
 
 from nautilus_trader.model.data import CustomData
 from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+from nautilus_trader.persistence.funcs import class_to_filename, urisafe_identifier
 
 from kanso.data import publication
 from kanso.data.manifest import (
+    CATALOG_DIR,
+    DATA_DIR,
+    MANIFESTS_DIR,
     DatasetRefLike,
     Manifest,
     as_publication,
     catalog_path,
     data_path,
     dataset_id,
-    manifests,
+    holds,
     overlaps,
     remove_manifest,
+    series_manifests,
     shortfall,
     write_manifest,
 )
@@ -103,6 +154,14 @@ DAY_END_NANOS = 86_400 * NANOS_PER_SECOND - 1
 
 ASIDE_DIR: Final = ".replaced"
 """Where a write keeps what a replace removed, beside the engine's tree, until it is done."""
+
+ENGINE_FILE: Final = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{9}Z_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{9}Z\.parquet"
+)
+"""The name the engine gives a file it writes: the first and the last `ts_init` it holds, to
+the nanosecond. A file named otherwise is not the engine's, and `filter_files` keeps a name
+it reads no interval off as meeting every span, so a replace looks only at names of this
+form."""
 
 WRITE_BATCH: Final = 250_000
 """Points per `write_data` call on a batched write: about 0.2 GB of engine objects and
@@ -245,19 +304,15 @@ def write(
 
     served = served_span(ordered)
     dataset = dataset_id(ref.instrument, ref.type, ref.resolution, ref.adjusted, served[1])
-    held = manifests(ws)
-    if supersedes is not None and supersedes not in held:
-        raise PreconditionError(
-            f"supersedes: {supersedes!r} is not a dataset this workspace holds",
-            remedy="name the dataset this one follows, or omit supersedes",
-        )
+    held = _held(ws, ref, served, supersedes)
     replaced = _clear(ws, held, dataset, ref, served, replace, data_cls, identifier, supersedes)
 
     root = data_path(ws)
-    before = _tree(root)
+    home = _filed_in(root, data_cls, identifier)
+    before = _listing(root, home)
     try:
         open_catalog(ws).write_data(ordered)
-        files = _new_files(before, _tree(root))
+        files = _new_files(before, _listing(root, home))
         if not files:
             raise PreconditionError(
                 f"dataset {dataset!r} wrote no bytes: the store already holds files for this "
@@ -265,7 +320,7 @@ def write(
                 remedy="run `kanso data show` and load with --replace to rewrite the span",
             )
     except BaseException:
-        _undo(ws, before, [held[name] for name in replaced])
+        _undo(ws, home, before, [held[name] for name in replaced])
         raise
     _let_go(ws)
 
@@ -344,18 +399,14 @@ def _write_batched(
             remedy="narrow the request, or check the source's history floor",
         )
     series = _checked(first, ref)
-    held = manifests(ws)
-    if supersedes is not None and supersedes not in held:
-        raise PreconditionError(
-            f"supersedes: {supersedes!r} is not a dataset this workspace holds",
-            remedy="name the dataset this one follows, or omit supersedes",
-        )
+    held = _held(ws, ref, ref.span, supersedes)
     requested = dataset_id(ref.instrument, ref.type, ref.resolution, ref.adjusted, ref.span[1])
     replaced = _clear(ws, held, requested, ref, ref.span, replace, *series[:2], supersedes)
 
     catalog = open_catalog(ws)
     root = data_path(ws)
-    before = _tree(root)
+    home = _filed_in(root, *series[:2])
+    before = _listing(root, home)
     rows = 0
     first_day, last_day = served_span(first)
     current: list[Any] | None = first
@@ -374,7 +425,7 @@ def _write_batched(
             span = served_span(current)
             first_day, last_day = min(first_day, span[0]), max(last_day, span[1])
             current = next(batches, None)
-        files = _new_files(before, _tree(root))
+        files = _new_files(before, _listing(root, home))
         if not files:
             raise PreconditionError(
                 f"dataset for {ref.instrument} {ref.type} wrote no bytes: the store already "
@@ -382,7 +433,7 @@ def _write_batched(
                 remedy="run `kanso data show` and load with --replace to rewrite the span",
             )
     except BaseException:
-        _undo(ws, before, [held[name] for name in replaced])
+        _undo(ws, home, before, [held[name] for name in replaced])
         raise
     _let_go(ws)
     served = (first_day, last_day)
@@ -516,6 +567,26 @@ def identity(point: Any) -> tuple[type, str | None, str | None]:
     return type(inner), str(instrument_id), str(instrument_id)
 
 
+def _held(
+    ws: Workspace, ref: DatasetRefLike, span: tuple[date, date], supersedes: str | None
+) -> dict[str, Manifest]:
+    """The held datasets of the series a write over `span` files under that end on or after
+    the span's first day, keyed by id: every one it can clash with, and no other series'.
+
+    What clashes is what `_clear` says: a dataset of the same series that overlaps the span
+    or has the id of the one written. A dataset that ends before the span begins does
+    neither, so it is not read. One that ends later is, whether or not it begins in time to
+    overlap, because its name carries its end and not its start. The dataset `supersedes`
+    names is read by its own file, of whatever series, and refused unless held.
+    """
+    if supersedes is not None and not holds(ws, supersedes):
+        raise PreconditionError(
+            f"supersedes: {supersedes!r} is not a dataset this workspace holds",
+            remedy="name the dataset this one follows, or omit supersedes",
+        )
+    return series_manifests(ws, (ref.instrument, ref.type, ref.resolution), ending_from=span[0])
+
+
 def _clear(
     ws: Workspace,
     held: dict[str, Manifest],
@@ -563,36 +634,40 @@ def _clear(
             f"{served[0]}..{served[1]} overlaps the held dataset(s) {names}",
             remedy="pass --replace to delete and rewrite the overlapped span",
         )
-    catalog = open_catalog(ws)
-    _set_aside(ws, catalog, data_cls)
+    root = data_path(ws)
+    home = _filed_in(root, data_cls, identifier)
+    owned = _owned(ws, home, data_cls, clashing, supersedes)
+    _set_aside(ws, home)
+    for name in sorted(owned):
+        (root / name).unlink()
     for manifest in clashing:
-        _delete(catalog, data_cls, identifier, manifest.span)
         remove_manifest(ws, manifest.dataset_id)
     return tuple(sorted(m.dataset_id for m in clashing))
 
 
-def _set_aside(ws: Workspace, catalog: ParquetDataCatalog, data_cls: type) -> None:
-    """Link every file the store holds of `data_cls` under `catalog/.replaced/`.
+def _set_aside(ws: Workspace, home: Path) -> None:
+    """Link every file in `home`, a series' directory, under `catalog/.replaced/`.
 
-    Those are all the files a removal of `data_cls` can touch, and a link costs no bytes: the
-    removal unlinks the store's name and the aside one keeps the file, until `_let_go`
+    Those are all the files a removal of the series can touch, and a link costs no bytes:
+    the removal unlinks the store's name and the aside one keeps the file, until `_let_go`
     drops it or `_undo` links it back.
     """
     aside = catalog_path(ws) / ASIDE_DIR
     shutil.rmtree(aside, ignore_errors=True)
     root = data_path(ws)
-    for name in catalog.get_file_list_from_data_cls(data_cls):
-        path = Path(name)
+    for path in home.glob("*.parquet"):
         kept = aside / path.relative_to(root)
         kept.parent.mkdir(parents=True, exist_ok=True)
         os.link(path, kept)
 
 
-def _undo(ws: Workspace, before: dict[str, tuple[int, int]], removed: Sequence[Manifest]) -> None:
-    """A failed write taken back: the files it produced removed, and what its replace
-    removed put back, files and manifests, as they were before it began."""
+def _undo(
+    ws: Workspace, home: Path, before: dict[str, tuple[int, int]], removed: Sequence[Manifest]
+) -> None:
+    """A failed write taken back: the files it produced in `home` removed, and what its
+    replace removed put back, files and manifests, as they were before it began."""
     root = data_path(ws)
-    for name in set(_tree(root)) - set(before):
+    for name in set(_listing(root, home)) - set(before):
         (root / name).unlink(missing_ok=True)
     aside = catalog_path(ws) / ASIDE_DIR
     if removed and aside.is_dir():
@@ -611,33 +686,205 @@ def _let_go(ws: Workspace) -> None:
     shutil.rmtree(catalog_path(ws) / ASIDE_DIR, ignore_errors=True)
 
 
-def _delete(
-    catalog: ParquetDataCatalog, data_cls: type, identifier: str | None, span: tuple[date, date]
-) -> None:
-    """Remove the files holding a dataset's span.
+def _owned(
+    ws: Workspace,
+    home: Path,
+    data_cls: type,
+    datasets: Sequence[Manifest],
+    supersedes: str | None,
+) -> set[str]:
+    """The files of `home`, a series' directory, that hold `datasets`, by path within the
+    engine's tree.
 
-    The engine addresses its files by availability interval and keeps those intervals
-    disjoint, so one file belongs to one dataset; the files removed are the ones whose
-    interval meets the dataset's served span.
+    A file's name is the availability interval it holds, its first and last `ts_init`, and a
+    dataset's span is economic, the days of its `ts_event`, so a span does not say which
+    files are a dataset's: a delayed dataset's last points are published after the next
+    one's first day has begun, and its file meets that day. The checksum and the row count a
+    dataset's manifest recorded over the files its write produced do, wherever those files
+    are a run and no other's: the engine keeps a series' intervals disjoint and names that
+    sort in time, so the files one write produced in `home`, with no other write of the series
+    between them, are a run of the directory's engine-named files in name order. Such a
+    dataset's files are the run whose checksum is the one it recorded and whose rows number
+    its `row_count`, and the run begins at or after the first instant of its span, since no
+    point is published before its reference time. Each file is hashed once.
+
+    No run matches a dataset whose files were altered or removed by hand; one a replace on
+    kanso 0.13 or earlier removed or rewrote a file of, having chosen its files by span; one
+    whose files another write of the series came between; one whose write hashed with its
+    own the file another write of the series landed in `home` meanwhile, a run `_run` tells
+    by its rows; and one kanso 0.13 or earlier recorded while another write ran in the
+    workspace, because that version listed the whole engine tree to find what it wrote and
+    hashed the other write's files, of any series, with its own. Its files are then the ones
+    within its span where `_unsettled` finds nothing to say otherwise, and it is refused,
+    before anything is removed, where it does. A later held dataset of the series that does
+    not clash begins after a clashing one ends, so no file of its lies within that one's span.
     """
-    start, end = window_ns(span)
-    intervals = [
-        interval
-        for interval in catalog.get_intervals(data_cls, identifier)
-        if interval[0] <= end and start <= interval[1]
-    ]
+    catalog = open_catalog(ws)
+    root = data_path(ws)
+    names = sorted(
+        path.relative_to(root).as_posix()
+        for path in home.glob("*.parquet")
+        if ENGINE_FILE.fullmatch(path.name)
+    )
+    hashed: dict[str, bytes] = {}
+    owned: set[str] = set()
+    unmatched: list[Manifest] = []
+    for manifest in datasets:
+        first = day_start_ns(manifest.start)
+        sooner = set(catalog.filter_files(data_cls, names, None, None, first - 1))
+        run = _run(root, [name for name in names if name not in sooner], manifest, hashed)
+        if run is None:
+            unmatched.append(manifest)
+        else:
+            owned.update(run)
+    series = (
+        series_manifests(ws, unmatched[0].filed_under, ending_from=date.min) if unmatched else {}
+    )
+    for manifest in unmatched:
+        within = catalog.filter_files(data_cls, names, None, *window_ns(manifest.span))
+        why = _unsettled(catalog, data_cls, within, manifest, series.values())
+        if why is not None:
+            raise _unknown_files(manifest, why, home.relative_to(root), supersedes)
+        owned.update(within)
+    return owned
 
-    for interval in intervals:
-        catalog.delete_data_range(data_cls, identifier, interval[0], interval[1])
+
+def _unsettled(
+    catalog: ParquetDataCatalog,
+    data_cls: type,
+    within: Sequence[str],
+    manifest: Manifest,
+    series: Iterable[Manifest],
+) -> str | None:
+    """Why the files `within` a dataset's span may not be all and only its own, or `None`.
+
+    They are when it is realtime, so none of its files lies before its span; no file runs
+    across an edge of the span, since such a file holds points from outside it as well, and
+    would go whole; and no dataset of `series` that ends before it begins is published
+    otherwise, since that dataset's files can lie within this one's span — save one file a
+    realtime dataset before it can leave there. Realtime does not make a point's `ts_init` its
+    `ts_event`: a loader may stamp the instant a tape carried a print, or a time its file
+    states, after the reference time, so a realtime dataset's last points can be public after
+    its last day ends, and a file holding only those lies wholly after its span. Nothing here
+    tells that file from one of the dataset after it: that dataset's own replace by span leaves
+    it behind, and the next one's takes it as its own.
+    """
+    if manifest.publication != "realtime":
+        return (
+            f"its publication is {manifest.publication}, not realtime, so its files can run past "
+            "its span"
+        )
+    start, end = window_ns(manifest.span)
+    across = catalog.filter_files(data_cls, list(within), None, None, start - 1)
+    across += catalog.filter_files(data_cls, list(within), None, end + 1, None)
+    if across:
+        return f"{across[0]} runs across an edge of its span"
+    before = sorted(
+        (m.span, m.dataset_id, m.publication)
+        for m in series
+        if m.end < manifest.start and m.publication != "realtime"
+    )
+    if before:
+        _, other, publication = before[-1]
+        return (
+            f"the publication of {other}, before it in its series, is {publication}, so that "
+            "dataset's files can lie within this one's span"
+        )
+    return None
 
 
-def _tree(root: Path) -> dict[str, tuple[int, int]]:
-    """Every file under `root`, by path relative to it, with its size and modification time."""
-    if not root.is_dir():
+def _unknown_files(
+    manifest: Manifest, why: str, home: Path, supersedes: str | None
+) -> PreconditionError:
+    """The refusal of a replace that cannot tell which files are `manifest`'s.
+
+    The remedy is one that works: a supersede names a dataset the workspace must still hold,
+    so once the dataset is removed by hand the load that takes its place names none.
+    """
+    dataset = manifest.dataset_id
+    filed = f"{CATALOG_DIR}/{DATA_DIR}/{home.as_posix()}"
+    again = "then run this load again"
+    if dataset == supersedes:
+        again += (
+            f" without --supersedes {dataset}: every snapshot naming it then stops supporting "
+            "a certification, as after a supersede, and the new dataset records no predecessor"
+        )
+    return PreconditionError(
+        f"{dataset}: no run of the files in {filed} hashes to the checksum its manifest "
+        f"recorded and holds its {manifest.row_count} rows, and {why}, so which of them are "
+        "its own is not known and none is removed. Its files were altered or removed by hand, "
+        "or damaged by a replace on kanso 0.13 or earlier, or another write of its series came "
+        "between them or landed a file while it was written; or kanso 0.13 or earlier "
+        "recorded it while another write ran in this workspace and hashed that write's files "
+        "with its own",
+        remedy=f"remove {CATALOG_DIR}/{MANIFESTS_DIR}/{dataset}.yaml and {dataset}'s files in "
+        f"{filed} by hand, {again}",
+    )
+
+
+def _run(
+    root: Path, names: Sequence[str], manifest: Manifest, hashed: dict[str, bytes]
+) -> Sequence[str] | None:
+    """The run of `names`, in order, whose checksum is `manifest`'s, if its files hold the
+    `row_count` points the manifest recorded, and otherwise `None`.
+
+    The checksum alone is not enough. A write records as its own every engine-named file
+    that appears in its series' directory while it writes, so the file of another write of
+    the series that landed meanwhile is hashed with its own, and the two are then a run that
+    hashes to its checksum; but its `row_count` is what the write was handed, which that
+    run's files exceed. Runs are tried as their last file is reached, so the search reads no
+    file past the dataset's own last; `hashed` keeps each file's digest for the next
+    dataset's search.
+    """
+    runs: list[Any] = []
+    for last, name in enumerate(names):
+        if name not in hashed:
+            hashed[name] = hashlib.sha256((root / name).read_bytes()).digest()
+        runs.append(hashlib.sha256())
+        for begin, run in enumerate(runs):
+            _bind(run, name, hashed[name])
+            if run.hexdigest() == manifest.checksum:
+                found = names[begin : last + 1]
+                return found if _rows(root, found) == manifest.row_count else None
+    return None
+
+
+def _rows(root: Path, files: Sequence[str]) -> int:
+    """How many points `files` hold, read off each parquet file's footer and not its data.
+
+    The engine names no count of a file's rows, so this reads the footer with `pyarrow`,
+    the library `nautilus_trader 1.231.0`'s catalog writes the files with; kanso declares no
+    dependency on it.
+    """
+    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
+    return sum(int(pq.read_metadata(root / name).num_rows) for name in files)
+
+
+def _filed_in(root: Path, data_cls: type, identifier: str | None) -> Path:
+    """The directory under the engine's tree `root` that a series is filed in.
+
+    Its class's directory, then its identifier's — a bar type or an instrument id, as
+    `identity` gives it — or the class's own directory for a series of no instrument.
+    """
+    home = root / class_to_filename(data_cls)
+    return home if identifier is None else home / urisafe_identifier(identifier)
+
+
+def _listing(root: Path, home: Path) -> dict[str, tuple[int, int]]:
+    """Every engine-named file in `home`, by path relative to `root`, with its size and
+    modification time.
+
+    `home` is a series' directory, and a write of the series creates or changes files there
+    and nowhere else, so this is all a write is compared against. Only the engine's names
+    count: a write's checksum is then taken over the set of files `_owned` searches, and a
+    file that lands beside them meanwhile — a desktop's `.DS_Store` — is not hashed with them.
+    """
+    if not home.is_dir():
         return {}
     found: dict[str, tuple[int, int]] = {}
-    for path in root.rglob("*"):
-        if path.is_file():
+    for path in home.iterdir():
+        if path.is_file() and ENGINE_FILE.fullmatch(path.name):
             stat = path.stat()
             found[path.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
     return found
@@ -654,7 +901,12 @@ def _checksum(root: Path, files: Sequence[str]) -> str:
     """A digest over the written bytes, each hashed under its path within the store."""
     digest = hashlib.sha256()
     for name in sorted(files):
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(hashlib.sha256((root / name).read_bytes()).digest())
+        _bind(digest, name, hashlib.sha256((root / name).read_bytes()).digest())
     return digest.hexdigest()
+
+
+def _bind(digest: Any, name: str, content: bytes) -> None:
+    """One file folded into a checksum: its path within the store, then its bytes' digest."""
+    digest.update(name.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(content)

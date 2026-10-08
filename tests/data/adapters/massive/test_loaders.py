@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-from kanso.data.adapters.massive.client import MassiveClient, Response
+from kanso.data.adapters.massive.client import API_HOST, MassiveClient, Response
 from kanso.data.adapters.massive.entitlement import PROBE_SPAN, settled_end
 from kanso.data.adapters.massive.errors import (
     BelowFloorError,
@@ -39,6 +39,7 @@ from kanso.data.adapters.massive.errors import (
 )
 from kanso.data.adapters.massive.loaders.bars import (
     AGGREGATE_LIMIT,
+    TICK_LIMIT,
     MassiveBarsLoader,
     MassiveSpec,
     Request,
@@ -686,6 +687,44 @@ def test_a_cursor_is_walked_to_the_end() -> None:
     loader, _ = bars_loader(answer)
     ref = loader.discover(spec(start=date(2024, 2, 1), end=date(2024, 2, 3)))[0]
     assert len(load_one(loader, ref)) == 2
+
+
+@pytest.mark.parametrize(
+    ("kind", "resolution", "row", "limit"),
+    [
+        (MassiveTradesLoader, None, tick, TICK_LIMIT),
+        (MassiveQuotesLoader, None, tick, TICK_LIMIT),
+        (MassiveBarsLoader, "1m", bar, AGGREGATE_LIMIT),
+        (MassiveBarsLoader, "5m", bar, None),
+    ],
+)
+def test_a_walk_names_its_limit_once_and_follows_each_cursor_as_served(
+    kind: type, resolution: str | None, row: Callable[[date], dict[str, Any]], limit: int | None
+) -> None:
+    """The cursor carries the limit the first page named, so no later page names one, and
+    a multiplier above one — whose limit would cap the inputs to its roll-up — names none
+    on any page of the walk."""
+    following = f"{API_HOST}/v3/walk/AAPL?cursor=page-two"
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if "/v3/reference/" in url:
+            return served_rows([definition("AAPL")])
+        if url == following:
+            return served_rows([row(date(2024, 2, 2))])
+        start, end = asked_window(url, params)
+        held = days(max(start, FLOOR), min(end, SETTLED))
+        return served_rows([row(day) for day in held], next_url=following) if held else nothing()
+
+    client, replay = client_of(answer)
+    loader = kind(client=client, as_of=TODAY)
+    ref = loader.discover(spec(resolution=resolution, start=date(2024, 2, 1), end=date(2024, 2, 3)))
+    probes = len(replay.asked)
+
+    load_one(loader, ref[0])
+
+    first, *cursor = replay.asked[probes:]
+    assert first.params.get("limit") == (None if limit is None else str(limit))
+    assert [(item.url, item.params) for item in cursor] == [(following, {})]
 
 
 def test_load_over_a_window_the_dataset_does_not_reach_serves_nothing() -> None:

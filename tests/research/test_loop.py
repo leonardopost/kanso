@@ -102,6 +102,9 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
         == sha256(ws.path("hypotheses", registered, "hypothesis.yaml").read_bytes()).hexdigest()
     )
     assert run.card_budget_s == max(loop.MIN_CARD_BUDGET_S, loop.HEADROOM * run.baseline_wall_s)
+    # The two numbers `docs/concepts.md` states for the card budget, and the `kanso.toml`
+    # template for the memory cap: three times the baseline, never under 60 s.
+    assert (loop.MIN_CARD_BUDGET_S, loop.HEADROOM) == (60.0, 3.0)
     assert run.baseline_wall_s > 0.0
 
     directory = lane_of(ws, run)
