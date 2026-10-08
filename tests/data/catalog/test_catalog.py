@@ -988,6 +988,41 @@ def test_a_replace_whose_dataset_s_files_no_longer_hash_to_it_removes_nothing(
     assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
 
 
+def test_a_replace_of_a_dataset_recorded_while_another_series_landed_removes_nothing(
+    ws: FakeWorkspace,
+) -> None:
+    """kanso 0.13 and earlier found what a write produced by listing the whole engine tree,
+    so a dataset recorded while another name's write landed hashed that name's file with its
+    own. Nothing on disk is altered, yet no run of its own directory hashes to its checksum:
+    a replace is refused with nothing removed, and goes through once its manifest and its
+    files are removed by hand, as the remedy says."""
+    other = cat.write(ws, bars(JAN1, 5, MSFT), ref=Ref(instrument=MSFT), source="synthetic")
+    held = write_bars(ws)
+    root = m.data_path(ws)
+    recorded = held.manifest.model_copy(
+        update={"checksum": cat._checksum(root, held.files + other.files)}
+    )
+    m.write_manifest(ws, recorded)
+
+    with pytest.raises(PreconditionError, match="while another write ran") as refused:
+        cat.write(ws, bars(JAN1, 5), ref=Ref(), source="synthetic", replace=True)
+
+    dataset = held.manifest.dataset_id
+    assert dataset in str(refused.value)
+    assert f"catalog/manifests/{dataset}.yaml" in (refused.value.remedy or "")
+    assert held_files(ws) == sorted(held.files + other.files)
+    assert m.manifests(ws) == {dataset: recorded, other.manifest.dataset_id: other.manifest}
+    assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()
+
+    m.manifest_file(ws, dataset).unlink()
+    for name in held.files:
+        (root / name).unlink()
+    again = write_bars(ws)
+
+    assert again.files == held.files
+    assert cat._checksum(root, other.files) == other.manifest.checksum
+
+
 def test_a_replace_leaves_a_file_the_engine_did_not_name(ws: FakeWorkspace) -> None:
     """Only a name of the engine's `<start>_<end>` form is one of its files; the engine reads
     every other name as holding no interval, which meets every span."""

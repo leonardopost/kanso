@@ -72,13 +72,20 @@ backfill paid on every chunk.
 is the availability interval it holds, first and last `ts_init`, and a dataset's span is
 economic, the days of its `ts_event`, so a span does not say which files are a dataset's: a
 delayed dataset's file runs into the next one's span. The checksum its manifest recorded
-does. The files that go for a clashing dataset are the run of the series' files, in name
-order and named as the engine names them, whose checksum is that one, and a dataset no run
-matches — its files altered since it was written — is refused before anything is removed.
-The engine's `delete_data_range` is not asked: given no identifier it runs on each
-instrument's directory of the class and never on the class's own, so it would remove every
-instrument's files over the span and none of a series of no instrument, whose replace would
-then be refused as having written no bytes.
+does, where it was taken over files of the series' own directory that no other write of the
+series came between. The files that go for a clashing dataset are the run of the series'
+files, in name order and named as the engine names them, whose checksum is that one. A
+dataset no run matches is refused before anything is removed, and is replaced only once its
+manifest and its files are removed by hand. That is a dataset whose files were altered or
+removed by hand; or one a replace on kanso 0.13 or earlier removed or rewrote a file of,
+having chosen its files by span; or one whose files another write of the series interleaved
+with its own; or one kanso 0.13 or earlier recorded while another write ran in the
+workspace — that version listed the whole of `data/` to find what it wrote, so it hashed the
+other write's files, of any series, with its own, and no run of its directory matches though
+nothing on disk was altered. The engine's `delete_data_range` is not asked: given no
+identifier it runs on each instrument's directory of the class and never on the class's own,
+so it would remove every instrument's files over the span and none of a series of no
+instrument, whose replace would then be refused as having written no bytes.
 
 **A replaced dataset is kept until its replacement is written.** A replace or a supersede
 removes the held dataset before the first new file is written, because the engine keeps its
@@ -109,6 +116,7 @@ from kanso.data import publication
 from kanso.data.manifest import (
     CATALOG_DIR,
     DATA_DIR,
+    MANIFESTS_DIR,
     DatasetRefLike,
     Manifest,
     as_publication,
@@ -679,16 +687,23 @@ def _owned(
     dataset's span is economic, the days of its `ts_event`, so a span does not say which
     files are a dataset's: a delayed dataset's last points are published after the next
     one's first day has begun, and its file meets that day. The checksum a dataset's manifest
-    recorded over the files its write produced does. The engine keeps a series' intervals
-    disjoint and names that sort in time, and the files of one write follow one another, so
-    a dataset's files are the run of the directory's engine-named files, in name order, whose
-    checksum is the one it recorded, and the run begins at or after the first instant of its
-    span, since no point is published before its reference time. Each file is hashed once.
+    recorded over the files its write produced does, wherever those files are a run: the
+    engine keeps a series' intervals disjoint and names that sort in time, so the files one
+    write produced in `home`, with no other write of the series between them, are a run of
+    the directory's engine-named files in name order. Such a dataset's files are the run
+    whose checksum is the one it recorded, and the run begins at or after the first instant
+    of its span, since no point is published before its reference time. Each file is hashed
+    once.
 
-    Refused, before anything is removed, when no run matches a dataset — its files altered,
-    removed or rewritten since it was recorded, or interleaved with another write's —
-    because a removal chosen any other way can reach another dataset's files and leave its
-    manifest claiming them.
+    Refused, before anything is removed, when no run matches a dataset, because a removal
+    chosen any other way can reach another dataset's files and leave its manifest claiming
+    them. No run matches a dataset whose files were altered or removed by hand; one a
+    replace on kanso 0.13 or earlier removed or rewrote a file of, having chosen its files by
+    span; one whose files another write of the series interleaved with its own; and one kanso
+    0.13 or earlier recorded while another write ran in the workspace, because that version
+    listed the whole engine tree to find what it wrote and hashed the other write's files, of
+    any series, with its own — nothing on disk is altered, and still no run of `home` is all
+    it hashed.
     """
     names = sorted(
         path.relative_to(root).as_posix()
@@ -702,13 +717,17 @@ def _owned(
         sooner = set(catalog.filter_files(data_cls, names, None, None, first - 1))
         run = _run(root, [name for name in names if name not in sooner], manifest, hashed)
         if run is None:
+            dataset = manifest.dataset_id
             filed = f"{CATALOG_DIR}/{DATA_DIR}/{home.relative_to(root).as_posix()}"
             raise PreconditionError(
-                f"{manifest.dataset_id}: no run of the files in {filed} hashes to the checksum "
-                "its manifest recorded, so which of them are its own is not known and none is "
-                "removed",
-                remedy=f"inspect {filed}: put back the files {manifest.dataset_id} was written "
-                "with, or remove its manifest and its files by hand",
+                f"{dataset}: no run of the files in {filed} hashes to the checksum its manifest "
+                "recorded, so which of them are its own is not known and none is removed. Its "
+                "files were altered or removed by hand, or damaged by a replace on kanso 0.13 "
+                "or earlier, or interleaved with another write's; or kanso 0.13 or earlier "
+                "recorded it while another write ran in this workspace and hashed that write's "
+                "files with its own",
+                remedy=f"remove {CATALOG_DIR}/{MANIFESTS_DIR}/{dataset}.yaml and {dataset}'s "
+                f"files in {filed} by hand, then run this load again",
             )
         owned.update(run)
     return owned
