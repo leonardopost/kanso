@@ -132,13 +132,15 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
     ], log
     # The crash is the one the script plants, not a card the host was too slow to finish.
     assert "rolling_sigma" in (carded[-1].crash_tail or ""), log
-    # A card's time budget is three times what the baseline took and never under 60 s, and the
-    # baseline trades nothing, so a card's cost past it is mostly its fills. The keep is what shows
-    # a host fast enough for the demo; a discard trading far more than the keep fits only under
-    # the floor, and is killed on any host slow enough for it to reach the floor
-    # (`docs/backlog.md` row 138: 2,445 trades to the keep's 1,003 took four times the baseline).
+    # A card's time budget is three times what the baseline took and never under 60 s. The demo's
+    # baseline is the stub, which trades nothing, and past it a card's wall grows with its fills,
+    # so a discard trading far more than the keep fits only under the floor and is killed on a
+    # host slow enough for the floor to stop binding (`docs/backlog.md` row 138: 2,445 trades to
+    # the keep's 1,003 took four times the baseline). Holding the discard to a fifth more than the
+    # keep's fills keeps its cost near the keep's; it narrows the margin, it guarantees none. The
+    # trade count is the proxy because it is deterministic and a wall time is not.
     _, kept, discarded, _ = carded
-    assert discarded.n_trades <= 1.5 * kept.n_trades, log
+    assert discarded.n_trades <= 1.2 * kept.n_trades, log
     assert outcome["best_sha"] is not None
     assert outcome["best_metric"] > 0
 

@@ -402,9 +402,12 @@ session under an environment allow-list. A card therefore has no route to data o
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach. The wall-time budget is three times what the
 run's baseline took and never under 60 s (the `budget` `research begin` prints), and a card
-killed for it is a `crash`. The baseline usually trades nothing, so a card that trades spends
-that headroom on its fills: in the sample above the keep and the discard each took about 2.7
-times the baseline's wall (row 138 of `docs/backlog.md`).
+killed for it is a `crash`. The baseline is the strategy the run starts from. A later run
+starts from the hypothesis's best, or from the card a re-seed names, so its baseline's wall
+already includes that strategy's fills. A hypothesis's first run starts from the workspace's
+`strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
+nothing and a card that trades spends the headroom on its fills: in the sample above the keep
+and the discard each took about 2.7 times the baseline's wall (row 138 of `docs/backlog.md`).
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog an hour at a time when the
