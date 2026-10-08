@@ -8,6 +8,7 @@ from typing import get_args
 
 from kanso.config import EnvConfig, ResearchConfig
 from kanso.schemas import CardStatus
+from tests.docs.test_pages import scope_names
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGED = ROOT / "src" / "kanso" / "skills"
@@ -88,6 +89,15 @@ def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
         assert f"`{status}`" in text or f"**{status}**" in text, status
     assert "no card, no trial" not in text
     assert "so it is a trial, a `results.tsv` row and a coverage entry like any other" in text
+
+
+def test_the_research_skill_names_every_field_a_re_pin_clears_the_best_on() -> None:
+    """An agent re-pinning a hypothesis between runs reads here whether the edit costs the
+    best; the list stopped at `book` while the objective, the costs and the depth cleared it
+    too, as the types each instrument is asked for and the session scope now do."""
+    text = skill(PACKAGED, "kanso-research")
+    for name in scope_names():
+        assert name in text, name
 
 
 def test_the_research_skill_states_the_exploration_default_the_package_ships() -> None:

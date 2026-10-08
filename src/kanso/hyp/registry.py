@@ -14,13 +14,15 @@ Either way it is refused outright while a run is active: the run is pinned to th
 that were registered when it began, and moving the pin under it would make the lane's
 copy disagree with the run without anything having changed in the lane.
 
-The scope a `best` is comparable under is the universe, the resolution, the data
-requirements and the construct. A card's metric means nothing across a change to any of
-the four, so a re-pin that changes one clears the hypothesis's `best` and says which in
-the event log. Clearing the classification counts as a change of construct: a draft has
-none, and the best was earned as something. It is the re-pin that clears, whichever
-command re-pins, so `classify` writing another construct clears on the same terms as an
-operator stating one.
+The scope a `best` is comparable under is what `SCOPE` names: the universe, the
+resolution, the data the hypothesis is shown — the types it requires, which instrument is
+asked for which of them, and on which sessions a name is delivered at all — the construct,
+the objective a metric is a number of, and the rules that shape what it measures. A card's
+metric means nothing across a change to any of them, so a re-pin that changes one clears
+the hypothesis's `best` and says which in the event log. Clearing the classification counts
+as a change of construct: a draft has none, and the best was earned as something. It is the
+re-pin that clears, whichever command re-pins, so `classify` writing another construct
+clears on the same terms as an operator stating one.
 """
 
 from __future__ import annotations
@@ -61,6 +63,8 @@ SCOPE: Final = (
     "universe",
     "resolution",
     "data_requirements",
+    "data_by_instrument",
+    "session_scope",
     "construct",
     "sizing",
     "objective",
@@ -88,6 +92,16 @@ with the key itself; `objective` in 0.5.0, answering from its own column. A row 
 file actually declares a rule."""
 COSTS: Final = "costs"
 """The scope field that joined in 0.13; a row pinned before it answers from its pinned file."""
+DATA_BY_INSTRUMENT: Final = "data_by_instrument"
+SESSION_SCOPE: Final = "session_scope"
+"""The scope fields that joined last. A file could state `session_scope` from 0.12.0, and
+`data_by_instrument` from the build that added it, before either was scope, so a row pinned
+before they joined answers both from its pinned file, as it does `costs`."""
+FROM_FILE: Final = (DATA_BY_INSTRUMENT, SESSION_SCOPE, COSTS)
+"""The scope fields a file stated before they joined the scope. A row pinned without one
+answers it from the file it pinned: read as `None`, it would clear the best of every
+hypothesis stating one at its next re-pin, whatever changed, and read as unchanged, it would
+keep the best through any change."""
 
 REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"
@@ -411,7 +425,15 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def scope_of(hyp: Hypothesis) -> dict[str, Any]:
-    """The eleven fields a metric is only comparable within, in a stable order.
+    """The thirteen fields a metric is only comparable within, in a stable order.
+
+    The data a strategy is shown is scope, however the file narrows it: the types it
+    requires, which of them each instrument is asked for (`data_by_instrument`), and the
+    sessions a name is delivered on at all (`session_scope`). A rule that read one leg's
+    quotes and one that read only its prints, or one handed every name of a pool every
+    session and one handed the names a flag admitted, measured different runs over the same
+    days. An instrument listed with every required type is asked for what an unlisted one
+    is, so it is no entry of the scope, and the order of a list is none either.
 
     The objective is one of them because a metric is a number in that objective's units:
     a best of 69 bps per trade compared against a Sharpe of 2 would keep nothing forever.
@@ -432,13 +454,19 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
     `hyp add` clears a best when they move, and composition refuses a certificate whose
     run pinned a hypothesis of another scope than the one registered now: one definition
     of what a number is comparable under, read in both places. A row pinned before a field
-    joined is read by `_scope_of`; for the cost model that means this function again, over
-    the file the row pinned.
+    joined is read by `_scope_of`; for the cost model, the instruments' own types and the
+    session scope that means this function again, over the file the row pinned.
     """
     return {
         "universe": sorted(hyp.universe),
         "resolution": hyp.resolution,
         "data_requirements": sorted(hyp.data_requirements),
+        DATA_BY_INSTRUMENT: _by_instrument(hyp),
+        SESSION_SCOPE: (
+            {**hyp.session_scope.model_dump(), "always": sorted(hyp.session_scope.always)}
+            if hyp.session_scope
+            else None
+        ),
         CONSTRUCT: hyp.construct.id if hyp.construct else None,
         SIZING: hyp.sizing.model_dump() if hyp.sizing else None,
         OBJECTIVE: hyp.objective.id if hyp.objective else None,
@@ -452,20 +480,34 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
     }
 
 
+def _by_instrument(hyp: Hypothesis) -> dict[str, list[str]] | None:
+    """Each instrument asked for less than every required type, and what it is asked for."""
+    every = sorted(hyp.data_requirements)
+    narrowed = {
+        name: sorted(kinds)
+        for name, kinds in sorted(hyp.data_by_instrument.items())
+        if sorted(kinds) != every
+    }
+    return narrowed or None
+
+
 def _scope_of(store: StateStore, held: sqlite3.Row, now: dict[str, Any]) -> dict[str, Any]:
     """The scope the row was pinned under, to be compared with `now`.
 
     The construct and the objective were pinned in their own columns before they joined
     the pins, and the columns are written with the pins, so a row from before then answers
     from its column rather than reporting a move that never happened. `sizing`, `warmup`,
-    `benchmark`, `book` and `depth` joined later still and have no column: a pin without the
-    key answers `None`. `costs` joined last, and nearly every hypothesis states one, so a pin
-    without it answers from the file it pinned — the bytes stored under the row's
-    `hypothesis_sha`, read by `scope_of` exactly as the file being pinned now is, latency
-    included. Only when the store holds no such bytes, or this kanso no longer reads them as
-    a hypothesis, does it answer `now`'s costs, since nothing then says what the old pin
-    charged. Answering `now` whenever the key was missing was measured keeping the bests of
-    four hypotheses scored at no latency through a re-pin that added 20 ms.
+    `benchmark`, `book` and `depth` joined later still and have no column, and each joined
+    with its key, so no file pinned before could state one: a pin without the key answers
+    `None`. `costs`, `data_by_instrument` and `session_scope` joined after files could state
+    them (`FROM_FILE`), so a pin without one answers from the file it pinned — the bytes
+    stored under the row's `hypothesis_sha`, read by `scope_of` exactly as the file being
+    pinned now is, latency included. Only when the store holds no such bytes, or this kanso
+    no longer reads them as a hypothesis, does it answer `now`'s, since nothing then says
+    what the old pin stated. Answering `now` whenever the key was missing was measured
+    keeping the bests of four hypotheses scored at no latency through a re-pin that added
+    20 ms; answering `None` would clear the best of every hypothesis that states a session
+    scope on the first re-pin after an upgrade, whatever it changed.
     """
     pins = _pins(held)
     scope = {name: pins.get(name) for name in SCOPE}
@@ -473,20 +515,24 @@ def _scope_of(store: StateStore, held: sqlite3.Row, now: dict[str, Any]) -> dict
         scope[CONSTRUCT] = _optional(held["construct_id"])
     if OBJECTIVE not in pins:
         scope[OBJECTIVE] = _optional(held["objective_id"])
-    if COSTS not in pins:
-        scope[COSTS] = _pinned_costs(store, held, now[COSTS])
+    missing = [name for name in FROM_FILE if name not in pins]
+    if missing:
+        stated = _pinned_scope(store, held)
+        for name in missing:
+            scope[name] = now[name] if stated is None else stated[name]
     return scope
 
 
-def _pinned_costs(store: StateStore, held: sqlite3.Row, now: Any) -> Any:
+def _pinned_scope(store: StateStore, held: sqlite3.Row) -> dict[str, Any] | None:
+    """`scope_of` the file the row pinned, or `None` when the store cannot say what it was."""
     sha = _optional(held["hypothesis_sha"])
     if sha is None or not store.has_blob(sha):
-        return now
+        return None
     try:
         pinned = parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
     except ValidationError:
-        return now
-    return scope_of(pinned)[COSTS]
+        return None
+    return scope_of(pinned)
 
 
 def moved(before: dict[str, Any], after: dict[str, Any]) -> str:

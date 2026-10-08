@@ -46,9 +46,11 @@ liquid instrument's day of book changes: the engine's `write_data` holds about 2
 book delta and a 561-byte-a-delta transient on top while it converts them, so a day of about
 8.5 million changes — a liquid perpetual's, ten levels deep — would peak near 6.5 GB written
 whole. Asked for `batch`, the write takes the points as they come, in `ts_init` order, and
-hands the engine at most `batch` of them at a time, cutting only between two instants so no
-instant is split across two files. Each batch is checked as a whole write is — availability,
-a delayed dataset's rule, one series — and each becomes one file whose interval is disjoint
+hands the engine a batch once it holds `batch` of them and the next point opens a new
+instant, so no instant is split across two files: every batch but the last holds at least
+`batch` points, and runs past that for as long as its last instant does, however many
+points the instant holds. Each batch is checked as a whole write is — availability, a
+delayed dataset's rule, one series — and each becomes one file whose interval is disjoint
 from the last, so the store reads the batches back as one series; the clash with held data
 is checked once, over the span requested, before the first file. The manifest is one, over
 every file the write produced, and a failure in any batch removes every file the write had
@@ -164,8 +166,9 @@ it reads no interval off as meeting every span, so a replace looks only at names
 form."""
 
 WRITE_BATCH: Final = 250_000
-"""Points per `write_data` call on a batched write: about 0.2 GB of engine objects and
-conversion at a book delta's measured 204 + 561 bytes, whatever the day holds."""
+"""The points a batched write gathers before it closes a batch at the next new instant: about
+0.2 GB of engine objects and conversion at a book delta's measured 204 + 561 bytes, however
+long the day, beside the rest of the instant the batch reached it in."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,9 +271,10 @@ def write(
     a declared rule, and `PreconditionError` when the write would overwrite data a
     snapshot has pinned or would overlap held data without an explicit replace.
 
-    With `batch`, the points are taken in the `ts_init` order they arrive in and written
-    at most `batch` at a time, each batch cut between two instants; the module docstring
-    says what that changes and what it does not.
+    With `batch`, the points are taken in the `ts_init` order they arrive in and written a
+    batch at a time, each closed at the first new instant once it holds `batch` points, so
+    every batch but the last holds at least that many; the module docstring says what that
+    changes and what it does not.
     """
     if batch is not None:
         return _write_batched(
