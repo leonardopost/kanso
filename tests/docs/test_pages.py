@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from kanso.classify import catalogue
 from kanso.config import Config, render_config
@@ -435,6 +436,29 @@ def test_the_concepts_page_states_both_sides_of_the_paper_gate() -> None:
     promotion = prose(section(page("concepts.md"), "Promotion and demotion"))
     assert "a shorter window is a `fail`, not a skip" in promotion
     assert "above the band as much a fail as below it" in promotion
+
+
+YAML_11_BOOLEANS = ("y", "n", "yes", "no", "true", "false", "on", "off")
+"""The words the YAML 1.1 type repository lists as booleans; which of them PyYAML reads as
+one is what the test below measures."""
+
+
+def test_the_catalog_section_names_the_words_pyyaml_reads_as_booleans() -> None:
+    """The page tells an operator which tickers to quote; the loader decides, not the spec."""
+    catalog = prose(section(page("workspace.md"), "`catalog/`"))
+    start = catalog.index("PyYAML reads a bare")
+    named = set(re.findall(r"`([A-Z]+)`", catalog[start : catalog.index("as a boolean", start)]))
+    read_as_boolean = {
+        word.upper()
+        for word in YAML_11_BOOLEANS
+        if all(
+            isinstance(yaml.safe_load(case(word)), bool)
+            for case in (str.lower, str.title, str.upper)
+        )
+    }
+    assert named == read_as_boolean
+    assert "`Y` and `N` are read as strings and need no quotes." in catalog
+    assert [yaml.safe_load(word) for word in ("Y", "N")] == ["Y", "N"]
 
 
 # -- docs/constructs.md ---------------------------------------------------------------
