@@ -796,12 +796,13 @@ exchange publishes instead: one zip a day, listed with a URL on the exchange's f
 
 **A dataset holds one day.** `okx_trades` declares `chunk_days: 1`, so `kanso data load`,
 `data backfill` and `data sync` write each UTC day of a range as a dataset of its own, with
-its own manifest, and hand the catalog the prints as the loader streams them, at most
-250,000 to a write. Every path used to gather its whole span before writing, and one
-day of `BTC-USDT-SWAP`, two archives of 17.6 and 16.3 MB, peaked at 1.8 GB resident on
-2026-09-30. Written a batch at a time, the same day — 2026-09-28, the same two archives,
-3,562,610 prints — loaded on 2026-10-02 at a peak of 0.41 GB resident, in 187 seconds of
-wall time and 65 of CPU on a shared machine, niced, downloads included.
+its own manifest, and hand the catalog the prints as the loader streams them, a batch to a
+write, each closed at the first new instant once it holds 250,000 prints. Every path used to
+gather its whole span before writing, and one day of `BTC-USDT-SWAP`, two archives of 17.6
+and 16.3 MB, peaked at 1.8 GB resident on 2026-09-30. Written a batch at a time, the same
+day — 2026-09-28, the same two archives, 3,562,610 prints — loaded on 2026-10-02 at a peak
+of 0.41 GB resident, in 187 seconds of wall time and 65 of CPU on a shared machine, niced,
+downloads included.
 
 #### `okx_book`
 
