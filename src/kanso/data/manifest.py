@@ -32,7 +32,10 @@ coverage either: the difference between it and what was served is what `shortfal
 Because the id carries the span's end but not its start, re-loading the same series to
 the same end reuses the id and is therefore a replacement rather than a duplicate, while
 a `sync` that extends the end, and a `backfill` that ends where the held data begins,
-both produce fresh ids and record the dataset they follow in `supersedes`.
+both produce fresh ids and record the dataset they follow in `supersedes`. And because the
+id begins with its series and ends with its last served day, and a manifest is filed under
+its id, the datasets of one series ending on or after a given day are found by file name
+without opening any other manifest (`series_manifests`).
 
 The store's layout is `catalog/` in the workspace: `data/` is the engine's own
 `ParquetDataCatalog` tree, `manifests/<dataset_id>.yaml` and
@@ -467,6 +470,43 @@ def manifests(ws: Workspace) -> dict[str, Manifest]:
         manifest = load_yaml(Manifest, path)
         found[manifest.dataset_id] = manifest
     return found
+
+
+def series_manifests(
+    ws: Workspace, filed_under: tuple[str, str, str | None], *, ending_from: date
+) -> dict[str, Manifest]:
+    """The manifests of the datasets filed under `filed_under` whose span ends on
+    `ending_from` or later, keyed by id.
+
+    They are found by name, however many datasets the workspace holds: a manifest is filed
+    under its id, and an id begins with the series' instrument, type and resolution, adjusted
+    or not, and ends with the last day the dataset serves. So no other series' manifest is
+    opened, and none of this series' that ends before `ending_from`. Sanitising can give two
+    series one prefix, so a manifest read is still kept only when it is filed under
+    `filed_under`.
+    """
+    directory = manifests_path(ws)
+    if not directory.is_dir():
+        return {}
+    instrument, kind, resolution = filed_under
+    prefix = "-".join(sanitise(part) for part in (instrument, kind, resolution or NO_RESOLUTION))
+    earliest = _yyyymmdd(ending_from)
+    found: dict[str, Manifest] = {}
+    for path in sorted(directory.glob(f"{prefix}-*.yaml")):
+        if path.stem[-8:] < earliest:
+            continue
+        manifest = load_yaml(Manifest, path)
+        if manifest.filed_under == filed_under:
+            found[manifest.dataset_id] = manifest
+    return found
+
+
+def holds(ws: Workspace, dataset: str) -> bool:
+    """True when the workspace holds a manifest of `dataset`, read from its one file."""
+    if not is_dataset_id(dataset):
+        return False
+    path = manifest_file(ws, dataset)
+    return path.is_file() and load_yaml(Manifest, path).dataset_id == dataset
 
 
 def remove_manifest(ws: Workspace, dataset: str) -> None:
