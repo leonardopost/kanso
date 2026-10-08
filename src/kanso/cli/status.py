@@ -27,6 +27,7 @@ import typer
 from kanso import inbox, models
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
+from kanso.cli.research import stopped_line
 from kanso.env import read as read_envelope
 from kanso.research import daemon, loop, records, scheduler
 from kanso.schemas import RunRecord
@@ -53,6 +54,7 @@ def status_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
 def _status(ws: Workspace) -> Report:
     with store(ws) as opened:
         pid = daemon.pid_of(ws)
+        alive = daemon.living(ws)
         planned = _planned_lanes(ws)
         active = daemon.active_runs(opened)
         lanes = _lanes(planned, active, opened)
@@ -61,7 +63,11 @@ def _status(ws: Workspace) -> Report:
         unread = inbox.unread(opened)
         data: dict[str, Any] = {
             "workspace": str(ws.root),
-            "daemon": {"running": pid is not None, "pid": pid},
+            "daemon": {
+                "running": pid is not None,
+                "pid": pid,
+                "children": [child.payload() for child in alive],
+            },
             "lanes": lanes,
             "cards_per_hour": _cards_per_hour(opened),
             "hypotheses": _hypotheses(opened),
@@ -181,7 +187,11 @@ def _baseline_failed(opened: StateStore) -> list[dict[str, Any]]:
 
 def _lines(data: dict[str, Any]) -> tuple[str, ...]:
     daemon_state = data["daemon"]
-    running = f"running (pid {daemon_state['pid']})" if daemon_state["running"] else "stopped"
+    running = (
+        f"running (pid {daemon_state['pid']})"
+        if daemon_state["running"]
+        else stopped_line([daemon.ChildPid(**child) for child in daemon_state["children"]])
+    )
     lines = [
         field("workspace", data["workspace"]),
         field("daemon", f"{running} · {data['queued']} queued"),

@@ -137,6 +137,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
+| `research start` while a lane or the monitor of a daemon that is gone still runs | 2 · naming each; `kanso research stop` ends it |
 | `data load` over a dataset a snapshot names | 2 · **with or without `--replace`** |
 | `data load` over unpinned data | 2 · until you pass `--replace` |
 | `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
@@ -1556,6 +1557,7 @@ The lane directories, and the only place research edits anything.
 runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
 runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
+runs/<child>.<pid>.lock    held by a lane or the monitor, named for it and its pid, while it lives
 runs/daemon.log            whatever the daemon and its children write to a stream
 runs/state-<instant>.db    a copy of state.db `kanso state prune` made before it deleted anything
 ```
@@ -1605,6 +1607,20 @@ remedy: run `kanso research stop` first
 
 (exit 2). A pid file naming a process that is gone reads as "not running" and the next
 `start` overwrites it. `daemon.log` survives a stop; `daemon.pid` does not.
+
+Each lane and the monitor holds `runs/<child>.<pid>.lock` (`l1.58102.lock`,
+`monitor.58105.lock`) under the same kind of lock for as long as it lives, and removes it when
+it exits. That is how a child still running after its supervisor is gone is seen: `research
+status` and `status` name it beside the stopped daemon, `research stop` ends it, and
+`research start` refuses until it has:
+
+```
+error: still running from a daemon that is gone: lane l1 (pid 58102)
+remedy: run `kanso research stop`, which ends it, then start again
+```
+
+(exit 2). A child killed outright leaves its file with nobody holding it, which names nothing;
+the supervisor that buries the child removes it, and the next supervisor removes any left.
 
 The whole directory is gitignored, and deleting it while nothing is running costs you only
 the log.

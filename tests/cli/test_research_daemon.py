@@ -10,6 +10,7 @@ that the queue is served by priority and then by arrival.
 from __future__ import annotations
 
 import contextlib
+import signal
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -20,6 +21,7 @@ from typer.testing import CliRunner
 
 from kanso.errors import Exit, KansoError
 from kanso.research import daemon
+from tests.processes import holding
 
 from .conftest import HYP_ID, at, lane, payload
 
@@ -54,7 +56,7 @@ def test_start_reports_the_pid_and_the_lanes_and_stop_keeps_the_run(
     ended = at(runner, stopped, "research", "stop", "--json")
 
     assert ended.exit_code == Exit.OK, ended.stdout
-    assert payload(ended) == {"running": False, "pid": running["pid"]}
+    assert payload(ended) == {"running": False, "pid": running["pid"], "orphans": []}
     # Nothing is ended and nothing is cleaned up, so the next start resumes.
     assert edited.read_text(encoding="utf-8") == "# the operator is mid-edit\n"
 
@@ -84,6 +86,7 @@ def test_status_with_nothing_running_still_reports_the_lanes(
     found = payload(result)
     assert found["running"] is False
     assert found["pid"] is None
+    assert found["children"] == []
     assert found["runs"] == []
     assert found["queue"] == []
     assert found["restarts"] == []
@@ -123,6 +126,57 @@ def test_status_lists_every_child_the_running_daemon_started_again(
     assert "restarts   2 since the daemon started" in human
     assert "killed by SIGKILL after 412s · started again at once" in human
     assert "exit 1 after 3s · started again after 2s" in human
+
+
+def test_a_lane_that_outlived_its_daemon_is_reported_refused_past_and_ended(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """What an operator reads once the daemon is gone but a lane of it still runs: never a
+    bare `stopped` beside it, a `start` that would put a second lane on its run refused, and
+    a `stop` that ends it and says so."""
+    lane = holding(mocked_ws, "l1")
+    try:
+        found = payload(at(runner, mocked_ws, "research", "status", "--json"))
+        human = at(runner, mocked_ws, "research", "status").stdout
+        screen = payload(at(runner, mocked_ws, "status", "--json"))
+        one = at(runner, mocked_ws, "status").stdout
+        refused = at(runner, mocked_ws, "research", "start", "--json")
+        ended = at(runner, mocked_ws, "research", "stop", "--json")
+    finally:
+        if lane.poll() is None:  # pragma: no cover - only when the stop failed
+            lane.kill()
+        lane.wait()
+
+    alive = [{"child": "l1", "pid": lane.pid}]
+    assert (found["running"], found["children"]) == (False, alive)
+    assert f"daemon     stopped · still running: lane l1 (pid {lane.pid})" in human
+    assert screen["daemon"] == {"running": False, "pid": None, "children": alive}
+    assert f"stopped · still running: lane l1 (pid {lane.pid}) · 0 queued" in one
+    assert refused.exit_code == Exit.PRECONDITION
+    assert payload(refused)["error"] == (
+        f"still running from a daemon that is gone: lane l1 (pid {lane.pid})"
+    )
+    assert "kanso research stop" in payload(refused)["remedy"]
+    assert ended.exit_code == Exit.OK, ended.stdout
+    assert payload(ended) == {"running": False, "pid": None, "orphans": alive}
+    assert lane.returncode == -signal.SIGTERM
+
+    again = holding(mocked_ws, "l1")
+    try:
+        said = at(runner, mocked_ws, "research", "stop")
+    finally:
+        if again.poll() is None:  # pragma: no cover - only when the stop failed
+            again.kill()
+        again.wait()
+
+    assert said.exit_code == Exit.OK, said.stdout
+    assert "daemon     stopped\n" in said.stdout
+    assert (
+        f"orphans    lane l1 (pid {again.pid}) · ended, still running after the daemon was gone"
+        in said.stdout
+    )
+    assert "stopped" in at(runner, mocked_ws, "research", "status").stdout
+    assert "still running" not in at(runner, mocked_ws, "research", "status").stdout
 
 
 def test_status_reports_a_run_with_its_three_shas(runner: CliRunner, mocked_ws: Path) -> None:
