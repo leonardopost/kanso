@@ -46,7 +46,7 @@ def test_rendered_template_parses_with_the_documented_defaults(tmp_path: Path) -
     assert config.research.local_cards == 10
     assert config.research.structural_cards == 10
     assert config.research.reseed_after_stalls == 2
-    assert config.research.explore_after_stalls == 0
+    assert config.research.explore_after_stalls == 5
     assert config.research.folds == 4
     assert config.research.max_lines_per_keep == 40
     assert config.research.baseline_budget_s == 1800
@@ -71,6 +71,7 @@ def test_the_template_names_the_broker_research_inherits(tmp_path: Path) -> None
 def test_omitted_sections_take_their_defaults(tmp_path: Path) -> None:
     config = load_config(write(tmp_path, MINIMAL))
     assert config.research.folds == 4
+    assert config.research.explore_after_stalls == 5  # a file without the key explores too
     assert config.data.reference == "none"
     assert config.monitor.interval == "5m"
 

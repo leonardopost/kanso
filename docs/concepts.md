@@ -389,10 +389,10 @@ restore. Three proposals into the demo:
 
 ```
 sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc
-93510e2	0.000000	0.000000	1	0	2.643	0.307	discard	baseline
-f729a53	9.986730	1.064759	2	1003	4.240	0.321	keep	fade a 2-sigma deviation from a 60-bar rolling mean
-67ef6fd	3.153159	0.409428	3	2445	7.102	0.330	discard	narrow the entry threshold to 1 sigma
-020aef2	0.000000	0.000000	4	0	1.203	0.307	crash	scale by a rolling sigma helper that does not exist (intentional crash)
+93510e2	0.000000	0.000000	1	0	3.147	0.216	discard	baseline
+f729a53	9.986730	1.064759	2	1003	8.366	0.241	keep	fade a 2-sigma deviation from a 60-bar rolling mean
+340620b	5.285159	0.928893	3	1164	8.720	0.246	discard	exit at 1 sigma rather than half a sigma
+020aef2	0.000000	0.000000	4	0	1.003	0.213	crash	scale by a rolling sigma helper that does not exist (intentional crash)
 ```
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
@@ -400,7 +400,14 @@ research window — and the warmup sessions before it, when the hypothesis decla
 out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
-memory and kills the process group on breach.
+memory and kills the process group on breach. The wall-time budget is three times what the
+run's baseline took and never under 60 s (the `budget` `research begin` prints), and a card
+killed for it is a `crash`. The baseline is the strategy the run starts from. A later run
+starts from the hypothesis's best, or from the card a re-seed names, so its baseline's wall
+already includes that strategy's fills. A hypothesis's first run starts from the workspace's
+`strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
+nothing and a card that trades spends the headroom on its fills: in the sample above the keep
+and the discard each took about 2.7 times the baseline's wall (row 139 of `docs/backlog.md`).
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog an hour at a time when the
@@ -609,7 +616,7 @@ drift rewind in one run leaves what another run earned standing.
 
 A re-seed moves the climb to another foot of the same hill; **exploring** asks for another
 hill. `kanso hyp explore ID` — or a daemon lane, once `[research] explore_after_stalls`
-stalls on one best have passed since the last exploration (zero, never, is the template) —
+stalls on one best have passed since the last exploration (5 in the template; 0 is never) —
 calls the `explore` task class with what the hypothesis's research learned: its pinned
 `hypothesis.yaml` and `program.md`, its best `strategy.py`, the coverage of its cards by
 tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of
@@ -630,7 +637,10 @@ when it wrote a candidate, `explored_failed` with the error and its remedy when 
 and the stalls a lane counts are the ones since the newest of them, so a provider that is
 down costs one call per spell. A hypothesis not registered or never researched is refused
 before any attempt and leaves neither. A lane's exploration that fails is never a failure
-of the lane.
+of the lane. The number a lane reads is the workspace's own `kanso.toml`, which `init` never
+rewrites: a workspace initialised on 0.8.0 to 0.13.x states `explore_after_stalls = 0` and
+keeps never until you set it, and one initialised before 0.8.0, whose file has no key,
+explores at the default.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search

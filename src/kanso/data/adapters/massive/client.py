@@ -22,6 +22,18 @@ one 50,000-row page timing out — twice at a 30 s `timeout_s` and once at 120 s
 resume walked the series from its first page again. A single `call`, which is what a probe
 makes, is never retried: a probe that cannot reach the vendor reports that.
 
+**A cursor is asked for exactly as it was served.** `next_url` carries one parameter,
+`cursor`, and the cursor carries the whole request it continues — the filters, the order and
+the page size — so a walk names its `limit` once, on its first page, and adds nothing after.
+Measured on 2026-10-07 (UTC) over the 2026-10-06 session: a walk of XLE quotes asked 50,000
+to a page was served 50,000 on every page but the last, and a second walk that re-sent the
+limit with each cursor was served the same 588,399 rows in the same order, as were XLE's
+124,309 prints. An aggregate above a multiplier of one, asked with no limit, is continued
+under the source's own base page, which is one more reason to add nothing. A sender that
+*replaces* a URL's query when handed parameters — `httpx` 0.28 does, even for an empty
+mapping — loses the cursor and is answered with the ticker's latest rows, newest first, a
+thousand to a page: those thousand-row pages are a lost cursor, never a lost limit.
+
 **The client never decides what an answer means.** It reduces each response to a
 `Signal` — rows, no rows, a refusal, a rejected request shape, or no answer at all — and
 stops there. Meaning is `entitlement`'s to establish, by probing. The reason is that the
@@ -47,7 +59,9 @@ function `asyncio.run` drives. It resolves to an `HttpResponse` carrying `status
 `headers` and `body` (bytes), and raises `nautilus_pyo3.HttpError` when no response
 arrives. `Quota.rate_per_second(n)` is the per-second quota; `keys` names the rate-limit
 buckets a request counts against, so a keyed quota can be added later without touching
-call sites.
+call sites. `params` are appended to the query a URL already carries and an empty mapping
+leaves it as it was — verified against a loopback server — which is what lets a cursor URL
+go through the same `call` as a first page with its cursor intact.
 """
 
 from __future__ import annotations
@@ -101,8 +115,11 @@ PAGE_BACKOFF_S: Final = (2.0, 8.0)
 """The pauses before a page that did not answer is asked for the second and the third time."""
 
 MAX_PAGES: Final = 1_000
-"""Pages one cursor walk may fetch. A universe page is a thousand rows, so this is a
-million rows: far past any legitimate answer, and a cheap guard against a cursor loop."""
+"""Pages one cursor walk may fetch. A listing's page is a thousand rows and a tick page
+fifty thousand, and the cursor keeps whichever size the walk began with, so this is a
+million rows of a listing or fifty million ticks: far past any legitimate answer — a day
+of a liquid name's quotes, asked as a chunk asks it, was 43 pages — and a cheap guard
+against a cursor loop."""
 
 OK_STATUS: Final = frozenset({"OK", "DELAYED", "SUCCESS"})
 """The values of the response's machine-readable `status` field that are not a refusal.
@@ -389,6 +406,9 @@ class MassiveClient:
         self, path: str, params: Mapping[str, str] | None = None, *, max_pages: int = MAX_PAGES
     ) -> Iterator[Call]:
         """Every page of a cursor walk, stopping at the first page that is not rows.
+
+        `params` go with the first page alone. Every later page is its predecessor's
+        `next_url` asked for as served, because the cursor in it carries them already.
 
         A page that did not answer fails the walk rather than ending it: a timeout half
         way through a universe looks exactly like the end of the universe, and a loader

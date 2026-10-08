@@ -13,8 +13,10 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import date
+from itertools import islice
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
@@ -43,7 +45,20 @@ from kanso.data.adapters.massive.errors import TransportError
 from kanso.errors import Exit, ValidationError
 from kanso.workspace import Workspace, init
 
-from . import WARNING, Replay, bar, body, definition, nothing, refused, rejected, served
+from . import (
+    WARNING,
+    Replay,
+    bar,
+    body,
+    definition,
+    encoded,
+    next_url_of,
+    nothing,
+    recorded,
+    refused,
+    rejected,
+    served,
+)
 
 KEY = "test-key-not-a-secret"
 
@@ -318,6 +333,40 @@ def test_a_failure_half_way_through_a_walk_is_not_the_end_of_the_data() -> None:
 
     with pytest.raises(TransportError):
         list(reader.pages("/v3/reference/tickers"))
+
+
+def test_a_cursor_is_asked_for_exactly_as_the_source_served_it() -> None:
+    """The recorded walk: three prints a page, the second asked from the first's `next_url`
+    with nothing added, is three rows wide and carries on from the first without a repeat."""
+    following = next_url_of("trades_page_1.json")
+    pages = {
+        "/v3/trades/XLE": recorded("trades_page_1.json"),
+        following.replace(API_HOST, ""): recorded("trades_page_2.json"),
+    }
+    reader, replay = client(lambda url, params: pages[url.replace(API_HOST, "")])
+    asked = {"timestamp.gte": "2026-10-06", "timestamp.lte": "2026-10-06", "limit": "3"}
+
+    walked = list(islice(reader.pages("/v3/trades/XLE", asked), 2))
+
+    assert replay.asked[0].params["limit"] == "3"
+    assert (replay.asked[1].url, replay.asked[1].params) == (following, {})
+    assert [len(page.rows) for page in walked] == [3, 3]
+    tape = [(row["sip_timestamp"], row["sequence_number"]) for page in walked for row in page.rows]
+    assert tape == sorted(tape) and len(set(tape)) == len(tape)
+
+
+@pytest.mark.parametrize(
+    ("name", "limit"),
+    [("trades_page_1.json", "3"), ("trades_page_2.json", "3"), ("aggs_5m_page_1.json", "5000")],
+)
+def test_the_source_s_cursor_carries_the_page_size_it_continues(name: str, limit: str) -> None:
+    """`next_url` carries one parameter, and the cursor in it carries the limit: the walk's
+    own, or the source's base page where the walk was asked with none — as a 5-minute
+    aggregate must be. So a walk has no page size to add to a cursor, and adds nothing."""
+    following = next_url_of(name)
+
+    assert [key for key, _ in parse_qsl(urlsplit(following).query)] == ["cursor"]
+    assert encoded(following)["limit"] == limit
 
 
 def walk_with(
