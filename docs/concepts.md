@@ -630,7 +630,10 @@ when it wrote a candidate, `explored_failed` with the error and its remedy when 
 and the stalls a lane counts are the ones since the newest of them, so a provider that is
 down costs one call per spell. A hypothesis not registered or never researched is refused
 before any attempt and leaves neither. A lane's exploration that fails is never a failure
-of the lane.
+of the lane. The number a lane reads is the workspace's own `kanso.toml`, which `init` never
+rewrites: a workspace initialised on 0.8.0 to 0.13.x states `explore_after_stalls = 0` and
+keeps never until you set it, and one initialised before 0.8.0, whose file has no key,
+explores at the default.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
 It is recorded on each card and on every certificate, because it is the size of the search

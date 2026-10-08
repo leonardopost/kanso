@@ -91,10 +91,18 @@ def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
 
 
 def test_the_research_skill_states_the_exploration_default_the_package_ships() -> None:
-    """The agent that reads this skill is the one an `explored` draft lands in front of."""
+    """The agent that reads this skill is the one an `explored` draft lands in front of.
+
+    The skill is a symlink into the installed package, so an agent in a workspace an older
+    template wrote reads it too, beside a `kanso.toml` that `init` never rewrote: it is told
+    to read the key there rather than to assume the template's number."""
     default = ResearchConfig().explore_after_stalls
     text = skill(PACKAGED, "kanso-research")
-    assert f"`[research] explore_after_stalls` ({default} by default; 0 is never)" in text
+    assert (
+        "`[research] explore_after_stalls` — read it in the workspace's `kanso.toml`, which"
+        f" decides: the template writes {default}, 0 is never, and a workspace initialised on"
+        " 0.8.0 to 0.13.x states 0"
+    ) in text
 
 
 def test_the_data_skill_says_what_a_gap_and_an_answer_mean() -> None:

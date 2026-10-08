@@ -55,7 +55,9 @@ def test_the_doctor_row_names_every_check_doctor_runs() -> None:
 
 def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() -> None:
     """An operator learns from these two pages that a lane writes drafts unasked, and how
-    often; a page still saying never would hide a model call every workspace makes."""
+    often; a page still saying never would hide a model call from every workspace whose
+    `kanso.toml` holds the template's number or omits the key. One initialised on 0.8.0 to
+    0.13.x states 0 and keeps it, because `init` never rewrites `kanso.toml`."""
     stated = f"({ResearchConfig().explore_after_stalls} in the template; 0 is never)"
     assert stated in prose(page("cli.md"))
     assert stated in prose(page("concepts.md"))

@@ -646,18 +646,26 @@ def test_a_workspace_with_no_model_pays_an_event_per_spell_for_the_default(
     ws: Workspace, store: StateStore, researched: str, recorded: Recorder
 ) -> None:
     """With no register the default costs a modelless workspace no call: one
-    `explored_failed` event at the fifth stall, then a fresh spell of five."""
+    `explored_failed` event at the fifth stall, then a fresh spell of five, so the second
+    arrives at the tenth stall and not before."""
     ws.path("models.yaml").unlink()
     calls = len(recorded.calls)
-    for _ in range(5):
-        stall(store, "a" * 64)
-        assert explore.after_stall(ws, store, researched, "l1") is None
+
+    def failed_after_each_of(stalls: int) -> list[int]:
+        counts = []
+        for _ in range(stalls):
+            stall(store, "a" * 64)
+            assert explore.after_stall(ws, store, researched, "l1") is None
+            kinds = [e.kind for e in store.events(subject=researched)]
+            counts.append(kinds.count(explore.EXPLORED_FAILED))
+        return counts
+
+    assert failed_after_each_of(5) == [0, 0, 0, 0, 1]
+    assert explore.due(store, researched, ws.config.research.explore_after_stalls) is False
+    assert failed_after_each_of(5) == [1, 1, 1, 1, 2]
 
     assert len(recorded.calls) == calls
-    kinds = [e.kind for e in store.events(subject=researched)]
-    assert kinds.count(explore.EXPLORED_FAILED) == 1
-    assert explore.EXPLORED not in kinds
-    assert explore.due(store, researched, ws.config.research.explore_after_stalls) is False
+    assert explore.EXPLORED not in [e.kind for e in store.events(subject=researched)]
     assert not ws.path("hypotheses", CANDIDATE_ID).exists()
 
 
