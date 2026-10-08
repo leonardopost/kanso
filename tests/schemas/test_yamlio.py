@@ -2,15 +2,38 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
+from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.errors import Exit, ValidationError
 from kanso.schemas import Envelope, InstrumentsFile, dump_yaml, load_yaml, parse_yaml, write_yaml
+from kanso.schemas.base import KansoModel, NonEmpty
 from tests.schemas.strategies import envelopes
 
 ENVELOPE = envelopes().example()
+
+YAML_TRUE = ("on", "yes", "true")
+YAML_FALSE = ("off", "no", "false")
+"""The words PyYAML's safe loader reads as booleans when bare, in any of the three cases
+`CASES` spells them in (6.0.3, measured)."""
+
+CASES: tuple[Callable[[str], str], ...] = (str.lower, str.title, str.upper)
+
+
+class Universe(KansoModel):
+    """Any model with a string field: the refusal is the schema layer's, not one spec's."""
+
+    instruments: list[NonEmpty]
+
+
+def tickers() -> st.SearchStrategy[str]:
+    """Bare tickers YAML reads back as themselves; `NULL`, say, it reads as nothing."""
+    return st.from_regex(r"[A-Z]{1,5}", fullmatch=True).filter(lambda t: yaml.safe_load(t) == t)
 
 
 def test_schema_key_comes_first() -> None:
@@ -76,3 +99,47 @@ def test_a_hand_written_bare_date_is_accepted() -> None:
     from kanso.schemas import DateWindow
 
     assert parse_yaml(DateWindow, "start: 2024-01-02\nend: 2024-12-31\n").end.year == 2024
+
+
+@given(
+    word=st.sampled_from(YAML_TRUE + YAML_FALSE),
+    case=st.sampled_from(CASES),
+    around=st.lists(tickers(), max_size=6),
+    data=st.data(),
+)
+def test_a_bare_yaml_boolean_ticker_is_refused_by_place_and_quoting_it_is_the_fix(
+    word: str,
+    case: Callable[[str], str],
+    around: list[str],
+    data: st.DataObject,
+) -> None:
+    bare = case(word)
+    place = data.draw(st.integers(min_value=0, max_value=len(around)))
+    listed = [*around[:place], bare, *around[place:]]
+    value = "true" if word in YAML_TRUE else "false"
+
+    with pytest.raises(ValidationError) as caught:
+        parse_yaml(Universe, f"instruments: [{', '.join(listed)}]\n", "spec.yaml")
+
+    assert caught.value.code is Exit.VALIDATION
+    assert caught.value.message == (
+        f"spec.yaml: instruments.{place}: {value} is a YAML boolean, not a string; YAML reads "
+        "a bare ON, OFF, YES, NO, TRUE or FALSE as one"
+    )
+    assert caught.value.remedy is not None
+    assert 'e.g. "ON" rather than ON' in caught.value.remedy
+    quoted = [*around[:place], f'"{bare}"', *around[place:]]
+    assert parse_yaml(Universe, f"instruments: [{', '.join(quoted)}]\n").instruments == listed
+
+
+@pytest.mark.parametrize("word", ["Y", "y", "N", "n", "oN"])
+def test_a_word_pyyaml_does_not_resolve_is_a_ticker(word: str) -> None:
+    """YAML 1.1 lists `y` and `n` as booleans; PyYAML's resolver does not, nor a mixed case."""
+    assert parse_yaml(Universe, f"instruments: [{word}]\n").instruments == [word]
+
+
+def test_a_number_where_a_string_belongs_is_not_called_a_boolean() -> None:
+    with pytest.raises(ValidationError) as caught:
+        parse_yaml(Universe, "instruments: [1]\n", "spec.yaml")
+    assert caught.value.message == "spec.yaml: instruments.0: Input should be a valid string"
+    assert caught.value.remedy is None

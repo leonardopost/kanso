@@ -3,7 +3,9 @@
 This is the sequence a person types on a fresh machine — scaffold the demo, load its
 synthetic bars, freeze a snapshot, register the idea, classify it, then hand it to the
 driver — run here as one test because what it proves is that the pieces fit, which no
-one of them can prove alone.
+one of them can prove alone. One step differs from what a person runs: the research runs
+under a card floor no operator can set (`CARD_FLOOR_S`), so whether the shipped budget fits
+the demo's cards on a given host is row 139 of `docs/backlog.md`, not this test's to say.
 
 Everything a model says comes from the demo's own scripted register, whose three answers
 are a keep, a discard and a crash in that order; nothing here resolves a provider key or
@@ -24,12 +26,29 @@ import yaml
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.research import loop, records
+from kanso.schemas import Card
+from kanso.state import StateStore
 
 from .conftest import at, payload, run
 
 DEMO_ID = "demo_mr"
 CARDS = 3
 """What the demo's scripted register has to say before it wraps around."""
+
+CARD_FLOOR_S = 600.0
+"""The card budget's floor while the demo researches: ten minutes.
+
+The budget is `max(MIN_CARD_BUDGET_S, HEADROOM × baseline wall)` (`research/loop.py`), and
+which term is larger, and whether a card fits under it, depends on how fast the host runs.
+This test asserts the demo's flow, not its budget: `tests/research/test_loop.py` pins the
+formula and its two constants, and `tests/nautilus/backtest/test_subprocess.py` the kill. So
+it lifts the floor to 600 s, about eight times the slowest demo card measured (74.9 s, the
+discard, on an Apple M2's efficiency cores under pytest-cov beside another test run), and
+the 3× term binds only past a 200 s baseline, over five times the 35.8 s measured there. A
+slow runner cannot turn the scripted discard into a budget crash, and a card that hangs is
+killed in ten minutes.
+"""
 
 
 @pytest.fixture(scope="module")
@@ -58,6 +77,26 @@ def calls(runner: CliRunner, root: Path) -> int:
     return int(payload(at(runner, root, "status", "--json"))["spend_today"]["calls"])
 
 
+def ledger(root: Path) -> tuple[list[Card], str]:
+    """The hypothesis's cards, oldest first, and the log an operator reads.
+
+    The log is `results.tsv` followed by the tail every crashed card recorded, so an
+    assertion that carries it as its message says which card went wrong and why: a card
+    killed for its time budget and one that raised read the same in the counts alone.
+    """
+    log = (root / "hypotheses" / DEMO_ID / "results.tsv").read_text(encoding="utf-8")
+    with StateStore(root / "state.db") as store:
+        carded = records.cards_of(store, DEMO_ID)
+    tails = [f"{card.sha7} crash_tail: {card.crash_tail}" for card in carded if card.crash_tail]
+    return carded, "\n".join([log, *tails])
+
+
+def scripted(root: Path) -> list[str]:
+    """The descriptions of the demo's scripted proposals, in the order the mock answers them."""
+    script = yaml.safe_load((root / "mock" / "responses.yaml").read_text(encoding="utf-8"))
+    return [str(answer["desc"]) for answer in script["propose"]]
+
+
 def document(root: Path) -> dict[str, Any]:
     text = (root / "hypotheses" / DEMO_ID / "hypothesis.yaml").read_text(encoding="utf-8")
     parsed = yaml.safe_load(text)
@@ -66,8 +105,11 @@ def document(root: Path) -> dict[str, Any]:
 
 
 def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
-    runner: CliRunner, demo: Path
+    runner: CliRunner, demo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # `research run` begins the run in this process and strikes its card budget there, so this
+    # floor is the one every card of the run is watched against (`CARD_FLOOR_S`).
+    monkeypatch.setattr(loop, "MIN_CARD_BUDGET_S", CARD_FLOOR_S)
     assert at(runner, demo, "doctor", "--json").exit_code == Exit.OK
     before = calls(runner, demo)
 
@@ -96,9 +138,33 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
 
     assert driven.exit_code == Exit.OK, driven.stdout
     outcome = payload(driven)
-    assert outcome["proposed"] == CARDS
+    carded, log = ledger(demo)
+    with StateStore(demo / "state.db") as store:
+        opened = records.active(store, DEMO_ID)
+    # The lifted floor reached the run, so no host's speed decides which card is a crash.
+    assert opened is not None and opened.card_budget_s >= CARD_FLOOR_S, log
+    assert outcome["proposed"] == CARDS, log
     # The demo's three scripted answers, in the order its own file documents.
-    assert (outcome["keeps"], outcome["discards"], outcome["crashes"]) == (1, 1, 1)
+    assert (outcome["keeps"], outcome["discards"], outcome["crashes"]) == (1, 1, 1), log
+    keep, discard, crash = scripted(demo)
+    assert [(card.status, card.desc) for card in carded] == [
+        ("discard", "baseline"),
+        ("keep", keep),
+        ("discard", discard),
+        ("crash", crash),
+    ], log
+    # The crash is the one the script plants, not a card the host was too slow to finish.
+    assert "rolling_sigma" in (carded[-1].crash_tail or ""), log
+    # The floor is lifted here, but an operator runs the demo under the shipped one: three times
+    # the baseline and never under 60 s. The demo's baseline is the stub, which trades nothing,
+    # and past it a card's wall grows with its fills, so a discard trading far more than the keep
+    # fits only under the floor and is killed on a host slow enough for the floor to stop binding
+    # (`docs/backlog.md` row 139: 2,445 trades to the keep's 1,003 took four times the baseline).
+    # Holding the script's discard to a fifth more than the keep's fills keeps its cost near the
+    # keep's on the operator's host; it narrows that margin, it guarantees none. The trade count
+    # is the proxy because it is deterministic and a wall time is not.
+    _, kept, discarded, _ = carded
+    assert discarded.n_trades <= 1.2 * kept.n_trades, log
     assert outcome["best_sha"] is not None
     assert outcome["best_metric"] > 0
 

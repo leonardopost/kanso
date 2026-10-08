@@ -389,10 +389,10 @@ restore. Three proposals into the demo:
 
 ```
 sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc
-93510e2	0.000000	0.000000	1	0	2.643	0.307	discard	baseline
-f729a53	9.986730	1.064759	2	1003	4.240	0.321	keep	fade a 2-sigma deviation from a 60-bar rolling mean
-67ef6fd	3.153159	0.409428	3	2445	7.102	0.330	discard	narrow the entry threshold to 1 sigma
-020aef2	0.000000	0.000000	4	0	1.203	0.307	crash	scale by a rolling sigma helper that does not exist (intentional crash)
+93510e2	0.000000	0.000000	1	0	3.147	0.216	discard	baseline
+f729a53	9.986730	1.064759	2	1003	8.366	0.241	keep	fade a 2-sigma deviation from a 60-bar rolling mean
+340620b	5.285159	0.928893	3	1164	8.720	0.246	discard	exit at 1 sigma rather than half a sigma
+020aef2	0.000000	0.000000	4	0	1.003	0.213	crash	scale by a rolling sigma helper that does not exist (intentional crash)
 ```
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
@@ -400,7 +400,14 @@ research window — and the warmup sessions before it, when the hypothesis decla
 out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
-memory and kills the process group on breach.
+memory and kills the process group on breach. The wall-time budget is three times what the
+run's baseline took and never under 60 s (the `budget` `research begin` prints), and a card
+killed for it is a `crash`. The baseline is the strategy the run starts from. A later run
+starts from the hypothesis's best, or from the card a re-seed names, so its baseline's wall
+already includes that strategy's fills. A hypothesis's first run starts from the workspace's
+`strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
+nothing and a card that trades spends the headroom on its fills: in the sample above the keep
+and the discard each took about 2.7 times the baseline's wall (row 139 of `docs/backlog.md`).
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog an hour at a time when the
