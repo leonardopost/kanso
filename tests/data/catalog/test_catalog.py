@@ -513,7 +513,7 @@ def test_a_write_opens_no_manifest_of_its_series_that_ends_before_it_begins(
 ) -> None:
     """A dataset that ends before a write begins can neither overlap it nor share its id, and
     an id carries its end, so a chunked load or a backfill written forwards opens none of
-    the chunks it already wrote: its cost does not grow with the series either."""
+    the chunks it already wrote: its cost does not grow with what it has written."""
     written: list[cat.Written] = []
     for start in [date(2024, 1, 1 + 7 * n) for n in range(4)]:
         unreadable(ws, *written)

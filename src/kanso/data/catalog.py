@@ -54,10 +54,12 @@ is checked once, over the span requested, before the first file. The manifest is
 every file the write produced, and a failure in any batch removes every file the write had
 already produced and records nothing, so a dataset is written whole or not at all.
 
-**A write costs what its own series holds, never what the store holds.** It reads the
-manifests it can clash with and no others — its series', filed under the same instrument,
-type and resolution, adjusted or not, that end on or after the span it writes begins, found
-by their names — and the one `supersedes` names, by its own file. It finds the files it
+**A write's cost grows with its own series, never with the store.** It opens no other
+series' manifest. It reads its series' manifests — filed under the same instrument, type and
+resolution, adjusted or not — that end on or after the day the span it writes begins, found
+by their names, and the one `supersedes` names, by its own file. Those are every manifest
+it can clash with, and more: a name carries a dataset's end and not its start, so a span
+written ahead of what the series holds reads every later dataset of it. It finds the files it
 produced by listing the one directory the engine files the series in, and sets aside only
 the files a removal of the series can reach. `nautilus_trader 1.231.0` files a series under
 `data/<class_to_filename(class)>/<urisafe_identifier(identifier)>`, and a series of no
@@ -525,12 +527,14 @@ def identity(point: Any) -> tuple[type, str | None, str | None]:
 def _held(
     ws: Workspace, ref: DatasetRefLike, span: tuple[date, date], supersedes: str | None
 ) -> dict[str, Manifest]:
-    """The held datasets a write over `span` can clash with, keyed by id, and no others.
+    """The held datasets of the series a write over `span` files under that end on or after
+    the span's first day, keyed by id: every one it can clash with, and no other series'.
 
     What clashes is what `_clear` says: a dataset of the same series that overlaps the span
     or has the id of the one written. A dataset that ends before the span begins does
-    neither, so only the series' datasets ending on or after that day are read. The dataset
-    `supersedes` names is read by its own file, of whatever series, and refused unless held.
+    neither, so it is not read. One that ends later is, whether or not it begins in time to
+    overlap, because its name carries its end and not its start. The dataset `supersedes`
+    names is read by its own file, of whatever series, and refused unless held.
     """
     if supersedes is not None and not holds(ws, supersedes):
         raise PreconditionError(
