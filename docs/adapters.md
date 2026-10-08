@@ -205,7 +205,7 @@ backfill and screen fetch writes one dataset a day as the pages stream in, and a
 fails loses that day and no other. A day costs its pages: the source serves 50,000 ticks a
 page in about four seconds, every page of a walk at the size its first page asked for, and
 a chunk is asked a day either side of its own — so one session of XLE quotes, 588,399 kept
-of 2,126,077 walked over 43 pages, loaded in 186 s on 2026-10-07 (`docs/backlog.md` row 138).
+of 2,126,077 walked over 43 pages, loaded in 186 s on 2026-10-07 (`docs/backlog.md` row 142).
 
 The bulk path is worth reaching for over long history where the store carries the class:
 whether it does is a fact about the store's *layout*, never about a plan, and whether your
