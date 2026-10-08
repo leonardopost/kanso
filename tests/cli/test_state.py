@@ -26,6 +26,7 @@ from kanso.research import daemon, records
 from kanso.schemas import RunRecord
 from kanso.state import StateStore
 from kanso.workspace import find
+from tests.processes import holding
 
 from .conftest import at, payload
 
@@ -192,6 +193,30 @@ def test_prune_is_refused_while_a_daemon_runs(
     assert "a daemon is running in this workspace" in document["error"]
     assert "kanso research stop" in document["remedy"]
     assert books(ws / "state.db") == {"live": KEPT, "gone": GONE} and backups(ws) == []
+
+
+def test_prune_is_refused_while_a_lane_of_a_daemon_that_is_gone_still_runs(
+    runner: CliRunner, ws: Path
+) -> None:
+    """A lane whose supervisor was killed — waiting on a model, say — still writes the store,
+    and it holds no daemon lock to be refused by: its own lock is what refuses the prune."""
+    lane = holding(ws, "l1")
+    try:
+        result = at(runner, ws, "state", "prune", "--json")
+    finally:
+        lane.kill()
+        lane.wait()
+
+    assert result.exit_code == Exit.PRECONDITION
+    document = payload(result)
+    assert (
+        document["error"] == f"still running from a daemon that is gone: lane l1 (pid {lane.pid})"
+    )
+    assert document["remedy"] == "run `kanso research stop`, which ends it, then run this again"
+    assert books(ws / "state.db") == {"live": KEPT, "gone": GONE} and backups(ws) == []
+    released = daemon._lock(find(ws))
+    assert released is not None, "the refusal let go of the daemon's lock"
+    released.close()
 
 
 def test_prune_is_refused_when_the_disk_cannot_hold_the_copy_and_the_rewrite(

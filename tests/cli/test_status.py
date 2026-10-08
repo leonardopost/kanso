@@ -30,7 +30,7 @@ def test_a_fresh_workspace_reports_every_field_with_nothing_in_it(
 
     assert result.exit_code == Exit.OK, result.stdout
     found = payload(result)
-    assert found["daemon"] == {"running": False, "pid": None, "children": []}
+    assert found["daemon"] == {"running": False, "pid": None, "children": [], "ending": []}
     assert found["cards_per_hour"] == 0
     assert found["hypotheses"] == []
     assert found["spend_today"]["calls"] == 0

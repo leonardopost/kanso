@@ -155,6 +155,7 @@ __all__ = [
     "benchmark",
     "end_with",
     "execute",
+    "handed_down",
     "main",
     "run",
     "run_subprocess",
@@ -294,6 +295,30 @@ def wanted(check: Callable[[], None]) -> Iterator[None]:
         yield
     finally:
         _WANTED.remove(check)
+
+
+_HANDED: list[int] = []
+"""The descriptors every child `watched` starts inherits, from the `handed_down` blocks this
+process is inside."""
+
+
+@contextlib.contextmanager
+def handed_down(descriptor: int) -> Iterator[None]:
+    """Have every child `watched` starts inside the block inherit `descriptor`, which it holds
+    open until it exits.
+
+    A lane hands down the lock it holds while it lives (`kanso.research.daemon`), so the lock
+    stays held until the lane and whatever card, certification or demotion it started have
+    all exited, however each ended: the kernel releases a `flock` once the last descriptor
+    of the open file is closed, and a process's descriptors are closed when it exits. That
+    is what a `stop` waits on, rather than on a guess at how long a card takes to see its
+    lane go. The child only holds it: nothing in it reads or closes it.
+    """
+    _HANDED.append(descriptor)
+    try:
+        yield
+    finally:
+        _HANDED.remove(descriptor)
 
 
 GIB: Final = float(1024**3)
@@ -2366,7 +2391,8 @@ def watched(
     certification another (`kanso.certify.child`), and a monitor's demotion a third that a
     stop leaves to finish (`kanso.portfolio.child`). `feed`, when given, is written to the
     child's standard input between the watch's polls (`_Feed`), and anything it raises kills
-    the child first; a child given none reads nothing.
+    the child first; a child given none reads nothing. The child inherits the descriptors
+    this process hands down (`handed_down`) and no other.
     """
     started = time.monotonic()
     with errors.open("wb") as stream:
@@ -2378,6 +2404,7 @@ def watched(
             stdout=stream,
             stderr=stream,
             start_new_session=True,
+            pass_fds=tuple(_HANDED),
         )
         pipe = child.stdin
         fed = None if pipe is None or feed is None else _Feed(pipe, feed)

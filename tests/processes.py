@@ -6,7 +6,7 @@ the kernel hands it to another parent, which reaps it when it gets round to it â
 asks `ps` for the process's state instead, and a zombie is not running.
 
 `holding` stands in for a lane or the monitor whose daemon is gone: a process holding that
-child's lock, which is all `kanso.research.daemon.living` reads.
+child's two locks, which are all `kanso.research.daemon.living` and `ending` read.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Final
 
 HOLDER: Final = r"""
-import signal, sys, time
+import os, signal, sys, time
 from pathlib import Path
 
 from kanso.research import daemon
@@ -26,7 +26,7 @@ from kanso.workspace import find
 
 if sys.argv[3] == "deaf":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-with daemon._supervised(find(Path(sys.argv[1])), sys.argv[2]):
+with daemon._supervised(find(Path(sys.argv[1])), sys.argv[2], os.getppid()):
     sys.stdout.write("held\n")
     sys.stdout.flush()
     time.sleep(60)

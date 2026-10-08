@@ -8,11 +8,13 @@ the loops are tested rather than merely started.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 import platform
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from hashlib import sha256
@@ -161,7 +163,7 @@ def test_a_worker_researches_what_it_claims_and_stops_when_asked(
     monkeypatch.setattr(research_driver, "run", fake_run)
     monkeypatch.setattr(explore, "after_stall", lambda *_: pytest.fail("no stall, no explore"))
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert seen == [(hyp_id, "l1")]
 
 
@@ -184,7 +186,7 @@ def test_a_turn_that_stalled_asks_whether_to_explore_after_the_driver_returned(
     monkeypatch.setattr(research_driver, "run", stalled)
     monkeypatch.setattr(explore, "after_stall", after_stall)
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert asked == [(hyp_id, "l1", True)]
     assert daemon.LANE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
 
@@ -203,7 +205,7 @@ def test_a_worker_with_nothing_to_do_waits_rather_than_spinning(
 
     monkeypatch.setattr(daemon, "time", SimpleNamespace(monotonic=time.monotonic, sleep=sleeping))
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert slept == [daemon._TICK]
 
 
@@ -221,7 +223,7 @@ def test_a_hypothesis_whose_baseline_will_not_run_goes_back_behind_the_others(
     monkeypatch.setattr(research_driver, "run", failing)
     monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert [item.priority for item in scheduler.queued(store)] == [scheduler.BASELINE_PRIORITY]
     failed = [event for event in store.events(subject=hyp_id) if event.kind == daemon.LANE_FAILED]
     assert [event.detail["because"] for event in failed] == ["try again with a smaller window"]
@@ -242,7 +244,7 @@ def test_a_hypothesis_taken_out_while_a_lane_held_it_does_not_come_back_when_it_
     monkeypatch.setattr(research_driver, "run", failing)
     monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert scheduler.queued(store) == []
     assert daemon.LANE_FAILED in [event.kind for event in store.events(subject=hyp_id)]
 
@@ -304,7 +306,7 @@ def test_a_removal_during_the_window_load_frees_the_lane_at_the_next_read(
     monkeypatch.setattr(research_driver, "run", driving)
     monkeypatch.setattr(daemon, "_wait", waited.append)
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
 
     assert len(reads) == REMOVED_ON, "no session is read after the one the removal landed in"
     assert [subject for subject, _ in driven] == [held, waiting]
@@ -330,7 +332,7 @@ def test_a_hypothesis_retired_while_a_lane_held_it_stays_out_and_the_lane_lives(
     monkeypatch.setattr(research_driver, "run", failing)
     monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert scheduler.queued(store) == []
 
 
@@ -347,7 +349,7 @@ def test_a_run_that_failed_mid_flight_stays_beside_the_stalled_ones(
     monkeypatch.setattr(research_driver, "run", failing)
     monkeypatch.setattr(daemon, "_wait", lambda _seconds: daemon.request_stop())
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert [item.priority for item in scheduler.queued(store)] == [scheduler.STALL_PRIORITY]
     assert records.active(store, hyp_id) is not None
 
@@ -364,7 +366,7 @@ def test_the_monitor_runs_a_pass_every_interval(
 
     monkeypatch.setattr("kanso.monitor.run_once", counted)
 
-    assert daemon.monitor(ws) == 0
+    assert daemon.monitor(ws, os.getppid()) == 0
     assert passes == [1], "the loop is the pass, not a placeholder around one"
 
 
@@ -379,7 +381,7 @@ def test_a_pass_that_cannot_run_is_recorded_and_the_cadence_is_kept(
 
     monkeypatch.setattr("kanso.monitor.run_once", failing)
 
-    assert daemon.monitor(ws) == 0
+    assert daemon.monitor(ws, os.getppid()) == 0
     assert [event.kind for event in store.events(subject="monitor")] == ["monitor_failed"]
 
 
@@ -396,7 +398,7 @@ def test_a_workspace_with_nothing_deployed_is_an_ordinary_pass(
     monkeypatch.setattr(daemon, "_wait", waiting)
     interval = parse_duration(ws.config.monitor.interval, "monitor.interval").total_seconds()
 
-    assert daemon.monitor(ws) == 0
+    assert daemon.monitor(ws, os.getppid()) == 0
     assert waited == [interval]
     assert store.events(kind=daemon.MONITOR_FAILED) == []
 
@@ -447,11 +449,13 @@ def test_the_supervisor_starts_again_a_child_that_ended_while_it_ran(
 
     assert daemon.serve(ws) == 0
 
+    # Each told which supervisor it answers to, rather than left to read its parent.
+    me = str(os.getpid())
     assert [argv for argv, _ in spawned] == [
-        ("lane", "l1"),
-        ("lane", "l2"),
-        ("monitor",),
-        ("lane", "l1"),
+        ("lane", "l1", me),
+        ("lane", "l2", me),
+        ("monitor", me),
+        ("lane", "l1", me),
     ]
     ended, *running = (child for _, child in spawned)
     assert not ended.terminated, "it had ended; there was nothing left to signal"
@@ -480,7 +484,7 @@ def test_a_lane_that_died_after_a_long_run_is_recorded_and_started_again_at_once
 
     daemon._tend(ws, [child], later)
 
-    assert spawned == [("lane", "l1")]
+    assert spawned == [("lane", "l1", str(os.getpid()))]
     assert (child.process, child.started, child.wait) == (replacement, later, 0.0)
     (died,) = store.events(kind=daemon.LANE_DIED)
     assert died.subject == "l1"
@@ -583,11 +587,11 @@ def test_what_a_dead_lane_held_with_no_run_goes_back_and_its_directory_with_it(
 
 
 def test_a_child_s_end_is_recorded_as_its_exit_status_or_the_signal_that_took_it() -> None:
-    assert daemon._ending(0) == {"exit": 0, "signal": None}
-    assert daemon._ending(1) == {"exit": 1, "signal": None}
-    assert daemon._ending(-signal.SIGKILL) == {"exit": None, "signal": "SIGKILL"}
+    assert daemon._ended_by(0) == {"exit": 0, "signal": None}
+    assert daemon._ended_by(1) == {"exit": 1, "signal": None}
+    assert daemon._ended_by(-signal.SIGKILL) == {"exit": None, "signal": "SIGKILL"}
     # A signal the platform names no member for — a real-time one on Linux — by its number.
-    assert daemon._ending(-200) == {"exit": None, "signal": "200"}
+    assert daemon._ended_by(-200) == {"exit": None, "signal": "200"}
 
 
 def test_a_child_still_working_when_its_grace_runs_out_is_killed(
@@ -601,23 +605,6 @@ def test_a_child_still_working_when_its_grace_runs_out_is_killed(
 
     assert daemon.serve(ws) == 0
     assert (child.terminated, child.killed) == (True, True)
-
-
-def test_a_supervisor_that_killed_a_child_waits_for_its_card_to_end_itself(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A card leads its own session, so a lane killed outright leaves it to notice and end
-    itself; the supervisor gives it that long before it exits, and only when it killed."""
-    waited: list[float] = []
-    monkeypatch.setattr(daemon, "_await_orphans", lambda: waited.append(daemon.ORPHAN_S))
-    monkeypatch.setattr(daemon, "GRACE_S", 0.01)
-
-    daemon._terminate([FakeChild(), FakeChild()])  # type: ignore[list-item]
-    assert waited == []
-
-    daemon._terminate([FakeChild(), FakeChild(stubborn=True)])  # type: ignore[list-item]
-    assert waited == [daemon.ORPHAN_S]
-    assert daemon.ORPHAN_S > backtest.PARENT_POLL_S, "longer than a card takes to look"
 
 
 class Deaf(FakeChild):
@@ -692,10 +679,7 @@ def test_a_supervisor_goes_within_one_grace_however_many_children_will_not_answe
 
     assert len(spawned) == 3, "two lanes and the monitor"
     assert all(child.poll() is not None for child in spawned)
-    # One grace, and then the one wait for whatever cards the kills left to end themselves.
-    assert took < 2.0 + daemon.ORPHAN_S, (
-        f"shutting three children down took {took:.2f}s: a grace each"
-    )
+    assert took < 2.0, f"shutting three children down took {took:.2f}s: a grace each"
 
 
 def test_a_daemon_that_will_not_answer_is_killed_with_every_process_in_its_group(
@@ -720,7 +704,7 @@ def test_a_daemon_that_will_not_answer_is_killed_with_every_process_in_its_group
     path.write_text(f"{supervisor.pid}\n", encoding="utf-8")
     monkeypatch.setattr(daemon, "STOP_TIMEOUT_S", 0.2)
     try:
-        assert daemon.stop(ws) == daemon.Stopped(supervisor.pid, ())
+        assert daemon.stop(ws) == daemon.Stopped(supervisor.pid, (), ())
 
         assert supervisor.wait(timeout=10) != 0
         assert ends(lane, within_s=10.0), "the lane outlived the supervisor it belonged to"
@@ -732,12 +716,13 @@ def test_a_daemon_that_will_not_answer_is_killed_with_every_process_in_its_group
 def test_a_lane_whose_supervisor_is_gone_stops_as_though_told_to(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Whatever took the supervisor, a lane nobody supervises takes nothing more."""
-    parents = iter([4242])
-    monkeypatch.setattr(daemon.os, "getppid", lambda: next(parents, 1))
+    """Whatever took the supervisor, a lane nobody supervises takes nothing more — one whose
+    supervisor went before the lane had started included: it is told which supervisor it
+    answers to, and its parent is already whatever adopted it."""
+    monkeypatch.setattr(daemon.os, "getppid", lambda: 1)
     monkeypatch.setattr(daemon, "claim", lambda *_: pytest.fail("the lane claimed work"))
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", 4242) == 0
     assert daemon.stopping()
     from kanso.nautilus import backtest as runner
 
@@ -747,12 +732,13 @@ def test_a_lane_whose_supervisor_is_gone_stops_as_though_told_to(
 def test_a_monitor_whose_supervisor_is_gone_stops_after_the_pass_it_is_on(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    parents = iter([4242, 4242])
+    """The supervisor goes during the pass. Its parent is read from what the pass has done
+    rather than from how many times it was asked, since the monitor's own thread asks too."""
     passes: list[int] = []
-    monkeypatch.setattr(daemon.os, "getppid", lambda: next(parents, 1))
+    monkeypatch.setattr(daemon.os, "getppid", lambda: 1 if passes else 4242)
     monkeypatch.setattr("kanso.monitor.run_once", lambda *_: passes.append(1) or [])
 
-    assert daemon.monitor(ws) == 0
+    assert daemon.monitor(ws, 4242) == 0
     assert passes == [1]
     assert daemon.stopping()
 
@@ -776,7 +762,7 @@ def test_a_lane_watching_a_card_notices_its_supervisor_is_gone_and_kills_the_car
 
     monkeypatch.setattr(research_driver, "run", watching_a_card)
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", 4242) == 0
     assert daemon.stopping()
     assert records.active(store, hyp_id) is not None, "the run stays open for the next start"
     assert all(event.kind != daemon.LANE_FAILED for event in store.events(subject=hyp_id))
@@ -809,12 +795,12 @@ def test_a_lane_hands_its_stop_request_to_the_driver_and_explores_nothing_once_s
     monkeypatch.setattr(research_driver, "run", stalled_then_stopped)
     monkeypatch.setattr(explore, "after_stall", lambda *_: pytest.fail("explored after a stop"))
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert asked == [False, True]
 
 
 LANE_THAT_STALLED: Final = r'''
-import sys
+import os, sys
 from pathlib import Path
 
 from kanso.certify import certificate, child, plan  # what a stall imports, before it is measured
@@ -837,7 +823,7 @@ def claim(store, lane):
 
 
 daemon.claim = claim
-raise SystemExit(daemon.worker(ws, "l1"))
+raise SystemExit(daemon.worker(ws, "l1", os.getppid()))
 '''
 """A real lane process — the loop the engine installs outside a test run is uvloop there — whose
 first claim certifies a stall and which then waits for a claim that never comes."""
@@ -923,7 +909,7 @@ def test_start_detaches_and_stop_leaves_the_run_and_the_lane_directory(
     with pytest.raises(PreconditionError, match="already running"):
         daemon.start(ws)
 
-    assert daemon.stop(ws) == daemon.Stopped(pid, ())
+    assert daemon.stop(ws) == daemon.Stopped(pid, (), ())
 
     assert daemon.pid_of(ws) is None
     assert (
@@ -953,10 +939,11 @@ def until(found: Callable[[], Any], what: str, within_s: float = 60.0) -> Any:
 
 
 def lane_process(supervisor: int, name: str) -> int | None:
-    """The running lane `name` the supervisor started, found by its command line."""
+    """The running lane `name` the supervisor started, found by its command line: `lane`,
+    the workspace, the lane's name and the supervisor's pid."""
     for pid, command in children(supervisor):
         words = command.split()
-        if words[-3:-2] == [daemon.LANE] and words[-1] == name and running(pid):
+        if words[-4:] == [daemon.LANE, words[-3], name, str(supervisor)] and running(pid):
             return pid
     return None
 
@@ -1096,25 +1083,65 @@ def test_a_lane_whose_supervisor_is_killed_mid_card_kills_the_card_and_records_n
     assert records.active(store, hyp_id) is not None, "the run stays open for the next start"
 
 
-def test_a_stop_that_kills_the_daemon_returns_with_no_card_of_it_running(
+def test_a_stop_that_kills_the_daemon_returns_once_no_card_of_it_runs(
     stopped: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The last resort: a supervisor that answers nothing is killed with its group, lanes and
     all, and a card those lanes were running — which leads a session of its own, out of the
-    kill's reach — has ended itself by the time `stop` says the daemon stopped."""
+    kill's reach — has let go of the lock its lane handed it by the time `stop` returns.
+
+    The stop sees the card exit rather than guessing how long that takes. Waiting a fixed
+    second instead, this failed on CI's macos-26 Python 3.12 job (run 37708308740): the card,
+    started a moment before and still importing what it runs, outlived the second."""
     ws = stopped
     hyp_id, supervisor, lane, card = mid_card(ws, store)
     cards = len(records.cards_of(store, hyp_id))
     os.kill(supervisor, signal.SIGSTOP)
     monkeypatch.setattr(daemon, "STOP_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(daemon, "ORPHAN_S", 60.0)  # however slowly a card starts on this host
 
-    stopped_ = daemon.stop(ws)
+    assert daemon.stop(ws) == daemon.Stopped(supervisor, (), ())
 
-    assert (stopped_.pid, stopped_.orphans) == (supervisor, ())
-    assert not running(card), "stop returned while a card of the daemon it killed still ran"
-    assert not running(lane)
+    assert daemon.ending(ws) == (), "stop returned while a card of the daemon it killed still ran"
     assert daemon.living(ws) == ()
+    # Letting go of the lock is the card's last act: its descriptors close as it exits.
+    assert ends(card, within_s=5.0)
+    assert not running(lane)
     assert len(records.cards_of(store, hyp_id)) == cards
+
+
+def test_what_a_gone_lane_started_is_named_until_it_ends_and_a_stop_waits_for_it(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane killed outright leaves the card it was running holding the lock the lane handed
+    down: `status` names the lane by it, never a bare stopped daemon, and `stop` waits for it
+    to let go — returning the moment it does, and naming it when it has not by `ORPHAN_S`."""
+    work = daemon.work_path(ws, "l1", 4242)
+    work.parent.mkdir(parents=True, exist_ok=True)
+    card = work.open("ab")  # the card, holding what its lane, now gone, handed it
+    fcntl.flock(card.fileno(), fcntl.LOCK_EX)
+    gone = daemon.ChildPid("l1", 4242)
+    try:
+        assert (daemon.living(ws), daemon.ending(ws)) == ((), (gone,))
+        reported = daemon.status(ws, store)
+        assert (reported.running, reported.children, reported.ending) == (False, (), (gone,))
+        assert reported.payload()["ending"] == [{"child": "l1", "pid": 4242}]
+
+        monkeypatch.setattr(daemon, "ORPHAN_S", 0.2)
+        assert daemon.stop(ws) == daemon.Stopped(None, (), (gone,))
+        assert daemon.stop(ws).payload()["ending"] == [{"child": "l1", "pid": 4242}]
+
+        monkeypatch.setattr(daemon, "ORPHAN_S", 60.0)
+        threading.Timer(0.3, card.close).start()
+        began = time.monotonic()
+        assert daemon.stop(ws) == daemon.Stopped(None, (), ())
+        assert time.monotonic() - began < 10.0, "it waited out its bound, not the card"
+    finally:
+        card.close()
+
+    assert daemon.ending(ws) == ()
+    with pytest.raises(PreconditionError, match="no daemon is running"):
+        daemon.stop(ws)
 
 
 def test_a_child_that_outlived_its_daemon_is_reported_refused_past_and_ended(
@@ -1125,12 +1152,12 @@ def test_a_child_that_outlived_its_daemon_is_reported_refused_past_and_ended(
     command reads: `status` names it, `start` refuses, and `stop` ends it, signalling it and
     killing it if the signal is not enough."""
     monkeypatch.setattr(daemon, "GRACE_S", 0.5)
-    monkeypatch.setattr(daemon, "ORPHAN_S", 0.1)
     lane = holding(ws.root, "l1")
     monitor = holding(ws.root, daemon.MONITOR, deaf=True)
     try:
         alive = (daemon.ChildPid("l1", lane.pid), daemon.ChildPid(daemon.MONITOR, monitor.pid))
         assert daemon.living(ws) == alive
+        assert daemon.ending(ws) == (), "a child alive is not one gone with its work running"
         reported = daemon.status(ws, store)
         assert (reported.running, reported.pid, reported.children) == (False, None, alive)
         assert reported.payload()["children"] == [
@@ -1148,11 +1175,12 @@ def test_a_child_that_outlived_its_daemon_is_reported_refused_past_and_ended(
 
         stopped_ = daemon.stop(ws)
 
-        assert stopped_ == daemon.Stopped(None, alive)
+        assert stopped_ == daemon.Stopped(None, alive, ())
         assert stopped_.payload() == {
             "running": False,
             "pid": None,
             "orphans": [{"child": "l1", "pid": lane.pid}, {"child": "monitor", "pid": monitor.pid}],
+            "ending": [],
         }
         assert lane.wait(timeout=5.0) == -signal.SIGTERM, "the signal was enough for the lane"
         assert monitor.wait(timeout=5.0) == -signal.SIGKILL, "the deaf one had to be killed"
@@ -1170,33 +1198,93 @@ def test_a_lock_a_killed_child_left_names_nothing_and_a_supervisor_removes_it(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The kernel releases a lock when its holder dies, however it died, and leaves the file:
-    the supervisor that buries a child removes its file, and one starting up removes every
-    file nobody holds — never one a child still running holds."""
+    the supervisor that buries a child removes its files — its `.work` only once whatever the
+    child started has let go of it — and one starting up removes every file nobody holds."""
     left = daemon.lock_path(ws, "l1", 4242)
+    work = daemon.work_path(ws, "l1", 4242)
     left.parent.mkdir(parents=True, exist_ok=True)
     left.write_bytes(b"")
+    work.write_bytes(b"")
     (left.parent / "notes.lock").write_bytes(b"")  # no pid in its name: no child's
-    assert daemon.living(ws) == ()
+    assert (daemon.living(ws), daemon.ending(ws)) == ((), ())
     assert daemon._held(left.parent / "l9.1.lock") is False, "a file already gone is no child"
 
     monkeypatch.setattr(daemon, "_spawn", lambda *_a: FakeChild())
+    card = work.open("ab")  # a card the lane started, yet to see its lane gone
+    fcntl.flock(card.fileno(), fcntl.LOCK_EX)
     killed = FakeChild(alive=False, code=-signal.SIGKILL, pid=4242)
     buried = daemon._Child(daemon.LANE, "l1", process=killed)  # type: ignore[arg-type]
     daemon._tend(ws, [buried], 1.0)
     assert not left.exists(), "the supervisor that buried it removed its lock"
+    assert work.exists(), "and left the one its card still holds"
+    card.close()
 
     left.write_bytes(b"")
+    monkeypatch.setattr(daemon, "_spawn", lambda *_a: FakeChild(alive=False))
+    daemon.request_stop()
+    assert daemon.serve(ws) == 0
+
+    assert not left.exists(), "a supervisor starting up removed what nobody holds"
+    assert not work.exists()
+
+
+def test_a_supervisor_refuses_while_a_child_of_one_that_is_gone_still_runs(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`serve` is what a service unit runs, and what a hand starts, with no `start` to look
+    first: a lane it started beside one still running would claim that one's run."""
+    monkeypatch.setattr(daemon, "_spawn", lambda *_a: pytest.fail("a child was started"))
     survivor = holding(ws.root, "l2")
     try:
-        monkeypatch.setattr(daemon, "_spawn", lambda *_a: FakeChild(alive=False))
-        daemon.request_stop()
-        assert daemon.serve(ws) == 0
-
-        assert not left.exists(), "a supervisor starting up removed what nobody holds"
+        with pytest.raises(PreconditionError) as refused:
+            daemon.serve(ws)
+        assert refused.value.message == (
+            f"still running from a daemon that is gone: lane l2 (pid {survivor.pid})"
+        )
+        assert refused.value.remedy == "run `kanso research stop`, which ends it, then start again"
+        assert daemon.pid_of(ws) is None, "nothing was stamped on the pid file"
+        released = daemon._lock(ws)
+        assert released is not None, "the refusal let go of the daemon's lock"
+        released.close()
         assert daemon.living(ws) == (daemon.ChildPid("l2", survivor.pid),)
     finally:
         survivor.kill()
         survivor.wait()
+
+
+BORN_ORPHANED: Final = (
+    "import os, subprocess, sys\n"
+    "lane = subprocess.Popen(\n"
+    "    [sys.executable, '-m', 'kanso.research', 'lane', sys.argv[1], 'l1', str(os.getpid())],\n"
+    "    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(sys.argv[2], 'wb'),\n"
+    ")\n"
+    "print(lane.pid)\n"
+)
+"""A supervisor that starts lane l1 and exits at once, before the lane has even imported."""
+
+
+def test_a_lane_whose_supervisor_died_while_it_started_stops_on_its_own(
+    ws: Workspace, tmp_path: Path
+) -> None:
+    """Measured with real processes: the lane is told its supervisor's pid, so one whose
+    supervisor went in the second it takes to start sees that at its first look. Told
+    nothing, it took whatever adopted it for its supervisor, and ran on unsupervised."""
+    errors = tmp_path / "lane.err"
+    parent = subprocess.run(
+        [sys.executable, "-c", BORN_ORPHANED, str(ws.root), str(errors)],
+        cwd=str(ws.root),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lane = int(parent.stdout)
+    try:
+        assert ends(lane, within_s=30.0), "the lane ran on with nobody supervising it"
+    finally:
+        if running(lane):  # pragma: no cover - only when the lane ran on
+            os.kill(lane, signal.SIGKILL)
+    assert errors.read_bytes() == b"", "it stopped, rather than failed"
+    assert (daemon.living(ws), daemon.ending(ws)) == ((), ())
 
 
 def test_a_daemon_that_will_not_answer_a_signal_is_killed(
@@ -1215,7 +1303,7 @@ def test_a_daemon_that_will_not_answer_a_signal_is_killed(
     path.write_text(f"{deaf.pid}\n", encoding="utf-8")
     monkeypatch.setattr(daemon, "STOP_TIMEOUT_S", 0.2)
 
-    assert daemon.stop(ws) == daemon.Stopped(deaf.pid, ())
+    assert daemon.stop(ws) == daemon.Stopped(deaf.pid, (), ())
 
     assert deaf.wait(timeout=10) != 0
     assert daemon.pid_of(ws) is None
@@ -1342,16 +1430,22 @@ def test_the_module_runs_as_a_supervisor_a_lane_or_the_monitor(
     root = str(ws.root)
 
     daemon.request_stop()
+    supervisor = str(os.getppid())
     assert daemon.main(["serve", root]) == 0
-    assert daemon.main(["lane", root, "l1"]) == 0
-    assert daemon.main(["monitor", root]) == 0
+    assert daemon.main(["lane", root, "l1", supervisor]) == 0
+    assert daemon.main(["monitor", root, supervisor]) == 0
 
 
 def test_the_module_refuses_a_command_it_does_not_have(ws: Workspace) -> None:
+    root = str(ws.root)
     with pytest.raises(PreconditionError, match="usage:"):
         daemon.main(["serve"])
     with pytest.raises(PreconditionError, match="is not one of"):
-        daemon.main(["dance", str(ws.root)])
+        daemon.main(["dance", root])
+    # A lane and the monitor are told their supervisor's pid, and nothing else is.
+    for argv in (["lane", root, "l1"], ["monitor", root, "l1"], ["serve", root, "4242"]):
+        with pytest.raises(PreconditionError, match="usage:"):
+            daemon.main(argv)
 
 
 def test_a_stop_request_can_be_taken_back(ws: Workspace) -> None:
@@ -1404,7 +1498,7 @@ def test_a_card_interrupted_by_a_stop_is_neither_failed_nor_requeued(
 
     monkeypatch.setattr(research_driver, "run", interrupted)
 
-    assert daemon.worker(ws, "l1") == 0
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert scheduler.queued(store) == []
     assert records.active(store, hyp_id) is not None
     assert all(event.kind != "lane_failed" for event in store.events(subject=hyp_id))

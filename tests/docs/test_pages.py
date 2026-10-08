@@ -83,6 +83,21 @@ def test_the_cli_page_says_the_daemon_starts_a_child_that_died_again() -> None:
     assert "started again" in status
 
 
+def test_the_cli_page_says_stop_sees_the_cards_it_left_end() -> None:
+    """`stop` once slept a second for the cards its kills left and called that their end; CI
+    found one still running when it returned. The page says what it waits on now, what it
+    says when the wait runs out, and that it is silent until then."""
+    rows = page("cli.md").splitlines()
+    stop = next(line for line in rows if line.startswith("| `kanso research stop`"))
+    assert "`stop` waits on those locks" in stop
+    assert "is named under `ending`" in stop
+    assert "`stop` prints nothing until it is done" in stop
+    assert "since the supervisor's pid is on its command line" in stop
+    status = next(line for line in rows if line.startswith("| `kanso research status`"))
+    assert "(`ending`, the same shape)" in status
+    assert "runs/<child>.<pid>.work" in page("workspace.md")
+
+
 def test_the_cli_page_says_the_transport_is_the_loader_the_spec_names() -> None:
     row = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso data backfill")

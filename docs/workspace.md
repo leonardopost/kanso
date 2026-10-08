@@ -138,7 +138,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
-| `research start` while a lane or the monitor of a daemon that is gone still runs | 2 · naming each; `kanso research stop` ends it |
+| `research start` or `state prune` while a lane or the monitor of a daemon that is gone still runs | 2 · naming each; `kanso research stop` ends it |
 | `data load` over a dataset a snapshot names | 2 · **with or without `--replace`** |
 | `data load` over unpinned data | 2 · until you pass `--replace` |
 | `data snapshot` over instrument data while the store holds no definition | 2 · a run reads its definitions from the store; resolve first |
@@ -1577,6 +1577,7 @@ runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and noth
 runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
 runs/<child>.<pid>.lock    held by a lane or the monitor, named for it and its pid, while it lives
+runs/<child>.<pid>.work    held by it and by every card it starts, until the last of them exits
 runs/daemon.log            whatever the daemon and its children write to a stream
 runs/state-<instant>.db    a copy of state.db `kanso state prune` made before it deleted anything
 ```
@@ -1638,8 +1639,39 @@ error: still running from a daemon that is gone: lane l1 (pid 58102)
 remedy: run `kanso research stop`, which ends it, then start again
 ```
 
-(exit 2). A child killed outright leaves its file with nobody holding it, which names nothing;
-the supervisor that buries the child removes it, and the next supervisor removes any left.
+(exit 2). `kanso state prune` refuses the same way, since such a lane still writes the store,
+and so does `python -m kanso.research serve`, which a service unit runs, exiting 1 with the
+same message.
+
+Each also holds `runs/<child>.<pid>.work`, and every card, certification or demotion it starts
+inherits that lock and holds it until it exits. A card leads a session of its own, so a lane
+killed outright leaves its card to see the lane gone and end itself, which takes it up to half
+a second once it is running and longer while it is still starting; the `.work` lock is how
+that is seen rather than guessed. `research status` names a lane that is gone by what it
+started for as long as that still runs, and `research stop` waits on it — returning the
+moment it is let go, or, ten seconds after the last lane went, naming what still holds it.
+Here a lane was killed outright while a child it had started through the card path — one
+that never looks for its lane, so it outlasts the wait — slept on:
+
+```
+$ kanso research status
+daemon     stopped · still running: what lane l1 (pid 90209) started
+lanes      l1, l2, l3
+restarts   none
+runs       0 active
+queue      0 waiting
+$ kanso research stop
+daemon     stopped
+ending     what lane l1 (pid 90209) started · still running; it ends itself, and `kanso research status` names it until it has
+runs       left open, with their lane directories
+```
+
+(exit 0 both, the stop after 11.45 s). With a child that exited eight seconds after it
+started, the same `stop` returned once it had, after 5.29 s, with no `ending` line.
+
+A child killed outright leaves its files with nobody holding them, which name nothing; the
+supervisor that buries the child removes them — its `.work` once nothing the child started
+holds it — and the next supervisor removes any left.
 
 The whole directory is gitignored, and deleting it while nothing is running costs you only
 the log.

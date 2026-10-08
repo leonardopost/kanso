@@ -55,6 +55,7 @@ def _status(ws: Workspace) -> Report:
     with store(ws) as opened:
         pid = daemon.pid_of(ws)
         alive = daemon.living(ws)
+        ending = daemon.ending(ws)
         planned = _planned_lanes(ws)
         active = daemon.active_runs(opened)
         lanes = _lanes(planned, active, opened)
@@ -67,6 +68,7 @@ def _status(ws: Workspace) -> Report:
                 "running": pid is not None,
                 "pid": pid,
                 "children": [child.payload() for child in alive],
+                "ending": [child.payload() for child in ending],
             },
             "lanes": lanes,
             "cards_per_hour": _cards_per_hour(opened),
@@ -190,7 +192,10 @@ def _lines(data: dict[str, Any]) -> tuple[str, ...]:
     running = (
         f"running (pid {daemon_state['pid']})"
         if daemon_state["running"]
-        else stopped_line([daemon.ChildPid(**child) for child in daemon_state["children"]])
+        else stopped_line(
+            [daemon.ChildPid(**child) for child in daemon_state["children"]],
+            [daemon.ChildPid(**child) for child in daemon_state["ending"]],
+        )
     )
     lines = [
         field("workspace", data["workspace"]),

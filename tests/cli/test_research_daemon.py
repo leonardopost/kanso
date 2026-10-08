@@ -10,6 +10,7 @@ that the queue is served by priority and then by arrival.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import signal
 import subprocess
 import sys
@@ -56,7 +57,12 @@ def test_start_reports_the_pid_and_the_lanes_and_stop_keeps_the_run(
     ended = at(runner, stopped, "research", "stop", "--json")
 
     assert ended.exit_code == Exit.OK, ended.stdout
-    assert payload(ended) == {"running": False, "pid": running["pid"], "orphans": []}
+    assert payload(ended) == {
+        "running": False,
+        "pid": running["pid"],
+        "orphans": [],
+        "ending": [],
+    }
     # Nothing is ended and nothing is cleaned up, so the next start resumes.
     assert edited.read_text(encoding="utf-8") == "# the operator is mid-edit\n"
 
@@ -86,7 +92,7 @@ def test_status_with_nothing_running_still_reports_the_lanes(
     found = payload(result)
     assert found["running"] is False
     assert found["pid"] is None
-    assert found["children"] == []
+    assert (found["children"], found["ending"]) == ([], [])
     assert found["runs"] == []
     assert found["queue"] == []
     assert found["restarts"] == []
@@ -148,9 +154,9 @@ def test_a_lane_that_outlived_its_daemon_is_reported_refused_past_and_ended(
         lane.wait()
 
     alive = [{"child": "l1", "pid": lane.pid}]
-    assert (found["running"], found["children"]) == (False, alive)
+    assert (found["running"], found["children"], found["ending"]) == (False, alive, [])
     assert f"daemon     stopped · still running: lane l1 (pid {lane.pid})" in human
-    assert screen["daemon"] == {"running": False, "pid": None, "children": alive}
+    assert screen["daemon"] == {"running": False, "pid": None, "children": alive, "ending": []}
     assert f"stopped · still running: lane l1 (pid {lane.pid}) · 0 queued" in one
     assert refused.exit_code == Exit.PRECONDITION
     assert payload(refused)["error"] == (
@@ -158,7 +164,7 @@ def test_a_lane_that_outlived_its_daemon_is_reported_refused_past_and_ended(
     )
     assert "kanso research stop" in payload(refused)["remedy"]
     assert ended.exit_code == Exit.OK, ended.stdout
-    assert payload(ended) == {"running": False, "pid": None, "orphans": alive}
+    assert payload(ended) == {"running": False, "pid": None, "orphans": alive, "ending": []}
     assert lane.returncode == -signal.SIGTERM
 
     again = holding(mocked_ws, "l1")
@@ -176,6 +182,40 @@ def test_a_lane_that_outlived_its_daemon_is_reported_refused_past_and_ended(
         in said.stdout
     )
     assert "stopped" in at(runner, mocked_ws, "research", "status").stdout
+    assert "still running" not in at(runner, mocked_ws, "research", "status").stdout
+
+
+def test_a_card_whose_lane_is_gone_is_named_until_it_ends_and_stop_says_when_it_has_not(
+    runner: CliRunner, mocked_ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane killed outright leaves its card to end itself, holding the lock the lane handed
+    down. Both status views name it rather than print a bare `stopped`, and a stop whose
+    patience runs out before it has ended says so rather than reading as though it had."""
+    from kanso.workspace import find
+
+    work = daemon.work_path(find(mocked_ws), "l1", 4242)
+    work.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(daemon, "ORPHAN_S", 0.2)
+    with work.open("ab") as card:
+        fcntl.flock(card.fileno(), fcntl.LOCK_EX)
+        found = payload(at(runner, mocked_ws, "research", "status", "--json"))
+        human = at(runner, mocked_ws, "research", "status").stdout
+        screen = payload(at(runner, mocked_ws, "status", "--json"))
+        one = at(runner, mocked_ws, "status").stdout
+        ended = at(runner, mocked_ws, "research", "stop", "--json")
+        said = at(runner, mocked_ws, "research", "stop").stdout
+
+    gone = [{"child": "l1", "pid": 4242}]
+    assert (found["children"], found["ending"]) == ([], gone)
+    assert "daemon     stopped · still running: what lane l1 (pid 4242) started" in human
+    assert screen["daemon"] == {"running": False, "pid": None, "children": [], "ending": gone}
+    assert "stopped · still running: what lane l1 (pid 4242) started · 0 queued" in one
+    assert ended.exit_code == Exit.OK, ended.stdout
+    assert payload(ended) == {"running": False, "pid": None, "orphans": [], "ending": gone}
+    assert (
+        "ending     what lane l1 (pid 4242) started · still running; it ends itself, "
+        "and `kanso research status` names it until it has"
+    ) in said
     assert "still running" not in at(runner, mocked_ws, "research", "status").stdout
 
 

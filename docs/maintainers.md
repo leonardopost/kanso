@@ -233,10 +233,12 @@ systemd: `kanso research stop` really stops the service, and a crash brings it b
 
 ### What both get wrong if you are not careful
 
-- **A workspace that cannot start will loop.** A workspace with no `envelope.yaml`, or one
-  whose lock another daemon already holds, exits the supervisor `1` with a traceback; the
-  restart policy starts it again, and the throttle is the only thing keeping it to twice a
-  minute. `kanso doctor` names the cause; fix the workspace rather than the unit.
+- **A workspace that cannot start will loop.** A workspace with no `envelope.yaml`, one
+  whose lock another daemon already holds, or one where a lane or the monitor of a daemon
+  that is gone still runs, exits the supervisor `1` with a traceback; the restart policy
+  starts it again, and the throttle is the only thing keeping it to twice a minute.
+  `kanso doctor` names the first two and `kanso research status` the third, which
+  `kanso research stop` ends; fix the workspace rather than the unit.
 - **Run `kanso doctor` before enabling the unit, and after every upgrade.** The CLI refuses
   a state database behind or ahead of the package's schema (exit 2, remedy `kanso migrate`),
   and the supervisor entry point checks the same thing before it takes the lock or spawns
