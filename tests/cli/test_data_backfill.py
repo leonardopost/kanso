@@ -11,7 +11,18 @@ from typer.testing import CliRunner
 
 from kanso.errors import Exit
 
-from .conftest import CHUNK_EDGES, INSTRUMENT, at, payload, write_instruments, write_spec
+from .conftest import (
+    CHUNK_EDGES,
+    FIRST,
+    INSTRUMENT,
+    LAST,
+    SYMBOL,
+    VENUE,
+    at,
+    payload,
+    write_instruments,
+    write_spec,
+)
 
 FULL = {"start": "2024-01-02", "end": "2024-03-29"}
 LATE = {"start": "2024-03-01", "end": "2024-03-29"}
@@ -564,3 +575,42 @@ def test_a_month_answered_empty_before_the_first_served_day_is_not_asked_again(
     with StateStore(resolved / "state.db") as store:
         recorded = [event.detail for event in store.events(kind="data_chunk_empty")]
     assert recorded.count({"start": month[0], "end": month[1]}) == 1
+
+
+@pytest.mark.parametrize("command", ["backfill", "load"])
+def test_a_bare_boolean_ticker_is_refused_naming_its_place_and_the_quotes(
+    runner: CliRunner, workspace: Path, command: str
+) -> None:
+    """ON Semiconductor written bare: YAML reads `ON` as true, and the refusal says so."""
+    from kanso.data.manifest import manifests
+    from kanso.workspace import find
+
+    spec = workspace / "on.yaml"
+    spec.write_text(
+        f"loader: synthetic\nseed: 7\ninstruments: [{SYMBOL}, ON]\nvenue: {VENUE}\n"
+        f"resolution: 1h\nstart: {FIRST}\nend: {LAST}\n",
+        encoding="utf-8",
+    )
+
+    result = at(
+        runner, workspace, "data", command, "--loader", "synthetic", "--spec", spec, "--json"
+    )
+
+    assert result.exit_code == Exit.VALIDATION
+    assert payload(result) == {
+        "error": "instruments.1: true is a YAML boolean, not a string; YAML reads a bare ON, "
+        "OFF, YES, NO, TRUE or FALSE as one",
+        "code": 3,
+        "remedy": 'quote the value in the YAML, e.g. "ON" rather than ON',
+    }
+    assert not manifests(find(workspace))
+
+    spec.write_text(spec.read_text(encoding="utf-8").replace(", ON]", ', "ON"]'), encoding="utf-8")
+    quoted = at(
+        runner, workspace, "data", command, "--loader", "synthetic", "--spec", spec, "--json"
+    )
+    assert quoted.exit_code == Exit.OK, quoted.stdout
+    assert {m.instrument for m in manifests(find(workspace)).values()} == {
+        INSTRUMENT,
+        f"ON.{VENUE}",
+    }

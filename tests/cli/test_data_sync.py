@@ -103,6 +103,33 @@ def test_sync_extends_a_dataset_into_a_successor(runner: CliRunner, files: Path)
     assert series["spans"] == [["2024-01-02", "2024-01-10"]]
 
 
+def test_a_sync_of_several_chunks_chains_them_and_reads_the_manifests_once(
+    runner: CliRunner, files: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each chunk a sync writes supersedes the one written before it, read from its own file:
+    the workspace's manifests are read once, to choose what to extend, however many chunks
+    follow."""
+    from kanso.data import commands
+
+    held = payload(at(runner, files, "data", "show", "--json"))["series"][0]["datasets"][0]
+    (files / "bars.csv").write_text(CSV_HEADER + rows(70), encoding="utf-8")
+    every = commands.manifests
+    reads: list[object] = []
+    monkeypatch.setattr(commands, "manifests", lambda ws: reads.append(ws) or every(ws))
+
+    result = at(runner, files, "data", "sync", "--to", "2024-03-10", "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    chunks = payload(result)["chunks"]
+    assert [chunk["outcome"] for chunk in chunks] == ["written"] * 3
+    assert len(reads) == 1
+    [series] = payload(at(runner, files, "data", "show", "--json"))["series"]
+    follows = {item["dataset_id"]: item.get("supersedes") for item in series["datasets"]}
+    chain = [held["dataset_id"], *(chunk["dataset_id"] for chunk in chunks)]
+    assert [follows[name] for name in chain[1:]] == chain[:-1]
+    assert series["spans"] == [["2024-01-02", "2024-03-10"]]
+
+
 def test_a_synced_dataset_never_rewrites_the_one_a_snapshot_pins(
     runner: CliRunner, files: Path
 ) -> None:

@@ -15,6 +15,7 @@ import pytest
 from nautilus_trader.model.identifiers import InstrumentId
 
 from kanso.data import catalog as cat
+from kanso.data import manifest as m
 from kanso.data import snapshot as snap
 from kanso.data.catalog import NANOS_PER_SECOND, day_start_ns
 from kanso.data.instruments import build, conventions_for
@@ -115,7 +116,7 @@ def test_a_realtime_funding_dataset_is_written_without_a_rule(ws: FakeWorkspace)
 def test_funding_public_before_it_settled_is_refused_at_write(ws: FakeWorkspace) -> None:
     with pytest.raises(ValidationError, match="availability cannot precede the reference time"):
         cat.write(ws, settlements(lag_ns=-1), ref=funding_ref(), source="csv_parquet")
-    assert cat.manifests(ws) == {}
+    assert m.manifests(ws) == {}
 
 
 WINDOWS = Windows.model_validate(

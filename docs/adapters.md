@@ -237,6 +237,51 @@ Two things do *not* follow from that, and both are yours to keep straight.
   fetched. Declare them on both halves or on neither; declaring them on one is a series
   with two conventions for when its bars became known.
 
+### What a bar's open and close are
+
+Measured on 2026-10-07 over REST: the unadjusted daily and one-minute aggregates
+(`/v2/aggs/ticker/{ticker}/range/1/day/…` and `…/range/1/minute/…`, `adjusted=false`)
+beside `/v3/trades/{ticker}` for the same day, the listing exchange from
+`/v3/reference/tickers/{ticker}` as of that day, and the condition names and update rules
+from `/v3/reference/conditions` asked with `data_type=trade` — asked without it, the quote
+conditions come back under the same ids (15 is *Closed*, 16 *Resume*). Seven names — AAPL,
+META and AMD listed on Nasdaq, UBER, JPM, CAT and LLY on NYSE — over 2026-08-12,
+2026-09-16 and 2026-09-30: twenty-one name-days. The flat-file `day_aggs_v1` objects
+`massive_bulk` reads carry the same open and close as REST on all twenty-one.
+
+- **The close is the official close.** A daily bar's `close` is the price of the listing
+  exchange's print carrying condition 15, *Market Center Official Close*, on 21 of 21
+  name-days.
+- **The open is not the official open.** That is the listing exchange's print carrying
+  condition 16, *Market Center Official Open*, at the price and size of the opening cross,
+  which carries 17, *Market Center Opening Trade*, and prints less than a millisecond
+  earlier on both listings; 25, *Opening Prints*, was never seen. A daily bar's `open`,
+  and the 09:30 one-minute bar's, which was the same price on every name-day, is the first
+  print at or after 09:30:00 New York on the tape's clock, on any venue, that none of its
+  conditions excludes from the consolidated open under the reference's update rules — 21
+  of 21. Condition 16 is excluded, so the official open is never the bar's open; the cross
+  itself is, when it prints first. That happened on 5 of the 12 NYSE name-days — CAT on
+  all three, JPM and LLY on 2026-09-30 — and on none of the 9 Nasdaq ones, where another
+  venue printed within 350 ms of the bell and Nasdaq's cross 0.48 to 1.54 s after it. On
+  the 16 that differ the gap runs from 0.1 bp to 34 bp, median 7: META 2026-09-30 opened
+  at 730.265 against Nasdaq's 728.57 (23 bp), AAPL 2026-09-16 at 332.53 against 332.38,
+  AMD 2026-09-16 at 517.39 against 517.12, and UBER 2026-09-16 at 71.32 against NYSE's
+  71.08, whose cross printed 19.8 s after the bell.
+- **A reopening after a halt** prints on the listing exchange under 18, *Market Center
+  Reopening Trade*: on every Nasdaq-listed LULD pause sampled from Nasdaq Trader's halt
+  list between 2026-06-05 and 2026-10-02 that resumed before the close, eight of them, and
+  on the one NYSE-listed one, VLN on 2026-06-05. 28, *Re-Opening Prints*, was never seen,
+  although the reference maps 17 and 18 to the CTA feed and 25 and 28 to the UTP feed that
+  carries Nasdaq-listed names. A halt that spans the open reopens as the open, under 17
+  and 16: GFR, halted at 09:18 on 2026-08-05 and resumed at 10:11.
+
+So a bar is the wrong source for anything that needs the auction's price, such as an
+opening-gap measure or a market-on-open fill, and kanso's trade points are no better:
+`massive_trades` keeps neither a print's exchange nor its conditions, because a
+`TradeTick` has no field for either, so the official open cannot be picked out of the
+catalog. It is in the vendor's `/v3/trades` rows, as the listing exchange's condition-16
+print. The close needs nothing of the kind.
+
 ### Reference resolution
 
 Set `[data] reference = "massive"` in `kanso.toml` and `kanso data instruments resolve`
