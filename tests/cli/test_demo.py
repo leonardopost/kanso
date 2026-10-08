@@ -3,7 +3,9 @@
 This is the sequence a person types on a fresh machine — scaffold the demo, load its
 synthetic bars, freeze a snapshot, register the idea, classify it, then hand it to the
 driver — run here as one test because what it proves is that the pieces fit, which no
-one of them can prove alone.
+one of them can prove alone. One step differs from what a person runs: the research runs
+under a card floor no operator can set (`CARD_FLOOR_S`), so whether the shipped budget fits
+the demo's cards on a given host is row 138 of `docs/backlog.md`, not this test's to say.
 
 Everything a model says comes from the demo's own scripted register, whose three answers
 are a keep, a discard and a crash in that order; nothing here resolves a provider key or
@@ -23,7 +25,6 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from kanso.config import ResearchConfig
 from kanso.errors import Exit
 from kanso.research import loop, records
 from kanso.schemas import Card
@@ -35,15 +36,18 @@ DEMO_ID = "demo_mr"
 CARDS = 3
 """What the demo's scripted register has to say before it wraps around."""
 
-CARD_FLOOR_S = float(ResearchConfig().baseline_budget_s)
-"""The card budget's floor while the demo researches: what the shipped baseline is allowed.
+CARD_FLOOR_S = 600.0
+"""The card budget's floor while the demo researches: ten minutes.
 
 The budget is `max(MIN_CARD_BUDGET_S, HEADROOM × baseline wall)` (`research/loop.py`), and
 which term is larger, and whether a card fits under it, depends on how fast the host runs.
-This test asserts the demo's flow, not its budgets (`tests/research/test_loop.py` holds
-those), so it lifts the floor to 1,800 s, some forty times the slowest demo card measured
-(42.9 s on an M2's efficiency cores): a slow runner cannot turn the scripted discard into a
-budget crash, and a card that hangs still ends.
+This test asserts the demo's flow, not its budget: `tests/research/test_loop.py` pins the
+formula and its two constants, and `tests/nautilus/backtest/test_subprocess.py` the kill. So
+it lifts the floor to 600 s, about eight times the slowest demo card measured (74.9 s, the
+discard, on an Apple M2's efficiency cores under pytest-cov beside another test run), and
+the 3× term binds only past a 200 s baseline, over five times the 35.8 s measured there. A
+slow runner cannot turn the scripted discard into a budget crash, and a card that hangs is
+killed in ten minutes.
 """
 
 
