@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from kanso.classify import catalogue
-from kanso.config import Config, render_config
+from kanso.config import Config, ResearchConfig, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.models.wire import REQUEST_TIMEOUT_S
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
@@ -52,6 +52,16 @@ def test_the_doctor_row_names_every_check_doctor_runs() -> None:
     row = next(line for line in page("cli.md").splitlines() if line.startswith("| `kanso doctor"))
     for name in CHECKS:
         assert f"`{name}`" in row, name
+
+
+def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() -> None:
+    """An operator learns from these two pages that a lane writes drafts unasked, and how
+    often; a page still saying never would hide a model call from every workspace whose
+    `kanso.toml` holds the template's number or omits the key. One initialised on 0.8.0 to
+    0.13.x states 0 and keeps it, because `init` never rewrites `kanso.toml`."""
+    stated = f"({ResearchConfig().explore_after_stalls} in the template; 0 is never)"
+    assert stated in prose(page("cli.md"))
+    assert stated in prose(page("concepts.md"))
 
 
 def test_the_cli_page_says_research_begin_needs_no_register() -> None:
