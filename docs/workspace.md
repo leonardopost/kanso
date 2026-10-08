@@ -508,15 +508,16 @@ are unchanged: the upper bound of every window is what it was, and only the data
 before it widens. An attached construct declares the same `warmup` as its host, or
 `kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
 
-**`data_by_instrument` narrows what one instrument must carry.** A universe that mixes
-sources can hold a type for some instruments and not others: a crypto exchange's prints beside
-the quotes of the US equities that follow it, where the exchange serves no historical quotes.
+**`data_by_instrument` narrows what one instrument must carry, and it is scope.** A
+universe that mixes sources can hold a type for some instruments and not others: a crypto
+exchange's prints beside the quotes of the US equities that follow it, where the exchange
+serves no historical quotes.
 `data_requirements` lists every type the hypothesis reads, and `data_by_instrument` gives a
 listed instrument its own subset:
 
 ```yaml
 data_requirements: [quote, trade]
-data_by_instrument:                # optional; an instrument not listed is asked for every type
+data_by_instrument:                # optional, and scope: adding or changing it clears `best`
   ETH-USD.COINBASE: [trade]        # the signal: the exchange's prints alone
 ```
 
@@ -525,7 +526,14 @@ else, and the strategy is subscribed to nothing else, so backtest, replay and a 
 the same data. Each list is a non-empty subset of `data_requirements`; an instrument outside
 the universe, a type outside the list, or a type in `data_requirements` no instrument is then
 asked for is refused at `hyp validate` (exit 3). `funding` is still asked of a perpetual alone.
-`kanso screen draft` writes it whenever the cell's two legs read different types.
+`kanso screen draft` writes it whenever the cell's two legs read different types. An
+instrument not listed is asked for every type in `data_requirements`, and so is one listed
+with all of them. What each instrument is asked for is scope: a rule handed one leg's prints
+and one that never saw them measured different runs over the same days, so adding, changing
+or removing an entry that narrows an instrument clears `best` with a `best_cleared` event
+naming `data_by_instrument`, and a certificate earned under another refuses to compose.
+Listing an instrument with every required type, or reordering a list, changes nothing an
+instrument is shown and clears nothing.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
 fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
@@ -556,7 +564,17 @@ trade of a name on a session its flag did not admit, so the two code paths see t
 market and `kanso replay parity` holds. `series` must be one of the custom types in
 `data_requirements` and `always` a subset of the universe, or `kanso hyp validate`
 refuses the file (exit 3). A position held into a session its name is not admitted on is
-not marked that session, exactly as an instrument that stopped printing is not.
+not marked that session, exactly as an instrument that stopped printing is not. Adopting,
+changing or dropping the key re-pins the hypothesis and clears `best` with a
+`best_cleared` event naming `session_scope`, and a certificate earned under another scope
+refuses to compose; the order of `always` is not scope.
+
+A file could state `session_scope` from 0.12.0, and `data_by_instrument` from the build that
+added it, before either was scope, so a row pinned before they joined holds neither in its
+pins. Its re-pin compares against what the file it pinned states, read back from the state
+store, exactly as `costs` is; only when the store no longer holds those bytes, or this kanso
+cannot read them as a hypothesis, does a missing key read as unchanged. A hypothesis whose
+file still scopes the same way keeps its best across the upgrade.
 
 **`benchmark` is yours, and it is scope.** A strategy trading one instrument can show a
 healthy Sharpe by holding that instrument through a rising market. Declaring a benchmark

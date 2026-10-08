@@ -19,6 +19,7 @@ import yaml
 from kanso.classify import catalogue
 from kanso.config import Config, ResearchConfig, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
+from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.research import driver
@@ -119,6 +120,20 @@ def test_the_cli_page_says_the_transport_is_the_loader_the_spec_names() -> None:
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso data backfill")
     )
     assert "never for you" in row
+
+
+def scope_names() -> list[str]:
+    """Every field a re-pin clears `best` on, as the pages spell it."""
+    spelled = {"construct": "construct.id", "objective": "objective.id"}
+    return [f"`{spelled.get(name, name)}`" for name in SCOPE]
+
+
+def test_the_hyp_add_row_names_every_field_a_re_pin_clears_the_best_on() -> None:
+    """The row is where an operator learns which edits cost the best; it left out `depth`,
+    which cleared it, and `session_scope`, which another page said cleared it."""
+    row = next(line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp add"))
+    for name in scope_names():
+        assert name in row, name
 
 
 def test_the_cli_page_says_a_stage_speed_paces_nothing_in_this_version() -> None:

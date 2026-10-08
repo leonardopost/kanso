@@ -11,9 +11,11 @@ from hashlib import sha256
 from typing import Any
 
 import pytest
+import yaml
 
 from kanso import hyp
 from kanso.errors import Exit, KansoError
+from kanso.schemas import Hypothesis, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.hyp.conftest import (
@@ -95,6 +97,8 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
         "universe": ["DEMO"],
         "resolution": "1m",
         "data_requirements": ["bar"],
+        "data_by_instrument": None,
+        "session_scope": None,
         "construct": None,
         "sizing": None,
         "objective": None,
@@ -499,6 +503,208 @@ def test_a_row_pinned_before_depth_joined_the_scope_keeps_the_best(
     )
 
     register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
+
+
+def cleared_reasons(store: StateStore) -> list[str]:
+    """Why each `best_cleared` event of the hypothesis says its best went, in order."""
+    return [
+        str(event.detail["reason"])
+        for event in store.events(subject=HYP_ID)
+        if event.kind == "best_cleared"
+    ]
+
+
+def pin_before(store: StateStore, *names: str) -> None:
+    """Rewrite the row's pins in the shape a release before `names` joined the scope wrote."""
+    held = store.connection.execute(
+        "SELECT pins FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    pins = json.loads(held["pins"])
+    for name in names:
+        del pins[name]
+    store.connection.execute(
+        "UPDATE hypotheses SET pins = ? WHERE hyp_id = ?", (json.dumps(pins), HYP_ID)
+    )
+
+
+MIXED: dict[str, Any] = {"universe": ["DEMO", "EURO"], "data_requirements": ["bar", "trade"]}
+"""Two names that may be asked for different types: either one's prints, or both."""
+
+
+def test_a_change_of_the_types_an_instrument_is_asked_for_clears_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A rule handed one leg's prints and one that never saw them measured different runs over
+    the same days, though `data_requirements` names the same types in both."""
+    register(ws, store, document(**MIXED))
+    set_best(store)
+
+    register(ws, store, document(**MIXED, data_by_instrument={"EURO": ["bar"]}))
+
+    assert record(ws, store).best_sha is None
+    assert cleared_reasons(store) == ["data_by_instrument changed from None to {'EURO': ['bar']}"]
+
+
+def test_listing_an_instrument_with_every_required_type_is_not_a_change_of_scope(
+    ws: Workspace, store: StateStore
+) -> None:
+    """An instrument listed with every required type, in any order, is asked for what an
+    unlisted one is: it sees the same data, so the best stands."""
+    register(ws, store, document(**MIXED))
+    set_best(store)
+
+    register(ws, store, document(**MIXED, data_by_instrument={"EURO": ["trade", "bar"]}))
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert cleared_reasons(store) == []
+
+
+def test_a_row_pinned_before_data_by_instrument_joined_the_scope_reads_its_file(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A file could narrow an instrument's types before the narrowing was scope. Its row
+    keeps its best while the file narrows the same way, and loses it when the file moves."""
+    narrowed = document(**MIXED, data_by_instrument={"EURO": ["bar"]})
+    register(ws, store, narrowed)
+    set_best(store)
+    pin_before(store, "data_by_instrument", "session_scope")
+
+    register(ws, store, {**narrowed, "title": "A better title"})
+
+    assert record(ws, store).best_sha == "c" * 64
+    pin_before(store, "data_by_instrument", "session_scope")
+
+    register(ws, store, document(**MIXED, data_by_instrument={"DEMO": ["bar"]}))
+
+    assert record(ws, store).best_sha is None
+    assert cleared_reasons(store) == [
+        "data_by_instrument changed from {'EURO': ['bar']} to {'DEMO': ['bar']}"
+    ]
+
+
+SCOPED: dict[str, Any] = {
+    "universe": ["DEMO", "EURO"],
+    "data_requirements": ["bar", "scope_tape"],
+}
+"""Two names and the custom series a session scope reads its flag off."""
+
+TAPE: dict[str, Any] = {"series": "scope_tape", "flag": "in_play", "always": ["DEMO"]}
+"""DEMO every session, EURO on the sessions the tape's `in_play` admits it."""
+
+
+def pin_document(store: StateStore, doc: dict[str, Any]) -> None:
+    """Pin a document as `hyp add` does once the workspace has validated it.
+
+    A session scope's series is a custom type an extension registers, and a registration
+    lasts the life of the process, so these pin the schema-valid document directly. The
+    scope is decided by the pin, which `hyp add` and `classify` both go through.
+    """
+    source = yaml.safe_dump(doc, sort_keys=False)
+    hyp.pin(store, parse_yaml(Hypothesis, source, "hypothesis.yaml"), source.encode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "reason"),
+    [
+        (
+            None,
+            TAPE,
+            "session_scope changed from None to "
+            "{'series': 'scope_tape', 'flag': 'in_play', 'always': ['DEMO']}",
+        ),
+        (
+            TAPE,
+            {**TAPE, "always": []},
+            "session_scope changed from {'always': ['DEMO'], 'flag': 'in_play', "
+            "'series': 'scope_tape'} to {'series': 'scope_tape', 'flag': 'in_play', "
+            "'always': []}",
+        ),
+        (
+            TAPE,
+            None,
+            "session_scope changed from {'always': ['DEMO'], 'flag': 'in_play', "
+            "'series': 'scope_tape'} to None",
+        ),
+    ],
+    ids=["adopted", "changed", "dropped"],
+)
+def test_a_change_of_session_scope_clears_the_best(
+    ws: Workspace,
+    store: StateStore,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    reason: str,
+) -> None:
+    """A strategy handed every name of a pool every session and one handed the names a flag
+    admitted measured different runs over the same days."""
+    pin_document(store, document(**SCOPED, session_scope=before))
+    set_best(store)
+
+    pin_document(store, document(**SCOPED, session_scope=after))
+
+    assert record(ws, store).best_sha is None
+    assert cleared_reasons(store) == [reason]
+
+
+def test_an_unrelated_change_under_a_session_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A title is not scope, and nor is the order of the names a scope always delivers."""
+    pin_document(store, document(**SCOPED, session_scope={**TAPE, "always": ["DEMO", "EURO"]}))
+    set_best(store)
+
+    pin_document(
+        store,
+        document(
+            **SCOPED,
+            title="A better title",
+            session_scope={**TAPE, "always": ["EURO", "DEMO"]},
+        ),
+    )
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert cleared_reasons(store) == []
+
+
+def test_a_row_pinned_before_session_scope_joined_the_scope_reads_its_file(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A session scope could be stated from 0.12.0, before it was scope, so its absence from
+    a row's pins says nothing: read as no scope, every scoped hypothesis would lose its best
+    on its next re-pin whatever changed; read as unchanged, none would on any change."""
+    pin_document(store, document(**SCOPED, session_scope=TAPE))
+    set_best(store)
+    pin_before(store, "data_by_instrument", "session_scope")
+
+    pin_document(store, document(**SCOPED, title="A better title", session_scope=TAPE))
+
+    assert record(ws, store).best_sha == "c" * 64
+    pin_before(store, "data_by_instrument", "session_scope")
+
+    pin_document(store, document(**SCOPED, session_scope={**TAPE, "flag": "gapped"}))
+
+    assert record(ws, store).best_sha is None
+    assert cleared_reasons(store) == [
+        "session_scope changed from {'series': 'scope_tape', 'flag': 'in_play', "
+        "'always': ['DEMO']} to {'series': 'scope_tape', 'flag': 'gapped', 'always': ['DEMO']}"
+    ]
+
+
+def test_a_row_pinned_before_session_scope_joined_whose_file_is_gone_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """With no pinned file to read, nothing says what the old pin scoped, and an upgrade must
+    not clear every best in a workspace, so the missing key reads as the scope it meets."""
+    pin_document(store, document(**SCOPED, session_scope=TAPE))
+    set_best(store)
+    pin_before(store, "data_by_instrument", "session_scope")
+    store.connection.execute(
+        "UPDATE hypotheses SET hypothesis_sha = ? WHERE hyp_id = ?", ("d" * 64, HYP_ID)
+    )
+
+    pin_document(store, document(**SCOPED, session_scope={**TAPE, "flag": "gapped"}))
 
     assert record(ws, store).best_sha == "c" * 64
 
