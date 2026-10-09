@@ -52,7 +52,8 @@ instrument's orders again only at its next point, so a point at or through a res
 price can fill it on the research path alone (`docs/backlog.md`). Under the print rules a
 resting order is credited only in a print's own match and a taker is decided from the quote in
 force alone, so neither that second match nor the bid and ask the two engines then hold apart
-moves a fill (`kanso.nautilus.tape`); a sleeve's cancel can still part them (`docs/backlog.md`).
+moves a fill (`kanso.nautilus.tape`); a sleeve's cancel can still part them, and a few tapes
+measured part them otherwise, not traced (`docs/backlog.md`).
 
 Every venue account is funded with the whole run capital, because the engine keeps one
 account per venue and has no cross-venue book. What bounds exposure across venues is the

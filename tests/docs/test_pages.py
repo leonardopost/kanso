@@ -1007,9 +1007,10 @@ def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> No
     assert "**Under `print_through` only a print through a resting order fills it, and a taker" in (
         delivery
     )
-    assert "Where a sleeve sends no cancel the venue's rule does not part the two code" in (
+    assert "Where a sleeve sends no cancel the venue's rule is built not to part the two" in (
         delivery
     )
+    assert "one of them a tape whose script sends no cancel" in delivery
     assert "With cancels the paths can still part" in delivery
     assert "The venue no longer parts the two code paths" not in delivery
     assert "a print that trades strictly outside that quote ends it" in delivery

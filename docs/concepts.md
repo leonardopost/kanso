@@ -1266,7 +1266,7 @@ before the first one at or after their delay, and 26 of those at another price, 
 the other, on COIN, landed on a print outside the quote and was refused, where the first quote
 at or after its delay would have filled it at the price of the quote before
 (`docs/backlog.md`). Where a sleeve sends no
-cancel the venue's rule does not part the two code paths: the engine judges whether an order
+cancel the venue's rule is built not to part the two code paths: the engine judges whether an order
 is marketable from a bid and an ask of its own, which the research path's second match after a
 command lands and a print with an aggressor leave apart on the two, but while a quote is in
 force neither is outside it — the bid never under its bid, the ask never over its ask — so the
@@ -1278,7 +1278,9 @@ cancels the paths can still part: 56 of 7,200 such runs parted reproducibly, 54 
 tapes `touch` or `through` part too and two only under the print rules — one a cancel sent
 behind a modify, one not traced — and a second generator, with a split, points stamped before
 they reached the venue and cancels of one order, found five tapes only the print rules part,
-not traced (`docs/backlog.md` rows 105 and 163).
+and a third, adding IOC and FOK limits and empty sides, five more, one of them a tape whose
+script sends no cancel, and 22 on which the two paths record one instant's fills in another
+order, none traced (`docs/backlog.md` rows 105 and 163).
 
 In the match it triggers, a trade print reaches a resting order only from the side that can
 trade with it: for that match the engine moves only the ask down for a seller's print and only

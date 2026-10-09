@@ -89,12 +89,14 @@ price. The model keeps the last quote and the print in hand for each instrument 
 none of its own; neither reads a clock nor draws a number, and `prob_fill_on_limit` is one and
 `prob_slippage` zero. Both paths build one model per exchange from the same configuration, hand
 both pieces the same points in the same order and land the same commands before each, so on a
-feed of quotes and prints, where a sleeve sends no cancel, the venue's rule parted the two on no
-tape measured: over 5,400 seeded runs of two names that send entries, market orders, modifies
-and orders from their fill handlers none parted reproducibly, where under `touch` most such runs
-part. A sleeve's cancel still parts them on some tapes, most of which the engine's own rules
-part as well (`docs/backlog.md` rows 105, 162 and 163). Nothing is copied, re-stamped or
-reordered: the sleeve is handed every point it was, at the same `data_time`.
+feed of quotes and prints, where a sleeve sends no cancel, the venue's rule parted the two on
+none of 5,400 seeded runs of two names that send entries, market orders, modifies and orders
+from their fill handlers, where under `touch` most such runs part. They still part on a few
+tapes: where a sleeve cancels, most of them tapes the engine's own rules part as well; on one
+tape of a generator with a split and an exit that cancels what rests, whose script sends no
+cancel; and on some the two record one instant's fills in another order (`docs/backlog.md`
+rows 105, 162 and 163). Nothing is copied, re-stamped or reordered: the sleeve is handed every
+point it was, at the same `data_time`.
 
 **A stage's flatten is filled.** A stage node closes every position after its window's last
 point, and no point follows to bring a quote: a close refused there would leave the stage

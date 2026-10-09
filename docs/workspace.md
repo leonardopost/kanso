@@ -737,8 +737,9 @@ costs:                             # scope: changing any key clears `best`
 ```
 
 A fill the venue reports as a maker's — a limit that waited on the book until the market
-reached it (`docs/concepts.md`, Delivery) — pays exactly `maker_bps` of its notional and
-nothing else: no slippage, because it filled at its own price, and no half-spread, because
+reached it (`docs/concepts.md`, Delivery) — pays exactly the model's maker schedule —
+`maker_bps` of its notional, and `maker_per_share` on each share where a layer states it
+(below) — and nothing else: no slippage, because it filled at its own price, and no half-spread, because
 the spread is what a resting order earns rather than pays. Negative is a net rebate, the way
 a per-share-priced account that pays for displayed liquidity can come out ahead on a fill
 that rested. Every other fill — a market order, a limit that was marketable when it arrived
