@@ -1047,7 +1047,11 @@ order counts as working until the cancel lands. A node may not yet have handed t
 the venue when the strategy's handler cancels it, and would send the cancel ahead of it,
 where it is lost and the order rests; kanso holds such a cancel back and sends it the moment
 the node reports the order submitted, before the venue has matched it, so a node and a
-backtest fill alike (`kanso replay parity`). A cancel the sleeve itself sends right behind a
+backtest fill alike (`kanso replay parity`). A cancel of a market order is not sent at all,
+by any of the three: the venue answers a market order where it lands, so a cancel behind it
+cancels nothing, and in nautilus_trader 1.231.0 it left one the venue refused for want of a
+market neither rejected nor filled but pending the cancel for good, still counted as working,
+so every exit sized after it came short. A cancel the sleeve itself sends right behind a
 modify of an order the venue already holds is not held back, as an exit at market's is: on a node it overtakes the
 modify, where the backtest lands the modify first and fills it if it is marketable, so the
 two paths can differ there (`docs/backlog.md`). Zero, the

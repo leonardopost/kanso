@@ -63,6 +63,10 @@ class Strategy(KansoStrategy):
             instrument_id = InstrumentId.from_str(name)
             if kind == "cancel_all":
                 self.cancel_all_orders(instrument_id)
+            elif kind == "cancel":
+                for order in self.cache.orders(instrument_id=instrument_id):
+                    if not order.is_closed and order.side_string() == side:
+                        self.cancel_order(order)
             elif kind == "market":
                 self.submit_entry(instrument_id, side, qty=qty)
             elif kind == "exit":
@@ -1059,3 +1063,41 @@ def test_the_benchmark_hold_sends_a_refused_entry_again_only_under_the_print_rul
         assert held == 0 and len(engine.intents) == 1
     else:
         assert held > 0
+
+
+OUTSIDE = [
+    *OPEN,
+    t(9.6, 100, 100),
+    t(9.61, 100, 110),
+    t(9.62, 100, 135),
+    t(9.62, 100, 160),
+    q(9.58, 9.62, 300),
+    q(9.58, 9.62, 400),
+    q(9.58, 9.62, 500),
+]
+"""Prints over the ask that end the quote, then quotes again."""
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", RULES)
+@pytest.mark.parametrize("how", ["cancel", "cancel_all"])
+def test_a_refused_exit_cancelled_as_it_was_sent_is_rejected_and_the_next_exit_goes_out(
+    how: str, rule: str, latency_ms: int
+) -> None:
+    """An exit at market sent on a print over the ask, with a cancel of that order or of every
+    order of its name in the same handler, is refused for want of a market. kanso sends no
+    cancel for a market order, so the venue rejects it on both paths, where a cancel sent or
+    held for it left it `PENDING_CANCEL` for good — on both paths for a cancel of the order, on
+    the node alone for a cancel of the name — and counted as working, so the exit asked for on
+    a later quote sent nothing. Here it goes out whole and fills on that quote."""
+    script = {
+        1: [("market", "BUY", 100, 0)],
+        3: [("exit", "SELL", 0, 0), (how, "SELL", 0, 0)],
+        8: [("exit", "SELL", 0, 0)],
+    }
+
+    node, engine = scripted(OUTSIDE, script, rule, latency_ms)
+
+    bought, sold = (10, 400) if latency_ms == 0 else (50, 500)
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == [(bought, 100.0, 9.52, T), (sold, 100.0, 9.58, T)]

@@ -452,6 +452,25 @@ def _modifying(order: Any) -> bool:
     return bool(order.venue_order_id is not None and order.status == OrderStatus.PENDING_UPDATE)
 
 
+def _never_rests(order: Any) -> bool:
+    """Whether an order is a market order, which kanso never sends or holds a cancel for.
+
+    A market order cannot rest: the venue answers it where it lands, filling it, walking its
+    rest one increment past the top of a level-one book, or refusing it for want of a market,
+    and a cancel sent after it — on the backtest engine in the same handler or later, under a
+    latency stamped after it — lands only behind that answer, so it cancels nothing. What it
+    does do is mark the order `PENDING_CANCEL` where the sleeve sent it, and in
+    nautilus_trader 1.231.0 the venue rejects a market order it finds nothing to fill only
+    while it is still `SUBMITTED` (`OrderMatchingEngine.apply_fills` in `backtest/engine.pyx`):
+    a refused market order whose cancel had been sent was left neither rejected nor filled,
+    counted as working for good, so the exits sized after it came short. On a node the cancel
+    held back for an order still in the risk engine's queue (`_hold_cancel`) is sent when the
+    order is reported `SUBMITTED`, before the venue matches it, so the same order parted the
+    two paths there. Measured on both paths by the replay tests, a market order sent with a
+    cancel of it or of its name under the print rules, which refuse one routinely."""
+    return bool(order.order_type == OrderType.MARKET)
+
+
 def _order_price(order: object) -> float | None:
     price = getattr(order, "price", None)
     return None if price is None else float(price)
@@ -2224,8 +2243,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         have been taken by the venue before the cancel that followed it.
 
         A cancel for an order not yet handed to the venue is held back and sent once it has
-        been (`_hold_cancel`)."""
+        been (`_hold_cancel`). A market order's cancel is never sent nor held (`_never_rests`).
+        """
         self._forget(order.instrument_id.value, order.side, priced_only=True)
+        if _never_rests(order):
+            return
         if not self._hold_cancel(order, client_id, params):
             self._cancelling(order)
             super().cancel_order(order, client_id, params)
@@ -2247,12 +2269,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         they read as cancelled (read in `trading/strategy.pyx` of nautilus_trader 1.231.0,
         which applies to both paths, the backtest engine and the node; the emulated case is
         measured on both by the exit and replay tests). An empty list is handed on as it is,
-        for the engine to refuse.
+        for the engine to refuse. A market order in it is left alone (`_never_rests`).
         """
         batches: dict[object, list[Any]] = {}
         for order in orders:
             self._forget(order.instrument_id.value, order.side, priced_only=True)
-            if self._hold_cancel(order, client_id, params):
+            if _never_rests(order) or self._hold_cancel(order, client_id, params):
                 continue
             self._cancelling(order)
             if self._current(order).is_emulated:
@@ -2282,7 +2304,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         there: the engine's own skips an order still `INITIALIZED` (read in
         `trading/strategy.pyx` of nautilus_trader 1.231.0), which on the backtest engine an
         order handed to `submit_order` never is by the time the call returns (`_hold_cancel`
-        names the exceptions).
+        names the exceptions). A market order is left alone either way (`_never_rests`).
         """
         orders = [
             order
@@ -2290,6 +2312,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if order.instrument_id == instrument_id
             and order_side in (OrderSide.NO_ORDER_SIDE, order.side)
             and not order.is_closed
+            and not _never_rests(order)
         ]
         self._forget(instrument_id.value, order_side, priced_only=True)
         if any(order.status == OrderStatus.INITIALIZED for order in orders):
