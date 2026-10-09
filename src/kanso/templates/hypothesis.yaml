@@ -20,7 +20,9 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
                                    # rebate. Unset, it pays what any fill pays
-#   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
+#   sell_fee_bps: 0.206            # on every sale, maker or taker, on top of the rest: the regulatory fee on the notional sold
+#   sell_fee_per_share: 0.000195   # and the activity fee on each share sold. Zero unless stated
+#   latency_ms: 20                # how long the simulated venue takes to see an order, insert, update or cancel alike;
                                    # measured on the account and route the strategy will trade through. Zero unless stated
 #   limit_fill: touch              # touch | through: a resting limit fills when the market reaches its price (the engine's
                                    # rule), or only once a bar's low/high or a print goes beyond it, which fills all that is

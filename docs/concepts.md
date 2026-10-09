@@ -1515,7 +1515,7 @@ spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a c
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
-commission, a flat rate, a maker rate, a fixed width — through the runner's own per-fill
+commission, a flat rate, a maker rate, a fixed width, the sell-side fees — through the runner's own per-fill
 arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
 objective on the re-priced run and holds it to `min_metric`: the same fills under the
 schedule of another account, without a second backtest, and the card's own schedule

@@ -24,6 +24,7 @@ from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.research import driver
+from kanso.schemas import CostsOverride
 from tests.cli.test_doctor import CHECKS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -917,3 +918,14 @@ def test_the_screen_ranges_the_docs_state_are_the_library_s() -> None:
         for name, span in item.ranges.items()
     }
     assert stated == declared
+
+
+def test_every_cost_key_is_described_on_the_workspace_page_and_named_in_the_template() -> None:
+    """A key of `costs:` an operator cannot find is a charge nobody states: each is named under
+    `hypotheses/<id>/`, in its prose or a block it shows, and on a commented line of the
+    hypothesis template."""
+    hypotheses = section(page("workspace.md"), "`hypotheses/<id>/`")
+    template = (ROOT / "src" / "kanso" / "templates" / "hypothesis.yaml").read_text()
+    for name in CostsOverride.model_fields:
+        assert re.search(rf"`(costs\.)?{name}`|^\s+{name}:", hypotheses, re.M), name
+        assert re.search(rf"^#\s+{name}:", template, re.M), name

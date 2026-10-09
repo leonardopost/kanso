@@ -925,8 +925,16 @@ SCENARIO_KEYS: Final = (
     "slippage_bps",
     "fixed_bps",
     "maker_bps",
+    "sell_fee_bps",
+    "sell_fee_per_share",
 )
-"""The cost model a scenario states, key for key with `costs:` in `hypothesis.yaml`."""
+"""The cost model a scenario states, key for key with the charges of `costs:` in
+`hypothesis.yaml`."""
+
+TAKER_KEYS: Final = ("commission_bps", "commission_per_share", "slippage_bps", "fixed_bps")
+"""The scenario keys that say what a fill that took liquidity pays. A scenario is a cost model
+only when it states one of them: a maker's key charges a resting fill alone and the sell-side
+fees a sale alone, and a scenario of those only would charge every other fill nothing."""
 
 
 def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
@@ -1005,7 +1013,7 @@ class _CostScenario:
 
     def evaluate(self, ctx: GateContext) -> GateResult:
         scenario = {key: number(ctx, key) for key in SCENARIO_KEYS}
-        if all(scenario[key] is None for key in SCENARIO_KEYS if key != "maker_bps"):
+        if all(scenario[key] is None for key in TAKER_KEYS):
             return skipped(self.id, "no cost model was chosen, so nothing was re-priced")
         objective = _objective(ctx)
         if objective is None:

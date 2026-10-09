@@ -296,3 +296,56 @@ def test_cost_scenario_without_an_objective_judges_nothing() -> None:
     )
 
     assert result.passed and result.skipped is not None
+
+
+def test_cost_scenario_handed_the_card_s_own_schedule_reproduces_the_card_s_own_costs() -> None:
+    """The sell-side fees are keys of a scenario like the rest, so a card priced under them is
+    re-priced to the same number, sale by sale, where a scenario without them charged none."""
+    schedule = {
+        "commission_per_share": 0.014,
+        "maker_bps": 0.0,
+        "sell_fee_bps": 0.206,
+        "sell_fee_per_share": 0.000195,
+    }
+    fills = tuple(
+        Fill(
+            ts_ns=at(START + timedelta(days=day)),
+            instrument_id="DEMO",
+            side=side,
+            qty=1_000.0,
+            px=20.0,
+            cost=0.0,
+            maker=maker,
+        )
+        for day in range(4)
+        for side, maker in (("BUY", True), ("SELL", False))
+    )
+    priced = repriced(build_run((10.0,) * 4, fills=fills), schedule)
+    ctx = context(
+        priced,
+        hyp=make_hyp(**CONTRIBUTION_HYP),
+        stage="cert",
+        params={**schedule, "min_metric": 0.0},
+    )
+
+    result = cost_scenario.evaluate(ctx)
+
+    assert result.evidence["scenario"] == schedule
+    assert result.evidence["cost_scenario"] == pytest.approx(result.evidence["cost_recorded"])
+    assert result.evidence["cost_recorded"] == pytest.approx(
+        4 * (1_000 * 0.014 + 20_000 * 0.206 / 10_000 + 1_000 * 0.000195)
+    )
+
+
+def test_cost_scenario_of_a_maker_s_and_a_sale_s_charges_alone_judges_nothing() -> None:
+    """Those keys charge a resting fill and a sale alone; stated without a taker's charge they
+    would re-price every other fill at nothing, which is no cost model."""
+    result = cost_scenario.evaluate(
+        context(
+            priced_run(),
+            hyp=make_hyp(**CONTRIBUTION_HYP),
+            params={"maker_bps": 0.0, "sell_fee_bps": 0.206, "sell_fee_per_share": 0.000195},
+        )
+    )
+
+    assert result.passed and result.skipped is not None
