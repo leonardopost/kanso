@@ -3,12 +3,19 @@
 Commission — in basis points and, where the model states it, per share — slippage and half
 the spread are charged on every fill, once, by the runner's extraction
 (`kanso.nautilus.backtest`); the simulated venue charges nothing. A fill that
-rested on the book — one the venue reports as a maker's — pays the venue model's
-`maker_bps` instead of all three when the model states one: it filled at its own price, so
-it slipped nothing, and the spread is what it earns rather than pays. A negative rate is a
-rebate. A sale pays the regulatory fee the model states on top, whoever the venue reports
+rested on the book — one the venue reports as a maker's — pays the venue model's maker
+schedule instead of all three, and instead of the per-share commission, when the model states
+one: `maker_bps` of its notional and `maker_per_share` on each share, either of which alone
+states the schedule and the other is then nothing. It filled at its own price, so it slipped
+nothing, and the spread is what it earns rather than pays. A negative rate or per-share charge
+is a rebate. A sale pays the regulatory fee the model states on top, whoever the venue reports
 the fill as: `sell_fee_bps` of its notional and `sell_fee_per_share` on each share, the
 transaction fee and the trading activity fee an account passes through on sells alone.
+A taker's fill — one the venue reports as a taker's, never a maker's — pays the model's
+`slippage_ticks` on top as well: that many of the instrument's price increments on each share,
+capped on an order with a limit at what the limit leaves past the fill's price
+(`tick_slip`), so an account that pays a tick over the touch to take states it in the unit it
+pays it in, exact for any increment, and a limit is never charged past its own price.
 A sleeve's harness needs the same number while it runs, to know what its account
 holds, so the arithmetic lives here and both call it: the balance a strategy sizes against
 is the equity the runner strikes.
@@ -43,7 +50,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from math import fsum
-from typing import Final
+from typing import Any, Final
 
 from kanso.schemas import Book
 
@@ -57,12 +64,14 @@ __all__ = [
     "fill_rate",
     "fixed_half_spread",
     "funding_payment",
+    "limit_at",
     "maintenance_ratio",
     "month_turned",
     "policy_of",
     "quote_half_spread",
     "reset",
     "side_rate",
+    "tick_slip",
 ]
 
 BPS: Final = 10_000.0
@@ -94,6 +103,12 @@ def side_rate(commission_bps: float, slippage_bps: float, half_spread: float) ->
     return (commission_bps + slippage_bps) / BPS + half_spread
 
 
+def _rests(maker: bool, maker_bps: float | None, maker_per_share: float | None) -> bool:
+    """Whether a fill is charged the maker schedule: the venue reported it as a maker's and
+    the model states a schedule for one — `maker_bps`, `maker_per_share` or both."""
+    return maker and (maker_bps is not None or maker_per_share is not None)
+
+
 def fill_rate(
     commission_bps: float,
     slippage_bps: float,
@@ -101,16 +116,68 @@ def fill_rate(
     maker_bps: float | None,
     *,
     maker: bool,
+    maker_per_share: float | None = None,
 ) -> float:
     """What one fill costs per unit of notional under a venue model.
 
-    A maker's fill pays `maker_bps` and nothing else when the model states it, which may be
-    negative; every other fill — and a maker's, under a model that states no `maker_bps` —
+    A maker's fill under a stated maker schedule pays `maker_bps` and nothing else per unit
+    of notional — nothing at all when the schedule is stated per share alone — which may be
+    negative; every other fill — and a maker's, under a model that states no maker schedule —
     pays commission, slippage and half the spread, exactly as `side_rate` strikes it.
     """
-    if maker and maker_bps is not None:
-        return maker_bps / BPS
+    if _rests(maker, maker_bps, maker_per_share):
+        return 0.0 if maker_bps is None else maker_bps / BPS
     return side_rate(commission_bps, slippage_bps, half_spread)
+
+
+def tick_slip(
+    slippage_ticks: float, increment: float, px: float, limit: float | None, *, sell: bool
+) -> float:
+    """What a taker's fill is charged on each share for `slippage_ticks`, as a price: that many
+    of the instrument's `increment`, and on an order with a `limit` no more than the limit
+    leaves past the fill's price `px` — above it for a buy, below it for a sale — so a limit
+    filled at its own price pays none of it and none pays past its limit. A market order
+    carries no limit and pays it whole. Nothing for a model that states none.
+    """
+    slip = slippage_ticks * increment
+    if limit is None or slip <= 0.0:
+        return slip
+    room = px - limit if sell else limit - px
+    return min(slip, max(room, 0.0))
+
+
+def limit_at(order: Any, trade_id: Any) -> float | None:
+    """The limit price `order` carried when its fill of trade id `trade_id` was applied: the
+    price it was created with, as each update the venue accepted restated it, up to that fill,
+    so a fill before a modify is capped by the limit it filled under; a trade id the order never
+    took reads as its last limit. `None` for an order that carries no limit — a market order,
+    a stop to market — and for one no cache holds.
+
+    Read from the order's own events, because the order object holds only its last price:
+    under nautilus_trader 1.231.0 `OrderInitialized.options` carries a limit's `price` as a
+    string and a market order's options none, `OrderUpdated.price` is the price a modify set
+    or `None` when it set none, and an order the emulator released keeps the events of the
+    order it was made from — so one released at market carries no limit here. The fill is
+    found by its trade id rather than its event id: `ExecutionEngine._flip_position` splits a
+    fill that flips a net position into a closing event under the fill's own event id and an
+    opening one under a new event id, both keeping the trade id, and the runner reads its
+    fills off the positions they made — so the opening half's event id is in no order's
+    events, and looked up by it, the half read the order's last limit, after any later modify.
+    """
+    from nautilus_trader.model.events import OrderFilled, OrderInitialized, OrderUpdated
+
+    if order is None or not order.has_price:
+        return None
+    price: float | None = None
+    for event in order.events:
+        if isinstance(event, OrderInitialized):
+            stated = event.options.get("price")
+            price = None if stated is None else float(stated)
+        elif isinstance(event, OrderUpdated) and event.price is not None:
+            price = float(event.price)
+        elif isinstance(event, OrderFilled) and event.trade_id == trade_id:
+            break
+    return price
 
 
 def fill_cost(
@@ -126,26 +193,46 @@ def fill_cost(
     sell: bool = False,
     sell_fee_bps: float = 0.0,
     sell_fee_per_share: float = 0.0,
+    maker_per_share: float | None = None,
+    slip: float = 0.0,
+    multiplier: float = 1.0,
 ) -> float:
     """What one fill costs in the account currency: `fill_rate` of its notional, plus the
-    per-share commission on each share whenever the fill pays commission at all, plus the
-    sell-side fees on a sale.
+    per-share charge its side pays on each share, plus the sell-side fees on a sale.
 
-    A maker's fill under a stated maker rate pays that rate alone, per share included: the
-    rate is the whole charge on that fill by contract, and a per-share-priced account states
-    its maker net there — commission less the rebate. Every other fill pays the per-share
+    `slip` is the price a taker's share is charged over its fill for the model's
+    `slippage_ticks` (`tick_slip`), worth `multiplier` in the account currency per unit of
+    price on a contract; a fill the venue reports as a maker's pays none of it, whatever the
+    model states, since it filled at its own price.
+
+    A maker's fill under a stated maker schedule pays that schedule alone: `maker_bps` of its
+    notional and `maker_per_share` on each share, the per-share commission not at all — the
+    schedule is the whole charge on that fill by contract. A per-share-priced account states
+    its maker charge per share there, commission less any rebate, exactly as it is charged;
+    one priced per notional states `maker_bps`. Every other fill pays the per-share
     commission on top of the three rates, so a cheap share pays more of its price than a
     dear one, exactly as the account would charge it. A sale pays `sell_fee_bps` of its
     notional and `sell_fee_per_share` on each share on top of all of that, maker or taker:
-    a regulatory fee is passed through on every sell, and no venue's maker rate covers it.
+    a regulatory fee is passed through on every sell, and no venue's maker schedule covers it.
+
+    A model that states neither maker key nor a tick charges every fill as it always was, bit
+    for bit: the sums are taken in the order they were before `maker_per_share` and
+    `slippage_ticks` existed.
     """
     charged = notional * fill_rate(
-        commission_bps, slippage_bps, half_spread, maker_bps, maker=maker
+        commission_bps,
+        slippage_bps,
+        half_spread,
+        maker_bps,
+        maker=maker,
+        maker_per_share=maker_per_share,
     )
     if sell:
         charged += notional * sell_fee_bps / BPS + qty * sell_fee_per_share
-    if maker and maker_bps is not None:
-        return charged
+    if _rests(maker, maker_bps, maker_per_share):
+        return charged if maker_per_share is None else charged + qty * maker_per_share
+    if slip and not maker:
+        charged += qty * slip * multiplier
     return charged + qty * commission_per_share
 
 

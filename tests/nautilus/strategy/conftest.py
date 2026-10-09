@@ -188,6 +188,7 @@ def backtest():
         data: Iterable[Bar] | None = None,
         instruments: Sequence[InstrumentId | Equity] = (DEMO,),
         capital: int = 100_000,
+        fill_model: object = None,
     ) -> Run:
         engine = BacktestEngine(
             config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)),
@@ -203,6 +204,7 @@ def backtest():
             # The venue kanso builds, corporate-action module and all, so a test of a sleeve
             # is a test of the exchange the sleeve actually runs against.
             modules=loaded,
+            fill_model=fill_model,
         )
         for named in instruments:
             engine.add_instrument(equity(named) if isinstance(named, InstrumentId) else named)

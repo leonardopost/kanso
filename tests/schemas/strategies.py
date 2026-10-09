@@ -120,12 +120,16 @@ def costs(draw: st.DrawFn) -> Costs:
     return Costs(
         commission_bps=draw(NON_NEGATIVE),
         slippage_bps=draw(NON_NEGATIVE),
+        slippage_ticks=draw(st.floats(min_value=0, max_value=5)),
         spread=spread,
         fixed_bps=draw(NON_NEGATIVE) if spread == "fixed_bps" else None,
         maker_bps=draw(st.none() | st.floats(min_value=-5, max_value=5, allow_nan=False)),
+        maker_per_share=draw(st.none() | st.floats(min_value=-0.01, max_value=0.02)),
         sell_fee_bps=draw(NON_NEGATIVE),
         sell_fee_per_share=draw(NON_NEGATIVE),
-        limit_fill=draw(st.sampled_from(["touch", "through"])),
+        limit_fill=draw(
+            st.sampled_from(["touch", "through", "print_through", "print_through_whole"])
+        ),
     )
 
 

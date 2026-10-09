@@ -10,14 +10,17 @@ attached modifiers.
 **Costs are applied here and nowhere else.** The simulated venue is cost-neutral
 (`kanso.nautilus.venue`), and commission, slippage and half the spread on each side are
 deducted per fill in this extraction — or, for a fill the venue reports as a maker's under a
-venue model that states `maker_bps`, that rate alone, and a per-share commission on every share
-of a fill that pays commission (`kanso.nautilus.costs.fill_cost`). One
+venue model that states a maker schedule, `maker_bps` of its notional and `maker_per_share` on
+each share alone — a per-share commission on every share of a fill that pays commission, and
+on a taker's fill `slippage_ticks` of the instrument's increment on each share, no further
+than the order's limit (`kanso.nautilus.costs.fill_cost`, `tick_slip`). One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
-maker's. A perpetual's funding is booked here too, once, at each settlement, on what was held
-then (`_equity`) — never by the venue — and the runner configures the sleeve to book the same
-amount into the balance it sizes from (`books_funding`).
+maker's, the instrument's increment and the order's limit. A perpetual's funding is booked
+here too, once, at each settlement, on what was held then (`_equity`) — never by the venue —
+and the runner configures the sleeve to book the same amount into the balance it sizes from
+(`books_funding`).
 
 **The window is a refusal, not a parameter.** A request may name only a window the
 hypothesis declares, and the card path — `run_subprocess` — accepts only the research
@@ -128,11 +131,13 @@ from kanso.nautilus.costs import (
     fill_cost,
     fixed_half_spread,
     funding_payment,
+    limit_at,
     maintenance_ratio,
     month_turned,
     policy_of,
     quote_half_spread,
     reset,
+    tick_slip,
 )
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
@@ -1089,14 +1094,16 @@ def execute_chunked(
                 trade_execution=venue.trade_execution,
                 queue_position=venue.queue_position,
                 # Whether a resting limit the market only touched fills: the venue model's
-                # `limit_fill`, built from the configuration the node's venue is built from.
+                # `limit_fill`, built from the configuration the node's venue is built from —
+                # kanso's own fill model under the print rules (`kanso.nautilus.tape`).
                 fill_model=get_fill_model(venue),
                 # How long the venue takes to see an order: the venue model's `latency_ms`,
                 # none when it states none.
                 latency_model=get_latency_model(venue),
                 # The venue applies a corporate action one call before it matches the point
-                # that carried the market past it, and applies every quote and print the sleeve
-                # is handed; see `kanso.nautilus.actions` and `kanso.nautilus.availability`.
+                # that carried the market past it, applies every quote and print the sleeve is
+                # handed, and, under `print_through`, lands what is due by a print before it;
+                # see `kanso.nautilus.actions`, `availability` and `tape`.
                 modules=modules(venue.name),
             )
         for instrument in instruments:
@@ -1653,16 +1660,33 @@ def multipliers_of(instruments: Iterable[Any]) -> dict[str, float]:
     return {str(instrument.id): float(instrument.multiplier) for instrument in instruments}
 
 
+def increments_of(instruments: Iterable[Any]) -> dict[str, float]:
+    """Each resolved definition's price increment, by instrument id: the tick a venue model's
+    `slippage_ticks` is counted in."""
+    return {str(instrument.id): float(instrument.price_increment) for instrument in instruments}
+
+
 def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
     """The one measured object: returns, equity, trades and fills with costs applied, and
     the book policy applied once at each period end."""
     model = VenueModel.model_validate(dict(request.venue_model))
     cache = engine.cache
     multipliers = multipliers_of(cache.instruments())
+    increments = increments_of(cache.instruments())
     positions = _positions(cache)
     events, owners = _fill_events(positions)
     marks.price(events)
-    fills = tuple(_fill(event, multipliers, marks.half(event), model) for event in events)
+    fills = tuple(
+        _fill(
+            event,
+            multipliers,
+            marks.half(event),
+            model,
+            increments.get(str(event.instrument_id), 0.0),
+            limit_at(cache.order(event.client_order_id), event.trade_id),
+        )
+        for event in events
+    )
     by_position: dict[int, list[Fill]] = {}
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
@@ -1754,13 +1778,18 @@ def _fill(
     multipliers: Mapping[str, float],
     half: float,
     model: VenueModel,
+    tick: float = 0.0,
+    limit: float | None = None,
 ) -> Fill:
     """One execution, with the cost this venue model charges it, applied once.
 
-    A fill the venue reports as a maker's pays the model's `maker_bps` when it states one;
-    every other fill pays commission, slippage and half the spread, and the per-share
-    commission on each share when the model states one; a sale pays the sell-side fees the
-    model states on top, maker or taker (`costs.fill_cost`).
+    A fill the venue reports as a maker's pays the model's maker schedule when it states
+    one — `maker_bps` of its notional and `maker_per_share` on each share, and nothing else;
+    every other fill pays commission, slippage and half the spread, the per-share commission
+    on each share when the model states one, and `slippage_ticks` of the instrument's
+    increment `tick` on each share, no further than the order's `limit`; a sale pays the
+    sell-side fees the model states on top, maker or taker (`costs.fill_cost`). The increment
+    and the limit are recorded on the fill, so a model re-applied to it charges the same.
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -1784,6 +1813,9 @@ def _fill(
         sell=side == "SELL",
         sell_fee_bps=costs.sell_fee_bps,
         sell_fee_per_share=costs.sell_fee_per_share,
+        maker_per_share=costs.maker_per_share,
+        slip=tick_slip(costs.slippage_ticks, tick, px, limit, sell=side == "SELL"),
+        multiplier=multiplier,
     )
     return Fill(
         ts_ns=int(event.ts_event),
@@ -1794,6 +1826,8 @@ def _fill(
         cost=cost,
         maker=maker,
         multiplier=multiplier,
+        tick=tick,
+        limit=limit,
     )
 
 

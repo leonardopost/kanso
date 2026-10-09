@@ -29,6 +29,10 @@ document is parsed. Everything else needs the workspace, and that is this module
   width; a universe spanning two account currencies would have a leg priced at a rate
   nothing in the workspace records, so it is refused — and so, for the same reason, is an
   instrument that settles in a currency other than its venue's account currency;
+* a venue model whose `limit_fill` is `print_through` or `print_through_whole` fills a
+  resting limit on prints and a taker on quotes, on the top-of-book venue, so the hypothesis
+  must require `quote` and `trade`, may not require `book`, and may not ask an instrument for
+  `bar` beside `quote`, since a bar walks the engine's bid and ask past the quote in force;
 * a universe holding a perpetual requires `funding`. A held perpetual pays or is paid its
   funding at every settlement, so a card not handed the realised rates measures a P&L the
   contract never had. What makes an instrument a perpetual is its resolved definition — the
@@ -165,6 +169,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_sizing(ws, hyp)
     _check_benchmark(hyp)
     _check_book(hyp, models)
+    _check_print_through(hyp, models)
     _check_classification(ws, hyp)
     _check_screened(ws, hyp)
     return hyp
@@ -495,6 +500,52 @@ def _check_book(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> None:
         remedy=f"set venues.{cash[0]}.account to margin in portfolio.yaml, or set "
         "book.reset to none and book.financing_rate_bps to 0",
     )
+
+
+PRINT_RULES: Final = frozenset({"print_through", "print_through_whole"})
+"""The `limit_fill` values under which a resting limit fills on prints and a taker on quotes."""
+
+TRADE_TYPE: Final = "trade"
+BOOK_TYPE: Final = "book"
+BAR_TYPE: Final = "bar"
+
+
+def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> None:
+    """The print rules fill a resting limit only on a print through it and a taker only on
+    a quote, on the top-of-book venue: a hypothesis under one, from whichever layer it was
+    stated at, requires both feeds and no book, and asks no instrument for bars beside its
+    quotes — a bar walks the engine's own bid and ask past the quote in force, so the venue
+    would judge a taker marketable on prices the quote never showed."""
+    ruled = sorted(v for v, model in models.items() if model.costs.limit_fill in PRINT_RULES)
+    if not ruled:
+        return
+    rule = models[ruled[0]].costs.limit_fill
+    missing = [kind for kind in (QUOTE_TYPE, TRADE_TYPE) if kind not in hyp.data_requirements]
+    if missing:
+        raise ValidationError(
+            f"costs.limit_fill: {rule} on {', '.join(ruled)} fills a resting limit only on a "
+            f"print through it and a taker only on the last quote, and data_requirements has "
+            f"no {' or '.join(missing)}",
+            remedy="add quote and trade to data_requirements, or state limit_fill: touch or "
+            "through",
+        )
+    if BOOK_TYPE in hyp.data_requirements:
+        raise ValidationError(
+            f"costs.limit_fill: {rule} on {', '.join(ruled)} is a rule for the top-of-book "
+            "venue, and requiring book builds a level-two one",
+            remedy="drop book from data_requirements, or state limit_fill: touch or through",
+        )
+    barred = [name for name in hyp.universe if {BAR_TYPE, QUOTE_TYPE} <= set(hyp.required_of(name))]
+    if barred:
+        raise ValidationError(
+            f"costs.limit_fill: {rule} on {', '.join(ruled)} fills a taker on the quote in "
+            f"force, and {', '.join(barred)} is asked for bar beside quote: a bar moves the "
+            "book the venue judges a taker marketable from past that quote",
+            remedy="ask each instrument that carries quotes for quote and trade alone under "
+            "data_by_instrument, keeping bar for an instrument asked for bar alone; with none "
+            "left, drop bar from data_requirements and research at resolution: tick, since a "
+            "bar size requires bar; or state limit_fill: touch or through",
+        )
 
 
 def _capital(ws: Workspace, hyp: Hypothesis) -> tuple[float, str]:

@@ -22,6 +22,7 @@ from kanso.criteria.run import midnight_ns
 from kanso.nautilus import actions
 from kanso.nautilus.availability import Availability
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+from kanso.nautilus.tape import Tape
 
 from .conftest import DEMO, HEDGE, VENUE, bar, equity
 
@@ -147,13 +148,15 @@ def test_the_venue_runs_the_corporate_actions_before_availability() -> None:
     """The corporate actions read the book a split restates and pays its fraction from, and
     `Availability` may empty that book before the point is applied, so the order is fixed:
     the other way round, a split its instrument's own point triggers, stamped before the
-    book's last update, finds the book already emptied."""
+    book's last update, finds the book already emptied. `Tape` runs last, on the book the
+    other two leave and before the point is applied."""
     loaded = actions.modules(VENUE.value)
 
-    assert [type(module) for module in loaded] == [actions.CorporateActions, Availability]
+    assert [type(module) for module in loaded] == [actions.CorporateActions, Availability, Tape]
     assert [str(module.id) for module in loaded] == [
         f"CorporateActions-{VENUE.value}",
         f"Availability-{VENUE.value}",
+        f"Tape-{VENUE.value}",
     ]
 
 
@@ -584,6 +587,45 @@ def test_a_split_restates_a_book_a_bar_stamped_past_its_trigger(backtest) -> Non
     (position,) = run.engine.cache.positions(instrument_id=HEDGE)
     assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
         (10.0, 100.0)
+    ]
+
+
+@pytest.mark.parametrize("rule", ["print_through", "print_through_whole"])
+def test_a_split_restates_the_quote_the_print_rule_fills_a_taker_on(backtest, rule: str) -> None:
+    """Under the print rules a taker fills on the last quote the venue applied, and the
+    restatement is a quote the venue applies past its modules: it is handed to the fill model
+    too, so ten HEDGE bought at market from DEMO's first bar of the ex-date, before HEDGE
+    quotes again, fill at the restated ask of 100.10 rather than at the 10.01 HEDGE quoted on
+    the eve."""
+    from nautilus_trader.backtest.node import get_fill_model
+    from nautilus_trader.config import BacktestVenueConfig
+
+    from kanso.nautilus.venue import fill_model
+
+    midnight = midnight_ns(EX)
+    second = 1_000_000_000
+    model = get_fill_model(
+        BacktestVenueConfig(
+            name=VENUE.value,
+            oms_type="NETTING",
+            account_type="MARGIN",
+            starting_balances=["100000 USD"],
+            fill_model=fill_model(rule),  # type: ignore[arg-type]
+        )
+    )
+    run = backtest(
+        Crosser(config(universe=(DEMO.value, HEDGE.value), data_requirements=("bar", "quote"))),
+        instruments=[equity(DEMO), equity(HEDGE, info=SCHEDULE)],
+        data=[
+            _hedge_quote(9.99, 10.01, 5_000, 5_000, midnight - 60 * second, midnight - 60 * second),
+            _stamped(DEMO, 10.0, midnight + 10 * second, midnight + 11 * second),
+        ],
+        fill_model=model,
+    )
+
+    (position,) = run.engine.cache.positions(instrument_id=HEDGE)
+    assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
+        (10.0, 100.1)
     ]
 
 

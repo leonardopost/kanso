@@ -1189,14 +1189,15 @@ when it was placed waits on the book, and a later point that reaches its price f
 that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`
 (`docs/workspace.md`): under `touch`, the default and the engine's own rule, a bar whose low
 is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
-a print past it. On a bar the venue walks the open, the high, the low and the close as prints
-in turn, so a bar that only touched the level at its low fills a resting buy at the limit
-under `touch` and leaves it resting under `through`; on a quote the engine asks the rule only
-when the order's own side of the book is at the price, so an ask falling to a resting buy
-fills it under either. Both code paths build their venue from the same configuration, so a
+a print past it. Under `print_through` only a print past it fills it, by that print's own size,
+and a taker fills on the quote rather than on a print (below). On a bar the venue walks the
+open, the high, the low and the close as prints in turn, so a bar that only touched the level
+at its low fills a resting buy at the limit under `touch` and leaves it resting under
+`through`; on a quote the engine asks the rule only when the order's own side of the book is
+at the price, so an ask falling to a resting buy fills it under either. Both code paths build their venue from the same configuration, so a
 card and a stage apply the same rule, and the rule draws no random number, so they apply it
-the same way every time. They part where a command lands — for any instrument, on any venue,
-sent from any handler, at any latency, zero included: the research engine then matches every
+the same way every time. Under `touch` and `through` they part where a command lands — for any
+instrument, on any venue, sent from any handler, at any latency, zero included: the research engine then matches every
 resting order again against its book as it stands, and the node's venue matches an instrument's
 orders again only at that instrument's next point. So a quote whose far side sits at or through
 a resting order's price, or a print there — a print stands as both sides of the book until the
@@ -1204,7 +1205,7 @@ next quote — can fill that order on the research path alone, a first time for 
 sent and again for one it has filled already. `kanso replay parity` compares intents, so it
 calls such runs identical while no intent moves. A sleeve that acts on its fills can then send
 different orders on the two paths, and parity and the required `parity_replay` certification
-gate fail. Since v0.14.1 applies the quotes and prints the venue used to skip, that happens
+gate fail. Since v0.15.0 applies the quotes and prints the venue used to skip, that happens
 more often, so a subject that passed `parity_replay` on 0.14.0 can fail it: on 60 seeded tapes
 of a sleeve sending entries, exits and cancels with no latency, 29 failed at a tolerance of
 zero where 14 had (`docs/backlog.md`).
@@ -1229,15 +1230,57 @@ run resting several orders at one price is credited that point several times; an
 several fills all that is left of the best-priced and nothing of an order resting at a worse
 price, even one it also went through. So only an order alone at its price and no larger than the
 points that reach it is filled as honestly as its prints; a larger one, or one resting beside
-another at its price, is credited size the tape never showed. The engine kanso pins offers no
-top-of-book setting that fills such a point by its own size without withholding a repeated
-print, and nothing kanso loads reaches that part of it (`docs/backlog.md`). A print also stands
-as the top of the book on both sides, at its price and size, until the next quote: a market
+another at its price, is credited size the tape never showed. No setting of the engine's own
+fill model fills such a point by its own size without withholding a repeated print; under
+`touch` and `through` kanso leaves the engine's fill as it is, and under `print_through` a fill
+model of kanso's own replaces it — a zero-quantity fill among the fills a fill model answers
+ends the engine's fill before it fills what is left whole, which `kanso doctor` checks (below,
+`docs/backlog.md`). A print also stands as the top of the book on both sides, at its price and size, until the next quote: a market
 order sent on it fills that size at the print's price and the rest one increment worse. `kanso
 doctor` checks the fill by size at the price, the quote credited again, the whole fill beyond
 it, two orders at one price each credited a point whole, a point beyond two orders filling only
 the better-priced, the print standing as the book and why `liquidity_consumption` stays off as
 engine facts.
+
+**Under `print_through` only a print through a resting order fills it, and a taker fills on the
+quote in force.** The venue's fill model is kanso's own there (`kanso.nautilus.tape`): the
+matching engine asks it for the fills of every order it has matched, and a venue module tells
+it before each point which point is in hand, which orders rested before a print and at what
+price, and the last quote. So a quote never fills a resting order and neither does a print at
+its price; a print through it fills it once, by the print's own size shared with the other
+orders it reaches, in price priority and then time at the price — the size the tape shows
+traded there — or, under `print_through_whole`, for all that is left; a print the venue
+applied before the order landed, or before a modify moved it to its price, fills nothing. A
+taker fills at the touch of the last quote, up to the size it shows and never past its own limit, not at a print standing as the
+book — and a print that trades strictly outside that quote ends it: until the next quote a
+market order is refused for want of a market and a limit rests at its price, so a sleeve buying
+on a print over the ask is not filled at an ask the market has left. A split restates the quote
+a taker fills on, not the print the book may hold. Under a stated latency a command due by a
+print's instant lands before the print. Measured on 2026-10-10 with the module, on five
+sessions of MSTR, COIN, ETHA and BMNR quotes and lit prints at 20 ms, with a probe resting at
+the touch and sending market orders: the venue matched an independent replay of the rule at
+every one of 2,973,825 quotes and 348,086 prints, made no maker fill on a quote where `through`
+had made 280 to 1,389 a session, and filled 4,455 of 4,456 market orders at the quote in force
+when it landed — 133 of them, whose first point after their delay was a print, on the quote
+before the first one at or after their delay, and 26 of those at another price, −6 to +5 ticks;
+the other, on COIN, landed on a print outside the quote and was refused, where the first quote
+at or after its delay would have filled it at the price of the quote before
+(`docs/backlog.md`). Where a sleeve sends no
+cancel the venue's rule is built not to part the two code paths: the engine judges whether an order
+is marketable from a bid and an ask of its own, which the research path's second match after a
+command lands and a print with an aggressor leave apart on the two, but while a quote is in
+force neither is outside it — the bid never under its bid, the ask never over its ask — so the
+fill model, deciding from the quote, decides alike; and a resting order is credited only in a
+print's own match. Measured on 2026-10-10 over seeded runs of two names sending entries,
+market orders, modifies and orders from their fill handlers at 0, 20 and 30 ms: with no cancel
+none of 5,400 parted reproducibly, where under `touch` 1,309 of 1,800 such runs parted. With
+cancels the paths can still part: 56 of 7,200 such runs parted reproducibly, 54 of them on
+tapes `touch` or `through` part too and two only under the print rules — one a cancel sent
+behind a modify, one not traced — and a second generator, with a split, points stamped before
+they reached the venue and cancels of one order, found five tapes only the print rules part,
+and a third, adding IOC and FOK limits and empty sides, five more, one of them a tape whose
+script sends no cancel, and 22 on which the two paths record one instant's fills in another
+order, none traced (`docs/backlog.md` rows 105 and 163).
 
 In the match it triggers, a trade print reaches a resting order only from the side that can
 trade with it: for that match the engine moves only the ask down for a seller's print and only
@@ -1245,7 +1288,8 @@ the bid up for a buyer's, so a buyer's print below a resting buy does not fill i
 a seller's print or one with no aggressor does. The print still stands as both sides of the
 book, so once a command lands the research path, matching every resting order again (above),
 fills a resting buy that a buyer's print went through, and fills all of it; the node's venue
-does not (`docs/backlog.md`). What side a print carries is therefore a fact about the data,
+does not (`docs/backlog.md`). Under `print_through` neither does: the rule keeps the side a
+print hit on every match. What side a print carries is therefore a fact about the data,
 and a trade file that records none is loaded with no aggressor rather than a guessed one
 (`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
 unfilled.
@@ -1288,13 +1332,18 @@ nothing, a clear empties both sides — which `kanso doctor` checks, and a prope
 its top levels and its best equal to the engine's `OrderBook` after any sequence of changes.
 
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
-the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
-the venue reported the fill as a maker's, in which case it pays exactly that and nothing
-else, since a resting limit fills at its own price and the spread is what it earns. A
-negative rate is a rebate. Each recorded fill says whether it was a maker's, so the charge
+the spread, once, in the runner's extraction — unless the venue model states a maker's
+schedule, `maker_bps` of the notional and `maker_per_share` on each share, and the venue
+reported the fill as a maker's, in which case it pays exactly that schedule and nothing else,
+since a resting limit fills at its own price and the spread is what it earns. A negative
+rate or per-share charge is a rebate. Each recorded fill says whether it was a maker's, so the charge
 can be struck again from the record, and the harness books the same rate into
 `self.balance` as it goes, which keeps the balance a sleeve sizes against equal to the
-equity the runner strikes.
+equity the runner strikes. A fill that took liquidity can be charged a tick as well:
+`slippage_ticks` charges it that many of the instrument's own price increments on each share,
+never past the limit its order carried and never on a maker's fill (`docs/workspace.md`), and
+each recorded fill keeps the increment and that limit, so this charge too is struck again from
+the record.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the
@@ -1322,7 +1371,9 @@ them: on the first market point stamped after the midnight that opens an ex-date
 instrument trades (`info.timezone`, or UTC when it names none), and one call before that
 point is matched against anything, the simulated exchange cancels every resting
 order in that instrument, rescales every open position, and resyncs the portfolio index
-behind the change.
+behind the change. The cancel is the matching engine's own, applied at once whatever the
+venue's latency and landing nothing else with it; an order still in flight to the venue is
+not resting, and lands in the old share count (`docs/backlog.md` row 165).
 
 It is the venue and not the strategy because a strategy is too late. A sleeve handles a
 point only after the exchange has already matched against it, so a take-profit resting
@@ -1515,7 +1566,8 @@ spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a c
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
-commission, a flat rate, a maker rate, a fixed width — through the runner's own per-fill
+commission, a flat rate, a maker's rate or per-share charge, a slippage in ticks, a fixed
+width, the sell-side fees — through the runner's own per-fill
 arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
 objective on the re-priced run and holds it to `min_metric`: the same fills under the
 schedule of another account, without a second backtest, and the card's own schedule

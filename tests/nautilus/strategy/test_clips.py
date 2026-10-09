@@ -13,6 +13,7 @@ from kanso.nautilus.sizing import (
     HEDGE_UNDER_SIZING,
     ONE_CLIP,
     SizingError,
+    full_book_quantity,
 )
 from kanso.nautilus.strategy import Decision, HookContext, KansoModifier, KansoModifierConfig
 
@@ -69,6 +70,27 @@ def test_a_clip_is_sized_to_the_overlay_s_budget_not_the_host_s(backtest) -> Non
 
     assert intents(run) == [("DEMO.XNAS", "BUY", DEMO_SHARES), ("HEDGE.XNAS", "BUY", HEDGE_CLIP)]
     assert positions(run) == {"DEMO.XNAS": DEMO_SHARES, "HEDGE.XNAS": HEDGE_CLIP}
+
+
+def test_a_clip_reserves_the_tick_its_venue_model_states(backtest) -> None:
+    """One tick of a cent on a 20-dollar name is 5 bp a side: 20,000 over (1 + 2 x 5 bp) x
+    20.01 is 998 shares of the hedge, one fewer than with no tick reserved; the host's entry in
+    the 10-dollar name reserves its own cent, 10 bp a side."""
+
+    class Once(Clipper):
+        script = {8: (Clip("HEDGE.XNAS", "BUY"),)}
+
+    ticked = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes"}}
+    ticked["costs"]["slippage_ticks"] = 1.0
+    overlay = clipper(Once)
+    run = backtest(
+        Enters(sized(venue_model=ticked)), [overlay], data=two_names(), instruments=(DEMO, HEDGE)
+    )
+
+    clip = float(int(full_book_quantity(CLIP_BUDGET, 20.0, 0.01, 0.01 / 20.0)))
+    entry = float(int(full_book_quantity(30_000.0, 10.0, 0.01, 0.01 / 10.0)))
+    assert (clip, entry) == (HEDGE_CLIP - 1.0, 2_991.0)
+    assert intents(run) == [("DEMO.XNAS", "BUY", entry), ("HEDGE.XNAS", "BUY", clip)]
 
 
 def test_a_clip_on_the_side_already_held_is_a_no_op(backtest) -> None:

@@ -61,8 +61,8 @@ only through its queue, so the queue is on and every command waits in flight. Th
 times that flight from the command's own clock, which on a node is wall time, so
 `SimulatedVenue._send` re-stamps each command from the data clock first; it then lands at
 the first point on or after its delay, once that point has been matched, exactly as on the
-research path, and `advance_past_latency` lands what a node's flatten sent after the
-window's last point.
+research path, and `advance_past_latency` lands what the sleeves sent on the window's last
+point and, after it, what a node's flatten sent.
 
 **The venue is settled at every flush marker too, because the research path settles there.**
 A feed whose instants coincide — every level-two book, any grain of several names — carries
@@ -93,7 +93,8 @@ cannot drift apart over it, since they are handed the same model.
 **The fill model is the venue model's, on both paths.** It is built from the configuration's
 own `fill_model` with the engine's converter, as the research path's is, so a resting limit
 the market only touched fills here exactly when it fills in a card — every time under
-`limit_fill: touch`, never under `through` (`kanso.nautilus.venue`).
+`limit_fill: touch`, never under `through`, and only from a print through it under
+`print_through` (`kanso.nautilus.venue`, `kanso.nautilus.tape`).
 
 Engine facts this module relies on (nautilus_trader 1.231.0):
 
@@ -422,15 +423,17 @@ class SimulatedVenue(LiveExecutionClient):
             leverages={},
             margin_model=LeveragedMarginModel(),
             # The same modules the research venue loads, so a split is applied at the same
-            # instant on both code paths and the venue applies every quote and print the
-            # sleeve is handed; see `kanso.nautilus.actions` and `kanso.nautilus.availability`.
+            # instant on both code paths, the venue applies every quote and print the sleeve
+            # is handed, and under `print_through` what is due by a print lands before it; see
+            # `kanso.nautilus.actions`, `kanso.nautilus.availability` and `kanso.nautilus.tape`.
             modules=actions.modules(venue.name),
             portfolio=kernel.portfolio,
             msgbus=self.relay,
             cache=kernel.cache,
             clock=self.test_clock,
             # The venue model's `limit_fill`, built by the converter the research path's
-            # engine uses, from the configuration both paths are given.
+            # engine uses, from the configuration both paths are given — kanso's own fill
+            # model under the print rules (`kanso.nautilus.tape`).
             fill_model=get_fill_model(venue),
             # The same latency the research venue is given, from the same configuration. The
             # exchange stamps a command's flight from the command's own clock, which on a node
@@ -589,11 +592,11 @@ class SimulatedVenue(LiveExecutionClient):
     def advance_past_latency(self) -> None:
         """Land every command still in flight after the last point, against that point's book.
 
-        Under a stated latency a command sent after the window's last point — a node's
-        flatten — would wait for a point that never comes; this advances the exchange to
-        the instant the delay has passed, so the command is matched where the research path
-        would have matched it had a point arrived then. Without a latency nothing is in
-        flight and nothing happens.
+        Under a stated latency a command sent on or after the window's last point — one a
+        sleeve sent on that point, or a node's flatten — would wait for a point that never
+        comes; this advances the exchange to the instant the delay has passed, so the command
+        is matched where the research path would have matched it had a point arrived then.
+        Without a latency nothing is in flight and nothing happens.
         """
         if self._latency_ns > 0:
             self.exchange.process(self._last_ts + self._latency_ns)

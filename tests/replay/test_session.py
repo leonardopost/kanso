@@ -1481,6 +1481,33 @@ def test_stale_prints_at_the_price_fill_by_their_size_on_both_paths() -> None:
     )
 
 
+def test_the_two_paths_charge_a_resting_fill_its_per_share_charge_alike() -> None:
+    """The node's venue reports the fill as a maker's exactly as the research engine does,
+    so one extraction charges it one schedule: here $0.0040 on each of its 100 shares."""
+    node, engine = rested(9.8, "touch", maker_per_share=0.004, commission_per_share=0.014)
+
+    assert node.run.fills == engine.run.fills
+    (fill,) = engine.run.fills
+    assert fill.maker is True
+    assert fill.cost == pytest.approx(100 * 0.004)
+    assert node.run.equity == engine.run.equity
+
+
+def test_the_two_paths_charge_a_taker_its_ticks_within_its_limit_alike() -> None:
+    """A buy limited at 10.50, over the market when it lands, is taken at once on both paths;
+    one extraction charges it a cent a share over what it paid without the key, and records
+    the increment and the limit it was charged under."""
+    node, engine = rested(10.5, "touch", slippage_ticks=1.0)
+    _, unticked = rested(10.5, "touch")
+
+    assert node.run.fills == engine.run.fills
+    (fill,) = engine.run.fills
+    assert (fill.maker, fill.tick, fill.limit) == (False, 0.01, 10.5)
+    assert fill.px < 10.5
+    assert fill.cost - unticked.run.fills[0].cost == pytest.approx(100 * 0.01)
+    assert node.run.equity == engine.run.equity
+
+
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:
     """Every data requirement a hypothesis can declare reaches both exchanges alike."""
     hyp = hypothesis(data_requirements=["bar", "quote", "trade"])

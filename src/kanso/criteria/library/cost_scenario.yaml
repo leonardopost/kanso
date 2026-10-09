@@ -3,6 +3,6 @@ kind: gate
 stage: cert
 required: false
 meaningful_when: "When the account the strategy would run on prices fills differently from the model it was measured under: the recorded fills are re-charged under the stated schedule and the objective recomputed."
-params: {commission_bps: float, commission_per_share: float, slippage_bps: float, fixed_bps: float, maker_bps: float, min_metric: float}
-ranges: {commission_bps: [0.0, 20.0], commission_per_share: [0.0, 0.02], slippage_bps: [0.0, 20.0], fixed_bps: [0.0, 50.0], maker_bps: [0.0, 5.0], min_metric: [0.0, 100.0]}
+params: {commission_bps: float, commission_per_share: float, slippage_bps: float, slippage_ticks: float, fixed_bps: float, maker_bps: float, maker_per_share: float, sell_fee_bps: float, sell_fee_per_share: float, min_metric: float}
+ranges: {commission_bps: [0.0, 20.0], commission_per_share: [0.0, 0.02], slippage_bps: [0.0, 20.0], slippage_ticks: [0.0, 5.0], fixed_bps: [0.0, 50.0], maker_bps: [0.0, 5.0], maker_per_share: [0.0, 0.02], sell_fee_bps: [0.0, 5.0], sell_fee_per_share: [0.0, 0.01], min_metric: [0.0, 100.0]}
 impl: kanso.criteria.gates.cost_scenario

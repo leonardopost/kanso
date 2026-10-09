@@ -105,6 +105,22 @@ BINDINGS = {
     "on it fills the print's size at its price and the rest one increment worse",
     "liquidity_consumption on a level-one venue fills a resting limit from the first of two "
     "identical prints at its price and not from the second",
+    "a fill model's book replaces the engine's own for the fills of an order it has "
+    "matched, and a zero-quantity fill in it ends the fill there, before a limit's "
+    "remainder is filled whole",
+    "the engine asks a fill model for a market order's fills and fills it from the book "
+    "the model answers, walking one increment past it for what that book does not cover",
+    "a lone zero-quantity fill refuses a market order for want of a market, and leaves a "
+    "limit accepted on arrival resting at its price",
+    "the backtest engine re-matches every resting order after it drains a command, and "
+    "asks a fill model with the arguments of the point's own match",
+    "a simulation module that calls its exchange's process from pre_process lands every "
+    "command due by then before the matching engine applies the point",
+    "a print inside the last quote leaves the engine's bid and ask no wider than that "
+    "quote, re-matched or not, so a limit the quote makes marketable is matched on landing",
+    "kanso's print_through venue fills a resting limit only from a later print strictly "
+    "through its price, by that print's size or whole, never from a quote, and fills a "
+    "taker at the last quote's touch, an IOC limit no further than the quote shows",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

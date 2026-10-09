@@ -252,6 +252,67 @@ def test_a_book_version_and_a_top_of_book_version_are_refused_one_venue(
     assert f"kanso strat retire {placement.label}" in str(raised.value.remedy)
 
 
+OTHER = f"OTHR.{VENUE}"
+
+
+def _quoted(label: str) -> tuple[str, object]:
+    """A version trading the demo name on its quotes and prints."""
+    return label, hypothesis(
+        id=label.split("@")[0],
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["quote", "trade"],
+    )
+
+
+def _barred(label: str) -> tuple[str, object]:
+    """A version reading the demo name's bars as a signal and trading another on its quotes."""
+    return label, hypothesis(
+        id=label.split("@")[0],
+        resolution="1m",
+        horizon="1d",
+        universe=[INSTRUMENT, OTHER],
+        data_requirements=["bar", "quote", "trade"],
+        data_by_instrument={INSTRUMENT: ["bar"], OTHER: ["quote", "trade"]},
+    )
+
+
+def _ruled(rule: str) -> object:
+    """The demo's venue model under this limit-fill rule."""
+    model = venue_model()
+    return model.model_copy(update={"costs": model.costs.model_copy(update={"limit_fill": rule})})
+
+
+@pytest.mark.parametrize("rule", ["print_through", "print_through_whole"])
+@pytest.mark.parametrize("barred_first", [True, False])
+def test_versions_asking_one_name_for_bars_and_quotes_are_refused_under_a_print_rule(
+    rule: str, barred_first: bool
+) -> None:
+    """Each version validates alone, but one venue applies both feeds: the demo name's bars,
+    which one version reads as a signal, walk the bid and ask the venue judges the other's
+    takers on past the quote in force. Under a print rule the pair is refused, naming the
+    instrument, both versions and the key; under `touch` the venue never judged a taker on
+    the quote alone, and the pair is admitted."""
+    model = _ruled(rule)
+    quoted, barred = _quoted("quoted@1"), _barred("barred@1")
+    pair = [(*barred, model), (*quoted, model)]
+    if not barred_first:
+        pair.reverse()
+
+    with pytest.raises(KansoError) as raised:
+        node.agree(pair)  # type: ignore[arg-type]
+
+    assert raised.value.code == Exit.PRECONDITION
+    assert f"venues.{VENUE}.costs.limit_fill: {rule}" in raised.value.message
+    assert f"barred@1 asks {INSTRUMENT} for 'bar' where quoted@1 asks it for 'quote'" in (
+        raised.value.message
+    )
+    assert "kanso strat retire barred@1" in str(raised.value.remedy)
+    assert "re-certify" in str(raised.value.remedy)
+    touch = _ruled("touch")
+    assert set(node.agree([(*barred, touch), (*quoted, touch)])) == {VENUE}  # type: ignore[list-item]
+
+
 def test_a_stage_with_no_capital_cannot_fund_a_venue(placement: Placement) -> None:
     with pytest.raises(KansoError) as raised:
         node.venues_for((placement,), 0.0)

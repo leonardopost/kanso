@@ -11,25 +11,40 @@ are available, and a resting limit order filled when the market reaches its pric
 currency code is any code the engine could register — a fiat code or a crypto code such as
 USDT — and whether it does register it is checked where an account is funded, not here.
 
-A fill that rested on the book may be charged apart. `maker_bps`, when a layer states it, is
-the whole charge on a fill the venue reports as a maker's — no slippage, since a resting
-limit fills at its own price, and no half-spread, since the spread is what it earns rather
-than what it pays — and it may be negative, a rebate. Unstated, a maker's fill is charged
-like any other, which is how every fill was charged before the key existed.
+A fill that rested on the book may be charged apart. `maker_bps` and `maker_per_share`, when
+the resolved model states either, are the whole charge on a fill the venue reports as a
+maker's — `maker_bps` of its notional and `maker_per_share` on each share, the one the resolved
+model leaves unstated counting as nothing — so it pays no slippage, since a resting limit fills
+at its own price, no half-spread, since the spread is what it earns rather than what it pays,
+and no per-share commission. Either may be negative, a rebate. With neither stated, a maker's
+fill is charged like any other, which is how every fill was charged before the keys existed.
+The two layer one by one, like every key of the block: `maker_per_share` stated over a layer
+that states `maker_bps` charges both, and `maker_bps: 0.0` beside it charges the share alone.
 
 A commission may be stated per share as well as in basis points. `commission_per_share` is
 charged on every share of a fill that pays commission at all — a taker's, and a maker's
-under a model that states no maker rate — on top of the three rates, so a cheap share pays
-more of its price than a dear one, the way a per-share-priced account does; a maker's fill
-under a stated `maker_bps` still pays that rate alone, per share included, because the
-rate is the whole charge on that fill by contract. Zero unless stated.
+under a model that states no maker schedule — on top of the three rates, so a cheap share
+pays more of its price than a dear one, the way a per-share-priced account does; a maker's
+fill under a stated maker schedule pays that schedule alone, because it is the whole charge on
+that fill by contract, and an account that charges a resting fill per share states that charge
+as `maker_per_share`. Zero unless stated.
+
+Slippage may be stated in ticks as well as in basis points. `slippage_ticks` is charged on
+every share of a fill the venue reports as a taker's — a market order, or a limit that was
+marketable when it landed — as that many of the instrument's own price increments, the way an
+account states that it pays a tick over the touch to take; never on a maker's fill, which
+filled at its own price. On an order that carries a limit it is capped, share by share, at
+what the limit leaves above the fill's price for a buy or below it for a sale, so a limit
+filled at its own price pays none of it and none pays past its limit. Zero unless stated.
 
 The cost model carries two keys that are not charges. `latency_ms` is how long the venue
 takes to see an order — the delay between a sleeve's insert, update or cancel and the
 simulated book acting on it, zero unless stated, measured on the account and route the
 strategy will trade through. `limit_fill` is the matching rule the
-simulated venue is built with: `touch` fills a resting limit the market only reached, and
-`through` fills it only once the market trades beyond its price. It decides which fills a
+simulated venue is built with: `touch` fills a resting limit the market only reached,
+`through` fills it only once the market trades beyond its price, and `print_through` fills it
+only on a print beyond its price, by that print's own size (`print_through_whole`, for all
+that is left of it), and fills a taker on the quote rather than on a print. It decides which fills a
 run has rather than what they cost, so it cannot be re-applied to recorded fills the way the
 charges can; it lives beside them because it is the same kind of statement — how
 pessimistic the simulation is about execution — and is stated at the same three layers.
@@ -53,7 +68,7 @@ from kanso.schemas.base import KansoModel, NonEmpty
 
 Account = Literal["margin", "cash"]
 Spread = Literal["quotes", "fixed_bps"]
-LimitFill = Literal["touch", "through"]
+LimitFill = Literal["touch", "through", "print_through", "print_through_whole"]
 Origin = Literal["default", "config", "broker", "venue_override", "hypothesis"]
 Funding = Literal["simulated", "broker_paper", "real"]
 Clock = Literal["replay", "wall"]
@@ -78,9 +93,11 @@ class CostsOverride(KansoModel):
     commission_bps: float | None = Field(default=None, ge=0)
     commission_per_share: float | None = Field(default=None, ge=0)
     slippage_bps: float | None = Field(default=None, ge=0)
+    slippage_ticks: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    maker_per_share: float | None = Field(default=None, allow_inf_nan=False)
     sell_fee_bps: float | None = Field(default=None, ge=0)
     sell_fee_per_share: float | None = Field(default=None, ge=0)
     limit_fill: LimitFill | None = None
@@ -92,9 +109,12 @@ class Costs(KansoModel):
     venue fills a resting limit the market only touched (`limit_fill`), and how long the
     venue takes to see an order (`latency_ms`, zero unless stated).
 
-    `maker_bps` is the charge on a fill the venue reports as a maker's, in place of all three
-    of the others; negative is a rebate, and `None` charges a maker's fill like any other.
-    `commission_per_share` is charged per share on every fill that pays commission, on top.
+    `maker_bps` and `maker_per_share` are the charge on a fill the venue reports as a maker's,
+    of its notional and per share, in place of all three of the others and of the per-share
+    commission; negative is a rebate, and with both `None` a maker's fill is charged like any
+    other. `commission_per_share` is charged per share on every fill that pays commission, on
+    top. `slippage_ticks` is charged per share on a taker's fill, in the instrument's price
+    increments, and no further than the order's limit allows.
     `sell_fee_bps` and `sell_fee_per_share` are charged on every sale, maker or taker, on top
     of everything else: the regulatory fees an account passes through on sells alone.
     """
@@ -102,9 +122,11 @@ class Costs(KansoModel):
     commission_bps: float = Field(ge=0)
     commission_per_share: float = Field(default=0.0, ge=0)
     slippage_bps: float = Field(ge=0)
+    slippage_ticks: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    maker_per_share: float | None = Field(default=None, allow_inf_nan=False)
     sell_fee_bps: float = Field(default=0.0, ge=0)
     sell_fee_per_share: float = Field(default=0.0, ge=0)
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
@@ -179,6 +201,7 @@ def _merge_costs(
         "spread": "quotes" if quotes_available else "fixed_bps",
         "fixed_bps": None,
         "maker_bps": None,
+        "maker_per_share": None,
         "limit_fill": DEFAULT_LIMIT_FILL,
         "latency_ms": 0.0,
     }

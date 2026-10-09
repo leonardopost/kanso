@@ -8,13 +8,15 @@ declaration, `venues.<MIC>` in `portfolio.yaml`, then the screen's own `costs` f
 or, for a bound screen, its hypothesis's `costs`. So the hurdle is the number a card would
 pay, and the result records where each part of it came from.
 
-One round trip is two taker fills: commission and slippage on both, the sell-side fees on the
-sale (the exit of a long, the entry of a short), the per-share commission at the fill's own
-price, and half the spread on each side. **No spread is charged twice**: a follower read as
-quotes or a book enters at the ask or the bid it shows, so its gross move has crossed the
-spread already and the hurdle charges none; a follower read as bars or prints is priced at its
-last price and charged the venue model's spread. A model whose spread comes from quotes, over a
-leg that has none, is refused (exit 3): nothing could price it.
+One round trip is two taker fills: commission and slippage on both — `slippage_ticks` too, as
+that many of the leg's price increments, whole, since a taker priced at market carries no limit
+to cap them — the sell-side fees on the sale (the exit of a long, the entry of a short), the
+per-share commission at the fill's own price, and half the spread on each side. **No spread
+is charged twice**: a follower read as quotes or a book enters at the ask or the bid it shows,
+so its gross move has crossed the spread already and the hurdle charges none; a follower read
+as bars or prints is priced at its last price and charged the venue model's spread. A model
+whose spread comes from quotes, over a leg that has none, is refused (exit 3): nothing could
+price it.
 
 A derived follower is traded leg by leg: a basket's legs in its weights, a spread's long leg and
 beta of its short one, both legs of a gap. Its hurdle is the sum of its legs' round trips, each
@@ -33,7 +35,7 @@ import numpy as np
 
 from kanso.errors import ValidationError
 from kanso.nautilus import adapters
-from kanso.nautilus.costs import BPS, fill_cost, fixed_half_spread, quote_half_spread
+from kanso.nautilus.costs import BPS, fill_cost, fixed_half_spread, quote_half_spread, tick_slip
 from kanso.schemas.screen import Response, Screen
 from kanso.schemas.venue import (
     DEFAULT_ACCOUNT,
@@ -61,6 +63,7 @@ class Hurdles:
     models: dict[str, VenueModel]
     venue_of: dict[str, str]
     multiplier_of: dict[str, float]
+    increment_of: dict[str, float]
 
     def round_trip(
         self,
@@ -98,6 +101,7 @@ class Hurdles:
             halves = self._halves(leg, model, series[leg], at)
         long = direction > 0
         total = 0.0
+        ticks, increment = model.costs.slippage_ticks, self.increment_of.get(leg, 0.0)
         for price, half, sell in ((prices[0], halves[0], not long), (prices[1], halves[1], long)):
             notional = float(price) * self.multiplier_of[leg]
             charged = fill_cost(
@@ -112,6 +116,8 @@ class Hurdles:
                 sell=sell,
                 sell_fee_bps=model.costs.sell_fee_bps,
                 sell_fee_per_share=model.costs.sell_fee_per_share,
+                slip=tick_slip(ticks, increment, float(price), None, sell=sell),
+                multiplier=self.multiplier_of[leg],
             )
             total += charged / notional
         return total * BPS
@@ -207,7 +213,10 @@ def hurdles(
             )
     multipliers = {leg: float(definitions[screen.legs[leg].instrument].multiplier) for leg in legs}
     assert all(math.isfinite(value) and value > 0 for value in multipliers.values())
-    return Hurdles(screen, models, venue_of, multipliers)
+    increments = {
+        leg: float(definitions[screen.legs[leg].instrument].price_increment) for leg in legs
+    }
+    return Hurdles(screen, models, venue_of, multipliers, increments)
 
 
 def described(
@@ -246,8 +255,9 @@ def _origin(screen: Screen, model: VenueModel) -> str:
 def _line(model: VenueModel, origin: str) -> str:
     costs = model.costs
     spread = "from quotes" if costs.spread == "quotes" else f"fixed {costs.fixed_bps:g} bp"
+    ticks = f" + {costs.slippage_ticks:g} ticks" if costs.slippage_ticks else ""
     return (
         f"commission {costs.commission_bps:g} bp + {costs.commission_per_share:g}/share, "
-        f"slippage {costs.slippage_bps:g} bp, spread {spread}, sale fees "
+        f"slippage {costs.slippage_bps:g} bp{ticks}, spread {spread}, sale fees "
         f"{costs.sell_fee_bps:g} bp · from {origin}"
     )

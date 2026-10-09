@@ -325,16 +325,18 @@ def test_the_exchange_is_built_the_way_the_research_path_builds_one(kernel: Any)
 
 
 def test_the_exchange_loads_the_modules_the_research_venue_loads(kernel: Any) -> None:
-    """The corporate actions, then `Availability`, from the one call both paths make, so a
-    split lands at the same instant on both and both apply every quote and print the sleeve
-    is handed."""
+    """The corporate actions, then `Availability`, then `Tape`, from the one call both paths
+    make, so a split lands at the same instant on both, both apply every quote and print the
+    sleeve is handed, and both run the print rule alike."""
     from kanso.nautilus.availability import Availability
+    from kanso.nautilus.tape import Tape
 
     client = sandbox.SimulatedVenue(kernel, venue())
 
     assert [type(module) for module in client.exchange.modules] == [
         actions.CorporateActions,
         Availability,
+        Tape,
     ]
 
 

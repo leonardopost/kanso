@@ -302,3 +302,118 @@ def test_the_configuration_layer_carries_no_cost() -> None:
 
     assert model.costs.commission_bps == 0.0
     assert model.origins.costs == "default"
+
+
+def test_a_maker_per_share_charge_is_unstated_by_default_and_layers_like_the_rest() -> None:
+    """`None` charges a resting fill like any other; zero is a maker schedule charging nothing;
+    the hypothesis's layer wins over the operator's, and a rebate is negative."""
+    assert resolve_venue_model("XNAS").costs.maker_per_share is None
+
+    stated = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(maker_per_share=0.003)),
+        hypothesis_costs=CostsOverride(maker_per_share=0.004, commission_per_share=0.014),
+    )
+    kept = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(maker_per_share=-0.002)),
+        hypothesis_costs=CostsOverride(commission_bps=0.0),
+    )
+
+    assert (stated.costs.maker_per_share, stated.costs.maker_bps) == (0.004, None)
+    assert stated.origins.costs == "hypothesis"
+    assert kept.costs.maker_per_share == -0.002
+
+
+def test_a_maker_per_share_over_a_layer_s_maker_rate_charges_both_until_zeroed() -> None:
+    """The two maker keys are inherited one by one like the rest: a hypothesis stating only
+    `maker_per_share` over a venue entry stating `maker_bps` keeps that rate, and a maker's
+    fill pays both; stating `maker_bps: 0.0` beside it charges the share alone."""
+    from kanso.nautilus.costs import fill_cost
+
+    venue = VenueOverride(costs=CostsOverride(maker_bps=0.5))
+    both = resolve_venue_model(
+        "XNAS", override=venue, hypothesis_costs=CostsOverride(maker_per_share=0.004)
+    ).costs
+    alone = resolve_venue_model(
+        "XNAS",
+        override=venue,
+        hypothesis_costs=CostsOverride(maker_per_share=0.004, maker_bps=0.0),
+    ).costs
+
+    def charged(costs: Costs) -> float:
+        return fill_cost(
+            10_000.0,
+            100.0,
+            costs.commission_bps,
+            costs.slippage_bps,
+            0.0,
+            costs.maker_bps,
+            costs.commission_per_share,
+            maker=True,
+            maker_per_share=costs.maker_per_share,
+        )
+
+    assert (both.maker_bps, both.maker_per_share) == (0.5, 0.004)
+    assert (alone.maker_bps, alone.maker_per_share) == (0.0, 0.004)
+    assert charged(both) == pytest.approx(10_000.0 * 0.5 / 10_000 + 100.0 * 0.004)
+    assert charged(alone) == pytest.approx(100.0 * 0.004)
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_a_maker_per_share_charge_that_is_not_a_number_is_refused(value: float) -> None:
+    with pytest.raises(ValidationError, match="maker_per_share"):
+        CostsOverride(maker_per_share=value)
+
+
+def test_a_venue_model_recorded_before_the_maker_per_share_key_reads_as_unstated() -> None:
+    """Every card, certificate and version pinned before the key charges a resting fill as it
+    was charged then."""
+    recorded = resolve_venue_model("XNAS").model_dump()
+    del recorded["costs"]["maker_per_share"]
+
+    assert VenueModel.model_validate(recorded).costs.maker_per_share is None
+
+
+def test_a_tick_charge_is_zero_unless_stated_and_layers_like_the_rest() -> None:
+    assert resolve_venue_model("XNAS").costs.slippage_ticks == 0.0
+
+    stated = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(slippage_ticks=2.0)),
+        hypothesis_costs=CostsOverride(slippage_ticks=1.0),
+    )
+    kept = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(slippage_ticks=2.0)),
+        hypothesis_costs=CostsOverride(commission_bps=0.0),
+    )
+
+    assert (stated.costs.slippage_ticks, stated.origins.costs) == (1.0, "hypothesis")
+    assert kept.costs.slippage_ticks == 2.0
+
+
+@pytest.mark.parametrize("value", [-1.0, float("inf"), float("nan")])
+def test_a_tick_charge_that_is_negative_or_not_a_number_is_refused(value: float) -> None:
+    with pytest.raises(ValidationError, match="slippage_ticks"):
+        CostsOverride(slippage_ticks=value)
+
+
+def test_a_venue_model_recorded_before_the_tick_charge_reads_as_none_charged() -> None:
+    recorded = resolve_venue_model("XNAS").model_dump()
+    del recorded["costs"]["slippage_ticks"]
+
+    assert VenueModel.model_validate(recorded).costs.slippage_ticks == 0.0
+
+
+@pytest.mark.parametrize("rule", ["touch", "through", "print_through", "print_through_whole"])
+def test_each_limit_fill_rule_is_stated_and_layered_like_the_rest(rule: str) -> None:
+    model = resolve_venue_model("XNAS", hypothesis_costs=CostsOverride(limit_fill=rule))  # type: ignore[arg-type]
+
+    assert model.costs.limit_fill == rule
+    assert VenueModel.model_validate(model.model_dump()).costs.limit_fill == rule
+
+
+def test_a_limit_fill_rule_kanso_does_not_know_is_refused() -> None:
+    with pytest.raises(ValidationError, match="limit_fill"):
+        CostsOverride(limit_fill="print")  # type: ignore[arg-type]

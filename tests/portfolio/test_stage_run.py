@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from kanso.nautilus import sandbox, tape
 from kanso.nautilus.cross_section import is_marker
 from kanso.portfolio import clients, deploy, files, records, set_state, show
 from kanso.schemas import StrategyFile
@@ -47,6 +48,34 @@ class Strategy(KansoStrategy):
         if not self.bought:
             self.submit_entry(
                 bar.bar_type.instrument_id, "BUY", notional=self.kanso_config.notional
+            )
+            self.bought = True
+'''
+
+
+LIMITED = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    notional: float = 5_000.0
+
+
+class Strategy(KansoStrategy):
+    """Buys once limited at the bar's close, which the market takes it at, and holds."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.bought = False
+
+    def on_bar(self, bar) -> None:
+        if not self.bought:
+            self.submit_entry(
+                bar.bar_type.instrument_id,
+                "BUY",
+                notional=self.kanso_config.notional,
+                price=round(float(bar.close), 2),
             )
             self.bought = True
 '''
@@ -97,6 +126,70 @@ def test_the_flatten_lands_under_a_latency_too(ws: Workspace, store: StateStore)
     assert realised.positions[0][1] > 0, "the window closed holding a long"
     assert len(realised.run.trades) == 1, "the flatten closed it, latency and all"
     assert deploy(ws, store, "paper").results[0].positions == ()
+
+
+def test_a_deployed_stage_lands_what_was_in_flight_then_tells_its_venues_it_is_closing(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stage's own drive flattens through `kanso.nautilus.node._closed`: what the sleeves
+    still had in flight lands first, then each venue's fill model is told the node is closing
+    — so under the print rules a close no quote can fill is filled from the engine's own book,
+    which `tests/replay/test_print_through.py` measures on the node's venue — and then the
+    flatten lands."""
+    done: list[str] = []
+    closing, advance = tape.closing, sandbox.SimulatedVenue.advance_past_latency
+
+    def told(exchange: Any) -> None:
+        done.append("closing")
+        closing(exchange)
+
+    def advanced(venue: Any) -> None:
+        done.append("advance")
+        advance(venue)
+
+    monkeypatch.setattr(tape, "closing", told)
+    monkeypatch.setattr(sandbox.SimulatedVenue, "advance_past_latency", advanced)
+    deployable(ws, store, "holder", sleeve=BUYER, doc=document(id="holder"))
+
+    deploy(ws, store, "paper")
+
+    assert done == ["advance", "closing", "advance"]
+
+
+def test_a_stage_charges_a_limit_taken_inside_it_the_tick_the_card_does(
+    ws: Workspace, store: StateStore
+) -> None:
+    """One tick stated: a buy limited at the close and taken there pays none of it, read off
+    the limit the order carried, on the stage's realised window as in a card — the realised
+    paper objective reads the card's arithmetic — while the flatten at market pays it whole."""
+    from kanso.nautilus.costs import fill_cost
+
+    doc = document(id="limited")
+    doc["costs"] = {**doc["costs"], "slippage_ticks": 1.0}
+    deployable(ws, store, "limited", sleeve=LIMITED, doc=doc)
+
+    realised = deploy(ws, store, "paper").results[0]
+
+    bought, flattened = realised.run.fills
+    assert (bought.side, bought.maker, bought.limit) == ("BUY", False, bought.px)
+    assert (flattened.side, flattened.limit, flattened.tick) == ("SELL", None, 0.01)
+    rates = (0.5, 1.0, 2.0 / 2.0 / 10_000)
+    for fill, slip in ((bought, 0.0), (flattened, 0.01)):
+        assert fill.tick == 0.01
+        assert fill.cost == pytest.approx(
+            fill_cost(
+                fill.qty * fill.px,
+                fill.qty,
+                *rates[:2],
+                rates[2],
+                None,
+                0.0,
+                maker=False,
+                sell=fill.side == "SELL",
+                slip=slip,
+            ),
+            rel=1e-12,
+        )
 
 
 def test_a_second_restart_finds_the_stage_flat(ws: Workspace, store: StateStore) -> None:

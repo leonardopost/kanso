@@ -25,7 +25,16 @@ position, then stops. Simulated execution keeps no position across a restart, so
 stopped holding a book would silently lose it and reopen flat with its record still claiming
 the position; flattening makes the loss explicit and realises the P&L into the record the
 paper and live gates read. The book is measured *before* the flatten, because the exposure a
-stage carried is a fact about the window and not about the way it ended.
+stage carried is a fact about the window and not about the way it ended. The close is a
+market order sent after the last point, so no later point can bring the market it needs.
+What the sleeves sent on that point and still had in flight under a latency lands first, so an
+entry it fills is closed too; an order a fill handler sends in answer to that landing, or to the
+flatten's own fill, is not. Then, under the print rules, which refuse a market order where no
+quote is in force, the node tells the venue it is closing (`kanso.nautilus.tape.closing`), and a
+close the quote in force cannot fill is filled from the engine's own book, as `touch` fills it.
+Where that book shows nothing on the side the close takes either — a last quote showing nothing
+there — the venue refuses the close under every rule and the stage stops still holding the
+position (`docs/backlog.md` row 164, which records both).
 
 **A benchmark is run beside the stage, not inside it.** A version whose sleeve is measured
 against a hold of its first leg has that hold produced after the node stops, by the backtest
@@ -60,13 +69,15 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   research path's settle does (`kanso.nautilus.sandbox`).
   The flatten cannot race an exit still working the way a replacement exit can
   (`KansoStrategy.submit_exit`): it is sent after the last point, so no point is matched
-  before its cancels land. Under a stated latency the flatten and any exit the sleeve sent
-  at the last point wait in flight together and land in `advance_past_latency()` with no
-  point matched in between. The close is sized to the position when it was sent and
-  carries `reduce_only`, `close_position`'s default, which the simulated venue honours: it
-  refuses the close once the position is closed, and trims it to the quantity still open
-  when the exit has closed part of it (`kanso.nautilus.facts` measures both, in the claim
-  that `close_position` sends a reduce-only order the simulated venue trims and refuses).
+  before its cancels land. Under a stated latency what the sleeve sent at the last point —
+  an exit, or an entry — is landed by a first `advance_past_latency()` before the flatten is
+  sent, so the flatten closes the position as those orders left it, and the flatten itself
+  lands in a second, with no point matched in between. The close is sized to the position
+  when it was sent and carries `reduce_only`, `close_position`'s default, which the
+  simulated venue honours: it refuses the close once the position is closed, and trims it
+  to the quantity still open when the exit has closed part of it (`kanso.nautilus.facts`
+  measures both, in the claim that `close_position` sends a reduce-only order the simulated
+  venue trims and refuses).
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.
@@ -99,13 +110,13 @@ from nautilus_trader.model.identifiers import TraderId
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
-from kanso.nautilus import backtest, sandbox, splits
+from kanso.nautilus import backtest, sandbox, splits, tape
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, coincident, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, signals_kept
-from kanso.nautilus.strategy import BOOK
-from kanso.nautilus.venue import venue_config, venues_of
+from kanso.nautilus.strategy import BAR, BOOK, QUOTE
+from kanso.nautilus.venue import PRINT_SIZE, venue_config, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -387,8 +398,15 @@ def agree(
     single fill model, a single round trip and a single book, and a stage whose versions were
     certified against different ones is refused rather than built from whichever came
     first. Nothing is built here, so `deploy` asks it before it writes a stage.
+
+    One exchange also applies every version's feed: under the print rules a bar of an
+    instrument moves the bid and ask the venue judges a taker on it marketable from past the
+    quote in force, so versions that between them ask one instrument for `bar` and for
+    `quote` are refused on a venue under either rule, as one hypothesis asking both is
+    refused by `kanso hyp validate`.
     """
     held: dict[str, tuple[str, VenueModel, float, bool]] = {}
+    asked: dict[str, dict[str, str]] = {}
     for label, hyp, model in versions:
         book = BOOK in hyp.data_requirements
         leverage = hyp.risk_limits.max_leverage
@@ -399,7 +417,29 @@ def agree(
                 continue
             _agree(venue, first, (label, model, leverage, book))
             held[venue] = (first[0], first[1], max(first[2], leverage), first[3])
-    return {venue: (model, leverage, book) for venue, (_, model, leverage, book) in held.items()}
+        for name in hyp.universe:
+            for kind in sorted({BAR, QUOTE} & set(hyp.required_of(name))):
+                asked.setdefault(name, {}).setdefault(kind, label)
+    agreed = {venue: (model, leverage, book) for venue, (_, model, leverage, book) in held.items()}
+    for name, kinds in sorted(asked.items()):
+        model = agreed[venues_of((name,))[0]][0]
+        if len(kinds) == 2 and model.costs.limit_fill in PRINT_SIZE:
+            _barred(name, model.costs.limit_fill, kinds[BAR], kinds[QUOTE])
+    return agreed
+
+
+def _barred(name: str, rule: str, bars: str, quotes: str) -> None:
+    """Refuse a print-rule venue fed bars and quotes of one instrument by two versions."""
+    venue = venues_of((name,))[0]
+    raise PreconditionError(
+        f"venues.{venue}.costs.limit_fill: {rule} fills a taker on {name} on the quote in "
+        f"force, and {bars} asks {name} for {BAR!r} where {quotes} asks it for {QUOTE!r}; one "
+        "venue applies both feeds, and a bar moves the book it judges a taker marketable "
+        "from past that quote",
+        remedy=f"`kanso strat retire {bars}` or `kanso strat retire {quotes}`, or ask {name} "
+        f"for {BAR!r} in neither hypothesis or for {QUOTE!r} in neither (data_by_instrument) "
+        "and re-certify",
+    )
 
 
 def _agree(
@@ -752,11 +792,7 @@ async def _drive(
     await client.replay()
     books = _books(built.kernel, strategies, points)
     if halt.reason is None:
-        _flatten(strategies)
-        await client.settle()
-        for venue in venues:
-            venue.advance_past_latency()
-        await client.settle()
+        await _closed(client, strategies, venues)
     else:
         await _halted(built)
     await built.stop_async()
@@ -765,6 +801,39 @@ async def _drive(
         await runner
     await _cleared()
     return books
+
+
+async def _closed(
+    client: ReplayDataClient, strategies: Sequence[Any], venues: Sequence[sandbox.SimulatedVenue]
+) -> None:
+    """Land what the sleeves had in flight when the window ended, then flatten every strategy
+    and land that.
+
+    Under a stated latency an order a sleeve sent on the window's last point is still in flight
+    when the window ends. `advance_past_latency` lands it first, under the venue's own rule —
+    so under the print rules a market order finding no quote in force is refused, as it would
+    be on a later point — and whatever it fills is a position the flatten then closes; landed
+    after the flatten, an entry's fill was never closed, under every rule. An order a fill
+    handler sends in answer to that landing, or to the flatten's own fill, is not closed: it
+    lands with the flatten, which was sized before it, or after it, and the stage stops holding
+    what it fills, or with it in flight (`docs/backlog.md` row 164). Only then is each
+    venue's fill model told the node is closing (`kanso.nautilus.tape.closing`): under the
+    print rules a market order is refused where no quote is in force, as after a print outside
+    the last quote, and no point follows the window's last to bring one, so the close is
+    filled from the engine's own book there, as `touch` fills it. The close is stamped from the
+    window's last point, so under a latency it comes due at the instant the first advance
+    reached, and the second lands it.
+    """
+    for venue in venues:
+        venue.advance_past_latency()
+    await client.settle()
+    for venue in venues:
+        tape.closing(venue.exchange)
+    _flatten(strategies)
+    await client.settle()
+    for venue in venues:
+        venue.advance_past_latency()
+    await client.settle()
 
 
 def _flatten(strategies: Sequence[Any]) -> None:
@@ -876,6 +945,10 @@ class _StrategyView:
     def position_snapshots(self) -> list[Any]:
         """The superseded positions this strategy held."""
         return [p for p in self._cache.position_snapshots() if str(p.strategy_id) == self._id]
+
+    def order(self, client_order_id: Any) -> Any:
+        """The order a fill of this strategy belongs to, whose limit caps its tick charge."""
+        return self._cache.order(client_order_id)
 
 
 async def _started(built: TradingNode, client: ReplayDataClient, strategies: Sequence[Any]) -> None:

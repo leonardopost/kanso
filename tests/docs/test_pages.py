@@ -24,6 +24,7 @@ from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.research import driver
+from kanso.schemas import CostsOverride
 from tests.cli.test_doctor import CHECKS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,6 +55,23 @@ def test_the_doctor_row_names_every_check_doctor_runs() -> None:
     row = next(line for line in page("cli.md").splitlines() if line.startswith("| `kanso doctor"))
     for name in CHECKS:
         assert f"`{name}`" in row, name
+
+
+def test_the_deploy_refusal_counts_the_cli_page_states_are_the_refusals_it_lists() -> None:
+    """The page once said eleven above twelve refusals; the counts it states must hold. The
+    refusals with exit 2 are listed one to a clause, and one clause refuses two things, an
+    `account` type or a `currency` that differ, which opens the ones that name both
+    versions."""
+    text = prose(page("cli.md"))
+    stated = re.search(r"\*\*`deploy` refuses (\w+) things with exit 2\*\*", text)
+    last = re.search(r"Each of the last (\w+) names both versions", text)
+    every = re.search(r"All (\w+) are refused before the stage is written", text)
+    assert stated is not None and last is not None and every is not None
+    clauses = text.split("With exit 2:", 1)[1].split("Each of the last", 1)[0].split(";")
+    pairs = [n for n, clause in enumerate(clauses) if " or in `currency`" in clause]
+    assert len(pairs) == 1
+    assert spelled(stated.group(1)) == len(clauses) + 1
+    assert spelled(last.group(1)) == spelled(every.group(1)) == len(clauses) - pairs[0] + 1
 
 
 def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() -> None:
@@ -561,9 +579,14 @@ def test_the_pages_say_a_point_is_credited_to_each_order_it_fills() -> None:
 def test_the_concepts_page_says_where_the_two_paths_part_and_what_it_costs_parity() -> None:
     """The paths part wherever a command lands, a quote or a print being matched again on the
     research path alone (`docs/backlog.md` row 154), not only where a print stands as the book;
-    and a sleeve that acts on its fills then fails `parity_replay`, more often since v0.14.1."""
+    and a sleeve that acts on its fills then fails `parity_replay`, more often since v0.15.0.
+    Under the print rules they do not part where a sleeve sends no cancel (v0.15.0), and the
+    pages say so no more broadly than it was measured."""
     delivery = prose(section(page("concepts.md"), "Delivery"))
-    assert "They part where a command lands — for any instrument, on any venue," in delivery
+    assert (
+        "Under `touch` and `through` they part where a command lands — for any instrument, on "
+        "any venue," in delivery
+    )
     assert "a subject that passed `parity_replay` on 0.14.0 can fail it" in delivery
     assert "They part where a command lands while a print stands as the book" not in delivery
 
@@ -917,3 +940,115 @@ def test_the_screen_ranges_the_docs_state_are_the_library_s() -> None:
         for name, span in item.ranges.items()
     }
     assert stated == declared
+
+
+def test_every_cost_key_is_described_on_the_workspace_page_and_named_in_the_template() -> None:
+    """A key of `costs:` an operator cannot find is a charge nobody states: each is named under
+    `hypotheses/<id>/`, in its prose or a block it shows, and on a commented line of the
+    hypothesis template."""
+    hypotheses = section(page("workspace.md"), "`hypotheses/<id>/`")
+    template = (ROOT / "src" / "kanso" / "templates" / "hypothesis.yaml").read_text()
+    for name in CostsOverride.model_fields:
+        assert re.search(rf"`(costs\.)?{name}`|^\s+{name}:", hypotheses, re.M), name
+        assert re.search(rf"^#\s+{name}:", template, re.M), name
+
+
+def test_the_pages_say_what_slippage_ticks_charges_and_which_row_it_narrows() -> None:
+    """The key is the taker's tick over the touch, charged in the instrument's own increment and
+    never past an order's limit; the backlog row it narrows says which half it closed."""
+    costs = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert "pays `slippage_ticks` times the instrument's price increment on each share" in costs
+    assert "A fill the venue reports as a maker's never pays it" in costs
+    assert "an order that carries a limit is never charged past it" in costs.lower()
+    assert "(`docs/backlog.md` row 157)" in costs
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 157 |"))
+    item = row.split("|")[3].strip()
+    assert item.startswith("~~The tick a taker pays over the touch could be stated only as a")
+    assert "~~ **narrowed in v0.15.0**: `costs.slippage_ticks`" in item
+    assert "Still open:" in item
+
+
+def _print_rule_block() -> dict[str, object]:
+    """The cost block the workspace page shows for an account priced as the operator's is."""
+    hypotheses = section(page("workspace.md"), "`hypotheses/<id>/`")
+    lead = (
+        "a tick over the touch to take, with the regulatory fees passed through on sales, states:"
+    )
+    assert lead in prose(hypotheses)
+    block = hypotheses[hypotheses.index("on sales, states:\n\n```yaml\n") :].split("```")[1]
+    return dict(yaml.safe_load(block.removeprefix("yaml\n"))["costs"])
+
+
+def test_the_workspace_page_s_block_for_the_operator_s_rule_validates_as_stated() -> None:
+    """The block an operator copies is the one the lanes run: $0.0040 a share both ways, a tick
+    over the touch to take, the sale fees, the print rule and 30 ms; it resolves as written."""
+    from kanso.schemas import CostsOverride, resolve_venue_model
+
+    block = _print_rule_block()
+
+    assert block == {
+        "commission_bps": 0.0,
+        "commission_per_share": 0.004,
+        "slippage_ticks": 1,
+        "maker_per_share": 0.004,
+        "slippage_bps": 0.0,
+        "spread": "fixed_bps",
+        "fixed_bps": 0.0,
+        "sell_fee_bps": 0.206,
+        "sell_fee_per_share": 0.000195,
+        "limit_fill": "print_through",
+        "latency_ms": 30,
+    }
+    costs = resolve_venue_model("XNAS", hypothesis_costs=CostsOverride.model_validate(block)).costs
+    assert (costs.limit_fill, costs.slippage_ticks, costs.maker_per_share) == (
+        "print_through",
+        1.0,
+        0.004,
+    )
+
+
+def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> None:
+    costs = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert (
+        "**`print_through` fills a resting limit only on a print through it, and a taker only"
+        in (costs)
+    )
+    assert "and by that print's own size, shared across the orders it reaches" in costs
+    assert "`print_through_whole` is the same rule with the other reading" in costs
+    assert "so a buy limit never pays above its limit" in costs
+    assert "`docs/backlog.md` row 158 records each" in costs
+    assert "under `limit_fill: print_through` a command due by a print's instant lands before" in (
+        costs
+    )
+    delivery = prose(page("concepts.md"))
+    assert "**Under `print_through` only a print through a resting order fills it, and a taker" in (
+        delivery
+    )
+    assert "Where a sleeve sends no cancel the venue's rule is built not to part the two" in (
+        delivery
+    )
+    assert "one of them a tape whose script sends no cancel" in delivery
+    assert "With cancels the paths can still part" in delivery
+    assert "The venue no longer parts the two code paths" not in delivery
+    assert "a print that trades strictly outside that quote ends it" in delivery
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 1(51|58) \|", line)
+    }
+    assert "v0.15.0 reaches the fill under `limit_fill: print_through`" in rows["151"]
+    assert "133 of 4,456 market orders, and 26 of them" in rows["158"]
+    assert "A marketable limit's rest past the displayed size is neither sized down" in rows["158"]
+    assert "Four parts of a taker rule" in costs and "row 158 records each" in costs
+    assert "The quote in force is the last one the venue applied, until a print trades" in costs
+
+
+def test_no_page_says_nothing_kanso_loads_reaches_the_level_one_fill() -> None:
+    """Measured false on 1.231.0: a fill model's zero-quantity fill ends the engine's fill before
+    it fills a resting limit's remainder whole, which is how `print_through` fills by size."""
+    claims = ("No kanso seam reaches", "nothing kanso loads reaches", "No kanso seam reaches the")
+    sources = [*DOCS.glob("*.md"), *(ROOT / "src").rglob("*.py")]
+    for path in sources:
+        text = prose(path.read_text(encoding="utf-8"))
+        for claim in claims:
+            assert claim not in text, f"{path}: {claim}"

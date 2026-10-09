@@ -456,7 +456,7 @@ def test_parity_misses_an_order_sent_from_a_print_s_handler_filling_against_it()
     at 9.96, under a quote of 9.99/10.01: the research engine lands the buy and matches it at
     once against the print, which stands as the book, and fills it as a maker; the node's
     venue lands it too and waits for the next point, a quote of 9.99/10.01 that does not
-    reach it. Older than v0.14.1: every point here is stamped as it is published."""
+    reach it. Older than v0.15.0: every point here is stamped as it is published."""
     seller = TradeTick(
         InstrumentId.from_str(INSTRUMENT),
         Price(9.96, 2),
@@ -578,7 +578,7 @@ def test_the_venue_module_parts_the_paths_intents_where_a_sleeve_acts_on_its_fil
     """The same quotes and a fourth after them, from whose handler the sleeve sells what it
     holds: 100 on the node and 200 on the research path, so the intents part and parity
     fails — as `parity_replay` would fail the certification. Without the module the venue
-    skips the stale quote, nothing fills, nothing is sold, and parity holds: v0.14.1 brings
+    skips the stale quote, nothing fills, nothing is sold, and parity holds: v0.15.0 brings
     the quote into the parting, and with it a certification that passed before."""
     points = [*AT_THE_QUOTE_POINTS, quote(9.95, 10.0, 40, 40)]
 

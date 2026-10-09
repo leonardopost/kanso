@@ -691,3 +691,63 @@ def test_cancel_orders_refuses_an_empty_list_as_the_engine_does(backtest) -> Non
                     self.refused = str(exc)
 
     assert "orders" in backtest(Empty(config())).strategy.refused
+
+
+def test_a_maker_per_share_charge_above_the_commission_is_the_one_reserved(backtest) -> None:
+    """An order does not know whether it will rest, so the dearer per-share charge is the
+    reserve: $0.01 a share on a maker's fill over $0.004 on a taker's, at $11."""
+    costly = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "commission_per_share": 0.004,
+            "maker_per_share": 0.01,
+        }
+    }
+    run = backtest(Trader(config(venue_model=costly)))
+
+    assert run.strategy.cost_rate == 0.0
+    assert run.strategy.cost_rate_at(11.0) == pytest.approx(0.01 / 11.0)
+
+
+def test_a_maker_per_share_rebate_reserves_nothing_of_its_own(backtest) -> None:
+    rebated = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "commission_per_share": 0.004,
+            "maker_per_share": -0.002,
+        }
+    }
+    run = backtest(Trader(config(venue_model=rebated)))
+
+    assert run.strategy.cost_rate_at(11.0) == pytest.approx(0.004 / 11.0)
+
+
+def test_a_tick_charge_is_reserved_whole_beside_the_commission(backtest) -> None:
+    """An order sized at market has no limit to cap its ticks, and may take: at $11 a cent a
+    share and the $0.004 commission are reserved, over the $0.004 a fill that rested would
+    pay; on a 50-times contract at 100 a quarter-point tick is a quarter of a point of it."""
+    ticked = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "commission_per_share": 0.004,
+            "slippage_ticks": 1.0,
+            "maker_per_share": 0.004,
+        }
+    }
+    run = backtest(Trader(config(venue_model=ticked)))
+
+    assert run.strategy.cost_rate_at(11.0, 1.0, 0.01) == pytest.approx(0.014 / 11.0)
+    assert run.strategy.cost_rate_at(11.0) == pytest.approx(0.004 / 11.0)
+    assert run.strategy.cost_rate_at(100.0, 50.0, 0.25) == pytest.approx(
+        (0.004 + 0.25 * 50.0) / (100.0 * 50.0)
+    )
+    # The room's 20,000 at 11.00 over 1 + 2 x 1.4 cents a share, 1,813 shares; with the
+    # commission alone reserved it would be 1,816.
+    assert run.strategy.intents[0].qty == float(int(20_000.0 / (1.0 + 2.0 * 0.014 / 11.0) / 11.0))
+    assert run.strategy.intents[0].qty == 1_813.0

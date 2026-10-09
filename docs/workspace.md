@@ -589,7 +589,7 @@ makes the objective the strategy's Sharpe *over* a hold of the universe's first 
 
 ```yaml
 benchmark:                         # scope: adding or changing it clears `best`
-  hold: first_leg                  # buy universe[0] on the first print it may trade on, never exit
+  hold: first_leg                  # buy universe[0] on the first point it may trade on, never exit
 ```
 
 The hold is not arithmetic on prices. It is a sleeve kanso ships
@@ -737,13 +737,15 @@ costs:                             # scope: changing any key clears `best`
 ```
 
 A fill the venue reports as a maker's — a limit that waited on the book until the market
-reached it (`docs/concepts.md`, Delivery) — pays exactly `maker_bps` of its notional and
-nothing else: no slippage, because it filled at its own price, and no half-spread, because
+reached it (`docs/concepts.md`, Delivery) — pays exactly the model's maker schedule —
+`maker_bps` of its notional, and `maker_per_share` on each share where a layer states it
+(below) — and nothing else: no slippage, because it filled at its own price, and no half-spread, because
 the spread is what a resting order earns rather than pays. Negative is a net rebate, the way
 a per-share-priced account that pays for displayed liquidity can come out ahead on a fill
 that rested. Every other fill — a market order, a limit that was marketable when it arrived
 — is charged commission, slippage and half the spread exactly as before, and so is a maker's
-fill under a model that states no `maker_bps`: leave the key out and no number moves. It is
+fill under a model that states neither `maker_bps` nor `maker_per_share` (below): leave the
+keys out and no number moves. It is
 applied where every cost is, once, in the runner's extraction, and `self.balance` books the
 same rate. `cost_stress` multiplies a charge and divides a rebate, so a stress of one or more
 never lets a fill earn more. What a sleeve reserves when it sizes is the larger of the maker
@@ -766,16 +768,84 @@ costs:
 A per-share-priced account charges a cheap share more of its price than a dear one — $0.0055
 is 5.5 bp of a $10 share and 0.2 bp of a $300 one — and a flat rate in basis points cannot say
 so over a universe that spans both. The per-share commission is charged on every share of a
-fill that pays commission at all: a taker's, and a maker's under a model that states no
-`maker_bps`. Per share means per contract on a multiplied instrument, whose notional is the
+fill that pays commission at all: a taker's, and a maker's under a model that states neither
+`maker_bps` nor `maker_per_share`. Per share means per contract on a multiplied instrument, whose notional is the
 price times the contract multiplier, and so does `sell_fee_per_share` below. A maker's fill
-under a stated `maker_bps` still pays that rate alone, because the rate is by contract the
-whole charge on that fill; a per-share-priced account states its maker net there, commission
-less the rebate. It is applied where every cost is, once, in the runner's extraction;
-`self.balance` books the same; what a sleeve reserves when it sizes
-includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
+under a stated maker schedule — `maker_bps`, `maker_per_share` or both — pays that schedule
+alone, because it is by contract the whole charge on that fill; a per-share-priced account
+states its maker charge as `maker_per_share`, commission less any rebate. It is applied
+where every cost is, once, in the runner's extraction; `self.balance` books the same; what a
+sleeve reserves when it sizes includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
 is part of the recorded cost of the fill. Zero unless stated, so no number moves for a model
 that does not name it.
+
+`costs.maker_per_share` charges a fill that rested on the book per share, the way an account
+priced per share charges it:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, on top of …
+  slippage_bps: 0.5                # … its slippage and the quoted half-spread
+  spread: quotes
+  maker_per_share: 0.0040          # a fill that rested: $0.0040 a share and nothing else
+```
+
+A fill the venue reports as a maker's pays exactly `maker_per_share` on each share — on each
+contract of a multiplied instrument — and nothing else: no commission in basis points or per
+share, no slippage, no half-spread. `maker_bps` and `maker_per_share` are one maker's
+schedule: a model that states either charges every maker's fill `maker_bps` of its notional
+and `maker_per_share` on each share, the one it leaves unstated counting as nothing, so a
+model stating both charges both, and one stating neither charges a maker's fill what any
+fill pays. Like every key of the block the two are inherited key by key — a broker's
+declaration, then `venues.<MIC>.costs`, then the hypothesis — so `maker_per_share` stated over
+a layer that states `maker_bps` charges the two together; state `maker_bps: 0.0` beside it to
+charge the share alone. Negative is a rebate. A sale pays the sell-side fees below on top,
+as every sale does. It is applied where every cost is, once, in the runner's extraction;
+`self.balance` books the same; what a sleeve reserves when it sizes takes the larger of it and
+`commission_per_share` at the price it sizes at, since an order cannot know whether it will
+rest, and a rebate reserves nothing of its own; `cost_stress` multiplies it with the rest and
+divides it where it is a rebate; `cost_scenario` states it key for key. A screen's hurdle is
+two taker fills, so neither maker key moves it. A fill a broker reports with no liquidity
+side is charged as a taker's (`docs/backlog.md` row 94). Unset unless a layer states it, so
+no number moves for a model that does not name it.
+
+`costs.slippage_ticks` charges a fill that took liquidity in the instrument's own ticks, the way
+an account that takes at the touch states what it pays to take:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.004      # a taker's fill: $0.0040 a share …
+  slippage_ticks: 1                # … and one tick over its fill on each share, within its limit
+  maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
+  slippage_bps: 0.0
+  spread: fixed_bps
+  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+```
+
+A fill the venue reports as a taker's — a market order, or a limit that was marketable when it
+landed — pays `slippage_ticks` times the instrument's price increment on each share, read from
+its definition, so one tick is a cent on a name quoted in cents, $0.0001 on a sub-dollar one
+and the contract's own step on a crypto instrument; on a multiplied instrument it is per
+contract, at the increment times the multiplier. A fill the venue reports as a maker's never
+pays it: it filled at its own price. An order that carries a limit is never charged past it:
+on each share the charge is capped at what the limit leaves above the fill's price for a buy,
+or below it for a sale, so a buy limited at 10.02 that fills at 10.01 pays one cent of a
+stated two ticks, and one that fills at its own limit — a limit priced at the touch, taken
+there — pays none of it; a market order carries no limit and pays it whole. It is applied
+where every cost is, once, in the runner's extraction, which records each fill's increment
+and the limit its order carried when it filled; `self.balance` books the same; what a sleeve
+reserves when it sizes includes it whole at the price it sizes at, beside the per-share
+commission, and takes the larger of the two and `maker_per_share`; `cost_stress` multiplies
+it with the rest; `cost_scenario` states it key for key and charges it on each recorded
+fill's increment and limit — a fill recorded before v0.15.0 kept neither, so a scenario
+charges it no tick, and a card is re-run before one is re-applied to it; and a screen's
+hurdle charges it whole on both of its taker fills. Zero unless stated, so no number moves for
+a model that does not name it. It states as a cost what the simulated venue does not do to
+the price: the venue fills a taker at the touch it matched, and this key is the tick past it
+the account pays, applied in the extraction like every other charge rather than by moving
+the fill (`docs/backlog.md` row 157).
 
 `costs.sell_fee_bps` and `costs.sell_fee_per_share` charge every sale on top of the rest,
 whoever the venue reports the fill as:
@@ -793,7 +863,7 @@ costs:
 
 A regulatory transaction fee is charged on sells alone, per notional, and a trading activity
 fee per share sold, and an account passes both through whatever the fill's liquidity side:
-a maker's sale under a stated `maker_bps` pays that rate and these on top, where the
+a maker's sale under a stated maker schedule pays that schedule and these on top, where the
 per-share commission does not. Before the keys existed the only way to state them was a
 larger `maker_bps` on both sides, which charges a purchase for a fee it never pays. They
 are applied where every cost is, once, in the runner's extraction; `self.balance` books the
@@ -806,7 +876,7 @@ venue fills a limit order resting on the book.
 
 ```yaml
 costs:
-  limit_fill: through              # touch (default) | through
+  limit_fill: through              # touch (default) | through | print_through | print_through_whole
 ```
 
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
@@ -831,6 +901,118 @@ broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and two
 certified under different rules cannot share a stage venue, which is one exchange: `deploy`
 refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs.limit_fill`.
 
+**`print_through` fills a resting limit only on a print through it, and a taker only on a
+quote.** It is a rule for the top-of-book venue fed both quotes and prints, and it moves both
+kinds of fill. A resting limit fills only on a print strictly through its price — a print under
+a resting buy, over a resting sell — that the venue applied after the order reached its book at
+the price it rests at, and by that print's own size, shared across the orders it reaches in
+price priority and then time at the price: a buy of 320 resting at 9.50 met by a print of 100
+at 9.49 fills 100, and the next print under it another 100; one print of 300 under buys of 200
+at 9.51 and of 200 at 9.50 fills the better-priced 200 and the other the 100 left; and of two
+buys at one price the one that took its place there first is filled first — the one the venue
+accepted first, unless a later modify sent it to the back of its price, as a modify of either
+price or size does; a partial fill keeps its place, and a stop-limit or a limit-if-touched takes
+its place at its limit when it triggers, not when the venue accepted it. Orders that take their
+places at one instant — sent from one handler, or landing together under a latency — keep the
+order the engine holds them in, which a modify does not re-sort, rather than the order they
+landed in: at that instant an order modified to a price can stay ahead of one that landed there
+before the modify did. Nothing else fills it: not a quote however far through its price, not a
+print at its price, not a bar, not a print the venue applied before the order landed, and not
+one it applied before a modify moved the order to its price. That is one
+reading of how much a print through a displayed limit fills — the size the tape shows traded
+there; `print_through_whole` is the same rule with the other reading, a print through filling all that is left of the order,
+as a market that traded through a displayed limit would have taken it first. A taker — a market
+order, or a limit marketable when it lands — fills against the quote in force, at its touch and
+up to the size it shows, never against a print standing as the book: a limit fills there and no
+further than its own price, so a buy limit never pays above its limit, and its rest stays on the
+book at its price under the rule above; a market order's rest walks one increment past the
+touch, as the engine walks any market order larger than the top level, so a rule that sizes a
+taker down to the displayed size is the sleeve's to apply, from the quote it is handed. A limit
+sent immediate-or-cancel (`TimeInForce.IOC`) takes what that quote shows within its limit and
+is cancelled for the rest — cancelled whole when the quote shows nothing it can take — and one
+sent fill-or-kill fills whole from it or is cancelled, so neither ever rests for a print. The
+quote in force is the last one the venue applied, until a print trades strictly outside it —
+under a bid or over an ask it shows at a size — which ends it: a market that traded there has
+left the quote. With no quote in force, or one showing nothing on the side a market order takes,
+a market order is refused for want of a market and a limit rests at its price; so a sleeve that
+buys at market on a print over the ask is refused rather than filled at that ask — on a
+synthetic tape whose next session opens 98 cents over the last session's closing ask the quote
+before would have filled it there, and on one whose prints jump nine cents over the ask within
+a session nine cents under the market — and kanso's benchmark hold, refused
+so, sends its entry again on the next point; under `touch` and `through` it does not, so a hold
+the venue refused there holds nothing for the window, as it always has. A split restates the quote in force, not the print the book
+holds. Under a stated latency a command due by a print's instant lands before that print, so an
+order that reached the book in time is there when the print arrives and a cancel that reached it
+in time has taken the order off; a command due at a quote still lands after the quote, so a
+taker fills on the first quote at or after its delay — unless a print comes first, when it fills
+on the quote before, if neither that print nor one since traded outside it: a print outside
+the quote ends it before what is due by that print lands, so a taker still in flight across a
+gap or a jump is refused or rests, as one sent on the print is. The venue cannot tell one print
+from another: it fills on every print the hypothesis loads, so a rule that only lit,
+last-sale-eligible, round-lot prints may fill needs a trade series written with only those
+(`csv_parquet`, `docs/adapters.md`), and a print outside the quote that a later report put there
+ends the quote all the same. A print carrying an aggressor reaches only the orders on the side
+it hit, as under the engine's own rules. A hypothesis whose resolved `limit_fill` is either
+value, from whichever layer, must require `quote` and `trade`, may not require `book`, and may
+not ask an instrument for `bar` beside `quote` — a bar walks the engine's own bid and ask
+through its prices, past the quote a taker fills on, so a market order sent on a bar that
+traded over the ask would fill at that ask — though an instrument asked for bars alone, a
+signal, is admitted beside the traded ones (`data_by_instrument`); `kanso hyp validate` refuses
+it otherwise (exit 3), naming `costs.limit_fill`. A resolution that is a bar size, `1m` say,
+requires `bar` of some instrument, so a hypothesis whose names all carry quotes researches under
+either rule at `resolution: tick`, asking them for `quote` and `trade`: asking each for `quote`
+and `trade` alone at `1m` leaves `bar` asked of nothing, which is refused too. One stage venue
+applies every version's feed, so `deploy` likewise refuses (exit 2) a stage venue under either
+rule whose versions between them ask one instrument for `bar` and for `quote` — one reading its
+bars as a signal, another trading it on its quotes — naming the instrument, both versions and
+`venues.<MIC>.costs.limit_fill`. The tick a taker pays
+over the touch is a charge, not a price: state it as `slippage_ticks`, which is never charged
+past an order's limit, so a limit priced at the touch and taken there pays its commission and no
+tick, and state a resting fill's charge as `maker_per_share`. An account that charges $0.0040 a
+share on every fill and a tick over the touch to take, with the regulatory fees passed through
+on sales, states:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.004      # a taker's fill: $0.0040 a share …
+  slippage_ticks: 1                # … and one tick over the touch, never past its limit
+  maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
+  slippage_bps: 0.0
+  spread: fixed_bps
+  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+  sell_fee_bps: 0.206              # the transaction fee and the activity fee, on every sale
+  sell_fee_per_share: 0.000195
+  limit_fill: print_through        # a resting limit fills only on a later print through it
+  latency_ms: 30                   # the time to decide and the route to the venue, one number
+```
+
+Four parts of a taker rule that waits for the first quote at or after its delay and sizes a
+clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each: a
+taker whose first point after its delay is a print fills on the quote before it (measured on
+five sessions at 20 ms, 133 of 4,456 market orders, 26 of them priced otherwise, −6 to +5
+ticks); a market order's rest past the displayed size walks one increment and pays
+`slippage_ticks` on top; a marketable limit's rest past the displayed size is not sized down but
+rests at its own limit, through the quotes that show the market under it, and a later print
+through it fills it there as a maker, at a price above the market for a buy, paying
+`maker_per_share`; and a taker landing on or after a print outside the quote, before the next, is
+refused if a market order and rests at its price if a limit, where such a rule would fill it on
+the next quote (one of the 4,456). A quote carried across a gap — a session's last into the next's first prints —
+stays in force until a print trades outside it, so a market order sent on a print inside it
+fills at its touch, at most its spread from that print. A stage node's flatten after its
+window's last point is a market order no later point can bring a quote for. What the sleeves
+sent on that point and still had in flight under a latency lands first, under the rule — a
+market order with no quote in force refused — so an entry it fills is closed with the rest,
+under every rule; an order a fill handler sends in answer to that landing, or to the flatten's
+own fill, is not, and the stage can stop holding what it fills (`docs/backlog.md` row 164). Then, under either print rule, a close the quote in force cannot fill — none
+in force after a print outside it — is filled from the engine's own book, at the last print, as
+`touch` closes it; a last quote showing nothing on the side the close takes refuses it under
+every rule, and the stage stops still holding the position (`docs/backlog.md` row 164).
+`kanso doctor` checks every engine behaviour the rule rests on but two as an engine fact, and
+the rule itself as kanso loads it; the two — the instants the venue stamps an acceptance, a
+stop's trigger and a modify with, which rank a print's shares, and a stage flatten's fallback to
+the engine's own book — are pinned by the suite (`tests/replay/test_print_through.py`).
+
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
 takes to see an order.
 
@@ -843,7 +1025,9 @@ Every order command — an insert, an update, a cancel — reaches the venue's b
 milliseconds after the sleeve sent it, on both code paths alike, and the book carries on in
 between: a print that would have filled the order in that interval finds it not there yet,
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
-the first point of data after its delay has passed, and only after matching that point, so
+the first point of data after its delay has passed, and only after matching that point —
+except that under `limit_fill: print_through` a command due by a print's instant lands before
+that print (above) — so
 the delay a run models is never shorter than the one stated and at tick resolution
 exceeds it by one point. On a feed of prints, quotes or a book, and on any grain of several
 names, a print, a quote or a bar reaches the sleeve through a flush marker at its instant,
@@ -891,7 +1075,18 @@ order counts as working until the cancel lands. A node may not yet have handed t
 the venue when the strategy's handler cancels it, and would send the cancel ahead of it,
 where it is lost and the order rests; kanso holds such a cancel back and sends it the moment
 the node reports the order submitted, before the venue has matched it, so a node and a
-backtest fill alike (`kanso replay parity`). A cancel the sleeve itself sends right behind a
+backtest fill alike (`kanso replay parity`). A cancel of a market order itself is not sent
+at all, by `cancel_order` or `cancel_orders`: on the top-of-book venue — every hypothesis that
+does not require `book` — the venue answers a market order where it lands, so a cancel behind
+it cancels nothing, and in nautilus_trader 1.231.0 it left one the venue refused for want of a
+market neither rejected nor filled but pending the cancel for good, still counted as working,
+so every exit sized after it came short. `cancel_all_orders` sends the engine's cancel of the
+name, which cancels nothing of a market order there either. On a level-two book a market order
+deeper than the book keeps its rest open, partly filled, and nothing fills it later:
+`cancel_order` and `cancel_orders` leave it there — the venue would have rejected that cancel,
+since it looks for the order among those resting on its book — and `cancel_all_orders` cancels
+it, as the engine's cancel of the name cancels every order open in it. A cancel the sleeve
+itself sends right behind a
 modify of an order the venue already holds is not held back, as an exit at market's is: on a node it overtakes the
 modify, where the backtest lands the modify first and fills it if it is marketable, so the
 two paths can differ there (`docs/backlog.md`). Zero, the
@@ -907,13 +1102,17 @@ versions.
 **A print at a resting limit's price fills it by its own size**, and no more: a buy of 320
 met by four sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per
 print, and met by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine
-fact). A quote beyond the price, or a print beyond it from the side that can trade with the
-order, fills all that is left of it whatever its own size — the same buy met by one seller's
+fact). Under `touch` and `through` a quote beyond the price, or a print beyond it from the side
+that can trade with the order, fills all that is left of it whatever its own size — the same
+buy met by one seller's
 print of 100 a tick under it fills 100 and then 220 — and of two orders resting beyond one
 point it fills only the better-priced. Under `touch` a print at a price is credited whole to
 every order resting there: two buys at 9.50 met by one seller's print of 100 there fill 100
 each. So the fills a run reports are as honest as the print sizes it is fed only for an order
 alone at its price and no larger than the prints that reach it (`docs/concepts.md`, Delivery).
+Under `print_through` a print at the price fills nothing and one beyond it fills by its own
+size, shared across the orders it reaches, so a resting fill is as honest as the prints that
+made it; under `print_through_whole` one beyond fills all that is left (above).
 A resting order sits on one exchange's book and is filled only by the executions that reach
 that book, so the trade stream that stands in for that exchange has to be its own executions,
 one print per execution: a consolidated tape fills the order with prints from venues it never

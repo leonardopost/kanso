@@ -382,10 +382,42 @@ it is filled whole too, and under zero a quote fills it and a print does not —
 the fill model when the last price sits at the limit for a print, and when the order's own side
 does for a quote. So only an order alone at its price and no larger than the points that reach
 it is filled as honestly as they are; a larger one is credited size the tape never showed, and
-so is every order resting beside another at one price. No kanso seam reaches that part of the
-engine: the exchange builds each matching engine inside `add_instrument` and keeps it in a
-`cdef` map with no setter, and a fill model that hands the engine a simulated book changes only
-the fills that come before the check.
+so is every order resting beside another at one price. Nothing kanso sets on the engine's own
+fill model changes that, and under `touch` and `through` kanso leaves the engine's fill as it
+is. A fill model that hands the engine a simulated book does change it: a zero-quantity fill
+among the fills it answers ends the fill before the check (below), which is how `print_through`
+fills a print beyond a resting limit by the print's own size (`kanso.nautilus.tape`).
+
+**What a fill model can decide.** The matching engine asks its fill model,
+`get_orderbook_for_fill_simulation`, for the fills of every order it has matched — a market
+order, a limit marketable when it lands, and a resting limit a point reached, marked `MAKER` —
+and fills the order from the book it answers in place of its own. `apply_fills` takes those
+fills in order and returns at the first of zero quantity, before it cancels an IOC remainder,
+walks a market order's rest or fills a resting limit's remainder whole: measured, a buy of 320
+resting at 9.50 under 9.48/9.52 and met by a print of 100 at 9.49 with no aggressor fills 100
+alone when the model answers 100 at 9.50 and then a zero, and 100 and then 220 when it answers
+the 100 alone. A market order the answered book does not cover walks one increment past it
+for the rest — a market buy of 300 answered with the quote's ask of 100 at 9.52 fills 100 at
+9.52 and 200 at 9.53 — and the answered book replaces the print standing as the venue's book:
+the same buy sent on a print of 100 at 9.50 under an ask of 1,000 fills 300 at 9.52. A lone
+zero refuses a market order, "no market for" its instrument, and leaves a limit accepted on
+arrival resting at its price. The model cannot tell from its arguments which point it is
+matching: once a command lands, the research engine matches every resting order again and asks
+with exactly the arguments of the print's own match — best bid and ask both at the print, the
+order `ACCEPTED` — and so reaches a resting buy a buyer's print did not reach in its own match.
+And a simulation module that calls its exchange's `process` from `pre_process` lands every
+command due by then before the matching engine applies the point, where the engine alone lands
+it after matching the point: a buy of 320 at 9.50 due at 120 ms, met by a quote of 9.45/9.49 at
+125 ms, rests and is filled as a maker at 9.50 with such a module, and lands on the quote it had
+already applied, a taker at 9.49, without it.
+
+**kanso's print rule.** Under `print_through` the venue loads kanso's own fill model with a
+module that tells it, before each point, which point is in hand and which orders rested before
+a print (`kanso.nautilus.tape`), and `kanso doctor` checks it as kanso loads it: a buy of 320
+resting at 9.50 under 9.48/9.52 is not filled by a quote of 9.45/9.49 showing 100, nor by a
+print of 100 at 9.50, and is filled 100 by each of two prints of 100 at 9.49 and 9.48 — 320 by
+the first under `print_through_whole` — and a market buy of 300 sent on a print of 100 at 9.50
+under 9.48/9.52 fills 300 at 9.52.
 
 **A print is the top-of-book until the next quote.** `process_trade_tick` sets both sides of a
 level-one book — the `OrderBook` — to the print's price and size, and they stay there until the
@@ -2027,6 +2059,545 @@ def _probe_queue(ahead: int, print_sizes: tuple[int, ...], *, queue_position: bo
         return probe.filled_at
     finally:
         engine.dispose()
+
+
+_MS = 1_000_000
+
+
+def _tape_quote(bid: float, ask: float, ms: int, ask_size: int = 1_000) -> object:
+    """A quote of the sample equity `ms` milliseconds after the first minute, 1,000 on the bid."""
+    from nautilus_trader.model.data import QuoteTick
+    from nautilus_trader.model.objects import Price, Quantity
+
+    ts = _MINUTE_NS + ms * _MS
+    return QuoteTick(
+        _sample_equity().id,  # type: ignore[attr-defined]
+        Price(bid, 2),
+        Price(ask, 2),
+        Quantity.from_int(1_000),
+        Quantity.from_int(ask_size),
+        ts,
+        ts,
+    )
+
+
+def _tape_print(price: float, size: int, ms: int, side: Any = None) -> object:
+    """A print of the sample equity `ms` milliseconds after the first minute, with no aggressor
+    unless `side` names one."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    ts = _MINUTE_NS + ms * _MS
+    return TradeTick(
+        _sample_equity().id,  # type: ignore[attr-defined]
+        Price(price, 2),
+        Quantity.from_int(size),
+        AggressorSide.NO_AGGRESSOR if side is None else side,
+        TradeId(f"P-{ms}"),
+        ts,
+        ts,
+    )
+
+
+def _probe_script(
+    points: list[object],
+    script: dict[int, list[tuple[str, str, int, float]]],
+    fill_model: Any,
+    *,
+    modules: tuple[object, ...] = (),
+    latency_ms: int = 0,
+) -> dict[str, list[Any]]:
+    """What the orders `script` sends do on a top-of-book venue built as kanso builds one, with
+    this fill model and these modules: on the n-th point handled, counted from one, each
+    `(kind, side, quantity, price)` — a `limit` at the price, an `ioc` limit at it that is
+    immediate-or-cancel, or a `market` order. Each fill
+    is its instant in milliseconds after the first minute, its quantity, its price and its
+    liquidity side; beside them the reasons of every rejection and each order's last status."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import (
+        AccountType,
+        BookType,
+        OmsType,
+        OrderSide,
+        TimeInForce,
+        liquidity_side_to_str,
+        order_status_to_str,
+    )
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.fills: list[tuple[object, ...]] = []
+            self.rejected: list[str] = []
+            self.sent: list[Any] = []
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+            self.subscribe_quote_ticks(equity.id)
+
+        def _point(self) -> None:
+            self.seen += 1
+            for kind, side, quantity, price in script.get(self.seen, []):
+                order_side = OrderSide.BUY if side == "BUY" else OrderSide.SELL
+                if kind == "market":
+                    order = self.order_factory.market(
+                        equity.id, order_side, Quantity.from_int(quantity)
+                    )
+                else:
+                    order = self.order_factory.limit(
+                        equity.id,
+                        order_side,
+                        Quantity.from_int(quantity),
+                        Price(price, 2),
+                        time_in_force=TimeInForce.IOC if kind == "ioc" else TimeInForce.GTC,
+                    )
+                self.sent.append(order)
+                self.submit_order(order)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self._point()
+
+        def on_quote_tick(self, tick: object) -> None:
+            self._point()
+
+        def on_order_filled(self, event: Any) -> None:
+            self.fills.append(
+                (
+                    (int(event.ts_event) - _MINUTE_NS) // _MS,
+                    float(event.last_qty),
+                    float(event.last_px),
+                    liquidity_side_to_str(event.liquidity_side),
+                )
+            )
+
+        def on_order_rejected(self, event: Any) -> None:
+            self.rejected.append(str(event.reason))
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            book_type=BookType.L1_MBP,
+            bar_execution=True,
+            trade_execution=True,
+            fill_model=fill_model,
+            latency_model=LatencyModel(
+                base_latency_nanos=latency_ms * _MS,
+                insert_latency_nanos=0,
+                update_latency_nanos=0,
+                cancel_latency_nanos=0,
+            )
+            if latency_ms
+            else None,
+            modules=list(modules),
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return {
+            "fills": probe.fills,
+            "rejected": probe.rejected,
+            "status": [
+                order_status_to_str(engine.cache.order(order.client_order_id).status)
+                for order in probe.sent
+            ],
+        }
+    finally:
+        engine.dispose()
+
+
+def _answering(fills: Any = None, taker: Any = None) -> Any:
+    """A fill model that answers a resting order's match with the book `fills(order)` builds
+    and a taker's with `taker(instrument, order)`, the engine's own book where either is
+    `None`; and that records, for every match it is asked about, the order's liquidity side,
+    the best bid and ask it was handed, the order's status and the instant of the last point a
+    `_clocked` module saw. `taker` is handed the best bid and ask the engine holds as well."""
+    from nautilus_trader.backtest.models import FillModel
+    from nautilus_trader.model.book import OrderBook
+    from nautilus_trader.model.enums import BookType, LiquiditySide, liquidity_side_to_str
+
+    class Answer(OrderBook):  # type: ignore[misc]
+        def __init__(self, instrument_id: Any, answer: list[Any]) -> None:
+            super().__init__(instrument_id, BookType.L2_MBP)
+            self.answer = answer
+
+        def simulate_fills(self, *args: Any) -> list[Any]:
+            return list(self.answer)
+
+    class Answering(FillModel):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__(prob_fill_on_limit=1.0, prob_slippage=0.0)
+            self.asked: list[tuple[object, ...]] = []
+            self.now = 0
+
+        def get_orderbook_for_fill_simulation(
+            self, instrument: Any, order: Any, best_bid: Any, best_ask: Any
+        ) -> Any:
+            self.asked.append(
+                (
+                    (self.now - _MINUTE_NS) // _MS,
+                    liquidity_side_to_str(order.liquidity_side),
+                    str(best_bid),
+                    str(best_ask),
+                    order.status_string(),
+                )
+            )
+            if order.liquidity_side == LiquiditySide.MAKER:
+                return None if fills is None else Answer(instrument.id, fills(order))
+            return None if taker is None else taker(instrument, order, best_bid, best_ask)
+
+    return Answering()
+
+
+def _clocked(*, lands: bool) -> object:
+    """A module that tells an `_answering` model the instant of each point before the venue
+    applies it, and, when `lands`, first lands every command due by a quote's or a print's
+    instant."""
+    from nautilus_trader.backtest.config import SimulationModuleConfig
+    from nautilus_trader.backtest.modules import SimulationModule
+    from nautilus_trader.model.data import QuoteTick, TradeTick
+
+    class Clocked(SimulationModule):  # type: ignore[misc]
+        def pre_process(self, data: Any) -> None:
+            if lands and isinstance(data, QuoteTick | TradeTick):
+                self.exchange.process(int(data.ts_init))
+            if hasattr(self.exchange.fill_model, "asked"):
+                self.exchange.fill_model.now = int(data.ts_init)
+
+        def process(self, ts_now: int) -> None:
+            """Nothing: the module acts on points."""
+
+        def log_diagnostics(self, logger: Any) -> None:
+            """Nothing: what it did is in what the model recorded."""
+
+        def reset(self) -> None:
+            """Nothing: it holds no state."""
+
+    return Clocked(SimulationModuleConfig(component_id="Clocked-XNAS"))
+
+
+def _zero(order: Any) -> list[Any]:
+    from nautilus_trader.model.objects import Quantity
+
+    return [(order.price, Quantity.zero(0))]
+
+
+def _check_a_zero_quantity_fill_ends_a_simulated_fill() -> tuple[bool, str]:
+    """What lets a fill model fill a resting limit by a print's size: the engine takes the
+    model's book in place of its own, and stops at a fill of zero quantity before it fills
+    what is left of the order whole."""
+    from nautilus_trader.model.objects import Quantity
+
+    points = [_tape_quote(9.48, 9.52, 10), _tape_print(9.49, 100, 100)]
+    script = {1: [("limit", "BUY", 320, 9.5)]}
+    hundred = Quantity.from_int(100)
+    ended = _probe_script(
+        points,
+        script,
+        _answering(lambda order: [(order.price, hundred), (order.price, Quantity.zero(0))]),
+    )["fills"]
+    open_ = _probe_script(points, script, _answering(lambda order: [(order.price, hundred)]))[
+        "fills"
+    ]
+    holds = ended == [(100, 100.0, 9.5, "MAKER")] and open_ == [
+        (100, 100.0, 9.5, "MAKER"),
+        (100, 220.0, 9.5, "MAKER"),
+    ]
+    return holds, (
+        "a buy of 320 resting at 9.50 under 9.48/9.52, met by a print of 100 at 9.49 with no "
+        f"aggressor: a fill model answering 100 at 9.50 and then a fill of zero filled {ended}; "
+        f"answering 100 at 9.50 alone, {open_}. The engine fills from the model's book and "
+        "returns at the zero, before it fills the remainder of a limit a point went beyond"
+    )
+
+
+def _check_a_market_order_fills_from_the_fill_model_s_book() -> tuple[bool, str]:
+    """What prices a taker under `print_through`: the book the fill model answers for a market
+    order, not the print standing as the venue's book, with the engine's one-increment walk for
+    what that book does not cover."""
+    from nautilus_trader.model.book import OrderBook
+    from nautilus_trader.model.enums import BookType
+
+    shown = _tape_quote(9.48, 9.52, 10, ask_size=100)
+
+    def quoted(instrument: Any, order: Any, best_bid: Any, best_ask: Any) -> Any:
+        book = OrderBook(instrument.id, BookType.L1_MBP)
+        book.update_quote_tick(shown)
+        return book
+
+    walked = _probe_script(
+        [shown, _tape_quote(9.48, 9.52, 20, ask_size=100)],
+        {2: [("market", "BUY", 300, 0.0)]},
+        _answering(taker=quoted),
+    )["fills"]
+    shown = _tape_quote(9.48, 9.52, 10)
+    on_print = _probe_script(
+        [shown, _tape_print(9.5, 100, 20)],
+        {2: [("market", "BUY", 300, 0.0)]},
+        _answering(taker=quoted),
+    )["fills"]
+    holds = walked == [(20, 100.0, 9.52, "TAKER"), (20, 200.0, 9.53, "TAKER")] and on_print == [
+        (20, 300.0, 9.52, "TAKER")
+    ]
+    return holds, (
+        "a fill model answering a market order with a top-of-book book of the quote 9.48/9.52: "
+        f"a market buy of 300 against an ask of 100 filled {walked}; one sent on a print of 100 "
+        f"at 9.50 under an ask of 1,000 filled {on_print}. The engine fills a market order from "
+        "the model's book, not the print standing as its own, and walks one increment past it "
+        "for the rest"
+    )
+
+
+def _check_a_lone_zero_fill_refuses_a_market_order() -> tuple[bool, str]:
+    """What the print rule answers a taker with no quote to fill on: a market order is refused
+    for want of a market, and a limit accepted on arrival rests at its price."""
+
+    def nothing(instrument: Any, order: Any, best_bid: Any, best_ask: Any) -> Any:
+        from nautilus_trader.model.book import OrderBook
+        from nautilus_trader.model.enums import BookType
+        from nautilus_trader.model.objects import Quantity
+
+        class Zero(OrderBook):  # type: ignore[misc]
+            def simulate_fills(self, *args: Any) -> list[Any]:
+                return [(order.price if order.has_price else best_ask, Quantity.zero(0))]
+
+        return Zero(instrument.id, BookType.L2_MBP)
+
+    prints = [_tape_print(9.5, 100, 10), _tape_print(9.51, 100, 20)]
+    market = _probe_script(
+        prints, {1: [("market", "BUY", 50, 0.0)]}, _answering(_zero, taker=nothing)
+    )
+    limit = _probe_script(
+        prints, {1: [("limit", "BUY", 50, 9.55)]}, _answering(_zero, taker=nothing)
+    )
+    holds = (
+        market["fills"] == []
+        and len(market["rejected"]) == 1
+        and market["rejected"][0].startswith("no market for")
+        and market["status"] == ["REJECTED"]
+        and limit["fills"] == []
+        and limit["rejected"] == []
+        and limit["status"] == ["ACCEPTED"]
+    )
+    return holds, (
+        "on prints alone, answered with a single fill of zero: a market buy of 50 filled "
+        f"{market['fills']}, was rejected {market['rejected']} and ended {market['status']}; a "
+        f"buy of 50 limited at 9.55, marketable against the print at 9.50, filled "
+        f"{limit['fills']} and ended {limit['status']}"
+    )
+
+
+def _check_a_drain_re_matches_every_resting_order() -> tuple[bool, str]:
+    """Why the print rule keeps a record of each print: the research path matches every resting
+    order again once a command lands, asking the fill model with exactly the arguments of the
+    print's own match, and so reaches an order the print's own match did not."""
+    from nautilus_trader.model.enums import AggressorSide
+
+    quote = _tape_quote(9.48, 9.52, 10)
+    seen: dict[str, list[tuple[object, ...]]] = {}
+    for name, side, script in (
+        ("no aggressor, a sell sent on it", None, {2: [("limit", "SELL", 10, 9.9)]}),
+        ("a buyer's, nothing sent on it", AggressorSide.BUYER, {}),
+        ("a buyer's, a sell sent on it", AggressorSide.BUYER, {2: [("limit", "SELL", 10, 9.9)]}),
+    ):
+        model = _answering(_zero)
+        _probe_script(
+            [quote, _tape_print(9.49, 100, 100, side)],
+            {1: [("limit", "BUY", 320, 9.5)], **script},
+            model,
+            modules=(_clocked(lands=False),),
+        )
+        seen[name] = [asked for asked in model.asked if asked[1] == "MAKER"]
+    asked = (100, "MAKER", "9.49", "9.49", "ACCEPTED")
+    holds = seen == {
+        "no aggressor, a sell sent on it": [asked, asked],
+        "a buyer's, nothing sent on it": [],
+        "a buyer's, a sell sent on it": [asked],
+    }
+    return holds, (
+        "a buy of 320 resting at 9.50, then a print of 100 at 9.49 at 100 ms, a fill model "
+        "answering every match with nothing: the resting buy was asked about — as (instant, "
+        "side, best bid, best ask, status) — "
+        + "; ".join(f"with a print of {name}, {calls}" for name, calls in seen.items())
+        + ". Once a command lands the engine matches every resting order again, with the "
+        "arguments of the print's own match, and reaches a buy a buyer's print did not"
+    )
+
+
+def _check_a_module_lands_due_commands_before_the_point() -> tuple[bool, str]:
+    """Why a command due by a print reaches the book before it under `print_through`: a module
+    that calls its exchange's `process` from `pre_process` lands it before the matching engine
+    applies the point, where the engine alone lands it after matching that point."""
+    from nautilus_trader.backtest.models import FillModel
+
+    points = [
+        _tape_quote(9.48, 9.52, 10),
+        _tape_quote(9.48, 9.52, 100),
+        _tape_quote(9.45, 9.49, 125),
+        _tape_quote(9.48, 9.52, 140),
+    ]
+    seen = {
+        lands: _probe_script(
+            points,
+            {2: [("limit", "BUY", 320, 9.5)]},
+            FillModel(prob_fill_on_limit=1.0, prob_slippage=0.0),
+            modules=(_clocked(lands=lands),),
+            latency_ms=20,
+        )["fills"]
+        for lands in (True, False)
+    }
+    holds = seen == {True: [(125, 320.0, 9.5, "MAKER")], False: [(125, 320.0, 9.49, "TAKER")]}
+    return holds, (
+        "a buy of 320 at 9.50 sent on a quote of 9.48/9.52 at 100 ms under a latency of 20 ms, "
+        "due at 120, then a quote of 9.45/9.49 at 125 ms, under the engine's own fill model: "
+        f"with a module landing what is due before each point it filled {seen[True]}, resting "
+        f"before the quote went through it; without it, {seen[False]}, landing on the quote it "
+        "had already applied. Alone the engine lands a command after it matches the first point "
+        "at or after its delay"
+    )
+
+
+def _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_taker() -> tuple[
+    bool, str
+]:
+    """Why the two paths judge a taker alike under `print_through`: whatever a print inside the
+    last quote does to the engine's own bid and ask, and whether or not a landing command has
+    since made the engine read them again from its book, they are never wider than that quote —
+    the bid never under its bid, the ask never over its ask — so every limit the quote makes
+    marketable is matched on landing and the fill model, which answers from the quote, decides
+    it."""
+    from nautilus_trader.model.enums import AggressorSide
+
+    quote = _tape_quote(9.48, 9.52, 10)
+    marketable = {3: [("limit", "SELL", 10, 9.48), ("limit", "BUY", 10, 9.52)]}
+    seen: dict[str, list[tuple[str, str]]] = {}
+    for side, name in (
+        (None, "no aggressor"),
+        (AggressorSide.BUYER, "a buyer's"),
+        (AggressorSide.SELLER, "a seller's"),
+    ):
+        for matched, script in (
+            ("", marketable),
+            (", a command landed between", {2: [("limit", "BUY", 1, 9.0)], **marketable}),
+        ):
+            model = _answering(_zero, taker=lambda instrument, order, bid, ask: None)
+            _probe_script(
+                [quote, _tape_print(9.5, 100, 20, side), _tape_print(9.5, 100, 30, side)],
+                script,
+                model,
+                modules=(_clocked(lands=False),),
+            )
+            seen[name + matched] = [
+                (str(asked[2]), str(asked[3]))
+                for asked in model.asked
+                if asked[0] == 30 and asked[1] == "TAKER"
+            ]
+    holds = all(
+        len(asked) >= 2 and all(float(bid) >= 9.48 and float(ask) <= 9.52 for bid, ask in asked)
+        for asked in seen.values()
+    )
+    return holds, (
+        "under a quote of 9.48/9.52, two prints of 100 at 9.50, a sell limited at 9.48 and a "
+        "buy at 9.52 sent on the second: each was matched on landing as a taker, with the "
+        "engine's bid and ask — "
+        + "; ".join(f"after prints of {name}, {asked}" for name, asked in seen.items())
+        + ". A print inside the quote never puts the engine's bid under the quote's bid nor its "
+        "ask over the quote's ask, before a re-match or after one"
+    )
+
+
+def _check_kanso_s_print_through_venue() -> tuple[bool, str]:
+    """`kanso.nautilus.tape` as kanso loads it: a resting limit fills only from a later print
+    strictly through its price, by that print's size, never from a quote or a print at its
+    price, and a taker fills at the last quote's touch rather than at a print — an IOC limit no
+    further than the quote shows, the rest cancelled, and cancelled whole when the quote shows
+    nothing it can take, however the engine's own bid and ask stand."""
+    from nautilus_trader.backtest.node import get_fill_model
+    from nautilus_trader.config import BacktestVenueConfig
+
+    from kanso.nautilus.actions import modules
+    from kanso.nautilus.venue import fill_model
+
+    def built(rule: str) -> Any:
+        return get_fill_model(
+            BacktestVenueConfig(
+                name="XNAS",
+                oms_type="NETTING",
+                account_type="MARGIN",
+                starting_balances=["1000000 USD"],
+                fill_model=fill_model(rule),  # type: ignore[arg-type]
+            )
+        )
+
+    resting = [
+        _tape_quote(9.48, 9.52, 10),
+        _tape_quote(9.45, 9.49, 20, ask_size=100),
+        _tape_quote(9.48, 9.52, 30),
+        _tape_print(9.5, 100, 40),
+        _tape_print(9.49, 100, 50),
+        _tape_print(9.48, 100, 60),
+    ]
+    rested = {
+        rule: _probe_script(
+            resting,
+            {1: [("limit", "BUY", 320, 9.5)]},
+            built(rule),
+            modules=tuple(modules("XNAS")),
+        )["fills"]
+        for rule in ("print_through", "print_through_whole")
+    }
+    taken = _probe_script(
+        [_tape_quote(9.48, 9.52, 10), _tape_print(9.5, 100, 20)],
+        {2: [("market", "BUY", 300, 0.0)]},
+        built("print_through"),
+        modules=tuple(modules("XNAS")),
+    )["fills"]
+    ioc = _probe_script(
+        [
+            _tape_quote(9.48, 9.52, 10, ask_size=100),
+            _tape_print(9.5, 100, 20),
+            _tape_print(9.51, 300, 30),
+            _tape_quote(9.48, 9.52, 40),
+            _tape_print(9.49, 300, 50),
+        ],
+        {1: [("ioc", "BUY", 320, 9.52)], 2: [("ioc", "BUY", 100, 9.5)]},
+        built("print_through"),
+        modules=tuple(modules("XNAS")),
+    )
+    holds = (
+        rested["print_through"] == [(50, 100.0, 9.5, "MAKER"), (60, 100.0, 9.5, "MAKER")]
+        and rested["print_through_whole"] == [(50, 320.0, 9.5, "MAKER")]
+        and taken == [(20, 300.0, 9.52, "TAKER")]
+        and ioc["fills"] == [(10, 100.0, 9.52, "TAKER")]
+        and ioc["status"] == ["CANCELED", "CANCELED"]
+    )
+    return holds, (
+        "kanso's venue modules and the fill model `limit_fill` names, a buy of 320 resting at "
+        "9.50 under 9.48/9.52, then a quote of 9.45/9.49 showing 100, a print of 100 at 9.50 "
+        f"and prints of 100 at 9.49 and 9.48: under print_through it filled "
+        f"{rested['print_through']}, under print_through_whole {rested['print_through_whole']}; "
+        f"a market buy of 300 sent on a print of 100 at 9.50 under 9.48/9.52 filled {taken}; an "
+        "IOC buy of 320 at 9.52 over an ask showing 100 there, and an IOC buy of 100 at 9.50 "
+        "sent on a print at 9.50 under that quote, before prints through both, filled "
+        f"{ioc['fills']} and ended {ioc['status']}"
+    )
 
 
 def _check_a_level_two_book_keeps_one_size_per_price() -> tuple[bool, str]:
@@ -4229,6 +4800,43 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "liquidity_consumption on a level-one venue fills a resting limit from the first of two "
         "identical prints at its price and not from the second",
         _check_liquidity_consumption_withholds_a_repeated_print,
+    ),
+    (
+        "a fill model's book replaces the engine's own for the fills of an order it has "
+        "matched, and a zero-quantity fill in it ends the fill there, before a limit's "
+        "remainder is filled whole",
+        _check_a_zero_quantity_fill_ends_a_simulated_fill,
+    ),
+    (
+        "the engine asks a fill model for a market order's fills and fills it from the book "
+        "the model answers, walking one increment past it for what that book does not cover",
+        _check_a_market_order_fills_from_the_fill_model_s_book,
+    ),
+    (
+        "a lone zero-quantity fill refuses a market order for want of a market, and leaves a "
+        "limit accepted on arrival resting at its price",
+        _check_a_lone_zero_fill_refuses_a_market_order,
+    ),
+    (
+        "the backtest engine re-matches every resting order after it drains a command, and "
+        "asks a fill model with the arguments of the point's own match",
+        _check_a_drain_re_matches_every_resting_order,
+    ),
+    (
+        "a simulation module that calls its exchange's process from pre_process lands every "
+        "command due by then before the matching engine applies the point",
+        _check_a_module_lands_due_commands_before_the_point,
+    ),
+    (
+        "a print inside the last quote leaves the engine's bid and ask no wider than that "
+        "quote, re-matched or not, so a limit the quote makes marketable is matched on landing",
+        _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_taker,
+    ),
+    (
+        "kanso's print_through venue fills a resting limit only from a later print strictly "
+        "through its price, by that print's size or whole, never from a quote, and fills a "
+        "taker at the last quote's touch, an IOC limit no further than the quote shows",
+        _check_kanso_s_print_through_venue,
     ),
     (
         "queue_position on a level-two book makes a joining limit wait for the size ahead",

@@ -9,8 +9,11 @@ expectation from either would prove only that the two agree with themselves.
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.criteria.run import NS_PER_DAY, midnight_ns
 from kanso.nautilus.costs import (
@@ -20,11 +23,13 @@ from kanso.nautilus.costs import (
     fill_cost,
     fill_rate,
     funding_payment,
+    limit_at,
     maintenance_ratio,
     month_turned,
     policy_of,
     reset,
     side_rate,
+    tick_slip,
 )
 from kanso.schemas import Book
 
@@ -251,3 +256,281 @@ def test_a_sale_pays_the_sell_side_fees_on_top_whoever_filled_it() -> None:
     assert taker_sell == pytest.approx(7.0)
     assert maker_sell == pytest.approx(2.0)
     assert maker_buy == 0.0
+
+
+# --- a maker charged per share ------------------------------------------------------
+
+
+def test_a_maker_under_a_per_share_schedule_pays_exactly_that_on_each_share() -> None:
+    """$0.0040 a share on 100 shares is 0.40, and nothing else: no commission in basis points
+    or per share, no slippage, no half-spread — whatever the model charges a taker."""
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.014, maker=True, maker_per_share=0.004
+    ) == pytest.approx(0.4, abs=1e-15)
+    assert fill_rate(1.0, 2.0, 0.0002, None, maker=True, maker_per_share=0.004) == 0.0
+
+
+def test_a_taker_under_a_per_share_maker_schedule_pays_what_it_always_paid() -> None:
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.014, maker=False, maker_per_share=0.004
+    ) == fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.014, maker=False)
+
+
+def test_a_maker_schedule_stated_both_ways_charges_both() -> None:
+    """Half a bp of 5,000 is 0.25, and $0.002 on 100 shares 0.20."""
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, 0.5, 0.0055, maker=True, maker_per_share=0.002
+    ) == pytest.approx(0.45)
+
+
+def test_a_negative_maker_per_share_charge_is_a_rebate() -> None:
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0055, maker=True, maker_per_share=-0.002
+    ) == pytest.approx(-0.2)
+
+
+def test_a_maker_s_sale_under_a_per_share_schedule_pays_the_sell_side_fees_on_top() -> None:
+    """One bp of 10,000 is 1.00 and a cent on 100 shares 1.00, beside the maker's 0.40."""
+    assert fill_cost(
+        10_000.0,
+        100.0,
+        1.0,
+        2.0,
+        0.0002,
+        None,
+        0.014,
+        maker=True,
+        sell=True,
+        sell_fee_bps=1.0,
+        sell_fee_per_share=0.01,
+        maker_per_share=0.004,
+    ) == pytest.approx(2.4)
+
+
+def _v0140_fill_cost(  # the arithmetic as v0.14.0 shipped it, copied, for the property below
+    notional: float,
+    qty: float,
+    commission_bps: float,
+    slippage_bps: float,
+    half_spread: float,
+    maker_bps: float | None,
+    commission_per_share: float,
+    *,
+    maker: bool,
+    sell: bool,
+    sell_fee_bps: float,
+    sell_fee_per_share: float,
+) -> float:
+    if maker and maker_bps is not None:
+        rate = maker_bps / 10_000.0
+    else:
+        rate = (commission_bps + slippage_bps) / 10_000.0 + half_spread
+    charged = notional * rate
+    if sell:
+        charged += notional * sell_fee_bps / 10_000.0 + qty * sell_fee_per_share
+    if maker and maker_bps is not None:
+        return charged
+    return charged + qty * commission_per_share
+
+
+RATES = st.floats(min_value=0.0, max_value=50.0, allow_nan=False)
+
+
+@given(
+    notional=st.floats(min_value=0.0, max_value=1e9, allow_nan=False),
+    qty=st.floats(min_value=0.0, max_value=1e7, allow_nan=False),
+    commission_bps=RATES,
+    slippage_bps=RATES,
+    half_spread=st.floats(min_value=0.0, max_value=0.01, allow_nan=False),
+    maker_bps=st.none() | st.floats(min_value=-5.0, max_value=5.0, allow_nan=False),
+    commission_per_share=st.floats(min_value=0.0, max_value=0.05, allow_nan=False),
+    maker=st.booleans(),
+    sell=st.booleans(),
+    sell_fee_bps=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
+    sell_fee_per_share=st.floats(min_value=0.0, max_value=0.01, allow_nan=False),
+)
+def test_a_model_without_a_maker_per_share_charge_costs_every_fill_bit_for_bit_as_before(
+    **kwargs: Any,
+) -> None:
+    """Leave the key out and no number moves: not one fill, not by one bit."""
+    args = (
+        kwargs["notional"],
+        kwargs["qty"],
+        kwargs["commission_bps"],
+        kwargs["slippage_bps"],
+        kwargs["half_spread"],
+        kwargs["maker_bps"],
+        kwargs["commission_per_share"],
+    )
+    named = {key: kwargs[key] for key in ("maker", "sell", "sell_fee_bps", "sell_fee_per_share")}
+    assert fill_cost(*args, **named) == _v0140_fill_cost(*args, **named)
+
+
+# --- a taker's tick ------------------------------------------------------------------
+
+
+def test_a_market_order_pays_its_ticks_whole() -> None:
+    """One tick of a cent; two of a sub-dollar name's hundredth of a cent."""
+    assert tick_slip(1.0, 0.01, 10.0, None, sell=False) == 0.01
+    assert tick_slip(2.0, 0.0001, 0.5, None, sell=True) == pytest.approx(0.0002)
+
+
+def test_a_limit_is_never_charged_past_its_price() -> None:
+    """A buy limited at 10.02 filled at 10.01 has a cent of room, so two ticks charge one; a
+    buy taken at its own limit has none; a sale's room is below the fill."""
+    assert tick_slip(2.0, 0.01, 10.01, 10.02, sell=False) == pytest.approx(0.01)
+    assert tick_slip(1.0, 0.01, 10.02, 10.02, sell=False) == 0.0
+    assert tick_slip(1.0, 0.01, 10.0, 9.95, sell=True) == pytest.approx(0.01)
+    assert tick_slip(3.0, 0.01, 10.0, 9.99, sell=True) == pytest.approx(0.01)
+    assert tick_slip(1.0, 0.01, 10.0, 10.01, sell=True) == 0.0, "a fill past its limit pays none"
+
+
+def test_no_ticks_stated_charge_nothing() -> None:
+    assert tick_slip(0.0, 0.01, 10.0, 10.5, sell=False) == 0.0
+    assert tick_slip(1.0, 0.0, 10.0, None, sell=False) == 0.0
+
+
+def test_a_taker_pays_its_ticks_per_share_and_a_maker_never_does() -> None:
+    """100 shares, a cent each, over a commission of $0.004 a share: 0.40 + 1.00. A maker under
+    the same model and no maker schedule pays the commission and not the tick."""
+    taker = fill_cost(1_000.0, 100.0, 0.0, 0.0, 0.0, None, 0.004, maker=False, slip=0.01)
+    maker = fill_cost(1_000.0, 100.0, 0.0, 0.0, 0.0, None, 0.004, maker=True, slip=0.01)
+    assert taker == pytest.approx(1.4)
+    assert maker == pytest.approx(0.4)
+
+
+def test_a_tick_on_a_contract_is_worth_the_increment_times_the_multiplier() -> None:
+    """Two contracts of a 50-times future, one tick of 0.25: 2 x 0.25 x 50 = 25.00."""
+    assert fill_cost(
+        200_000.0, 2.0, 0.0, 0.0, 0.0, None, 0.0, maker=False, slip=0.25, multiplier=50.0
+    ) == pytest.approx(25.0)
+
+
+def test_a_maker_schedule_and_a_tick_never_meet() -> None:
+    assert fill_cost(
+        1_000.0, 100.0, 0.0, 0.0, 0.0, None, 0.004, maker=True, maker_per_share=0.004, slip=0.01
+    ) == pytest.approx(0.4)
+
+
+def _order_with_a_modify(filled_at: list[float]) -> tuple[Any, list[Any]]:
+    """A buy limited at 9.50, filled once, modified to 9.55, filled again: the order and its
+    two fills, applied as the engine applies them."""
+    from nautilus_trader.common.component import TestClock
+    from nautilus_trader.common.factories import OrderFactory
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.enums import LiquiditySide, OrderSide
+    from nautilus_trader.model.events import (
+        OrderAccepted,
+        OrderFilled,
+        OrderSubmitted,
+        OrderUpdated,
+    )
+    from nautilus_trader.model.identifiers import (
+        AccountId,
+        InstrumentId,
+        StrategyId,
+        TradeId,
+        TraderId,
+        VenueOrderId,
+    )
+    from nautilus_trader.model.objects import Currency, Money, Price, Quantity
+
+    factory = OrderFactory(TraderId("T-1"), StrategyId("S-1"), TestClock())
+    order = factory.limit(
+        InstrumentId.from_str("DEMO.XNAS"), OrderSide.BUY, Quantity.from_int(200), Price(9.5, 2)
+    )
+    common = {
+        "trader_id": order.trader_id,
+        "strategy_id": order.strategy_id,
+        "instrument_id": order.instrument_id,
+        "client_order_id": order.client_order_id,
+        "event_id": None,
+        "ts_event": 0,
+        "ts_init": 0,
+    }
+    account, venue_id = AccountId("SIM-001"), VenueOrderId("V-1")
+
+    def made(cls: Any, **fields: Any) -> Any:
+        return cls(**{**common, **fields, "event_id": UUID4()})
+
+    order.apply(made(OrderSubmitted, account_id=account))
+    order.apply(made(OrderAccepted, account_id=account, venue_order_id=venue_id))
+    fills = []
+    for number, (px, price) in enumerate(zip(filled_at, (None, 9.55), strict=True)):
+        if price is not None:
+            order.apply(
+                made(
+                    OrderUpdated,
+                    venue_order_id=venue_id,
+                    account_id=account,
+                    quantity=order.quantity,
+                    price=Price(price, 2),
+                    trigger_price=None,
+                )
+            )
+        fill = made(
+            OrderFilled,
+            account_id=account,
+            venue_order_id=venue_id,
+            position_id=None,
+            trade_id=TradeId(f"F-{number}"),
+            order_side=OrderSide.BUY,
+            order_type=order.order_type,
+            last_qty=Quantity.from_int(100),
+            last_px=Price(px, 2),
+            currency=Currency.from_str("USD"),
+            commission=Money(0, Currency.from_str("USD")),
+            liquidity_side=LiquiditySide.TAKER,
+        )
+        order.apply(fill)
+        fills.append(fill)
+    return order, fills
+
+
+def test_a_fill_is_capped_by_the_limit_its_order_carried_when_it_filled() -> None:
+    """The order holds only its last price, 9.55; the fill before the modify was taken under
+    9.50, so a tick at 9.50 has no room and the one at 9.54 a cent."""
+    order, (first, second) = _order_with_a_modify([9.5, 9.54])
+
+    assert limit_at(order, first.trade_id) == 9.5
+    assert limit_at(order, second.trade_id) == 9.55
+    assert float(order.price) == 9.55
+    assert tick_slip(1.0, 0.01, 9.5, limit_at(order, first.trade_id), sell=False) == 0.0
+    assert tick_slip(1.0, 0.01, 9.54, limit_at(order, second.trade_id), sell=False) == (
+        pytest.approx(0.01)
+    )
+
+
+def test_a_trade_id_the_order_never_took_reads_as_its_last_limit() -> None:
+    from nautilus_trader.model.identifiers import TradeId
+
+    order, _ = _order_with_a_modify([9.5, 9.54])
+
+    assert limit_at(order, TradeId("F-9")) == 9.55
+
+
+def test_the_opening_half_of_a_flipping_fill_is_capped_by_the_limit_it_filled_under() -> None:
+    """The engine splits a fill that flips a net position into two events, the opening half
+    under a new event id and the fill's own trade id: that half is found by its trade id, and
+    reads the limit before the modify that came after it, not the order's last."""
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.events import OrderFilled
+
+    order, (first, _) = _order_with_a_modify([9.5, 9.54])
+    opening = OrderFilled.from_dict({**OrderFilled.to_dict(first), "event_id": UUID4().value})
+
+    assert opening.id != first.id and opening.trade_id == first.trade_id
+    assert limit_at(order, opening.trade_id) == 9.5
+
+
+def test_an_order_with_no_limit_has_none_to_cap() -> None:
+    from nautilus_trader.common.component import TestClock
+    from nautilus_trader.common.factories import OrderFactory
+    from nautilus_trader.model.enums import OrderSide
+    from nautilus_trader.model.identifiers import InstrumentId, StrategyId, TradeId, TraderId
+    from nautilus_trader.model.objects import Quantity
+
+    factory = OrderFactory(TraderId("T-1"), StrategyId("S-1"), TestClock())
+    market = factory.market(InstrumentId.from_str("DEMO.XNAS"), OrderSide.BUY, Quantity.from_int(1))
+    assert limit_at(market, TradeId("F-0")) is None
+    assert limit_at(None, TradeId("F-0")) is None

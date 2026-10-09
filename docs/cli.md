@@ -210,7 +210,7 @@ for a read, the version on the stage for a move.
 | `kanso promote STRATEGY[@V] --live --as NAME` | move a `promotable` version onto the live stage under a named operator's recorded approval, retiring whatever was live, then redeploy both stages. A version the live stage's venues could not hold beside what is already live — any of the venue disagreements `deploy` refuses — is refused (exit 2) before the approval is recorded or anything moves. The check is of the live stage; a paper stage that already held a disagreement from before this release still refuses its own redeploy after the promotion, and `kanso strat retire` on one of the pair clears it |
 | `kanso demote STRATEGY[@V]` | take a live version off the live stage — back to paper, or retired when a newer version is already there — then redeploy the stages that are not halted. A demotion never waits on agreement: the version leaves live first, so a demoted version that paper cannot hold beside what is there — one of the venue disagreements `deploy` refuses — ends the paper redeploy at exit 2 with the move already made; `kanso strat retire STRATEGY@V` on one of the two clears it |
 
-**`deploy` refuses eleven things with exit 2**, one with exit 3 and two with exit 4, and blocks one more with a `deploy_blocked` escalation: a share below the version's budgets — the sleeve's `sizing` budget and its sized overlays' together — because a sized version deployed at less than its budgets would size every order over the money it has; raise `limits.per_strategy_max_pct` or the stage's capital.
+**`deploy` refuses twelve things with exit 2**, one with exit 3 and two with exit 4, and blocks one more with a `deploy_blocked` escalation: a share below the version's budgets — the sleeve's `sizing` budget and its sized overlays' together — because a sized version deployed at less than its budgets would size every order over the money it has; raise `limits.per_strategy_max_pct` or the stage's capital.
 
 With exit 2: a stage whose `kill_switch` is on, because the switch is the operator's and a
 deployment that cleared it by starting a node would make it advisory; an execution client id
@@ -225,14 +225,17 @@ on one venue whose venue models differ in `account` type or in `currency`, becau
 is one account; two certified under different `costs.limit_fill`, because one exchange fills
 a touched limit one way; two certified under different `costs.latency_ms`, because one venue
 is one round trip and the stage's venue carries the latency its versions were measured
-under; and a version whose hypothesis requires `book` beside one whose does not, because one
+under; a version whose hypothesis requires `book` beside one whose does not, because one
 venue keeps one book — a level-two book with queue position or the top of the book — and
-each version was certified on its own. Each of the last five names both versions and the
-key; for the account type and currency the way out is one value under `venues.<MIC>` in
-`portfolio.yaml` and a re-certification, and for the last three it is
-`kanso strat retire STRATEGY@V` on one of the two, or one `limit_fill`, one latency and one
-book requirement in both hypotheses and a re-certification. All five are refused before the
-stage is written, so a refused deployment leaves `portfolio.yaml`, the strategy files and
+each version was certified on its own; and, on a venue under `limit_fill: print_through` or
+`print_through_whole`, a version asking an instrument for `bar` beside one asking it for
+`quote`, because one venue applies both feeds and a bar moves the book a taker on the quote
+is judged on. Each of the last six names both versions and the key; for the account type
+and currency the way out is one value under `venues.<MIC>` in `portfolio.yaml` and a
+re-certification, and for the last four it is `kanso strat retire STRATEGY@V` on one of the
+two, or one `limit_fill`, one latency, one book requirement and no instrument asked for both
+`bar` and `quote` across the two hypotheses, and a re-certification. All six are refused
+before the stage is written, so a refused deployment leaves `portfolio.yaml`, the strategy files and
 the state record as they were.
 
 With exit 3: a version whose implementation is not the code it was certified with. Every
