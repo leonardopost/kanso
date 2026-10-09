@@ -1266,7 +1266,8 @@ quote before the first one at or after their delay, and 26 of those at another p
 ticks; none landed after a print outside the quote (`docs/backlog.md`). The venue no longer
 parts the two code paths: the engine judges whether an order is marketable from a bid and an ask
 of its own, which the research path's second match after a command lands and a print with an
-aggressor leave apart on the two, but while a quote is in force neither is narrower than it, so
+aggressor leave apart on the two, but while a quote is in force neither is outside it — the
+bid never under its bid, the ask never over its ask — so
 the fill model, deciding from the quote, decides alike; and a resting order is credited only in
 a print's own match. Measured over seeded runs of two names sending entries, market orders,
 modifies and orders from their fill handlers at 0, 20 and 30 ms, with no cancel none of 5,400

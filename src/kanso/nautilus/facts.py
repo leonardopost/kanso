@@ -2473,9 +2473,10 @@ def _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_tak
 ]:
     """Why the two paths judge a taker alike under `print_through`: whatever a print inside the
     last quote does to the engine's own bid and ask, and whether or not a landing command has
-    since made the engine read them again from its book, they are never narrower than that
-    quote, so every limit the quote makes marketable is matched on landing and the fill model,
-    which answers from the quote, decides it."""
+    since made the engine read them again from its book, they are never wider than that quote —
+    the bid never under its bid, the ask never over its ask — so every limit the quote makes
+    marketable is matched on landing and the fill model, which answers from the quote, decides
+    it."""
     from nautilus_trader.model.enums import AggressorSide
 
     quote = _tape_quote(9.48, 9.52, 10)
@@ -4802,7 +4803,7 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_module_lands_due_commands_before_the_point,
     ),
     (
-        "a print inside the last quote leaves the engine's bid and ask no narrower than that "
+        "a print inside the last quote leaves the engine's bid and ask no wider than that "
         "quote, re-matched or not, so a limit the quote makes marketable is matched on landing",
         _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_taker,
     ),

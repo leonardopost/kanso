@@ -110,7 +110,8 @@ also exercises the last:
   a buyer's print raises the ask to its price when it trades over it and puts the bid back to
   the last quote's, a seller's the other way round; and the re-match after a command lands
   reads both from the book, which a print sets to its price on both sides. After a print
-  inside the last quote, re-matched or not, neither is narrower than that quote.
+  inside the last quote, re-matched or not, neither is outside that quote: the bid is never
+  under its bid nor the ask over its ask.
 * `SimulatedExchange.fill_model` is the model the exchange was built with, and
   `get_matching_engine(instrument_id).get_open_orders()` the orders resting on an instrument.
 """

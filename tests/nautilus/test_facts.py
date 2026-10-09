@@ -116,7 +116,7 @@ BINDINGS = {
     "asks a fill model with the arguments of the point's own match",
     "a simulation module that calls its exchange's process from pre_process lands every "
     "command due by then before the matching engine applies the point",
-    "a print inside the last quote leaves the engine's bid and ask no narrower than that "
+    "a print inside the last quote leaves the engine's bid and ask no wider than that "
     "quote, re-matched or not, so a limit the quote makes marketable is matched on landing",
     "kanso's print_through venue fills a resting limit only from a later print strictly "
     "through its price, by that print's size or whole, never from a quote, and fills a "
