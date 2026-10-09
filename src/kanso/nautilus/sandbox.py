@@ -421,8 +421,9 @@ class SimulatedVenue(LiveExecutionClient):
             default_leverage=Decimal(str(venue.default_leverage)),
             leverages={},
             margin_model=LeveragedMarginModel(),
-            # The same corporate-action module the research venue loads, so a split is
-            # applied at the same instant on both code paths; see `kanso.nautilus.actions`.
+            # The same modules the research venue loads, so a split is applied at the same
+            # instant on both code paths and the venue applies every quote and print the
+            # sleeve is handed; see `kanso.nautilus.actions` and `kanso.nautilus.availability`.
             modules=actions.modules(venue.name),
             portfolio=kernel.portfolio,
             msgbus=self.relay,

@@ -812,21 +812,24 @@ costs:
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
 price — a bar whose low is the limit, or a print at it. Under `through` the market has to go
 beyond it: a low one tick under the buy, a high one tick over the sell, or a print past
-either, and the order then fills at its own price. A print counts only from the side that
-can trade with the order — a seller's print or one with no aggressor for a buy, never a
-buyer's (`docs/concepts.md`, Delivery). It is deterministic either way — the
-venue's fill model is asked with a probability of exactly one or exactly zero and draws
-nothing — and it reaches every run of the hypothesis alike: a card, a certificate, a replay
-on either code path and a stage, whose simulated exchange is built from the same venue
-configuration a card's is. On quotes it withholds less than its name suggests: the engine asks
-it only when the order's own side of the book is at the price, so an ask that falls exactly
-to a resting buy fills it under either rule, and only a market locked at the limit is left
-to it (`kanso doctor` re-checks both behaviours as engine facts). A broker fills as it
-fills: the key moves kanso's simulated venues and nothing a broker does. Like every cost it
-is inherited — a broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and
-two versions certified under different rules cannot share a stage venue, which is one
-exchange: `deploy` refuses the pair before it writes the stage (exit 2), naming
-`venues.<MIC>.costs.limit_fill`.
+either, and the order then fills at its own price — for all that is left of it, whatever the
+size of the print or quote that went past, though a point beyond two resting orders fills only
+the better-priced (`docs/concepts.md`, Delivery). A print counts only from the side that can
+trade with the order — a seller's print or one with no aggressor for a buy, never a buyer's
+(`docs/concepts.md`, Delivery). It is deterministic either way — the venue's fill model is
+asked with a probability of exactly one or exactly zero and draws nothing — and it reaches
+every run of the hypothesis alike: a card, a certificate, a replay on either code path and a
+stage, whose simulated exchange is built from the same venue configuration a card's is. On
+quotes it withholds less than its name suggests: the engine asks it only when the order's own
+side of the book is at the price, so an ask that falls exactly to a resting buy fills it under
+either rule, by the size it shows and again at every quote that shows it, an ask below the buy
+fills all of it (only the best-priced buy, when several rest above it), and only a market
+locked at the limit is left to it (`kanso doctor` re-checks the side a print reaches from and
+each of these quote behaviours as engine facts). A broker fills as it fills: the key moves
+kanso's simulated venues and nothing a broker does. Like every cost it is inherited — a
+broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and two versions
+certified under different rules cannot share a stage venue, which is one exchange: `deploy`
+refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs.limit_fill`.
 
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
 takes to see an order.
@@ -901,20 +904,26 @@ different values cannot share one, which is one round trip: `deploy` refuses the
 before it writes the stage (exit 2), naming `venues.<MIC>.costs.latency_ms` and both
 versions.
 
-**A print fills a resting limit by its own size**, and no more: a buy of 320 met by four
-sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per print, and met
-by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine fact). So the
-fills a run reports are exactly as honest as the print sizes it is fed. A resting order sits
-on one exchange's book and is filled only by the executions that reach that book, so the
-trade stream that stands in for that exchange has to be its own executions, one print per
-execution: a consolidated tape fills the order with prints from venues it never rested on,
-and a file that merges a run of same-price prints into one hands it their sum in one fill.
-Measured on a posting strategy over one month of two Nasdaq names, the consolidated tape's
-fills were an order of magnitude larger than the exchange's own executions at the same
+**A print at a resting limit's price fills it by its own size**, and no more: a buy of 320
+met by four sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per
+print, and met by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine
+fact). A quote beyond the price, or a print beyond it from the side that can trade with the
+order, fills all that is left of it whatever its own size — the same buy met by one seller's
+print of 100 a tick under it fills 100 and then 220 — and of two orders resting beyond one
+point it fills only the better-priced. Under `touch` a print at a price is credited whole to
+every order resting there: two buys at 9.50 met by one seller's print of 100 there fill 100
+each. So the fills a run reports are as honest as the print sizes it is fed only for an order
+alone at its price and no larger than the prints that reach it (`docs/concepts.md`, Delivery).
+A resting order sits on one exchange's book and is filled only by the executions that reach
+that book, so the trade stream that stands in for that exchange has to be its own executions,
+one print per execution: a consolidated tape fills the order with prints from venues it never
+rested on, and a file that merges a run of same-price prints into one hands it their sum in one
+fill. Measured on a posting strategy over one month of two Nasdaq names, the consolidated
+tape's fills were an order of magnitude larger than the exchange's own executions at the same
 prices and instants allowed. On a level-two book (`OrderBookDelta` data) the venue can also
-track queue position — `queue_position` in the engine's venue configuration — so a limit
-that joins a level showing 500 ahead fills only after those 500 have traded through; an
-order posted inside the spread creates its own level and has nothing ahead of it either way.
+track queue position — `queue_position` in the engine's venue configuration — so a limit that
+joins a level showing 500 ahead fills only after those 500 have traded through; an order posted
+inside the spread creates its own level and has nothing ahead of it either way.
 
 A hypothesis that requires `book` needs the book on every UTC day its window holds a name's
 bars, quotes or prints. A day that holds them and no change of that name's book — its book
@@ -1403,7 +1412,9 @@ refuses (exit 2) and `--refresh` performs, and re-snapshotting afterwards is wha
 run reproduces. And the shares a reverse split leaves short of a whole lot are paid out in
 cash at the close before the ex-date, as an issuer pays them — 1,005 shares through a
 one-for-ten split keep 100 and are paid five old shares' worth — so a position under one new
-lot is paid out whole and closes at the split rather than stopping the run.
+lot is paid out whole and closes at the split rather than stopping the run. The close is the
+midpoint the venue's book still quotes; a book whose last quote showed one side at size zero
+pays at the side it shows, and one that quotes neither at the position's own last fill.
 
 The schedule goes here rather than in the data because a split is the one corporate action
 with no honest publication instant. A dividend carries the day it was declared; a split

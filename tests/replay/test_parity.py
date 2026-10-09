@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
+from typing import Any
 
 import pytest
+from nautilus_trader.model.data import QuoteTick, TradeTick
+from nautilus_trader.model.enums import AggressorSide
+from nautilus_trader.model.identifiers import InstrumentId, TradeId
+from nautilus_trader.model.objects import Price, Quantity
 
 from kanso import replay
+from kanso.nautilus import actions
 from kanso.replay import record
 from kanso.replay.parity import RELEASED, STREAM, Intent, Parity, compare, of_sessions
 from kanso.state import StateStore
@@ -15,11 +22,27 @@ from tests.replay.conftest import (
     BLOCKING_FILTER,
     FLAT,
     HOLDING,
+    INSTRUMENT,
     RAISING,
     bars,
     carded,
     composed,
     document,
+    hypothesis,
+    instrument,
+    request_for,
+)
+from tests.replay.test_session import (
+    MS,
+    OTHER_ID,
+    STALE,
+    STALE_PRINTS,
+    T0,
+    both,
+    fills_of,
+    posted,
+    quote,
+    trade,
 )
 
 
@@ -352,3 +375,320 @@ def test_parity_holds_across_a_split(ws_split: Workspace, store_split: StateStor
         ("BUY", 1_005.0),
         ("SELL", 100.0),
     ]
+
+
+def test_parity_is_identical_on_points_published_after_a_later_one() -> None:
+    """A quote stamped before the venue's last update and published after it is applied by
+    both venues, so the two paths submit and fill alike and parity holds at zero."""
+    node, engine = posted(100, 9.9, STALE["quote"])
+
+    divergence, widest = compare(
+        [Intent.of(row) for row in node.intents], [Intent.of(row) for row in engine.intents]
+    )
+
+    assert divergence is None
+    assert widest == 0
+    assert len(node.intents) == 1
+    assert node.run.fills == engine.run.fills
+    assert node.run.fills
+
+
+# --- where the two paths part: `docs/backlog.md` row 154 ---------------------------
+
+PARTING = """Pinned for `docs/backlog.md` row 154. A fix that has the two venues match alike
+once a command lands turns the fill assertions of every test below. The `compare` assertions
+hold parity's own comparison, of intents: a fix that has parity compare fills as well leaves
+them as they are — a session records no fills, so `replay.parity` has none to compare — and
+brings its own failing test through `replay.parity`."""
+
+
+def two_paths(
+    source: bytes, points: list[object], *, names: tuple[str, ...] = (INSTRUMENT,)
+) -> tuple[Any, Any]:
+    """`source` on both paths over these quotes and prints of `names`, under `touch` and with
+    no latency."""
+    hyp = hypothesis(
+        resolution="tick", horizon="1d", data_requirements=["quote", "trade"], universe=list(names)
+    )
+    request = request_for(hyp=hyp, source=source)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), "limit_fill": "touch"}  # type: ignore[arg-type]
+    groups = [
+        group
+        for group in (
+            tuple(point for point in points if isinstance(point, QuoteTick)),
+            tuple(point for point in points if isinstance(point, TradeTick)),
+        )
+        if group
+    ]
+    instruments = [instrument(name.split(".")[0]) for name in names]
+    return both(replace(request, venue_model=model), instruments, groups)
+
+
+def compared(node: Any, engine: Any) -> tuple[object, int]:
+    """What parity says of the two runs' intents, at a tolerance of zero."""
+    return compare(
+        [Intent.of(row) for row in node.intents], [Intent.of(row) for row in engine.intents]
+    )
+
+
+FROM_THE_PRINT = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of 100 at 9.98 from the first print it is handed."""
+
+    config_cls = KansoConfig
+
+    def on_start(self) -> None:
+        self.sent = False
+
+    def on_trade_tick(self, tick) -> None:
+        if not self.sent:
+            self.sent = True
+            self.submit_entry(tick.instrument_id, "BUY", qty=100, price=9.98)
+'''
+
+
+def test_parity_misses_an_order_sent_from_a_print_s_handler_filling_against_it() -> None:
+    """With no latency, a buy of 100 at 9.98 sent from the handler of a seller's print of 100
+    at 9.96, under a quote of 9.99/10.01: the research engine lands the buy and matches it at
+    once against the print, which stands as the book, and fills it as a maker; the node's
+    venue lands it too and waits for the next point, a quote of 9.99/10.01 that does not
+    reach it. Older than v0.14.1: every point here is stamped as it is published."""
+    seller = TradeTick(
+        InstrumentId.from_str(INSTRUMENT),
+        Price(9.96, 2),
+        Quantity.from_int(100),
+        AggressorSide.SELLER,
+        TradeId("S1"),
+        T0 + 20 * MS,
+        T0 + 20 * MS,
+    )
+    points = [quote(9.99, 10.01, 10, 10), seller, quote(9.99, 10.01, 40, 40)]
+
+    node, engine = two_paths(FROM_THE_PRINT, points)
+
+    assert fills_of(node) == []
+    assert fills_of(engine) == [(20, 100.0, 9.98, True)]
+    assert compared(node, engine) == (None, 0)
+
+
+THROUGH_A_BUY = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of 445 at 9.90 from the first quote, and sends a buy of one far under the
+    market from every print."""
+
+    config_cls = KansoConfig
+
+    def on_start(self) -> None:
+        self.placed = False
+
+    def on_quote_tick(self, tick) -> None:
+        if not self.placed:
+            self.placed = True
+            self.submit_entry(tick.instrument_id, "BUY", qty=445, price=9.9)
+
+    def on_trade_tick(self, tick) -> None:
+        self.submit_entry(tick.instrument_id, "BUY", qty=1, price=1.0)
+'''
+
+
+def test_parity_misses_a_buyer_s_print_filling_a_resting_buy_once_a_command_lands() -> None:
+    """No latency, and every point stamped as it is published. A buyer's print of 100 at 9.85
+    goes through a buy of 445 resting at 9.90, and in the match it triggers moves only the
+    engine's bid, so it fills nothing — as it does on both paths when no command follows it.
+    The buy of one sent from its handler lands while the print stands as both sides of the
+    book, and the research engine, matching every resting order again, fills the resting buy
+    whole from it; the node waits for the next point, a quote that does not reach it."""
+    buyer = TradeTick(
+        InstrumentId.from_str(INSTRUMENT),
+        Price(9.85, 2),
+        Quantity.from_int(100),
+        AggressorSide.BUYER,
+        TradeId("B1"),
+        T0 + 20 * MS,
+        T0 + 20 * MS,
+    )
+    points = [quote(9.99, 10.01, 10, 10), buyer, quote(9.99, 10.01, 40, 40)]
+    silent = THROUGH_A_BUY.replace(
+        b'self.submit_entry(tick.instrument_id, "BUY", qty=1, price=1.0)', b"pass"
+    )
+
+    node, engine = two_paths(THROUGH_A_BUY, points)
+    quiet_node, quiet_engine = two_paths(silent, points)
+
+    assert fills_of(node) == []
+    assert fills_of(engine) == [(20, 100.0, 9.9, True), (20, 345.0, 9.9, True)]
+    assert compared(node, engine) == (None, 0)
+    assert fills_of(quiet_node) == fills_of(quiet_engine) == []
+
+
+AT_THE_QUOTE = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of 445 at 9.90 from the first quote, sends a buy of one far under the
+    market from the third, and from the fourth sells whatever it holds."""
+
+    config_cls = KansoConfig
+
+    def on_start(self) -> None:
+        self.seen = 0
+
+    def on_quote_tick(self, tick) -> None:
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(tick.instrument_id, "BUY", qty=445, price=9.9)
+        elif self.seen == 3:
+            self.submit_entry(tick.instrument_id, "BUY", qty=1, price=1.0)
+        elif self.seen == 4 and self.held(tick.instrument_id):
+            self.submit_exit(tick.instrument_id)
+'''
+
+AT_THE_QUOTE_POINTS = [
+    quote(9.99, 10.01, 10, 10),
+    quote(9.95, 10.0, 20, 20),
+    quote(9.85, 9.9, 15, 30, ask_size=100),
+]
+"""The resting buy's market, then a quote whose ask of 100 sits at its price, stamped at 15 ms,
+before the venue's last update at 20 ms, and published at 30 ms."""
+
+
+def test_parity_misses_a_quote_at_a_resting_price_credited_again_when_a_command_lands() -> None:
+    """No print at all, and no latency. The quote at 30 ms shows 100 at the resting buy's
+    price and fills 100 on both paths; the buy of one sent from its handler lands while that
+    quote is the book, and the research engine, matching every resting order again, credits
+    the same 100 a second time, where the node waits for the next point."""
+    node, engine = two_paths(AT_THE_QUOTE, AT_THE_QUOTE_POINTS)
+
+    assert fills_of(node) == [(30, 100.0, 9.9, True)]
+    assert fills_of(engine) == [(30, 100.0, 9.9, True), (30, 100.0, 9.9, True)]
+    assert compared(node, engine) == (None, 0)
+
+
+def test_the_venue_module_parts_the_paths_intents_where_a_sleeve_acts_on_its_fills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same quotes and a fourth after them, from whose handler the sleeve sells what it
+    holds: 100 on the node and 200 on the research path, so the intents part and parity
+    fails — as `parity_replay` would fail the certification. Without the module the venue
+    skips the stale quote, nothing fills, nothing is sold, and parity holds: v0.14.1 brings
+    the quote into the parting, and with it a certification that passed before."""
+    points = [*AT_THE_QUOTE_POINTS, quote(9.95, 10.0, 40, 40)]
+
+    node, engine = two_paths(AT_THE_QUOTE, points)
+    divergence, _ = compared(node, engine)
+
+    assert divergence is not None
+    assert (divergence.index, divergence.field, divergence.node, divergence.engine) == (
+        2,
+        "qty",
+        100.0,
+        200.0,
+    )
+
+    loaded = actions.modules
+    monkeypatch.setattr(actions, "modules", lambda venue: loaded(venue)[:1])
+    node, engine = two_paths(AT_THE_QUOTE, points)
+
+    assert fills_of(node) == fills_of(engine) == []
+    assert compared(node, engine) == (None, 0)
+    assert len(node.intents) == 2
+
+
+ACROSS = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of 445 at 9.90 on DEMO from its first quote, and sends a buy of one far
+    under OTHR's market from every OTHR quote."""
+
+    config_cls = KansoConfig
+
+    def on_start(self) -> None:
+        self.placed = False
+
+    def on_quote_tick(self, tick) -> None:
+        if str(tick.instrument_id) == "DEMO.XNAS":
+            if not self.placed:
+                self.placed = True
+                self.submit_entry(tick.instrument_id, "BUY", qty=445, price=9.9)
+        else:
+            self.submit_entry(tick.instrument_id, "BUY", qty=1, price=1.0)
+'''
+
+
+def test_parity_misses_a_command_for_another_name_re_crediting_a_print() -> None:
+    """No latency. DEMO's book is a print of 100 at the resting buy's price from 30 ms, stamped
+    before the venue's last update; OTHR quotes every millisecond from 31 to 36 ms and the
+    sleeve sends OTHR a buy of one from each. Every one of those commands lands, and the
+    research engine matches every resting order of the venue again — DEMO's buy among them,
+    against DEMO's print — so one print of 100 is credited 445; the node credits it once."""
+    other = [
+        QuoteTick(
+            InstrumentId.from_str(OTHER_ID),
+            Price(50.0, 2),
+            Price(50.02, 2),
+            Quantity.from_int(1_000),
+            Quantity.from_int(1_000),
+            T0 + ms * MS,
+            T0 + ms * MS,
+        )
+        for ms in range(31, 37)
+    ]
+    points = [quote(9.99, 10.01, 10, 10), quote(9.95, 10.0, 20, 20), trade(9.9, 100, 15, 30, 1)]
+
+    node, engine = two_paths(ACROSS, [*points, *other], names=(INSTRUMENT, OTHER_ID))
+
+    assert fills_of(node) == [(30, 100.0, 9.9, True)]
+    assert fills_of(engine) == [
+        (30, 100.0, 9.9, True),
+        (31, 100.0, 9.9, True),
+        (32, 100.0, 9.9, True),
+        (33, 100.0, 9.9, True),
+        (34, 45.0, 9.9, True),
+    ]
+    assert compared(node, engine) == (None, 0)
+
+
+def test_parity_misses_the_paths_parting_on_a_stale_print_an_order_lands_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under 20 ms the buy of 320 lands on the first print's instant, and the print stands as
+    the book: both paths fill 100 there as a taker, and the research engine, matching every
+    resting order again once the buy has landed, fills another 100 from the same print as a
+    maker, where the node waits for the next print. The venue used to skip that print,
+    stamped before its last update, and the two paths then agreed; it now applies it, so the
+    parting reaches it. Parity compares intents, which agree, so it calls the two identical
+    either way. Pinned for `docs/backlog.md` row 154 as `PARTING` says."""
+
+    node, engine = posted(320, 9.9, STALE_PRINTS, latency_ms=20)
+
+    assert fills_of(node) == [
+        (30, 100.0, 9.9, False),
+        (40, 100.0, 9.9, True),
+        (50, 100.0, 9.9, True),
+        (60, 20.0, 9.9, True),
+    ]
+    assert fills_of(engine) == [
+        (30, 100.0, 9.9, False),
+        (30, 100.0, 9.9, True),
+        (40, 100.0, 9.9, True),
+        (50, 20.0, 9.9, True),
+    ]
+    assert compared(node, engine) == (None, 0)
+
+    loaded = actions.modules
+    monkeypatch.setattr(actions, "modules", lambda venue: loaded(venue)[:1])
+    node, engine = posted(320, 9.9, STALE_PRINTS, latency_ms=20)
+
+    skipped = [(40, 100.0, 9.9, True), (50, 100.0, 9.9, True), (60, 100.0, 9.9, True)]
+    assert fills_of(node) == fills_of(engine) == skipped
+    assert compared(node, engine) == (None, 0)

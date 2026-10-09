@@ -1095,7 +1095,8 @@ def execute_chunked(
                 # none when it states none.
                 latency_model=get_latency_model(venue),
                 # The venue applies a corporate action one call before it matches the point
-                # that carried the market past it; see `kanso.nautilus.actions`.
+                # that carried the market past it, and applies every quote and print the sleeve
+                # is handed; see `kanso.nautilus.actions` and `kanso.nautilus.availability`.
                 modules=modules(venue.name),
             )
         for instrument in instruments:

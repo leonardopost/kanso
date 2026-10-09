@@ -1106,6 +1106,27 @@ series were loaded in. A sleeve that trades several instruments therefore used t
 the first name against a book the later names had not yet moved, and a market submitted
 into the second filled at its previous close.
 
+**The venue holds every point the sleeve is handed.** A market point carries two instants,
+and a tape can stamp them apart: `massive_quotes` and `massive_trades` take `ts_init` from the
+consolidated tape and `ts_event` from the participant, a few hundred microseconds earlier, so
+a point delivered after another can carry the earlier `ts_event`. The engine's top-of-book
+venue ignores a quote or a print stamped before the last one it applied — it advances its
+clock and matches the book it already held — while the sleeve is handed the point. Measured
+on 85 sessions each of two Nasdaq names' quotes and lit prints, the venue ignored about 12 %
+of the quotes and 53 % of the prints the sleeve saw: a resting buy that a later quote went
+through never filled, and a market order sent on a quote the venue had ignored filled
+against the book before it. Both of kanso's simulated venues — a card's, a certificate's, a
+replay's on either path and a stage's — now empty that book first
+(`kanso.nautilus.availability`), so the venue applies every quote and print at its
+`ts_init`, as the sleeve is handed it. No point is copied or re-stamped, so the sleeve is
+handed every point at the same `data_time` and the stream's digest is the same; what moves is
+what the venue fills, and with it every order a sleeve sends because of a fill or of the
+position one leaves. Every quote and print the venue applies is also there to be matched again
+when a command lands, which is where the two code paths part (below). A tape that carries
+prints reported long after they were struck moves the venue with them, as it already moved the
+sleeve and the marks (`docs/backlog.md`). A level-two book was never filtered this way and is
+left alone. `kanso doctor` checks the engine's filter and the remedy as engine facts.
+
 kanso batches a coincident grain — every bar at one `ts_init`, then every quote, then
 every trade — into the venue before any author handler of that grain runs, and then runs
 those handlers one at a time so each fill is visible to the next. `on_bar` of the first
@@ -1173,17 +1194,59 @@ in turn, so a bar that only touched the level at its low fills a resting buy at 
 under `touch` and leaves it resting under `through`; on a quote the engine asks the rule only
 when the order's own side of the book is at the price, so an ask falling to a resting buy
 fills it under either. Both code paths build their venue from the same configuration, so a
-card and a stage fill the same resting orders, and the rule draws no random number, so they
-fill them the same way every time. A print fills the order by its own size and no more, so
-the honesty of a fill is the honesty of the print: an exchange's own executions, one per
-print, fill a resting order as that exchange would; a consolidated or merged tape fills it
-with size the book never showed it (`docs/workspace.md`, `limit_fill`).
+card and a stage apply the same rule, and the rule draws no random number, so they apply it
+the same way every time. They part where a command lands — for any instrument, on any venue,
+sent from any handler, at any latency, zero included: the research engine then matches every
+resting order again against its book as it stands, and the node's venue matches an instrument's
+orders again only at that instrument's next point. So a quote whose far side sits at or through
+a resting order's price, or a print there — a print stands as both sides of the book until the
+next quote — can fill that order on the research path alone, a first time for an order just
+sent and again for one it has filled already. `kanso replay parity` compares intents, so it
+calls such runs identical while no intent moves. A sleeve that acts on its fills can then send
+different orders on the two paths, and parity and the required `parity_replay` certification
+gate fail. Since v0.14.1 applies the quotes and prints the venue used to skip, that happens
+more often, so a subject that passed `parity_replay` on 0.14.0 can fail it: on 60 seeded tapes
+of a sleeve sending entries, exits and cancels with no latency, 29 failed at a tolerance of
+zero where 14 had (`docs/backlog.md`).
 
-A trade print reaches a resting order only from the side that can trade with it: the engine
-moves only the ask down for a seller's print and only the bid up for a buyer's, so a
-buyer's print below a resting buy never fills it, while a seller's print or one with no
-aggressor does. What side a print carries is therefore a fact about the data, and a trade
-file that records none is loaded with no aggressor rather than a guessed one
+**How much a point fills depends on where it lands.** A print *at* a resting order's price fills
+it by the print's own size and no more, so the honesty of that fill is the honesty of the print:
+an exchange's own executions, one per print, fill a resting order as that exchange would; a
+consolidated or merged tape fills it with size the book never showed it (`docs/workspace.md`,
+`limit_fill`). A quote whose far side sits at the price fills it by the size shown, and again at
+every quote that shows it. **A print or a quote *beyond* the price fills all that is left of the
+order** — a print, in the match it triggers, only from the side that can trade with it, as the
+next paragraph says — at its price, whatever its own size: the engine's top-of-book venue
+assumes that a market which moved through a limit had the size to fill it. A buy of 445 resting
+at 9.62 and met by one print of 89 at 9.59 fills 89 and then 356; under `through` every fill a
+print makes is such a fill. Measured on 2026-10-09 over lit prints of two Nasdaq names and no
+quotes, a buy and a sell of 445 re-posted a tick from the last print every five seconds: 19–36 %
+of what the venue filled was beyond what the prints' own sizes allowed (7 % two ticks away,
+re-posted every minute). Each of these is a statement about one order. With several resting, a
+point is credited to each order it fills, not shared among them: a quote at a price fills every
+order resting there by the size it shows, and a print at it does the same under `touch`, so a
+run resting several orders at one price is credited that point several times; and a point beyond
+several fills all that is left of the best-priced and nothing of an order resting at a worse
+price, even one it also went through. So only an order alone at its price and no larger than the
+points that reach it is filled as honestly as its prints; a larger one, or one resting beside
+another at its price, is credited size the tape never showed. The engine kanso pins offers no
+top-of-book setting that fills such a point by its own size without withholding a repeated
+print, and nothing kanso loads reaches that part of it (`docs/backlog.md`). A print also stands
+as the top of the book on both sides, at its price and size, until the next quote: a market
+order sent on it fills that size at the print's price and the rest one increment worse. `kanso
+doctor` checks the fill by size at the price, the quote credited again, the whole fill beyond
+it, two orders at one price each credited a point whole, a point beyond two orders filling only
+the better-priced, the print standing as the book and why `liquidity_consumption` stays off as
+engine facts.
+
+In the match it triggers, a trade print reaches a resting order only from the side that can
+trade with it: for that match the engine moves only the ask down for a seller's print and only
+the bid up for a buyer's, so a buyer's print below a resting buy does not fill it there, while
+a seller's print or one with no aggressor does. The print still stands as both sides of the
+book, so once a command lands the research path, matching every resting order again (above),
+fills a resting buy that a buyer's print went through, and fills all of it; the node's venue
+does not (`docs/backlog.md`). What side a print carries is therefore a fact about the data,
+and a trade file that records none is loaded with no aggressor rather than a guessed one
 (`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
 unfilled.
 
@@ -1198,7 +1261,9 @@ runner and on both code paths: 500 shown on the bid, an order of 300 joining it,
 sellers' prints of 100 a second apart fill the order at the seventh, eighth and ninth prints;
 the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
 third and fourth, credited with what stood ahead of it — which is why a posting thesis on
-that venue rests a level of its own. `kanso doctor` checks both engine facts.
+that venue rests a level of its own, though even there a print or a quote beyond the order
+fills all of it, when it is the best-priced order the point reaches. `kanso doctor` checks
+both engine facts.
 
 **Under `depth` the strategy sees the book its account would, and the venue every change.**
 Without the key a sleeve is handed each change to the book as the venue is. With it

@@ -61,8 +61,18 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 * `SimulatedExchange.get_matching_engine(instrument_id)` returns the instrument's
   `OrderMatchingEngine` on both venues. Its `get_book()` is the book the venue declares — L1
   unless the hypothesis requires `book`, then L2 by price level — and on an L1 book
-  `process_quote_tick` sets the top level from a quote, skipping
-  one older than its last update. A market order is matched against that top level.
+  `process_quote_tick` sets the top level from a quote, skipping one older than its last
+  update — which is why a restatement is admitted first (`kanso.nautilus.availability`): a
+  bar's walk can stamp the book past the instant of the point that applies the split. A
+  side a quote shows at size zero is left empty, and `best_bid_price` or `best_ask_price`
+  returns `None` for it. A market order is matched against that top level.
+* On that book `process_quote_tick` also keeps the quote's bid and ask prices whatever their
+  sizes, and `process_trade_tick`, once a print has been matched, sets the matching engine's
+  bid back to the kept bid after a buyer's print and its ask back to the kept ask after a
+  seller's, where they stay until a later point or a landing command sets them from the
+  book's own side.
+* `Position` keeps no last price of its own: its prices are `avg_px_open` and
+  `avg_px_close`, and its last fill is `last_event`, an `OrderFilled` carrying `last_px`.
 """
 
 from __future__ import annotations
@@ -79,7 +89,8 @@ from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId, StrategyId
 
-from kanso.nautilus import splits
+from kanso.nautilus import availability, splits
+from kanso.nautilus.availability import Availability
 from kanso.nautilus.splits import Split
 
 __all__ = ["NAME", "TOPIC", "CorporateActions", "Restated", "last_price", "modules"]
@@ -121,12 +132,18 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         self._due: list[tuple[int, str, Split]] = []
         self._applied: set[tuple[str, date]] = set()
         self._known = -1
+        self._quoted: dict[InstrumentId, tuple[Any, Any]] = {}
 
     # --- what the exchange calls ---------------------------------------------
 
     def pre_process(self, data: Any) -> None:
-        """Apply everything this point's reference time has reached, before it is matched."""
+        """Apply everything this point's reference time has reached, before it is matched,
+        then keep a quote's bid and ask prices, whatever their sizes: the matching engine
+        keeps them too once it applies the quote, which `Availability` sees that it does, and a
+        restatement prices an empty side from them."""
         self.apply_through(int(data.ts_event), int(data.ts_init))
+        if isinstance(data, QuoteTick):
+            self._quoted[data.instrument_id] = (data.bid_price, data.ask_price)
 
     def process(self, ts_now: int) -> None:
         """Nothing: a corporate action is applied by the point that carries the market past
@@ -137,10 +154,12 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         is where the runner's extraction reads it."""
 
     def reset(self) -> None:
-        """Forget what has been applied, so a reused exchange re-reads its schedules."""
+        """Forget what has been applied and quoted, so a reused exchange re-reads its
+        schedules."""
         self._due = []
         self._applied = set()
         self._known = -1
+        self._quoted = {}
 
     # --- the action ----------------------------------------------------------
 
@@ -214,25 +233,57 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
     ) -> None:
         """Quote the matching engine's book in the restated shares: the last bid and ask
         divided by the ratio, their sizes multiplied by it. Nothing rests in it — the cancel
-        ran first — so the quote moves prices and matches nothing."""
+        ran first — so the quote moves prices and matches nothing.
+
+        A side the book holds empty — a quote showed it at size zero — is restated empty, at
+        size zero, which a top-of-book book applies as no level. Restating only a book that
+        holds both sides left the other side quoting the old count: measured, a book whose
+        last quote showed no bid kept its ask at ten dollars, and an order another name's
+        handler sent into it filled there against a restated hundred. The empty side's price
+        matters although it shows nothing: the matching engine keeps the last quote's bid
+        and ask prices whatever their sizes, and after every print on a top-of-book book it
+        puts the side the print's aggressor did not trade against back to that price, until
+        a later point or a landing command sets it again. So the empty side is priced at
+        what the last quote showed there, divided by the ratio — what that quote would have
+        shown in the new count. Priced at the other side's restated price, as it was, a sell
+        resting at the restated ask was filled there by a buyer's print below it: measured,
+        an empty bid restated at an ask of 100.30, a buyer's print at 100.20 put the
+        engine's bid at 100.30, and a second at 100.10 filled a sell of 100 at 100.30 that
+        no buyer paid. A book no point has reached has nothing to restate.
+
+        The quote carries the instant of the point that applied the split, and a bar of this
+        instrument published after that instant has already stamped the book past it, so it
+        is admitted first rather than skipped: measured, a bar of the eve published thirty
+        seconds into the ex-date left the book quoting ten dollars, and an order another
+        name's handler sent into it filled there against a restated hundred."""
         engine = self.exchange.get_matching_engine(instrument_id)
         book = engine.get_book()
         bid, ask = book.best_bid_price(), book.best_ask_price()
-        if bid is None or ask is None:
+        # Only a quote empties a side, and every quote is kept, so a book with an empty side
+        # has a quote to price it from; a book with no quote kept holds both sides, set by a
+        # print or a bar, or nothing at all.
+        quoted_bid, quoted_ask = self._quoted.get(instrument_id, (bid, ask))
+        if quoted_bid is None:
             return
         instrument = self.exchange.instruments[instrument_id]
         step = float(instrument.size_increment)
-        engine.process_quote_tick(
-            QuoteTick(
-                instrument_id,
-                instrument.make_price(float(bid) / split.ratio),
-                instrument.make_price(float(ask) / split.ratio),
-                instrument.make_qty(max(float(book.best_bid_size()) * split.ratio, step)),
-                instrument.make_qty(max(float(book.best_ask_size()) * split.ratio, step)),
-                ts_event,
-                ts_init,
+
+        def side(price: Any, size: Any, quoted: Any) -> tuple[Any, Any]:
+            if price is None:
+                return instrument.make_price(float(quoted) / split.ratio), instrument.make_qty(0)
+            restated_size = max(float(size) * split.ratio, step)
+            return instrument.make_price(float(price) / split.ratio), instrument.make_qty(
+                restated_size
             )
+
+        bid_price, bid_size = side(bid, book.best_bid_size(), quoted_bid)
+        ask_price, ask_size = side(ask, book.best_ask_size(), quoted_ask)
+        restated = QuoteTick(
+            instrument_id, bid_price, ask_price, bid_size, ask_size, ts_event, ts_init
         )
+        availability.admit(engine, ts_event)
+        engine.process_quote_tick(restated)
+        self._quoted[instrument_id] = (bid_price, ask_price)
 
     def _cancel(self, instrument_id: InstrumentId, ts_init: int) -> None:
         """Cancel every resting order in this instrument, one command per sleeve holding one."""
@@ -255,14 +306,30 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
 
 def last_price(book: Any, position: Any) -> float:
     """An instrument's last price in the old share count, before a split restates it: the
-    midpoint its book still quotes, which is the close before the ex-date, or the position's
-    own last fill when the book holds no quote."""
+    midpoint its book still quotes, which is the close before the ex-date; the one side it
+    quotes when a quote showed the other at size zero; or, when it quotes neither, the price
+    of the position's own last fill.
+
+    The position's last fill is its `last_event`: nautilus_trader 1.231.0's `Position` keeps
+    no `last_px` of its own — its prices are `avg_px_open` and `avg_px_close` — and reading
+    one ended the run with `AttributeError` the first time a book with an empty side met a
+    split with a position open."""
     bid, ask = book.best_bid_price(), book.best_ask_price()
-    if bid is None or ask is None:
-        return float(position.last_px)
-    return (float(bid) + float(ask)) / 2.0
+    if bid is not None and ask is not None:
+        return (float(bid) + float(ask)) / 2.0
+    if bid is not None or ask is not None:
+        return float(bid if bid is not None else ask)
+    return float(position.last_event.last_px)
 
 
-def modules(venue: str) -> list[CorporateActions]:
-    """The simulation modules one venue loads: this one, named for the venue it serves."""
-    return [CorporateActions(SimulationModuleConfig(component_id=f"{NAME}-{venue}"))]
+def modules(venue: str) -> list[SimulationModule]:
+    """The simulation modules one venue loads, in the order it runs them, each named for the
+    venue it serves: the corporate actions first, which read the book a split restates and
+    pays in lieu from, then `Availability`, which may empty a top-of-book book before the
+    point is applied. The other way round, a split that the instrument's own point triggers,
+    stamped before the book's last update, would find the book already emptied: nothing to
+    restate, and no quote to value the fraction at."""
+    return [
+        CorporateActions(SimulationModuleConfig(component_id=f"{NAME}-{venue}")),
+        Availability(SimulationModuleConfig(component_id=f"{availability.NAME}-{venue}")),
+    ]

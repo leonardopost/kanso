@@ -522,6 +522,52 @@ def test_the_concepts_page_states_both_sides_of_the_paper_gate() -> None:
     assert "above the band as much a fail as below it" in promotion
 
 
+def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
+    """The engine's top-of-book venue ignored a quote or a print stamped before its book's
+    last update while the sleeve was handed it; the page says the venue now applies it, and
+    names the module that makes it so."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert "**The venue holds every point the sleeve is handed.**" in delivery
+    assert "(`kanso.nautilus.availability`)" in delivery
+
+
+def test_the_pages_say_a_point_beyond_a_limit_fills_all_of_it() -> None:
+    """Both pages said a print fills a resting limit by its own size and no more; that holds
+    only at the price, and the engine fills an order whole once a point goes beyond it
+    (`kanso.nautilus.facts`), which a posting thesis sized above its prints is credited."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert (
+        "**A print or a quote *beyond* the price fills all that is left of the order**" in delivery
+    )
+    assert "A print fills the order by its own size and no more" not in delivery
+    workspace = prose(page("workspace.md"))
+    assert "**A print at a resting limit's price fills it by its own size**" in workspace
+    assert "**A print fills a resting limit by its own size**" not in workspace
+
+
+def test_the_pages_say_a_point_is_credited_to_each_order_it_fills() -> None:
+    """The honesty of a fill was stated for one order; with several resting, one point at a
+    price is credited whole to each, and one beyond several fills only the best-priced
+    (`kanso.nautilus.facts`), so both pages say whose statement it is."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert "Each of these is a statement about one order." in delivery
+    assert "only an order alone at its price" in delivery
+    workspace = prose(page("workspace.md"))
+    assert "of two orders resting beyond one point it fills only the better-priced" in workspace
+    assert "only for an order alone at its price" in workspace
+    assert "exactly as honest as the print sizes it is fed" not in workspace
+
+
+def test_the_concepts_page_says_where_the_two_paths_part_and_what_it_costs_parity() -> None:
+    """The paths part wherever a command lands, a quote or a print being matched again on the
+    research path alone (`docs/backlog.md` row 154), not only where a print stands as the book;
+    and a sleeve that acts on its fills then fails `parity_replay`, more often since v0.14.1."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert "They part where a command lands — for any instrument, on any venue," in delivery
+    assert "a subject that passed `parity_replay` on 0.14.0 can fail it" in delivery
+    assert "They part where a command lands while a print stands as the book" not in delivery
+
+
 YAML_11_BOOLEANS = ("y", "n", "yes", "no", "true", "false", "on", "off")
 """The words the YAML 1.1 type repository lists as booleans; which of them PyYAML reads as
 one is what the test below measures."""

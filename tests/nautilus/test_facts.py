@@ -87,6 +87,24 @@ BINDINGS = {
     "order's last when the order takes it",
     "a level-two venue refuses to run a name it holds data and no book data for, and "
     "counts only the first point of each validated add_data call",
+    "a level-one venue ignores a quote or a print whose ts_event is earlier than its book's "
+    "last update, and applies one stamped at it",
+    "a level-one book that kanso's Availability module resets applies the next quote or "
+    "print whatever its ts_event, and holds what that point alone sets",
+    "a print at a resting limit's price fills it by its own size, so a larger clip fills in parts",
+    "on a level-one venue a quote beyond a resting limit's price, or a print beyond it from "
+    "the side that can trade with it, fills all that is left of the order at its price, "
+    "whatever its own size, when it is the best-priced order the point reaches",
+    "a point beyond two resting limits on a level-one venue fills all that is left of the "
+    "better-priced and nothing of the other",
+    "on a level-one venue a quote at the price two limits rest at, or a print at it under "
+    "touch, fills each of them by the point's whole size",
+    "a quote whose far side sits at a resting limit's price on a level-one venue fills it "
+    "by the size shown, and again at every quote that shows it",
+    "a print is both sides of a level-one book until the next quote, so a market order sent "
+    "on it fills the print's size at its price and the rest one increment worse",
+    "liquidity_consumption on a level-one venue fills a resting limit from the first of two "
+    "identical prints at its price and not from the second",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

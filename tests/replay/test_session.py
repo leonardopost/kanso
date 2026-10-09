@@ -17,8 +17,10 @@ from typing import Any
 
 import pytest
 import uvloop
-from nautilus_trader.model.data import CustomData, DataType
-from nautilus_trader.model.identifiers import ClientId, InstrumentId
+from nautilus_trader.model.data import CustomData, DataType, QuoteTick, TradeTick
+from nautilus_trader.model.enums import AggressorSide
+from nautilus_trader.model.identifiers import ClientId, InstrumentId, TradeId
+from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import midnight_ns
 from kanso.data.types import CorporateAction, Funding
@@ -1301,6 +1303,182 @@ def test_the_two_paths_charge_a_resting_fill_the_maker_rate_alike() -> None:
     assert fill.maker is True
     assert fill.cost == pytest.approx(-100 * 9.8 * 0.2 / 10_000)
     assert node.run.equity == engine.run.equity
+
+
+# --- what a quote or a print fills on the top-of-book venue --------------------
+
+T0 = midnight_ns(date(2024, 3, 4)) + 15 * 3_600 * SECOND_NS
+"""15:00 UTC on a forward session; every instant below is in milliseconds after it."""
+MS = 1_000_000
+
+POSTED = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    qty: int = 100
+    limit: float = 9.9
+
+
+class Strategy(KansoStrategy):
+    """Rests one buy on the first quote or print it is handed, and waits for the market."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.placed = False
+
+    def _rest(self, tick) -> None:
+        if not self.placed:
+            self.placed = True
+            self.submit_entry(
+                tick.instrument_id, "BUY", qty=self.kanso_config.qty, price=self.kanso_config.limit
+            )
+
+    def on_quote_tick(self, tick) -> None:
+        self._rest(tick)
+
+    def on_trade_tick(self, tick) -> None:
+        self._rest(tick)
+'''
+
+
+def quote(
+    bid: float,
+    ask: float,
+    event_ms: int,
+    init_ms: int,
+    bid_size: int = 1_000,
+    ask_size: int = 1_000,
+) -> QuoteTick:
+    """A quote stamped `event_ms` by the participant and published at `init_ms`."""
+    return QuoteTick(
+        InstrumentId.from_str(INSTRUMENT),
+        Price(bid, 2),
+        Price(ask, 2),
+        Quantity.from_int(bid_size),
+        Quantity.from_int(ask_size),
+        T0 + event_ms * MS,
+        T0 + init_ms * MS,
+    )
+
+
+def trade(px: float, size: int, event_ms: int, init_ms: int, number: int) -> TradeTick:
+    """A print with no aggressor, stamped and published the same way."""
+    return TradeTick(
+        InstrumentId.from_str(INSTRUMENT),
+        Price(px, 2),
+        Quantity.from_int(size),
+        AggressorSide.NO_AGGRESSOR,
+        TradeId(f"T{number}"),
+        T0 + event_ms * MS,
+        T0 + init_ms * MS,
+    )
+
+
+def posted(
+    qty: int, limit: float, points: list[object], rule: str = "touch", latency_ms: float = 0.0
+) -> tuple[backtest.RunResult, backtest.RunResult]:
+    """A buy of `qty` resting at `limit` from the first point, over these quotes and prints,
+    under a venue model whose `limit_fill` is `rule` and whose latency is `latency_ms`."""
+    hyp = hypothesis(resolution="tick", horizon="1d", data_requirements=["quote", "trade"])
+    request = request_for(hyp=hyp, source=POSTED)
+    model = dict(request.venue_model)
+    model["costs"] = {**dict(model["costs"]), "limit_fill": rule}  # type: ignore[arg-type]
+    if latency_ms:
+        model["costs"]["latency_ms"] = latency_ms  # type: ignore[index]
+    subject = replace(request, venue_model=model, overrides={"qty": qty, "limit": limit})
+    groups = [
+        group
+        for group in (
+            tuple(point for point in points if isinstance(point, QuoteTick)),
+            tuple(point for point in points if isinstance(point, TradeTick)),
+        )
+        if group
+    ]
+    return both(subject, [instrument()], groups)
+
+
+def fills_of(result: backtest.RunResult) -> list[tuple[int, float, float, bool]]:
+    """Each fill as its instant in milliseconds after `T0`, its quantity, price and maker flag."""
+    return [(round((f.ts_ns - T0) / MS), f.qty, f.px, f.maker) for f in result.run.fills]
+
+
+@pytest.mark.parametrize("rule", ["touch", "through"])
+@pytest.mark.parametrize(
+    "beyond",
+    [trade(9.59, 89, 20, 20, 1), quote(9.55, 9.60, 20, 20, ask_size=89)],
+    ids=["print", "quote"],
+)
+def test_a_point_beyond_a_resting_limit_fills_it_whole_on_both_paths(
+    beyond: object, rule: str
+) -> None:
+    """A buy of 445 resting at 9.62 under 9.65/9.70, met by a print of 89 at 9.59 or a quote
+    whose ask of 89 is at 9.60: the engine fills the 89 and then the other 356 at the limit,
+    under either rule and on both paths, because a market that moved through a limit is
+    assumed to have had the size (`kanso.nautilus.facts`)."""
+    node, engine = posted(445, 9.62, [quote(9.65, 9.70, 10, 10), beyond], rule)
+
+    assert node.intents == engine.intents
+    assert fills_of(node) == fills_of(engine) == [(20, 89.0, 9.62, True), (20, 356.0, 9.62, True)]
+
+
+STALE = {
+    "quote": [quote(9.99, 10.01, 10, 10), quote(9.95, 10.0, 20, 20), quote(9.8, 9.85, 15, 50)],
+    "print": [quote(9.99, 10.01, 10, 10), quote(9.95, 10.0, 20, 20), trade(9.85, 100, 15, 50, 1)],
+}
+"""A buy of 100 rests at 9.90 from the first quote; a quote or a print through it is stamped
+at 15 ms, before the venue's last update at 20 ms, and published at 50 ms."""
+
+
+@pytest.mark.parametrize(
+    ("latency_ms", "filled"),
+    [(0, [(50, 100.0, 9.9, True)]), (20, [(50, 100.0, 9.85, False)])],
+    ids=["no-latency", "20ms"],
+)
+@pytest.mark.parametrize("kind", ["quote", "print"])
+def test_the_two_paths_apply_a_point_published_after_a_later_one(
+    kind: str, latency_ms: int, filled: list[tuple[int, float, float, bool]]
+) -> None:
+    """The top-of-book venue applies every quote and print the sleeve is handed, on both
+    paths alike, where it used to skip one stamped before its book's last update and leave
+    the order unfilled. With no latency the resting buy fills at its price as a maker; at
+    20 ms it lands with the late point and takes it."""
+    node, engine = posted(100, 9.9, STALE[kind], latency_ms=latency_ms)
+
+    assert node.intents == engine.intents
+    assert fills_of(node) == fills_of(engine) == filled
+
+
+STALE_PRINTS = [
+    quote(9.99, 10.01, 10, 10),
+    quote(9.95, 10.0, 20, 20),
+    *[trade(9.9, 100, 15 + 10 * k, 30 + 10 * k, k) for k in range(4)],
+]
+"""A buy rests at 9.90 from the first quote; four prints of 100 at its price follow, each
+published 15 ms after it was stamped, so the first, at 30 ms, is stamped before the venue's
+last update at 20 ms."""
+
+
+def test_stale_prints_at_the_price_fill_by_their_size_on_both_paths() -> None:
+    """A buy of 320 at 9.90 and the four prints: the first used to be skipped, and now each
+    print fills by its own size. At no latency only — under 20 ms the buy lands on the first
+    print's instant, which the venue used to skip on both paths and now applies, and there
+    the two paths credit the print differently (`docs/backlog.md`, row 154; pinned in
+    `tests/replay/test_parity.py`)."""
+    node, engine = posted(320, 9.9, STALE_PRINTS)
+
+    assert node.intents == engine.intents
+    assert (
+        fills_of(node)
+        == fills_of(engine)
+        == [
+            (30, 100.0, 9.9, True),
+            (40, 100.0, 9.9, True),
+            (50, 100.0, 9.9, True),
+            (60, 20.0, 9.9, True),
+        ]
+    )
 
 
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:
