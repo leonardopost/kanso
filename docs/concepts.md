@@ -1118,11 +1118,14 @@ through never filled, and a market order sent on a quote the venue had ignored f
 against the book before it. Both of kanso's simulated venues — a card's, a certificate's, a
 replay's on either path and a stage's — now empty that book first
 (`kanso.nautilus.availability`), so the venue applies every quote and print at its
-`ts_init`, as the sleeve is handed it; no point, no `data_time` and no intent moves. A tape
-that carries prints reported long after they were struck moves the venue with them, as it
-already moved the sleeve and the marks (`docs/backlog.md`). A level-two book was never
-filtered this way and is left alone. `kanso doctor` checks the engine's filter and the
-remedy as engine facts.
+`ts_init`, as the sleeve is handed it. No point is copied or re-stamped, so the sleeve is
+handed every point at the same `data_time` and the stream's digest is the same; what moves is
+what the venue fills, and with it every order a sleeve sends because of a fill or of the
+position one leaves. Every print the venue applies can also stand as the book when a command
+lands, which is where the two code paths part (below). A tape that carries prints reported
+long after they were struck moves the venue with them, as it already moved the sleeve and the
+marks (`docs/backlog.md`). A level-two book was never filtered this way and is left alone.
+`kanso doctor` checks the engine's filter and the remedy as engine facts.
 
 kanso batches a coincident grain — every bar at one `ts_init`, then every quote, then
 every trade — into the venue before any author handler of that grain runs, and then runs
@@ -1191,8 +1194,13 @@ in turn, so a bar that only touched the level at its low fills a resting buy at 
 under `touch` and leaves it resting under `through`; on a quote the engine asks the rule only
 when the order's own side of the book is at the price, so an ask falling to a resting buy
 fills it under either. Both code paths build their venue from the same configuration, so a
-card and a stage fill the same resting orders, and the rule draws no random number, so they
-fill them the same way every time.
+card and a stage apply the same rule, and the rule draws no random number, so they apply it
+the same way every time. They part where a command lands while a print stands as the book —
+sent from that print's handler, or due at its instant under a latency: the research engine
+matches every resting order again once the commands due at an instant have landed, against
+the print, and the node's venue waits for the next point, so the two can fill an order
+differently there while `kanso replay parity`, which compares intents, calls them identical
+(`docs/backlog.md`).
 
 **How much a point fills depends on where it lands.** A print *at* a resting order's price
 fills it by the print's own size and no more, so the honesty of that fill is the honesty of

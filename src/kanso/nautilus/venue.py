@@ -29,16 +29,18 @@ nothing else here: its slippage probability is zero, and its limit probability i
 one or exactly zero, so it never draws a random number and the same request fills the same
 way every time. `touch` is the engine's own default, probability one: a resting limit fills
 the moment the market reaches its price. `through` is probability zero: a limit whose price
-the market only reached stays on the book, and fills once a print or a quote goes beyond
-it. Under either rule a point that goes beyond a resting limit — a quote, or a print from the
+the market only reached stays on the book, and fills once a print or a quote goes beyond it.
+Under either rule a point that goes beyond a resting limit — a quote, or a print from the
 side that can trade with it — fills all that is left of it, whatever the size of that point,
-which is the engine's assumption and not a measurement.
-`liquidity_consumption` stays at the engine's default, off: on a top-of-book venue it
-remembers what it credited at a price until the size shown there changes, so a second print
-of the same size at the order's price fills nothing, and a market order against a level it
-has consumed is neither filled nor rejected (`kanso.nautilus.facts`). Both code paths build
-their fill model from this one configuration, so a card and a stage cannot disagree about
-which orders filled.
+which is the engine's assumption and not a measurement. `liquidity_consumption` stays at the
+engine's default, off: on a top-of-book venue it remembers what it credited at a price until
+the size shown there changes, so a second print of the same size at the order's price fills
+nothing, and a market order against a level it has consumed is neither filled nor rejected
+(`kanso.nautilus.facts`). Both code paths build their fill model from this one
+configuration, so a card and a stage apply the same rule to which orders filled. They can
+still part where a command lands while a print stands as the book: the research engine
+matches the resting orders again once the commands due at an instant have landed, against
+the print, while the node's venue waits for the next point (`docs/backlog.md`).
 
 Every venue account is funded with the whole run capital, because the engine keeps one
 account per venue and has no cross-venue book. What bounds exposure across venues is the

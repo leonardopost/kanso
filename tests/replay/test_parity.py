@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
 
 from kanso import replay
+from kanso.nautilus import actions
 from kanso.replay import record
 from kanso.replay.parity import RELEASED, STREAM, Intent, Parity, compare, of_sessions
 from kanso.state import StateStore
@@ -21,7 +23,7 @@ from tests.replay.conftest import (
     composed,
     document,
 )
-from tests.replay.test_session import STALE, posted
+from tests.replay.test_session import STALE, STALE_PRINTS, fills_of, posted
 
 
 def intent(**changes: object) -> Intent:
@@ -369,3 +371,44 @@ def test_parity_is_identical_on_points_published_after_a_later_one() -> None:
     assert len(node.intents) == 1
     assert node.run.fills == engine.run.fills
     assert node.run.fills
+
+
+def test_parity_misses_the_paths_parting_on_a_stale_print_an_order_lands_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pinned so that a fix of `docs/backlog.md` row 154 turns it. Under 20 ms the buy of 320
+    lands on the first print's instant, and the print stands as the book: both paths fill
+    100 there as a taker, and the research engine, matching the resting orders again once the
+    buy has landed, fills another 100 from the same print as a maker, where the node waits
+    for the next print. The venue used to skip that print, stamped before its last update,
+    and the two paths then agreed; it now applies it, so the parting reaches it. Parity
+    compares intents, which agree, so it calls the two identical either way."""
+
+    def compared(node: Any, engine: Any) -> tuple[object, int]:
+        return compare(
+            [Intent.of(row) for row in node.intents], [Intent.of(row) for row in engine.intents]
+        )
+
+    node, engine = posted(320, 9.9, STALE_PRINTS, latency_ms=20)
+
+    assert fills_of(node) == [
+        (30, 100.0, 9.9, False),
+        (40, 100.0, 9.9, True),
+        (50, 100.0, 9.9, True),
+        (60, 20.0, 9.9, True),
+    ]
+    assert fills_of(engine) == [
+        (30, 100.0, 9.9, False),
+        (30, 100.0, 9.9, True),
+        (40, 100.0, 9.9, True),
+        (50, 20.0, 9.9, True),
+    ]
+    assert compared(node, engine) == (None, 0)
+
+    loaded = actions.modules
+    monkeypatch.setattr(actions, "modules", lambda venue: loaded(venue)[:1])
+    node, engine = posted(320, 9.9, STALE_PRINTS, latency_ms=20)
+
+    skipped = [(40, 100.0, 9.9, True), (50, 100.0, 9.9, True), (60, 100.0, 9.9, True)]
+    assert fills_of(node) == fills_of(engine) == skipped
+    assert compared(node, engine) == (None, 0)

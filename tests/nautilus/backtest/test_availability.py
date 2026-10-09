@@ -55,16 +55,19 @@ class Config(KansoConfig):
     qty: int = 100
     limit: float = 0.0
     on: int = 1
+    exits: bool = False
 
 
 class Strategy(KansoStrategy):
     \"\"\"Buys `qty` from the handler of the `on`th quote or print, at `limit` or at market
-    when it is zero, and writes down every point it is handed.\"\"\"
+    when it is zero, sells what it holds at market from the first handler that finds it
+    holding when `exits` is set, and writes down every point it is handed.\"\"\"
 
     config_cls = Config
 
     def on_start(self):
         self.seen = 0
+        self.exited = False
 
     def _see(self, kind, point):
         module = sys.modules["tests.nautilus.backtest.test_availability"]
@@ -87,6 +90,9 @@ class Strategy(KansoStrategy):
                 qty=self.kanso_config.qty,
                 price=self.kanso_config.limit or None,
             )
+        elif self.kanso_config.exits and not self.exited and self.held(tick.instrument_id) > 0:
+            self.exited = True
+            self.submit_exit(tick.instrument_id)
 
     def on_quote_tick(self, tick):
         self._handle("quote", tick)
@@ -143,6 +149,7 @@ def card(
     qty: int = 100,
     limit: float = 9.9,
     on: int = 1,
+    exits: bool = False,
     rule: str = "touch",
     requirements: tuple[str, ...] = ("quote", "trade"),
     resolution: str = "tick",
@@ -157,7 +164,7 @@ def card(
         RESEARCH,
         source=WATCHER,
         hypothesis_=hyp,
-        overrides={"qty": qty, "limit": limit, "on": on},
+        overrides={"qty": qty, "limit": limit, "on": on, "exits": exits},
     )
     groups: list[tuple[object, ...]] = []
     for kind in (Bar, QuoteTick, TradeTick):
@@ -283,8 +290,9 @@ def test_the_sleeve_is_handed_what_it_was_handed_before(
     request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The module copies and re-stamps nothing: the sleeve is handed the same points in the
-    same order, each with its own `ts_event` as `data_time`, and sends the same order, with
-    the module and without it. Only what the venue fills moves."""
+    same order, each with its own `ts_event` as `data_time`, with the module and without it.
+    This sleeve sends one order whatever it is filled, so it sends the same one either way;
+    what the venue fills moves, and with it what a sleeve sends because of a fill (below)."""
     with_it = card(request_for, AT_THE_PRICE, qty=320)
     handed = list(SEEN)
     without_the_module(monkeypatch)
@@ -296,6 +304,25 @@ def test_the_sleeve_is_handed_what_it_was_handed_before(
     assert with_it.intents == without.intents
     assert len(with_it.run.fills) == 4
     assert len(without.run.fills) == 3
+
+
+def test_a_sleeve_that_acts_on_its_fill_sends_what_the_fill_leads_to(
+    request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sleeve that sells once it holds: the late quote now fills its buy, so it sells from
+    that quote's handler, at the quote's own `ts_event`; without the module the buy waited for
+    the next quote through it, and so did the sale. No point moved, and the order did."""
+    points = [*THROUGH_QUOTE, quote(9.8, 9.85, 60, 60)]
+
+    def sent(result: RunResult) -> list[tuple[int, str, str]]:
+        return [((row[0] - T0) // MS, row[2], row[4]) for row in result.intents]
+
+    with_it = card(request_for, points, exits=True)
+    without_the_module(monkeypatch)
+    without = card(request_for, points, exits=True)
+
+    assert sent(with_it) == [(10, "BUY", "LIMIT"), (15, "SELL", "MARKET")]
+    assert sent(without) == [(10, "BUY", "LIMIT"), (60, "SELL", "MARKET")]
 
 
 # --- what the module leaves alone -------------------------------------------------

@@ -1450,19 +1450,23 @@ def test_the_two_paths_apply_a_point_published_after_a_later_one(
     assert fills_of(node) == fills_of(engine) == filled
 
 
-def test_stale_prints_at_the_price_fill_by_their_size_on_both_paths() -> None:
-    """A buy of 320 at 9.90 and four prints of 100 at its price, each published 15 ms after
-    it was stamped, the first before the venue's last update: it used to be skipped, and now
-    each print fills by its own size. At no latency only — under one, the order lands on the
-    first print's instant, where the two paths credit a print differently whatever the venue
-    module does (`docs/backlog.md`)."""
-    points = [
-        quote(9.99, 10.01, 10, 10),
-        quote(9.95, 10.0, 20, 20),
-        *[trade(9.9, 100, 15 + 10 * k, 30 + 10 * k, k) for k in range(4)],
-    ]
+STALE_PRINTS = [
+    quote(9.99, 10.01, 10, 10),
+    quote(9.95, 10.0, 20, 20),
+    *[trade(9.9, 100, 15 + 10 * k, 30 + 10 * k, k) for k in range(4)],
+]
+"""A buy rests at 9.90 from the first quote; four prints of 100 at its price follow, each
+published 15 ms after it was stamped, so the first, at 30 ms, is stamped before the venue's
+last update at 20 ms."""
 
-    node, engine = posted(320, 9.9, points)
+
+def test_stale_prints_at_the_price_fill_by_their_size_on_both_paths() -> None:
+    """A buy of 320 at 9.90 and the four prints: the first used to be skipped, and now each
+    print fills by its own size. At no latency only — under 20 ms the buy lands on the first
+    print's instant, which the venue used to skip on both paths and now applies, and there
+    the two paths credit the print differently (`docs/backlog.md`, row 154; pinned in
+    `tests/replay/test_parity.py`)."""
+    node, engine = posted(320, 9.9, STALE_PRINTS)
 
     assert node.intents == engine.intents
     assert (
