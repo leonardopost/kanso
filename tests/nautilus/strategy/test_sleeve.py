@@ -691,3 +691,36 @@ def test_cancel_orders_refuses_an_empty_list_as_the_engine_does(backtest) -> Non
                     self.refused = str(exc)
 
     assert "orders" in backtest(Empty(config())).strategy.refused
+
+
+def test_a_maker_per_share_charge_above_the_commission_is_the_one_reserved(backtest) -> None:
+    """An order does not know whether it will rest, so the dearer per-share charge is the
+    reserve: $0.01 a share on a maker's fill over $0.004 on a taker's, at $11."""
+    costly = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "commission_per_share": 0.004,
+            "maker_per_share": 0.01,
+        }
+    }
+    run = backtest(Trader(config(venue_model=costly)))
+
+    assert run.strategy.cost_rate == 0.0
+    assert run.strategy.cost_rate_at(11.0) == pytest.approx(0.01 / 11.0)
+
+
+def test_a_maker_per_share_rebate_reserves_nothing_of_its_own(backtest) -> None:
+    rebated = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "commission_per_share": 0.004,
+            "maker_per_share": -0.002,
+        }
+    }
+    run = backtest(Trader(config(venue_model=rebated)))
+
+    assert run.strategy.cost_rate_at(11.0) == pytest.approx(0.004 / 11.0)

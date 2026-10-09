@@ -302,3 +302,39 @@ def test_the_configuration_layer_carries_no_cost() -> None:
 
     assert model.costs.commission_bps == 0.0
     assert model.origins.costs == "default"
+
+
+def test_a_maker_per_share_charge_is_unstated_by_default_and_layers_like_the_rest() -> None:
+    """`None` charges a resting fill like any other; zero is a maker schedule charging nothing;
+    the hypothesis's layer wins over the operator's, and a rebate is negative."""
+    assert resolve_venue_model("XNAS").costs.maker_per_share is None
+
+    stated = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(maker_per_share=0.003)),
+        hypothesis_costs=CostsOverride(maker_per_share=0.004, commission_per_share=0.014),
+    )
+    kept = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(maker_per_share=-0.002)),
+        hypothesis_costs=CostsOverride(commission_bps=0.0),
+    )
+
+    assert (stated.costs.maker_per_share, stated.costs.maker_bps) == (0.004, None)
+    assert stated.origins.costs == "hypothesis"
+    assert kept.costs.maker_per_share == -0.002
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_a_maker_per_share_charge_that_is_not_a_number_is_refused(value: float) -> None:
+    with pytest.raises(ValidationError, match="maker_per_share"):
+        CostsOverride(maker_per_share=value)
+
+
+def test_a_venue_model_recorded_before_the_maker_per_share_key_reads_as_unstated() -> None:
+    """Every card, certificate and version pinned before the key charges a resting fill as it
+    was charged then."""
+    recorded = resolve_venue_model("XNAS").model_dump()
+    del recorded["costs"]["maker_per_share"]
+
+    assert VenueModel.model_validate(recorded).costs.maker_per_share is None

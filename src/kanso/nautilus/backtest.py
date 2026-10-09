@@ -10,8 +10,9 @@ attached modifiers.
 **Costs are applied here and nowhere else.** The simulated venue is cost-neutral
 (`kanso.nautilus.venue`), and commission, slippage and half the spread on each side are
 deducted per fill in this extraction — or, for a fill the venue reports as a maker's under a
-venue model that states `maker_bps`, that rate alone, and a per-share commission on every share
-of a fill that pays commission (`kanso.nautilus.costs.fill_cost`). One
+venue model that states a maker schedule, `maker_bps` of its notional and `maker_per_share` on
+each share alone — and a per-share commission on every share of a fill that pays commission
+(`kanso.nautilus.costs.fill_cost`). One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
@@ -1757,7 +1758,8 @@ def _fill(
 ) -> Fill:
     """One execution, with the cost this venue model charges it, applied once.
 
-    A fill the venue reports as a maker's pays the model's `maker_bps` when it states one;
+    A fill the venue reports as a maker's pays the model's maker schedule when it states
+    one — `maker_bps` of its notional and `maker_per_share` on each share, and nothing else;
     every other fill pays commission, slippage and half the spread, and the per-share
     commission on each share when the model states one; a sale pays the sell-side fees the
     model states on top, maker or taker (`costs.fill_cost`).
@@ -1784,6 +1786,7 @@ def _fill(
         sell=side == "SELL",
         sell_fee_bps=costs.sell_fee_bps,
         sell_fee_per_share=costs.sell_fee_per_share,
+        maker_per_share=costs.maker_per_share,
     )
     return Fill(
         ts_ns=int(event.ts_event),

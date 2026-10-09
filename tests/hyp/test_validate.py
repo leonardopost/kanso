@@ -491,6 +491,7 @@ TEMPLATE_VENUE_MODEL: dict[str, Any] = {
         "spread": "fixed_bps",
         "fixed_bps": 2.0,
         "maker_bps": None,
+        "maker_per_share": None,
         "sell_fee_bps": 0.0,
         "sell_fee_per_share": 0.0,
         "limit_fill": "touch",

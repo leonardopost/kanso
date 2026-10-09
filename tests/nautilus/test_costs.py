@@ -9,8 +9,11 @@ expectation from either would prove only that the two agree with themselves.
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.criteria.run import NS_PER_DAY, midnight_ns
 from kanso.nautilus.costs import (
@@ -251,3 +254,111 @@ def test_a_sale_pays_the_sell_side_fees_on_top_whoever_filled_it() -> None:
     assert taker_sell == pytest.approx(7.0)
     assert maker_sell == pytest.approx(2.0)
     assert maker_buy == 0.0
+
+
+# --- a maker charged per share ------------------------------------------------------
+
+
+def test_a_maker_under_a_per_share_schedule_pays_exactly_that_on_each_share() -> None:
+    """$0.0040 a share on 100 shares is 0.40, and nothing else: no commission in basis points
+    or per share, no slippage, no half-spread — whatever the model charges a taker."""
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.014, maker=True, maker_per_share=0.004
+    ) == pytest.approx(0.4, abs=1e-15)
+    assert fill_rate(1.0, 2.0, 0.0002, None, maker=True, maker_per_share=0.004) == 0.0
+
+
+def test_a_taker_under_a_per_share_maker_schedule_pays_what_it_always_paid() -> None:
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.014, maker=False, maker_per_share=0.004
+    ) == fill_cost(5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.014, maker=False)
+
+
+def test_a_maker_schedule_stated_both_ways_charges_both() -> None:
+    """Half a bp of 5,000 is 0.25, and $0.002 on 100 shares 0.20."""
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, 0.5, 0.0055, maker=True, maker_per_share=0.002
+    ) == pytest.approx(0.45)
+
+
+def test_a_negative_maker_per_share_charge_is_a_rebate() -> None:
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0055, maker=True, maker_per_share=-0.002
+    ) == pytest.approx(-0.2)
+
+
+def test_a_maker_s_sale_under_a_per_share_schedule_pays_the_sell_side_fees_on_top() -> None:
+    """One bp of 10,000 is 1.00 and a cent on 100 shares 1.00, beside the maker's 0.40."""
+    assert fill_cost(
+        10_000.0,
+        100.0,
+        1.0,
+        2.0,
+        0.0002,
+        None,
+        0.014,
+        maker=True,
+        sell=True,
+        sell_fee_bps=1.0,
+        sell_fee_per_share=0.01,
+        maker_per_share=0.004,
+    ) == pytest.approx(2.4)
+
+
+def _v0140_fill_cost(  # the arithmetic as v0.14.0 shipped it, copied, for the property below
+    notional: float,
+    qty: float,
+    commission_bps: float,
+    slippage_bps: float,
+    half_spread: float,
+    maker_bps: float | None,
+    commission_per_share: float,
+    *,
+    maker: bool,
+    sell: bool,
+    sell_fee_bps: float,
+    sell_fee_per_share: float,
+) -> float:
+    if maker and maker_bps is not None:
+        rate = maker_bps / 10_000.0
+    else:
+        rate = (commission_bps + slippage_bps) / 10_000.0 + half_spread
+    charged = notional * rate
+    if sell:
+        charged += notional * sell_fee_bps / 10_000.0 + qty * sell_fee_per_share
+    if maker and maker_bps is not None:
+        return charged
+    return charged + qty * commission_per_share
+
+
+RATES = st.floats(min_value=0.0, max_value=50.0, allow_nan=False)
+
+
+@given(
+    notional=st.floats(min_value=0.0, max_value=1e9, allow_nan=False),
+    qty=st.floats(min_value=0.0, max_value=1e7, allow_nan=False),
+    commission_bps=RATES,
+    slippage_bps=RATES,
+    half_spread=st.floats(min_value=0.0, max_value=0.01, allow_nan=False),
+    maker_bps=st.none() | st.floats(min_value=-5.0, max_value=5.0, allow_nan=False),
+    commission_per_share=st.floats(min_value=0.0, max_value=0.05, allow_nan=False),
+    maker=st.booleans(),
+    sell=st.booleans(),
+    sell_fee_bps=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
+    sell_fee_per_share=st.floats(min_value=0.0, max_value=0.01, allow_nan=False),
+)
+def test_a_model_without_a_maker_per_share_charge_costs_every_fill_bit_for_bit_as_before(
+    **kwargs: Any,
+) -> None:
+    """Leave the key out and no number moves: not one fill, not by one bit."""
+    args = (
+        kwargs["notional"],
+        kwargs["qty"],
+        kwargs["commission_bps"],
+        kwargs["slippage_bps"],
+        kwargs["half_spread"],
+        kwargs["maker_bps"],
+        kwargs["commission_per_share"],
+    )
+    named = {key: kwargs[key] for key in ("maker", "sell", "sell_fee_bps", "sell_fee_per_share")}
+    assert fill_cost(*args, **named) == _v0140_fill_cost(*args, **named)

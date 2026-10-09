@@ -15,6 +15,7 @@ from kanso.criteria.gates import (
     deflated_contribution,
     min_event_days,
     repriced,
+    stressed,
 )
 from kanso.criteria.run import Fill
 from tests.criteria.builders import START, at, build_run, context, fill, make_hyp, trade
@@ -344,8 +345,86 @@ def test_cost_scenario_of_a_maker_s_and_a_sale_s_charges_alone_judges_nothing() 
         context(
             priced_run(),
             hyp=make_hyp(**CONTRIBUTION_HYP),
-            params={"maker_bps": 0.0, "sell_fee_bps": 0.206, "sell_fee_per_share": 0.000195},
+            params={
+                "maker_bps": 0.0,
+                "maker_per_share": 0.004,
+                "sell_fee_bps": 0.206,
+                "sell_fee_per_share": 0.000195,
+            },
         )
     )
 
     assert result.passed and result.skipped is not None
+
+
+def test_repriced_charges_a_maker_its_per_share_charge_alone_and_a_taker_the_rest() -> None:
+    maker = Fill(
+        ts_ns=at(START), instrument_id="DEMO", side="BUY", qty=100.0, px=100.0, cost=1.0, maker=True
+    )
+    taker = Fill(
+        ts_ns=at(START + timedelta(days=1)),
+        instrument_id="DEMO",
+        side="SELL",
+        qty=100.0,
+        px=100.0,
+        cost=1.0,
+    )
+    run = build_run((10.0, 10.0), fills=(maker, taker))
+
+    under = repriced(run, {"commission_per_share": 0.014, "maker_per_share": 0.004})
+
+    assert under.fills[0].cost == pytest.approx(0.4), "the maker pays $0.004 a share alone"
+    assert under.fills[1].cost == pytest.approx(1.4), "the taker pays $0.014 a share"
+
+
+def test_cost_scenario_reproduces_a_card_charged_its_maker_per_share() -> None:
+    """The maker's per-share charge is a key of a scenario like the rest, so a card priced under
+    it is re-priced to the same number, fill by fill."""
+    schedule = {
+        "commission_per_share": 0.014,
+        "maker_per_share": 0.004,
+        "sell_fee_bps": 0.206,
+        "sell_fee_per_share": 0.000195,
+    }
+    fills = tuple(
+        Fill(
+            ts_ns=at(START + timedelta(days=day)),
+            instrument_id="DEMO",
+            side=side,
+            qty=1_000.0,
+            px=20.0,
+            cost=0.0,
+            maker=maker,
+        )
+        for day in range(4)
+        for side, maker in (("BUY", True), ("SELL", False))
+    )
+    priced = repriced(build_run((10.0,) * 4, fills=fills), schedule)
+    ctx = context(
+        priced,
+        hyp=make_hyp(**CONTRIBUTION_HYP),
+        stage="cert",
+        params={**schedule, "min_metric": 0.0},
+    )
+
+    result = cost_scenario.evaluate(ctx)
+
+    assert result.evidence["scenario"] == schedule
+    assert result.evidence["cost_scenario"] == pytest.approx(result.evidence["cost_recorded"])
+    assert result.evidence["cost_recorded"] == pytest.approx(
+        4 * (1_000 * 0.004 + 1_000 * 0.014 + 20_000 * 0.206 / 10_000 + 1_000 * 0.000195)
+    )
+
+
+@pytest.mark.parametrize(("per_share", "doubled"), [(0.004, 0.8), (-0.002, -0.1)])
+def test_a_stress_multiplies_a_maker_s_per_share_charge_and_divides_its_rebate(
+    per_share: float, doubled: float
+) -> None:
+    """The charge is part of the fill's recorded cost, so `cost_stress` reads it as it reads
+    every other: twice $0.004 on 100 shares is 0.80, and half a $0.002 rebate is 0.10."""
+    maker = Fill(
+        ts_ns=at(START), instrument_id="DEMO", side="BUY", qty=100.0, px=100.0, cost=0.0, maker=True
+    )
+    priced = repriced(build_run((10.0,), fills=(maker,)), {"maker_per_share": per_share})
+
+    assert stressed(priced, 2.0).fills[0].cost == pytest.approx(doubled)

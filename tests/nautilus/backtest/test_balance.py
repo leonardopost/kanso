@@ -278,3 +278,36 @@ def test_a_sale_pays_the_sell_side_fees_on_top_and_the_balance_is_still_the_equi
     assert any(fill.maker and fill.side == "SELL" for fill in card.fills)
     assert any(not fill.maker and fill.side == "SELL" for fill in card.fills)
     assert_the_same(card, record, at_least=1)
+
+
+@pytest.mark.parametrize("per_share", [-0.002, 0.0, 0.004], ids=["rebate", "free", "charge"])
+def test_a_fill_that_rested_pays_exactly_its_per_share_charge_and_the_balance_is_the_equity(
+    tmp_path: Path, request_for, per_share: float
+) -> None:
+    """The operator's account: $0.0040 a share on a resting fill and nothing else, a taker's
+    $0.014 a share on top of the rates, and the sell-side fees on every sale either way."""
+    card, record = resting_card(
+        tmp_path,
+        request_for,
+        {
+            **FIXED,
+            "commission_per_share": 0.014,
+            "maker_per_share": per_share,
+            "sell_fee_bps": 0.206,
+            "sell_fee_per_share": 0.000195,
+        },
+    )
+
+    makers = [fill for fill in card.fills if fill.maker]
+    takers = [fill for fill in card.fills if not fill.maker]
+    assert [(fill.side, fill.px) for fill in makers] == [("BUY", 12.9), ("SELL", 10.1)]
+    assert [fill.side for fill in takers] == ["BUY", "SELL"]
+    for fill in card.fills:
+        fee = (
+            fill.qty * fill.px * 0.206 / 10_000 + fill.qty * 0.000195
+            if fill.side == "SELL"
+            else 0.0
+        )
+        base = fill.qty * per_share if fill.maker else fill.qty * fill.px * TAKER + fill.qty * 0.014
+        assert fill.cost == pytest.approx(base + fee, rel=1e-12, abs=1e-12)
+    assert_the_same(card, record, at_least=15)

@@ -393,9 +393,16 @@ def _charges(config: KansoConfig) -> Mapping[str, Any]:
 
 
 def _maker_bps(charges: Mapping[str, Any]) -> float | None:
-    """What a maker's fill pays, or `None` when the venue model charges it like any other —
-    kept apart from zero, which is a maker paying nothing."""
+    """What a maker's fill pays of its notional, or `None` when the venue model states no
+    such rate — kept apart from zero, which is a maker paying nothing."""
     stated = charges.get("maker_bps")
+    return None if stated is None else float(stated)
+
+
+def _maker_per_share(charges: Mapping[str, Any]) -> float | None:
+    """What a maker's fill pays on each share, or `None` when the venue model states no such
+    charge — kept apart from zero, which states a maker's schedule that charges nothing."""
+    stated = charges.get("maker_per_share")
     return None if stated is None else float(stated)
 
 
@@ -679,10 +686,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def cost_rate_at(self, price: float, multiplier: float = 1.0) -> float:
         """`cost_rate` at a price: the per-share commission, where the model states one, and
         half the per-share sell fee are fractions of notional only once the price is known,
-        and a dearer share pays less. On a multiplied instrument per share means per
-        contract, and one contract's notional is `price x multiplier`, so the fraction is
-        the charge over that."""
+        and a dearer share pays less. An order does not know whether it will rest, so where
+        the model states a maker's charge per share the larger of it and the commission is
+        the one reserved, as the larger rate is in `cost_rate`; a rebate reserves nothing of
+        its own. On a multiplied instrument per share means per contract, and one contract's
+        notional is `price x multiplier`, so the fraction is the charge over that."""
         per_share = float(self._charges.get("commission_per_share") or 0.0)
+        maker = _maker_per_share(self._charges)
+        if maker is not None:
+            per_share = max(per_share, maker)
         per_share += float(self._charges.get("sell_fee_per_share") or 0.0) / 2.0
         if per_share <= 0.0 or price <= 0.0:
             return self.cost_rate
@@ -2713,8 +2725,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _paid(self, event: Any) -> float:
         """What one fill took out of cash: the value it bought, or gave back what it sold
         for, and what the runner charges it — commission, per share included where the model
-        states one, slippage and half the spread, or a maker's own rate where the venue model
-        states one, which a rebate makes negative."""
+        states one, slippage and half the spread, or a maker's own schedule where the venue
+        model states one, of its notional and per share, which a rebate makes negative."""
         multiplier = self._multiplier_of(event.instrument_id)
         qty, px = float(event.last_qty), float(event.last_px)
         signed = qty if event.order_side == OrderSide.BUY else -qty
@@ -2730,6 +2742,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             sell=event.order_side == OrderSide.SELL,
             sell_fee_bps=float(self._charges.get("sell_fee_bps") or 0.0),
             sell_fee_per_share=float(self._charges.get("sell_fee_per_share") or 0.0),
+            maker_per_share=_maker_per_share(self._charges),
         )
         return signed * px * multiplier + cost
 

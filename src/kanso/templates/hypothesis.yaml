@@ -13,13 +13,15 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 # costs:                           # optional. Costs are inherited from the venue, which the configured broker defines
 #   commission_bps: 0.5            # (kanso.toml research.broker, portfolio.yaml venues.<MIC>). Set any subset here only to
 #   commission_per_share: 0.0055   # charged on every share of a fill that pays commission, on top of the rates; a maker's fill
-#                                  # under a stated maker_bps pays that rate alone
+#                                  # under a stated maker_bps or maker_per_share pays that alone
 #   slippage_bps: 1.0              # override them for this hypothesis — the way to test an idea against costs worse than
 #   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
                                    # rebate. Unset, it pays what any fill pays
+#   maker_per_share: 0.004         # what a fill that rested pays on each share, beside maker_bps (the one unset is nothing):
+                                   # either key alone replaces every other charge on a resting fill. Negative is a rebate
 #   sell_fee_bps: 0.206            # on every sale, maker or taker, on top of the rest: the regulatory fee on the notional sold
 #   sell_fee_per_share: 0.000195   # and the activity fee on each share sold. Zero unless stated
 #   latency_ms: 20                # how long the simulated venue takes to see an order, insert, update or cancel alike;

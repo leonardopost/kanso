@@ -230,6 +230,16 @@ def test_reordering_the_universe_is_not_a_change_of_scope(ws: Workspace, store: 
                 "maker_bps": 0.12,
             },
         ),
+        (
+            "costs",
+            {
+                "commission_bps": 0.5,
+                "slippage_bps": 1.0,
+                "spread": "fixed_bps",
+                "fixed_bps": 2,
+                "maker_per_share": 0.004,
+            },
+        ),
     ],
 )
 def test_a_change_of_scope_clears_the_best(
@@ -1001,3 +1011,16 @@ def test_active_run_is_none_without_one(ws: Workspace, store: StateStore) -> Non
 
     assert hyp.active_run(store, HYP_ID) is None
     hyp.refuse_active_run(store, HYP_ID, "re-pin")
+
+
+def test_a_cost_model_that_states_no_maker_per_share_charge_pins_the_scope_it_did() -> None:
+    """The key joined the block with nothing stated by default, so a hypothesis that does not
+    state it keeps the scope it was pinned under and its best survives the upgrade."""
+    parsed = Hypothesis.model_validate(DOCUMENT)
+
+    assert hyp.registry.scope_of(parsed)["costs"] == {
+        "commission_bps": 0.5,
+        "slippage_bps": 1.0,
+        "spread": "fixed_bps",
+        "fixed_bps": 2.0,
+    }

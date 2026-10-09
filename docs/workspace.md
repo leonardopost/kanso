@@ -743,7 +743,8 @@ the spread is what a resting order earns rather than pays. Negative is a net reb
 a per-share-priced account that pays for displayed liquidity can come out ahead on a fill
 that rested. Every other fill — a market order, a limit that was marketable when it arrived
 — is charged commission, slippage and half the spread exactly as before, and so is a maker's
-fill under a model that states no `maker_bps`: leave the key out and no number moves. It is
+fill under a model that states neither `maker_bps` nor `maker_per_share` (below): leave the
+keys out and no number moves. It is
 applied where every cost is, once, in the runner's extraction, and `self.balance` books the
 same rate. `cost_stress` multiplies a charge and divides a rebate, so a stress of one or more
 never lets a fill earn more. What a sleeve reserves when it sizes is the larger of the maker
@@ -766,16 +767,47 @@ costs:
 A per-share-priced account charges a cheap share more of its price than a dear one — $0.0055
 is 5.5 bp of a $10 share and 0.2 bp of a $300 one — and a flat rate in basis points cannot say
 so over a universe that spans both. The per-share commission is charged on every share of a
-fill that pays commission at all: a taker's, and a maker's under a model that states no
-`maker_bps`. Per share means per contract on a multiplied instrument, whose notional is the
+fill that pays commission at all: a taker's, and a maker's under a model that states neither
+`maker_bps` nor `maker_per_share`. Per share means per contract on a multiplied instrument, whose notional is the
 price times the contract multiplier, and so does `sell_fee_per_share` below. A maker's fill
-under a stated `maker_bps` still pays that rate alone, because the rate is by contract the
-whole charge on that fill; a per-share-priced account states its maker net there, commission
-less the rebate. It is applied where every cost is, once, in the runner's extraction;
-`self.balance` books the same; what a sleeve reserves when it sizes
-includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
+under a stated maker schedule — `maker_bps`, `maker_per_share` or both — pays that schedule
+alone, because it is by contract the whole charge on that fill; a per-share-priced account
+states its maker charge as `maker_per_share`, commission less any rebate. It is applied
+where every cost is, once, in the runner's extraction; `self.balance` books the same; what a
+sleeve reserves when it sizes includes it at the price it sizes at; and `cost_stress` multiplies it with the rest, since it
 is part of the recorded cost of the fill. Zero unless stated, so no number moves for a model
 that does not name it.
+
+`costs.maker_per_share` charges a fill that rested on the book per share, the way an account
+priced per share charges it:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, on top of …
+  slippage_bps: 0.5                # … its slippage and the quoted half-spread
+  spread: quotes
+  maker_per_share: 0.0040          # a fill that rested: $0.0040 a share and nothing else
+```
+
+A fill the venue reports as a maker's pays exactly `maker_per_share` on each share — on each
+contract of a multiplied instrument — and nothing else: no commission in basis points or per
+share, no slippage, no half-spread. `maker_bps` and `maker_per_share` are one maker's
+schedule: a model that states either charges every maker's fill `maker_bps` of its notional
+and `maker_per_share` on each share, the one it leaves unstated counting as nothing, so a
+model stating both charges both, and one stating neither charges a maker's fill what any
+fill pays. Like every key of the block the two are inherited key by key — a broker's
+declaration, then `venues.<MIC>.costs`, then the hypothesis — so `maker_per_share` stated over
+a layer that states `maker_bps` charges the two together; state `maker_bps: 0.0` beside it to
+charge the share alone. Negative is a rebate. A sale pays the sell-side fees below on top,
+as every sale does. It is applied where every cost is, once, in the runner's extraction;
+`self.balance` books the same; what a sleeve reserves when it sizes takes the larger of it and
+`commission_per_share` at the price it sizes at, since an order cannot know whether it will
+rest, and a rebate reserves nothing of its own; `cost_stress` multiplies it with the rest and
+divides it where it is a rebate; `cost_scenario` states it key for key. A screen's hurdle is
+two taker fills, so neither maker key moves it. A fill a broker reports with no liquidity
+side is charged as a taker's (`docs/backlog.md` row 94). Unset unless a layer states it, so
+no number moves for a model that does not name it.
 
 `costs.sell_fee_bps` and `costs.sell_fee_per_share` charge every sale on top of the rest,
 whoever the venue reports the fill as:
@@ -793,7 +825,7 @@ costs:
 
 A regulatory transaction fee is charged on sells alone, per notional, and a trading activity
 fee per share sold, and an account passes both through whatever the fill's liquidity side:
-a maker's sale under a stated `maker_bps` pays that rate and these on top, where the
+a maker's sale under a stated maker schedule pays that schedule and these on top, where the
 per-share commission does not. Before the keys existed the only way to state them was a
 larger `maker_bps` on both sides, which charges a purchase for a fee it never pays. They
 are applied where every cost is, once, in the runner's extraction; `self.balance` books the

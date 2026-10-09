@@ -3,10 +3,12 @@
 Commission — in basis points and, where the model states it, per share — slippage and half
 the spread are charged on every fill, once, by the runner's extraction
 (`kanso.nautilus.backtest`); the simulated venue charges nothing. A fill that
-rested on the book — one the venue reports as a maker's — pays the venue model's
-`maker_bps` instead of all three when the model states one: it filled at its own price, so
-it slipped nothing, and the spread is what it earns rather than pays. A negative rate is a
-rebate. A sale pays the regulatory fee the model states on top, whoever the venue reports
+rested on the book — one the venue reports as a maker's — pays the venue model's maker
+schedule instead of all three, and instead of the per-share commission, when the model states
+one: `maker_bps` of its notional and `maker_per_share` on each share, either of which alone
+states the schedule and the other is then nothing. It filled at its own price, so it slipped
+nothing, and the spread is what it earns rather than pays. A negative rate or per-share charge
+is a rebate. A sale pays the regulatory fee the model states on top, whoever the venue reports
 the fill as: `sell_fee_bps` of its notional and `sell_fee_per_share` on each share, the
 transaction fee and the trading activity fee an account passes through on sells alone.
 A sleeve's harness needs the same number while it runs, to know what its account
@@ -94,6 +96,12 @@ def side_rate(commission_bps: float, slippage_bps: float, half_spread: float) ->
     return (commission_bps + slippage_bps) / BPS + half_spread
 
 
+def _rests(maker: bool, maker_bps: float | None, maker_per_share: float | None) -> bool:
+    """Whether a fill is charged the maker schedule: the venue reported it as a maker's and
+    the model states a schedule for one — `maker_bps`, `maker_per_share` or both."""
+    return maker and (maker_bps is not None or maker_per_share is not None)
+
+
 def fill_rate(
     commission_bps: float,
     slippage_bps: float,
@@ -101,15 +109,17 @@ def fill_rate(
     maker_bps: float | None,
     *,
     maker: bool,
+    maker_per_share: float | None = None,
 ) -> float:
     """What one fill costs per unit of notional under a venue model.
 
-    A maker's fill pays `maker_bps` and nothing else when the model states it, which may be
-    negative; every other fill — and a maker's, under a model that states no `maker_bps` —
+    A maker's fill under a stated maker schedule pays `maker_bps` and nothing else per unit
+    of notional — nothing at all when the schedule is stated per share alone — which may be
+    negative; every other fill — and a maker's, under a model that states no maker schedule —
     pays commission, slippage and half the spread, exactly as `side_rate` strikes it.
     """
-    if maker and maker_bps is not None:
-        return maker_bps / BPS
+    if _rests(maker, maker_bps, maker_per_share):
+        return 0.0 if maker_bps is None else maker_bps / BPS
     return side_rate(commission_bps, slippage_bps, half_spread)
 
 
@@ -126,26 +136,36 @@ def fill_cost(
     sell: bool = False,
     sell_fee_bps: float = 0.0,
     sell_fee_per_share: float = 0.0,
+    maker_per_share: float | None = None,
 ) -> float:
     """What one fill costs in the account currency: `fill_rate` of its notional, plus the
-    per-share commission on each share whenever the fill pays commission at all, plus the
-    sell-side fees on a sale.
+    per-share charge its side pays on each share, plus the sell-side fees on a sale.
 
-    A maker's fill under a stated maker rate pays that rate alone, per share included: the
-    rate is the whole charge on that fill by contract, and a per-share-priced account states
-    its maker net there — commission less the rebate. Every other fill pays the per-share
+    A maker's fill under a stated maker schedule pays that schedule alone: `maker_bps` of its
+    notional and `maker_per_share` on each share, the per-share commission not at all — the
+    schedule is the whole charge on that fill by contract. A per-share-priced account states
+    its maker charge per share there, commission less any rebate, exactly as it is charged;
+    one priced per notional states `maker_bps`. Every other fill pays the per-share
     commission on top of the three rates, so a cheap share pays more of its price than a
     dear one, exactly as the account would charge it. A sale pays `sell_fee_bps` of its
     notional and `sell_fee_per_share` on each share on top of all of that, maker or taker:
-    a regulatory fee is passed through on every sell, and no venue's maker rate covers it.
+    a regulatory fee is passed through on every sell, and no venue's maker schedule covers it.
+
+    A model that states neither maker key charges every fill as it always was, bit for bit:
+    the sums are taken in the order they were before `maker_per_share` existed.
     """
     charged = notional * fill_rate(
-        commission_bps, slippage_bps, half_spread, maker_bps, maker=maker
+        commission_bps,
+        slippage_bps,
+        half_spread,
+        maker_bps,
+        maker=maker,
+        maker_per_share=maker_per_share,
     )
     if sell:
         charged += notional * sell_fee_bps / BPS + qty * sell_fee_per_share
-    if maker and maker_bps is not None:
-        return charged
+    if _rests(maker, maker_bps, maker_per_share):
+        return charged if maker_per_share is None else charged + qty * maker_per_share
     return charged + qty * commission_per_share
 
 

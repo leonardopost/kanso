@@ -11,18 +11,21 @@ are available, and a resting limit order filled when the market reaches its pric
 currency code is any code the engine could register — a fiat code or a crypto code such as
 USDT — and whether it does register it is checked where an account is funded, not here.
 
-A fill that rested on the book may be charged apart. `maker_bps`, when a layer states it, is
-the whole charge on a fill the venue reports as a maker's — no slippage, since a resting
-limit fills at its own price, and no half-spread, since the spread is what it earns rather
-than what it pays — and it may be negative, a rebate. Unstated, a maker's fill is charged
-like any other, which is how every fill was charged before the key existed.
+A fill that rested on the book may be charged apart. `maker_bps` and `maker_per_share`, when
+a layer states either, are the whole charge on a fill the venue reports as a maker's —
+`maker_bps` of its notional and `maker_per_share` on each share, the one a layer leaves unstated
+counting as nothing — so it pays no slippage, since a resting limit fills at its own price, no
+half-spread, since the spread is what it earns rather than what it pays, and no per-share
+commission. Either may be negative, a rebate. With neither stated, a maker's fill is charged
+like any other, which is how every fill was charged before the keys existed.
 
 A commission may be stated per share as well as in basis points. `commission_per_share` is
 charged on every share of a fill that pays commission at all — a taker's, and a maker's
-under a model that states no maker rate — on top of the three rates, so a cheap share pays
-more of its price than a dear one, the way a per-share-priced account does; a maker's fill
-under a stated `maker_bps` still pays that rate alone, per share included, because the
-rate is the whole charge on that fill by contract. Zero unless stated.
+under a model that states no maker schedule — on top of the three rates, so a cheap share
+pays more of its price than a dear one, the way a per-share-priced account does; a maker's
+fill under a stated maker schedule pays that schedule alone, because it is the whole charge on
+that fill by contract, and an account that charges a resting fill per share states that charge
+as `maker_per_share`. Zero unless stated.
 
 The cost model carries two keys that are not charges. `latency_ms` is how long the venue
 takes to see an order — the delay between a sleeve's insert, update or cancel and the
@@ -81,6 +84,7 @@ class CostsOverride(KansoModel):
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    maker_per_share: float | None = Field(default=None, allow_inf_nan=False)
     sell_fee_bps: float | None = Field(default=None, ge=0)
     sell_fee_per_share: float | None = Field(default=None, ge=0)
     limit_fill: LimitFill | None = None
@@ -92,9 +96,11 @@ class Costs(KansoModel):
     venue fills a resting limit the market only touched (`limit_fill`), and how long the
     venue takes to see an order (`latency_ms`, zero unless stated).
 
-    `maker_bps` is the charge on a fill the venue reports as a maker's, in place of all three
-    of the others; negative is a rebate, and `None` charges a maker's fill like any other.
-    `commission_per_share` is charged per share on every fill that pays commission, on top.
+    `maker_bps` and `maker_per_share` are the charge on a fill the venue reports as a maker's,
+    of its notional and per share, in place of all three of the others and of the per-share
+    commission; negative is a rebate, and with both `None` a maker's fill is charged like any
+    other. `commission_per_share` is charged per share on every fill that pays commission, on
+    top.
     `sell_fee_bps` and `sell_fee_per_share` are charged on every sale, maker or taker, on top
     of everything else: the regulatory fees an account passes through on sells alone.
     """
@@ -105,6 +111,7 @@ class Costs(KansoModel):
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
+    maker_per_share: float | None = Field(default=None, allow_inf_nan=False)
     sell_fee_bps: float = Field(default=0.0, ge=0)
     sell_fee_per_share: float = Field(default=0.0, ge=0)
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
@@ -179,6 +186,7 @@ def _merge_costs(
         "spread": "quotes" if quotes_available else "fixed_bps",
         "fixed_bps": None,
         "maker_bps": None,
+        "maker_per_share": None,
         "limit_fill": DEFAULT_LIMIT_FILL,
         "latency_ms": 0.0,
     }

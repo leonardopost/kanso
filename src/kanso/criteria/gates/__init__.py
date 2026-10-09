@@ -925,6 +925,7 @@ SCENARIO_KEYS: Final = (
     "slippage_bps",
     "fixed_bps",
     "maker_bps",
+    "maker_per_share",
     "sell_fee_bps",
     "sell_fee_per_share",
 )
@@ -933,7 +934,7 @@ SCENARIO_KEYS: Final = (
 
 TAKER_KEYS: Final = ("commission_bps", "commission_per_share", "slippage_bps", "fixed_bps")
 """The scenario keys that say what a fill that took liquidity pays. A scenario is a cost model
-only when it states one of them: a maker's key charges a resting fill alone and the sell-side
+only when it states one of them: the maker's keys charge a resting fill alone and the sell-side
 fees a sale alone, and a scenario of those only would charge every other fill nothing."""
 
 
@@ -949,12 +950,13 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
     fill now costs and what it cost is charged to the return period it falls in, exactly as
     a cost multiple is; the carry, the transfers and the cushion stand as recorded, for the
     reasons `stressed` gives. A key the scenario leaves out is zero, and a scenario that
-    states no `maker_bps` charges a maker's fill what any fill pays.
+    states neither `maker_bps` nor `maker_per_share` charges a maker's fill what any fill pays.
     """
     from kanso.nautilus.costs import fill_cost
 
     half_spread = (scenario.get("fixed_bps") or 0.0) / 2.0 / BPS  # a rate, as the runner hands it
     maker_bps = scenario.get("maker_bps")
+    maker_per_share = scenario.get("maker_per_share")
 
     def recost(fill: Fill) -> float:
         return fill_cost(
@@ -969,6 +971,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             sell=fill.side == "SELL",
             sell_fee_bps=scenario.get("sell_fee_bps") or 0.0,
             sell_fee_per_share=scenario.get("sell_fee_per_share") or 0.0,
+            maker_per_share=maker_per_share,
         )
 
     ends = run.period_ends_ns

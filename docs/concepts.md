@@ -1288,10 +1288,11 @@ nothing, a clear empties both sides — which `kanso doctor` checks, and a prope
 its top levels and its best equal to the engine's `OrderBook` after any sequence of changes.
 
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
-the spread, once, in the runner's extraction — unless the venue model states `maker_bps` and
-the venue reported the fill as a maker's, in which case it pays exactly that and nothing
-else, since a resting limit fills at its own price and the spread is what it earns. A
-negative rate is a rebate. Each recorded fill says whether it was a maker's, so the charge
+the spread, once, in the runner's extraction — unless the venue model states a maker's
+schedule, `maker_bps` of the notional and `maker_per_share` on each share, and the venue
+reported the fill as a maker's, in which case it pays exactly that schedule and nothing else,
+since a resting limit fills at its own price and the spread is what it earns. A negative
+rate or per-share charge is a rebate. Each recorded fill says whether it was a maker's, so the charge
 can be struck again from the record, and the harness books the same rate into
 `self.balance` as it goes, which keeps the balance a sleeve sizes against equal to the
 equity the runner strikes.
@@ -1515,7 +1516,8 @@ spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a c
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
-commission, a flat rate, a maker rate, a fixed width, the sell-side fees — through the runner's own per-fill
+commission, a flat rate, a maker's rate or per-share charge, a fixed width, the sell-side
+fees — through the runner's own per-fill
 arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
 objective on the re-priced run and holds it to `min_metric`: the same fills under the
 schedule of another account, without a second backtest, and the card's own schedule
