@@ -563,7 +563,8 @@ def test_the_concepts_page_says_where_the_two_paths_part_and_what_it_costs_parit
     """The paths part wherever a command lands, a quote or a print being matched again on the
     research path alone (`docs/backlog.md` row 154), not only where a print stands as the book;
     and a sleeve that acts on its fills then fails `parity_replay`, more often since v0.14.1.
-    Under the print rules they do not part (v0.15.0)."""
+    Under the print rules they do not part where a sleeve sends no cancel (v0.15.0), and the
+    pages say so no more broadly than it was measured."""
     delivery = prose(section(page("concepts.md"), "Delivery"))
     assert (
         "Under `touch` and `through` they part where a command lands — for any instrument, on "
@@ -1006,7 +1007,11 @@ def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> No
     assert "**Under `print_through` only a print through a resting order fills it, and a taker" in (
         delivery
     )
-    assert "The venue no longer parts the two code paths" in delivery
+    assert "Where a sleeve sends no cancel the venue's rule does not part the two code" in (
+        delivery
+    )
+    assert "With cancels the paths can still part" in delivery
+    assert "The venue no longer parts the two code paths" not in delivery
     assert "a print that trades strictly outside that quote ends it" in delivery
     rows = {
         line.split("|")[1].strip(): line

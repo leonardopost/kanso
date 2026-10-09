@@ -909,9 +909,9 @@ of 320 resting at 9.50 met by a print of 100 at 9.49 fills 100, and the next pri
 another 100; one print of 300 under buys of 200 at 9.51 and of 200 at 9.50 fills the
 better-priced 200 and the other the 100 left. Nothing else fills it: not a quote however far
 through its price, not a print at its price, not a bar, not a print the venue applied before the
-order landed, and not one it applied before a modify moved the order to its price. That is the
-reading of how much a print fills that the operator's resting rule takes; `print_through_whole`
-is the same rule with the other reading, a print through filling all that is left of the order,
+order landed, and not one it applied before a modify moved the order to its price. That is one
+reading of how much a print through a displayed limit fills — the size the tape shows traded
+there; `print_through_whole` is the same rule with the other reading, a print through filling all that is left of the order,
 as a market that traded through a displayed limit would have taken it first. A taker — a market
 order, or a limit marketable when it lands — fills against the quote in force, at its touch and
 up to the size it shows, never against a print standing as the book: a limit fills there and no
@@ -926,9 +926,10 @@ quote in force is the last one the venue applied, until a print trades strictly 
 under a bid or over an ask it shows at a size — which ends it: a market that traded there has
 left the quote. With no quote in force, or one showing nothing on the side a market order takes,
 a market order is refused for want of a market and a limit rests at its price; so a sleeve that
-buys at market on a print over the ask is refused rather than filled at that ask — measured, the
-quote before would have filled it a dollar under a session's first print when that quote was the
-last session's, and nine cents under a print within one — and kanso's benchmark hold, refused
+buys at market on a print over the ask is refused rather than filled at that ask — on a
+synthetic tape whose next session opens 98 cents over the last session's closing ask the quote
+before would have filled it there, and on one whose prints jump nine cents over the ask within
+a session nine cents under the market — and kanso's benchmark hold, refused
 so, sends its entry again on the next point; under `touch` and `through` it does not, so a hold
 the venue refused there holds nothing for the window, as it always has. A split restates the quote in force, not the print the book
 holds. Under a stated latency a command due by a print's instant lands before that print, so an

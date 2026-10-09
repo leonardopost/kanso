@@ -1248,8 +1248,8 @@ matching engine asks it for the fills of every order it has matched, and a venue
 it before each point which point is in hand, which orders rested before a print and at what
 price, and the last quote. So a quote never fills a resting order and neither does a print at
 its price; a print through it fills it once, by the print's own size shared with the other
-orders it reaches — the reading the operator's resting rule takes — or, under
-`print_through_whole`, for all that is left; a print the venue applied before the order landed,
+orders it reaches — the size the tape shows traded there — or, under `print_through_whole`, for
+all that is left; a print the venue applied before the order landed,
 or before a modify moved it to its price, fills nothing. A taker fills at the touch of the last
 quote, up to the size it shows and never past its own limit, not at a print standing as the
 book — and a print that trades strictly outside that quote ends it: until the next quote a
@@ -1265,16 +1265,20 @@ when it landed — 133 of them, whose first point after their delay was a print,
 before the first one at or after their delay, and 26 of those at another price, −6 to +5 ticks;
 the other, on COIN, landed on a print outside the quote and was refused, where the first quote
 at or after its delay would have filled it at the price of the quote before
-(`docs/backlog.md`). The venue no longer
-parts the two code paths: the engine judges whether an order is marketable from a bid and an ask
-of its own, which the research path's second match after a command lands and a print with an
-aggressor leave apart on the two, but while a quote is in force neither is outside it — the
-bid never under its bid, the ask never over its ask — so
-the fill model, deciding from the quote, decides alike; and a resting order is credited only in
-a print's own match. Measured over seeded runs of two names sending entries, market orders,
-modifies and orders from their fill handlers at 0, 20 and 30 ms, with no cancel none of 5,400
-parted reproducibly, where under `touch` 1,309 of 1,800 such runs parted; with a cancel 82 of
-7,200 parted, 78 of them on tapes `touch` or `through` part too (`docs/backlog.md`).
+(`docs/backlog.md`). Where a sleeve sends no
+cancel the venue's rule does not part the two code paths: the engine judges whether an order
+is marketable from a bid and an ask of its own, which the research path's second match after a
+command lands and a print with an aggressor leave apart on the two, but while a quote is in
+force neither is outside it — the bid never under its bid, the ask never over its ask — so the
+fill model, deciding from the quote, decides alike; and a resting order is credited only in a
+print's own match. Measured on 2026-10-10 over seeded runs of two names sending entries,
+market orders, modifies and orders from their fill handlers at 0, 20 and 30 ms: with no cancel
+none of 5,400 parted reproducibly, where under `touch` 1,309 of 1,800 such runs parted. With
+cancels the paths can still part: 56 of 7,200 such runs parted reproducibly, 54 of them on
+tapes `touch` or `through` part too and two only under the print rules — one a cancel sent
+behind a modify, one not traced — and a second generator, with a split, points stamped before
+they reached the venue and cancels of one order, found five tapes only the print rules part,
+not traced (`docs/backlog.md` rows 105 and 163).
 
 In the match it triggers, a trade print reaches a resting order only from the side that can
 trade with it: for that match the engine moves only the ask down for a seller's print and only
