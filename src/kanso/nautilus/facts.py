@@ -327,6 +327,43 @@ the buy under either probability, because the buy's own side is not at its price
 only a market locked at 9.50 leaves it to the model. At zero or one the model draws
 no random number, so `limit_fill` is deterministic either way.
 
+**A point beyond a resting limit fills all of it.** A print *at* a resting limit's price
+fills it by the print's own size and no more, one part per print: a buy of 320 met by four
+sellers' prints of 100 at its price fills 100, 100, 100 and 20. A print or a quote *beyond*
+the price fills all that is left of the order, at its price, as a maker, whatever its own
+size: once a level strictly better than the limit has been matched, the matching engine's
+check of a limit "on exhausted book volume" (`backtest/engine.pyx`) fills the order's
+`leaves_qty` at the limit with `liquidity_consumption` off, assuming that a market which moved
+through it had the size. Measured, the same buy of 320 resting at 9.50: a seller's print of
+100 at 9.49 fills 100 and then 220, and so does a quote of 9.40/9.49 showing 100 on the ask;
+a seller's print of 100 at 9.50 fills 100. So a resting order no larger than the points that
+reach it is filled as honestly as they are, and a larger one is credited size the tape never
+showed. No kanso seam reaches that part of the engine: the exchange builds each matching
+engine inside `add_instrument` and keeps it in a `cdef` map with no setter, and a fill model
+that hands the engine a simulated book changes only the fills that come before the check.
+
+**A print is the top-of-book until the next quote.** `process_trade_tick` sets both sides of a
+level-one book to the print's price and size, and they stay there until the next quote or
+print moves them. So a market order sent on a print is matched against the print and walks
+one increment past it for the rest: measured under a quote of 9.97/10.03 showing 1,000 a
+side, a market buy of 300 sent on the quote fills 300 at 10.03, and sent on a seller's print
+of 100 at 10.00 after it fills 100 at 10.00 and 200 at 10.01 — the fill model's one increment,
+not the quote's ask.
+
+**`liquidity_consumption` trades one dishonesty for another.** The engine's remedy for a
+level credited again and again is `liquidity_consumption`, off by default, and kanso's venues
+leave it off (`kanso.nautilus.venue`). On a top-of-book venue it records what it credited at a
+price and forgets the record only when the size shown at that price changes, so it withholds
+a repeated print: measured, a buy of 320 resting at 9.50 met by two sellers' prints of 100 at
+9.50 fills 100 with it on, and 100 and 100 with it off. Measured on 2026-10-09 on a venue
+configured as kanso configures one and switched on, it also leaves a market order against a
+level it has consumed neither filled nor rejected, `SUBMITTED` for good; withholds from a
+second resting order the repeat of a print it credited to the first; credits three bars whose
+lows go under a resting buy a quarter of one bar's volume between them; and fills the buy of
+320 met by four prints of 100 at its price 100 in all.
+Each of those is a wrong fill of its own, so the claim is checked here: an engine release
+that changes it is the moment to look at it again.
+
 **A print reaches a resting order only from the side that can trade with it.**
 `process_trade_tick` moves only the ask down for a seller's print, only the bid up for
 a buyer's, and both sides to the print for one with no aggressor. Measured, the same buy
@@ -894,13 +931,19 @@ def _limit_points(kind: str, *prices: float, side: Any = None) -> list[object]:
 
 
 def _probe_resting_limit(
-    prob: float, points: list[object], side: str, *, quantity: int = 10
+    prob: float,
+    points: list[object],
+    side: str,
+    *,
+    quantity: int = 10,
+    liquidity_consumption: bool = False,
 ) -> list[tuple[object, ...]]:
     """The fills of one limit order resting from the first point's handler.
 
     A buy at 9.50 or a sell at 10.50 against a market at 10.00, so the order rests on the
     book as a maker; the venue's fill model fills a limit the market reaches with
-    probability `prob`. Each fill is its quantity, its price and its liquidity side.
+    probability `prob`, and the venue remembers what it credited at a price only under
+    `liquidity_consumption`. Each fill is its quantity, its price and its liquidity side.
     """
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.models import FillModel
@@ -964,6 +1007,7 @@ def _probe_resting_limit(
             base_currency=USD,
             starting_balances=[Money(1_000_000, USD)],
             fill_model=FillModel(prob_fill_on_limit=prob),
+            liquidity_consumption=liquidity_consumption,
         )
         engine.add_instrument(equity)
         engine.add_data(points)
@@ -1437,9 +1481,148 @@ def _check_a_print_fills_a_resting_limit_by_its_own_size() -> tuple[bool, str]:
     holds = parts == [100.0, 100.0, 100.0, 20.0] and whole == [320.0]
     return holds, (
         f"a buy of 320 at 9.50 met by four sellers' prints of 100 at 9.50 filled {parts}; met by "
-        f"one print of 1,000 it filled {whole}. A print fills a resting limit by its own size, so "
-        "the fills a run reports are only as honest as the print sizes it is fed: a venue's own "
+        f"one print of 1,000 it filled {whole}. A print at a resting limit's price fills it by "
+        "its own size — a print beyond the price fills all of it (the claim after) — so the "
+        "fills a run reports are only as honest as the print sizes it is fed: a venue's own "
         "executions, unmerged, fill in parts; consolidated or merged prints fill whole"
+    )
+
+
+def _check_a_point_beyond_a_level_one_limit_fills_it_whole() -> tuple[bool, str]:
+    """Where a point's size stops bounding a fill: a print or a quote beyond a resting limit
+    on a top-of-book venue fills all that is left of it, at its price, as a maker."""
+    whole = [(100.0, 9.5, "MAKER"), (220.0, 9.5, "MAKER")]
+    beyond = _probe_resting_limit(1.0, _limit_points("trade", 9.49), "BUY", quantity=320)
+    quoted = _probe_resting_limit(1.0, _limit_points("quote", 9.4, 9.49), "BUY", quantity=320)
+    at = _probe_resting_limit(1.0, _limit_points("trade", 9.5), "BUY", quantity=320)
+    holds = beyond == whole and quoted == whole and at == [(100.0, 9.5, "MAKER")]
+    return holds, (
+        f"a buy of 320 resting at 9.50 — met by a seller's print of 100 at 9.49 filled {beyond}; "
+        f"by a quote of 9.40/9.49 showing 100 on the ask, {quoted}; by a seller's print of 100 "
+        f"at 9.50, {at}. Once a point goes beyond the limit, the engine fills what is left of "
+        "the order at its price, whatever the point's own size, assuming a market that moved "
+        "through it had the size"
+    )
+
+
+def _probe_market_on(points: list[object], quantity: int, on: int) -> list[tuple[object, ...]]:
+    """The fills of one market buy of `quantity` sent from the handler of the `on`-th point,
+    counted from one, as its quantity, its price and its liquidity side."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, liquidity_side_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.fills: list[tuple[object, ...]] = []
+            self.seen = 0
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+            self.subscribe_quote_ticks(equity.id)
+
+        def _count(self) -> None:
+            self.seen += 1
+            if self.seen == on:
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(quantity))
+                )
+
+        def on_trade_tick(self, tick: object) -> None:
+            self._count()
+
+        def on_quote_tick(self, tick: object) -> None:
+            self._count()
+
+        def on_order_filled(self, event: Any) -> None:
+            self.fills.append(
+                (
+                    float(event.last_qty),
+                    float(event.last_px),
+                    liquidity_side_to_str(event.liquidity_side),
+                )
+            )
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return probe.fills
+    finally:
+        engine.dispose()
+
+
+def _check_a_print_is_the_level_one_book_until_the_next_quote() -> tuple[bool, str]:
+    """What a taker sent on a print is matched against: the print, on both sides of the
+    book, and one increment past it for what the print does not cover."""
+    from nautilus_trader.model.data import QuoteTick, TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    instrument_id = _sample_equity().id  # type: ignore[attr-defined]
+    quote = QuoteTick(
+        instrument_id,
+        Price(9.97, 2),
+        Price(10.03, 2),
+        Quantity.from_int(1_000),
+        Quantity.from_int(1_000),
+        _MINUTE_NS,
+        _MINUTE_NS,
+    )
+    printed = TradeTick(
+        instrument_id,
+        Price(10.0, 2),
+        Quantity.from_int(100),
+        AggressorSide.SELLER,
+        TradeId("P-1"),
+        2 * _MINUTE_NS,
+        2 * _MINUTE_NS,
+    )
+    on_quote = _probe_market_on([quote], 300, 1)
+    on_print = _probe_market_on([quote, printed], 300, 2)
+    holds = on_quote == [(300.0, 10.03, "TAKER")] and on_print == [
+        (100.0, 10.0, "TAKER"),
+        (200.0, 10.01, "TAKER"),
+    ]
+    return holds, (
+        f"under a quote of 9.97/10.03 showing 1,000 a side, a market buy of 300 sent on the "
+        f"quote filled {on_quote}; sent on a seller's print of 100 at 10.00 after it, "
+        f"{on_print}. A print sets both sides of a level-one book to its price and size until "
+        "the next quote, and what it does not cover fills one increment past it, not at the "
+        "quote's ask"
+    )
+
+
+def _check_liquidity_consumption_withholds_a_repeated_print() -> tuple[bool, str]:
+    """Why kanso's venues leave `liquidity_consumption` at the engine's default, off: on a
+    top-of-book venue it withholds the second of two identical prints at a resting price."""
+    points = _limit_points("trade", 9.5, 9.5)
+    on = _probe_resting_limit(1.0, points, "BUY", quantity=320, liquidity_consumption=True)
+    off = _probe_resting_limit(1.0, points, "BUY", quantity=320)
+    holds = on == [(100.0, 9.5, "MAKER")] and off == [(100.0, 9.5, "MAKER")] * 2
+    return holds, (
+        f"a buy of 320 resting at 9.50 met by two sellers' prints of 100 at 9.50 filled {on} "
+        f"with liquidity_consumption on and {off} with it off: the venue remembers what it "
+        "credited at a price until the size shown there changes, so a second print of the same "
+        "size fills nothing"
     )
 
 
@@ -3695,8 +3878,24 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_buyer_s_print_never_reaches_a_resting_buy,
     ),
     (
-        "a print fills a resting limit by its own size, so a larger clip fills in parts",
+        "a print at a resting limit's price fills it by its own size, so a larger clip fills "
+        "in parts",
         _check_a_print_fills_a_resting_limit_by_its_own_size,
+    ),
+    (
+        "a print or a quote beyond a resting limit on a level-one venue fills all that is left "
+        "of it at its price, whatever its own size",
+        _check_a_point_beyond_a_level_one_limit_fills_it_whole,
+    ),
+    (
+        "a print is both sides of a level-one book until the next quote, so a market order sent "
+        "on it fills the print's size at its price and the rest one increment worse",
+        _check_a_print_is_the_level_one_book_until_the_next_quote,
+    ),
+    (
+        "liquidity_consumption on a level-one venue fills a resting limit from the first of two "
+        "identical prints at its price and not from the second",
+        _check_liquidity_consumption_withholds_a_repeated_print,
     ),
     (
         "queue_position on a level-two book makes a joining limit wait for the size ahead",

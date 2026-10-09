@@ -522,6 +522,20 @@ def test_the_concepts_page_states_both_sides_of_the_paper_gate() -> None:
     assert "above the band as much a fail as below it" in promotion
 
 
+def test_the_pages_say_a_point_beyond_a_limit_fills_all_of_it() -> None:
+    """Both pages said a print fills a resting limit by its own size and no more; that holds
+    only at the price, and the engine fills an order whole once a point goes beyond it
+    (`kanso.nautilus.facts`), which a posting thesis sized above its prints is credited."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert (
+        "**A print or a quote *beyond* the price fills all that is left of the order**" in delivery
+    )
+    assert "A print fills the order by its own size and no more" not in delivery
+    workspace = prose(page("workspace.md"))
+    assert "**A print at a resting limit's price fills it by its own size**" in workspace
+    assert "**A print fills a resting limit by its own size**" not in workspace
+
+
 YAML_11_BOOLEANS = ("y", "n", "yes", "no", "true", "false", "on", "off")
 """The words the YAML 1.1 type repository lists as booleans; which of them PyYAML reads as
 one is what the test below measures."""

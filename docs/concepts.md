@@ -1174,10 +1174,27 @@ under `touch` and leaves it resting under `through`; on a quote the engine asks 
 when the order's own side of the book is at the price, so an ask falling to a resting buy
 fills it under either. Both code paths build their venue from the same configuration, so a
 card and a stage fill the same resting orders, and the rule draws no random number, so they
-fill them the same way every time. A print fills the order by its own size and no more, so
-the honesty of a fill is the honesty of the print: an exchange's own executions, one per
-print, fill a resting order as that exchange would; a consolidated or merged tape fills it
-with size the book never showed it (`docs/workspace.md`, `limit_fill`).
+fill them the same way every time.
+
+**How much a point fills depends on where it lands.** A print *at* a resting order's price
+fills it by the print's own size and no more, so the honesty of that fill is the honesty of
+the print: an exchange's own executions, one per print, fill a resting order as that exchange
+would; a consolidated or merged tape fills it with size the book never showed it
+(`docs/workspace.md`, `limit_fill`). A quote whose far side sits at the price fills it by the
+size shown, and again at every quote that shows it. **A print or a quote *beyond* the price
+fills all that is left of the order**, at its price, whatever its own size: the engine's
+top-of-book venue assumes that a market which moved through a limit had the size to fill it.
+A buy of 445 resting at 9.62 and met by one print of 89 at 9.59 fills 89 and then 356; under
+`through` every fill a print makes is such a fill. Measured on 2026-10-09 over lit prints of
+two Nasdaq names, a buy and a sell of 445 re-posted a tick from the touch every five seconds
+were filled 19–36 % beyond what the prints' own sizes allowed, 7 % two ticks away re-posted
+every minute. A resting order no larger than the points that reach it is filled as honestly
+as its prints; a larger one is credited size the tape never showed. The engine kanso pins
+offers no top-of-book setting that fills such a point by its own size without withholding a
+repeated print, and nothing kanso loads reaches that part of it (`docs/backlog.md`). A print
+also stands as the top of the book on both sides, at its price and size, until the next
+quote: a market order sent on it fills that size at the print's price and the rest one
+increment worse. `kanso doctor` checks each of these as an engine fact.
 
 A trade print reaches a resting order only from the side that can trade with it: the engine
 moves only the ask down for a seller's print and only the bid up for a buyer's, so a
@@ -1198,7 +1215,8 @@ runner and on both code paths: 500 shown on the bid, an order of 300 joining it,
 sellers' prints of 100 a second apart fill the order at the seventh, eighth and ninth prints;
 the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
 third and fourth, credited with what stood ahead of it — which is why a posting thesis on
-that venue rests a level of its own. `kanso doctor` checks both engine facts.
+that venue rests a level of its own, though even there a print or a quote beyond the order
+fills all of it. `kanso doctor` checks both engine facts.
 
 **Under `depth` the strategy sees the book its account would, and the venue every change.**
 Without the key a sleeve is handed each change to the book as the venue is. With it
