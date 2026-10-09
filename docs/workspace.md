@@ -987,12 +987,17 @@ refused if a market order and rests at its price if a limit, where such a rule w
 the next quote (one of the 4,456). A quote carried across a gap — a session's last into the next's first prints —
 stays in force until a print trades outside it, so a market order sent on a print inside it
 fills at its touch, at most its spread from that print. A stage node's flatten after its
-window's last point is a market order no later point can bring a quote for: under either rule
-one the quote in force cannot fill — none in force after a print outside it — is filled from
-the engine's own book, at the last print, as `touch` closes it; a last quote showing nothing on
-the side the close takes refuses it under every rule, and the stage stops still holding the
-position (`docs/backlog.md` row 164). `kanso doctor` checks each engine
-behaviour the rule rests on as an engine fact, and the rule itself as kanso loads it.
+window's last point is a market order no later point can bring a quote for. What the sleeves
+sent on that point and still had in flight under a latency lands first, under the rule — a
+market order with no quote in force refused — so an entry it fills is closed with the rest,
+under every rule. Then, under either print rule, a close the quote in force cannot fill — none
+in force after a print outside it — is filled from the engine's own book, at the last print, as
+`touch` closes it; a last quote showing nothing on the side the close takes refuses it under
+every rule, and the stage stops still holding the position (`docs/backlog.md` row 164).
+`kanso doctor` checks every engine behaviour the rule rests on but two as an engine fact, and
+the rule itself as kanso loads it; the two — the instants the venue stamps an acceptance and a
+modify with, which rank a print's shares, and a stage flatten's fallback to the engine's own
+book — are pinned by the suite (`tests/replay/test_print_through.py`).
 
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
 takes to see an order.

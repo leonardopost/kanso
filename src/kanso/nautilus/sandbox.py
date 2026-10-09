@@ -61,8 +61,8 @@ only through its queue, so the queue is on and every command waits in flight. Th
 times that flight from the command's own clock, which on a node is wall time, so
 `SimulatedVenue._send` re-stamps each command from the data clock first; it then lands at
 the first point on or after its delay, once that point has been matched, exactly as on the
-research path, and `advance_past_latency` lands what a node's flatten sent after the
-window's last point.
+research path, and `advance_past_latency` lands what the sleeves sent on the window's last
+point and, after it, what a node's flatten sent.
 
 **The venue is settled at every flush marker too, because the research path settles there.**
 A feed whose instants coincide — every level-two book, any grain of several names — carries
@@ -592,11 +592,11 @@ class SimulatedVenue(LiveExecutionClient):
     def advance_past_latency(self) -> None:
         """Land every command still in flight after the last point, against that point's book.
 
-        Under a stated latency a command sent after the window's last point — a node's
-        flatten — would wait for a point that never comes; this advances the exchange to
-        the instant the delay has passed, so the command is matched where the research path
-        would have matched it had a point arrived then. Without a latency nothing is in
-        flight and nothing happens.
+        Under a stated latency a command sent on or after the window's last point — one a
+        sleeve sent on that point, or a node's flatten — would wait for a point that never
+        comes; this advances the exchange to the instant the delay has passed, so the command
+        is matched where the research path would have matched it had a point arrived then.
+        Without a latency nothing is in flight and nothing happens.
         """
         if self._latency_ns > 0:
             self.exchange.process(self._last_ts + self._latency_ns)

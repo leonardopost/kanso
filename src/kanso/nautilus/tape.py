@@ -97,11 +97,13 @@ reordered: the sleeve is handed every point it was, at the same `data_time`.
 
 **A stage's flatten is filled.** A stage node closes every position after its window's last
 point, and no point follows to bring a quote: a close refused there would leave the stage
-holding a book no restart inherits. So the node tells the model it is closing (`closing`), and
-a market order the quote in force cannot fill — none in force after a print outside it, or one
-showing nothing on the side the close takes — is answered nothing at all, which the engine
-fills from its own book: the last print, or the quote, at that point's price and the rest one
-increment past it, exactly as `touch` closes it. Where that book is empty too, the engine
+holding a book no restart inherits. So the node first lands what the sleeves sent on that
+point and still had in flight, which the rule answers as on any point — a market order with
+no quote in force refused — and only then tells the model it is closing (`closing`). From
+there a market order the quote in force cannot fill — none in force after a print outside it,
+or one showing nothing on the side the close takes — is answered nothing at all, which the
+engine fills from its own book: the last print, or the quote, at that point's price and the
+rest one increment past it, exactly as `touch` closes it. Where that book is empty too, the engine
 refuses the close under every rule (`docs/backlog.md`).
 
 **A split restates the model's own quote.** The corporate actions restate an instrument's book
@@ -440,8 +442,9 @@ def _rested(order: Any) -> Rested:
 
 def closing(exchange: Any) -> None:
     """Tell a venue's fill model, if it is a `PrintThrough`, that the node is flattening after
-    its window's last point: from here a market order the quote in force cannot fill is filled
-    from the engine's own book, as under `touch`, rather than refused."""
+    its window's last point, once what the sleeves sent on that point has landed: from here a
+    market order the quote in force cannot fill is filled from the engine's own book, as
+    under `touch`, rather than refused."""
     model = exchange.fill_model
     if isinstance(model, PrintThrough):
         model.closing = True

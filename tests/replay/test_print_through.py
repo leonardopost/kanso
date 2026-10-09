@@ -1191,22 +1191,16 @@ def test_a_refused_exit_cancelled_as_it_was_sent_is_rejected_and_the_next_exit_g
     assert fills_of(engine) == fills_of(node) == [(bought, 100.0, 9.52, T), (sold, 100.0, 9.58, T)]
 
 
-@pytest.mark.parametrize("latency_ms", LATENCIES)
-@pytest.mark.parametrize("rule", ["touch", *RULES])
-@pytest.mark.parametrize(
-    ("last", "closed"),
-    [(t(9.6, 100, 300), 9.6), (t(9.5, 100, 300), 9.5), (q(9.55, 9.59, 300), 9.55)],
-    ids=["a print over the ask", "a print inside the quote", "a quote"],
-)
-def test_a_stage_s_flatten_closes_whatever_point_ended_the_window(
-    last: object, closed: float, rule: str, latency_ms: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A stage node closes every position after its window's last point, the way `_drive`
-    does, on the node's own simulated venue. A window ending on a print over the ask leaves no
-    quote in force under the print rules, which refuse a market order then, and no point
-    follows to bring one: the node tells the venue it is closing, and the close fills from the
-    engine's own book, at that print, as `touch` closes it. Ending on a print inside the quote
-    or on a quote, the close fills at the quote's bid under every rule."""
+def flattened(
+    points: list[object],
+    script: dict[int, list[Any]],
+    rule: str,
+    latency_ms: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[tuple[str, float]], backtest.RunResult]:
+    """The scripted sleeve on the node's own simulated venue, closed after the window's last
+    point by `kanso.nautilus.node._closed`, the way a stage's `_drive` closes it; with the
+    positions still open once the close has landed."""
     seen: dict[str, Any] = {}
     venues_of = session._venues
 
@@ -1234,14 +1228,68 @@ def test_a_stage_s_flatten_closes_whatever_point_ended_the_window(
 
     monkeypatch.setattr(session, "_venues", venues)
     monkeypatch.setattr(session, "_drive", drive)
+    staged = session.run_node(*_subject(points, script, rule, latency_ms)).result
+    return seen["open"], staged
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", ["touch", "through", *RULES])
+@pytest.mark.parametrize(
+    ("last", "closed"),
+    [(t(9.6, 100, 300), 9.6), (t(9.5, 100, 300), 9.5), (q(9.55, 9.59, 300), 9.55)],
+    ids=["a print over the ask", "a print inside the quote", "a quote"],
+)
+def test_a_stage_s_flatten_closes_whatever_point_ended_the_window(
+    last: object, closed: float, rule: str, latency_ms: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stage node closes every position after its window's last point. A window ending on a
+    print over the ask leaves no quote in force under the print rules, which refuse a market
+    order then, and no point follows to bring one: the node tells the venue it is closing, and
+    the close fills from the engine's own book, at that print, as `touch` and `through` close
+    it. Ending on a print inside the quote or on a quote, the close fills at the quote's bid
+    under every rule."""
     points = [*OPEN, q(9.5, 9.54, 200), last]
 
-    staged = session.run_node(
-        *_subject(points, {2: [("market", "BUY", 100, 0)]}, rule, latency_ms)
-    ).result
+    held, staged = flattened(
+        points, {2: [("market", "BUY", 100, 0)]}, rule, latency_ms, monkeypatch
+    )
 
-    assert seen["open"] == []
+    assert held == []
     assert fills_of(staged)[-1] == (300 + latency_ms, 100.0, closed, T)
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", ["touch", "through", *RULES])
+@pytest.mark.parametrize(
+    "last", [t(9.6, 100, 300), q(9.55, 9.59, 300)], ids=["a print over the ask", "a quote"]
+)
+@pytest.mark.parametrize(
+    "entry", [("market", "BUY", 100, 0), ("limit", "BUY", 100, 9.62)], ids=["market", "limit"]
+)
+def test_an_entry_sent_on_the_window_s_last_point_is_closed_too(
+    entry: tuple[Any, ...],
+    last: object,
+    rule: str,
+    latency_ms: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An entry a sleeve sends on the window's last point is still in flight under a latency
+    when the window ends. It lands before the flatten is sent, under the venue's own rule, so
+    whatever it fills is closed: under the print rules after a print over the ask a market
+    entry is refused and a limit rests and is cancelled, and under `touch` and `through` either
+    fills at the print; on a quote either fills at its ask. Landed after the flatten, an entry
+    that filled was never closed, under every rule."""
+    points = [*OPEN, q(9.5, 9.54, 200), last]
+
+    held, staged = flattened(points, {4: [entry]}, rule, latency_ms, monkeypatch)
+
+    taken = isinstance(last, QuoteTick) or rule in ("touch", "through")
+    price = 9.59 if isinstance(last, QuoteTick) else 9.6
+    closed = 9.55 if isinstance(last, QuoteTick) else 9.6
+    assert held == []
+    assert fills_of(staged) == (
+        [(300 + latency_ms, 100.0, price, T), (300 + latency_ms, 100.0, closed, T)] if taken else []
+    )
 
 
 CAPPED = """

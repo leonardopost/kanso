@@ -26,10 +26,12 @@ stopped holding a book would silently lose it and reopen flat with its record st
 the position; flattening makes the loss explicit and realises the P&L into the record the
 paper and live gates read. The book is measured *before* the flatten, because the exposure a
 stage carried is a fact about the window and not about the way it ended. The close is a
-market order sent after the last point, so no later point can bring the market it needs:
-under the print rules, which refuse a market order where no quote is in force, the node tells
-the venue it is closing (`kanso.nautilus.tape.closing`), and a close the quote in force cannot
-fill is filled from the engine's own book, as `touch` fills it. Where that book shows nothing
+market order sent after the last point, so no later point can bring the market it needs.
+What the sleeves sent on that point and still had in flight under a latency lands first, so an
+entry it fills is closed too. Then, under the print rules, which refuse a market order where
+no quote is in force, the node tells the venue it is closing (`kanso.nautilus.tape.closing`),
+and a close the quote in force cannot fill is filled from the engine's own book, as `touch`
+fills it. Where that book shows nothing
 on the side the close takes either — a last quote showing nothing there — the venue refuses
 the close under every rule and the stage stops still holding the position
 (`docs/backlog.md` row 164).
@@ -67,13 +69,15 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   research path's settle does (`kanso.nautilus.sandbox`).
   The flatten cannot race an exit still working the way a replacement exit can
   (`KansoStrategy.submit_exit`): it is sent after the last point, so no point is matched
-  before its cancels land. Under a stated latency the flatten and any exit the sleeve sent
-  at the last point wait in flight together and land in `advance_past_latency()` with no
-  point matched in between. The close is sized to the position when it was sent and
-  carries `reduce_only`, `close_position`'s default, which the simulated venue honours: it
-  refuses the close once the position is closed, and trims it to the quantity still open
-  when the exit has closed part of it (`kanso.nautilus.facts` measures both, in the claim
-  that `close_position` sends a reduce-only order the simulated venue trims and refuses).
+  before its cancels land. Under a stated latency what the sleeve sent at the last point —
+  an exit, or an entry — is landed by a first `advance_past_latency()` before the flatten is
+  sent, so the flatten closes the position as those orders left it, and the flatten itself
+  lands in a second, with no point matched in between. The close is sized to the position
+  when it was sent and carries `reduce_only`, `close_position`'s default, which the
+  simulated venue honours: it refuses the close once the position is closed, and trims it
+  to the quantity still open when the exit has closed part of it (`kanso.nautilus.facts`
+  measures both, in the claim that `close_position` sends a reduce-only order the simulated
+  venue trims and refuses).
 * A live engine kills the process on an unhandled exception in queue processing unless
   `graceful_shutdown_on_exception` is set, so every engine here sets it and a strategy that
   raises stops the node instead of the interpreter.
@@ -773,14 +777,23 @@ async def _drive(
 async def _closed(
     client: ReplayDataClient, strategies: Sequence[Any], venues: Sequence[sandbox.SimulatedVenue]
 ) -> None:
-    """Flatten every strategy after the window's last point and land what that sent.
+    """Land what the sleeves still had in flight, then flatten every strategy and land that.
 
-    Each venue's fill model is told the node is closing first (`kanso.nautilus.tape.closing`):
-    under the print rules a market order is refused where no quote is in force, as after a
-    print outside the last quote, and no point follows the window's last to bring one, so the
-    close is filled from the engine's own book there, as `touch` fills it. Under a stated
-    latency the close waits in flight, and `advance_past_latency` lands it.
+    Under a stated latency an order a sleeve sent on the window's last point is still in flight
+    when the window ends. `advance_past_latency` lands it first, under the venue's own rule —
+    so under the print rules a market order finding no quote in force is refused, as it would
+    be on a later point — and whatever it fills is a position the flatten then closes; landed
+    after the flatten, an entry's fill was never closed, under every rule. Only then is each
+    venue's fill model told the node is closing (`kanso.nautilus.tape.closing`): under the
+    print rules a market order is refused where no quote is in force, as after a print outside
+    the last quote, and no point follows the window's last to bring one, so the close is
+    filled from the engine's own book there, as `touch` fills it. The close is stamped from the
+    window's last point, so under a latency it comes due at the instant the first advance
+    reached, and the second lands it.
     """
+    for venue in venues:
+        venue.advance_past_latency()
+    await client.settle()
     for venue in venues:
         tape.closing(venue.exchange)
     _flatten(strategies)
