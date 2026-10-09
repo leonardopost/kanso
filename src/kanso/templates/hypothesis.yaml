@@ -34,7 +34,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # goes beyond it, which fills all that is left of it (of the best-priced order, when it
                                    # goes beyond several), or only on a later print beyond it — by that print's size, or all
                                    # of it — with takers filled on the last quote until a print trades outside it; the print
-                                   # rules need quote and trade and no book. kanso's simulated venues only
+                                   # rules need quote and trade, no book, and no bars beside an instrument's
+                                   # quotes. kanso's simulated venues only
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
 # sizing:                          # yours: classification never touches it. Scope: changing it clears `best`
 #   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / (price x multiplier)) whole lots with the

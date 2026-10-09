@@ -942,8 +942,12 @@ last-sale-eligible, round-lot prints may fill needs a trade series written with 
 (`csv_parquet`, `docs/adapters.md`), and a print outside the quote that a later report put there
 ends the quote all the same. A print carrying an aggressor reaches only the orders on the side
 it hit, as under the engine's own rules. A hypothesis whose resolved `limit_fill` is either
-value, from whichever layer, must require `quote` and `trade` and may not require `book`; `kanso
-hyp validate` refuses it otherwise (exit 3), naming `costs.limit_fill`. The tick a taker pays
+value, from whichever layer, must require `quote` and `trade`, may not require `book`, and may
+not ask an instrument for `bar` beside `quote` — a bar walks the engine's own bid and ask
+through its prices, past the quote a taker fills on, so a market order sent on a bar that
+traded over the ask would fill at that ask — though an instrument asked for bars alone, a
+signal, is admitted beside the traded ones (`data_by_instrument`); `kanso hyp validate` refuses
+it otherwise (exit 3), naming `costs.limit_fill`. The tick a taker pays
 over the touch is a charge, not a price: state it as `slippage_ticks`, which is never charged
 past an order's limit, so a limit priced at the touch and taken there pays its commission and no
 tick, and state a resting fill's charge as `maker_per_share`. An account that charges $0.0040 a

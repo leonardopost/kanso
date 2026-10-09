@@ -407,6 +407,48 @@ def test_a_print_rule_over_quotes_and_prints_is_admissible_beside_a_print_only_s
     assert parsed.costs is not None and parsed.costs.limit_fill == "print_through"
 
 
+@pytest.mark.parametrize("rule", ["print_through", "print_through_whole"])
+def test_a_print_rule_over_bars_beside_quotes_is_refused(ws: Workspace, rule: str) -> None:
+    """A bar walks the engine's own bid and ask through its prices, past the quote a taker is
+    filled on, so a market order sent on one would fill on a quote the market has left and a
+    limit that quote makes marketable would rest for a later print."""
+    failure = refused(
+        ws,
+        document(
+            resolution="1m",
+            data_requirements=["bar", "quote", "trade"],
+            costs={**PRINT_COSTS, "limit_fill": rule},
+        ),
+    )
+
+    assert failure.message == (
+        f"costs.limit_fill: {rule} on SIM fills a taker on the quote in force, and DEMO is asked "
+        "for bar beside quote: a bar moves the book the venue judges a taker marketable from "
+        "past that quote"
+    )
+    assert failure.remedy == (
+        "ask each instrument that carries quotes for quote and trade alone under "
+        "data_by_instrument, or state limit_fill: touch or through"
+    )
+
+
+def test_a_print_rule_is_admissible_beside_a_bar_only_signal(ws: Workspace) -> None:
+    """Bars of an instrument that carries no quotes move no quote in force: a market order on
+    it is refused for want of one, and no bar fills a resting limit."""
+    parsed = accepted(
+        ws,
+        document(
+            resolution="1m",
+            universe=["DEMO", "EURO"],
+            data_requirements=["bar", "quote", "trade"],
+            data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["bar"]},
+            costs={**PRINT_COSTS, "limit_fill": "print_through"},
+        ),
+    )
+
+    assert parsed.costs is not None and parsed.costs.limit_fill == "print_through"
+
+
 def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> None:
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
 
