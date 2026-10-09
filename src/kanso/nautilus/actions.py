@@ -237,19 +237,19 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
 
         A side the book holds empty — a quote showed it at size zero — is restated empty, at
         size zero, which a top-of-book book applies as no level. Restating only a book that
-        holds both sides left the other side quoting the old count: measured, a book whose last
-        quote showed no bid kept its ask at ten dollars, and an order another name's handler
-        sent into it filled there against a restated hundred. The empty side's price matters
-        although it shows nothing: the matching engine keeps the last quote's bid and ask
-        prices whatever their sizes, and after every print on a top-of-book book it puts the
-        side the print's aggressor did not trade against back to that price, until the next
-        quote. So the empty side is priced at what the last quote showed there, divided by the
-        ratio — what that quote would have shown in the new count. Priced at the other side's
-        restated price, as it was, a sell resting at the restated ask was filled there by a
-        buyer's print below it: measured, an empty bid restated at an ask of 100.30, a buyer's
-        print at 100.20 put the engine's bid at 100.30, and a second at 100.10 filled a sell of
-        100 at 100.30 that no buyer paid. A book nothing has quoted or printed into has nothing
-        to restate.
+        holds both sides left the other side quoting the old count: measured, a book whose
+        last quote showed no bid kept its ask at ten dollars, and an order another name's
+        handler sent into it filled there against a restated hundred. The empty side's price
+        matters although it shows nothing: the matching engine keeps the last quote's bid
+        and ask prices whatever their sizes, and after every print on a top-of-book book it
+        puts the side the print's aggressor did not trade against back to that price, until
+        a later point or a landing command sets it again. So the empty side is priced at
+        what the last quote showed there, divided by the ratio — what that quote would have
+        shown in the new count. Priced at the other side's restated price, as it was, a sell
+        resting at the restated ask was filled there by a buyer's print below it: measured,
+        an empty bid restated at an ask of 100.30, a buyer's print at 100.20 put the
+        engine's bid at 100.30, and a second at 100.10 filled a sell of 100 at 100.30 that
+        no buyer paid. A book no point has reached has nothing to restate.
 
         The quote carries the instant of the point that applied the split, and a bar of this
         instrument published after that instant has already stamped the book past it, so it
@@ -260,7 +260,8 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         book = engine.get_book()
         bid, ask = book.best_bid_price(), book.best_ask_price()
         # Only a quote empties a side, and every quote is kept, so a book with an empty side
-        # has a quote to price it from; one with none holds both sides, or nothing at all.
+        # has a quote to price it from; a book with no quote kept holds both sides, set by a
+        # print or a bar, or nothing at all.
         quoted_bid, quoted_ask = self._quoted.get(instrument_id, (bid, ask))
         if quoted_bid is None:
             return
