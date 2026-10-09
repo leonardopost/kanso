@@ -47,7 +47,9 @@ ts_event` always, and the engine orders by `ts_init`. Never derive `ts_init` fro
 declared publication rule is refused at write (`data/publication.py`).
 
 **Costs are applied once, by the runner, in the extraction.** Commission — in basis points
-and, where the model states it, per share — slippage and half the spread each side — or, on a
+and, where the model states it, per share — slippage — in basis points and, on a fill that took
+liquidity where the model states it, in ticks of the instrument's increment no further than
+its order's limit — and half the spread each side — or, on a
 fill that rested on the book under a venue model that states a maker's schedule, `maker_bps`
 of its notional and `maker_per_share` on each share alone —
 plus, on a sale, the sell-side fees the model states, maker or taker —

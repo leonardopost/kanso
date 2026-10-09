@@ -272,3 +272,41 @@ def test_a_derived_follower_s_quoted_leg_pays_the_half_spread_it_shows() -> None
     one_leg = 2 * (1.0 + 0.5 + 1.0)
     measured = 2 * (1.0 + 0.5 + 0.05 / 100.0 * 1e4)
     assert found.hurdle == pytest.approx(0.5 * one_leg + 0.5 * measured)
+
+
+def test_a_round_trip_pays_the_model_s_ticks_whole_on_both_fills() -> None:
+    """One tick of a cent stated: a taker priced at market has no limit to cap it, so the entry
+    at 100 pays a basis point more and the exit at the moved price a cent of that price."""
+    spec = screen(MOVE)
+    measure = spec.measures[0]
+    assert isinstance(measure, Response)
+    ticked = resolve_venue_model(
+        "XNAS",
+        hypothesis_costs=CostsOverride(**{**COSTS.model_dump(), "slippage_ticks": 1.0}),
+        quotes_available=False,
+    )
+    hurdles = Hurdles(
+        spec,
+        {"XNAS": ticked},
+        {"a": "XNAS", "b": "XNAS", "q": "XNAS"},
+        {"a": 1.0, "b": 1.0, "q": 1.0},
+        {"a": 0.01, "b": 0.01, "q": 0.01},
+    )
+    series = reaction(after=2)
+
+    (found,) = response.session(spec, measure, series, (0, 10**12), True, {}, hurdles)
+
+    assert found is not None
+    moved = 100.0 * math.exp(30.0 / 1e4)
+    assert found.hurdle == pytest.approx(2 * (1.0 + 0.5 + 1.0) + 1.0 + 1e4 * 0.01 / moved)
+
+
+def test_the_hurdle_s_line_names_the_ticks_only_when_a_model_states_them() -> None:
+    from kanso.screen.hurdle import _line
+
+    ticked = resolve_venue_model(
+        "XNAS", hypothesis_costs=CostsOverride(**{**COSTS.model_dump(), "slippage_ticks": 1.0})
+    )
+
+    assert "slippage 0.5 bp + 1 ticks, spread fixed 2 bp" in _line(ticked, "screen")
+    assert "slippage 0.5 bp, spread fixed 2 bp" in _line(MODEL, "screen")

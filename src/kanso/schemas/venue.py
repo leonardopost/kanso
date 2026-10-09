@@ -27,6 +27,14 @@ fill under a stated maker schedule pays that schedule alone, because it is the w
 that fill by contract, and an account that charges a resting fill per share states that charge
 as `maker_per_share`. Zero unless stated.
 
+Slippage may be stated in ticks as well as in basis points. `slippage_ticks` is charged on
+every share of a fill the venue reports as a taker's — a market order, or a limit that was
+marketable when it landed — as that many of the instrument's own price increments, the way an
+account states that it pays a tick over the touch to take; never on a maker's fill, which
+filled at its own price. On an order that carries a limit it is capped, share by share, at
+what the limit leaves above the fill's price for a buy or below it for a sale, so a limit
+filled at its own price pays none of it and none pays past its limit. Zero unless stated.
+
 The cost model carries two keys that are not charges. `latency_ms` is how long the venue
 takes to see an order — the delay between a sleeve's insert, update or cancel and the
 simulated book acting on it, zero unless stated, measured on the account and route the
@@ -81,6 +89,7 @@ class CostsOverride(KansoModel):
     commission_bps: float | None = Field(default=None, ge=0)
     commission_per_share: float | None = Field(default=None, ge=0)
     slippage_bps: float | None = Field(default=None, ge=0)
+    slippage_ticks: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     spread: Spread | None = None
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)
@@ -100,7 +109,8 @@ class Costs(KansoModel):
     of its notional and per share, in place of all three of the others and of the per-share
     commission; negative is a rebate, and with both `None` a maker's fill is charged like any
     other. `commission_per_share` is charged per share on every fill that pays commission, on
-    top.
+    top. `slippage_ticks` is charged per share on a taker's fill, in the instrument's price
+    increments, and no further than the order's limit allows.
     `sell_fee_bps` and `sell_fee_per_share` are charged on every sale, maker or taker, on top
     of everything else: the regulatory fees an account passes through on sells alone.
     """
@@ -108,6 +118,7 @@ class Costs(KansoModel):
     commission_bps: float = Field(ge=0)
     commission_per_share: float = Field(default=0.0, ge=0)
     slippage_bps: float = Field(ge=0)
+    slippage_ticks: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     spread: Spread
     fixed_bps: float | None = Field(default=None, ge=0)
     maker_bps: float | None = Field(default=None, allow_inf_nan=False)

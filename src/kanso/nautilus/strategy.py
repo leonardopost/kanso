@@ -156,9 +156,11 @@ from kanso.nautilus.costs import (
     fill_cost,
     fixed_half_spread,
     funding_payment,
+    limit_at,
     month_turned,
     quote_half_spread,
     reset,
+    tick_slip,
 )
 from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
 from kanso.nautilus.hooks import (
@@ -683,15 +685,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         bps += float(costs.get("sell_fee_bps") or 0.0) / 2.0
         return bps / BASIS_POINT
 
-    def cost_rate_at(self, price: float, multiplier: float = 1.0) -> float:
-        """`cost_rate` at a price: the per-share commission, where the model states one, and
-        half the per-share sell fee are fractions of notional only once the price is known,
-        and a dearer share pays less. An order does not know whether it will rest, so where
-        the model states a maker's charge per share the larger of it and the commission is
-        the one reserved, as the larger rate is in `cost_rate`; a rebate reserves nothing of
-        its own. On a multiplied instrument per share means per contract, and one contract's
-        notional is `price x multiplier`, so the fraction is the charge over that."""
+    def cost_rate_at(self, price: float, multiplier: float = 1.0, increment: float = 0.0) -> float:
+        """`cost_rate` at a price: the per-share commission, where the model states one, the
+        model's `slippage_ticks` of the instrument's price `increment`, and half the per-share
+        sell fee are fractions of notional only once the price is known, and a dearer share
+        pays less. An order does not know whether it will rest, so where the model states a
+        maker's charge per share the larger of it and what a taker pays a share — the
+        commission and the ticks, whole, since an order sized at market has no limit to cap
+        them — is the one reserved, as the larger rate is in `cost_rate`; a rebate reserves
+        nothing of its own. On a multiplied instrument per share means per contract, and one
+        contract's notional is `price x multiplier`, so the fraction is the charge over that,
+        a tick on a contract being worth the increment times the multiplier."""
         per_share = float(self._charges.get("commission_per_share") or 0.0)
+        ticks = float(self._charges.get("slippage_ticks") or 0.0)
+        per_share += ticks * increment * multiplier
         maker = _maker_per_share(self._charges)
         if maker is not None:
             per_share = max(per_share, maker)
@@ -1728,7 +1735,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 budget,
                 price * multiplier,
                 float(instrument.price_increment) * multiplier,
-                self.cost_rate_at(price, multiplier),
+                self.cost_rate_at(price, multiplier, float(instrument.price_increment)),
             )
             quantity = self._quantise(instrument, raw)
             if quantity is None:
@@ -2004,11 +2011,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if reference is None or reference <= 0:
             return None
         multiplier = float(instrument.multiplier)  # type: ignore[attr-defined]
+        increment = float(instrument.price_increment)  # type: ignore[attr-defined]
         raw = full_book_quantity(
             self.budget,
             reference * multiplier,
-            float(instrument.price_increment) * multiplier,  # type: ignore[attr-defined]
-            self.cost_rate_at(reference, multiplier),
+            increment * multiplier,
+            self.cost_rate_at(reference, multiplier, increment),
         )
         ctx = self._context(instrument_id, side, raw, None, "MARKET")
         self._entry_answers = self._ask_overlays(ctx)
@@ -2581,7 +2589,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         per share included at the last price, slippage and the whole spread each way — the
         stated width, or the last quoted one."""
         price = self._last_print.get(key)
-        rate = self.cost_rate_at(price, self._multiplier_of(key)) if price else self.cost_rate
+        rate = (
+            self.cost_rate_at(price, self._multiplier_of(key), self._increment_of(key))
+            if price
+            else self.cost_rate
+        )
         if self._charges.get("spread") == "quotes":
             _, values = self._quoted.get(key, ([], []))
             if values:
@@ -2725,11 +2737,24 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _paid(self, event: Any) -> float:
         """What one fill took out of cash: the value it bought, or gave back what it sold
         for, and what the runner charges it — commission, per share included where the model
-        states one, slippage and half the spread, or a maker's own schedule where the venue
-        model states one, of its notional and per share, which a rebate makes negative."""
+        states one, slippage and half the spread, and a taker's `slippage_ticks` of the
+        increment, no further than the limit the order carried at the fill, or a maker's own
+        schedule where the venue model states one, of its notional and per share, which a
+        rebate makes negative."""
         multiplier = self._multiplier_of(event.instrument_id)
         qty, px = float(event.last_qty), float(event.last_px)
         signed = qty if event.order_side == OrderSide.BUY else -qty
+        maker = event.liquidity_side == LiquiditySide.MAKER
+        ticks = float(self._charges.get("slippage_ticks") or 0.0)
+        slip = 0.0
+        if ticks and not maker:
+            slip = tick_slip(
+                ticks,
+                self._increment_of(event.instrument_id),
+                px,
+                limit_at(self.cache.order(event.client_order_id), event.id),
+                sell=event.order_side == OrderSide.SELL,
+            )
         cost = fill_cost(
             qty * px * multiplier,
             qty,
@@ -2738,11 +2763,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._half_spread_at(event.instrument_id.value, int(event.ts_event)),
             _maker_bps(self._charges),
             float(self._charges.get("commission_per_share") or 0.0),
-            maker=event.liquidity_side == LiquiditySide.MAKER,
+            maker=maker,
             sell=event.order_side == OrderSide.SELL,
             sell_fee_bps=float(self._charges.get("sell_fee_bps") or 0.0),
             sell_fee_per_share=float(self._charges.get("sell_fee_per_share") or 0.0),
             maker_per_share=_maker_per_share(self._charges),
+            slip=slip,
+            multiplier=multiplier,
         )
         return signed * px * multiplier + cost
 
@@ -2776,6 +2803,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         one (`kanso.nautilus.facts`)."""
         instrument = self.cache.instrument(self._instrument_id(instrument_id))
         return 1.0 if instrument is None else float(instrument.multiplier)
+
+    def _increment_of(self, instrument_id: InstrumentId | str) -> float:
+        """The price increment a venue model's `slippage_ticks` is counted in, read from the
+        cached instrument: zero when the cache holds no definition, which charges no tick."""
+        instrument = self.cache.instrument(self._instrument_id(instrument_id))
+        return 0.0 if instrument is None else float(instrument.price_increment)
 
     def _opening(
         self, instrument_id: InstrumentId, side: OrderSide, quantity: float, price: float

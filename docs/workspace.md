@@ -809,6 +809,43 @@ two taker fills, so neither maker key moves it. A fill a broker reports with no 
 side is charged as a taker's (`docs/backlog.md` row 94). Unset unless a layer states it, so
 no number moves for a model that does not name it.
 
+`costs.slippage_ticks` charges a fill that took liquidity in the instrument's own ticks, the way
+an account that takes at the touch states what it pays to take:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.004      # a taker's fill: $0.0040 a share …
+  slippage_ticks: 1                # … and one tick over its fill on each share, within its limit
+  maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
+  slippage_bps: 0.0
+  spread: fixed_bps
+  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+```
+
+A fill the venue reports as a taker's — a market order, or a limit that was marketable when it
+landed — pays `slippage_ticks` times the instrument's price increment on each share, read from
+its definition, so one tick is a cent on a name quoted in cents, $0.0001 on a sub-dollar one
+and the contract's own step on a crypto instrument; on a multiplied instrument it is per
+contract, at the increment times the multiplier. A fill the venue reports as a maker's never
+pays it: it filled at its own price. An order that carries a limit is never charged past it:
+on each share the charge is capped at what the limit leaves above the fill's price for a buy,
+or below it for a sale, so a buy limited at 10.02 that fills at 10.01 pays one cent of a
+stated two ticks, and one that fills at its own limit — a limit priced at the touch, taken
+there — pays none of it; a market order carries no limit and pays it whole. It is applied
+where every cost is, once, in the runner's extraction, which records each fill's increment
+and the limit its order carried when it filled; `self.balance` books the same; what a sleeve
+reserves when it sizes includes it whole at the price it sizes at, beside the per-share
+commission, and takes the larger of the two and `maker_per_share`; `cost_stress` multiplies
+it with the rest; `cost_scenario` states it key for key and charges it on each recorded
+fill's increment and limit — a fill recorded before v0.15.0 kept neither, so a scenario
+charges it no tick, and a card is re-run before one is re-applied to it; and a screen's
+hurdle charges it whole on both of its taker fills. Zero unless stated, so no number moves for
+a model that does not name it. It states as a cost what the simulated venue does not do to
+the price: the venue fills a taker at the touch it matched, and this key is the tick past it
+the account pays, applied in the extraction like every other charge rather than by moving
+the fill (`docs/backlog.md` row 157).
+
 `costs.sell_fee_bps` and `costs.sell_fee_per_share` charge every sale on top of the rest,
 whoever the venue reports the fill as:
 

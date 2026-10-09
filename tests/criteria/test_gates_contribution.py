@@ -428,3 +428,70 @@ def test_a_stress_multiplies_a_maker_s_per_share_charge_and_divides_its_rebate(
     priced = repriced(build_run((10.0,), fills=(maker,)), {"maker_per_share": per_share})
 
     assert stressed(priced, 2.0).fills[0].cost == pytest.approx(doubled)
+
+
+def test_repriced_charges_a_taker_its_ticks_within_the_limit_it_recorded() -> None:
+    """Two ticks of a cent on 100 shares: a market order pays 2.00; a buy limited a cent over
+    its fill pays the cent it has room for, 1.00; a maker nothing; and a fill recorded before
+    its increment was kept nothing either."""
+
+    def made(**fields: object) -> Fill:
+        base: dict[str, object] = {
+            "ts_ns": at(START),
+            "instrument_id": "DEMO",
+            "side": "BUY",
+            "qty": 100.0,
+            "px": 10.01,
+            "cost": 0.0,
+            "tick": 0.01,
+        }
+        return Fill(**{**base, **fields})  # type: ignore[arg-type]
+
+    fills = (
+        made(),
+        made(limit=10.02),
+        made(limit=10.01, maker=True),
+        made(tick=0.0),
+    )
+    under = repriced(build_run((10.0,), fills=fills), {"slippage_ticks": 2.0})
+
+    assert [fill.cost for fill in under.fills] == pytest.approx([2.0, 1.0, 0.0, 0.0])
+
+
+def test_cost_scenario_reproduces_a_card_charged_its_ticks() -> None:
+    """A tick is a taker's charge, so a scenario stating it alone re-prices; and the card's own
+    schedule reproduces the card's own costs, the cap included."""
+    schedule = {"commission_per_share": 0.004, "slippage_ticks": 1.0, "maker_per_share": 0.004}
+    fills = tuple(
+        Fill(
+            ts_ns=at(START + timedelta(days=day)),
+            instrument_id="DEMO",
+            side=side,
+            qty=1_000.0,
+            px=20.0,
+            cost=0.0,
+            maker=maker,
+            tick=0.01,
+            limit=limit,
+        )
+        for day in range(4)
+        for side, maker, limit in (("BUY", True, 20.0), ("SELL", False, 19.995))
+    )
+    priced = repriced(build_run((10.0,) * 4, fills=fills), schedule)
+    ctx = context(
+        priced,
+        hyp=make_hyp(**CONTRIBUTION_HYP),
+        stage="cert",
+        params={**schedule, "min_metric": 0.0},
+    )
+
+    result = cost_scenario.evaluate(ctx)
+
+    assert result.evidence["cost_scenario"] == pytest.approx(result.evidence["cost_recorded"])
+    assert result.evidence["cost_recorded"] == pytest.approx(
+        4 * (1_000 * 0.004 + 1_000 * 0.004 + 1_000 * 0.005)
+    ), "the sale has half a cent of room under its limit"
+    alone = cost_scenario.evaluate(
+        context(priced, hyp=make_hyp(**CONTRIBUTION_HYP), params={"slippage_ticks": 1.0})
+    )
+    assert alone.skipped is None

@@ -23,11 +23,13 @@ from kanso.nautilus.costs import (
     fill_cost,
     fill_rate,
     funding_payment,
+    limit_at,
     maintenance_ratio,
     month_turned,
     policy_of,
     reset,
     side_rate,
+    tick_slip,
 )
 from kanso.schemas import Book
 
@@ -362,3 +364,158 @@ def test_a_model_without_a_maker_per_share_charge_costs_every_fill_bit_for_bit_a
     )
     named = {key: kwargs[key] for key in ("maker", "sell", "sell_fee_bps", "sell_fee_per_share")}
     assert fill_cost(*args, **named) == _v0140_fill_cost(*args, **named)
+
+
+# --- a taker's tick ------------------------------------------------------------------
+
+
+def test_a_market_order_pays_its_ticks_whole() -> None:
+    """One tick of a cent; two of a sub-dollar name's hundredth of a cent."""
+    assert tick_slip(1.0, 0.01, 10.0, None, sell=False) == 0.01
+    assert tick_slip(2.0, 0.0001, 0.5, None, sell=True) == pytest.approx(0.0002)
+
+
+def test_a_limit_is_never_charged_past_its_price() -> None:
+    """A buy limited at 10.02 filled at 10.01 has a cent of room, so two ticks charge one; a
+    buy taken at its own limit has none; a sale's room is below the fill."""
+    assert tick_slip(2.0, 0.01, 10.01, 10.02, sell=False) == pytest.approx(0.01)
+    assert tick_slip(1.0, 0.01, 10.02, 10.02, sell=False) == 0.0
+    assert tick_slip(1.0, 0.01, 10.0, 9.95, sell=True) == pytest.approx(0.01)
+    assert tick_slip(3.0, 0.01, 10.0, 9.99, sell=True) == pytest.approx(0.01)
+    assert tick_slip(1.0, 0.01, 10.0, 10.01, sell=True) == 0.0, "a fill past its limit pays none"
+
+
+def test_no_ticks_stated_charge_nothing() -> None:
+    assert tick_slip(0.0, 0.01, 10.0, 10.5, sell=False) == 0.0
+    assert tick_slip(1.0, 0.0, 10.0, None, sell=False) == 0.0
+
+
+def test_a_taker_pays_its_ticks_per_share_and_a_maker_never_does() -> None:
+    """100 shares, a cent each, over a commission of $0.004 a share: 0.40 + 1.00. A maker under
+    the same model and no maker schedule pays the commission and not the tick."""
+    taker = fill_cost(1_000.0, 100.0, 0.0, 0.0, 0.0, None, 0.004, maker=False, slip=0.01)
+    maker = fill_cost(1_000.0, 100.0, 0.0, 0.0, 0.0, None, 0.004, maker=True, slip=0.01)
+    assert taker == pytest.approx(1.4)
+    assert maker == pytest.approx(0.4)
+
+
+def test_a_tick_on_a_contract_is_worth_the_increment_times_the_multiplier() -> None:
+    """Two contracts of a 50-times future, one tick of 0.25: 2 x 0.25 x 50 = 25.00."""
+    assert fill_cost(
+        200_000.0, 2.0, 0.0, 0.0, 0.0, None, 0.0, maker=False, slip=0.25, multiplier=50.0
+    ) == pytest.approx(25.0)
+
+
+def test_a_maker_schedule_and_a_tick_never_meet() -> None:
+    assert fill_cost(
+        1_000.0, 100.0, 0.0, 0.0, 0.0, None, 0.004, maker=True, maker_per_share=0.004, slip=0.01
+    ) == pytest.approx(0.4)
+
+
+def _order_with_a_modify(filled_at: list[float]) -> tuple[Any, list[Any]]:
+    """A buy limited at 9.50, filled once, modified to 9.55, filled again: the order and its
+    two fills, applied as the engine applies them."""
+    from nautilus_trader.common.component import TestClock
+    from nautilus_trader.common.factories import OrderFactory
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.enums import LiquiditySide, OrderSide
+    from nautilus_trader.model.events import (
+        OrderAccepted,
+        OrderFilled,
+        OrderSubmitted,
+        OrderUpdated,
+    )
+    from nautilus_trader.model.identifiers import (
+        AccountId,
+        InstrumentId,
+        StrategyId,
+        TradeId,
+        TraderId,
+        VenueOrderId,
+    )
+    from nautilus_trader.model.objects import Currency, Money, Price, Quantity
+
+    factory = OrderFactory(TraderId("T-1"), StrategyId("S-1"), TestClock())
+    order = factory.limit(
+        InstrumentId.from_str("DEMO.XNAS"), OrderSide.BUY, Quantity.from_int(200), Price(9.5, 2)
+    )
+    common = {
+        "trader_id": order.trader_id,
+        "strategy_id": order.strategy_id,
+        "instrument_id": order.instrument_id,
+        "client_order_id": order.client_order_id,
+        "event_id": None,
+        "ts_event": 0,
+        "ts_init": 0,
+    }
+    account, venue_id = AccountId("SIM-001"), VenueOrderId("V-1")
+
+    def made(cls: Any, **fields: Any) -> Any:
+        return cls(**{**common, **fields, "event_id": UUID4()})
+
+    order.apply(made(OrderSubmitted, account_id=account))
+    order.apply(made(OrderAccepted, account_id=account, venue_order_id=venue_id))
+    fills = []
+    for number, (px, price) in enumerate(zip(filled_at, (None, 9.55), strict=True)):
+        if price is not None:
+            order.apply(
+                made(
+                    OrderUpdated,
+                    venue_order_id=venue_id,
+                    account_id=account,
+                    quantity=order.quantity,
+                    price=Price(price, 2),
+                    trigger_price=None,
+                )
+            )
+        fill = made(
+            OrderFilled,
+            account_id=account,
+            venue_order_id=venue_id,
+            position_id=None,
+            trade_id=TradeId(f"F-{number}"),
+            order_side=OrderSide.BUY,
+            order_type=order.order_type,
+            last_qty=Quantity.from_int(100),
+            last_px=Price(px, 2),
+            currency=Currency.from_str("USD"),
+            commission=Money(0, Currency.from_str("USD")),
+            liquidity_side=LiquiditySide.TAKER,
+        )
+        order.apply(fill)
+        fills.append(fill)
+    return order, fills
+
+
+def test_a_fill_is_capped_by_the_limit_its_order_carried_when_it_filled() -> None:
+    """The order holds only its last price, 9.55; the fill before the modify was taken under
+    9.50, so a tick at 9.50 has no room and the one at 9.54 a cent."""
+    order, (first, second) = _order_with_a_modify([9.5, 9.54])
+
+    assert limit_at(order, first.id) == 9.5
+    assert limit_at(order, second.id) == 9.55
+    assert float(order.price) == 9.55
+    assert tick_slip(1.0, 0.01, 9.5, limit_at(order, first.id), sell=False) == 0.0
+    assert tick_slip(1.0, 0.01, 9.54, limit_at(order, second.id), sell=False) == pytest.approx(0.01)
+
+
+def test_an_id_the_order_never_took_reads_as_its_last_limit() -> None:
+    from nautilus_trader.core.uuid import UUID4
+
+    order, _ = _order_with_a_modify([9.5, 9.54])
+
+    assert limit_at(order, UUID4()) == 9.55
+
+
+def test_an_order_with_no_limit_has_none_to_cap() -> None:
+    from nautilus_trader.common.component import TestClock
+    from nautilus_trader.common.factories import OrderFactory
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.enums import OrderSide
+    from nautilus_trader.model.identifiers import InstrumentId, StrategyId, TraderId
+    from nautilus_trader.model.objects import Quantity
+
+    factory = OrderFactory(TraderId("T-1"), StrategyId("S-1"), TestClock())
+    market = factory.market(InstrumentId.from_str("DEMO.XNAS"), OrderSide.BUY, Quantity.from_int(1))
+    assert limit_at(market, UUID4()) is None
+    assert limit_at(None, UUID4()) is None

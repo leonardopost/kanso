@@ -84,6 +84,13 @@ class Fill:
     the currency it moved. A fill recorded before it was kept reads as one, a share's; a
     run struck on a multiplied instrument before then is re-run before a cost model is
     re-applied to its record.
+
+    `tick` is the instrument's price increment and `limit` the limit price of the order that
+    filled, `None` for an order that carried none, a market order's: what a venue model's
+    `slippage_ticks` charges a taker's fill per share, and is capped by, so a model re-applied
+    to the record charges it as the runner did. A fill recorded before they were kept reads as
+    an increment of zero, which no `slippage_ticks` charges; such a run is re-run before a
+    model that states one is re-applied to it.
     """
 
     ts_ns: int
@@ -94,6 +101,8 @@ class Fill:
     cost: float
     maker: bool = False
     multiplier: float = 1.0
+    tick: float = 0.0
+    limit: float | None = None
 
     @property
     def notional(self) -> float:

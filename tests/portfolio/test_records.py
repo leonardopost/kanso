@@ -440,3 +440,26 @@ def test_a_window_measured_without_a_policy_seeds_no_cushion_but_its_last_end() 
 
 def test_a_version_that_never_measured_a_period_starts_from_nothing() -> None:
     assert records.book_seed([]) == (0.0, None)
+
+
+def test_each_fill_s_increment_and_limit_survive_the_round_trip() -> None:
+    """`cost_scenario` charges `slippage_ticks` on them, so a stage's realised window keeps
+    them as a card does: a limit taken at 10.49 under 10.50, and a market order's none."""
+    limited = replace(a_fill(1), tick=0.01, limit=10.5, px=10.49)
+    market = replace(a_fill(2), tick=0.01)
+    run = a_run(fills=(limited, market))
+
+    decoded = records.decode_run(records.encode_run(run))
+
+    assert decoded == run
+    assert [(fill.tick, fill.limit) for fill in decoded.fills] == [(0.01, 10.5), (0.01, None)]
+
+
+def test_a_fill_recorded_before_its_increment_was_kept_reads_as_no_tick_to_charge() -> None:
+    payload = records.encode_run(a_run())
+    for recorded in payload["fills"]:
+        del recorded["tick"], recorded["limit"]
+
+    decoded = records.decode_run(payload)
+
+    assert {(fill.tick, fill.limit) for fill in decoded.fills} == {(0.0, None)}

@@ -877,6 +877,10 @@ class _StrategyView:
         """The superseded positions this strategy held."""
         return [p for p in self._cache.position_snapshots() if str(p.strategy_id) == self._id]
 
+    def order(self, client_order_id: Any) -> Any:
+        """The order a fill of this strategy belongs to, whose limit caps its tick charge."""
+        return self._cache.order(client_order_id)
+
 
 async def _started(built: TradingNode, client: ReplayDataClient, strategies: Sequence[Any]) -> None:
     """Yield until the node is running, the feed is connected and every sleeve started."""

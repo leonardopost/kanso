@@ -338,3 +338,34 @@ def test_a_venue_model_recorded_before_the_maker_per_share_key_reads_as_unstated
     del recorded["costs"]["maker_per_share"]
 
     assert VenueModel.model_validate(recorded).costs.maker_per_share is None
+
+
+def test_a_tick_charge_is_zero_unless_stated_and_layers_like_the_rest() -> None:
+    assert resolve_venue_model("XNAS").costs.slippage_ticks == 0.0
+
+    stated = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(slippage_ticks=2.0)),
+        hypothesis_costs=CostsOverride(slippage_ticks=1.0),
+    )
+    kept = resolve_venue_model(
+        "XNAS",
+        override=VenueOverride(costs=CostsOverride(slippage_ticks=2.0)),
+        hypothesis_costs=CostsOverride(commission_bps=0.0),
+    )
+
+    assert (stated.costs.slippage_ticks, stated.origins.costs) == (1.0, "hypothesis")
+    assert kept.costs.slippage_ticks == 2.0
+
+
+@pytest.mark.parametrize("value", [-1.0, float("inf"), float("nan")])
+def test_a_tick_charge_that_is_negative_or_not_a_number_is_refused(value: float) -> None:
+    with pytest.raises(ValidationError, match="slippage_ticks"):
+        CostsOverride(slippage_ticks=value)
+
+
+def test_a_venue_model_recorded_before_the_tick_charge_reads_as_none_charged() -> None:
+    recorded = resolve_venue_model("XNAS").model_dump()
+    del recorded["costs"]["slippage_ticks"]
+
+    assert VenueModel.model_validate(recorded).costs.slippage_ticks == 0.0

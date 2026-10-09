@@ -1295,7 +1295,11 @@ since a resting limit fills at its own price and the spread is what it earns. A 
 rate or per-share charge is a rebate. Each recorded fill says whether it was a maker's, so the charge
 can be struck again from the record, and the harness books the same rate into
 `self.balance` as it goes, which keeps the balance a sleeve sizes against equal to the
-equity the runner strikes.
+equity the runner strikes. A fill that took liquidity can be charged a tick as well:
+`slippage_ticks` charges it that many of the instrument's own price increments on each share,
+never past the limit its order carried and never on a maker's fill (`docs/workspace.md`), and
+each recorded fill keeps the increment and that limit, so this charge too is struck again from
+the record.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the
@@ -1516,8 +1520,8 @@ spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a c
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
-commission, a flat rate, a maker's rate or per-share charge, a fixed width, the sell-side
-fees — through the runner's own per-fill
+commission, a flat rate, a maker's rate or per-share charge, a slippage in ticks, a fixed
+width, the sell-side fees — through the runner's own per-fill
 arithmetic on each fill's recorded notional, quantity, price and multiplier, recomputes the
 objective on the re-priced run and holds it to `min_metric`: the same fills under the
 schedule of another account, without a second backtest, and the card's own schedule

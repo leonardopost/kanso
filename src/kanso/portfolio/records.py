@@ -427,6 +427,8 @@ def _encode_fill(fill: Fill) -> dict[str, Any]:
         "cost": fill.cost,
         "maker": fill.maker,
         "multiplier": fill.multiplier,
+        "tick": fill.tick,
+        "limit": fill.limit,
     }
 
 
@@ -434,7 +436,9 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
     """A recorded fill; one recorded before fills said whether they rested reads as a
     taker's, which is what it was charged as, and one recorded before the multiplier was
     kept reads as a multiplier of one, a share's; a run struck on a multiplied instrument
-    before the multiplier was kept is re-run before a cost model is re-applied to it."""
+    before the multiplier was kept is re-run before a cost model is re-applied to it. One
+    recorded before the increment and the limit were kept reads as an increment of zero and
+    no limit, which no `slippage_ticks` charges."""
     return Fill(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
@@ -444,6 +448,8 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
         cost=float(payload["cost"]),
         maker=bool(payload.get("maker", False)),
         multiplier=float(payload.get("multiplier", 1.0)),
+        tick=float(payload.get("tick", 0.0)),
+        limit=None if payload.get("limit") is None else float(payload["limit"]),
     )
 
 

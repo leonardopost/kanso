@@ -311,3 +311,89 @@ def test_a_fill_that_rested_pays_exactly_its_per_share_charge_and_the_balance_is
         base = fill.qty * per_share if fill.maker else fill.qty * fill.px * TAKER + fill.qty * 0.014
         assert fill.cost == pytest.approx(base + fee, rel=1e-12, abs=1e-12)
     assert_the_same(card, record, at_least=15)
+
+
+TICKED = b"""
+from pathlib import Path
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    record: str = ""
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys with a limit at the close and sells with one a nickel under it, both taken when
+    they land, then the same at market, and writes down the balance it read before acting.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        self.seen += 1
+        acting = self.seen in (7, 13, 19, 25)
+        with Path(self.kanso_config.record).open("a") as out:
+            out.write(f"{bar.ts_init} {self.balance!r} {int(acting)}\\n")
+        name = bar.bar_type.instrument_id
+        close = float(bar.close)
+        if self.seen == 7:
+            self.submit_entry(name, "BUY", notional=1_000.0, price=round(close, 2))
+        elif self.seen == 13:
+            self.submit_exit(name, price=round(close - 0.05, 2))
+        elif self.seen == 19:
+            self.submit_entry(name, "BUY", notional=1_000.0)
+        elif self.seen == 25:
+            self.submit_exit(name)
+"""
+
+
+def test_a_taker_pays_its_ticks_within_its_limit_and_the_balance_is_still_the_equity(
+    tmp_path: Path, request_for
+) -> None:
+    """One tick of a cent a share on every fill that took liquidity: none on the buy taken at
+    its own limit, a cent on the sale limited a nickel under its fill and on both market
+    orders. Each fill records the increment and the limit it was charged under."""
+    record = tmp_path / "balance.txt"
+    request = request_for(
+        RESEARCH,
+        source=TICKED,
+        hypothesis_=hypothesis(costs={**FIXED, "slippage_ticks": 1.0}),
+        overrides={"record": str(record)},
+    )
+
+    card = execute(request, [instrument()], [tuple(bars(RESEARCH))]).run
+
+    assert [(fill.side, fill.maker) for fill in card.fills] == [
+        ("BUY", False),
+        ("SELL", False),
+        ("BUY", False),
+        ("SELL", False),
+    ]
+    limited_buy, limited_sale, *market = card.fills
+    assert limited_buy.limit == limited_buy.px
+    assert limited_sale.limit == pytest.approx(limited_sale.px - 0.05)
+    assert [fill.limit for fill in market] == [None, None]
+    assert {fill.tick for fill in card.fills} == {0.01}
+    ticked = (0.0, 0.01, 0.01, 0.01)
+    for fill, tick in zip(card.fills, ticked, strict=True):
+        assert fill.cost == pytest.approx(
+            fill.qty * fill.px * TAKER + fill.qty * tick, rel=1e-12, abs=1e-12
+        )
+    assert_the_same(card, record, at_least=15)
+
+
+def test_a_fill_that_rested_never_pays_a_tick(tmp_path: Path, request_for) -> None:
+    """Two ticks stated: the resting probe's two makers pay their schedule alone and its two
+    market orders two cents a share on top of the rates."""
+    card, record = resting_card(
+        tmp_path, request_for, {**FIXED, "maker_bps": 0.0, "slippage_ticks": 2.0}
+    )
+
+    for fill in card.fills:
+        expected = 0.0 if fill.maker else fill.qty * fill.px * TAKER + fill.qty * 0.02
+        assert fill.cost == pytest.approx(expected, rel=1e-12, abs=1e-12)
+    assert [fill.maker for fill in card.fills] == [True, True, False, False]
+    assert_the_same(card, record, at_least=15)

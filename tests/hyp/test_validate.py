@@ -488,6 +488,7 @@ TEMPLATE_VENUE_MODEL: dict[str, Any] = {
         "commission_bps": 0.5,
         "commission_per_share": 0.0,
         "slippage_bps": 1.0,
+        "slippage_ticks": 0.0,
         "spread": "fixed_bps",
         "fixed_bps": 2.0,
         "maker_bps": None,

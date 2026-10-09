@@ -929,3 +929,18 @@ def test_every_cost_key_is_described_on_the_workspace_page_and_named_in_the_temp
     for name in CostsOverride.model_fields:
         assert re.search(rf"`(costs\.)?{name}`|^\s+{name}:", hypotheses, re.M), name
         assert re.search(rf"^#\s+{name}:", template, re.M), name
+
+
+def test_the_pages_say_what_slippage_ticks_charges_and_which_row_it_narrows() -> None:
+    """The key is the taker's tick over the touch, charged in the instrument's own increment and
+    never past an order's limit; the backlog row it narrows says which half it closed."""
+    costs = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert "pays `slippage_ticks` times the instrument's price increment on each share" in costs
+    assert "A fill the venue reports as a maker's never pays it" in costs
+    assert "an order that carries a limit is never charged past it" in costs.lower()
+    assert "(`docs/backlog.md` row 157)" in costs
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 157 |"))
+    item = row.split("|")[3].strip()
+    assert item.startswith("~~The tick a taker pays over the touch could be stated only as a")
+    assert "~~ **narrowed in v0.15.0**: `costs.slippage_ticks`" in item
+    assert "Still open:" in item
