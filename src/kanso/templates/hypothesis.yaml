@@ -22,8 +22,9 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # a maker's fill never pays it. Zero unless stated
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
                                    # rebate. Unset, it pays what any fill pays
-#   maker_per_share: 0.004         # what a fill that rested pays on each share, beside maker_bps (the one unset is nothing):
-                                   # either key alone replaces commission, slippage and the half-spread on a resting fill
+#   maker_per_share: 0.004         # what a fill that rested pays on each share, beside maker_bps, which a broker or venue
+                                   # layer may state: state maker_bps: 0.0 to charge the share alone. Either key, from
+                                   # any layer, replaces commission, slippage and the half-spread on a resting fill
                                    # (a sale still pays the sell-side fees). Negative is a rebate
 #   sell_fee_bps: 0.206            # on every sale, maker or taker, on top of the rest: the regulatory fee on the notional sold
 #   sell_fee_per_share: 0.000195   # and the activity fee on each share sold. Zero unless stated

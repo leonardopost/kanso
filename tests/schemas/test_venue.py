@@ -325,6 +325,41 @@ def test_a_maker_per_share_charge_is_unstated_by_default_and_layers_like_the_res
     assert kept.costs.maker_per_share == -0.002
 
 
+def test_a_maker_per_share_over_a_layer_s_maker_rate_charges_both_until_zeroed() -> None:
+    """The two maker keys are inherited one by one like the rest: a hypothesis stating only
+    `maker_per_share` over a venue entry stating `maker_bps` keeps that rate, and a maker's
+    fill pays both; stating `maker_bps: 0.0` beside it charges the share alone."""
+    from kanso.nautilus.costs import fill_cost
+
+    venue = VenueOverride(costs=CostsOverride(maker_bps=0.5))
+    both = resolve_venue_model(
+        "XNAS", override=venue, hypothesis_costs=CostsOverride(maker_per_share=0.004)
+    ).costs
+    alone = resolve_venue_model(
+        "XNAS",
+        override=venue,
+        hypothesis_costs=CostsOverride(maker_per_share=0.004, maker_bps=0.0),
+    ).costs
+
+    def charged(costs: Costs) -> float:
+        return fill_cost(
+            10_000.0,
+            100.0,
+            costs.commission_bps,
+            costs.slippage_bps,
+            0.0,
+            costs.maker_bps,
+            costs.commission_per_share,
+            maker=True,
+            maker_per_share=costs.maker_per_share,
+        )
+
+    assert (both.maker_bps, both.maker_per_share) == (0.5, 0.004)
+    assert (alone.maker_bps, alone.maker_per_share) == (0.0, 0.004)
+    assert charged(both) == pytest.approx(10_000.0 * 0.5 / 10_000 + 100.0 * 0.004)
+    assert charged(alone) == pytest.approx(100.0 * 0.004)
+
+
 @pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
 def test_a_maker_per_share_charge_that_is_not_a_number_is_refused(value: float) -> None:
     with pytest.raises(ValidationError, match="maker_per_share"):

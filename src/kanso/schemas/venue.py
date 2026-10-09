@@ -12,12 +12,14 @@ currency code is any code the engine could register — a fiat code or a crypto 
 USDT — and whether it does register it is checked where an account is funded, not here.
 
 A fill that rested on the book may be charged apart. `maker_bps` and `maker_per_share`, when
-a layer states either, are the whole charge on a fill the venue reports as a maker's —
-`maker_bps` of its notional and `maker_per_share` on each share, the one a layer leaves unstated
-counting as nothing — so it pays no slippage, since a resting limit fills at its own price, no
-half-spread, since the spread is what it earns rather than what it pays, and no per-share
-commission. Either may be negative, a rebate. With neither stated, a maker's fill is charged
-like any other, which is how every fill was charged before the keys existed.
+the resolved model states either, are the whole charge on a fill the venue reports as a
+maker's — `maker_bps` of its notional and `maker_per_share` on each share, the one the resolved
+model leaves unstated counting as nothing — so it pays no slippage, since a resting limit fills
+at its own price, no half-spread, since the spread is what it earns rather than what it pays,
+and no per-share commission. Either may be negative, a rebate. With neither stated, a maker's
+fill is charged like any other, which is how every fill was charged before the keys existed.
+The two layer one by one, like every key of the block: `maker_per_share` stated over a layer
+that states `maker_bps` charges both, and `maker_bps: 0.0` beside it charges the share alone.
 
 A commission may be stated per share as well as in basis points. `commission_per_share` is
 charged on every share of a fill that pays commission at all — a taker's, and a maker's
