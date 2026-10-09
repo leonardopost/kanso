@@ -1002,6 +1002,76 @@ def test_a_split_restates_the_quote_a_taker_fills_on_both_paths(
     assert node.run.equity == engine.run.equity
 
 
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", ["touch", "through", *RULES])
+@pytest.mark.parametrize("resting", [False, True], ids=["nothing resting", "a buy resting"])
+def test_a_split_lands_nothing_in_flight_whatever_rests_in_the_split_name(
+    resting: bool, rule: str, latency_ms: int
+) -> None:
+    """A market buy sent on the eve's last quote is in flight under a latency when the
+    ex-date's first point, a print over the restated ask, arrives. The split's cancel of what
+    rests in the split name is applied on the matching engine at once and lands nothing else:
+    sent as a command and drained, it landed the market buy first, on the eve's quote in the
+    old count, only when a buy happened to rest in that name. Under the print rules the print
+    ends the restated quote and the buy is refused, and under `touch` and `through` it fills at
+    the print, whatever rests; with no latency it fills on the eve's quote."""
+    points = [
+        q(9.48, 9.52, 10),
+        q(19.98, 20.02, 15, on=OTHER),
+        q(9.48, 9.52, 500),
+        t(96.0, 100, 0, day=1),
+        q(95.9, 96.1, 100, day=1),
+        q(19.98, 20.02, 150, on=OTHER, day=1),
+    ]
+    script = {
+        3: [("market", "BUY", 100, 0)],
+        **({1: [("limit", "BUY", 100, 9.4)]} if resting else {}),
+    }
+
+    node, engine = scripted(
+        points, script, rule, latency_ms, names=(INSTRUMENT, str(OTHER)), infos={INSTRUMENT: SPLIT}
+    )
+
+    if latency_ms == 0:
+        expected = [(500, 100.0, 9.52, T)]
+    elif rule in RULES:
+        expected = []
+    else:
+        expected = [(DAY // MS, 100.0, 96.0, T)]
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == expected
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", ["touch", "through", *RULES])
+def test_a_split_cancels_a_resting_order_before_the_restated_book_can_fill_it(
+    rule: str, latency_ms: int
+) -> None:
+    """A sell of 100 resting at 9.60 in the old count beside a long of 100, under a one-for-ten
+    reverse split applied on the other name's point: the restated book bids 94.80, through the
+    old-count price. The cancel is applied before the restatement at every latency, so nothing
+    fills it; sent as a command under a latency it waited in flight, and under `touch` and
+    `through` the restated quote filled all 100 at 9.60, selling the 10 restated shares and
+    opening a short of 90 about $85 a share under the market."""
+    points = [
+        q(9.48, 9.52, 10),
+        q(19.98, 20.02, 15, on=OTHER),
+        q(9.48, 9.52, 50),
+        q(9.48, 9.52, 500),
+        q(19.98, 20.02, 0, on=OTHER, day=1),
+        q(19.98, 20.02, 100, on=OTHER, day=1),
+        q(94.8, 95.2, 200, day=1),
+    ]
+    script = {1: [("market", "BUY", 100, 0)], 3: [("limit", "SELL", 100, 9.6)]}
+
+    node, engine = scripted(
+        points, script, rule, latency_ms, names=(INSTRUMENT, str(OTHER)), infos={INSTRUMENT: SPLIT}
+    )
+
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == [(10 if latency_ms == 0 else 50, 100.0, 9.52, T)]
+
+
 HANDLED: dict[str, tuple[list[object], dict[int, list[Any]], dict[int, list[Any]]]] = {
     "cancel the other buy on a fill": (
         [*OPEN, t(9.49, 300, 100), q(9.48, 9.52, 110), t(9.47, 300, 150), q(9.48, 9.52, 200)],

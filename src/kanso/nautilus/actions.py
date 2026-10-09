@@ -47,12 +47,12 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   and then `module.register_venue(self)`, so a module holds the kernel's portfolio and
   cache and the exchange itself. `SimulationModule.process`, `log_diagnostics` and `reset`
   raise `NotImplementedError` unless overridden; `pre_process` does not.
-* `SimulatedExchange.send` processes a command in the same call when `use_message_queue` is
-  off, which is what a stage or replay venue sets unless its venue model states a latency,
-  and queues it when it is on, which is the research venue's default and the stage's under a
-  stated latency; `process(ts_now)` drains that queue. Both are called here, so
-  a cancel raised from `pre_process` is applied on either path before the point that
-  raised it reaches the matching engine.
+* `OrderMatchingEngine.get_open_orders()` is the orders resting on the instrument's book, and
+  `cancel_order(order)` cancels one the engine has accepted and reports it in the same call,
+  past the venue's command queue and its latency model; the report reaches the order before
+  the call returns on both paths. So the cancel is applied on either path, at any latency,
+  before the point that raised it reaches the matching engine, and nothing else in flight
+  lands with it.
 * `SimulatedExchange.instruments` is the venue's own instrument map, populated by
   `add_instrument` before any point moves the market on both paths.
 * `MessageBus.publish(topic, msg)` calls every handler subscribed to `topic` before it
@@ -83,11 +83,8 @@ from typing import Any, Final
 
 from nautilus_trader.backtest.config import SimulationModuleConfig
 from nautilus_trader.backtest.modules import SimulationModule
-from nautilus_trader.core.uuid import UUID4
-from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.model.data import QuoteTick
-from nautilus_trader.model.enums import OrderSide
-from nautilus_trader.model.identifiers import InstrumentId, StrategyId
+from nautilus_trader.model.identifiers import InstrumentId
 
 from kanso.nautilus import availability, splits, tape
 from kanso.nautilus.availability import Availability
@@ -211,7 +208,7 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         `TOPIC`: that is how a sleeve learns of the split, without holding a schedule, and
         books the payment in lieu.
         """
-        self._cancel(instrument_id, ts_init)
+        self._cancel(instrument_id)
         instrument = self.exchange.instruments[instrument_id]
         lot = float(instrument.lot_size or instrument.size_increment)
         multiplier = float(instrument.multiplier)
@@ -296,23 +293,20 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         engine.process_quote_tick(restated)
         self._quoted[instrument_id] = (bid_price, ask_price)
 
-    def _cancel(self, instrument_id: InstrumentId, ts_init: int) -> None:
-        """Cancel every resting order in this instrument, one command per sleeve holding one."""
-        resting = self.cache.orders_open(instrument_id=instrument_id)
-        if not resting:
-            return
-        for strategy_id in sorted({str(order.strategy_id) for order in resting}):
-            self.exchange.send(
-                CancelAllOrders(
-                    trader_id=resting[0].trader_id,
-                    strategy_id=StrategyId(strategy_id),
-                    instrument_id=instrument_id,
-                    order_side=OrderSide.NO_ORDER_SIDE,
-                    command_id=UUID4(),
-                    ts_init=ts_init,
-                )
-            )
-        self.exchange.process(ts_init)
+    def _cancel(self, instrument_id: InstrumentId) -> None:
+        """Cancel every order resting on this instrument's book, at once and nothing else.
+
+        The matching engine cancels each itself, past the venue's command queue and its
+        latency: sent as a command, the cancel waited out a stated latency in flight while the
+        restated book matched the old-count orders, and the drain that landed it at no latency
+        landed everything else due by the point with it — before the split restated the book
+        and before a print could end the quote a taker in flight would fill on, and only when
+        the split name held an order the sleeve's own cache counted as open, which on a node
+        includes one whose cancel is still in flight. The book the venue keeps is the same on
+        both paths, and an order still in flight is on neither."""
+        engine = self.exchange.get_matching_engine(instrument_id)
+        for order in list(engine.get_open_orders()):
+            engine.cancel_order(order)
 
 
 def last_price(book: Any, position: Any) -> float:

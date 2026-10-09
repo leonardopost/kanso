@@ -1369,7 +1369,9 @@ them: on the first market point stamped after the midnight that opens an ex-date
 instrument trades (`info.timezone`, or UTC when it names none), and one call before that
 point is matched against anything, the simulated exchange cancels every resting
 order in that instrument, rescales every open position, and resyncs the portfolio index
-behind the change.
+behind the change. The cancel is the matching engine's own, applied at once whatever the
+venue's latency and landing nothing else with it; an order still in flight to the venue is
+not resting, and lands in the old share count (`docs/backlog.md` row 165).
 
 It is the venue and not the strategy because a strategy is too late. A sleeve handles a
 point only after the exchange has already matched against it, so a take-profit resting
