@@ -19,6 +19,8 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
 from kanso.criteria.run import midnight_ns
+from kanso.nautilus import actions
+from kanso.nautilus.availability import Availability
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 from .conftest import DEMO, HEDGE, VENUE, bar, equity
@@ -139,6 +141,20 @@ def test_what_has_already_been_applied_is_not_scheduled_again(backtest) -> None:
 
     assert module._due == []
     assert [float(event.quantity_change) for event in held(run).adjustments] == [-905.0]
+
+
+def test_the_venue_runs_the_corporate_actions_before_availability() -> None:
+    """The corporate actions read the book a split restates and pays its fraction from, and
+    `Availability` may empty that book before the point is applied, so the order is fixed:
+    the other way round, a split its instrument's own point triggers, stamped before the
+    book's last update, finds the book already emptied."""
+    loaded = actions.modules(VENUE.value)
+
+    assert [type(module) for module in loaded] == [actions.CorporateActions, Availability]
+    assert [str(module.id) for module in loaded] == [
+        f"CorporateActions-{VENUE.value}",
+        f"Availability-{VENUE.value}",
+    ]
 
 
 def test_a_reset_venue_re_reads_its_schedules(backtest) -> None:
@@ -509,3 +525,65 @@ def test_the_account_is_unmoved_at_the_ex_date_and_wrong_from_the_closing_fill(
     assert float(position.realized_pnl) == 9_050.0  # the engine adds the 50 paid in lieu
     assert (float(position.avg_px_open), float(position.peak_qty)) == (10.0, 1_005.0)
     assert run.engine.cache.positions()[0].is_closed
+
+
+# --- a restatement the top-of-book venue would skip ---------------------------
+
+
+class Crosser(KansoStrategy):
+    """Buys ten HEDGE at market from DEMO's first bar of the ex-date, before HEDGE prints."""
+
+    config_cls = KansoConfig
+
+    def __init__(self, config: KansoConfig | None = None) -> None:
+        super().__init__(config)
+        self.sent = False
+
+    def on_bar(self, bar: object) -> None:
+        on_the_ex_date = int(bar.ts_event) >= midnight_ns(EX)  # type: ignore[attr-defined]
+        if bar.bar_type.instrument_id == DEMO and on_the_ex_date and not self.sent:  # type: ignore[attr-defined]
+            self.sent = True
+            self.submit_entry(HEDGE, "BUY", qty=10)
+
+
+def _stamped(instrument_id: object, close: float, ts_event: int, ts_init: int) -> object:
+    """One minute bar at `close`, stamped and published at the instants given."""
+    from nautilus_trader.model.data import Bar
+
+    point = bar(instrument_id, 0, close)  # type: ignore[arg-type]
+    return Bar(
+        point.bar_type,
+        point.open,
+        point.high,
+        point.low,
+        point.close,
+        Quantity.from_int(10_000),
+        ts_event=ts_event,
+        ts_init=ts_init,
+    )
+
+
+def test_a_split_restates_a_book_a_bar_stamped_past_its_trigger(backtest) -> None:
+    """HEDGE's last bar of the eve closes at 23:59 UTC and is published at 00:00:30 on the
+    ex-date, and the venue walks it into the book stamped at its publication. DEMO's first bar
+    of the ex-date, closed at 00:00:10 and published at 00:00:40, applies HEDGE's split, and
+    the restated quote carries its 00:00:10 — earlier than the book's last update, so the
+    top-of-book venue would skip it and leave HEDGE quoted at the old ten dollars to the order
+    DEMO's handler sends into it. The restatement is admitted first, so the order fills at the
+    restated hundred."""
+    midnight = midnight_ns(EX)
+    second = 1_000_000_000
+    run = backtest(
+        Crosser(config(universe=(DEMO.value, HEDGE.value))),
+        instruments=[equity(DEMO), equity(HEDGE, info=SCHEDULE)],
+        data=[
+            _stamped(DEMO, 10.0, midnight - 60 * second, midnight - 59 * second),
+            _stamped(HEDGE, 10.0, midnight - 60 * second, midnight + 30 * second),
+            _stamped(DEMO, 10.0, midnight + 10 * second, midnight + 40 * second),
+        ],
+    )
+
+    (position,) = run.engine.cache.positions(instrument_id=HEDGE)
+    assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
+        (10.0, 100.0)
+    ]

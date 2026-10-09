@@ -21,6 +21,7 @@ from tests.replay.conftest import (
     composed,
     document,
 )
+from tests.replay.test_session import STALE, posted
 
 
 def intent(**changes: object) -> Intent:
@@ -352,3 +353,19 @@ def test_parity_holds_across_a_split(ws_split: Workspace, store_split: StateStor
         ("BUY", 1_005.0),
         ("SELL", 100.0),
     ]
+
+
+def test_parity_is_identical_on_points_published_after_a_later_one() -> None:
+    """A quote stamped before the venue's last update and published after it is applied by
+    both venues, so the two paths submit and fill alike and parity holds at zero."""
+    node, engine = posted(100, 9.9, STALE["quote"])
+
+    divergence, widest = compare(
+        [Intent.of(row) for row in node.intents], [Intent.of(row) for row in engine.intents]
+    )
+
+    assert divergence is None
+    assert widest == 0
+    assert len(node.intents) == 1
+    assert node.run.fills == engine.run.fills
+    assert node.run.fills

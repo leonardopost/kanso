@@ -140,7 +140,8 @@ def test_an_emulated_order_s_fill_is_booked_from_the_order_the_emulator_released
 ) -> None:
     """The engine releases an emulated order as another object under the same id, and the
     fill lands on that one; read from the object submitted, the balance kept the money the
-    sleeve had spent on it."""
+    sleeve had spent on it. The stop is released by a print, which is then the venue's book:
+    500 at its price and the rest one increment worse."""
     hyp = hypothesis(data_requirements=("bar", "trade"), costs=FIXED)
     record = tmp_path / "balance.txt"
     request = request_for(
@@ -149,7 +150,10 @@ def test_an_emulated_order_s_fill_is_booked_from_the_order_the_emulator_released
 
     card = execute(request, [instrument()], [tuple(bars(RESEARCH)), tuple(trades(RESEARCH))]).run
 
-    assert [fill.side for fill in card.fills] == ["BUY"]
+    assert [(fill.qty, fill.px, fill.maker) for fill in card.fills] == [
+        (500.0, 10.5, False),
+        (500.0, 10.51, False),
+    ]
     assert_the_same(card, record, at_least=25)
 
 

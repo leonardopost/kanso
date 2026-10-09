@@ -93,10 +93,12 @@ with `key=lambda x: x.ts_init`, and `BacktestDataIterator` merges streams on a
 heap keyed by `ts_init` and advances the clock to each datum's `ts_init`. Given
 two streams whose `ts_event` and `ts_init` orders disagree — one bar at
 `ts_event=10, ts_init=100`, another at `ts_event=50, ts_init=20` — the iterator
-delivers the second first. Nothing in the engine reads `ts_event` for ordering,
-filtering or clocking. A catalog round-trip preserves the two independently, so
-a point stamped with a publication instant later than its reference time is
-delivered at the publication instant and never earlier.
+delivers the second first. Nothing in the engine reads `ts_event` for ordering or
+clocking. One part filters on it: a top-of-book matching engine ignores a quote or
+a print stamped before its book's last update (below), which
+`kanso.nautilus.availability` undoes. A catalog round-trip preserves the two
+independently, so a point stamped with a publication instant later than its
+reference time is delivered at the publication instant and never earlier.
 
 Custom data types
 -----------------
@@ -326,6 +328,25 @@ exception worth knowing: an ask falling to exactly 9.50 while the bid is 9.48 fi
 the buy under either probability, because the buy's own side is not at its price —
 only a market locked at 9.50 leaves it to the model. At zero or one the model draws
 no random number, so `limit_fill` is deterministic either way.
+
+**A top-of-book venue ignores a point older than its book.** On an `L1_MBP` book,
+`OrderMatchingEngine.process_quote_tick` and `process_trade_tick` return before they touch
+the book, the last price or a resting order when the point's `ts_event` is earlier than the
+book's `ts_last`, and only advance the venue's clock to the point's `ts_init`; one stamped at
+`ts_last` is applied. `ts_last` is the running maximum of the `ts_event` of every quote and
+print applied, and of the `ts_init` a walked bar stamps its prints with. No configuration
+turns the filter off, a level-two book has none, and the data engine hands the point to the
+strategy all the same. A tape that takes `ts_init` from itself and `ts_event` from the
+participant stamps a point delivered after another earlier often enough to matter: measured
+on 85 sessions each of two Nasdaq names' quotes and lit prints, the venue ignored about
+12 % of the quotes and 53 % of the prints the strategy was handed. `OrderBook.reset` empties
+both sides and zeroes `ts_last`, and a quote or a print applied after it leaves a top-of-book
+book exactly as that point alone sets it — so `kanso.nautilus.availability`, a module both
+of kanso's venues load, resets the book when the filter would fire and the venue applies
+every quote and print. Measured, a buy of 10 resting at 9.50 under quotes at minutes one and
+three, then a quote of 9.45/9.48 or a seller's print at 9.48 published at minute four:
+stamped at minute two, neither fills it; stamped at minute three, each does; stamped at
+minute two with the module loaded, each does.
 
 **A point beyond a resting limit fills all of it.** A print *at* a resting limit's price
 fills it by the print's own size and no more, one part per print: a buy of 320 met by four
@@ -937,13 +958,15 @@ def _probe_resting_limit(
     *,
     quantity: int = 10,
     liquidity_consumption: bool = False,
+    modules: tuple[object, ...] = (),
 ) -> list[tuple[object, ...]]:
     """The fills of one limit order resting from the first point's handler.
 
     A buy at 9.50 or a sell at 10.50 against a market at 10.00, so the order rests on the
     book as a maker; the venue's fill model fills a limit the market reaches with
-    probability `prob`, and the venue remembers what it credited at a price only under
-    `liquidity_consumption`. Each fill is its quantity, its price and its liquidity side.
+    probability `prob`, the venue remembers what it credited at a price only under
+    `liquidity_consumption`, and it loads `modules`. Each fill is its quantity, its price and
+    its liquidity side.
     """
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.models import FillModel
@@ -1008,6 +1031,7 @@ def _probe_resting_limit(
             starting_balances=[Money(1_000_000, USD)],
             fill_model=FillModel(prob_fill_on_limit=prob),
             liquidity_consumption=liquidity_consumption,
+            modules=list(modules),
         )
         engine.add_instrument(equity)
         engine.add_data(points)
@@ -1432,6 +1456,154 @@ def _check_a_quote_reaching_a_limit_from_the_far_side_fills_it() -> tuple[bool, 
         f"prob_fill_on_limit 0 and {far[1.0]} at 1; a quote locked at 9.50/9.50 filled it "
         f"{locked[0.0]} at 0 and {locked[1.0]} at 1. The fill model is asked only when the order's "
         "own side of the book — the bid of a buy — is at its price"
+    )
+
+
+def _stale_points(kind: str, minute: int) -> list[object]:
+    """A market quoted 9.99/10.01 at minute one and 9.98/10.00 at minute three, then, published
+    at minute four and stamped at `minute`, a quote of 9.45/9.48 or a seller's print at 9.48:
+    beyond a buy resting at 9.50, and older than the book when `minute` is under three."""
+    from nautilus_trader.model.data import QuoteTick, TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    instrument_id = _sample_equity().id  # type: ignore[attr-defined]
+
+    def quoted(bid: float, ask: float, ts_event: int, ts_init: int) -> object:
+        return QuoteTick(
+            instrument_id,
+            Price(bid, 2),
+            Price(ask, 2),
+            Quantity.from_int(100),
+            Quantity.from_int(100),
+            ts_event,
+            ts_init,
+        )
+
+    stamped, published = minute * _MINUTE_NS, 4 * _MINUTE_NS
+    late = (
+        quoted(9.45, 9.48, stamped, published)
+        if kind == "quote"
+        else TradeTick(
+            instrument_id,
+            Price(9.48, 2),
+            Quantity.from_int(100),
+            AggressorSide.SELLER,
+            TradeId("P-1"),
+            stamped,
+            published,
+        )
+    )
+    return [
+        quoted(9.99, 10.01, _MINUTE_NS, _MINUTE_NS),
+        quoted(9.98, 10.0, 3 * _MINUTE_NS, 3 * _MINUTE_NS),
+        late,
+    ]
+
+
+def _check_a_level_one_venue_ignores_a_point_older_than_its_book() -> tuple[bool, str]:
+    """What `kanso.nautilus.availability` undoes: a top-of-book matching engine skips a quote
+    or a print stamped before its book's last update, and applies one stamped at it."""
+    seen = {
+        (kind, minute): _probe_resting_limit(1.0, _stale_points(kind, minute), "BUY")
+        for kind in ("quote", "print")
+        for minute in (2, 3)
+    }
+    holds = all(
+        fills == ([] if minute == 2 else [(10.0, 9.5, "MAKER")])
+        for (_kind, minute), fills in seen.items()
+    )
+    return holds, (
+        "a buy of 10 resting at 9.50 under quotes at minutes one and three, then a quote of "
+        "9.45/9.48 or a seller's print at 9.48 published at minute four — "
+        + "; ".join(
+            f"the {kind} stamped at minute {minute}: {fills}"
+            for (kind, minute), fills in seen.items()
+        )
+        + ". The venue ignored the point stamped before the book's last update and applied "
+        "the one stamped at it"
+    )
+
+
+def _check_a_reset_level_one_book_applies_the_next_point() -> tuple[bool, str]:
+    """`kanso.nautilus.availability`'s premise: emptying a top-of-book book loses nothing the
+    next quote or print does not set again, and lets the engine apply it."""
+    from nautilus_trader.backtest.config import SimulationModuleConfig
+    from nautilus_trader.model.book import OrderBook
+    from nautilus_trader.model.data import QuoteTick, TradeTick
+    from nautilus_trader.model.enums import AggressorSide, BookType
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    from kanso.nautilus.availability import NAME, Availability
+
+    admitted = {
+        kind: _probe_resting_limit(
+            1.0,
+            _stale_points(kind, 2),
+            "BUY",
+            modules=(Availability(SimulationModuleConfig(component_id=f"{NAME}-XNAS")),),
+        )
+        for kind in ("quote", "print")
+    }
+    instrument_id = _sample_equity().id  # type: ignore[attr-defined]
+
+    def quoted(bid_size: int) -> object:
+        return QuoteTick(
+            instrument_id,
+            Price(9.9, 2),
+            Price(10.0, 2),
+            Quantity.from_int(bid_size),
+            Quantity.from_int(400),
+            2 * _MINUTE_NS,
+            4 * _MINUTE_NS,
+        )
+
+    points = {
+        "a quote": quoted(300),
+        "a print": TradeTick(
+            instrument_id,
+            Price(10.05, 2),
+            Quantity.from_int(89),
+            AggressorSide.NO_AGGRESSOR,
+            TradeId("P-9"),
+            2 * _MINUTE_NS,
+            4 * _MINUTE_NS,
+        ),
+        "a quote with no bid": quoted(0),
+    }
+    same: dict[str, bool] = {}
+    for name, point in points.items():
+        reset, alone = (
+            OrderBook(instrument_id, BookType.L1_MBP),
+            OrderBook(instrument_id, BookType.L1_MBP),
+        )
+        reset.update_quote_tick(_stale_points("quote", 3)[1])
+        reset.reset()
+        for book in (reset, alone):
+            if isinstance(point, QuoteTick):
+                book.update_quote_tick(point)
+            else:
+                book.update_trade_tick(point)
+        tops = [
+            (
+                str(book.best_bid_price()),
+                str(book.best_bid_size()),
+                str(book.best_ask_price()),
+                str(book.best_ask_size()),
+                book.ts_last,
+            )
+            for book in (reset, alone)
+        ]
+        same[name] = tops[0] == tops[1]
+    filled = [(10.0, 9.5, "MAKER")]
+    holds = all(fills == filled for fills in admitted.values()) and all(same.values())
+    return holds, (
+        f"the same buy of 10 with kanso's Availability module loaded, the late quote and print "
+        f"stamped at minute two: {admitted}. A book quoted 9.98/10.00 at minute three, reset and "
+        f"then handed a point stamped at minute two, held what that point alone sets — "
+        + "; ".join(f"{name}: {held}" for name, held in same.items())
     )
 
 
@@ -3876,6 +4048,16 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a buyer's print never reaches a resting buy beneath it, where a seller's print or one "
         "with no aggressor does",
         _check_a_buyer_s_print_never_reaches_a_resting_buy,
+    ),
+    (
+        "a level-one venue ignores a quote or a print whose ts_event is earlier than its book's "
+        "last update, and applies one stamped at it",
+        _check_a_level_one_venue_ignores_a_point_older_than_its_book,
+    ),
+    (
+        "a level-one book that kanso's Availability module resets applies the next quote or "
+        "print whatever its ts_event, and holds what that point alone sets",
+        _check_a_reset_level_one_book_applies_the_next_point,
     ),
     (
         "a print at a resting limit's price fills it by its own size, so a larger clip fills "

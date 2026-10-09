@@ -61,8 +61,10 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 * `SimulatedExchange.get_matching_engine(instrument_id)` returns the instrument's
   `OrderMatchingEngine` on both venues. Its `get_book()` is the book the venue declares — L1
   unless the hypothesis requires `book`, then L2 by price level — and on an L1 book
-  `process_quote_tick` sets the top level from a quote, skipping
-  one older than its last update. A market order is matched against that top level.
+  `process_quote_tick` sets the top level from a quote, skipping one older than its last
+  update — which is why a restatement is admitted first (`kanso.nautilus.availability`): a
+  bar's walk can stamp the book past the instant of the point that applies the split. A
+  market order is matched against that top level.
 """
 
 from __future__ import annotations
@@ -79,7 +81,8 @@ from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId, StrategyId
 
-from kanso.nautilus import splits
+from kanso.nautilus import availability, splits
+from kanso.nautilus.availability import Availability
 from kanso.nautilus.splits import Split
 
 __all__ = ["NAME", "TOPIC", "CorporateActions", "Restated", "last_price", "modules"]
@@ -214,7 +217,13 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
     ) -> None:
         """Quote the matching engine's book in the restated shares: the last bid and ask
         divided by the ratio, their sizes multiplied by it. Nothing rests in it — the cancel
-        ran first — so the quote moves prices and matches nothing."""
+        ran first — so the quote moves prices and matches nothing.
+
+        The quote carries the instant of the point that applied the split, and a bar of this
+        instrument published after that instant has already stamped the book past it, so it
+        is admitted first rather than skipped: measured, a bar of the eve published thirty
+        seconds into the ex-date left the book quoting ten dollars, and an order another
+        name's handler sent into it filled there against a restated hundred."""
         engine = self.exchange.get_matching_engine(instrument_id)
         book = engine.get_book()
         bid, ask = book.best_bid_price(), book.best_ask_price()
@@ -222,17 +231,17 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
             return
         instrument = self.exchange.instruments[instrument_id]
         step = float(instrument.size_increment)
-        engine.process_quote_tick(
-            QuoteTick(
-                instrument_id,
-                instrument.make_price(float(bid) / split.ratio),
-                instrument.make_price(float(ask) / split.ratio),
-                instrument.make_qty(max(float(book.best_bid_size()) * split.ratio, step)),
-                instrument.make_qty(max(float(book.best_ask_size()) * split.ratio, step)),
-                ts_event,
-                ts_init,
-            )
+        restated = QuoteTick(
+            instrument_id,
+            instrument.make_price(float(bid) / split.ratio),
+            instrument.make_price(float(ask) / split.ratio),
+            instrument.make_qty(max(float(book.best_bid_size()) * split.ratio, step)),
+            instrument.make_qty(max(float(book.best_ask_size()) * split.ratio, step)),
+            ts_event,
+            ts_init,
         )
+        availability.admit(engine, ts_event)
+        engine.process_quote_tick(restated)
 
     def _cancel(self, instrument_id: InstrumentId, ts_init: int) -> None:
         """Cancel every resting order in this instrument, one command per sleeve holding one."""
@@ -263,6 +272,14 @@ def last_price(book: Any, position: Any) -> float:
     return (float(bid) + float(ask)) / 2.0
 
 
-def modules(venue: str) -> list[CorporateActions]:
-    """The simulation modules one venue loads: this one, named for the venue it serves."""
-    return [CorporateActions(SimulationModuleConfig(component_id=f"{NAME}-{venue}"))]
+def modules(venue: str) -> list[SimulationModule]:
+    """The simulation modules one venue loads, in the order it runs them, each named for the
+    venue it serves: the corporate actions first, which read the book a split restates and
+    pays in lieu from, then `Availability`, which may empty a top-of-book book before the
+    point is applied. The other way round, a split that the instrument's own point triggers,
+    stamped before the book's last update, would find the book already emptied: nothing to
+    restate, and no quote to value the fraction at."""
+    return [
+        CorporateActions(SimulationModuleConfig(component_id=f"{NAME}-{venue}")),
+        Availability(SimulationModuleConfig(component_id=f"{availability.NAME}-{venue}")),
+    ]

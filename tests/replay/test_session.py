@@ -1423,6 +1423,60 @@ def test_a_point_beyond_a_resting_limit_fills_it_whole_on_both_paths(
     assert fills_of(node) == fills_of(engine) == [(20, 89.0, 9.62, True), (20, 356.0, 9.62, True)]
 
 
+STALE = {
+    "quote": [quote(9.99, 10.01, 10, 10), quote(9.95, 10.0, 20, 20), quote(9.8, 9.85, 15, 50)],
+    "print": [quote(9.99, 10.01, 10, 10), quote(9.95, 10.0, 20, 20), trade(9.85, 100, 15, 50, 1)],
+}
+"""A buy of 100 rests at 9.90 from the first quote; a quote or a print through it is stamped
+at 15 ms, before the venue's last update at 20 ms, and published at 50 ms."""
+
+
+@pytest.mark.parametrize(
+    ("latency_ms", "filled"),
+    [(0, [(50, 100.0, 9.9, True)]), (20, [(50, 100.0, 9.85, False)])],
+    ids=["no-latency", "20ms"],
+)
+@pytest.mark.parametrize("kind", ["quote", "print"])
+def test_the_two_paths_apply_a_point_published_after_a_later_one(
+    kind: str, latency_ms: int, filled: list[tuple[int, float, float, bool]]
+) -> None:
+    """The top-of-book venue applies every quote and print the sleeve is handed, on both
+    paths alike, where it used to skip one stamped before its book's last update and leave
+    the order unfilled. With no latency the resting buy fills at its price as a maker; at
+    20 ms it lands with the late point and takes it."""
+    node, engine = posted(100, 9.9, STALE[kind], latency_ms=latency_ms)
+
+    assert node.intents == engine.intents
+    assert fills_of(node) == fills_of(engine) == filled
+
+
+def test_stale_prints_at_the_price_fill_by_their_size_on_both_paths() -> None:
+    """A buy of 320 at 9.90 and four prints of 100 at its price, each published 15 ms after
+    it was stamped, the first before the venue's last update: it used to be skipped, and now
+    each print fills by its own size. At no latency only — under one, the order lands on the
+    first print's instant, where the two paths credit a print differently whatever the venue
+    module does (`docs/backlog.md`)."""
+    points = [
+        quote(9.99, 10.01, 10, 10),
+        quote(9.95, 10.0, 20, 20),
+        *[trade(9.9, 100, 15 + 10 * k, 30 + 10 * k, k) for k in range(4)],
+    ]
+
+    node, engine = posted(320, 9.9, points)
+
+    assert node.intents == engine.intents
+    assert (
+        fills_of(node)
+        == fills_of(engine)
+        == [
+            (30, 100.0, 9.9, True),
+            (40, 100.0, 9.9, True),
+            (50, 100.0, 9.9, True),
+            (60, 20.0, 9.9, True),
+        ]
+    )
+
+
 def test_the_two_paths_agree_on_quotes_and_trades_too() -> None:
     """Every data requirement a hypothesis can declare reaches both exchanges alike."""
     hyp = hypothesis(data_requirements=["bar", "quote", "trade"])

@@ -87,6 +87,10 @@ BINDINGS = {
     "order's last when the order takes it",
     "a level-two venue refuses to run a name it holds data and no book data for, and "
     "counts only the first point of each validated add_data call",
+    "a level-one venue ignores a quote or a print whose ts_event is earlier than its book's "
+    "last update, and applies one stamped at it",
+    "a level-one book that kanso's Availability module resets applies the next quote or "
+    "print whatever its ts_event, and holds what that point alone sets",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

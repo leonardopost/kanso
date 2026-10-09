@@ -522,6 +522,15 @@ def test_the_concepts_page_states_both_sides_of_the_paper_gate() -> None:
     assert "above the band as much a fail as below it" in promotion
 
 
+def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
+    """The engine's top-of-book venue ignored a quote or a print stamped before its book's
+    last update while the sleeve was handed it; the page says the venue now applies it, and
+    names the module that makes it so."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert "**The venue holds every point the sleeve is handed.**" in delivery
+    assert "(`kanso.nautilus.availability`)" in delivery
+
+
 def test_the_pages_say_a_point_beyond_a_limit_fills_all_of_it() -> None:
     """Both pages said a print fills a resting limit by its own size and no more; that holds
     only at the price, and the engine fills an order whole once a point goes beyond it

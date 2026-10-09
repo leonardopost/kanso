@@ -1106,6 +1106,24 @@ series were loaded in. A sleeve that trades several instruments therefore used t
 the first name against a book the later names had not yet moved, and a market submitted
 into the second filled at its previous close.
 
+**The venue holds every point the sleeve is handed.** A market point carries two instants,
+and a tape can stamp them apart: `massive_quotes` and `massive_trades` take `ts_init` from the
+consolidated tape and `ts_event` from the participant, a few hundred microseconds earlier, so
+a point delivered after another can carry the earlier `ts_event`. The engine's top-of-book
+venue ignores a quote or a print stamped before the last one it applied — it advances its
+clock and matches the book it already held — while the sleeve is handed the point. Measured
+on 85 sessions each of two Nasdaq names' quotes and lit prints, the venue ignored about 12 %
+of the quotes and 53 % of the prints the sleeve saw: a resting buy that a later quote went
+through never filled, and a market order sent on a quote the venue had ignored filled
+against the book before it. Both of kanso's simulated venues — a card's, a certificate's, a
+replay's on either path and a stage's — now empty that book first
+(`kanso.nautilus.availability`), so the venue applies every quote and print at its
+`ts_init`, as the sleeve is handed it; no point, no `data_time` and no intent moves. A tape
+that carries prints reported long after they were struck moves the venue with them, as it
+already moved the sleeve and the marks (`docs/backlog.md`). A level-two book was never
+filtered this way and is left alone. `kanso doctor` checks the engine's filter and the
+remedy as engine facts.
+
 kanso batches a coincident grain — every bar at one `ts_init`, then every quote, then
 every trade — into the venue before any author handler of that grain runs, and then runs
 those handlers one at a time so each fill is visible to the next. `on_bar` of the first
