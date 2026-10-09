@@ -558,6 +558,16 @@ def test_the_pages_say_a_point_is_credited_to_each_order_it_fills() -> None:
     assert "exactly as honest as the print sizes it is fed" not in workspace
 
 
+def test_the_concepts_page_says_where_the_two_paths_part_and_what_it_costs_parity() -> None:
+    """The paths part wherever a command lands, a quote or a print being matched again on the
+    research path alone (`docs/backlog.md` row 154), not only where a print stands as the book;
+    and a sleeve that acts on its fills then fails `parity_replay`, more often since v0.14.1."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert "They part where a command lands — for any instrument, on any venue," in delivery
+    assert "a subject that passed `parity_replay` on 0.14.0 can fail it" in delivery
+    assert "They part where a command lands while a print stands as the book" not in delivery
+
+
 YAML_11_BOOLEANS = ("y", "n", "yes", "no", "true", "false", "on", "off")
 """The words the YAML 1.1 type repository lists as booleans; which of them PyYAML reads as
 one is what the test below measures."""

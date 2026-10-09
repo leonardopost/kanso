@@ -1121,11 +1121,11 @@ replay's on either path and a stage's — now empty that book first
 `ts_init`, as the sleeve is handed it. No point is copied or re-stamped, so the sleeve is
 handed every point at the same `data_time` and the stream's digest is the same; what moves is
 what the venue fills, and with it every order a sleeve sends because of a fill or of the
-position one leaves. Every print the venue applies can also stand as the book when a command
-lands, which is where the two code paths part (below). A tape that carries prints reported
-long after they were struck moves the venue with them, as it already moved the sleeve and the
-marks (`docs/backlog.md`). A level-two book was never filtered this way and is left alone.
-`kanso doctor` checks the engine's filter and the remedy as engine facts.
+position one leaves. Every quote and print the venue applies is also there to be matched again
+when a command lands, which is where the two code paths part (below). A tape that carries
+prints reported long after they were struck moves the venue with them, as it already moved the
+sleeve and the marks (`docs/backlog.md`). A level-two book was never filtered this way and is
+left alone. `kanso doctor` checks the engine's filter and the remedy as engine facts.
 
 kanso batches a coincident grain — every bar at one `ts_init`, then every quote, then
 every trade — into the venue before any author handler of that grain runs, and then runs
@@ -1195,12 +1195,19 @@ under `touch` and leaves it resting under `through`; on a quote the engine asks 
 when the order's own side of the book is at the price, so an ask falling to a resting buy
 fills it under either. Both code paths build their venue from the same configuration, so a
 card and a stage apply the same rule, and the rule draws no random number, so they apply it
-the same way every time. They part where a command lands while a print stands as the book —
-sent from that print's handler, or due at its instant under a latency: the research engine
-matches every resting order again once the commands due at an instant have landed, against
-the print, and the node's venue waits for the next point, so the two can fill an order
-differently there while `kanso replay parity`, which compares intents, calls them identical
-(`docs/backlog.md`).
+the same way every time. They part where a command lands — for any instrument, on any venue,
+sent from any handler, at any latency, zero included: the research engine then matches every
+resting order again against its book as it stands, and the node's venue matches an instrument's
+orders again only at that instrument's next point. So a quote whose far side sits at or through
+a resting order's price, or a print there — a print stands as both sides of the book until the
+next quote — can fill that order on the research path alone, a first time for an order just
+sent and again for one it has filled already. `kanso replay parity` compares intents, so it
+calls such runs identical while no intent moves. A sleeve that acts on its fills can then send
+different orders on the two paths, and parity and the required `parity_replay` certification
+gate fail. Since v0.14.1 applies the quotes and prints the venue used to skip, that happens
+more often, so a subject that passed `parity_replay` on 0.14.0 can fail it: on 60 seeded tapes
+of a sleeve sending entries, exits and cancels with no latency, 29 failed at a tolerance of
+zero where 14 had (`docs/backlog.md`).
 
 **How much a point fills depends on where it lands.** A print *at* a resting order's price
 fills it by the print's own size and no more, so the honesty of that fill is the honesty of

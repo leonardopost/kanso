@@ -40,9 +40,12 @@ price until the size shown there changes, so a second print of the same size at 
 price fills nothing, and a market order against a level it has consumed is neither filled
 nor rejected (`kanso.nautilus.facts`). Both code paths build their fill model from this one
 configuration, so a card and a stage apply the same rule to which orders filled. They can
-still part where a command lands while a print stands as the book: the research engine
-matches the resting orders again once the commands due at an instant have landed, against
-the print, while the node's venue waits for the next point (`docs/backlog.md`).
+still part where a command lands, for any instrument on any venue and at any latency, zero
+included: the research engine then matches every resting order again against its book as it
+stands — a quote, or a print, which stands as both sides of the book until the next quote —
+while the node's venue matches an instrument's orders again only at its next point, so a point
+at or through a resting order's price can fill it on the research path alone
+(`docs/backlog.md`).
 
 Every venue account is funded with the whole run capital, because the engine keeps one
 account per venue and has no cross-venue book. What bounds exposure across venues is the

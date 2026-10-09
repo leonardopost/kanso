@@ -6,13 +6,13 @@ a consolidated tape takes `ts_init` from itself and `ts_event` from the particip
 hundred microseconds earlier — so a point delivered after another can carry the earlier
 `ts_event`. The engine's top-of-book matching engine ignores such a point: a quote or a print
 stamped before its book's last update advances the venue's clock and matches the resting
-orders against the book the venue already held — which can credit a print standing as that
-book a second time — and leaves the book and the last price as they were. The sleeve is
-handed it all the same, so the venue matched against a market the sleeve was no longer
-looking at. Measured on 85 sessions each of two Nasdaq names' quotes and lit prints, about
-12 % of the quotes and 53 % of the prints the sleeve was handed never reached the venue: a
-resting buy a later quote went through stayed unfilled, and a market order sent on a quote
-the venue had ignored filled against the book before it.
+orders against the book the venue already held — which can credit a quote or a print standing
+as that book at a resting order's price again — and leaves the book and the last price as they
+were. The sleeve is handed it all the same, so the venue matched against a market the sleeve
+was no longer looking at. Measured on 85 sessions each of two Nasdaq names' quotes and lit
+prints, about 12 % of the quotes and 53 % of the prints the sleeve was handed never reached the
+venue: a resting buy a later quote went through stayed unfilled, and a market order sent on a
+quote the venue had ignored filled against the book before it.
 
 `Availability` is a simulation module both of kanso's venues load, after the corporate
 actions (`kanso.nautilus.actions.modules`). Handed a quote or a print before the matching
