@@ -89,9 +89,10 @@ from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId, StrategyId
 
-from kanso.nautilus import availability, splits
+from kanso.nautilus import availability, splits, tape
 from kanso.nautilus.availability import Availability
 from kanso.nautilus.splits import Split
+from kanso.nautilus.tape import Tape
 
 __all__ = ["NAME", "TOPIC", "CorporateActions", "Restated", "last_price", "modules"]
 
@@ -255,7 +256,13 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         instrument published after that instant has already stamped the book past it, so it
         is admitted first rather than skipped: measured, a bar of the eve published thirty
         seconds into the ex-date left the book quoting ten dollars, and an order another
-        name's handler sent into it filled there against a restated hundred."""
+        name's handler sent into it filled there against a restated hundred.
+
+        The restated quote reaches the matching engine directly, past the venue's modules, so
+        under `limit_fill: print_through` it is handed to the fill model first
+        (`kanso.nautilus.tape.observe`): a taker there fills on the last quote the venue
+        applied, and without it an order sent before the split name's next quote would be
+        filled at the quote before the split, in the old count."""
         engine = self.exchange.get_matching_engine(instrument_id)
         book = engine.get_book()
         bid, ask = book.best_bid_price(), book.best_ask_price()
@@ -282,6 +289,7 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
             instrument_id, bid_price, ask_price, bid_size, ask_size, ts_event, ts_init
         )
         availability.admit(engine, ts_event)
+        tape.observe(self.exchange, restated)
         engine.process_quote_tick(restated)
         self._quoted[instrument_id] = (bid_price, ask_price)
 
@@ -328,8 +336,12 @@ def modules(venue: str) -> list[SimulationModule]:
     pays in lieu from, then `Availability`, which may empty a top-of-book book before the
     point is applied. The other way round, a split that the instrument's own point triggers,
     stamped before the book's last update, would find the book already emptied: nothing to
-    restate, and no quote to value the fraction at."""
+    restate, and no quote to value the fraction at. Then `Tape`, which under
+    `limit_fill: print_through` lands what is due by a print and tells the fill model the
+    point in hand, after a split has restated the book and before the point is applied, and
+    under any other rule does nothing."""
     return [
         CorporateActions(SimulationModuleConfig(component_id=f"{NAME}-{venue}")),
         Availability(SimulationModuleConfig(component_id=f"{availability.NAME}-{venue}")),
+        Tape(SimulationModuleConfig(component_id=f"{tape.NAME}-{venue}")),
     ]

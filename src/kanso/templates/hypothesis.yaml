@@ -28,10 +28,12 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   sell_fee_per_share: 0.000195   # and the activity fee on each share sold. Zero unless stated
 #   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
                                    # measured on the account and route the strategy will trade through. Zero unless stated
-#   limit_fill: touch              # touch | through: a resting limit fills when the market reaches its price (the engine's
-                                   # rule), or only once a bar's low/high or a print goes beyond it, which fills all that is
-                                   # left of it (of the best-priced order, when it goes beyond several). kanso's simulated
-                                   # venues only
+#   limit_fill: touch              # touch | through | print_through | print_through_whole: a resting limit fills when the
+                                   # market reaches its price (the engine's rule), or only once a bar's low/high or a print
+                                   # goes beyond it, which fills all that is left of it (of the best-priced order, when it
+                                   # goes beyond several), or only on a later print beyond it — by that print's size, or all
+                                   # of it — with takers filled on the quote; the print rules need quote and trade and no
+                                   # book. kanso's simulated venues only
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
 # sizing:                          # yours: classification never touches it. Scope: changing it clears `best`
 #   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / (price x multiplier)) whole lots with the

@@ -11,6 +11,7 @@ from kanso.errors import ValidationError
 from kanso.nautilus.venue import (
     LIMIT_FILL,
     NETTING,
+    PRINT_SIZE,
     fill_model,
     known_currency,
     latency_model,
@@ -62,7 +63,35 @@ def test_a_touched_limit_fills_unless_the_venue_model_says_through() -> None:
     assert get_fill_model(default).prob_fill_on_limit == 1.0
     assert stated.fill_model == fill_model("through")
     assert get_fill_model(stated).prob_fill_on_limit == 0.0
-    assert set(LIMIT_FILL) == set(get_args(LimitFill))
+    assert set(LIMIT_FILL) | set(PRINT_SIZE) == set(get_args(LimitFill))
+    assert not set(LIMIT_FILL) & set(PRINT_SIZE)
+
+
+@pytest.mark.parametrize(
+    ("rule", "size"), [("print_through", "print"), ("print_through_whole", "whole")]
+)
+def test_a_print_rule_builds_kanso_s_own_fill_model(rule: str, size: str) -> None:
+    """Under a print rule the venue's fill model is `kanso.nautilus.tape.PrintThrough`, sized
+    by the print or whole, with a limit probability of one and no slippage; it draws nothing."""
+    from kanso.nautilus.tape import PrintThrough
+
+    ruled = hypothesis(
+        resolution="tick",
+        data_requirements=["quote", "trade"],
+        costs={"spread": "fixed_bps", "fixed_bps": 4.0, "limit_fill": rule},
+    )
+
+    (config,) = venue_configs(ruled, venue_model(ruled), CAPITAL)
+    built = get_fill_model(config)
+
+    assert config.fill_model == fill_model(rule)  # type: ignore[arg-type]
+    assert config.fill_model.config == {
+        "prob_fill_on_limit": 1.0,
+        "prob_slippage": 0.0,
+        "size": size,
+    }
+    assert isinstance(built, PrintThrough)
+    assert (built.prob_fill_on_limit, built.prob_slippage) == (1.0, 0.0)
 
 
 def test_a_stated_latency_delays_every_command_by_that_much_and_none_is_no_model() -> None:

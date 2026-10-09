@@ -338,6 +338,75 @@ def test_a_policy_that_moves_money_is_admissible_on_a_margin_account(ws: Workspa
     assert parsed.book is not None and parsed.book.funded
 
 
+PRINT_COSTS = {"commission_bps": 0.5, "slippage_bps": 1.0, "spread": "fixed_bps", "fixed_bps": 2}
+
+
+@pytest.mark.parametrize("rule", ["print_through", "print_through_whole"])
+@pytest.mark.parametrize(
+    ("resolution", "requirements", "missing"),
+    [("1d", ["bar"], "quote or trade"), ("tick", ["quote"], "trade")],
+)
+def test_a_print_rule_without_quotes_and_prints_is_refused(
+    ws: Workspace, rule: str, resolution: str, requirements: list[str], missing: str
+) -> None:
+    """The rule fills a resting limit on prints and a taker on quotes, so it needs both."""
+    failure = refused(
+        ws,
+        document(
+            resolution=resolution,
+            data_requirements=requirements,
+            costs={**PRINT_COSTS, "limit_fill": rule},
+        ),
+    )
+
+    assert failure.message.startswith(f"costs.limit_fill: {rule} on SIM fills a resting limit")
+    assert failure.message.endswith(f"data_requirements has no {missing}")
+    assert failure.remedy == (
+        "add quote and trade to data_requirements, or state limit_fill: touch or through"
+    )
+
+
+def test_a_print_rule_over_a_level_two_book_is_refused(ws: Workspace) -> None:
+    failure = refused(
+        ws,
+        document(
+            resolution="tick",
+            data_requirements=["quote", "trade", "book"],
+            costs={**PRINT_COSTS, "limit_fill": "print_through"},
+        ),
+    )
+
+    assert "is a rule for the top-of-book venue" in failure.message
+    assert failure.remedy.startswith("drop book from data_requirements")
+
+
+def test_a_print_rule_stated_for_the_venue_alone_is_refused_the_same_way(ws: Workspace) -> None:
+    write_portfolio(ws, {"SIM": {"costs": {"limit_fill": "print_through"}}})
+
+    failure = refused(ws, document(data_requirements=["bar"]))
+
+    assert failure.message.startswith("costs.limit_fill: print_through on SIM")
+
+
+def test_a_print_rule_over_quotes_and_prints_is_admissible_beside_a_print_only_signal(
+    ws: Workspace,
+) -> None:
+    """An instrument asked only for its prints is a signal the sleeve never trades; were it
+    traded, a market order on it would be refused for want of a quote."""
+    parsed = accepted(
+        ws,
+        document(
+            resolution="tick",
+            universe=["DEMO", "EURO"],
+            data_requirements=["quote", "trade"],
+            data_by_instrument={"EURO": ["trade"]},
+            costs={**PRINT_COSTS, "limit_fill": "print_through"},
+        ),
+    )
+
+    assert parsed.costs is not None and parsed.costs.limit_fill == "print_through"
+
+
 def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> None:
     assert accepted(ws, document(universe=["DEMO", "EURO"])) is not None
 

@@ -39,8 +39,10 @@ The cost model carries two keys that are not charges. `latency_ms` is how long t
 takes to see an order — the delay between a sleeve's insert, update or cancel and the
 simulated book acting on it, zero unless stated, measured on the account and route the
 strategy will trade through. `limit_fill` is the matching rule the
-simulated venue is built with: `touch` fills a resting limit the market only reached, and
-`through` fills it only once the market trades beyond its price. It decides which fills a
+simulated venue is built with: `touch` fills a resting limit the market only reached,
+`through` fills it only once the market trades beyond its price, and `print_through` fills it
+only on a print beyond its price, by that print's own size (`print_through_whole`, for all
+that is left of it), and fills a taker on the quote rather than on a print. It decides which fills a
 run has rather than what they cost, so it cannot be re-applied to recorded fills the way the
 charges can; it lives beside them because it is the same kind of statement — how
 pessimistic the simulation is about execution — and is stated at the same three layers.
@@ -64,7 +66,7 @@ from kanso.schemas.base import KansoModel, NonEmpty
 
 Account = Literal["margin", "cash"]
 Spread = Literal["quotes", "fixed_bps"]
-LimitFill = Literal["touch", "through"]
+LimitFill = Literal["touch", "through", "print_through", "print_through_whole"]
 Origin = Literal["default", "config", "broker", "venue_override", "hypothesis"]
 Funding = Literal["simulated", "broker_paper", "real"]
 Clock = Literal["replay", "wall"]

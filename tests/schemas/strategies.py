@@ -127,7 +127,9 @@ def costs(draw: st.DrawFn) -> Costs:
         maker_per_share=draw(st.none() | st.floats(min_value=-0.01, max_value=0.02)),
         sell_fee_bps=draw(NON_NEGATIVE),
         sell_fee_per_share=draw(NON_NEGATIVE),
-        limit_fill=draw(st.sampled_from(["touch", "through"])),
+        limit_fill=draw(
+            st.sampled_from(["touch", "through", "print_through", "print_through_whole"])
+        ),
     )
 
 

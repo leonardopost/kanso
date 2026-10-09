@@ -875,7 +875,7 @@ venue fills a limit order resting on the book.
 
 ```yaml
 costs:
-  limit_fill: through              # touch (default) | through
+  limit_fill: through              # touch (default) | through | print_through | print_through_whole
 ```
 
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
@@ -900,6 +900,67 @@ broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and two
 certified under different rules cannot share a stage venue, which is one exchange: `deploy`
 refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs.limit_fill`.
 
+**`print_through` fills a resting limit only on a print through it, and a taker only on a
+quote.** It is a rule for the top-of-book venue fed both quotes and prints, and it moves both
+kinds of fill. A resting limit fills only on a print strictly through its price — a print
+under a resting buy, over a resting sell — that the venue applied after the order reached its
+book, and by that print's own size, shared across the orders it reaches: a buy of 320 resting
+at 9.50 met by a print of 100 at 9.49 fills 100, and the next print under it another 100; one
+print of 300 under buys of 200 at 9.51 and of 200 at 9.50 fills the better-priced 200 and the
+other the 100 left. Nothing else fills it: not a quote however far through its price, not a
+print at its price, not a bar, and not a print the venue applied before the order landed.
+That is the reading of how much a print fills that the operator's resting rule takes;
+`print_through_whole` is the same rule with the other reading, a print through filling all
+that is left of the order, as a market that traded through a displayed limit would have taken
+it first. A taker — a market order, or a limit marketable when it lands — fills against the
+last quote the venue applied, at its touch and up to the size it shows, never against a print
+standing as the book: a limit fills there and no further than its own price, so a buy limit
+never pays above its limit, and its rest stays on the book at its price under the rule above;
+a market order's rest walks one increment past the touch, as the engine walks any market order
+larger than the top level, so a rule that sizes a taker down to the displayed size is the
+sleeve's to apply, from the quote it is handed. With no quote applied yet, or one showing
+nothing on the side a market order takes, it is refused for want of a market. Under a stated
+latency a command due by a print's instant lands before that print, so an order that reached
+the book in time is there when the print arrives and a cancel that reached it in time has taken
+the order off; a command due at a quote still lands after the quote, so a taker fills on the
+first quote at or after its delay — unless a print comes first, when it fills on the quote
+before. The venue cannot tell one print from another: it fills on every print the hypothesis
+loads, so a rule that only lit, last-sale-eligible, round-lot prints may fill needs a trade
+series written with only those (`csv_parquet`, `docs/adapters.md`). A print carrying an
+aggressor reaches only the orders on the side it hit, as under the engine's own rules. A
+hypothesis whose resolved `limit_fill` is either value, from whichever layer, must require
+`quote` and `trade` and may not require `book`; `kanso hyp validate` refuses it otherwise
+(exit 3), naming `costs.limit_fill`. The tick a taker pays over the touch is a charge, not a
+price: state it as `slippage_ticks`, which is never charged past an order's limit, so a limit
+priced at the touch and taken there pays its commission and no tick, and state a resting
+fill's charge as `maker_per_share`. An account that charges $0.0040 a share on every fill and
+a tick over the touch to take, with the regulatory fees passed through on sales, states:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  commission_per_share: 0.004      # a taker's fill: $0.0040 a share …
+  slippage_ticks: 1                # … and one tick over the touch, never past its limit
+  maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
+  slippage_bps: 0.0
+  spread: fixed_bps
+  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+  sell_fee_bps: 0.206              # the transaction fee and the activity fee, on every sale
+  sell_fee_per_share: 0.000195
+  limit_fill: print_through        # a resting limit fills only on a later print through it
+  latency_ms: 30                   # the time to decide and the route to the venue, one number
+```
+
+Three parts of a taker rule that waits for the first quote at or after its delay and sizes a
+clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each:
+a taker whose first point after its delay is a print fills on the quote before it (measured on
+five sessions at 20 ms with the rule's prototype, 26 of 4,456 market orders priced otherwise,
+−6 to +5 ticks); a market order's rest past the displayed size walks one increment and pays
+`slippage_ticks` on top; and a limit priced between the touch and a print with no aggressor
+standing above it rests and later fills as a maker, where such a rule would take it on the
+next quote. `kanso doctor` checks each engine behaviour the rule rests on as an engine fact,
+and the rule itself as kanso loads it.
+
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
 takes to see an order.
 
@@ -912,7 +973,9 @@ Every order command — an insert, an update, a cancel — reaches the venue's b
 milliseconds after the sleeve sent it, on both code paths alike, and the book carries on in
 between: a print that would have filled the order in that interval finds it not there yet,
 and a cancel that arrives after a fill finds the order filled. The venue acts on a command at
-the first point of data after its delay has passed, and only after matching that point, so
+the first point of data after its delay has passed, and only after matching that point —
+except that under `limit_fill: print_through` a command due by a print's instant lands before
+that print (above) — so
 the delay a run models is never shorter than the one stated and at tick resolution
 exceeds it by one point. On a feed of prints, quotes or a book, and on any grain of several
 names, a print, a quote or a bar reaches the sleeve through a flush marker at its instant,
@@ -976,13 +1039,17 @@ versions.
 **A print at a resting limit's price fills it by its own size**, and no more: a buy of 320
 met by four sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per
 print, and met by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine
-fact). A quote beyond the price, or a print beyond it from the side that can trade with the
-order, fills all that is left of it whatever its own size — the same buy met by one seller's
+fact). Under `touch` and `through` a quote beyond the price, or a print beyond it from the side
+that can trade with the order, fills all that is left of it whatever its own size — the same
+buy met by one seller's
 print of 100 a tick under it fills 100 and then 220 — and of two orders resting beyond one
 point it fills only the better-priced. Under `touch` a print at a price is credited whole to
 every order resting there: two buys at 9.50 met by one seller's print of 100 there fill 100
 each. So the fills a run reports are as honest as the print sizes it is fed only for an order
 alone at its price and no larger than the prints that reach it (`docs/concepts.md`, Delivery).
+Under `print_through` a print at the price fills nothing and one beyond it fills by its own
+size, shared across the orders it reaches, so a resting fill is as honest as the prints that
+made it; under `print_through_whole` one beyond fills all that is left (above).
 A resting order sits on one exchange's book and is filled only by the executions that reach
 that book, so the trade stream that stands in for that exchange has to be its own executions,
 one print per execution: a consolidated tape fills the order with prints from venues it never

@@ -369,3 +369,16 @@ def test_a_venue_model_recorded_before_the_tick_charge_reads_as_none_charged() -
     del recorded["costs"]["slippage_ticks"]
 
     assert VenueModel.model_validate(recorded).costs.slippage_ticks == 0.0
+
+
+@pytest.mark.parametrize("rule", ["touch", "through", "print_through", "print_through_whole"])
+def test_each_limit_fill_rule_is_stated_and_layered_like_the_rest(rule: str) -> None:
+    model = resolve_venue_model("XNAS", hypothesis_costs=CostsOverride(limit_fill=rule))  # type: ignore[arg-type]
+
+    assert model.costs.limit_fill == rule
+    assert VenueModel.model_validate(model.model_dump()).costs.limit_fill == rule
+
+
+def test_a_limit_fill_rule_kanso_does_not_know_is_refused() -> None:
+    with pytest.raises(ValidationError, match="limit_fill"):
+        CostsOverride(limit_fill="print")  # type: ignore[arg-type]

@@ -1189,14 +1189,15 @@ when it was placed waits on the book, and a later point that reaches its price f
 that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`
 (`docs/workspace.md`): under `touch`, the default and the engine's own rule, a bar whose low
 is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
-a print past it. On a bar the venue walks the open, the high, the low and the close as prints
-in turn, so a bar that only touched the level at its low fills a resting buy at the limit
-under `touch` and leaves it resting under `through`; on a quote the engine asks the rule only
-when the order's own side of the book is at the price, so an ask falling to a resting buy
-fills it under either. Both code paths build their venue from the same configuration, so a
+a print past it. Under `print_through` only a print past it fills it, by that print's own size,
+and a taker fills on the quote rather than on a print (below). On a bar the venue walks the
+open, the high, the low and the close as prints in turn, so a bar that only touched the level
+at its low fills a resting buy at the limit under `touch` and leaves it resting under
+`through`; on a quote the engine asks the rule only when the order's own side of the book is
+at the price, so an ask falling to a resting buy fills it under either. Both code paths build their venue from the same configuration, so a
 card and a stage apply the same rule, and the rule draws no random number, so they apply it
-the same way every time. They part where a command lands — for any instrument, on any venue,
-sent from any handler, at any latency, zero included: the research engine then matches every
+the same way every time. Under `touch` and `through` they part where a command lands — for any
+instrument, on any venue, sent from any handler, at any latency, zero included: the research engine then matches every
 resting order again against its book as it stands, and the node's venue matches an instrument's
 orders again only at that instrument's next point. So a quote whose far side sits at or through
 a resting order's price, or a print there — a print stands as both sides of the book until the
@@ -1229,15 +1230,38 @@ run resting several orders at one price is credited that point several times; an
 several fills all that is left of the best-priced and nothing of an order resting at a worse
 price, even one it also went through. So only an order alone at its price and no larger than the
 points that reach it is filled as honestly as its prints; a larger one, or one resting beside
-another at its price, is credited size the tape never showed. The engine kanso pins offers no
-top-of-book setting that fills such a point by its own size without withholding a repeated
-print, and nothing kanso loads reaches that part of it (`docs/backlog.md`). A print also stands
-as the top of the book on both sides, at its price and size, until the next quote: a market
+another at its price, is credited size the tape never showed. No setting of the engine's own
+fill model fills such a point by its own size without withholding a repeated print; under
+`touch` and `through` kanso leaves the engine's fill as it is, and under `print_through` a fill
+model of kanso's own replaces it — a zero-quantity fill among the fills a fill model answers
+ends the engine's fill before it fills what is left whole, which `kanso doctor` checks (below,
+`docs/backlog.md`). A print also stands as the top of the book on both sides, at its price and size, until the next quote: a market
 order sent on it fills that size at the print's price and the rest one increment worse. `kanso
 doctor` checks the fill by size at the price, the quote credited again, the whole fill beyond
 it, two orders at one price each credited a point whole, a point beyond two orders filling only
 the better-priced, the print standing as the book and why `liquidity_consumption` stays off as
 engine facts.
+
+**Under `print_through` only a print through a resting order fills it, and a taker fills on the
+quote.** The venue's fill model is kanso's own there (`kanso.nautilus.tape`): the matching
+engine asks it for the fills of every order it has matched, and a venue module tells it before
+each point which point is in hand, which orders rested before a print, and the last quote. So
+a quote never fills a resting order and neither does a print at its price; a print through it
+fills it once, by the print's own size shared with the other orders it reaches — the reading
+the operator's resting rule takes — or, under `print_through_whole`, for all that is left; and
+a taker fills at the last quote's touch, up to the size it shows and never past its own limit,
+not at a print standing as the book. Under a stated latency a command due by a print's instant
+lands before the print. Measured on 2026-10-09 with the rule's prototype — which the module
+reproduces on every synthetic case of the suite, on both paths — on five sessions of MSTR,
+COIN, ETHA and BMNR quotes and lit prints at 20 ms, with a probe resting at the touch and
+sending market orders: the venue matched an independent replay of the rule at every one of
+2,973,825 quotes and 348,086 prints, made no maker fill on a quote where `through` had made 280
+to 1,389 a session, and filled every one of 4,456 market orders at the quote in force when it
+landed — 26 of them, whose first point after their delay was a print, on the quote before the
+first one at or after their delay (`docs/backlog.md`). Both code paths agree on every fill as well as every intent, because each print's record
+refuses a second credit when the research path matches resting orders again; under `touch` and
+`through` the research path still credits a point again on a re-match the node does not run
+(`docs/backlog.md`).
 
 In the match it triggers, a trade print reaches a resting order only from the side that can
 trade with it: for that match the engine moves only the ask down for a seller's print and only
@@ -1245,7 +1269,8 @@ the bid up for a buyer's, so a buyer's print below a resting buy does not fill i
 a seller's print or one with no aggressor does. The print still stands as both sides of the
 book, so once a command lands the research path, matching every resting order again (above),
 fills a resting buy that a buyer's print went through, and fills all of it; the node's venue
-does not (`docs/backlog.md`). What side a print carries is therefore a fact about the data,
+does not (`docs/backlog.md`). Under `print_through` neither does: the rule keeps the side a
+print hit on every match. What side a print carries is therefore a fact about the data,
 and a trade file that records none is loaded with no aggressor rather than a guessed one
 (`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
 unfilled.

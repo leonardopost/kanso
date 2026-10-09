@@ -1094,14 +1094,16 @@ def execute_chunked(
                 trade_execution=venue.trade_execution,
                 queue_position=venue.queue_position,
                 # Whether a resting limit the market only touched fills: the venue model's
-                # `limit_fill`, built from the configuration the node's venue is built from.
+                # `limit_fill`, built from the configuration the node's venue is built from —
+                # kanso's own fill model under the print rules (`kanso.nautilus.tape`).
                 fill_model=get_fill_model(venue),
                 # How long the venue takes to see an order: the venue model's `latency_ms`,
                 # none when it states none.
                 latency_model=get_latency_model(venue),
                 # The venue applies a corporate action one call before it matches the point
-                # that carried the market past it, and applies every quote and print the sleeve
-                # is handed; see `kanso.nautilus.actions` and `kanso.nautilus.availability`.
+                # that carried the market past it, applies every quote and print the sleeve is
+                # handed, and, under `print_through`, lands what is due by a print before it;
+                # see `kanso.nautilus.actions`, `availability` and `tape`.
                 modules=modules(venue.name),
             )
         for instrument in instruments:

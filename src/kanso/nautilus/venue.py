@@ -38,14 +38,20 @@ fills the orders resting there credits each of them its whole size. `liquidity_c
 stays at the engine's default, off: on a top-of-book venue it remembers what it credited at a
 price until the size shown there changes, so a second print of the same size at the order's
 price fills nothing, and a market order against a level it has consumed is neither filled
-nor rejected (`kanso.nautilus.facts`). Both code paths build their fill model from this one
-configuration, so a card and a stage apply the same rule to which orders filled. They can
-still part where a command lands, for any instrument on any venue and at any latency, zero
-included: the research engine then matches every resting order again against its book as it
-stands — a quote, or a print, which stands as both sides of the book until the next quote —
-while the node's venue matches an instrument's orders again only at its next point, so a point
-at or through a resting order's price can fill it on the research path alone
-(`docs/backlog.md`).
+nor rejected (`kanso.nautilus.facts`). Under `print_through` and `print_through_whole` the fill
+model is kanso's own, `kanso.nautilus.tape.PrintThrough`, with the `Tape` module both venues
+load: it fills a resting limit only from a later print strictly through its price — by that
+print's own size, or all that is left of it — and a taker from the last quote, and decides
+nothing else either: its limit probability is one and it draws nothing. Both code paths
+build their fill model from this one configuration, so a card and a stage apply the same rule
+to which orders filled. Under `touch` and `through` they can still part where a command lands,
+for any instrument on any venue and at any latency, zero included: the research engine then
+matches every resting order again against its book as it stands — a quote, or a print, which
+stands as both sides of the book until the next quote — while the node's venue matches an
+instrument's orders again only at its next point, so a point at or through a resting order's
+price can fill it on the research path alone (`docs/backlog.md`). Under the print rules the
+fill model's record of each print refuses that second credit, and the two paths agree on every
+fill.
 
 Every venue account is funded with the whole run capital, because the engine keeps one
 account per venue and has no cross-venue book. What bounds exposure across venues is the
@@ -92,6 +98,7 @@ from kanso.schemas import Hypothesis, LimitFill, VenueModel
 __all__ = [
     "LIMIT_FILL",
     "NETTING",
+    "PRINT_SIZE",
     "fill_model",
     "known_currency",
     "latency_model",
@@ -116,6 +123,13 @@ FILL_MODEL: Final = "nautilus_trader.backtest.models:FillModel"
 FILL_MODEL_CONFIG: Final = "nautilus_trader.backtest.config:FillModelConfig"
 """The engine's own fill model and its configuration, by the paths its factory resolves."""
 
+PRINT_SIZE: Final[dict[str, str]] = {"print_through": "print", "print_through_whole": "whole"}
+"""The two print rules, and how much of a resting limit a print through it fills."""
+
+TAPE_MODEL: Final = "kanso.nautilus.tape:PrintThrough"
+TAPE_MODEL_CONFIG: Final = "kanso.nautilus.tape:PrintThroughConfig"
+"""kanso's own fill model under the print rules, and its configuration (`kanso.nautilus.tape`)."""
+
 _ACCOUNT_TYPES: Final[dict[str, str]] = {"margin": "MARGIN", "cash": "CASH"}
 
 
@@ -136,7 +150,19 @@ def venues_of(universe: Sequence[str]) -> tuple[str, ...]:
 
 def fill_model(limit_fill: LimitFill) -> ImportableFillModelConfig:
     """The fill model a venue is configured with: when a resting limit fills, and nothing
-    else — it slips no order, because slippage is the runner's to charge."""
+    else — it slips no order, because slippage is the runner's to charge. Under a print rule
+    it is kanso's own, which fills a resting limit only from a print through it and a taker
+    from the last quote; under `touch` and `through`, the engine's."""
+    if limit_fill in PRINT_SIZE:
+        return ImportableFillModelConfig(
+            fill_model_path=TAPE_MODEL,
+            config_path=TAPE_MODEL_CONFIG,
+            config={
+                "prob_fill_on_limit": 1.0,
+                "prob_slippage": 0.0,
+                "size": PRINT_SIZE[limit_fill],
+            },
+        )
     return ImportableFillModelConfig(
         fill_model_path=FILL_MODEL,
         config_path=FILL_MODEL_CONFIG,
