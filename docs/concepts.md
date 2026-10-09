@@ -1209,41 +1209,44 @@ more often, so a subject that passed `parity_replay` on 0.14.0 can fail it: on 6
 of a sleeve sending entries, exits and cancels with no latency, 29 failed at a tolerance of
 zero where 14 had (`docs/backlog.md`).
 
-**How much a point fills depends on where it lands.** A print *at* a resting order's price
-fills it by the print's own size and no more, so the honesty of that fill is the honesty of
-the print: an exchange's own executions, one per print, fill a resting order as that exchange
-would; a consolidated or merged tape fills it with size the book never showed it
-(`docs/workspace.md`, `limit_fill`). A quote whose far side sits at the price fills it by the
-size shown, and again at every quote that shows it. **A print or a quote *beyond* the price
-fills all that is left of the order** — a print only from the side that can trade with it, as
-the next paragraph says — at its price, whatever its own size: the engine's top-of-book venue
-assumes that a market which moved through a limit had the size to fill it. A buy of 445
-resting at 9.62 and met by one print of 89 at 9.59 fills 89 and then 356; under `through`
-every fill a print makes is such a fill. Measured on 2026-10-09 over lit prints of two Nasdaq
-names and no quotes, a buy and a sell of 445 re-posted a tick from the last print every five
-seconds: 19–36 % of what the venue filled was beyond what the prints' own sizes allowed (7 %
-two ticks away, re-posted every minute). Each of these is a statement about one order. With
-several resting, a point is credited to each order it fills, not shared among them: a quote at
-a price fills every order resting there by the size it shows, and a print at it does the same
-under `touch`, so a run resting several orders at one price is credited that point several
-times; and a point beyond several fills all that is left of the best-priced and nothing of an
-order resting at a worse price, even one it also went through. So only an order alone at its
-price and no larger than the points that reach it is filled as honestly as its prints; a larger
-one, or one resting beside another at its price, is credited size the tape never showed. The
-engine kanso pins offers no top-of-book setting that fills such a point by its own size without
-withholding a repeated print, and nothing kanso loads reaches that part of it
-(`docs/backlog.md`). A print also stands as the top of the book on both sides, at its price and
-size, until the next quote: a market order sent on it fills that size at the print's price and
-the rest one increment worse. `kanso doctor` checks the fill by size at the price, the quote
-credited again, the whole fill beyond it, two orders at one price each credited a point whole,
-a point beyond two orders filling only the better-priced, the print standing as the book and
-why `liquidity_consumption` stays off as engine facts.
+**How much a point fills depends on where it lands.** A print *at* a resting order's price fills
+it by the print's own size and no more, so the honesty of that fill is the honesty of the print:
+an exchange's own executions, one per print, fill a resting order as that exchange would; a
+consolidated or merged tape fills it with size the book never showed it (`docs/workspace.md`,
+`limit_fill`). A quote whose far side sits at the price fills it by the size shown, and again at
+every quote that shows it. **A print or a quote *beyond* the price fills all that is left of the
+order** — a print, in the match it triggers, only from the side that can trade with it, as the
+next paragraph says — at its price, whatever its own size: the engine's top-of-book venue
+assumes that a market which moved through a limit had the size to fill it. A buy of 445 resting
+at 9.62 and met by one print of 89 at 9.59 fills 89 and then 356; under `through` every fill a
+print makes is such a fill. Measured on 2026-10-09 over lit prints of two Nasdaq names and no
+quotes, a buy and a sell of 445 re-posted a tick from the last print every five seconds: 19–36 %
+of what the venue filled was beyond what the prints' own sizes allowed (7 % two ticks away,
+re-posted every minute). Each of these is a statement about one order. With several resting, a
+point is credited to each order it fills, not shared among them: a quote at a price fills every
+order resting there by the size it shows, and a print at it does the same under `touch`, so a
+run resting several orders at one price is credited that point several times; and a point beyond
+several fills all that is left of the best-priced and nothing of an order resting at a worse
+price, even one it also went through. So only an order alone at its price and no larger than the
+points that reach it is filled as honestly as its prints; a larger one, or one resting beside
+another at its price, is credited size the tape never showed. The engine kanso pins offers no
+top-of-book setting that fills such a point by its own size without withholding a repeated
+print, and nothing kanso loads reaches that part of it (`docs/backlog.md`). A print also stands
+as the top of the book on both sides, at its price and size, until the next quote: a market
+order sent on it fills that size at the print's price and the rest one increment worse. `kanso
+doctor` checks the fill by size at the price, the quote credited again, the whole fill beyond
+it, two orders at one price each credited a point whole, a point beyond two orders filling only
+the better-priced, the print standing as the book and why `liquidity_consumption` stays off as
+engine facts.
 
-A trade print reaches a resting order only from the side that can trade with it: the engine
-moves only the ask down for a seller's print and only the bid up for a buyer's, so a
-buyer's print below a resting buy never fills it, while a seller's print or one with no
-aggressor does. What side a print carries is therefore a fact about the data, and a trade
-file that records none is loaded with no aggressor rather than a guessed one
+In the match it triggers, a trade print reaches a resting order only from the side that can
+trade with it: for that match the engine moves only the ask down for a seller's print and only
+the bid up for a buyer's, so a buyer's print below a resting buy does not fill it there, while
+a seller's print or one with no aggressor does. The print still stands as both sides of the
+book, so once a command lands the research path, matching every resting order again (above),
+fills a resting buy that a buyer's print went through, and fills all of it; the node's venue
+does not (`docs/backlog.md`). What side a print carries is therefore a fact about the data,
+and a trade file that records none is loaded with no aggressor rather than a guessed one
 (`csv_parquet`); a buyer's label on those prints used to leave every buy resting under them
 unfilled.
 

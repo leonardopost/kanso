@@ -475,6 +475,59 @@ def test_parity_misses_an_order_sent_from_a_print_s_handler_filling_against_it()
     assert compared(node, engine) == (None, 0)
 
 
+THROUGH_A_BUY = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of 445 at 9.90 from the first quote, and sends a buy of one far under the
+    market from every print."""
+
+    config_cls = KansoConfig
+
+    def on_start(self) -> None:
+        self.placed = False
+
+    def on_quote_tick(self, tick) -> None:
+        if not self.placed:
+            self.placed = True
+            self.submit_entry(tick.instrument_id, "BUY", qty=445, price=9.9)
+
+    def on_trade_tick(self, tick) -> None:
+        self.submit_entry(tick.instrument_id, "BUY", qty=1, price=1.0)
+'''
+
+
+def test_parity_misses_a_buyer_s_print_filling_a_resting_buy_once_a_command_lands() -> None:
+    """No latency, and every point stamped as it is published. A buyer's print of 100 at 9.85
+    goes through a buy of 445 resting at 9.90, and in the match it triggers moves only the
+    engine's bid, so it fills nothing — as it does on both paths when no command follows it.
+    The buy of one sent from its handler lands while the print stands as both sides of the
+    book, and the research engine, matching every resting order again, fills the resting buy
+    whole from it; the node waits for the next point, a quote that does not reach it."""
+    buyer = TradeTick(
+        InstrumentId.from_str(INSTRUMENT),
+        Price(9.85, 2),
+        Quantity.from_int(100),
+        AggressorSide.BUYER,
+        TradeId("B1"),
+        T0 + 20 * MS,
+        T0 + 20 * MS,
+    )
+    points = [quote(9.99, 10.01, 10, 10), buyer, quote(9.99, 10.01, 40, 40)]
+    silent = THROUGH_A_BUY.replace(
+        b'self.submit_entry(tick.instrument_id, "BUY", qty=1, price=1.0)', b"pass"
+    )
+
+    node, engine = two_paths(THROUGH_A_BUY, points)
+    quiet_node, quiet_engine = two_paths(silent, points)
+
+    assert fills_of(node) == []
+    assert fills_of(engine) == [(20, 100.0, 9.9, True), (20, 345.0, 9.9, True)]
+    assert compared(node, engine) == (None, 0)
+    assert fills_of(quiet_node) == fills_of(quiet_engine) == []
+
+
 AT_THE_QUOTE = b'''
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 

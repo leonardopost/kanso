@@ -360,8 +360,8 @@ prints of 100 at its price fills 100, 100, 100 and 20. A quote whose far side si
 fills it by the size shown, and again at every quote that shows it, because with
 `liquidity_consumption` off the venue keeps no record of what it credited there: a buy of 445
 met by six identical quotes of 9.40/9.50 showing 100 on the ask fills 100 four times and then
-45, under either probability. A quote *beyond* the price, or a print beyond it from the side
-that can trade with the order (a buyer's print never reaches a resting buy, below), fills all
+45, under either probability. A quote *beyond* the price, or a print beyond it — in the
+match the print triggers, one from the side that can trade with the order (below) — fills all
 that is left of the order, at its price, as a maker, whatever its own size: once a level
 strictly better than the limit has been matched, the matching engine's check of a limit "on
 exhausted book volume" (`backtest/engine.pyx`) fills the order's `leaves_qty` at the limit with
@@ -388,13 +388,14 @@ engine: the exchange builds each matching engine inside `add_instrument` and kee
 the fills that come before the check.
 
 **A print is the top-of-book until the next quote.** `process_trade_tick` sets both sides of a
-level-one book to the print's price and size, and they stay there until the next quote or
-print moves them. So a market order sent on a print is matched against the print and walks
-one increment past it for the rest: measured under a quote of 9.97/10.03 showing 1,000 a
-side, a market buy of 300 sent on the quote fills 300 at 10.03, and sent on a seller's print
-of 100 at 10.00 after it fills 100 at 10.00 and 200 at 10.01 — the matching engine's
-one-increment step for a market order larger than the top level, which the fill model has no
-part in, not the quote's ask.
+level-one book — the `OrderBook` — to the print's price and size, and they stay there until the
+next quote or print moves them, while the match the print itself triggers moves only the far
+side its aggressor allows (below). So a market order sent on a print is matched against the
+print and walks one increment past it for the rest: measured under a quote of 9.97/10.03
+showing 1,000 a side, a market buy of 300 sent on the quote fills 300 at 10.03, and sent on a
+seller's print of 100 at 10.00 after it fills 100 at 10.00 and 200 at 10.01 — the matching
+engine's one-increment step for a market order larger than the top level, which the fill model
+has no part in, not the quote's ask.
 
 **`liquidity_consumption` trades one dishonesty for another.** The engine's remedy for a
 level credited again and again is `liquidity_consumption`, off by default, and kanso's venues
@@ -410,13 +411,17 @@ lows go under a resting buy a quarter of one bar's volume between them; and fill
 Each of those is a wrong fill of its own, so the claim is checked here: an engine release
 that changes it is the moment to look at it again.
 
-**A print reaches a resting order only from the side that can trade with it.**
-`process_trade_tick` moves only the ask down for a seller's print, only the bid up for
-a buyer's, and both sides to the print for one with no aggressor. Measured, the same buy
-at 9.50 against a print at 9.49: a seller's print, or one with no aggressor, fills it at
-9.50; a buyer's never does, at any probability. A bar's own prints carry no such label —
-the engine walks them as book updates — so this bites only on trade data, which is why
-a trade file that records no side is loaded as `NO_AGGRESSOR` and never given one.
+**In the match it triggers, a print reaches a resting order only from the side that can
+trade with it.** For that match `process_trade_tick` moves the matching engine's ask down to
+a seller's print, its bid up to a buyer's, and both to one with no aggressor; the book holds
+the print on both sides all the same (above). Measured, the same buy at 9.50 against a print
+at 9.49: a seller's print, or one with no aggressor, fills it at 9.50; a buyer's does not, at
+any probability. Once a command lands, though, the research path matches every resting order
+again against the book, where the print stands as both sides, so there a buyer's print
+through a resting buy fills it, and fills all of it; the node's venue does not
+(`docs/backlog.md` row 154). A bar's own prints carry no such label — the engine walks them
+as book updates — so this bites only on trade data, which is why a trade file that records
+no side is loaded as `NO_AGGRESSOR` and never given one.
 
 **A book's changes of one instant reach the venue and the strategy whole only as one
 `OrderBookDeltas`.** Fed one `OrderBookDelta` at a time, the backtest engine hands each to
@@ -1478,9 +1483,9 @@ def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tu
 
 
 def _check_a_buyer_s_print_never_reaches_a_resting_buy() -> tuple[bool, str]:
-    """What a trade file's aggressor column decides: a buyer's print moves only the bid, so
-    a resting buy beneath it is never reached; a seller's print, and one with no aggressor,
-    move the ask down to the print and fill it."""
+    """What a trade file's aggressor column decides: in the match a print triggers, a buyer's
+    print moves only the bid, so a resting buy beneath it is not reached; a seller's print, and
+    one with no aggressor, move the ask down to the print and fill it."""
     from nautilus_trader.model.enums import AggressorSide, aggressor_side_to_str
 
     seen = {
@@ -1493,8 +1498,9 @@ def _check_a_buyer_s_print_never_reaches_a_resting_buy() -> tuple[bool, str]:
     holds = seen == {"BUYER": [], "SELLER": filled, "NO_AGGRESSOR": filled}
     return holds, (
         f"a buy at 9.50 resting against a print at 10.00, then a print at 9.49 by each "
-        f"aggressor, filled: {seen}. A buyer's print moves only the bid up, so it never reaches "
-        "a resting buy; a seller's or no one's moves the ask down to it"
+        f"aggressor, filled: {seen}. In the match it triggers, a buyer's print moves only the "
+        "bid up, so it never reaches a resting buy; a seller's or no one's moves the ask down "
+        "to it"
     )
 
 
@@ -1730,8 +1736,8 @@ def _check_a_point_beyond_a_level_one_limit_fills_it_whole() -> tuple[bool, str]
         f"at 9.50, {at}. Once a point goes beyond the limit, the engine fills what is left of "
         "the order at its price, whatever the point's own size, assuming a market that moved "
         "through it had the size — of the one order resting here, as of the best-priced of "
-        "several (the claim after); a print does so only from the side that can trade with the "
-        "order, since a buyer's print never reaches a resting buy"
+        "several (the claim after); in the match a print triggers, it does so only from the "
+        "side that can trade with the order"
     )
 
 
@@ -4174,8 +4180,8 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_quote_reaching_a_limit_from_the_far_side_fills_it,
     ),
     (
-        "a buyer's print never reaches a resting buy beneath it, where a seller's print or one "
-        "with no aggressor does",
+        "in the match it triggers, a buyer's print never reaches a resting buy beneath it, "
+        "where a seller's print or one with no aggressor does",
         _check_a_buyer_s_print_never_reaches_a_resting_buy,
     ),
     (
