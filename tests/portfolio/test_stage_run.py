@@ -52,6 +52,34 @@ class Strategy(KansoStrategy):
 '''
 
 
+LIMITED = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    notional: float = 5_000.0
+
+
+class Strategy(KansoStrategy):
+    """Buys once limited at the bar's close, which the market takes it at, and holds."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.bought = False
+
+    def on_bar(self, bar) -> None:
+        if not self.bought:
+            self.submit_entry(
+                bar.bar_type.instrument_id,
+                "BUY",
+                notional=self.kanso_config.notional,
+                price=round(float(bar.close), 2),
+            )
+            self.bought = True
+'''
+
+
 def with_filter(ws: Workspace, store: StateStore, hyp_id: str) -> StrategyFile:
     """A composed strategy whose sleeve carries a filter that refuses every entry."""
     a_card(ws, store, doc=document(id=hyp_id), strategy=REVERTING)
@@ -97,6 +125,42 @@ def test_the_flatten_lands_under_a_latency_too(ws: Workspace, store: StateStore)
     assert realised.positions[0][1] > 0, "the window closed holding a long"
     assert len(realised.run.trades) == 1, "the flatten closed it, latency and all"
     assert deploy(ws, store, "paper").results[0].positions == ()
+
+
+def test_a_stage_charges_a_limit_taken_inside_it_the_tick_the_card_does(
+    ws: Workspace, store: StateStore
+) -> None:
+    """One tick stated: a buy limited at the close and taken there pays none of it, read off
+    the limit the order carried, on the stage's realised window as in a card — the realised
+    paper objective reads the card's arithmetic — while the flatten at market pays it whole."""
+    from kanso.nautilus.costs import fill_cost
+
+    doc = document(id="limited")
+    doc["costs"] = {**doc["costs"], "slippage_ticks": 1.0}
+    deployable(ws, store, "limited", sleeve=LIMITED, doc=doc)
+
+    realised = deploy(ws, store, "paper").results[0]
+
+    bought, flattened = realised.run.fills
+    assert (bought.side, bought.maker, bought.limit) == ("BUY", False, bought.px)
+    assert (flattened.side, flattened.limit, flattened.tick) == ("SELL", None, 0.01)
+    rates = (0.5, 1.0, 2.0 / 2.0 / 10_000)
+    for fill, slip in ((bought, 0.0), (flattened, 0.01)):
+        assert fill.tick == 0.01
+        assert fill.cost == pytest.approx(
+            fill_cost(
+                fill.qty * fill.px,
+                fill.qty,
+                *rates[:2],
+                rates[2],
+                None,
+                0.0,
+                maker=False,
+                sell=fill.side == "SELL",
+                slip=slip,
+            ),
+            rel=1e-12,
+        )
 
 
 def test_a_second_restart_finds_the_stage_flat(ws: Workspace, store: StateStore) -> None:

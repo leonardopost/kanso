@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1174,3 +1175,86 @@ def test_a_stage_s_flatten_closes_whatever_point_ended_the_window(
 
     assert seen["open"] == []
     assert fills_of(staged)[-1] == (300 + latency_ms, 100.0, closed, T)
+
+
+CAPPED = """
+from pathlib import Path
+
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.objects import Price
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+RECORD = Path(%r)
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 320 limited at 9.55, moves the rest to 9.50 from its first fill's handler before
+    it reads its balance, and writes down every balance it reads from the sixth point on.\"\"\"
+
+    config_cls = KansoConfig
+
+    def on_start(self):
+        self.seen = 0
+        self.moved = False
+
+    def _point(self, tick):
+        self.seen += 1
+        if self.seen == 3:
+            self.submit_entry(InstrumentId.from_str("DEMO.XNAS"), "BUY", qty=320, price=9.55)
+        if self.seen >= 6:
+            with RECORD.open("a") as out:
+                out.write(f"{self.balance!r}\\n")
+
+    def on_quote_tick(self, tick):
+        self._point(tick)
+
+    def on_trade_tick(self, tick):
+        self._point(tick)
+
+    def on_order_filled(self, event):
+        if not self.moved:
+            self.moved = True
+            for order in self.cache.orders_open():
+                self.modify_order(order, price=Price(9.50, 2))
+"""
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+def test_a_fill_booked_after_a_modify_pays_the_tick_its_own_limit_allowed(
+    tmp_path: Path, latency_ms: int
+) -> None:
+    """A buy of 320 limited at 9.55 takes the 100 an ask of 9.52 shows; its fill handler moves
+    the rest to 9.50 before the sleeve reads its balance, which books the fill only then. The
+    fill is charged under the limit it filled under, 9.55, which leaves the whole cent: the
+    balance the sleeve reads is the equity the runner strikes on both paths, where reading the
+    order's limit as it stands at booking, 9.50, would drop the cent the runner charges."""
+    points = [
+        *OPEN,
+        q(9.48, 9.52, 100, ask_size=100),
+        q(9.48, 9.52, 120, ask_size=100),
+        q(9.48, 9.52, 130, ask_size=100),
+        q(9.48, 9.53, 200),
+        t(9.51, 10, 300),
+        q(9.48, 9.53, 400),
+    ]
+    ran: dict[str, Any] = {}
+    read: dict[str, float] = {}
+    for path in ("engine", "node"):
+        record = tmp_path / f"{path}.txt"
+        source = (CAPPED % str(record)).encode()
+        subject, instruments, groups = _subject(
+            points, {}, "print_through", latency_ms, costs=OPERATOR, source=source
+        )
+        if path == "engine":
+            ran[path] = backtest.execute(subject, instruments, groups).run
+        else:
+            ran[path] = session.run_node(subject, instruments, groups).result.run
+        read[path] = float(record.read_text().split()[-1])
+
+    (fill,) = ran["engine"].fills
+    assert (fill.qty, fill.px, fill.limit, fill.maker) == (100.0, 9.52, 9.55, False)
+    assert fill.cost == pytest.approx(100 * 0.004 + 100 * 0.01, rel=1e-12)
+    assert ran["node"].fills == ran["engine"].fills
+    for path in ("engine", "node"):
+        assert read[path] == pytest.approx(ran[path].equity[-1], rel=1e-12)

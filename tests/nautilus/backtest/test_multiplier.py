@@ -9,6 +9,7 @@ synthetic saw-tooth every other card here trades, filed under the contract's id.
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ from kanso.nautilus.costs import fill_cost
 from kanso.schemas import InstrumentEntry
 
 from .conftest import RESEARCH, bars, hypothesis
+from .test_balance import FIXED, PROBE, TAKER, assert_the_same
 
 SYMBOL = "FUT"
 CONTRACT = f"{SYMBOL}.XNAS"
@@ -95,3 +97,32 @@ def test_a_card_on_a_multiplied_instrument_records_the_contract_notional(request
     for recorded, again in zip(card.fills, under.fills, strict=True):
         assert again.cost == pytest.approx(recorded.cost, abs=1e-9)
     assert under.equity == pytest.approx(card.equity, abs=1e-9)
+
+
+def test_a_taker_pays_its_ticks_per_contract_and_the_balance_is_still_the_equity(
+    tmp_path: Path, request_for
+) -> None:
+    """One tick of 0.25 on a 50-times contract is $12.50 a contract: every market order the
+    probe sends pays it on top of the rates, the card's own scenario re-prices each fill to
+    the cost it recorded, and the balance the sleeve read is the equity struck."""
+    record = tmp_path / "balance.txt"
+    hyp = hypothesis(universe=(CONTRACT,), costs={**FIXED, "slippage_ticks": 1.0})
+    request = request_for(
+        RESEARCH, source=PROBE, hypothesis_=hyp, overrides={"record": str(record)}
+    )
+
+    card = execute(request, [future()], [tuple(bars(RESEARCH, SYMBOL))]).run
+
+    assert card.fills and not any(fill.maker for fill in card.fills)
+    for fill in card.fills:
+        assert (fill.tick, fill.multiplier, fill.limit) == (0.25, MULTIPLIER, None)
+        assert fill.cost == pytest.approx(
+            fill.qty * fill.px * MULTIPLIER * TAKER + fill.qty * 0.25 * MULTIPLIER,
+            rel=1e-12,
+        )
+    costs = dict(card.venue_model["costs"])  # type: ignore[call-overload]
+    scenario = {key: costs[key] for key in SCENARIO_KEYS if costs.get(key) is not None}
+    under = repriced(card, scenario)
+    for recorded, again in zip(card.fills, under.fills, strict=True):
+        assert again.cost == pytest.approx(recorded.cost, rel=1e-12)
+    assert_the_same(card, record, at_least=10)
