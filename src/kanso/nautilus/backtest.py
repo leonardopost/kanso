@@ -1683,7 +1683,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
             marks.half(event),
             model,
             increments.get(str(event.instrument_id), 0.0),
-            limit_at(cache.order(event.client_order_id), event.id),
+            limit_at(cache.order(event.client_order_id), event.trade_id),
         )
         for event in events
     )

@@ -397,3 +397,80 @@ def test_a_fill_that_rested_never_pays_a_tick(tmp_path: Path, request_for) -> No
         assert fill.cost == pytest.approx(expected, rel=1e-12, abs=1e-12)
     assert [fill.maker for fill in card.fills] == [True, True, False, False]
     assert_the_same(card, record, at_least=15)
+
+
+FLIPPED = b"""
+from pathlib import Path
+
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    record: str = ""
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 100 at market, sells 3,000 limited at a close (taken in part, which flips the
+    position), and the next session moves the rest of the sale a nickel under that close.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.sale = None
+
+    def on_bar(self, bar):
+        self.seen += 1
+        acting = self.seen in (7, 9, 10)
+        with Path(self.kanso_config.record).open("a") as out:
+            out.write(f"{bar.ts_init} {self.balance!r} {int(acting)}\\n")
+        name = bar.bar_type.instrument_id
+        if self.seen == 7:
+            bought = self.order_factory.market(name, OrderSide.BUY, Quantity.from_int(100))
+            self.submit_order(bought)
+        elif self.seen == 9:
+            self.limit = float(bar.close)
+            self.sale = self.order_factory.limit(
+                name, OrderSide.SELL, Quantity.from_int(3_000), Price(self.limit, 2)
+            )
+            self.submit_order(self.sale)
+        elif self.seen == 10:
+            live = self.cache.order(self.sale.client_order_id)
+            if live is not None and live.is_open:
+                self.modify_order(live, price=Price(round(self.limit - 0.05, 2), 2))
+"""
+
+
+def test_a_flipping_fill_before_a_modify_is_capped_by_the_limit_it_filled_under(
+    tmp_path: Path, request_for
+) -> None:
+    """The sale taken at its own limit closes the long and opens a short in one fill, which the
+    engine books on two positions, the opening half under a new event id; both halves are
+    capped by the limit the order carried when it filled, so neither pays the tick, though the
+    order's last limit, after the modify, sits a nickel under the fill. The rest, filled after
+    the modify, records the limit it filled under. The balance is the equity throughout."""
+    record = tmp_path / "balance.txt"
+    request = request_for(
+        RESEARCH,
+        source=FLIPPED,
+        hypothesis_=hypothesis(
+            costs={**FIXED, "slippage_ticks": 1.0, "limit_fill": "through"}, max_leverage=2.0
+        ),
+        overrides={"record": str(record)},
+    )
+
+    card = execute(request, [instrument()], [tuple(bars(RESEARCH))]).run
+
+    bought, closing, opening, rest = card.fills
+    assert (bought.side, bought.qty, bought.maker, bought.limit) == ("BUY", 100.0, False, None)
+    assert (closing.side, closing.qty, closing.maker) == ("SELL", 100.0, False)
+    assert (opening.side, opening.qty, opening.maker) == ("SELL", 2_400.0, False)
+    assert closing.limit == opening.limit == opening.px == closing.px
+    assert (rest.maker, rest.limit) == (True, pytest.approx(opening.px - 0.05))
+    assert bought.cost == pytest.approx(100 * bought.px * TAKER + 100 * 0.01, rel=1e-12)
+    for fill in (closing, opening):
+        assert fill.cost == pytest.approx(fill.qty * fill.px * TAKER, rel=1e-12)
+    assert_the_same(card, record, at_least=10)

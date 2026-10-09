@@ -2752,7 +2752,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 ticks,
                 self._increment_of(event.instrument_id),
                 px,
-                limit_at(self.cache.order(event.client_order_id), event.id),
+                limit_at(self.cache.order(event.client_order_id), event.trade_id),
                 sell=event.order_side == OrderSide.SELL,
             )
         cost = fill_cost(

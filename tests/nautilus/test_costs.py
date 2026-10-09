@@ -492,30 +492,45 @@ def test_a_fill_is_capped_by_the_limit_its_order_carried_when_it_filled() -> Non
     9.50, so a tick at 9.50 has no room and the one at 9.54 a cent."""
     order, (first, second) = _order_with_a_modify([9.5, 9.54])
 
-    assert limit_at(order, first.id) == 9.5
-    assert limit_at(order, second.id) == 9.55
+    assert limit_at(order, first.trade_id) == 9.5
+    assert limit_at(order, second.trade_id) == 9.55
     assert float(order.price) == 9.55
-    assert tick_slip(1.0, 0.01, 9.5, limit_at(order, first.id), sell=False) == 0.0
-    assert tick_slip(1.0, 0.01, 9.54, limit_at(order, second.id), sell=False) == pytest.approx(0.01)
+    assert tick_slip(1.0, 0.01, 9.5, limit_at(order, first.trade_id), sell=False) == 0.0
+    assert tick_slip(1.0, 0.01, 9.54, limit_at(order, second.trade_id), sell=False) == (
+        pytest.approx(0.01)
+    )
 
 
-def test_an_id_the_order_never_took_reads_as_its_last_limit() -> None:
-    from nautilus_trader.core.uuid import UUID4
+def test_a_trade_id_the_order_never_took_reads_as_its_last_limit() -> None:
+    from nautilus_trader.model.identifiers import TradeId
 
     order, _ = _order_with_a_modify([9.5, 9.54])
 
-    assert limit_at(order, UUID4()) == 9.55
+    assert limit_at(order, TradeId("F-9")) == 9.55
+
+
+def test_the_opening_half_of_a_flipping_fill_is_capped_by_the_limit_it_filled_under() -> None:
+    """The engine splits a fill that flips a net position into two events, the opening half
+    under a new event id and the fill's own trade id: that half is found by its trade id, and
+    reads the limit before the modify that came after it, not the order's last."""
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.events import OrderFilled
+
+    order, (first, _) = _order_with_a_modify([9.5, 9.54])
+    opening = OrderFilled.from_dict({**OrderFilled.to_dict(first), "event_id": UUID4().value})
+
+    assert opening.id != first.id and opening.trade_id == first.trade_id
+    assert limit_at(order, opening.trade_id) == 9.5
 
 
 def test_an_order_with_no_limit_has_none_to_cap() -> None:
     from nautilus_trader.common.component import TestClock
     from nautilus_trader.common.factories import OrderFactory
-    from nautilus_trader.core.uuid import UUID4
     from nautilus_trader.model.enums import OrderSide
-    from nautilus_trader.model.identifiers import InstrumentId, StrategyId, TraderId
+    from nautilus_trader.model.identifiers import InstrumentId, StrategyId, TradeId, TraderId
     from nautilus_trader.model.objects import Quantity
 
     factory = OrderFactory(TraderId("T-1"), StrategyId("S-1"), TestClock())
     market = factory.market(InstrumentId.from_str("DEMO.XNAS"), OrderSide.BUY, Quantity.from_int(1))
-    assert limit_at(market, UUID4()) is None
-    assert limit_at(None, UUID4()) is None
+    assert limit_at(market, TradeId("F-0")) is None
+    assert limit_at(None, TradeId("F-0")) is None

@@ -146,10 +146,10 @@ def tick_slip(
     return min(slip, max(room, 0.0))
 
 
-def limit_at(order: Any, fill_id: Any) -> float | None:
-    """The limit price `order` carried when its fill with event id `fill_id` was applied: the
+def limit_at(order: Any, trade_id: Any) -> float | None:
+    """The limit price `order` carried when its fill of trade id `trade_id` was applied: the
     price it was created with, as each update the venue accepted restated it, up to that fill,
-    so a fill before a modify is capped by the limit it filled under; an id the order never
+    so a fill before a modify is capped by the limit it filled under; a trade id the order never
     took reads as its last limit. `None` for an order that carries no limit — a market order,
     a stop to market — and for one no cache holds.
 
@@ -157,9 +157,14 @@ def limit_at(order: Any, fill_id: Any) -> float | None:
     under nautilus_trader 1.231.0 `OrderInitialized.options` carries a limit's `price` as a
     string and a market order's options none, `OrderUpdated.price` is the price a modify set
     or `None` when it set none, and an order the emulator released keeps the events of the
-    order it was made from — so one released at market carries no limit here.
+    order it was made from — so one released at market carries no limit here. The fill is
+    found by its trade id rather than its event id: `ExecutionEngine._flip_position` splits a
+    fill that flips a net position into a closing event under the fill's own event id and an
+    opening one under a new event id, both keeping the trade id, and the runner reads its
+    fills off the positions they made — so the opening half's event id is in no order's
+    events, and looked up by it, the half read the order's last limit, after any later modify.
     """
-    from nautilus_trader.model.events import OrderInitialized, OrderUpdated
+    from nautilus_trader.model.events import OrderFilled, OrderInitialized, OrderUpdated
 
     if order is None or not order.has_price:
         return None
@@ -170,7 +175,7 @@ def limit_at(order: Any, fill_id: Any) -> float | None:
             price = None if stated is None else float(stated)
         elif isinstance(event, OrderUpdated) and event.price is not None:
             price = float(event.price)
-        elif event.id == fill_id:
+        elif isinstance(event, OrderFilled) and event.trade_id == trade_id:
             break
     return price
 
