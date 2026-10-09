@@ -12,6 +12,7 @@ from typing import Any
 
 from nautilus_trader.backtest.config import SimulationModuleConfig
 from nautilus_trader.backtest.models import FillModel
+from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick, TradeTick
 from nautilus_trader.model.enums import (
     AggregationSource,
@@ -21,10 +22,17 @@ from nautilus_trader.model.enums import (
     OrderSide,
     PriceType,
 )
-from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, TradeId
+from nautilus_trader.model.events import OrderUpdated
+from nautilus_trader.model.identifiers import (
+    ClientOrderId,
+    InstrumentId,
+    StrategyId,
+    TradeId,
+    TraderId,
+)
 from nautilus_trader.model.objects import Price, Quantity
 
-from kanso.nautilus.tape import PrintThrough, PrintThroughConfig, Tape, observe
+from kanso.nautilus.tape import PrintThrough, PrintThroughConfig, Rested, Tape, observe
 
 COIN = InstrumentId.from_str("FRAC.XNAS")
 INSTRUMENT = SimpleNamespace(id=COIN, size_precision=4, price_precision=2)
@@ -62,9 +70,12 @@ def quoted(bid: float, ask: float, bid_size: str = "1", ask_size: str = "1") -> 
     )
 
 
-def resting(*orders: Any) -> dict[Any, Any]:
-    """The orders resting before a print, with the price each rests at."""
-    return {each.client_order_id: each.price for each in orders}
+def resting(*orders: Any) -> list[Rested]:
+    """The orders resting before a print, each having taken its place after the one before."""
+    return [
+        Rested(each.client_order_id, each.side == OrderSide.BUY, each.price, each.leaves_qty.raw, n)
+        for n, each in enumerate(orders)
+    ]
 
 
 def filled(answer: Any) -> list[tuple[float, str]]:
@@ -94,6 +105,84 @@ def test_a_print_through_fills_by_its_exact_size_and_shares_it() -> None:
     assert shared == [[(9.51, "0.5000"), (9.51, "0.0000")], [(9.5, "0.3000"), (9.5, "0.0000")]]
 
 
+def test_a_print_is_shared_in_price_then_time_priority_whatever_order_the_engine_asks() -> None:
+    """The shares are struck when the print arrives: asked the worse-priced buy first, the
+    model still credits the better-priced first; at one price, the order that took its place
+    there first is credited first, whichever the engine asks about first."""
+    worse, better = order("O-1", "0.3000", 9.5), order("O-2", "0.3000", 9.51)
+    later, earlier = order("O-3", "0.3000"), order("O-4", "0.3000")
+    fills = model()
+    fills.seen(printed(9.49, "0.4000"), resting(worse, better))
+    by_price = [
+        filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, each, None, None))
+        for each in (worse, better)
+    ]
+    fills.seen(printed(9.49, "0.4000"), resting(earlier, later))
+    by_time = [
+        filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, each, None, None))
+        for each in (later, earlier)
+    ]
+
+    assert by_price == [[(9.5, "0.1000"), (9.5, "0.0000")], [(9.51, "0.3000"), (9.51, "0.0000")]]
+    assert by_time == [[(9.5, "0.1000"), (9.5, "0.0000")], [(9.5, "0.3000"), (9.5, "0.0000")]]
+
+
+def test_the_observer_ranks_a_modified_order_from_its_modify_and_skips_an_untriggered_stop() -> (
+    None
+):
+    """An order takes its place at its price when the venue accepts it or, later, modifies it,
+    so a modify sends it behind an order that reached that price before; a partial fill does
+    not move it. A stop's limit is not resting until it triggers, so it takes no share."""
+
+    def held(
+        name: str, accepted: int, modified: int | None = None, triggered: bool | None = None
+    ) -> Any:
+        rested = order(name, "0.3000", 9.55 if triggered is False else 9.5)
+        events = [] if modified is None else [updated(rested, modified)]
+        return SimpleNamespace(
+            **vars(rested),
+            has_trigger_price=triggered is not None,
+            is_triggered=bool(triggered),
+            ts_accepted=accepted,
+            events=events,
+        )
+
+    def updated(rested: Any, ts: int) -> OrderUpdated:
+        return OrderUpdated(
+            TraderId("T-1"),
+            StrategyId("S-1"),
+            COIN,
+            rested.client_order_id,
+            None,
+            None,
+            Quantity.from_str("1.0000"),
+            rested.price,
+            None,
+            UUID4(),
+            ts,
+            ts,
+        )
+
+    moved, stayed, stop = held("O-1", 1, modified=5), held("O-2", 3), held("O-3", 0, None, False)
+    fills = model()
+    engine = SimpleNamespace(get_open_orders=lambda: [moved, stop, stayed])
+    observe(
+        SimpleNamespace(fill_model=fills, get_matching_engine=lambda _: engine),
+        printed(9.49, "0.5"),
+    )
+
+    asked = [
+        filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, each, None, None))
+        for each in (moved, stop, stayed)
+    ]
+
+    assert asked == [
+        [(9.5, "0.2000"), (9.5, "0.0000")],
+        [(9.55, "0.0000")],
+        [(9.5, "0.3000"), (9.5, "0.0000")],
+    ]
+
+
 def test_a_print_credits_an_order_once_and_only_one_that_rested_before_it() -> None:
     rested, late = order("O-1", "1.0000"), order("O-2", "1.0000")
     fills = model()
@@ -113,7 +202,7 @@ def test_whole_fills_all_that_is_left_and_a_quote_or_a_bar_ends_the_print() -> N
     fills.seen(printed(9.52, "0.0100"), resting(sell))
     whole = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, sell, None, None))
     fills.seen(printed(9.52, "0.0100"), resting(sell))
-    fills.seen(quoted(9.4, 9.6), {})
+    fills.seen(quoted(9.4, 9.6), [])
     after_quote = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, sell, None, None))
     fills.seen(printed(9.52, "0.0100"), resting(sell))
     bar_type = BarType(
@@ -130,7 +219,7 @@ def test_whole_fills_all_that_is_left_and_a_quote_or_a_bar_ends_the_print() -> N
             3,
             3,
         ),
-        {},
+        [],
     )
     after_bar = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, sell, None, None))
 
@@ -215,7 +304,7 @@ def test_a_print_strictly_outside_the_quote_ends_it_and_one_at_its_edges_does_no
     def in_force(*points: Any) -> bool:
         fills = model()
         for point in points:
-            fills.seen(point, {})
+            fills.seen(point, [])
         return COIN in fills._quote
 
     assert in_force(quoted(9.48, 9.52), printed(9.48, "1"), printed(9.52, "1"))
@@ -239,7 +328,7 @@ def test_a_split_restates_the_model_s_own_quote_and_ends_the_print_in_hand() -> 
     fills = model()
     rested = order("O-1", "1.0000")
     fills.restate(definition, 0.1, 3, 3)
-    fills.seen(quoted(9.48, 9.52, bid_size="0.0005", ask_size="0.0000"), {})
+    fills.seen(quoted(9.48, 9.52, bid_size="0.0005", ask_size="0.0000"), [])
     fills.seen(printed(9.49, "0.1000"), resting(rested))
 
     fills.restate(definition, 0.1, 3, 3)

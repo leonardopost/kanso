@@ -1248,10 +1248,10 @@ matching engine asks it for the fills of every order it has matched, and a venue
 it before each point which point is in hand, which orders rested before a print and at what
 price, and the last quote. So a quote never fills a resting order and neither does a print at
 its price; a print through it fills it once, by the print's own size shared with the other
-orders it reaches — the size the tape shows traded there — or, under `print_through_whole`, for
-all that is left; a print the venue applied before the order landed,
-or before a modify moved it to its price, fills nothing. A taker fills at the touch of the last
-quote, up to the size it shows and never past its own limit, not at a print standing as the
+orders it reaches, in price priority and then time at the price — the size the tape shows
+traded there — or, under `print_through_whole`, for all that is left; a print the venue
+applied before the order landed, or before a modify moved it to its price, fills nothing. A
+taker fills at the touch of the last quote, up to the size it shows and never past its own limit, not at a print standing as the
 book — and a print that trades strictly outside that quote ends it: until the next quote a
 market order is refused for want of a market and a limit rests at its price, so a sleeve buying
 on a print over the ask is not filled at an ask the market has left. A split restates the quote

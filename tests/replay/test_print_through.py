@@ -78,6 +78,16 @@ class Strategy(KansoStrategy):
                 for order in self.cache.orders_open(instrument_id=instrument_id):
                     if order.side_string() == side and order.has_price:
                         self.modify_order(order, price=Price(price, 2))
+            elif kind == "modify_first":
+                first = min(
+                    (
+                        order
+                        for order in self.cache.orders_open(instrument_id=instrument_id)
+                        if order.side_string() == side and order.has_price
+                    ),
+                    key=lambda order: order.ts_init,
+                )
+                self.modify_order(first, price=Price(price, 2))
             elif kind in ("ioc", "fok"):
                 self.submit_order(
                     self.order_factory.limit(
@@ -815,6 +825,63 @@ def test_a_modify_landing_on_another_name_s_point_is_not_filled_by_the_print_in_
     filled = 100.0 if rule == "print_through" else 320.0
     assert node.intents == engine.intents
     assert fills_of(engine) == fills_of(node) == [(300, filled, 9.5, M)]
+
+
+PRIORITY = [
+    *OPEN,
+    *[q(9.47, 9.53, ms) for ms in (100, 200, 250, 300, 350)],
+    t(9.46, 100, 400),
+    q(9.47, 9.53, 500),
+    t(9.46, 250, 600),
+    q(9.47, 9.53, 700),
+]
+"""Quotes far enough apart that what a sleeve sends on one has landed by the next at 30 ms,
+then prints of 100 and then 250 at 9.46, under every buy sent."""
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        (
+            {
+                2: [("limit", "BUY", 200, 9.48)],
+                3: [("limit", "BUY", 200, 9.5)],
+                5: [("modify_first", "BUY", 0, 9.52)],
+            },
+            [(400, 100.0, 9.52, M), (600, 100.0, 9.52, M), (600, 150.0, 9.5, M)],
+        ),
+        (
+            {2: [("limit", "BUY", 300, 9.5)], 3: [("limit", "BUY", 100, 9.5)]},
+            [(400, 100.0, 9.5, M), (600, 200.0, 9.5, M), (600, 50.0, 9.5, M)],
+        ),
+        (
+            {
+                2: [("limit", "BUY", 300, 9.5)],
+                3: [("limit", "BUY", 100, 9.5)],
+                4: [("modify_first", "BUY", 0, 9.49)],
+                6: [("modify_first", "BUY", 0, 9.5)],
+            },
+            [(400, 100.0, 9.5, M), (600, 250.0, 9.5, M)],
+        ),
+    ],
+    ids=["modified ahead", "partly filled, keeps its place", "modified away and back"],
+)
+def test_a_print_is_shared_in_price_then_time_priority_on_both_paths(
+    script: dict[int, list[Any]], expected: list[Any], latency_ms: int
+) -> None:
+    """Under `print_through` a print smaller than the orders it reaches is shared from the
+    best price down, and at one price from the order that took its place there first — when
+    the venue accepted it or last modified it. The engine asks about its resting orders in the
+    order each reached its price list, which a modify does not re-sort: a buy modified from
+    9.48 to 9.52, ahead of one resting at 9.50, was asked second, and both prints went to the
+    worse price. A buy of 300 filled in part by the first print keeps its place ahead of a buy
+    of 100 sent after it, and takes 200 of the second print; modified away and back, it goes
+    behind that buy, which the first print fills, and takes 250 of the second."""
+    node, engine = scripted(PRIORITY, script, "print_through", latency_ms)
+
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == expected
 
 
 @pytest.mark.parametrize("latency_ms", LATENCIES)

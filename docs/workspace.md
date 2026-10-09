@@ -904,10 +904,13 @@ refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs
 quote.** It is a rule for the top-of-book venue fed both quotes and prints, and it moves both
 kinds of fill. A resting limit fills only on a print strictly through its price — a print under
 a resting buy, over a resting sell — that the venue applied after the order reached its book at
-the price it rests at, and by that print's own size, shared across the orders it reaches: a buy
-of 320 resting at 9.50 met by a print of 100 at 9.49 fills 100, and the next print under it
-another 100; one print of 300 under buys of 200 at 9.51 and of 200 at 9.50 fills the
-better-priced 200 and the other the 100 left. Nothing else fills it: not a quote however far
+the price it rests at, and by that print's own size, shared across the orders it reaches in
+price priority and then time at the price: a buy of 320 resting at 9.50 met by a print of 100
+at 9.49 fills 100, and the next print under it another 100; one print of 300 under buys of 200
+at 9.51 and of 200 at 9.50 fills the better-priced 200 and the other the 100 left; and of two
+buys at one price the one that took its place there first is filled first — the one the venue
+accepted first, unless a later modify sent it to the back of its price, as a modify of either
+price or size does; a partial fill keeps its place. Nothing else fills it: not a quote however far
 through its price, not a print at its price, not a bar, not a print the venue applied before the
 order landed, and not one it applied before a modify moved the order to its price. That is one
 reading of how much a print through a displayed limit fills — the size the tape shows traded
