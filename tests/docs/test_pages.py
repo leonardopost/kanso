@@ -57,6 +57,23 @@ def test_the_doctor_row_names_every_check_doctor_runs() -> None:
         assert f"`{name}`" in row, name
 
 
+def test_the_deploy_refusal_counts_the_cli_page_states_are_the_refusals_it_lists() -> None:
+    """The page once said eleven above twelve refusals; the counts it states must hold. The
+    refusals with exit 2 are listed one to a clause, and one clause refuses two things, an
+    `account` type or a `currency` that differ, which opens the ones that name both
+    versions."""
+    text = prose(page("cli.md"))
+    stated = re.search(r"\*\*`deploy` refuses (\w+) things with exit 2\*\*", text)
+    last = re.search(r"Each of the last (\w+) names both versions", text)
+    every = re.search(r"All (\w+) are refused before the stage is written", text)
+    assert stated is not None and last is not None and every is not None
+    clauses = text.split("With exit 2:", 1)[1].split("Each of the last", 1)[0].split(";")
+    pairs = [n for n, clause in enumerate(clauses) if " or in `currency`" in clause]
+    assert len(pairs) == 1
+    assert spelled(stated.group(1)) == len(clauses) + 1
+    assert spelled(last.group(1)) == spelled(every.group(1)) == len(clauses) - pairs[0] + 1
+
+
 def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() -> None:
     """An operator learns from these two pages that a lane writes drafts unasked, and how
     often; a page still saying never would hide a model call from every workspace whose
