@@ -28,13 +28,13 @@ paper and live gates read. The book is measured *before* the flatten, because th
 stage carried is a fact about the window and not about the way it ended. The close is a
 market order sent after the last point, so no later point can bring the market it needs.
 What the sleeves sent on that point and still had in flight under a latency lands first, so an
-entry it fills is closed too. Then, under the print rules, which refuse a market order where
-no quote is in force, the node tells the venue it is closing (`kanso.nautilus.tape.closing`),
-and a close the quote in force cannot fill is filled from the engine's own book, as `touch`
-fills it. Where that book shows nothing
-on the side the close takes either — a last quote showing nothing there — the venue refuses
-the close under every rule and the stage stops still holding the position
-(`docs/backlog.md` row 164).
+entry it fills is closed too; an order a fill handler sends in answer to that landing, or to the
+flatten's own fill, is not. Then, under the print rules, which refuse a market order where no
+quote is in force, the node tells the venue it is closing (`kanso.nautilus.tape.closing`), and a
+close the quote in force cannot fill is filled from the engine's own book, as `touch` fills it.
+Where that book shows nothing on the side the close takes either — a last quote showing nothing
+there — the venue refuses the close under every rule and the stage stops still holding the
+position (`docs/backlog.md` row 164, which records both).
 
 **A benchmark is run beside the stage, not inside it.** A version whose sleeve is measured
 against a hold of its first leg has that hold produced after the node stops, by the backtest
@@ -806,13 +806,17 @@ async def _drive(
 async def _closed(
     client: ReplayDataClient, strategies: Sequence[Any], venues: Sequence[sandbox.SimulatedVenue]
 ) -> None:
-    """Land what the sleeves still had in flight, then flatten every strategy and land that.
+    """Land what the sleeves had in flight when the window ended, then flatten every strategy
+    and land that.
 
     Under a stated latency an order a sleeve sent on the window's last point is still in flight
     when the window ends. `advance_past_latency` lands it first, under the venue's own rule —
     so under the print rules a market order finding no quote in force is refused, as it would
     be on a later point — and whatever it fills is a position the flatten then closes; landed
-    after the flatten, an entry's fill was never closed, under every rule. Only then is each
+    after the flatten, an entry's fill was never closed, under every rule. An order a fill
+    handler sends in answer to that landing, or to the flatten's own fill, is not closed: it
+    lands with the flatten, which was sized before it, or after it, and the stage stops holding
+    what it fills, or with it in flight (`docs/backlog.md` row 164). Only then is each
     venue's fill model told the node is closing (`kanso.nautilus.tape.closing`): under the
     print rules a market order is refused where no quote is in force, as after a print outside
     the last quote, and no point follows the window's last to bring one, so the close is

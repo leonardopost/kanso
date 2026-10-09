@@ -1003,7 +1003,8 @@ fills at its touch, at most its spread from that print. A stage node's flatten a
 window's last point is a market order no later point can bring a quote for. What the sleeves
 sent on that point and still had in flight under a latency lands first, under the rule — a
 market order with no quote in force refused — so an entry it fills is closed with the rest,
-under every rule. Then, under either print rule, a close the quote in force cannot fill — none
+under every rule; an order a fill handler sends in answer to that landing, or to the flatten's
+own fill, is not, and the stage can stop holding what it fills (`docs/backlog.md` row 164). Then, under either print rule, a close the quote in force cannot fill — none
 in force after a print outside it — is filled from the engine's own book, at the last print, as
 `touch` closes it; a last quote showing nothing on the side the close takes refuses it under
 every rule, and the stage stops still holding the position (`docs/backlog.md` row 164).
