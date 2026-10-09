@@ -545,6 +545,19 @@ def test_the_pages_say_a_point_beyond_a_limit_fills_all_of_it() -> None:
     assert "**A print fills a resting limit by its own size**" not in workspace
 
 
+def test_the_pages_say_a_point_is_credited_to_each_order_it_fills() -> None:
+    """The honesty of a fill was stated for one order; with several resting, one point at a
+    price is credited whole to each, and one beyond several fills only the best-priced
+    (`kanso.nautilus.facts`), so both pages say whose statement it is."""
+    delivery = prose(section(page("concepts.md"), "Delivery"))
+    assert "Each of these is a statement about one order." in delivery
+    assert "only an order alone at its price" in delivery
+    workspace = prose(page("workspace.md"))
+    assert "of two orders resting beyond one point it fills only the better-priced" in workspace
+    assert "only for an order alone at its price" in workspace
+    assert "exactly as honest as the print sizes it is fed" not in workspace
+
+
 YAML_11_BOOLEANS = ("y", "n", "yes", "no", "true", "false", "on", "off")
 """The words the YAML 1.1 type repository lists as booleans; which of them PyYAML reads as
 one is what the test below measures."""

@@ -32,11 +32,13 @@ the moment the market reaches its price. `through` is probability zero: a limit 
 the market only reached stays on the book, and fills once a print or a quote goes beyond it.
 Under either rule a point that goes beyond a resting limit — a quote, or a print from the
 side that can trade with it — fills all that is left of it, whatever the size of that point,
-which is the engine's assumption and not a measurement. `liquidity_consumption` stays at the
-engine's default, off: on a top-of-book venue it remembers what it credited at a price until
-the size shown there changes, so a second print of the same size at the order's price fills
-nothing, and a market order against a level it has consumed is neither filled nor rejected
-(`kanso.nautilus.facts`). Both code paths build their fill model from this one
+which is the engine's assumption and not a measurement; of several orders it goes beyond, it
+fills the best-priced so and nothing of one resting at a worse price. A point at a price that
+fills the orders resting there credits each of them its whole size. `liquidity_consumption`
+stays at the engine's default, off: on a top-of-book venue it remembers what it credited at a
+price until the size shown there changes, so a second print of the same size at the order's
+price fills nothing, and a market order against a level it has consumed is neither filled
+nor rejected (`kanso.nautilus.facts`). Both code paths build their fill model from this one
 configuration, so a card and a stage apply the same rule to which orders filled. They can
 still part where a command lands while a print stands as the book: the research engine
 matches the resting orders again once the commands due at an instant have landed, against

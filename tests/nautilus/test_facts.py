@@ -95,6 +95,10 @@ BINDINGS = {
     "on a level-one venue a quote beyond a resting limit's price, or a print beyond it from "
     "the side that can trade with it, fills all that is left of the order at its price, "
     "whatever its own size",
+    "a point beyond two resting limits on a level-one venue fills all that is left of the "
+    "better-priced and nothing of the other",
+    "on a level-one venue a quote at the price two limits rest at, or a print at it under "
+    "touch, fills each of them by the point's whole size",
     "a quote whose far side sits at a resting limit's price on a level-one venue fills it "
     "by the size shown, and again at every quote that shows it",
     "a print is both sides of a level-one book until the next quote, so a market order sent "
