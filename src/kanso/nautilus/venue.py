@@ -49,9 +49,10 @@ for any instrument on any venue and at any latency, zero included: the research 
 matches every resting order again against its book as it stands — a quote, or a print, which
 stands as both sides of the book until the next quote — while the node's venue matches an
 instrument's orders again only at its next point, so a point at or through a resting order's
-price can fill it on the research path alone (`docs/backlog.md`). Under the print rules the
-fill model's record of each print refuses that second credit, and the two paths agree on every
-fill.
+price can fill it on the research path alone (`docs/backlog.md`). Under the print rules a
+resting order is credited only in a print's own match and a taker is decided from the quote in
+force alone, so neither that second match nor the bid and ask the two engines then hold apart
+moves a fill (`kanso.nautilus.tape`); a sleeve's cancel can still part them (`docs/backlog.md`).
 
 Every venue account is funded with the whole run capital, because the engine keeps one
 account per venue and has no cross-venue book. What bounds exposure across venues is the

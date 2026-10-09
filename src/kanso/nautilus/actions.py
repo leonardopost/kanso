@@ -259,10 +259,14 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         name's handler sent into it filled there against a restated hundred.
 
         The restated quote reaches the matching engine directly, past the venue's modules, so
-        under `limit_fill: print_through` it is handed to the fill model first
-        (`kanso.nautilus.tape.observe`): a taker there fills on the last quote the venue
+        under `limit_fill: print_through` the fill model's own last quote is restated with it
+        (`kanso.nautilus.tape.restate`): a taker there fills on the last quote the venue
         applied, and without it an order sent before the split name's next quote would be
-        filled at the quote before the split, in the old count."""
+        filled at the quote before the split, in the old count. The model is not handed the
+        book's restatement, which after a print is the print on both sides: measured, an eve
+        ending on a print of 9.50 after a quote of 9.48/9.52 filled a market buy at 95.00,
+        the print restated, where the restated ask is 95.20."""
+        tape.restate(self.exchange, instrument_id, split.ratio, ts_event, ts_init)
         engine = self.exchange.get_matching_engine(instrument_id)
         book = engine.get_book()
         bid, ask = book.best_bid_price(), book.best_ask_price()
@@ -289,7 +293,6 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
             instrument_id, bid_price, ask_price, bid_size, ask_size, ts_event, ts_init
         )
         availability.admit(engine, ts_event)
-        tape.observe(self.exchange, restated)
         engine.process_quote_tick(restated)
         self._quoted[instrument_id] = (bid_price, ask_price)
 

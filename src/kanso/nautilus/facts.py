@@ -2468,6 +2468,54 @@ def _check_a_module_lands_due_commands_before_the_point() -> tuple[bool, str]:
     )
 
 
+def _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_taker() -> tuple[
+    bool, str
+]:
+    """Why the two paths judge a taker alike under `print_through`: whatever a print inside the
+    last quote does to the engine's own bid and ask, and whether or not a landing command has
+    since made the engine read them again from its book, they are never narrower than that
+    quote, so every limit the quote makes marketable is matched on landing and the fill model,
+    which answers from the quote, decides it."""
+    from nautilus_trader.model.enums import AggressorSide
+
+    quote = _tape_quote(9.48, 9.52, 10)
+    marketable = {3: [("limit", "SELL", 10, 9.48), ("limit", "BUY", 10, 9.52)]}
+    seen: dict[str, list[tuple[str, str]]] = {}
+    for side, name in (
+        (None, "no aggressor"),
+        (AggressorSide.BUYER, "a buyer's"),
+        (AggressorSide.SELLER, "a seller's"),
+    ):
+        for matched, script in (
+            ("", marketable),
+            (", a command landed between", {2: [("limit", "BUY", 1, 9.0)], **marketable}),
+        ):
+            model = _answering(_zero, taker=lambda instrument, order, bid, ask: None)
+            _probe_script(
+                [quote, _tape_print(9.5, 100, 20, side), _tape_print(9.5, 100, 30, side)],
+                script,
+                model,
+                modules=(_clocked(lands=False),),
+            )
+            seen[name + matched] = [
+                (str(asked[2]), str(asked[3]))
+                for asked in model.asked
+                if asked[0] == 30 and asked[1] == "TAKER"
+            ]
+    holds = all(
+        len(asked) >= 2 and all(float(bid) >= 9.48 and float(ask) <= 9.52 for bid, ask in asked)
+        for asked in seen.values()
+    )
+    return holds, (
+        "under a quote of 9.48/9.52, two prints of 100 at 9.50, a sell limited at 9.48 and a "
+        "buy at 9.52 sent on the second: each was matched on landing as a taker, with the "
+        "engine's bid and ask — "
+        + "; ".join(f"after prints of {name}, {asked}" for name, asked in seen.items())
+        + ". A print inside the quote never puts the engine's bid under the quote's bid nor its "
+        "ask over the quote's ask, before a re-match or after one"
+    )
+
+
 def _check_kanso_s_print_through_venue() -> tuple[bool, str]:
     """`kanso.nautilus.tape` as kanso loads it: a resting limit fills only from a later print
     strictly through its price, by that print's size, never from a quote or a print at its
@@ -4752,6 +4800,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a simulation module that calls its exchange's process from pre_process lands every "
         "command due by then before the matching engine applies the point",
         _check_a_module_lands_due_commands_before_the_point,
+    ),
+    (
+        "a print inside the last quote leaves the engine's bid and ask no narrower than that "
+        "quote, re-matched or not, so a limit the quote makes marketable is matched on landing",
+        _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_taker,
     ),
     (
         "kanso's print_through venue fills a resting limit only from a later print strictly "

@@ -589,7 +589,7 @@ makes the objective the strategy's Sharpe *over* a hold of the universe's first 
 
 ```yaml
 benchmark:                         # scope: adding or changing it clears `best`
-  hold: first_leg                  # buy universe[0] on the first print it may trade on, never exit
+  hold: first_leg                  # buy universe[0] on the first point it may trade on, never exit
 ```
 
 The hold is not arithmetic on prices. It is a sleeve kanso ships
@@ -902,39 +902,48 @@ refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs
 
 **`print_through` fills a resting limit only on a print through it, and a taker only on a
 quote.** It is a rule for the top-of-book venue fed both quotes and prints, and it moves both
-kinds of fill. A resting limit fills only on a print strictly through its price — a print
-under a resting buy, over a resting sell — that the venue applied after the order reached its
-book, and by that print's own size, shared across the orders it reaches: a buy of 320 resting
-at 9.50 met by a print of 100 at 9.49 fills 100, and the next print under it another 100; one
-print of 300 under buys of 200 at 9.51 and of 200 at 9.50 fills the better-priced 200 and the
-other the 100 left. Nothing else fills it: not a quote however far through its price, not a
-print at its price, not a bar, and not a print the venue applied before the order landed.
-That is the reading of how much a print fills that the operator's resting rule takes;
-`print_through_whole` is the same rule with the other reading, a print through filling all
-that is left of the order, as a market that traded through a displayed limit would have taken
-it first. A taker — a market order, or a limit marketable when it lands — fills against the
-last quote the venue applied, at its touch and up to the size it shows, never against a print
-standing as the book: a limit fills there and no further than its own price, so a buy limit
-never pays above its limit, and its rest stays on the book at its price under the rule above;
-a market order's rest walks one increment past the touch, as the engine walks any market order
-larger than the top level, so a rule that sizes a taker down to the displayed size is the
-sleeve's to apply, from the quote it is handed. With no quote applied yet, or one showing
-nothing on the side a market order takes, it is refused for want of a market. Under a stated
-latency a command due by a print's instant lands before that print, so an order that reached
-the book in time is there when the print arrives and a cancel that reached it in time has taken
-the order off; a command due at a quote still lands after the quote, so a taker fills on the
-first quote at or after its delay — unless a print comes first, when it fills on the quote
-before. The venue cannot tell one print from another: it fills on every print the hypothesis
-loads, so a rule that only lit, last-sale-eligible, round-lot prints may fill needs a trade
-series written with only those (`csv_parquet`, `docs/adapters.md`). A print carrying an
-aggressor reaches only the orders on the side it hit, as under the engine's own rules. A
-hypothesis whose resolved `limit_fill` is either value, from whichever layer, must require
-`quote` and `trade` and may not require `book`; `kanso hyp validate` refuses it otherwise
-(exit 3), naming `costs.limit_fill`. The tick a taker pays over the touch is a charge, not a
-price: state it as `slippage_ticks`, which is never charged past an order's limit, so a limit
-priced at the touch and taken there pays its commission and no tick, and state a resting
-fill's charge as `maker_per_share`. An account that charges $0.0040 a share on every fill and
-a tick over the touch to take, with the regulatory fees passed through on sales, states:
+kinds of fill. A resting limit fills only on a print strictly through its price — a print under
+a resting buy, over a resting sell — that the venue applied after the order reached its book at
+the price it rests at, and by that print's own size, shared across the orders it reaches: a buy
+of 320 resting at 9.50 met by a print of 100 at 9.49 fills 100, and the next print under it
+another 100; one print of 300 under buys of 200 at 9.51 and of 200 at 9.50 fills the
+better-priced 200 and the other the 100 left. Nothing else fills it: not a quote however far
+through its price, not a print at its price, not a bar, not a print the venue applied before the
+order landed, and not one it applied before a modify moved the order to its price. That is the
+reading of how much a print fills that the operator's resting rule takes; `print_through_whole`
+is the same rule with the other reading, a print through filling all that is left of the order,
+as a market that traded through a displayed limit would have taken it first. A taker — a market
+order, or a limit marketable when it lands — fills against the quote in force, at its touch and
+up to the size it shows, never against a print standing as the book: a limit fills there and no
+further than its own price, so a buy limit never pays above its limit, and its rest stays on the
+book at its price under the rule above; a market order's rest walks one increment past the
+touch, as the engine walks any market order larger than the top level, so a rule that sizes a
+taker down to the displayed size is the sleeve's to apply, from the quote it is handed. The
+quote in force is the last one the venue applied, until a print trades strictly outside it —
+under a bid or over an ask it shows at a size — which ends it: a market that traded there has
+left the quote. With no quote in force, or one showing nothing on the side a market order takes,
+a market order is refused for want of a market and a limit rests at its price; so a sleeve that
+buys at market on a print over the ask is refused rather than filled at that ask — measured, the
+quote before would have filled it a dollar under a session's first print when that quote was the
+last session's, and nine cents under a print within one — and kanso's benchmark hold sends its
+entry again on the next point. A split restates the quote in force, not the print the book
+holds. Under a stated latency a command due by a print's instant lands before that print, so an
+order that reached the book in time is there when the print arrives and a cancel that reached it
+in time has taken the order off; a command due at a quote still lands after the quote, so a
+taker fills on the first quote at or after its delay — unless a print comes first, when it fills
+on the quote before, if no print since has traded outside it. The venue cannot tell one print
+from another: it fills on every print the hypothesis loads, so a rule that only lit,
+last-sale-eligible, round-lot prints may fill needs a trade series written with only those
+(`csv_parquet`, `docs/adapters.md`), and a print outside the quote that a later report put there
+ends the quote all the same. A print carrying an aggressor reaches only the orders on the side
+it hit, as under the engine's own rules. A hypothesis whose resolved `limit_fill` is either
+value, from whichever layer, must require `quote` and `trade` and may not require `book`; `kanso
+hyp validate` refuses it otherwise (exit 3), naming `costs.limit_fill`. The tick a taker pays
+over the touch is a charge, not a price: state it as `slippage_ticks`, which is never charged
+past an order's limit, so a limit priced at the touch and taken there pays its commission and no
+tick, and state a resting fill's charge as `maker_per_share`. An account that charges $0.0040 a
+share on every fill and a tick over the touch to take, with the regulatory fees passed through
+on sales, states:
 
 ```yaml
 costs:
@@ -951,15 +960,20 @@ costs:
   latency_ms: 30                   # the time to decide and the route to the venue, one number
 ```
 
-Three parts of a taker rule that waits for the first quote at or after its delay and sizes a
-clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each:
-a taker whose first point after its delay is a print fills on the quote before it (measured on
-five sessions at 20 ms with the rule's prototype, 26 of 4,456 market orders priced otherwise,
-−6 to +5 ticks); a market order's rest past the displayed size walks one increment and pays
-`slippage_ticks` on top; and a limit priced between the touch and a print with no aggressor
-standing above it rests and later fills as a maker, where such a rule would take it on the
-next quote. `kanso doctor` checks each engine behaviour the rule rests on as an engine fact,
-and the rule itself as kanso loads it.
+Four parts of a taker rule that waits for the first quote at or after its delay and sizes a
+clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each: a
+taker whose first point after its delay is a print fills on the quote before it (measured on
+five sessions at 20 ms, 134 of 4,456 market orders, 26 of them priced otherwise, −6 to +5
+ticks); a market order's rest past the displayed size walks one increment and pays
+`slippage_ticks` on top; a marketable limit's rest past the displayed size is not sized down but
+rests at its own limit, through the quotes that show the market under it, and a later print
+through it fills it there as a maker, at a price above the market for a buy, paying
+`maker_per_share`; and a taker landing after a print outside the quote, before the next, is
+refused if a market order and rests at its price if a limit, where such a rule would fill it on
+the next quote. A quote carried across a gap — a session's last into the next's first prints —
+stays in force until a print trades outside it, so a market order sent on a print inside it
+fills at its touch, at most its spread from that print. `kanso doctor` checks each engine
+behaviour the rule rests on as an engine fact, and the rule itself as kanso loads it.
 
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
 takes to see an order.

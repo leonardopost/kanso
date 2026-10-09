@@ -1243,25 +1243,35 @@ the better-priced, the print standing as the book and why `liquidity_consumption
 engine facts.
 
 **Under `print_through` only a print through a resting order fills it, and a taker fills on the
-quote.** The venue's fill model is kanso's own there (`kanso.nautilus.tape`): the matching
-engine asks it for the fills of every order it has matched, and a venue module tells it before
-each point which point is in hand, which orders rested before a print, and the last quote. So
-a quote never fills a resting order and neither does a print at its price; a print through it
-fills it once, by the print's own size shared with the other orders it reaches — the reading
-the operator's resting rule takes — or, under `print_through_whole`, for all that is left; and
-a taker fills at the last quote's touch, up to the size it shows and never past its own limit,
-not at a print standing as the book. Under a stated latency a command due by a print's instant
-lands before the print. Measured on 2026-10-09 with the rule's prototype — which the module
-reproduces on every synthetic case of the suite, on both paths — on five sessions of MSTR,
-COIN, ETHA and BMNR quotes and lit prints at 20 ms, with a probe resting at the touch and
-sending market orders: the venue matched an independent replay of the rule at every one of
-2,973,825 quotes and 348,086 prints, made no maker fill on a quote where `through` had made 280
-to 1,389 a session, and filled every one of 4,456 market orders at the quote in force when it
-landed — 26 of them, whose first point after their delay was a print, on the quote before the
-first one at or after their delay (`docs/backlog.md`). Both code paths agree on every fill as well as every intent, because each print's record
-refuses a second credit when the research path matches resting orders again; under `touch` and
-`through` the research path still credits a point again on a re-match the node does not run
-(`docs/backlog.md`).
+quote in force.** The venue's fill model is kanso's own there (`kanso.nautilus.tape`): the
+matching engine asks it for the fills of every order it has matched, and a venue module tells
+it before each point which point is in hand, which orders rested before a print and at what
+price, and the last quote. So a quote never fills a resting order and neither does a print at
+its price; a print through it fills it once, by the print's own size shared with the other
+orders it reaches — the reading the operator's resting rule takes — or, under
+`print_through_whole`, for all that is left; a print the venue applied before the order landed,
+or before a modify moved it to its price, fills nothing. A taker fills at the touch of the last
+quote, up to the size it shows and never past its own limit, not at a print standing as the
+book — and a print that trades strictly outside that quote ends it: until the next quote a
+market order is refused for want of a market and a limit rests at its price, so a sleeve buying
+on a print over the ask is not filled at an ask the market has left. A split restates the quote
+a taker fills on, not the print the book may hold. Under a stated latency a command due by a
+print's instant lands before the print. Measured on 2026-10-10 with the module, on five
+sessions of MSTR, COIN, ETHA and BMNR quotes and lit prints at 20 ms, with a probe resting at
+the touch and sending market orders: the venue matched an independent replay of the rule at
+every one of 2,973,825 quotes and 348,086 prints, made no maker fill on a quote where `through`
+had made 280 to 1,389 a session, and filled every one of 4,456 market orders at the quote in
+force when it landed — 134 of them, whose first point after their delay was a print, on the
+quote before the first one at or after their delay, and 26 of those at another price, −6 to +5
+ticks; none landed after a print outside the quote (`docs/backlog.md`). The venue no longer
+parts the two code paths: the engine judges whether an order is marketable from a bid and an ask
+of its own, which the research path's second match after a command lands and a print with an
+aggressor leave apart on the two, but while a quote is in force neither is narrower than it, so
+the fill model, deciding from the quote, decides alike; and a resting order is credited only in
+a print's own match. Measured over seeded runs of two names sending entries, market orders,
+modifies and orders from their fill handlers at 0, 20 and 30 ms, with no cancel none of 5,400
+parted reproducibly, where under `touch` 1,309 of 1,800 such runs parted; with a cancel 82 of
+7,200 parted, 78 of them on tapes `touch` or `through` part too (`docs/backlog.md`).
 
 In the match it triggers, a trade print reaches a resting order only from the side that can
 trade with it: for that match the engine moves only the ask down for a seller's print and only

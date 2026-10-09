@@ -2,37 +2,46 @@
 
 Under `costs.limit_fill: print_through` a resting limit fills only when the venue applies a
 print strictly through its price — under a resting buy, over a resting sell — that it applied
-after the order reached its book, and by that print's own size, shared in the engine's own
-matching order across the orders it reaches: a buy of 320 resting at 9.50 met by a print of
-100 at 9.49 fills 100, and the next print under it another 100. Nothing else fills it: not a
-quote however far through its price, not a print at its price, not a bar, and not a print the
-venue applied before the order landed. Under `print_through_whole` a print through fills all
-that is left of the order instead, the reading in which a market that traded through a
-displayed limit would have taken it first. Either way a taker — a market order, or a limit
-marketable when it lands — fills against the last quote the venue applied, at its touch and up
-to the size it shows, never against a print standing as the book: a limit's rest stays on the
-book at its own price, so a buy limit never pays above its limit, and a market order's rest
-walks one increment past the touch, as the engine walks any market order larger than its top
-level. A market order with no quote applied, or one whose side of the quote shows nothing, is
-refused for want of a market. Under `touch` and `through` nothing here does anything: the venue
-keeps the engine's own fill model and `Tape` returns on its first line.
+after the order reached its book at the price it rests at, and by that print's own size, shared
+in the engine's own matching order across the orders it reaches: a buy of 320 resting at 9.50
+met by a print of 100 at 9.49 fills 100, and the next print under it another 100. Nothing else
+fills it: not a quote however far through its price, not a print at its price, not a bar, not a
+print the venue applied before the order landed, and not one it applied before a modify moved
+the order to the price it rests at. Under `print_through_whole` a print through fills all that
+is left of the order instead, the reading in which a market that traded through a displayed
+limit would have taken it first.
+
+Either way a taker — a market order, or a limit marketable when it lands — fills against the
+last quote the venue applied while that quote is in force, at its touch and up to the size it
+shows, never against a print standing as the book. A quote is in force until the next quote,
+or until a print trades strictly outside it — under a bid or over an ask it shows at a size —
+since a market that traded there has left the quote, and a fill on it would be a price nobody
+offered. With no quote in force a market order is refused for want of a market, as is one whose
+side of the quote shows nothing, and a limit rests at its price. A limit's rest past the size
+the quote shows also rests at its own price, so a buy limit never pays above its limit, and a
+market order's rest walks one increment past the touch, as the engine walks any market order
+larger than its top level. A rest priced through the quote is a resting order like any other:
+no quote fills it, and a later print through it fills it as a maker, at its limit. Under
+`touch` and `through` nothing here does anything: the venue keeps the engine's own fill model
+and `Tape` returns on its first line.
 
 **Two pieces, because the engine hands a fill model too little.** The matching engine asks its
 fill model for the fills of every order it has matched — a market order, a limit marketable
-when it lands, and a resting limit a point reached — and fills it from the book the model
-answers. It asks with identical arguments for a print, for a resting order matched again after
-a command lands and for a quote locked at the price, so the model cannot tell from them which
-point it is matching or whether the order was on the book before it. `Tape`, a simulation
-module both of kanso's venues load after the corporate actions and `Availability`
-(`kanso.nautilus.actions.modules`), tells it: before each point the venue applies, the point
-itself, and for a print the orders resting on the instrument's matching engine before it. A
-print's record — its price, the side it hit, what of its size is not yet credited, the orders
-that rested before it and those it has credited — stands until the instrument's next quote or
-bar, so an order matched again later, on either path, is never credited twice by one print and
-never credited by a print it was not resting for. A print that carries an aggressor reaches only
-the orders on the side it hit, as the engine's own match does; without that, the research path,
-which matches every resting order again once a command lands, credited a buyer's print under a
-resting buy that the node never credited.
+when it lands or when a modify lands, and a resting limit a point reached — and fills it from
+the book the model answers. It asks with identical arguments for a print, for a resting order
+matched again after a command lands and for a quote locked at the price, so the model cannot
+tell from them which point it is matching or whether the order was on the book before it.
+`Tape`, a simulation module both of kanso's venues load after the corporate actions and
+`Availability` (`kanso.nautilus.actions.modules`), tells it: before each point the venue
+applies, the point itself, and for a print the orders resting on the instrument's matching
+engine before it, each with the price it rested at. A print's record — its price, the side it
+hit, what of its size is not yet credited, the orders that rested before it and their prices,
+and those it has credited — stands until the instrument's next quote or bar, so an order
+matched again later, on either path, is never credited twice by one print, never credited by a
+print it was not resting for, and never credited at a price it did not rest at when the print
+arrived: a modify that moves an order through the print in hand makes it, for that print, an
+order that arrived after it. A print that carries an aggressor reaches only the orders on the
+side it hit, as the engine's own match does.
 
 **The fill the model answers is the whole fill.** `PrintThrough` answers a book whose
 `simulate_fills` returns exactly the fills the rule allows, ended by a fill of zero quantity:
@@ -47,18 +56,38 @@ every command due by the print's instant first (`SimulatedExchange.process`), so
 reached the venue in time is on the book when the print arrives, and a cancel that reached it
 in time has taken the order off; one due at a quote still lands after the quote, so a taker
 fills on the first quote at or after its delay — unless a print comes first, when it fills on
-the quote before.
+the quote before, if no print since has traded outside it.
 
-**It holds state and decides nothing at random.** The fill model keeps the last quote and the
-print in hand for each instrument and the module none of its own; neither reads a clock nor
-draws a number, and `prob_fill_on_limit` is one and `prob_slippage` zero. Both paths build one
-model per exchange from the same configuration, hand both pieces the same points in the same
-order and land the same commands before each, so the two hold the same state at every point,
-and a card and a stage fill alike — every fill, not only every intent. Nothing is copied,
-re-stamped or reordered: the sleeve is handed every point it was, at the same `data_time`.
+**The two paths fill alike because the model decides.** The engine decides whether an order is
+marketable from its own bid and ask, and the two paths can hold those differently: once a
+command lands the research engine matches every resting order again and re-reads its bid and
+ask from its book, which a print sets to the print's price on both sides, while the node's
+venue keeps the side the engine put back to the last quote after a print with an aggressor.
+While a quote is in force neither path's bid is under its bid nor its ask over its ask — a
+print inside the quote moves them only towards each other, and one outside ends the quote — so
+the engine asks the model about every order the quote makes marketable, and the model answers
+from the quote alone; with none in force it rests or refuses whatever it is asked about; and a
+resting order is credited only by the print's own match, which both paths make alike, the
+research path's later matches finding it credited, of the other side or not resting at that
+price. The model keeps the last quote and the print in hand for each instrument and the module
+none of its own; neither reads a clock nor draws a number, and `prob_fill_on_limit` is one and
+`prob_slippage` zero. Both paths build one model per exchange from the same configuration, hand
+both pieces the same points in the same order and land the same commands before each, so on a
+feed of quotes and prints the venue's rule parts the two nowhere: measured over 5,400 seeded runs
+of two names that send entries, market orders, modifies and orders from their fill handlers, with
+no cancel, none parted reproducibly, where under `touch` most such runs part. What still parts
+them is a sleeve's cancel, mostly on tapes the engine's own rules part as well (`docs/backlog.md`
+rows 105, 162 and 163). Nothing is copied, re-stamped or reordered: the sleeve is handed every
+point it was, at the same `data_time`.
+
+**A split restates the model's own quote.** The corporate actions restate an instrument's book
+in the new share count past the venue's modules, so the module cannot see it; the model's last
+quote is restated with it (`restate`), its prices divided by the ratio and its sizes multiplied
+by it, rather than handed the book, which after a print is the print on both sides — a taker
+sent before the split name's next quote fills at the restated quote, never at a restated print.
 
 Engine facts this module relies on (nautilus_trader 1.231.0). `kanso doctor` checks the first
-five on the raw engine (`kanso.nautilus.facts`), and checks this module as kanso loads it, which
+six on the raw engine (`kanso.nautilus.facts`), and checks this module as kanso loads it, which
 also exercises the last:
 
 * The matching engine asks `FillModel.get_orderbook_for_fill_simulation(instrument, order,
@@ -76,12 +105,19 @@ also exercises the last:
   fill model with exactly the arguments of the point's own match.
 * `SimulatedExchange.process(ts_now)` lands every command in flight due by `ts_now`, and a
   module may call it from `pre_process`, before the matching engine applies the point.
+* A top-of-book matching engine keeps a bid and an ask of its own, from which it judges whether
+  an order is marketable: a quote sets both; a print with no aggressor sets both to its price;
+  a buyer's print raises the ask to its price when it trades over it and puts the bid back to
+  the last quote's, a seller's the other way round; and the re-match after a command lands
+  reads both from the book, which a print sets to its price on both sides. After a print
+  inside the last quote, re-matched or not, neither is narrower than that quote.
 * `SimulatedExchange.fill_model` is the model the exchange was built with, and
   `get_matching_engine(instrument_id).get_open_orders()` the orders resting on an instrument.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -93,7 +129,15 @@ from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
 from nautilus_trader.model.enums import AggressorSide, BookType, LiquiditySide, OrderSide
 from nautilus_trader.model.objects import Quantity
 
-__all__ = ["NAME", "WHOLE", "PrintThrough", "PrintThroughConfig", "Tape", "observe"]
+__all__ = [
+    "NAME",
+    "WHOLE",
+    "PrintThrough",
+    "PrintThroughConfig",
+    "Tape",
+    "observe",
+    "restate",
+]
 
 NAME: Final = "Tape"
 """What the venue's log calls this module, suffixed with the venue it was loaded into."""
@@ -112,12 +156,13 @@ class PrintThroughConfig(FillModelConfig, frozen=True):
 @dataclass(slots=True)
 class _Print:
     """The print in hand on one instrument: its price, the side its aggressor hit, what of
-    its size is not yet credited (raw), the orders resting before it, and those it credited."""
+    its size is not yet credited (raw), the orders resting before it with the price each
+    rested at, and those it credited."""
 
     price: Any
     hit: Any
     left: int
-    resting: frozenset[Any]
+    resting: Mapping[Any, Any]
     credited: set[Any] = field(default_factory=set)
 
 
@@ -151,10 +196,11 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         self._quote: dict[Any, QuoteTick] = {}
         self._print: dict[Any, _Print | None] = {}
 
-    def seen(self, point: Any, resting: frozenset[Any]) -> None:
-        """The point the venue is about to apply, and the orders resting before it: a quote
-        becomes the last quote and ends the print in hand, as a bar does; a print is in hand
-        until the next of either."""
+    def seen(self, point: Any, resting: Mapping[Any, Any]) -> None:
+        """The point the venue is about to apply, and the orders resting before it with the
+        price each rests at: a quote becomes the last quote and ends the print in hand, as a
+        bar does; a print is in hand until the next of either, and ends the last quote if it
+        trades strictly outside it."""
         if isinstance(point, QuoteTick):
             self._quote[point.instrument_id] = point
             self._print[point.instrument_id] = None
@@ -162,8 +208,37 @@ class PrintThrough(FillModel):  # type: ignore[misc]
             self._print[point.instrument_id] = _Print(
                 point.price, point.aggressor_side, point.size.raw, resting
             )
+            quote = self._quote.get(point.instrument_id)
+            if quote is not None and _outside(point.price, quote):
+                del self._quote[point.instrument_id]
         elif isinstance(point, Bar):
             self._print[point.bar_type.instrument_id] = None
+
+    def restate(self, instrument: Any, ratio: float, ts_event: int, ts_init: int) -> None:
+        """Restate the last quote of an instrument a split applied to in the new count: its
+        prices divided by the ratio and its sizes multiplied by it, a size it showed staying
+        at least one increment and one it did not at zero. The print in hand ends, as it does
+        at any quote; with no quote in force there is nothing to restate."""
+        self._print[instrument.id] = None
+        quote = self._quote.get(instrument.id)
+        if quote is None:
+            return
+        step = float(instrument.size_increment)
+
+        def size(shown: Any) -> Any:
+            if shown.raw == 0:
+                return instrument.make_qty(0)
+            return instrument.make_qty(max(float(shown) * ratio, step))
+
+        self._quote[instrument.id] = QuoteTick(
+            instrument.id,
+            instrument.make_price(float(quote.bid_price) / ratio),
+            instrument.make_price(float(quote.ask_price) / ratio),
+            size(quote.bid_size),
+            size(quote.ask_size),
+            ts_event,
+            ts_init,
+        )
 
     def get_orderbook_for_fill_simulation(
         self, instrument: Any, order: Any, best_bid: Any, best_ask: Any
@@ -178,8 +253,9 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         nothing = [(order.price, Quantity.zero(instrument.size_precision))]
         hit = self._print.get(instrument.id)
         key = order.client_order_id
-        if hit is None or key not in hit.resting or key in hit.credited:
-            return nothing  # a quote, a bar, an order that landed after the print, a re-match
+        if hit is None or hit.resting.get(key) != order.price or key in hit.credited:
+            # A quote, a bar, an order that landed or was moved after the print, a re-match.
+            return nothing
         buy = order.side == OrderSide.BUY
         if hit.hit == (AggressorSide.BUYER if buy else AggressorSide.SELLER):
             return nothing  # the engine's own rule: a print reaches the side it hit
@@ -198,7 +274,7 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         touch = best_ask if order.side == OrderSide.BUY else best_bid
         quote = self._quote.get(instrument.id)
         if quote is None:
-            # No quote applied: a market order is refused, a limit rests at its price.
+            # No quote in force: a market order is refused, a limit rests at its price.
             return _Answer(instrument.id, [(order.price if order.has_price else touch, zero)])
         book = OrderBook(instrument.id, BookType.L1_MBP)
         book.update_quote_tick(quote)
@@ -212,18 +288,37 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         return _Answer(instrument.id, filled or [(touch, zero)])
 
 
+def _outside(price: Any, quote: QuoteTick) -> bool:
+    """Whether a print's price is strictly under the quote's bid or over its ask, of a side
+    the quote shows at a size."""
+    under = quote.bid_size.raw > 0 and price < quote.bid_price
+    over = quote.ask_size.raw > 0 and price > quote.ask_price
+    return bool(under or over)
+
+
 def observe(exchange: Any, point: Any) -> None:
     """Tell a venue's fill model the point it is about to apply, if it is a `PrintThrough`:
-    for a print, with the orders resting on the instrument before it."""
+    for a print, with the orders resting on the instrument before it and their prices."""
     model = exchange.fill_model
     if not isinstance(model, PrintThrough):
         return
-    resting: frozenset[Any] = frozenset()
+    resting: dict[Any, Any] = {}
     if isinstance(point, TradeTick):
         engine = exchange.get_matching_engine(point.instrument_id)
         if engine is not None:
-            resting = frozenset(order.client_order_id for order in engine.get_open_orders())
+            resting = {
+                order.client_order_id: order.price if order.has_price else None
+                for order in engine.get_open_orders()
+            }
     model.seen(point, resting)
+
+
+def restate(exchange: Any, instrument_id: Any, ratio: float, ts_event: int, ts_init: int) -> None:
+    """Restate a venue's fill model's last quote of an instrument in a split's new count, if
+    the model is a `PrintThrough` (`PrintThrough.restate`)."""
+    model = exchange.fill_model
+    if isinstance(model, PrintThrough):
+        model.restate(exchange.instruments[instrument_id], ratio, ts_event, ts_init)
 
 
 class Tape(SimulationModule):  # type: ignore[misc]

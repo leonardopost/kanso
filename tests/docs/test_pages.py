@@ -1006,14 +1006,18 @@ def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> No
     assert "**Under `print_through` only a print through a resting order fills it, and a taker" in (
         delivery
     )
-    assert "Both code paths agree on every fill as well as every intent" in delivery
+    assert "The venue no longer parts the two code paths" in delivery
+    assert "a print that trades strictly outside that quote ends it" in delivery
     rows = {
         line.split("|")[1].strip(): line
         for line in page("backlog.md").splitlines()
         if re.match(r"\| 1(51|58) \|", line)
     }
     assert "v0.15.0 reaches the fill under `limit_fill: print_through`" in rows["151"]
-    assert "26 of 4,456 market orders" in rows["158"]
+    assert "134 of 4,456 market orders, and 26 of them" in rows["158"]
+    assert "A marketable limit's rest past the displayed size is neither sized down" in rows["158"]
+    assert "Four parts of a taker rule" in costs and "row 158 records each" in costs
+    assert "The quote in force is the last one the venue applied, until a print trades" in costs
 
 
 def test_no_page_says_nothing_kanso_loads_reaches_the_level_one_fill() -> None:

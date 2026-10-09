@@ -23,7 +23,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
                                    # rebate. Unset, it pays what any fill pays
 #   maker_per_share: 0.004         # what a fill that rested pays on each share, beside maker_bps (the one unset is nothing):
-                                   # either key alone replaces every other charge on a resting fill. Negative is a rebate
+                                   # either key alone replaces commission, slippage and the half-spread on a resting fill
+                                   # (a sale still pays the sell-side fees). Negative is a rebate
 #   sell_fee_bps: 0.206            # on every sale, maker or taker, on top of the rest: the regulatory fee on the notional sold
 #   sell_fee_per_share: 0.000195   # and the activity fee on each share sold. Zero unless stated
 #   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
@@ -32,8 +33,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # market reaches its price (the engine's rule), or only once a bar's low/high or a print
                                    # goes beyond it, which fills all that is left of it (of the best-priced order, when it
                                    # goes beyond several), or only on a later print beyond it — by that print's size, or all
-                                   # of it — with takers filled on the quote; the print rules need quote and trade and no
-                                   # book. kanso's simulated venues only
+                                   # of it — with takers filled on the last quote until a print trades outside it; the print
+                                   # rules need quote and trade and no book. kanso's simulated venues only
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
 # sizing:                          # yours: classification never touches it. Scope: changing it clears `best`
 #   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / (price x multiplier)) whole lots with the
