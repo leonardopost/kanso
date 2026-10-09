@@ -928,8 +928,9 @@ left the quote. With no quote in force, or one showing nothing on the side a mar
 a market order is refused for want of a market and a limit rests at its price; so a sleeve that
 buys at market on a print over the ask is refused rather than filled at that ask — measured, the
 quote before would have filled it a dollar under a session's first print when that quote was the
-last session's, and nine cents under a print within one — and kanso's benchmark hold sends its
-entry again on the next point. A split restates the quote in force, not the print the book
+last session's, and nine cents under a print within one — and kanso's benchmark hold, refused
+so, sends its entry again on the next point; under `touch` and `through` it does not, so a hold
+the venue refused there holds nothing for the window, as it always has. A split restates the quote in force, not the print the book
 holds. Under a stated latency a command due by a print's instant lands before that print, so an
 order that reached the book in time is there when the print arrives and a cancel that reached it
 in time has taken the order off; a command due at a quote still lands after the quote, so a

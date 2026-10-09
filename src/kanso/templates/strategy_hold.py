@@ -2,9 +2,11 @@
 
 kanso ships this file and runs it itself; it is never copied into a workspace and never edited by
 the research loop. It buys the universe's first instrument on the first point it may trade on and
-never exits; an entry the venue refused for want of a market — under `limit_fill: print_through`,
-one sent on a print before any quote, or after a print traded outside the last quote — is sent
-again on the next point, so the hold waits for a quote rather than holding nothing. The entry
+never exits. Under `limit_fill: print_through` or `print_through_whole` an entry the venue
+refused for want of a market — one sent on a print before any quote, or after a print traded
+outside the last quote — is sent again on the next point, so the hold waits for a quote rather
+than holding nothing; under `touch` and `through` a refused entry is not sent again, so a hold
+whose first entry the venue refused holds nothing, as it always has. The entry
 names no size, so it takes the whole room the risk limits leave — the whole budget under a
 `sizing` rule — and every cost, split, book rule and warmup is the runner's own, applied exactly
 as it is to the strategy measured against it. It is not a card: no gate judges it, and
@@ -14,6 +16,9 @@ as it is to the strategy measured against it. It is not a card: no gate judges i
 from nautilus_trader.model.enums import OrderStatus
 
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+PRINT_RULES = ("print_through", "print_through_whole")
+"""The `limit_fill` values under which a market order with no quote in force is refused."""
 
 
 class Config(KansoConfig):
@@ -25,6 +30,8 @@ class Strategy(KansoStrategy):
 
     def on_start(self) -> None:
         self.entry = None
+        costs = self.venue_model.get("costs") or {}
+        self.resend = costs.get("limit_fill") in PRINT_RULES
 
     def on_bar(self, bar) -> None:
         self.hold()
@@ -39,7 +46,7 @@ class Strategy(KansoStrategy):
         # `None` until an order is placed: no price for the leg yet, or a warmup still dropping
         # every order before the window opens. A refusal is read off the order itself, so it is
         # seen whenever and however the venue reported it.
-        if self.entry is None or refused(self.entry):
+        if self.entry is None or (self.resend and refused(self.entry)):
             self.entry = self.submit_entry(self.universe[0], "BUY")
 
 

@@ -1030,3 +1030,32 @@ def test_the_benchmark_hold_waits_for_a_quote_when_its_first_point_is_a_print(
     assert node.intents == engine.intents
     assert fills_of(engine) == fills_of(node)
     assert sum(qty for _, qty, _, _ in fills_of(engine)) > 0
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", ["touch", "through", *RULES])
+def test_the_benchmark_hold_sends_a_refused_entry_again_only_under_the_print_rules(
+    rule: str, latency_ms: int
+) -> None:
+    """A first quote showing nothing on the ask has no touch for the hold's market buy, which
+    the venue refuses under every rule. Under the print rules the hold sends it again on the
+    next point; under `touch` and `through` it does not, so it holds nothing for the window,
+    as it did before the print rules existed and a benchmark measured on them stays the same.
+    At 20 and 30 ms the entry lands on a later quote and nothing is refused."""
+    points = [
+        q(9.48, 9.52, 5, ask_size=0),
+        q(9.48, 9.52, 10),
+        t(9.51, 100, 20),
+        q(9.5, 9.54, 30),
+        q(9.6, 9.64, 400),
+    ]
+
+    node, engine = scripted(points, {}, rule, latency_ms, source=HOLD.read_bytes())
+
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node)
+    held = sum(qty for _, qty, _, _ in fills_of(engine))
+    if latency_ms == 0 and rule in ("touch", "through"):
+        assert held == 0 and len(engine.intents) == 1
+    else:
+        assert held > 0
