@@ -9,11 +9,14 @@ resting at 9.50 met by a print of 100 at 9.49 fills 100, and the next print unde
 took its place there first — when the venue accepted it, when its trigger put a stop's limit on
 the book, or when the venue last modified it, whichever came last, so a modify sends an order
 to the back of its price, as the engine's own queue model does, and a partial fill does not.
-Nothing else fills it: not a quote however far through its price, not a print at its price,
-not a bar, not a print the venue applied before the order landed, and not one it applied
-before a modify moved the order to the price it rests at. Under `print_through_whole`
-a print through fills all that is left of the order instead, the reading in which a market
-that traded through a displayed limit would have taken it first.
+Orders that took their places at one instant keep the order the engine holds them in, which a
+modify does not re-sort, rather than the order they landed in: at that instant an order modified
+to a price can stay ahead of one that landed there before the modify did. Nothing else fills it:
+not a quote however far through its price, not a print at its price, not a bar, not a print the
+venue applied before the order landed, and not one it applied before a modify moved the order to
+the price it rests at. Under `print_through_whole` a print through fills all that is left of
+the order instead, the reading in which a market that traded through a displayed limit would
+have taken it first.
 
 Either way a taker — a market order, or a limit marketable when it lands — fills against the
 last quote the venue applied while that quote is in force, at its touch and up to the size it

@@ -912,9 +912,13 @@ at 9.51 and of 200 at 9.50 fills the better-priced 200 and the other the 100 lef
 buys at one price the one that took its place there first is filled first — the one the venue
 accepted first, unless a later modify sent it to the back of its price, as a modify of either
 price or size does; a partial fill keeps its place, and a stop-limit or a limit-if-touched takes
-its place at its limit when it triggers, not when the venue accepted it. Nothing else fills it: not a quote however far
-through its price, not a print at its price, not a bar, not a print the venue applied before the
-order landed, and not one it applied before a modify moved the order to its price. That is one
+its place at its limit when it triggers, not when the venue accepted it. Orders that take their
+places at one instant — sent from one handler, or landing together under a latency — keep the
+order the engine holds them in, which a modify does not re-sort, rather than the order they
+landed in: at that instant an order modified to a price can stay ahead of one that landed there
+before the modify did. Nothing else fills it: not a quote however far through its price, not a
+print at its price, not a bar, not a print the venue applied before the order landed, and not
+one it applied before a modify moved the order to its price. That is one
 reading of how much a print through a displayed limit fills — the size the tape shows traded
 there; `print_through_whole` is the same rule with the other reading, a print through filling all that is left of the order,
 as a market that traded through a displayed limit would have taken it first. A taker — a market

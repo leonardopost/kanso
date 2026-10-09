@@ -96,6 +96,11 @@ class Strategy(KansoStrategy):
                     key=lambda order: order.ts_init,
                 )
                 self.modify_order(first, price=Price(price, 2))
+            elif kind == "modify_from":
+                was, now = price
+                for order in self.cache.orders_open(instrument_id=instrument_id):
+                    if order.side_string() == side and order.price == Price(was, 2):
+                        self.modify_order(order, price=Price(now, 2))
             elif kind in ("stop_limit", "if_touched"):
                 limit, trigger = price
                 make = (
@@ -194,7 +199,8 @@ def scripted(
 ) -> tuple[backtest.RunResult, backtest.RunResult]:
     """The scripted sleeve on both paths under `limit_fill: rule` at this latency: a step is
     `(kind, side, qty, price)` on the demo name, or `(kind, name, side, qty, price)`, where a
-    stop's price is its limit and its trigger; `on_fill`
+    stop's price is its limit and its trigger and a `modify_from`'s the price it moves an open
+    limit from and the price it moves it to; `on_fill`
     lists what the sleeve sends on its n-th fill, `costs` what the venue model's costs state
     besides, and `infos` an instrument's `info`."""
     subject, instruments, groups = _subject(
@@ -913,6 +919,37 @@ def test_a_print_is_shared_in_price_then_time_priority_on_both_paths(
 
     assert node.intents == engine.intents
     assert fills_of(engine) == fills_of(node) == expected
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+def test_orders_that_take_their_places_at_one_instant_keep_the_engine_s_order(
+    latency_ms: int,
+) -> None:
+    """A buy of 100 rests at 9.50 and one of 100 at 9.52. One handler sends a buy of 30 at 9.50
+    and then modifies the buy at 9.52 down to 9.50, so both take their places at 9.50 at one
+    instant, the new buy landing first. Of a print of 140 at 9.49 under `print_through` the
+    first buy at 9.50 takes 100, and of the two that took their places at one instant the
+    modified buy, which the engine holds ahead from its old, better price, takes the 40 left
+    and the new buy nothing: at one instant the engine's order decides, not the order the two
+    landed in, which would have filled the new buy's 30 and 10 of the modified one."""
+    points = [
+        q(9.48, 9.55, 10),
+        q(9.48, 9.55, 20),
+        q(9.48, 9.55, 100),
+        q(9.48, 9.55, 150),
+        t(9.49, 140, 200),
+        q(9.48, 9.55, 300),
+    ]
+    script = {
+        1: [("limit", "BUY", 100, 9.5)],
+        2: [("limit", "BUY", 100, 9.52)],
+        3: [("limit", "BUY", 30, 9.5), ("modify_from", "BUY", 0, [9.52, 9.5])],
+    }
+
+    node, engine = scripted(points, script, "print_through", latency_ms)
+
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == [(200, 100.0, 9.5, M), (200, 40.0, 9.5, M)]
 
 
 @pytest.mark.parametrize("latency_ms", LATENCIES)
