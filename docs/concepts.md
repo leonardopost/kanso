@@ -1259,7 +1259,8 @@ sellers' prints of 100 a second apart fill the order at the seventh, eighth and 
 the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
 third and fourth, credited with what stood ahead of it — which is why a posting thesis on
 that venue rests a level of its own, though even there a print or a quote beyond the order
-fills all of it. `kanso doctor` checks both engine facts.
+fills all of it, when it is the best-priced order the point reaches. `kanso doctor` checks
+both engine facts.
 
 **Under `depth` the strategy sees the book its account would, and the venue every change.**
 Without the key a sleeve is handed each change to the book as the venue is. With it

@@ -1712,7 +1712,8 @@ def _check_a_print_fills_a_resting_limit_by_its_own_size() -> tuple[bool, str]:
 def _check_a_point_beyond_a_level_one_limit_fills_it_whole() -> tuple[bool, str]:
     """Where a point's size stops bounding a fill: a quote beyond a resting limit on a
     top-of-book venue, or a print beyond it that can trade with it, fills all that is left of
-    it, at its price, as a maker."""
+    it, at its price, as a maker — the one order resting here, and of several the best-priced
+    (`_check_a_point_beyond_two_level_one_limits_fills_only_the_better`)."""
     whole = [(100.0, 9.5, "MAKER"), (220.0, 9.5, "MAKER")]
     beyond = _probe_resting_limit(1.0, _limit_points("trade", 9.49), "BUY", quantity=320)
     quoted = _probe_resting_limit(1.0, _limit_points("quote", 9.4, 9.49), "BUY", quantity=320)
@@ -1723,7 +1724,8 @@ def _check_a_point_beyond_a_level_one_limit_fills_it_whole() -> tuple[bool, str]
         f"by a quote of 9.40/9.49 showing 100 on the ask, {quoted}; by a seller's print of 100 "
         f"at 9.50, {at}. Once a point goes beyond the limit, the engine fills what is left of "
         "the order at its price, whatever the point's own size, assuming a market that moved "
-        "through it had the size; a print does so only from the side that can trade with the "
+        "through it had the size — of the one order resting here, as of the best-priced of "
+        "several (the claim after); a print does so only from the side that can trade with the "
         "order, since a buyer's print never reaches a resting buy"
     )
 
@@ -4189,7 +4191,7 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "on a level-one venue a quote beyond a resting limit's price, or a print beyond it from "
         "the side that can trade with it, fills all that is left of the order at its price, "
-        "whatever its own size",
+        "whatever its own size, when it is the best-priced order the point reaches",
         _check_a_point_beyond_a_level_one_limit_fills_it_whole,
     ),
     (

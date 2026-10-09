@@ -94,7 +94,7 @@ BINDINGS = {
     "a print at a resting limit's price fills it by its own size, so a larger clip fills in parts",
     "on a level-one venue a quote beyond a resting limit's price, or a print beyond it from "
     "the side that can trade with it, fills all that is left of the order at its price, "
-    "whatever its own size",
+    "whatever its own size, when it is the best-priced order the point reaches",
     "a point beyond two resting limits on a level-one venue fills all that is left of the "
     "better-priced and nothing of the other",
     "on a level-one venue a quote at the price two limits rest at, or a print at it under "
