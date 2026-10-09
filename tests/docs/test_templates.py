@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import get_args
 
 from kanso.config import Config, render_config
+from kanso.criteria.integrity import DENIED_UNDER_SIZING
 from kanso.research import driver
 from kanso.schemas import CardStatus
 from tests.docs.test_pages import spelled
@@ -106,3 +107,18 @@ def test_the_program_tells_the_proposer_a_settlement_is_not_answered() -> None:
     text = re.sub(r"\s+", " ", template("program.md"))
     assert "on what you held before that instant" in text
     assert "an order placed in answer to the rate neither collects nor escapes it" in text
+
+
+def test_the_program_s_print_rule_advice_says_a_sized_strategy_cannot_follow_it() -> None:
+    """The print-rule bullet once told every proposer to size a taker to the quote or send an
+    IOC limit, which a strategy under a `sizing` rule cannot do: `strategy_integrity` discards
+    one that names a size, `submit_order` or `order_factory` before any backtest, and
+    `submit_entry` takes no time in force. The advice is scoped to a strategy without one, and
+    the names it gives for an IOC limit are the ones a sized strategy is denied."""
+    bullet = line_with(template("program.md"), "- Under `costs.limit_fill: print_through`")
+    unsized, sized = bullet.split("Without a `sizing` rule", 1)[1].split("Under `sizing:", 1)
+    assert "immediate-or-cancel" in unsized
+    for name in ("order_factory", "submit_order"):
+        assert f"`{name}`" in unsized and f"`{name}`" in sized
+        assert name in DENIED_UNDER_SIZING
+    assert "discarded before any backtest" in sized
