@@ -106,15 +106,13 @@ sent before the split name's next quote fills at the restated quote, never at a 
 
 Engine facts this module relies on (nautilus_trader 1.231.0). `kanso doctor` checks the first
 six on the raw engine (`kanso.nautilus.facts`), and checks this module as kanso loads it, which
-also exercises the last two:
+also exercises the seventh and eighth; the suite pins the last, through a stage's flatten:
 
 * The matching engine asks `FillModel.get_orderbook_for_fill_simulation(instrument, order,
   best_bid, best_ask)` for the fills of an order it has matched — a market order, a limit on
   landing and a resting limit a point reached — and takes its answer's `simulate_fills` in
-  place of its own book, or its own book when the answer is `None` (for a market order, also
-  when the answered book fills nothing, which is why a refusal is answered a zero); a resting
-  limit it has matched is marked `MAKER` first, and a market order or a limit marketable on
-  landing `TAKER`.
+  place of its own book; a resting limit it has matched is marked `MAKER` first, and a market
+  order or a limit marketable on landing `TAKER`.
 * `apply_fills` returns at the first fill of zero quantity, before the IOC cancel, the market
   order's one-increment walk and the limit's whole fill on exhausted top-of-book volume; it
   rejects a market order still `SUBMITTED` whose only fill is that zero ("no market"), and
@@ -136,6 +134,9 @@ also exercises the last two:
   `get_matching_engine(instrument_id).get_open_orders()` the orders resting on an instrument.
 * `OrderMatchingEngine.cancel_order(order)` cancels an order the engine has accepted and
   reports it, also from inside the fill model's call for that order.
+* A market order whose fill model answers `None`, or a book that fills nothing, is filled from
+  the engine's own book (`determine_market_fills_with_simulation`) — which is why a refusal is
+  answered a fill of zero rather than an empty book.
 """
 
 from __future__ import annotations
