@@ -694,6 +694,39 @@ def test_a_split_on_a_book_quoting_neither_side_pays_in_lieu_at_the_last_fill(ba
     ] == [(-905.0, pytest.approx(50.05))]
 
 
+def test_a_split_on_a_book_nothing_has_reached_restates_nothing(backtest) -> None:
+    """HEDGE has neither quoted nor printed when DEMO's first bar of the ex-date applies its
+    split, so there is no price in either count to restate and no quote to price an empty side
+    from: the split is applied, and the book is left as empty as it was."""
+    midnight = midnight_ns(EX)
+    second = 1_000_000_000
+    run = backtest(
+        Holder(config(universe=(DEMO.value, HEDGE.value))),
+        instruments=[equity(DEMO), equity(HEDGE, info=SCHEDULE)],
+        data=[
+            _stamped(DEMO, 10.0, midnight - 60 * second, midnight - 59 * second),
+            _stamped(DEMO, 10.0, midnight + 10 * second, midnight + 11 * second),
+        ],
+    )
+    module = run.actions[0]
+    book = module.exchange.get_matching_engine(HEDGE).get_book()
+
+    assert (HEDGE.value, EX) in module._applied
+    assert (book.best_bid_price(), book.best_ask_price()) == (None, None)
+    assert HEDGE not in module._quoted
+
+
+def test_a_reset_venue_forgets_the_quotes_it_kept(backtest) -> None:
+    """The prices an empty side is restated at are the venue's last quote's, so a reused
+    exchange starts with none."""
+    module = _held_through(backtest, 0, 5_000).actions[0]
+    assert set(module._quoted) == {HEDGE}
+
+    module.reset()
+
+    assert module._quoted == {}
+
+
 class RestsAtTheEmptySide(KansoStrategy):
     """Buys 1,005 HEDGE at market on HEDGE's first quote and holds them through the split, then
     rests one limit in HEDGE from DEMO's first bar of the ex-date: a sell of what it holds, or a
