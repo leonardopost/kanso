@@ -96,6 +96,22 @@ class Strategy(KansoStrategy):
                     key=lambda order: order.ts_init,
                 )
                 self.modify_order(first, price=Price(price, 2))
+            elif kind in ("stop_limit", "if_touched"):
+                limit, trigger = price
+                make = (
+                    self.order_factory.stop_limit
+                    if kind == "stop_limit"
+                    else self.order_factory.limit_if_touched
+                )
+                self.submit_order(
+                    make(
+                        instrument_id,
+                        OrderSide.BUY if side == "BUY" else OrderSide.SELL,
+                        Quantity.from_int(qty),
+                        Price(limit, 2),
+                        Price(trigger, 2),
+                    )
+                )
             elif kind in ("ioc", "fok"):
                 self.submit_order(
                     self.order_factory.limit(
@@ -177,7 +193,8 @@ def scripted(
     source: bytes = SCRIPTED,
 ) -> tuple[backtest.RunResult, backtest.RunResult]:
     """The scripted sleeve on both paths under `limit_fill: rule` at this latency: a step is
-    `(kind, side, qty, price)` on the demo name, or `(kind, name, side, qty, price)`; `on_fill`
+    `(kind, side, qty, price)` on the demo name, or `(kind, name, side, qty, price)`, where a
+    stop's price is its limit and its trigger; `on_fill`
     lists what the sleeve sends on its n-th fill, `costs` what the venue model's costs state
     besides, and `infos` an instrument's `info`."""
     subject, instruments, groups = _subject(
@@ -894,6 +911,56 @@ def test_a_print_is_shared_in_price_then_time_priority_on_both_paths(
     behind that buy, which the first print fills, and takes 250 of the second."""
     node, engine = scripted(PRIORITY, script, "print_through", latency_ms)
 
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == expected
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", RULES)
+@pytest.mark.parametrize(
+    ("kind", "limit", "trigger", "triggering", "through"),
+    [
+        ("stop_limit", 9.5, 9.55, q(9.53, 9.56, 100), 9.49),
+        ("if_touched", 9.47, 9.49, q(9.45, 9.49, 100), 9.46),
+    ],
+    ids=["stop-limit", "limit-if-touched"],
+)
+def test_a_triggered_stop_takes_its_place_at_its_limit_when_it_triggers(
+    kind: str,
+    limit: float,
+    trigger: float,
+    triggering: QuoteTick,
+    through: float,
+    rule: str,
+    latency_ms: int,
+) -> None:
+    """A buy of 100 with a trigger is accepted before a plain buy of 60 at its limit, and the
+    quote at 100 ms triggers it, leaving its limit resting there; then two prints of 100 come
+    through that price. A stop's limit is not resting until it triggers, so under
+    `print_through` the plain buy, on the book there since before the trigger, takes its 60 of
+    the first print and the triggered order the 40 left, and 60 more of the second — ranked
+    from when the venue accepted the stop, it took all of the first print. Under
+    `print_through_whole` both fill whole on the first."""
+    points = [
+        q(9.48, 9.52, 10),
+        q(9.48, 9.52, 20),
+        q(9.48, 9.52, 60),
+        triggering,
+        q(9.48, 9.52, 150),
+        t(through, 100, 200),
+        q(9.48, 9.52, 300),
+        t(through, 100, 400),
+        q(9.48, 9.52, 500),
+    ]
+    script = {1: [(kind, "BUY", 100, [limit, trigger])], 2: [("limit", "BUY", 60, limit)]}
+
+    node, engine = scripted(points, script, rule, latency_ms)
+
+    expected = (
+        [(200, 40.0, limit, M), (200, 60.0, limit, M), (400, 60.0, limit, M)]
+        if rule == "print_through"
+        else [(200, 100.0, limit, M), (200, 60.0, limit, M)]
+    )
     assert node.intents == engine.intents
     assert fills_of(engine) == fills_of(node) == expected
 

@@ -6,11 +6,12 @@ after the order reached its book at the price it rests at, and by that print's o
 across the orders it reaches in price priority and then time at the price: a buy of 320
 resting at 9.50 met by a print of 100 at 9.49 fills 100, and the next print under it another
 100; of two buys it reaches, the higher is filled first, and of two at one price the one that
-took its place there first — when the venue accepted it or last modified it, so a modify sends
-an order to the back of its price, as the engine's own queue model does, and a partial fill
-does not. Nothing else fills it: not a quote however far through its price, not a print at
-its price, not a bar, not a print the venue applied before the order landed, and not one it
-applied before a modify moved the order to the price it rests at. Under `print_through_whole`
+took its place there first — when the venue accepted it, when its trigger put a stop's limit on
+the book, or when the venue last modified it, whichever came last, so a modify sends an order
+to the back of its price, as the engine's own queue model does, and a partial fill does not.
+Nothing else fills it: not a quote however far through its price, not a print at its price,
+not a bar, not a print the venue applied before the order landed, and not one it applied
+before a modify moved the order to the price it rests at. Under `print_through_whole`
 a print through fills all that is left of the order instead, the reading in which a market
 that traded through a displayed limit would have taken it first.
 
@@ -148,7 +149,8 @@ moves an order ahead of another and through a stage's flatten:
   reports it, also from inside the fill model's call for that order.
 * A modify changes a resting order's price in place, without re-sorting the lists the engine
   walks, and the venue reports it with an `OrderUpdated` stamped (`ts_event`) at the instant
-  it lands, as it stamps the order's `ts_accepted`; both paths apply the event to the order
+  it lands, as it stamps the order's `ts_accepted`, and a stop's trigger with an
+  `OrderTriggered` stamped at the instant it triggers; both paths apply each event to the order
   before the next point reaches the venue.
 * A market order whose fill model answers `None`, or a book that fills nothing, is filled from
   the engine's own book (`determine_market_fills_with_simulation`) — which is why a refusal is
@@ -173,7 +175,7 @@ from nautilus_trader.model.enums import (
     OrderSide,
     TimeInForce,
 )
-from nautilus_trader.model.events import OrderUpdated
+from nautilus_trader.model.events import OrderTriggered, OrderUpdated
 from nautilus_trader.model.objects import Quantity
 
 __all__ = [
@@ -206,7 +208,8 @@ class PrintThroughConfig(FillModelConfig, frozen=True):
 class Rested:
     """A limit resting on the book when a print arrives: its client order id, whether it
     buys, its price, what is left of it (raw), and the instant it took its place at that
-    price — when the venue accepted it, or last modified it."""
+    price — when the venue accepted it, triggered it or last modified it, whichever came
+    last."""
 
     key: Any
     buy: bool
@@ -434,9 +437,14 @@ def observe(exchange: Any, point: Any) -> None:
 
 def _rested(order: Any) -> Rested:
     """A resting limit as a print finds it: it took its place at its price when the venue
-    accepted it or, if later, when the venue last modified it."""
+    accepted it or, if later, when a stop's trigger put its limit on the book or the venue
+    last modified it. A stop's limit is not resting until it has triggered, so it is ranked
+    from the trigger and not from when the venue accepted the stop."""
     since = max(
-        [order.ts_accepted, *(e.ts_event for e in order.events if isinstance(e, OrderUpdated))]
+        [
+            order.ts_accepted,
+            *(e.ts_event for e in order.events if isinstance(e, (OrderTriggered, OrderUpdated))),
+        ]
     )
     return Rested(
         order.client_order_id, order.side == OrderSide.BUY, order.price, order.leaves_qty.raw, since

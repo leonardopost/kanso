@@ -22,7 +22,7 @@ from nautilus_trader.model.enums import (
     OrderSide,
     PriceType,
 )
-from nautilus_trader.model.events import OrderUpdated
+from nautilus_trader.model.events import OrderTriggered, OrderUpdated
 from nautilus_trader.model.identifiers import (
     ClientOrderId,
     InstrumentId,
@@ -181,6 +181,49 @@ def test_the_observer_ranks_a_modified_order_from_its_modify_and_skips_an_untrig
         [(9.55, "0.0000")],
         [(9.5, "0.3000"), (9.5, "0.0000")],
     ]
+
+
+def test_the_observer_ranks_a_triggered_stop_from_its_trigger() -> None:
+    """A stop the venue accepted first and triggered later took its place at its limit when it
+    triggered, behind a plain limit accepted between the two: of a print of 0.5 the plain
+    limit takes its 0.3 and the stop the 0.2 left, whichever the engine holds first."""
+    stop, plain = order("O-1", "0.3000"), order("O-2", "0.3000")
+    triggered = OrderTriggered(
+        TraderId("T-1"),
+        StrategyId("S-1"),
+        COIN,
+        stop.client_order_id,
+        None,
+        None,
+        UUID4(),
+        5,
+        5,
+    )
+    held = [
+        SimpleNamespace(
+            **vars(stop),
+            has_trigger_price=True,
+            is_triggered=True,
+            ts_accepted=1,
+            events=[triggered],
+        ),
+        SimpleNamespace(
+            **vars(plain), has_trigger_price=False, is_triggered=False, ts_accepted=3, events=[]
+        ),
+    ]
+    fills = model()
+    engine = SimpleNamespace(get_open_orders=lambda: held)
+    observe(
+        SimpleNamespace(fill_model=fills, get_matching_engine=lambda _: engine),
+        printed(9.49, "0.5"),
+    )
+
+    asked = [
+        filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, each, None, None))
+        for each in (stop, plain)
+    ]
+
+    assert asked == [[(9.5, "0.2000"), (9.5, "0.0000")], [(9.5, "0.3000"), (9.5, "0.0000")]]
 
 
 def test_a_print_credits_an_order_once_and_only_one_that_rested_before_it() -> None:

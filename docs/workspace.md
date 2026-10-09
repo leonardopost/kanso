@@ -911,7 +911,8 @@ at 9.49 fills 100, and the next print under it another 100; one print of 300 und
 at 9.51 and of 200 at 9.50 fills the better-priced 200 and the other the 100 left; and of two
 buys at one price the one that took its place there first is filled first — the one the venue
 accepted first, unless a later modify sent it to the back of its price, as a modify of either
-price or size does; a partial fill keeps its place. Nothing else fills it: not a quote however far
+price or size does; a partial fill keeps its place, and a stop-limit or a limit-if-touched takes
+its place at its limit when it triggers, not when the venue accepted it. Nothing else fills it: not a quote however far
 through its price, not a print at its price, not a bar, not a print the venue applied before the
 order landed, and not one it applied before a modify moved the order to its price. That is one
 reading of how much a print through a displayed limit fills — the size the tape shows traded
@@ -1003,9 +1004,9 @@ in force after a print outside it — is filled from the engine's own book, at t
 `touch` closes it; a last quote showing nothing on the side the close takes refuses it under
 every rule, and the stage stops still holding the position (`docs/backlog.md` row 164).
 `kanso doctor` checks every engine behaviour the rule rests on but two as an engine fact, and
-the rule itself as kanso loads it; the two — the instants the venue stamps an acceptance and a
-modify with, which rank a print's shares, and a stage flatten's fallback to the engine's own
-book — are pinned by the suite (`tests/replay/test_print_through.py`).
+the rule itself as kanso loads it; the two — the instants the venue stamps an acceptance, a
+stop's trigger and a modify with, which rank a print's shares, and a stage flatten's fallback to
+the engine's own book — are pinned by the suite (`tests/replay/test_print_through.py`).
 
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
 takes to see an order.
