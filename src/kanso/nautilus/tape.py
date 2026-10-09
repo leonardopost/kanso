@@ -89,6 +89,15 @@ them is a sleeve's cancel, mostly on tapes the engine's own rules part as well (
 rows 105, 162 and 163). Nothing is copied, re-stamped or reordered: the sleeve is handed every
 point it was, at the same `data_time`.
 
+**A stage's flatten is filled.** A stage node closes every position after its window's last
+point, and no point follows to bring a quote: a close refused there would leave the stage
+holding a book no restart inherits. So the node tells the model it is closing (`closing`), and
+a market order the quote in force cannot fill — none in force after a print outside it, or one
+showing nothing on the side the close takes — is answered nothing at all, which the engine
+fills from its own book: the last print, or the quote, at that point's price and the rest one
+increment past it, exactly as `touch` closes it. Where that book is empty too, the engine
+refuses the close under every rule (`docs/backlog.md`).
+
 **A split restates the model's own quote.** The corporate actions restate an instrument's book
 in the new share count past the venue's modules, so the module cannot see it; the model's last
 quote is restated with it (`restate`), its prices divided by the ratio and its sizes multiplied
@@ -153,6 +162,7 @@ __all__ = [
     "PrintThrough",
     "PrintThroughConfig",
     "Tape",
+    "closing",
     "observe",
     "restate",
 ]
@@ -216,6 +226,8 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         self.exchange: Any = None
         """The exchange the model fills for, set by `observe`: an IOC limit it answers nothing
         is cancelled on that exchange's matching engine."""
+        self.closing = False
+        """Whether a stage node is flattening after its window's last point (`closing`)."""
 
     def seen(self, point: Any, resting: Mapping[Any, Any]) -> None:
         """The point the venue is about to apply, and the orders resting before it with the
@@ -271,7 +283,8 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         self, instrument: Any, order: Any, best_bid: Any, best_ask: Any
     ) -> Any:
         """The book an order the engine has matched is filled from: the rule's fills for a
-        resting limit, the last quote for a taker."""
+        resting limit, the last quote for a taker — or `None`, the engine's own book, for a
+        stage's closing market order the quote cannot fill."""
         if order.liquidity_side == LiquiditySide.MAKER:
             return _Answer(instrument.id, self._rested(instrument, order))
         return self._taken(instrument, order, best_bid, best_ask)
@@ -310,7 +323,9 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         if not order.has_price:
             # A market order: the quote's touch, its rest walking one increment past it — an
             # IOC's cancelled instead; refused with no quote in force or when the side it takes
-            # shows nothing.
+            # shows nothing — except a stage's flatten, which the engine fills from its own book.
+            if self.closing and not filled:
+                return None
             return _Answer(instrument.id, filled or [(touch, zero)])
         if order.time_in_force == TimeInForce.IOC:
             # What the quote shows within the limit, and no more: answered without the zero,
@@ -348,6 +363,15 @@ def observe(exchange: Any, point: Any) -> None:
                 for order in engine.get_open_orders()
             }
     model.seen(point, resting)
+
+
+def closing(exchange: Any) -> None:
+    """Tell a venue's fill model, if it is a `PrintThrough`, that the node is flattening after
+    its window's last point: from here a market order the quote in force cannot fill is filled
+    from the engine's own book, as under `touch`, rather than refused."""
+    model = exchange.fill_model
+    if isinstance(model, PrintThrough):
+        model.closing = True
 
 
 def restate(exchange: Any, instrument_id: Any, ratio: float, ts_event: int, ts_init: int) -> None:

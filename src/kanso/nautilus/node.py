@@ -25,7 +25,14 @@ position, then stops. Simulated execution keeps no position across a restart, so
 stopped holding a book would silently lose it and reopen flat with its record still claiming
 the position; flattening makes the loss explicit and realises the P&L into the record the
 paper and live gates read. The book is measured *before* the flatten, because the exposure a
-stage carried is a fact about the window and not about the way it ended.
+stage carried is a fact about the window and not about the way it ended. The close is a
+market order sent after the last point, so no later point can bring the market it needs:
+under the print rules, which refuse a market order where no quote is in force, the node tells
+the venue it is closing (`kanso.nautilus.tape.closing`), and a close the quote in force cannot
+fill is filled from the engine's own book, as `touch` fills it. Where that book shows nothing
+on the side the close takes either — a last quote showing nothing there — the venue refuses
+the close under every rule and the stage stops still holding the position
+(`docs/backlog.md` row 164).
 
 **A benchmark is run beside the stage, not inside it.** A version whose sleeve is measured
 against a hold of its first leg has that hold produced after the node stops, by the backtest
@@ -99,7 +106,7 @@ from nautilus_trader.model.identifiers import TraderId
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
-from kanso.nautilus import backtest, sandbox, splits
+from kanso.nautilus import backtest, sandbox, splits, tape
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, coincident, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
@@ -752,11 +759,7 @@ async def _drive(
     await client.replay()
     books = _books(built.kernel, strategies, points)
     if halt.reason is None:
-        _flatten(strategies)
-        await client.settle()
-        for venue in venues:
-            venue.advance_past_latency()
-        await client.settle()
+        await _closed(client, strategies, venues)
     else:
         await _halted(built)
     await built.stop_async()
@@ -765,6 +768,26 @@ async def _drive(
         await runner
     await _cleared()
     return books
+
+
+async def _closed(
+    client: ReplayDataClient, strategies: Sequence[Any], venues: Sequence[sandbox.SimulatedVenue]
+) -> None:
+    """Flatten every strategy after the window's last point and land what that sent.
+
+    Each venue's fill model is told the node is closing first (`kanso.nautilus.tape.closing`):
+    under the print rules a market order is refused where no quote is in force, as after a
+    print outside the last quote, and no point follows the window's last to bring one, so the
+    close is filled from the engine's own book there, as `touch` fills it. Under a stated
+    latency the close waits in flight, and `advance_past_latency` lands it.
+    """
+    for venue in venues:
+        tape.closing(venue.exchange)
+    _flatten(strategies)
+    await client.settle()
+    for venue in venues:
+        venue.advance_past_latency()
+    await client.settle()
 
 
 def _flatten(strategies: Sequence[Any]) -> None:

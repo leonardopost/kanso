@@ -13,6 +13,8 @@ the module that ships. Instants are milliseconds after 15:00 UTC on 2024-03-04, 
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import replace
 from datetime import date
 from typing import Any
@@ -24,7 +26,7 @@ from nautilus_trader.model.identifiers import InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import midnight_ns
-from kanso.nautilus import backtest, session
+from kanso.nautilus import backtest, node, session
 from kanso.nautilus.backtest import HOLD
 from tests.replay.conftest import INSTRUMENT, hypothesis, instrument, request_for
 
@@ -153,6 +155,26 @@ def scripted(
     `(kind, side, qty, price)` on the demo name, or `(kind, name, side, qty, price)`; `on_fill`
     lists what the sleeve sends on its n-th fill, `costs` what the venue model's costs state
     besides, and `infos` an instrument's `info`."""
+    subject, instruments, groups = _subject(
+        points, script, rule, latency_ms, names, on_fill, costs, infos, source
+    )
+    engine = backtest.execute(subject, instruments, groups)
+    node = session.run_node(subject, instruments, groups).result
+    return node, engine
+
+
+def _subject(
+    points: list[object],
+    script: dict[int, list[tuple[Any, ...]]],
+    rule: str,
+    latency_ms: float = 0.0,
+    names: tuple[str, ...] = (INSTRUMENT,),
+    on_fill: dict[int, list[tuple[Any, ...]]] | None = None,
+    costs: dict[str, Any] | None = None,
+    infos: dict[str, dict[str, Any]] | None = None,
+    source: bytes = SCRIPTED,
+) -> tuple[Any, list[Any], list[tuple[object, ...]]]:
+    """The run request `scripted` runs, the instruments and the window's groups."""
     hyp = hypothesis(
         resolution="tick", horizon="1d", data_requirements=["quote", "trade"], universe=list(names)
     )
@@ -183,9 +205,7 @@ def scripted(
         instrument(name.split(".")[0], **({"info": infos[name]} if infos and name in infos else {}))
         for name in names
     ]
-    engine = backtest.execute(subject, instruments, groups)
-    node = session.run_node(subject, instruments, groups).result
-    return node, engine
+    return subject, instruments, groups
 
 
 def fills_of(result: backtest.RunResult) -> list[tuple[int, float, float, bool]]:
@@ -1101,3 +1121,56 @@ def test_a_refused_exit_cancelled_as_it_was_sent_is_rejected_and_the_next_exit_g
     bought, sold = (10, 400) if latency_ms == 0 else (50, 500)
     assert node.intents == engine.intents
     assert fills_of(engine) == fills_of(node) == [(bought, 100.0, 9.52, T), (sold, 100.0, 9.58, T)]
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", ["touch", *RULES])
+@pytest.mark.parametrize(
+    ("last", "closed"),
+    [(t(9.6, 100, 300), 9.6), (t(9.5, 100, 300), 9.5), (q(9.55, 9.59, 300), 9.55)],
+    ids=["a print over the ask", "a print inside the quote", "a quote"],
+)
+def test_a_stage_s_flatten_closes_whatever_point_ended_the_window(
+    last: object, closed: float, rule: str, latency_ms: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stage node closes every position after its window's last point, the way `_drive`
+    does, on the node's own simulated venue. A window ending on a print over the ask leaves no
+    quote in force under the print rules, which refuse a market order then, and no point
+    follows to bring one: the node tells the venue it is closing, and the close fills from the
+    engine's own book, at that print, as `touch` closes it. Ending on a print inside the quote
+    or on a quote, the close fills at the quote's bid under every rule."""
+    seen: dict[str, Any] = {}
+    venues_of = session._venues
+
+    def venues(*args: Any) -> Any:
+        seen["venues"] = venues_of(*args)
+        return seen["venues"]
+
+    async def drive(built: Any, client: Any, strategy: Any, halt: Any, chunks: Any) -> None:
+        runner = asyncio.create_task(built.run_async())
+        await session._started(built, client, strategy)
+        await client.settle()
+        for _ in chunks:
+            await client.settle()
+            await client.replay()
+        await node._closed(client, [strategy], seen["venues"])
+        seen["open"] = [
+            (str(position.instrument_id), float(position.signed_qty))
+            for position in built.kernel.cache.positions_open()
+        ]
+        await built.stop_async()
+        runner.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await runner
+        await session._cleared()
+
+    monkeypatch.setattr(session, "_venues", venues)
+    monkeypatch.setattr(session, "_drive", drive)
+    points = [*OPEN, q(9.5, 9.54, 200), last]
+
+    staged = session.run_node(
+        *_subject(points, {2: [("market", "BUY", 100, 0)]}, rule, latency_ms)
+    ).result
+
+    assert seen["open"] == []
+    assert fills_of(staged)[-1] == (300 + latency_ms, 100.0, closed, T)

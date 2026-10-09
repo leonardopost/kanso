@@ -982,7 +982,12 @@ through it fills it there as a maker, at a price above the market for a buy, pay
 refused if a market order and rests at its price if a limit, where such a rule would fill it on
 the next quote (one of the 4,456). A quote carried across a gap — a session's last into the next's first prints —
 stays in force until a print trades outside it, so a market order sent on a print inside it
-fills at its touch, at most its spread from that print. `kanso doctor` checks each engine
+fills at its touch, at most its spread from that print. A stage node's flatten after its
+window's last point is a market order no later point can bring a quote for: under either rule
+one the quote in force cannot fill — none in force after a print outside it — is filled from
+the engine's own book, at the last print, as `touch` closes it; a last quote showing nothing on
+the side the close takes refuses it under every rule, and the stage stops still holding the
+position (`docs/backlog.md` row 164). `kanso doctor` checks each engine
 behaviour the rule rests on as an engine fact, and the rule itself as kanso loads it.
 
 `costs.latency_ms` is the other key that is not a charge: how long the simulated venue
