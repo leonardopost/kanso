@@ -1014,7 +1014,7 @@ def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> No
         if re.match(r"\| 1(51|58) \|", line)
     }
     assert "v0.15.0 reaches the fill under `limit_fill: print_through`" in rows["151"]
-    assert "134 of 4,456 market orders, and 26 of them" in rows["158"]
+    assert "133 of 4,456 market orders, and 26 of them" in rows["158"]
     assert "A marketable limit's rest past the displayed size is neither sized down" in rows["158"]
     assert "Four parts of a taker rule" in costs and "row 158 records each" in costs
     assert "The quote in force is the last one the venue applied, until a print trades" in costs

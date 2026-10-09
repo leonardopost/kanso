@@ -713,11 +713,30 @@ def test_a_print_outside_the_quote_ends_it_and_a_market_order_on_it_is_refused(
     points: list[object], rule: str, latency_ms: int
 ) -> None:
     """A market buy sent on the first print over the ask does not fill at that ask, nine cents
-    or a dollar under the market that just traded: the print ended the quote, so the order is
+    or 98 cents under the market these tapes print: the print ended the quote, so the order is
     refused for want of a market, at every latency, until a quote arrives. The engine's own
     rule fills it at a print."""
     node, engine = scripted(points, {3: [("market", "BUY", 100, 0)]}, rule, latency_ms)
     _, touched = scripted(points, {3: [("market", "BUY", 100, 0)]}, "touch", latency_ms)
+
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == []
+    assert fills_of(touched) and all(px >= 9.6 for _, _, px, _ in fills_of(touched))
+
+
+@pytest.mark.parametrize("latency_ms", [20, 30])
+@pytest.mark.parametrize("rule", RULES)
+@pytest.mark.parametrize("points", [DAY_TWO, JUMP], ids=["across sessions", "within one"])
+def test_a_market_order_in_flight_when_a_print_outside_the_quote_arrives_is_refused(
+    points: list[object], rule: str, latency_ms: int
+) -> None:
+    """A market buy sent on the last quote before the print over its ask, still in flight
+    when that print arrives, lands on the print — before it under the rule, which lands what is
+    due by a print first — and finds the quote already ended by it: refused, where landing it
+    before the print ended the quote filled it at 9.52 under a market printing 9.60 or 10.50.
+    The engine's own rule fills it at the print."""
+    node, engine = scripted(points, {2: [("market", "BUY", 100, 0)]}, rule, latency_ms)
+    _, touched = scripted(points, {2: [("market", "BUY", 100, 0)]}, "touch", latency_ms)
 
     assert node.intents == engine.intents
     assert fills_of(engine) == fills_of(node) == []

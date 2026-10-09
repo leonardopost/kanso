@@ -62,7 +62,9 @@ every command due by the print's instant first (`SimulatedExchange.process`), so
 reached the venue in time is on the book when the print arrives, and a cancel that reached it
 in time has taken the order off; one due at a quote still lands after the quote, so a taker
 fills on the first quote at or after its delay — unless a print comes first, when it fills on
-the quote before, if no print since has traded outside it.
+the quote before, if neither that print nor one since traded outside it: a print outside the
+quote ends it before what is due by the print lands, so a taker in flight across a gap or a
+jump is refused or rests, as one sent on that print is.
 
 **The two paths fill alike because the model decides.** The engine decides whether an order is
 marketable from its own bid and ask, and the two paths can hold those differently: once a
@@ -226,11 +228,17 @@ class PrintThrough(FillModel):  # type: ignore[misc]
             self._print[point.instrument_id] = _Print(
                 point.price, point.aggressor_side, point.size.raw, resting
             )
-            quote = self._quote.get(point.instrument_id)
-            if quote is not None and _outside(point.price, quote):
-                del self._quote[point.instrument_id]
+            self.traded(point)
         elif isinstance(point, Bar):
             self._print[point.bar_type.instrument_id] = None
+
+    def traded(self, point: TradeTick) -> None:
+        """End the last quote of a print's instrument if the print trades strictly outside it:
+        the market has left that quote, so no taker is filled on it from here on, one landing
+        on this print included."""
+        quote = self._quote.get(point.instrument_id)
+        if quote is not None and _outside(point.price, quote):
+            del self._quote[point.instrument_id]
 
     def restate(self, instrument: Any, ratio: float, ts_event: int, ts_init: int) -> None:
         """Restate the last quote of an instrument a split applied to in the new count: its
@@ -354,10 +362,14 @@ class Tape(SimulationModule):  # type: ignore[misc]
     fill model the point in hand. Under any other rule, nothing."""
 
     def pre_process(self, data: Any) -> None:
-        """Land the commands due by a print, then hand the point to the fill model."""
-        if not isinstance(self.exchange.fill_model, PrintThrough):
+        """Land the commands due by a print — once the print has ended a quote it trades
+        outside — then hand the point to the fill model."""
+        model = self.exchange.fill_model
+        if not isinstance(model, PrintThrough):
             return
         if isinstance(data, TradeTick):
+            model.exchange = self.exchange
+            model.traded(data)
             self.exchange.process(int(data.ts_init))
         observe(self.exchange, data)
 

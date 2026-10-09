@@ -1260,10 +1260,12 @@ print's instant lands before the print. Measured on 2026-10-10 with the module, 
 sessions of MSTR, COIN, ETHA and BMNR quotes and lit prints at 20 ms, with a probe resting at
 the touch and sending market orders: the venue matched an independent replay of the rule at
 every one of 2,973,825 quotes and 348,086 prints, made no maker fill on a quote where `through`
-had made 280 to 1,389 a session, and filled every one of 4,456 market orders at the quote in
-force when it landed — 134 of them, whose first point after their delay was a print, on the
-quote before the first one at or after their delay, and 26 of those at another price, −6 to +5
-ticks; none landed after a print outside the quote (`docs/backlog.md`). The venue no longer
+had made 280 to 1,389 a session, and filled 4,455 of 4,456 market orders at the quote in force
+when it landed — 133 of them, whose first point after their delay was a print, on the quote
+before the first one at or after their delay, and 26 of those at another price, −6 to +5 ticks;
+the other, on COIN, landed on a print outside the quote and was refused, where the first quote
+at or after its delay would have filled it at the price of the quote before
+(`docs/backlog.md`). The venue no longer
 parts the two code paths: the engine judges whether an order is marketable from a bid and an ask
 of its own, which the research path's second match after a command lands and a print with an
 aggressor leave apart on the two, but while a quote is in force neither is outside it — the

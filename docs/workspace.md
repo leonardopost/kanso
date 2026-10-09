@@ -934,7 +934,9 @@ holds. Under a stated latency a command due by a print's instant lands before th
 order that reached the book in time is there when the print arrives and a cancel that reached it
 in time has taken the order off; a command due at a quote still lands after the quote, so a
 taker fills on the first quote at or after its delay — unless a print comes first, when it fills
-on the quote before, if no print since has traded outside it. The venue cannot tell one print
+on the quote before, if neither that print nor one since traded outside it: a print outside
+the quote ends it before what is due by that print lands, so a taker still in flight across a
+gap or a jump is refused or rests, as one sent on the print is. The venue cannot tell one print
 from another: it fills on every print the hypothesis loads, so a rule that only lit,
 last-sale-eligible, round-lot prints may fill needs a trade series written with only those
 (`csv_parquet`, `docs/adapters.md`), and a print outside the quote that a later report put there
@@ -966,14 +968,14 @@ costs:
 Four parts of a taker rule that waits for the first quote at or after its delay and sizes a
 clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each: a
 taker whose first point after its delay is a print fills on the quote before it (measured on
-five sessions at 20 ms, 134 of 4,456 market orders, 26 of them priced otherwise, −6 to +5
+five sessions at 20 ms, 133 of 4,456 market orders, 26 of them priced otherwise, −6 to +5
 ticks); a market order's rest past the displayed size walks one increment and pays
 `slippage_ticks` on top; a marketable limit's rest past the displayed size is not sized down but
 rests at its own limit, through the quotes that show the market under it, and a later print
 through it fills it there as a maker, at a price above the market for a buy, paying
-`maker_per_share`; and a taker landing after a print outside the quote, before the next, is
+`maker_per_share`; and a taker landing on or after a print outside the quote, before the next, is
 refused if a market order and rests at its price if a limit, where such a rule would fill it on
-the next quote. A quote carried across a gap — a session's last into the next's first prints —
+the next quote (one of the 4,456). A quote carried across a gap — a session's last into the next's first prints —
 stays in force until a print trades outside it, so a market order sent on a print inside it
 fills at its touch, at most its spread from that print. `kanso doctor` checks each engine
 behaviour the rule rests on as an engine fact, and the rule itself as kanso loads it.
