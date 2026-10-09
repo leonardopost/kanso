@@ -11,8 +11,8 @@ as that book at a resting order's price again — and leaves the book and the la
 were. The sleeve is handed it all the same, so the venue matched against a market the sleeve
 was no longer looking at. Measured on 85 sessions each of two Nasdaq names' quotes and lit
 prints, about 12 % of the quotes and 53 % of the prints the sleeve was handed never reached the
-venue: a resting buy a later quote went through stayed unfilled, and a market order sent on a
-quote the venue had ignored filled against the book before it.
+venue's book: a resting buy a later quote went through stayed unfilled, and a market order
+sent on a quote the venue had ignored filled against the book before it.
 
 `Availability` is a simulation module both of kanso's venues load, after the corporate
 actions (`kanso.nautilus.actions.modules`). Handed a quote or a print before the matching
@@ -27,16 +27,20 @@ position a fill leaves. It holds no state, reads no clock and draws nothing, so 
 paths, handed the same points in the same order, hold the same book after each.
 
 It leaves two things alone. A level-two book has no such filter — the engine applies a
-change whatever its `ts_event` — and holds depth a reset would delete. A bar is never
-filtered: the venue walks its open, high, low and close as prints stamped at the bar's
-`ts_init`, straight into the book.
+change whatever its `ts_event` — and holds depth a reset would delete. A bar passes no
+matching-engine filter: the venue walks its open, high, low and close into the book as prints
+stamped at the bar's `ts_init`, through the book's own update, which ignores a point stamped
+before the book's `ts_last` too. That never happens while every point's `ts_init` is at or
+after its `ts_event`, because the venue is handed points in `ts_init` order, and a reset zeroes
+the `ts_last` both filters read.
 
 Engine facts this module relies on (nautilus_trader 1.231.0). `kanso doctor` checks the first
 two as engine facts (`kanso.nautilus.facts`), the second by loading this module alone on a
 venue, which also exercises the third and shows a module handed a quote and a print before
 the matching engine sees them. That a venue calls several modules in the order loaded is
 read from the engine's source; the order kanso loads them in is pinned by a test of
-`kanso.nautilus.actions.modules`.
+`kanso.nautilus.actions.modules`. The book's own filter, the fifth, was measured on a bare
+book.
 
 * A top-of-book (`L1_MBP`) matching engine's `process_quote_tick` and `process_trade_tick`
   return before they touch the book when the point's `ts_event` is earlier than the book's
@@ -51,6 +55,9 @@ read from the engine's source; the order kanso loads them in is pinned by a test
 * `SimulatedExchange.process_quote_tick` and `process_trade_tick` call
   `module.pre_process(point)` for every loaded module, in the order loaded, before the
   matching engine sees the point.
+* A top-of-book `OrderBook`'s own `update_quote_tick` and `update_trade_tick`, which the
+  matching engine applies a point with and a bar's walk writes through, leave the book as it
+  was for a point stamped before its `ts_last` as well.
 """
 
 from __future__ import annotations

@@ -94,9 +94,11 @@ heap keyed by `ts_init` and advances the clock to each datum's `ts_init`. Given
 two streams whose `ts_event` and `ts_init` orders disagree — one bar at
 `ts_event=10, ts_init=100`, another at `ts_event=50, ts_init=20` — the iterator
 delivers the second first. Nothing in the engine reads `ts_event` for ordering or
-clocking. One part filters on it: a top-of-book matching engine ignores a quote or
-a print stamped before its book's last update (below), which
-`kanso.nautilus.availability` undoes. A catalog round-trip preserves the two
+clocking. Two parts filter on it, one inside the other: a top-of-book matching
+engine ignores a quote or a print stamped before its book's last update (below), and
+the level-one `OrderBook`'s own `update_quote_tick` and `update_trade_tick`, which a
+bar's walk writes through, ignore one too. `kanso.nautilus.availability` undoes both,
+since its reset zeroes the `ts_last` both read. A catalog round-trip preserves the two
 independently, so a point stamped with a publication instant later than its
 reference time is delivered at the publication instant and never earlier.
 
@@ -336,13 +338,16 @@ having only advanced the venue's clock to the point's `ts_init` and matched the 
 orders against the book it already held — which can credit a quote or a print standing as that
 book at a resting order's price again; one stamped at `ts_last` is applied. `ts_last` is the
 running maximum of the `ts_event` of every quote and print applied, and of the `ts_init` a
-walked bar stamps its prints with. No configuration turns the filter off, a level-two book has
-none, and the data engine hands the point to the strategy all the same. A tape that takes
-`ts_init` from itself and `ts_event` from the participant stamps a point delivered after
-another earlier often enough to matter: measured on 85 sessions each of two Nasdaq names'
-quotes and lit prints, the venue ignored about 12 % of the quotes and 53 % of the prints the
-strategy was handed. `OrderBook.reset` empties both sides and zeroes `ts_last`, and a quote or
-a print applied after it leaves a top-of-book book exactly as that point alone sets it — so
+walked bar stamps its prints with. The book's own `update_quote_tick` and `update_trade_tick`
+filter the same way, so a bar published before `ts_last` is not walked into it either — which
+no point handed over in `ts_init` order, each at or after its `ts_event`, can bring about. No
+configuration turns either filter off, a level-two book has none, and the data engine hands
+the point to the strategy all the same. A tape that takes `ts_init` from itself and
+`ts_event` from the participant stamps a point delivered after another earlier often enough
+to matter: measured on 85 sessions each of two Nasdaq names' quotes and lit prints, the
+venue ignored about 12 % of the quotes and 53 % of the prints the strategy was handed.
+`OrderBook.reset` empties both sides and zeroes `ts_last`, and a quote or a print applied
+after it leaves a top-of-book book exactly as that point alone sets it — so
 `kanso.nautilus.availability`, a module both of kanso's venues load, resets the book when the
 filter would fire and the venue applies every quote and print. Measured, a buy of 10 resting at
 9.50 under quotes at minutes one and three, then a quote of 9.45/9.48 or a seller's print at
