@@ -747,3 +747,7 @@ def test_a_tick_charge_is_reserved_whole_beside_the_commission(backtest) -> None
     assert run.strategy.cost_rate_at(100.0, 50.0, 0.25) == pytest.approx(
         (0.004 + 0.25 * 50.0) / (100.0 * 50.0)
     )
+    # The room's 20,000 at 11.00 over 1 + 2 x 1.4 cents a share, 1,813 shares; with the
+    # commission alone reserved it would be 1,816.
+    assert run.strategy.intents[0].qty == float(int(20_000.0 / (1.0 + 2.0 * 0.014 / 11.0) / 11.0))
+    assert run.strategy.intents[0].qty == 1_813.0

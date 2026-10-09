@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
@@ -63,7 +63,7 @@ class Hurdles:
     models: dict[str, VenueModel]
     venue_of: dict[str, str]
     multiplier_of: dict[str, float]
-    increment_of: dict[str, float] = field(default_factory=dict)
+    increment_of: dict[str, float]
 
     def round_trip(
         self,

@@ -83,6 +83,7 @@ def tally(spec: Screen, series: dict[str, Series], model: Any = MODEL) -> respon
         {"XNAS": model},
         {"a": "XNAS", "b": "XNAS", "q": "XNAS"},
         {"a": 1.0, "b": 1.0, "q": 1.0},
+        {"a": 0.01, "b": 0.01, "q": 0.01},
     )
     (found,) = response.session(spec, measure, series, (0, 10**12), True, {}, hurdles)
     assert found is not None
@@ -240,7 +241,7 @@ def test_a_session_a_leg_never_printed_in_is_not_live() -> None:
     measure = spec.measures[0]
     assert isinstance(measure, Response)
     empty = Series(ts=np.zeros(0, np.int64), price=np.zeros(0))
-    hurdles = Hurdles(spec, {"XNAS": MODEL}, {"b": "XNAS"}, {"b": 1.0})
+    hurdles = Hurdles(spec, {"XNAS": MODEL}, {"b": "XNAS"}, {"b": 1.0}, {"b": 0.01})
     (found,) = response.session(
         spec, measure, {"a": path({}), "b": empty, "q": path({})}, (0, 10**12), True, {}, hurdles
     )

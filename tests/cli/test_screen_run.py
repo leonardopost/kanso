@@ -490,3 +490,21 @@ def test_a_model_that_takes_its_spread_from_quotes_cannot_price_a_bar_follower(
 
     assert result.exit_code == Exit.VALIDATION
     assert "takes the spread from quotes" in payload(result)["error"]
+
+
+def test_a_hurdle_charges_the_tick_of_each_leg_s_own_definition(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """Under `slippage_ticks: 1` each of the round trip's two taker fills pays the increment its
+    leg's definition carries, a cent on the demo name, over the 5 bp the rates charge: about
+    1e4 x 0.01 / price a fill, so two basis points a round trip at a price near 100."""
+    ticked = {
+        **FADE,
+        "id": "ou_fade_ticked",
+        "costs": {"SIM": {**FADE["costs"]["SIM"], "slippage_ticks": 1}},
+    }
+
+    document = run_screen(runner, loaded, ticked)
+
+    stats = document["best"][0]["response"]
+    assert 5.0 + 2e4 * 0.01 / 120.0 < stats["hurdle_bp"] < 5.0 + 2e4 * 0.01 / 80.0

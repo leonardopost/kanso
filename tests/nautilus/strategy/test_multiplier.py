@@ -136,6 +136,33 @@ def test_a_per_share_commission_is_per_contract_in_the_reserve(backtest) -> None
     assert intents(run) == [(FUT.value, "BUY", expected)]
 
 
+TICKED = {"costs": {**FREE["costs"], "slippage_ticks": 1.0}}
+"""The free model with one tick of the instrument's increment on every taker share."""
+
+
+def test_a_full_book_entry_reserves_a_tick_of_the_contract_s_increment(backtest) -> None:
+    """A tick of a quarter point on a 50-times contract is 12.50 a contract, 25 bp of one at
+    100: 30,100 over (1 + 2 x 25 bp) x 5,012.5 is five whole contracts, where with no tick
+    reserved it buys six."""
+
+    class Enters(OnThird):
+        def act(self) -> None:
+            self.submit_entry(FUT, "BUY")
+
+    run = backtest(
+        Enters(contract_config(sizing_budget=30_100.0, venue_model=TICKED)),
+        data=series(),
+        instruments=(future(),),
+    )
+
+    rate = run.strategy.cost_rate_at(PRICE, MULTIPLIER, 0.25)
+    assert rate == pytest.approx(0.25 * MULTIPLIER / CONTRACT)
+    expected = float(int(full_book_quantity(30_100.0, CONTRACT, 0.25 * MULTIPLIER, rate)))
+    untouched = float(int(full_book_quantity(30_100.0, CONTRACT, 0.25 * MULTIPLIER, 0.0)))
+    assert (expected, untouched) == (5.0, 6.0)
+    assert intents(run) == [(FUT.value, "BUY", expected)]
+
+
 def test_the_room_after_a_fill_is_reduced_by_the_contract_notional(backtest) -> None:
     """Four contracts at 100 take 20,000 of a 100,000 book, and the balance marks them back."""
 
