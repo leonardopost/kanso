@@ -350,18 +350,23 @@ minute two with the module loaded, each does.
 
 **A point beyond a resting limit fills all of it.** A print *at* a resting limit's price
 fills it by the print's own size and no more, one part per print: a buy of 320 met by four
-sellers' prints of 100 at its price fills 100, 100, 100 and 20. A print or a quote *beyond*
-the price fills all that is left of the order, at its price, as a maker, whatever its own
-size: once a level strictly better than the limit has been matched, the matching engine's
-check of a limit "on exhausted book volume" (`backtest/engine.pyx`) fills the order's
-`leaves_qty` at the limit with `liquidity_consumption` off, assuming that a market which moved
-through it had the size. Measured, the same buy of 320 resting at 9.50: a seller's print of
-100 at 9.49 fills 100 and then 220, and so does a quote of 9.40/9.49 showing 100 on the ask;
-a seller's print of 100 at 9.50 fills 100. So a resting order no larger than the points that
-reach it is filled as honestly as they are, and a larger one is credited size the tape never
-showed. No kanso seam reaches that part of the engine: the exchange builds each matching
-engine inside `add_instrument` and keeps it in a `cdef` map with no setter, and a fill model
-that hands the engine a simulated book changes only the fills that come before the check.
+sellers' prints of 100 at its price fills 100, 100, 100 and 20. A quote whose far side sits
+at the price fills it by the size shown, and again at every quote that shows it, because
+with `liquidity_consumption` off the venue keeps no record of what it credited there: a buy
+of 445 met by six identical quotes of 9.40/9.50 showing 100 on the ask fills 100 four times
+and then 45, under either probability. A quote *beyond* the price, or a print beyond it from
+the side that can trade with the order (a buyer's print never reaches a resting buy, below),
+fills all that is left of the order, at its price, as a maker, whatever its own size: once a
+level strictly better than the limit has been matched, the matching engine's check of a
+limit "on exhausted book volume" (`backtest/engine.pyx`) fills the order's `leaves_qty` at
+the limit with `liquidity_consumption` off, assuming that a market which moved through it
+had the size. Measured, the same buy of 320 resting at 9.50: a seller's print of 100 at 9.49
+fills 100 and then 220, and so does a quote of 9.40/9.49 showing 100 on the ask; a seller's
+print of 100 at 9.50 fills 100. So a resting order no larger than the points that reach it
+is filled as honestly as they are, and a larger one is credited size the tape never showed.
+No kanso seam reaches that part of the engine: the exchange builds each matching engine
+inside `add_instrument` and keeps it in a `cdef` map with no setter, and a fill model that
+hands the engine a simulated book changes only the fills that come before the check.
 
 **A print is the top-of-book until the next quote.** `process_trade_tick` sets both sides of a
 level-one book to the print's price and size, and they stay there until the next quote or
@@ -1654,15 +1659,17 @@ def _check_a_print_fills_a_resting_limit_by_its_own_size() -> tuple[bool, str]:
     return holds, (
         f"a buy of 320 at 9.50 met by four sellers' prints of 100 at 9.50 filled {parts}; met by "
         f"one print of 1,000 it filled {whole}. A print at a resting limit's price fills it by "
-        "its own size — a print beyond the price fills all of it (the claim after) — so the "
-        "fills a run reports are only as honest as the print sizes it is fed: a venue's own "
-        "executions, unmerged, fill in parts; consolidated or merged prints fill whole"
+        "its own size — one beyond the price that can trade with it fills all of it (the claim "
+        "after) — so the fills a run reports are only as honest as the print sizes it is fed: "
+        "a venue's own executions, unmerged, fill in parts; consolidated or merged prints fill "
+        "whole"
     )
 
 
 def _check_a_point_beyond_a_level_one_limit_fills_it_whole() -> tuple[bool, str]:
-    """Where a point's size stops bounding a fill: a print or a quote beyond a resting limit
-    on a top-of-book venue fills all that is left of it, at its price, as a maker."""
+    """Where a point's size stops bounding a fill: a quote beyond a resting limit on a
+    top-of-book venue, or a print beyond it that can trade with it, fills all that is left of
+    it, at its price, as a maker."""
     whole = [(100.0, 9.5, "MAKER"), (220.0, 9.5, "MAKER")]
     beyond = _probe_resting_limit(1.0, _limit_points("trade", 9.49), "BUY", quantity=320)
     quoted = _probe_resting_limit(1.0, _limit_points("quote", 9.4, 9.49), "BUY", quantity=320)
@@ -1673,7 +1680,24 @@ def _check_a_point_beyond_a_level_one_limit_fills_it_whole() -> tuple[bool, str]
         f"by a quote of 9.40/9.49 showing 100 on the ask, {quoted}; by a seller's print of 100 "
         f"at 9.50, {at}. Once a point goes beyond the limit, the engine fills what is left of "
         "the order at its price, whatever the point's own size, assuming a market that moved "
-        "through it had the size"
+        "through it had the size; a print does so only from the side that can trade with the "
+        "order, since a buyer's print never reaches a resting buy"
+    )
+
+
+def _check_a_quote_at_a_level_one_limit_fills_it_again_at_every_quote() -> tuple[bool, str]:
+    """What a quote at a resting limit's price credits on a top-of-book venue: the size it
+    shows, and the same size again at every quote that shows it, since the venue keeps no
+    record of what it credited there."""
+    repeated = _limit_points("quote", *([9.4, 9.5] * 6))
+    seen = {prob: _probe_resting_limit(prob, repeated, "BUY", quantity=445) for prob in (1.0, 0.0)}
+    filled = [(100.0, 9.5, "MAKER")] * 4 + [(45.0, 9.5, "MAKER")]
+    holds = all(fills == filled for fills in seen.values())
+    return holds, (
+        f"a buy of 445 resting at 9.50 met by six identical quotes of 9.40/9.50 showing 100 on "
+        f"the ask filled {seen[1.0]} at prob_fill_on_limit 1 and {seen[0.0]} at 0. A quote "
+        "whose far side sits at the limit fills it by the size shown, and the same unchanged "
+        "100 fills it again at every quote that shows it"
     )
 
 
@@ -4065,9 +4089,15 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_print_fills_a_resting_limit_by_its_own_size,
     ),
     (
-        "a print or a quote beyond a resting limit on a level-one venue fills all that is left "
-        "of it at its price, whatever its own size",
+        "on a level-one venue a quote beyond a resting limit's price, or a print beyond it from "
+        "the side that can trade with it, fills all that is left of the order at its price, "
+        "whatever its own size",
         _check_a_point_beyond_a_level_one_limit_fills_it_whole,
+    ),
+    (
+        "a quote whose far side sits at a resting limit's price on a level-one venue fills it "
+        "by the size shown, and again at every quote that shows it",
+        _check_a_quote_at_a_level_one_limit_fills_it_again_at_every_quote,
     ),
     (
         "a print is both sides of a level-one book until the next quote, so a market order sent "

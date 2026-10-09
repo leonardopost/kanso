@@ -1200,19 +1200,22 @@ the print: an exchange's own executions, one per print, fill a resting order as 
 would; a consolidated or merged tape fills it with size the book never showed it
 (`docs/workspace.md`, `limit_fill`). A quote whose far side sits at the price fills it by the
 size shown, and again at every quote that shows it. **A print or a quote *beyond* the price
-fills all that is left of the order**, at its price, whatever its own size: the engine's
-top-of-book venue assumes that a market which moved through a limit had the size to fill it.
-A buy of 445 resting at 9.62 and met by one print of 89 at 9.59 fills 89 and then 356; under
-`through` every fill a print makes is such a fill. Measured on 2026-10-09 over lit prints of
-two Nasdaq names, a buy and a sell of 445 re-posted a tick from the touch every five seconds
-were filled 19–36 % beyond what the prints' own sizes allowed, 7 % two ticks away re-posted
-every minute. A resting order no larger than the points that reach it is filled as honestly
-as its prints; a larger one is credited size the tape never showed. The engine kanso pins
-offers no top-of-book setting that fills such a point by its own size without withholding a
-repeated print, and nothing kanso loads reaches that part of it (`docs/backlog.md`). A print
-also stands as the top of the book on both sides, at its price and size, until the next
-quote: a market order sent on it fills that size at the print's price and the rest one
-increment worse. `kanso doctor` checks each of these as an engine fact.
+fills all that is left of the order** — a print only from the side that can trade with it, as
+the next paragraph says — at its price, whatever its own size: the engine's top-of-book venue
+assumes that a market which moved through a limit had the size to fill it. A buy of 445
+resting at 9.62 and met by one print of 89 at 9.59 fills 89 and then 356; under `through`
+every fill a print makes is such a fill. Measured on 2026-10-09 over lit prints of two Nasdaq
+names and no quotes, a buy and a sell of 445 re-posted a tick from the last print every five
+seconds: 19–36 % of what the venue filled was beyond what the prints' own sizes allowed (7 %
+two ticks away, re-posted every minute). A resting order no larger than the points that
+reach it is filled as honestly as its prints; a larger one is credited size the tape never
+showed. The engine kanso pins offers no top-of-book setting that fills such a point by its
+own size without withholding a repeated print, and nothing kanso loads reaches that part of
+it (`docs/backlog.md`). A print also stands as the top of the book on both sides, at its
+price and size, until the next quote: a market order sent on it fills that size at the
+print's price and the rest one increment worse. `kanso doctor` checks the fill by size at the
+price, the quote credited again, the whole fill beyond it, the print standing as the book and
+why `liquidity_consumption` stays off as engine facts.
 
 A trade print reaches a resting order only from the side that can trade with it: the engine
 moves only the ask down for a seller's print and only the bid up for a buyer's, so a

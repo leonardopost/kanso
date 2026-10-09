@@ -30,8 +30,9 @@ one or exactly zero, so it never draws a random number and the same request fill
 way every time. `touch` is the engine's own default, probability one: a resting limit fills
 the moment the market reaches its price. `through` is probability zero: a limit whose price
 the market only reached stays on the book, and fills once a print or a quote goes beyond
-it. Under either rule a point that goes beyond a resting limit fills all that is left of it,
-whatever the size of that point, which is the engine's assumption and not a measurement.
+it. Under either rule a point that goes beyond a resting limit — a quote, or a print from the
+side that can trade with it — fills all that is left of it, whatever the size of that point,
+which is the engine's assumption and not a measurement.
 `liquidity_consumption` stays at the engine's default, off: on a top-of-book venue it
 remembers what it credited at a price until the size shown there changes, so a second print
 of the same size at the order's price fills nothing, and a market order against a level it

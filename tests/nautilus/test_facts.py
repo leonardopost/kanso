@@ -91,6 +91,16 @@ BINDINGS = {
     "last update, and applies one stamped at it",
     "a level-one book that kanso's Availability module resets applies the next quote or "
     "print whatever its ts_event, and holds what that point alone sets",
+    "a print at a resting limit's price fills it by its own size, so a larger clip fills in parts",
+    "on a level-one venue a quote beyond a resting limit's price, or a print beyond it from "
+    "the side that can trade with it, fills all that is left of the order at its price, "
+    "whatever its own size",
+    "a quote whose far side sits at a resting limit's price on a level-one venue fills it "
+    "by the size shown, and again at every quote that shows it",
+    "a print is both sides of a level-one book until the next quote, so a market order sent "
+    "on it fills the print's size at its price and the rest one increment worse",
+    "liquidity_consumption on a level-one venue fills a resting limit from the first of two "
+    "identical prints at its price and not from the second",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
