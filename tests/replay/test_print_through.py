@@ -1362,10 +1362,12 @@ def test_a_refused_exit_cancelled_as_it_was_sent_is_rejected_and_the_next_exit_g
 ) -> None:
     """An exit at market sent on a print over the ask, with a cancel of that order or of every
     order of its name in the same handler, is refused for want of a market. kanso sends no
-    cancel for a market order, so the venue rejects it on both paths, where a cancel sent or
-    held for it left it `PENDING_CANCEL` for good — on both paths for a cancel of the order, on
-    the node alone for a cancel of the name — and counted as working, so the exit asked for on
-    a later quote sent nothing. Here it goes out whole and fills on that quote."""
+    cancel of a market order itself and holds none back for one, and a cancel of its name marks
+    pending only what the venue holds open, so the venue rejects it on both paths, where a
+    cancel sent or held for it left it `PENDING_CANCEL` for good — on both paths for a cancel
+    of the order, on the node alone for a cancel of the name — and counted as working, so the
+    exit asked for on a later quote sent nothing. Here it goes out whole and fills on that
+    quote."""
     script = {
         1: [("market", "BUY", 100, 0)],
         3: [("exit", "SELL", 0, 0), (how, "SELL", 0, 0)],
