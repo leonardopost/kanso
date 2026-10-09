@@ -13,7 +13,9 @@ limit would have taken it first.
 
 Either way a taker — a market order, or a limit marketable when it lands — fills against the
 last quote the venue applied while that quote is in force, at its touch and up to the size it
-shows, never against a print standing as the book. A quote is in force until the next quote,
+shows, never against a print standing as the book; an IOC limit takes no more than that and
+is cancelled for the rest, and a FOK fills whole from it or not at all, so neither ever rests.
+A quote is in force until the next quote,
 or until a print trades strictly outside it — under a bid or over an ask it shows at a size —
 since a market that traded there has left the quote, and a fill on it would be a price nobody
 offered. With no quote in force a market order is refused for want of a market, as is one whose
@@ -48,7 +50,11 @@ side it hit, as the engine's own match does.
 the engine applies the fills in order and returns at the zero, before it cancels an IOC
 remainder, walks a market order's rest or fills a resting limit's remainder whole on the
 top-of-book venue. A lone zero answered for a market order is the engine's refusal for want of
-a market; for a limit it leaves the order resting at its price.
+a market — for an order still `SUBMITTED`, which kanso never moves on from there with a cancel
+(`KansoStrategy.cancel_order`); for a limit it leaves the order resting at its price. An IOC
+limit is answered what the quote gives it and no zero, so the engine fills that and cancels the
+rest; one the quote gives nothing the model cancels on the matching engine itself, as the
+engine cancels an IOC it finds unmarketable on landing.
 
 **A command due by a print lands before it.** Under a stated latency the venue lands a command
 at the first point after its delay, and after matching that point. Before a print `Tape` lands
@@ -88,7 +94,7 @@ sent before the split name's next quote fills at the restated quote, never at a 
 
 Engine facts this module relies on (nautilus_trader 1.231.0). `kanso doctor` checks the first
 six on the raw engine (`kanso.nautilus.facts`), and checks this module as kanso loads it, which
-also exercises the last:
+also exercises the last two:
 
 * The matching engine asks `FillModel.get_orderbook_for_fill_simulation(instrument, order,
   best_bid, best_ask)` for the fills of an order it has matched — a market order, a limit on
@@ -98,7 +104,7 @@ also exercises the last:
 * `apply_fills` returns at the first fill of zero quantity, before the IOC cancel, the market
   order's one-increment walk and the limit's whole fill on exhausted top-of-book volume; it
   rejects a market order still `SUBMITTED` whose only fill is that zero ("no market"), and
-  leaves a limit open.
+  leaves a limit open. With no zero it cancels an IOC's rest after the fills, before either.
 * A market order's fills that the answered book does not cover walk one increment past the
   last of them on a top-of-book venue.
 * Once a command lands, the research engine matches every resting order again and asks the
@@ -114,6 +120,8 @@ also exercises the last:
   under its bid nor the ask over its ask.
 * `SimulatedExchange.fill_model` is the model the exchange was built with, and
   `get_matching_engine(instrument_id).get_open_orders()` the orders resting on an instrument.
+* `OrderMatchingEngine.cancel_order(order)` cancels an order the engine has accepted and
+  reports it, also from inside the fill model's call for that order.
 """
 
 from __future__ import annotations
@@ -127,7 +135,13 @@ from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.backtest.modules import SimulationModule
 from nautilus_trader.model.book import OrderBook
 from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
-from nautilus_trader.model.enums import AggressorSide, BookType, LiquiditySide, OrderSide
+from nautilus_trader.model.enums import (
+    AggressorSide,
+    BookType,
+    LiquiditySide,
+    OrderSide,
+    TimeInForce,
+)
 from nautilus_trader.model.objects import Quantity
 
 __all__ = [
@@ -196,6 +210,9 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         self._whole = getattr(config, "size", "print") == WHOLE
         self._quote: dict[Any, QuoteTick] = {}
         self._print: dict[Any, _Print | None] = {}
+        self.exchange: Any = None
+        """The exchange the model fills for, set by `observe`: an IOC limit it answers nothing
+        is cancelled on that exchange's matching engine."""
 
     def seen(self, point: Any, resting: Mapping[Any, Any]) -> None:
         """The point the venue is about to apply, and the orders resting before it with the
@@ -274,19 +291,28 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         zero = Quantity.zero(instrument.size_precision)
         touch = best_ask if order.side == OrderSide.BUY else best_bid
         quote = self._quote.get(instrument.id)
-        if quote is None:
-            # No quote in force: a market order is refused, a limit rests at its price.
-            return _Answer(instrument.id, [(order.price if order.has_price else touch, zero)])
-        book = OrderBook(instrument.id, BookType.L1_MBP)
-        book.update_quote_tick(quote)
-        filled = book.simulate_fills(
-            order, instrument.price_precision, instrument.size_precision, not order.has_price
-        )
-        if order.has_price:
-            return _Answer(instrument.id, [*filled, (order.price, zero)])  # the rest rests
-        # A market order: the quote's touch, its rest walking one increment past it; refused
-        # when the side it takes shows nothing.
-        return _Answer(instrument.id, filled or [(touch, zero)])
+        filled: list[tuple[Any, Any]] = []
+        if quote is not None:
+            book = OrderBook(instrument.id, BookType.L1_MBP)
+            book.update_quote_tick(quote)
+            filled = book.simulate_fills(
+                order, instrument.price_precision, instrument.size_precision, not order.has_price
+            )
+        if not order.has_price:
+            # A market order: the quote's touch, its rest walking one increment past it — an
+            # IOC's cancelled instead; refused with no quote in force or when the side it takes
+            # shows nothing.
+            return _Answer(instrument.id, filled or [(touch, zero)])
+        if order.time_in_force == TimeInForce.IOC:
+            # What the quote shows within the limit, and no more: answered without the zero,
+            # the engine fills it and cancels the rest. With nothing to take, the order is
+            # cancelled here, as the engine cancels an IOC it finds unmarketable on landing.
+            if filled:
+                return _Answer(instrument.id, filled)
+            self.exchange.get_matching_engine(instrument.id).cancel_order(order)
+        # A limit: what the quote shows within it, and the rest rests at its price — all of
+        # it with no quote in force. A FOK the quote cannot fill whole is cancelled.
+        return _Answer(instrument.id, [*filled, (order.price, zero)])
 
 
 def _outside(price: Any, quote: QuoteTick) -> bool:
@@ -303,6 +329,7 @@ def observe(exchange: Any, point: Any) -> None:
     model = exchange.fill_model
     if not isinstance(model, PrintThrough):
         return
+    model.exchange = exchange
     resting: dict[Any, Any] = {}
     if isinstance(point, TradeTick):
         engine = exchange.get_matching_engine(point.instrument_id)

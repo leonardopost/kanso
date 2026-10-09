@@ -918,7 +918,10 @@ up to the size it shows, never against a print standing as the book: a limit fil
 further than its own price, so a buy limit never pays above its limit, and its rest stays on the
 book at its price under the rule above; a market order's rest walks one increment past the
 touch, as the engine walks any market order larger than the top level, so a rule that sizes a
-taker down to the displayed size is the sleeve's to apply, from the quote it is handed. The
+taker down to the displayed size is the sleeve's to apply, from the quote it is handed. A limit
+sent immediate-or-cancel (`TimeInForce.IOC`) takes what that quote shows within its limit and
+is cancelled for the rest — cancelled whole when the quote shows nothing it can take — and one
+sent fill-or-kill fills whole from it or is cancelled, so neither ever rests for a print. The
 quote in force is the last one the venue applied, until a print trades strictly outside it —
 under a bid or over an ask it shows at a size — which ends it: a market that traded there has
 left the quote. With no quote in force, or one showing nothing on the side a market order takes,

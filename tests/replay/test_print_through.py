@@ -36,8 +36,9 @@ OTHER = InstrumentId.from_str("OTHR.XNAS")
 RULES = ("print_through", "print_through_whole")
 
 SCRIPTED = b"""
+from nautilus_trader.model.enums import OrderSide, TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
@@ -70,6 +71,16 @@ class Strategy(KansoStrategy):
                 for order in self.cache.orders_open(instrument_id=instrument_id):
                     if order.side_string() == side and order.has_price:
                         self.modify_order(order, price=Price(price, 2))
+            elif kind in ("ioc", "fok"):
+                self.submit_order(
+                    self.order_factory.limit(
+                        instrument_id,
+                        OrderSide.BUY if side == "BUY" else OrderSide.SELL,
+                        Quantity.from_int(qty),
+                        Price(price, 2),
+                        time_in_force=TimeInForce.IOC if kind == "ioc" else TimeInForce.FOK,
+                    )
+                )
             else:
                 self.submit_entry(instrument_id, side, qty=qty, price=price)
 
@@ -604,6 +615,75 @@ def test_a_marketable_limit_s_rest_past_the_displayed_size_rests_at_its_own_pric
     rest = 100.0 if rule == "print_through" else 220.0
     assert node.intents == engine.intents
     assert fills_of(engine) == fills_of(node) == [(100, 100.0, 9.52, T), (130, rest, 9.55, M)]
+
+
+IMMEDIATE: dict[str, tuple[list[object], dict[int, list[Any]], dict[int, list[Any]]]] = {
+    "an IOC over the size shown": (
+        [
+            *OPEN,
+            q(9.48, 9.52, 100, ask_size=100),
+            q(9.5, 9.53, 110),
+            t(9.51, 150, 400),
+            q(9.5, 9.53, 410),
+        ],
+        {3: [("ioc", "BUY", 320, 9.52)]},
+        {0: [(100, 100.0, 9.52, T)], 20: [], 30: []},
+    ),
+    "an IOC sent on a print inside the quote": (
+        [*OPEN, t(9.5, 100, 100), t(9.49, 100, 130), q(9.48, 9.52, 140), t(9.49, 100, 150)],
+        {3: [("ioc", "BUY", 320, 9.5)]},
+        {0: [], 20: [], 30: []},
+    ),
+    "an IOC sent on a print outside the quote": (
+        [*OPEN, t(9.6, 100, 100), t(9.59, 100, 130), q(9.58, 9.62, 140), t(9.55, 100, 150)],
+        {3: [("ioc", "BUY", 320, 9.6)]},
+        {0: [], 20: [], 30: []},
+    ),
+    "a FOK over the size shown": (
+        [
+            *OPEN,
+            q(9.48, 9.52, 100, ask_size=100),
+            q(9.5, 9.53, 110),
+            t(9.51, 150, 400),
+            q(9.5, 9.53, 410),
+        ],
+        {3: [("fok", "BUY", 320, 9.52)]},
+        {0: [], 20: [], 30: []},
+    ),
+    "a FOK within the size shown": (
+        [
+            *OPEN,
+            q(9.48, 9.52, 100, ask_size=100),
+            q(9.48, 9.52, 110, ask_size=100),
+            t(9.51, 150, 400),
+            q(9.5, 9.53, 410),
+        ],
+        {3: [("fok", "BUY", 100, 9.52)]},
+        {0: [(100, 100.0, 9.52, T)], 20: [(400, 100.0, 9.52, T)], 30: [(400, 100.0, 9.52, T)]},
+    ),
+}
+"""Immediate-or-cancel and fill-or-kill limits: what each fills, by latency, under either rule."""
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", RULES)
+@pytest.mark.parametrize("name", list(IMMEDIATE))
+def test_an_ioc_or_fok_limit_takes_what_the_quote_shows_and_never_rests(
+    name: str, rule: str, latency_ms: int
+) -> None:
+    """An IOC limit takes what the quote in force shows within its limit and is cancelled for
+    the rest; one the quote gives nothing — a print inside it moved the engine's own ask to the
+    limit, or a print outside it ended it — is cancelled whole. A FOK fills whole from the quote
+    or not at all. Neither is left resting for a later print to fill as a maker, which the
+    rule's closing zero, ending the engine's fill before its own IOC cancel, would do. Under 20
+    and 30 ms the IOC over the size shown lands on the print at 400 ms, where the quote in force
+    no longer makes it marketable, and the FOK within it fills there on the quote before."""
+    points, script, expected = IMMEDIATE[name]
+
+    node, engine = scripted(points, script, rule, latency_ms)
+
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == expected[latency_ms]
 
 
 DAY_TWO = [

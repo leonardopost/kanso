@@ -120,7 +120,7 @@ BINDINGS = {
     "quote, re-matched or not, so a limit the quote makes marketable is matched on landing",
     "kanso's print_through venue fills a resting limit only from a later print strictly "
     "through its price, by that print's size or whole, never from a quote, and fills a "
-    "taker at the last quote's touch",
+    "taker at the last quote's touch, an IOC limit no further than the quote shows",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 

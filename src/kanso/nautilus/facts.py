@@ -2111,7 +2111,8 @@ def _probe_script(
 ) -> dict[str, list[Any]]:
     """What the orders `script` sends do on a top-of-book venue built as kanso builds one, with
     this fill model and these modules: on the n-th point handled, counted from one, each
-    `(kind, side, quantity, price)` — a `limit` at the price, or a `market` order. Each fill
+    `(kind, side, quantity, price)` — a `limit` at the price, an `ioc` limit at it that is
+    immediate-or-cancel, or a `market` order. Each fill
     is its instant in milliseconds after the first minute, its quantity, its price and its
     liquidity side; beside them the reasons of every rejection and each order's last status."""
     from nautilus_trader.backtest.engine import BacktestEngine
@@ -2123,6 +2124,7 @@ def _probe_script(
         BookType,
         OmsType,
         OrderSide,
+        TimeInForce,
         liquidity_side_to_str,
         order_status_to_str,
     )
@@ -2154,7 +2156,11 @@ def _probe_script(
                     )
                 else:
                     order = self.order_factory.limit(
-                        equity.id, order_side, Quantity.from_int(quantity), Price(price, 2)
+                        equity.id,
+                        order_side,
+                        Quantity.from_int(quantity),
+                        Price(price, 2),
+                        time_in_force=TimeInForce.IOC if kind == "ioc" else TimeInForce.GTC,
                     )
                 self.sent.append(order)
                 self.submit_order(order)
@@ -2520,7 +2526,9 @@ def _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_tak
 def _check_kanso_s_print_through_venue() -> tuple[bool, str]:
     """`kanso.nautilus.tape` as kanso loads it: a resting limit fills only from a later print
     strictly through its price, by that print's size, never from a quote or a print at its
-    price, and a taker fills at the last quote's touch rather than at a print."""
+    price, and a taker fills at the last quote's touch rather than at a print — an IOC limit no
+    further than the quote shows, the rest cancelled, and cancelled whole when the quote shows
+    nothing it can take, however the engine's own bid and ask stand."""
     from nautilus_trader.backtest.node import get_fill_model
     from nautilus_trader.config import BacktestVenueConfig
 
@@ -2561,17 +2569,34 @@ def _check_kanso_s_print_through_venue() -> tuple[bool, str]:
         built("print_through"),
         modules=tuple(modules("XNAS")),
     )["fills"]
+    ioc = _probe_script(
+        [
+            _tape_quote(9.48, 9.52, 10, ask_size=100),
+            _tape_print(9.5, 100, 20),
+            _tape_print(9.51, 300, 30),
+            _tape_quote(9.48, 9.52, 40),
+            _tape_print(9.49, 300, 50),
+        ],
+        {1: [("ioc", "BUY", 320, 9.52)], 2: [("ioc", "BUY", 100, 9.5)]},
+        built("print_through"),
+        modules=tuple(modules("XNAS")),
+    )
     holds = (
         rested["print_through"] == [(50, 100.0, 9.5, "MAKER"), (60, 100.0, 9.5, "MAKER")]
         and rested["print_through_whole"] == [(50, 320.0, 9.5, "MAKER")]
         and taken == [(20, 300.0, 9.52, "TAKER")]
+        and ioc["fills"] == [(10, 100.0, 9.52, "TAKER")]
+        and ioc["status"] == ["CANCELED", "CANCELED"]
     )
     return holds, (
         "kanso's venue modules and the fill model `limit_fill` names, a buy of 320 resting at "
         "9.50 under 9.48/9.52, then a quote of 9.45/9.49 showing 100, a print of 100 at 9.50 "
         f"and prints of 100 at 9.49 and 9.48: under print_through it filled "
         f"{rested['print_through']}, under print_through_whole {rested['print_through_whole']}; "
-        f"a market buy of 300 sent on a print of 100 at 9.50 under 9.48/9.52 filled {taken}"
+        f"a market buy of 300 sent on a print of 100 at 9.50 under 9.48/9.52 filled {taken}; an "
+        "IOC buy of 320 at 9.52 over an ask showing 100 there, and an IOC buy of 100 at 9.50 "
+        "sent on a print at 9.50 under that quote, before prints through both, filled "
+        f"{ioc['fills']} and ended {ioc['status']}"
     )
 
 
@@ -4810,7 +4835,7 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "kanso's print_through venue fills a resting limit only from a later print strictly "
         "through its price, by that print's size or whole, never from a quote, and fills a "
-        "taker at the last quote's touch",
+        "taker at the last quote's touch, an IOC limit no further than the quote shows",
         _check_kanso_s_print_through_venue,
     ),
     (
