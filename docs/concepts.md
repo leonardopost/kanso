@@ -1205,7 +1205,7 @@ next quote — can fill that order on the research path alone, a first time for 
 sent and again for one it has filled already. `kanso replay parity` compares intents, so it
 calls such runs identical while no intent moves. A sleeve that acts on its fills can then send
 different orders on the two paths, and parity and the required `parity_replay` certification
-gate fail. Since v0.14.1 applies the quotes and prints the venue used to skip, that happens
+gate fail. Since v0.15.0 applies the quotes and prints the venue used to skip, that happens
 more often, so a subject that passed `parity_replay` on 0.14.0 can fail it: on 60 seeded tapes
 of a sleeve sending entries, exits and cancels with no latency, 29 failed at a tolerance of
 zero where 14 had (`docs/backlog.md`).

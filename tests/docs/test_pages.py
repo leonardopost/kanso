@@ -579,7 +579,7 @@ def test_the_pages_say_a_point_is_credited_to_each_order_it_fills() -> None:
 def test_the_concepts_page_says_where_the_two_paths_part_and_what_it_costs_parity() -> None:
     """The paths part wherever a command lands, a quote or a print being matched again on the
     research path alone (`docs/backlog.md` row 154), not only where a print stands as the book;
-    and a sleeve that acts on its fills then fails `parity_replay`, more often since v0.14.1.
+    and a sleeve that acts on its fills then fails `parity_replay`, more often since v0.15.0.
     Under the print rules they do not part where a sleeve sends no cancel (v0.15.0), and the
     pages say so no more broadly than it was measured."""
     delivery = prose(section(page("concepts.md"), "Delivery"))
