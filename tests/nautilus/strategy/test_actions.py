@@ -680,9 +680,9 @@ def test_a_split_restates_the_side_a_book_still_quotes_and_pays_in_lieu_at_it(ba
 
 
 def test_a_split_on_a_book_quoting_neither_side_pays_in_lieu_at_the_last_fill(backtest) -> None:
-    """HEDGE's last quote of the eve shows neither side, so there is nothing to restate and no
-    quote to value the five old shares at: they are paid at the position's own last fill,
-    10.01, and the order DEMO's handler sends finds no ask."""
+    """HEDGE's last quote of the eve shows neither side, so the restatement leaves both empty
+    and there is no quote to value the five old shares at: they are paid at the position's own
+    last fill, 10.01, and the order DEMO's handler sends finds no ask."""
     (position,) = _held_through(backtest, 0, 0).engine.cache.positions(instrument_id=HEDGE)
 
     assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
@@ -692,3 +692,110 @@ def test_a_split_on_a_book_quoting_neither_side_pays_in_lieu_at_the_last_fill(ba
         (float(event.quantity_change), event.pnl_change.as_double())
         for event in position.adjustments
     ] == [(-905.0, pytest.approx(50.05))]
+
+
+class RestsAtTheEmptySide(KansoStrategy):
+    """Buys 1,005 HEDGE at market on HEDGE's first quote and holds them through the split, then
+    rests one limit in HEDGE from DEMO's first bar of the ex-date: a sell of what it holds, or a
+    buy of 100, at `price`."""
+
+    config_cls = KansoConfig
+
+    def __init__(self, config: KansoConfig, side: str, price: float) -> None:
+        super().__init__(config)
+        self.side, self.price = side, price
+        self.bought = self.sent = False
+
+    def on_quote_tick(self, tick: object) -> None:
+        if not self.bought:
+            self.bought = True
+            self.submit_entry(HEDGE, "BUY", qty=1_005)
+
+    def on_bar(self, bar: object) -> None:
+        on_the_ex_date = int(bar.ts_event) >= midnight_ns(EX)  # type: ignore[attr-defined]
+        if bar.bar_type.instrument_id == DEMO and on_the_ex_date and not self.sent:  # type: ignore[attr-defined]
+            self.sent = True
+            if self.side == "SELL":
+                self.submit_exit(HEDGE, price=self.price)
+            else:
+                self.submit_entry(HEDGE, "BUY", qty=100, price=self.price)
+
+
+def _hedge_print(price: float, aggressor: str, ts: int) -> object:
+    """One HEDGE print of 100, stamped and published at `ts`."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+    from nautilus_trader.model.objects import Price
+
+    return TradeTick(
+        HEDGE,
+        Price(price, 2),
+        Quantity.from_int(100),
+        AggressorSide.BUYER if aggressor == "BUYER" else AggressorSide.SELLER,
+        TradeId(f"{aggressor}-{ts}"),
+        ts,
+        ts,
+    )
+
+
+@pytest.mark.parametrize(
+    ("schedule", "eve", "side", "price", "prints", "after"),
+    [
+        # one-for-ten reverse: no bid; the sell rests at the restated ask; buyers print under it
+        (SCHEDULE, (9.98, 10.03, 0, 5_000), "SELL", 100.3, (100.2, 100.1), (100.0, 100.3)),
+        # four-for-one forward: no ask; the buy rests at the restated bid; sellers print over it
+        (FORWARD, (10.0, 10.04, 5_000, 0), "BUY", 2.5, (2.53, 2.52), (2.5, 2.53)),
+    ],
+)
+def test_a_split_prices_an_empty_side_at_what_the_last_quote_showed_there(
+    backtest,
+    schedule: object,
+    eve: tuple[float, float, int, int],
+    side: str,
+    price: float,
+    prints: tuple[float, float],
+    after: tuple[float, float],
+) -> None:
+    """HEDGE's last quote of the eve shows one side at size zero, and DEMO's first bar of the
+    ex-date applies HEDGE's split, from whose handler a limit rests at the restated side the
+    book still shows. Two prints follow, from the side that trades against that limit and
+    short of it, then a quote: nothing traded at the limit, so nothing fills it. The engine
+    keeps a quote's prices whatever their sizes and, after each print, puts the side its
+    aggressor did not trade against back to the last quote's: restated with the empty side
+    priced at the other side's price, it put the empty side at the limit after the first
+    print, and the second print filled the order there."""
+    midnight = midnight_ns(EX)
+    second = 1_000_000_000
+    bid, ask, bid_size, ask_size = eve
+    aggressor = "BUYER" if side == "SELL" else "SELLER"
+    run = backtest(
+        RestsAtTheEmptySide(
+            config(
+                universe=(DEMO.value, HEDGE.value),
+                data_requirements=("bar", "quote", "trade"),
+            ),
+            side,
+            price,
+        ),
+        instruments=[equity(DEMO), equity(HEDGE, info=schedule)],
+        data=[
+            _hedge_quote(
+                9.99, 10.01, 5_000, 5_000, midnight - 7_200 * second, midnight - 7_200 * second
+            ),
+            _hedge_quote(
+                bid, ask, bid_size, ask_size, midnight - 30 * second, midnight - 30 * second
+            ),
+            _stamped(DEMO, 10.0, midnight + 10 * second, midnight + 11 * second),
+            _hedge_print(prints[0], aggressor, midnight + 20 * second),
+            _hedge_print(prints[1], aggressor, midnight + 30 * second),
+            _hedge_quote(*after, 500, 500, midnight + 40 * second, midnight + 40 * second),
+        ],
+    )
+    (position,) = run.engine.cache.positions(instrument_id=HEDGE)
+    (resting,) = run.engine.cache.orders_open(instrument_id=HEDGE)
+
+    assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
+        (1_005.0, 10.01)
+    ]
+    assert float(resting.price) == price

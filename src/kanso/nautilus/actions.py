@@ -66,6 +66,11 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   bar's walk can stamp the book past the instant of the point that applies the split. A
   side a quote shows at size zero is left empty, and `best_bid_price` or `best_ask_price`
   returns `None` for it. A market order is matched against that top level.
+* On that book `process_quote_tick` also keeps the quote's bid and ask prices whatever their
+  sizes, and `process_trade_tick`, once a print has been matched, sets the matching engine's
+  bid back to the kept bid after a buyer's print and its ask back to the kept ask after a
+  seller's, where they stay until a later point or a landing command sets them from the
+  book's own side.
 * `Position` keeps no last price of its own: its prices are `avg_px_open` and
   `avg_px_close`, and its last fill is `last_event`, an `OrderFilled` carrying `last_px`.
 """
@@ -127,12 +132,18 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         self._due: list[tuple[int, str, Split]] = []
         self._applied: set[tuple[str, date]] = set()
         self._known = -1
+        self._quoted: dict[InstrumentId, tuple[Any, Any]] = {}
 
     # --- what the exchange calls ---------------------------------------------
 
     def pre_process(self, data: Any) -> None:
-        """Apply everything this point's reference time has reached, before it is matched."""
+        """Apply everything this point's reference time has reached, before it is matched,
+        then keep a quote's bid and ask prices, whatever their sizes: the matching engine
+        keeps them too once it applies the quote, which `Availability` sees that it does, and a
+        restatement prices an empty side from them."""
         self.apply_through(int(data.ts_event), int(data.ts_init))
+        if isinstance(data, QuoteTick):
+            self._quoted[data.instrument_id] = (data.bid_price, data.ask_price)
 
     def process(self, ts_now: int) -> None:
         """Nothing: a corporate action is applied by the point that carries the market past
@@ -143,10 +154,12 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         is where the runner's extraction reads it."""
 
     def reset(self) -> None:
-        """Forget what has been applied, so a reused exchange re-reads its schedules."""
+        """Forget what has been applied and quoted, so a reused exchange re-reads its
+        schedules."""
         self._due = []
         self._applied = set()
         self._known = -1
+        self._quoted = {}
 
     # --- the action ----------------------------------------------------------
 
@@ -222,13 +235,21 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         divided by the ratio, their sizes multiplied by it. Nothing rests in it — the cancel
         ran first — so the quote moves prices and matches nothing.
 
-        A side the book holds empty — a quote showed it at size zero — is restated empty: at
-        size zero, which a top-of-book book applies as no level, and at the other side's
-        restated price, since an empty side keeps none. Restating only a book that holds both
-        sides left the other side quoting the old count: measured, a book whose last quote
-        showed no bid kept its ask at ten dollars, and an order another name's handler sent
-        into it filled there against a restated hundred. A book holding neither side quotes
-        nothing to restate.
+        A side the book holds empty — a quote showed it at size zero — is restated empty, at
+        size zero, which a top-of-book book applies as no level. Restating only a book that
+        holds both sides left the other side quoting the old count: measured, a book whose last
+        quote showed no bid kept its ask at ten dollars, and an order another name's handler
+        sent into it filled there against a restated hundred. The empty side's price matters
+        although it shows nothing: the matching engine keeps the last quote's bid and ask
+        prices whatever their sizes, and after every print on a top-of-book book it puts the
+        side the print's aggressor did not trade against back to that price, until the next
+        quote. So the empty side is priced at what the last quote showed there, divided by the
+        ratio — what that quote would have shown in the new count. Priced at the other side's
+        restated price, as it was, a sell resting at the restated ask was filled there by a
+        buyer's print below it: measured, an empty bid restated at an ask of 100.30, a buyer's
+        print at 100.20 put the engine's bid at 100.30, and a second at 100.10 filled a sell of
+        100 at 100.30 that no buyer paid. A book nothing has quoted or printed into has nothing
+        to restate.
 
         The quote carries the instant of the point that applied the split, and a bar of this
         instrument published after that instant has already stamped the book past it, so it
@@ -238,26 +259,30 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         engine = self.exchange.get_matching_engine(instrument_id)
         book = engine.get_book()
         bid, ask = book.best_bid_price(), book.best_ask_price()
-        if bid is None and ask is None:
+        # Only a quote empties a side, and every quote is kept, so a book with an empty side
+        # has a quote to price it from; one with none holds both sides, or nothing at all.
+        quoted_bid, quoted_ask = self._quoted.get(instrument_id, (bid, ask))
+        if quoted_bid is None:
             return
         instrument = self.exchange.instruments[instrument_id]
         step = float(instrument.size_increment)
 
-        def side(price: Any, size: Any, other: Any) -> tuple[Any, Any]:
+        def side(price: Any, size: Any, quoted: Any) -> tuple[Any, Any]:
             if price is None:
-                return instrument.make_price(float(other) / split.ratio), instrument.make_qty(0)
+                return instrument.make_price(float(quoted) / split.ratio), instrument.make_qty(0)
             restated_size = max(float(size) * split.ratio, step)
             return instrument.make_price(float(price) / split.ratio), instrument.make_qty(
                 restated_size
             )
 
-        bid_price, bid_size = side(bid, book.best_bid_size(), ask)
-        ask_price, ask_size = side(ask, book.best_ask_size(), bid)
+        bid_price, bid_size = side(bid, book.best_bid_size(), quoted_bid)
+        ask_price, ask_size = side(ask, book.best_ask_size(), quoted_ask)
         restated = QuoteTick(
             instrument_id, bid_price, ask_price, bid_size, ask_size, ts_event, ts_init
         )
         availability.admit(engine, ts_event)
         engine.process_quote_tick(restated)
+        self._quoted[instrument_id] = (bid_price, ask_price)
 
     def _cancel(self, instrument_id: InstrumentId, ts_init: int) -> None:
         """Cancel every resting order in this instrument, one command per sleeve holding one."""
