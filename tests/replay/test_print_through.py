@@ -70,6 +70,14 @@ class Strategy(KansoStrategy):
                 for order in self.cache.orders(instrument_id=instrument_id):
                     if not order.is_closed and order.side_string() == side:
                         self.cancel_order(order)
+            elif kind == "cancel_orders":
+                self.cancel_orders(
+                    [
+                        order
+                        for order in self.cache.orders(instrument_id=instrument_id)
+                        if not order.is_closed and order.side_string() == side
+                    ]
+                )
             elif kind == "market":
                 self.submit_entry(instrument_id, side, qty=qty)
             elif kind == "exit":
@@ -120,16 +128,22 @@ _printed = [0]
 
 
 def q(
-    bid: float, ask: float, ms: int, ask_size: int = 1_000, on: InstrumentId = DEMO, day: int = 0
+    bid: float,
+    ask: float,
+    ms: int,
+    ask_size: int = 1_000,
+    on: InstrumentId = DEMO,
+    day: int = 0,
+    bid_size: int = 1_000,
 ) -> QuoteTick:
-    """A quote showing 1,000 on the bid and `ask_size` on the ask, `day` sessions after the
+    """A quote showing `bid_size` on the bid and `ask_size` on the ask, `day` sessions after the
     first."""
     ns = T0 + day * DAY + ms * MS
     return QuoteTick(
         on,
         Price(bid, 2),
         Price(ask, 2),
-        Quantity.from_int(1_000),
+        Quantity.from_int(bid_size),
         Quantity.from_int(ask_size),
         ns,
         ns,
@@ -1238,7 +1252,7 @@ OUTSIDE = [
 
 @pytest.mark.parametrize("latency_ms", LATENCIES)
 @pytest.mark.parametrize("rule", RULES)
-@pytest.mark.parametrize("how", ["cancel", "cancel_all"])
+@pytest.mark.parametrize("how", ["cancel", "cancel_orders", "cancel_all"])
 def test_a_refused_exit_cancelled_as_it_was_sent_is_rejected_and_the_next_exit_goes_out(
     how: str, rule: str, latency_ms: int
 ) -> None:
@@ -1255,6 +1269,39 @@ def test_a_refused_exit_cancelled_as_it_was_sent_is_rejected_and_the_next_exit_g
     }
 
     node, engine = scripted(OUTSIDE, script, rule, latency_ms)
+
+    bought, sold = (10, 400) if latency_ms == 0 else (50, 500)
+    assert node.intents == engine.intents
+    assert fills_of(engine) == fills_of(node) == [(bought, 100.0, 9.52, T), (sold, 100.0, 9.58, T)]
+
+
+NO_BID = [
+    *OPEN,
+    *[q(9.48, 9.52, ms, bid_size=0) for ms in (100, 110, 135)],
+    *[q(9.58, 9.62, ms) for ms in (300, 400, 500)],
+]
+"""Quotes, three showing no bid, then a market a few cents up."""
+
+
+@pytest.mark.parametrize("latency_ms", LATENCIES)
+@pytest.mark.parametrize("rule", ["touch", "through"])
+@pytest.mark.parametrize("how", ["cancel", "cancel_orders", "cancel_all"])
+def test_under_the_engine_s_rules_a_refused_exit_cancelled_as_it_was_sent_is_rejected_too(
+    how: str, rule: str, latency_ms: int
+) -> None:
+    """Under `touch` and `through` the venue refuses a market order only when the quote shows
+    nothing on its side: an exit at market sent on a quote showing no bid, with a cancel of
+    that order or of every order of its name, is rejected on both paths, and the exit asked
+    for on a later quote goes out whole and fills there. With the cancel sent the refused exit
+    stayed `PENDING_CANCEL` for good and counted as working, so that later exit sent nothing —
+    on both paths for a cancel of the order, and on the node alone for a cancel of its name."""
+    script = {
+        1: [("market", "BUY", 100, 0)],
+        3: [("exit", "SELL", 0, 0), (how, "SELL", 0, 0)],
+        7: [("exit", "SELL", 0, 0)],
+    }
+
+    node, engine = scripted(NO_BID, script, rule, latency_ms)
 
     bought, sold = (10, 400) if latency_ms == 0 else (50, 500)
     assert node.intents == engine.intents
