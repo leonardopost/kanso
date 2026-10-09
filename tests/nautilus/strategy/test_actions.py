@@ -469,21 +469,19 @@ class Book:
         return self.ask
 
 
-class Filled:
-    last_px = 9.5
-
-
 @pytest.mark.parametrize(
-    ("bid", "ask", "price"), [(9.9, 10.1, 10.0), (None, 10.1, 9.5), (9.9, None, 9.5)]
+    ("bid", "ask", "price"), [(9.9, 10.1, 10.0), (None, 10.1, 10.1), (9.9, None, 9.9)]
 )
-def test_the_fraction_is_valued_at_the_book_s_midpoint_or_the_last_fill(
+def test_the_fraction_is_valued_at_what_the_book_still_quotes(
     bid: float | None, ask: float | None, price: float
 ) -> None:
-    """The book still quotes the close before the ex-date when a split is applied; a book
-    with no quote falls back to the last price the position itself traded at."""
+    """The book still quotes the close before the ex-date when a split is applied: its
+    midpoint, or the one side it shows when a quote showed the other at size zero. The
+    position is not read; a book quoting neither side is valued at the position's last fill,
+    with a real position, below."""
     from kanso.nautilus.actions import last_price
 
-    assert last_price(Book(bid, ask), Filled()) == pytest.approx(price)
+    assert last_price(Book(bid, ask), object()) == pytest.approx(price)
 
 
 def test_the_fraction_a_split_leaves_is_paid_at_the_close_before_the_ex_date(backtest) -> None:
@@ -587,3 +585,110 @@ def test_a_split_restates_a_book_a_bar_stamped_past_its_trigger(backtest) -> Non
     assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
         (10.0, 100.0)
     ]
+
+
+# --- a book with an empty side --------------------------------------------------
+
+
+class HoldsThrough(KansoStrategy):
+    """Buys 1,005 HEDGE at market on HEDGE's first quote and holds them through the split,
+    then buys ten more from DEMO's first bar of the ex-date, before HEDGE quotes again."""
+
+    config_cls = KansoConfig
+
+    def __init__(self, config: KansoConfig | None = None) -> None:
+        super().__init__(config)
+        self.bought = self.sent = False
+
+    def on_quote_tick(self, tick: object) -> None:
+        if not self.bought:
+            self.bought = True
+            self.submit_entry(HEDGE, "BUY", qty=1_005)
+
+    def on_bar(self, bar: object) -> None:
+        on_the_ex_date = int(bar.ts_event) >= midnight_ns(EX)  # type: ignore[attr-defined]
+        if bar.bar_type.instrument_id == DEMO and on_the_ex_date and not self.sent:  # type: ignore[attr-defined]
+            self.sent = True
+            self.submit_entry(HEDGE, "BUY", qty=10)
+
+
+def _hedge_quote(
+    bid: float, ask: float, bid_size: int, ask_size: int, ts_event: int, ts_init: int
+) -> object:
+    """One HEDGE quote, stamped and published at the instants given."""
+    from nautilus_trader.model.data import QuoteTick
+    from nautilus_trader.model.objects import Price
+
+    return QuoteTick(
+        HEDGE,
+        Price(bid, 2),
+        Price(ask, 2),
+        Quantity.from_int(bid_size),
+        Quantity.from_int(ask_size),
+        ts_event,
+        ts_init,
+    )
+
+
+def _held_through(backtest: object, bid_size: int, ask_size: int) -> object:
+    """1,005 HEDGE bought at 10.01, then HEDGE's last quote of the eve — 9.98/10.03 at these
+    sizes, stamped ninety seconds before midnight and published thirty seconds before it,
+    after a quote stamped sixty seconds before — so the venue applies it only because it
+    admits a point stamped before its book's last update. DEMO's first bar of the ex-date
+    applies HEDGE's one-for-ten reverse split with the position open."""
+    midnight = midnight_ns(EX)
+    second = 1_000_000_000
+    return backtest(  # type: ignore[operator]
+        HoldsThrough(
+            config(universe=(DEMO.value, HEDGE.value), data_requirements=("bar", "quote"))
+        ),
+        instruments=[equity(DEMO), equity(HEDGE, info=SCHEDULE)],
+        data=[
+            _hedge_quote(
+                9.99, 10.01, 5_000, 5_000, midnight - 7_200 * second, midnight - 7_200 * second
+            ),
+            _hedge_quote(9.99, 10.01, 5_000, 5_000, midnight - 60 * second, midnight - 60 * second),
+            _hedge_quote(
+                9.98, 10.03, bid_size, ask_size, midnight - 90 * second, midnight - 30 * second
+            ),
+            _stamped(DEMO, 10.0, midnight + 10 * second, midnight + 11 * second),
+        ],
+    )
+
+
+def test_a_split_restates_the_side_a_book_still_quotes_and_pays_in_lieu_at_it(backtest) -> None:
+    """HEDGE's last quote of the eve shows no bid, so the top-of-book book holds an ask alone
+    when DEMO's bar applies the split with 1,005 HEDGE held. The five old shares the split
+    leaves are paid at that ask, 10.03, the price the book still quotes in the old count; the
+    ask is restated to 100.30 and the bid left empty, so the ten DEMO's handler buys fill
+    there, not at the old 10.03. A book with an empty side used to be left unrestated, and
+    valuing the fraction read a price `Position` does not keep and ended the run."""
+    run = _held_through(backtest, 0, 5_000)
+    (position,) = run.engine.cache.positions(instrument_id=HEDGE)
+    book = run.actions[0].exchange.get_matching_engine(HEDGE).get_book()
+
+    assert (book.best_bid_price(), str(book.best_ask_price())) == (None, "100.30")
+    assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
+        (1_005.0, 10.01),
+        (10.0, 100.3),
+    ]
+    assert [
+        (float(event.quantity_change), event.pnl_change.as_double())
+        for event in position.adjustments
+    ] == [(-905.0, pytest.approx(50.15))]
+    assert float(position.quantity) == 110.0
+
+
+def test_a_split_on_a_book_quoting_neither_side_pays_in_lieu_at_the_last_fill(backtest) -> None:
+    """HEDGE's last quote of the eve shows neither side, so there is nothing to restate and no
+    quote to value the five old shares at: they are paid at the position's own last fill,
+    10.01, and the order DEMO's handler sends finds no ask."""
+    (position,) = _held_through(backtest, 0, 0).engine.cache.positions(instrument_id=HEDGE)
+
+    assert [(float(fill.last_qty), float(fill.last_px)) for fill in position.events] == [
+        (1_005.0, 10.01)
+    ]
+    assert [
+        (float(event.quantity_change), event.pnl_change.as_double())
+        for event in position.adjustments
+    ] == [(-905.0, pytest.approx(50.05))]

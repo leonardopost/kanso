@@ -64,7 +64,10 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   `process_quote_tick` sets the top level from a quote, skipping one older than its last
   update — which is why a restatement is admitted first (`kanso.nautilus.availability`): a
   bar's walk can stamp the book past the instant of the point that applies the split. A
-  market order is matched against that top level.
+  side a quote shows at size zero is left empty, and `best_bid_price` or `best_ask_price`
+  returns `None` for it. A market order is matched against that top level.
+* `Position` keeps no last price of its own: its prices are `avg_px_open` and
+  `avg_px_close`, and its last fill is `last_event`, an `OrderFilled` carrying `last_px`.
 """
 
 from __future__ import annotations
@@ -219,6 +222,14 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         divided by the ratio, their sizes multiplied by it. Nothing rests in it — the cancel
         ran first — so the quote moves prices and matches nothing.
 
+        A side the book holds empty — a quote showed it at size zero — is restated empty: at
+        size zero, which a top-of-book book applies as no level, and at the other side's
+        restated price, since an empty side keeps none. Restating only a book that holds both
+        sides left the other side quoting the old count: measured, a book whose last quote
+        showed no bid kept its ask at ten dollars, and an order another name's handler sent
+        into it filled there against a restated hundred. A book holding neither side quotes
+        nothing to restate.
+
         The quote carries the instant of the point that applied the split, and a bar of this
         instrument published after that instant has already stamped the book past it, so it
         is admitted first rather than skipped: measured, a bar of the eve published thirty
@@ -227,18 +238,23 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         engine = self.exchange.get_matching_engine(instrument_id)
         book = engine.get_book()
         bid, ask = book.best_bid_price(), book.best_ask_price()
-        if bid is None or ask is None:
+        if bid is None and ask is None:
             return
         instrument = self.exchange.instruments[instrument_id]
         step = float(instrument.size_increment)
+
+        def side(price: Any, size: Any, other: Any) -> tuple[Any, Any]:
+            if price is None:
+                return instrument.make_price(float(other) / split.ratio), instrument.make_qty(0)
+            restated_size = max(float(size) * split.ratio, step)
+            return instrument.make_price(float(price) / split.ratio), instrument.make_qty(
+                restated_size
+            )
+
+        bid_price, bid_size = side(bid, book.best_bid_size(), ask)
+        ask_price, ask_size = side(ask, book.best_ask_size(), bid)
         restated = QuoteTick(
-            instrument_id,
-            instrument.make_price(float(bid) / split.ratio),
-            instrument.make_price(float(ask) / split.ratio),
-            instrument.make_qty(max(float(book.best_bid_size()) * split.ratio, step)),
-            instrument.make_qty(max(float(book.best_ask_size()) * split.ratio, step)),
-            ts_event,
-            ts_init,
+            instrument_id, bid_price, ask_price, bid_size, ask_size, ts_event, ts_init
         )
         availability.admit(engine, ts_event)
         engine.process_quote_tick(restated)
@@ -264,12 +280,20 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
 
 def last_price(book: Any, position: Any) -> float:
     """An instrument's last price in the old share count, before a split restates it: the
-    midpoint its book still quotes, which is the close before the ex-date, or the position's
-    own last fill when the book holds no quote."""
+    midpoint its book still quotes, which is the close before the ex-date; the one side it
+    quotes when a quote showed the other at size zero; or, when it quotes neither, the price
+    of the position's own last fill.
+
+    The position's last fill is its `last_event`: nautilus_trader 1.231.0's `Position` keeps
+    no `last_px` of its own — its prices are `avg_px_open` and `avg_px_close` — and reading
+    one ended the run with `AttributeError` the first time a book with an empty side met a
+    split with a position open."""
     bid, ask = book.best_bid_price(), book.best_ask_price()
-    if bid is None or ask is None:
-        return float(position.last_px)
-    return (float(bid) + float(ask)) / 2.0
+    if bid is not None and ask is not None:
+        return (float(bid) + float(ask)) / 2.0
+    if bid is not None or ask is not None:
+        return float(bid if bid is not None else ask)
+    return float(position.last_event.last_px)
 
 
 def modules(venue: str) -> list[SimulationModule]:

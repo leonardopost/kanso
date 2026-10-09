@@ -1410,7 +1410,9 @@ refuses (exit 2) and `--refresh` performs, and re-snapshotting afterwards is wha
 run reproduces. And the shares a reverse split leaves short of a whole lot are paid out in
 cash at the close before the ex-date, as an issuer pays them — 1,005 shares through a
 one-for-ten split keep 100 and are paid five old shares' worth — so a position under one new
-lot is paid out whole and closes at the split rather than stopping the run.
+lot is paid out whole and closes at the split rather than stopping the run. The close is the
+midpoint the venue's book still quotes; a book whose last quote showed one side at size zero
+pays at the side it shows, and one that quotes neither at the position's own last fill.
 
 The schedule goes here rather than in the data because a split is the one corporate action
 with no honest publication instant. A dividend carries the day it was declared; a split
