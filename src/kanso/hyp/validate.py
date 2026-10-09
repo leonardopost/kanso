@@ -542,7 +542,9 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
             f"force, and {', '.join(barred)} is asked for bar beside quote: a bar moves the "
             "book the venue judges a taker marketable from past that quote",
             remedy="ask each instrument that carries quotes for quote and trade alone under "
-            "data_by_instrument, or state limit_fill: touch or through",
+            "data_by_instrument, keeping bar for an instrument asked for bar alone; with none "
+            "left, drop bar from data_requirements and research at resolution: tick, since a "
+            "bar size requires bar; or state limit_fill: touch or through",
         )
 
 

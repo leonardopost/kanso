@@ -79,7 +79,8 @@ ask from its book, which a print sets to the print's price on both sides, while 
 venue keeps the side the engine put back to the last quote after a print with an aggressor.
 While a quote is in force neither path's bid is under its bid nor its ask over its ask — a
 print inside the quote moves them only towards each other, one outside ends the quote, and no
-bar reaches an instrument that carries quotes (`kanso hyp validate` refuses one) — so
+bar reaches an instrument that carries quotes (`kanso hyp validate` refuses a hypothesis that
+asks one for both, and a stage's `deploy` versions that do between them) — so
 the engine asks the model about every order the quote makes marketable, and the model answers
 from the quote alone; with none in force it rests or refuses whatever it is asked about; and a
 resting order is credited only by the print's own match, which both paths make alike, the

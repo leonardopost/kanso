@@ -225,14 +225,17 @@ on one venue whose venue models differ in `account` type or in `currency`, becau
 is one account; two certified under different `costs.limit_fill`, because one exchange fills
 a touched limit one way; two certified under different `costs.latency_ms`, because one venue
 is one round trip and the stage's venue carries the latency its versions were measured
-under; and a version whose hypothesis requires `book` beside one whose does not, because one
+under; a version whose hypothesis requires `book` beside one whose does not, because one
 venue keeps one book — a level-two book with queue position or the top of the book — and
-each version was certified on its own. Each of the last five names both versions and the
-key; for the account type and currency the way out is one value under `venues.<MIC>` in
-`portfolio.yaml` and a re-certification, and for the last three it is
-`kanso strat retire STRATEGY@V` on one of the two, or one `limit_fill`, one latency and one
-book requirement in both hypotheses and a re-certification. All five are refused before the
-stage is written, so a refused deployment leaves `portfolio.yaml`, the strategy files and
+each version was certified on its own; and, on a venue under `limit_fill: print_through` or
+`print_through_whole`, a version asking an instrument for `bar` beside one asking it for
+`quote`, because one venue applies both feeds and a bar moves the book a taker on the quote
+is judged on. Each of the last six names both versions and the key; for the account type
+and currency the way out is one value under `venues.<MIC>` in `portfolio.yaml` and a
+re-certification, and for the last four it is `kanso strat retire STRATEGY@V` on one of the
+two, or one `limit_fill`, one latency, one book requirement and no instrument asked for both
+`bar` and `quote` across the two hypotheses, and a re-certification. All six are refused
+before the stage is written, so a refused deployment leaves `portfolio.yaml`, the strategy files and
 the state record as they were.
 
 With exit 3: a version whose implementation is not the code it was certified with. Every

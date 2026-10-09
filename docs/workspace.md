@@ -952,7 +952,14 @@ not ask an instrument for `bar` beside `quote` — a bar walks the engine's own 
 through its prices, past the quote a taker fills on, so a market order sent on a bar that
 traded over the ask would fill at that ask — though an instrument asked for bars alone, a
 signal, is admitted beside the traded ones (`data_by_instrument`); `kanso hyp validate` refuses
-it otherwise (exit 3), naming `costs.limit_fill`. The tick a taker pays
+it otherwise (exit 3), naming `costs.limit_fill`. A resolution that is a bar size, `1m` say,
+requires `bar` of some instrument, so a hypothesis whose names all carry quotes researches under
+either rule at `resolution: tick`, asking them for `quote` and `trade`: asking each for `quote`
+and `trade` alone at `1m` leaves `bar` asked of nothing, which is refused too. One stage venue
+applies every version's feed, so `deploy` likewise refuses (exit 2) a stage venue under either
+rule whose versions between them ask one instrument for `bar` and for `quote` — one reading its
+bars as a signal, another trading it on its quotes — naming the instrument, both versions and
+`venues.<MIC>.costs.limit_fill`. The tick a taker pays
 over the touch is a charge, not a price: state it as `slippage_ticks`, which is never charged
 past an order's limit, so a limit priced at the touch and taken there pays its commission and no
 tick, and state a resting fill's charge as `maker_per_share`. An account that charges $0.0040 a

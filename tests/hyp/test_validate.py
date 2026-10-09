@@ -428,8 +428,44 @@ def test_a_print_rule_over_bars_beside_quotes_is_refused(ws: Workspace, rule: st
     )
     assert failure.remedy == (
         "ask each instrument that carries quotes for quote and trade alone under "
-        "data_by_instrument, or state limit_fill: touch or through"
+        "data_by_instrument, keeping bar for an instrument asked for bar alone; with none "
+        "left, drop bar from data_requirements and research at resolution: tick, since a "
+        "bar size requires bar; or state limit_fill: touch or through"
     )
+
+
+@pytest.mark.parametrize("rule", ["print_through", "print_through_whole"])
+def test_the_remedy_for_bars_beside_quotes_admits_a_one_name_minute_hypothesis(
+    ws: Workspace, rule: str
+) -> None:
+    """A one-name hypothesis at a minute's resolution, asking its name for bars, quotes and
+    prints, is refused under a print rule. Asking the name for quote and trade alone leaves
+    bar asked of nothing, which is refused, and dropping bar leaves a bar-size resolution
+    without bars, which is refused too; the remedy names the way that is admitted, the same
+    feeds at resolution tick."""
+    costs = {**PRINT_COSTS, "limit_fill": rule}
+    minute = {"resolution": "1m", "costs": costs}
+    beside = refused(ws, document(**minute, data_requirements=["bar", "quote", "trade"]))
+    unasked = refused(
+        ws,
+        document(
+            **minute,
+            data_requirements=["bar", "quote", "trade"],
+            data_by_instrument={"DEMO": ["quote", "trade"]},
+        ),
+    )
+    barless = refused(ws, document(**minute, data_requirements=["quote", "trade"]))
+
+    parsed = accepted(
+        ws, document(resolution="tick", data_requirements=["quote", "trade"], costs=costs)
+    )
+
+    assert "DEMO is asked for bar beside quote" in beside.message
+    assert "resolution: tick" in beside.remedy
+    assert "no instrument is asked for bar" in unasked.message
+    assert "resolution 1m is a bar size" in barless.message
+    assert parsed.resolution == "tick" and parsed.costs is not None
+    assert parsed.costs.limit_fill == rule
 
 
 def test_a_print_rule_is_admissible_beside_a_bar_only_signal(ws: Workspace) -> None:

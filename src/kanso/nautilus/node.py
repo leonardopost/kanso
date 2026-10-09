@@ -115,8 +115,8 @@ from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, coincident, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, signals_kept
-from kanso.nautilus.strategy import BOOK
-from kanso.nautilus.venue import venue_config, venues_of
+from kanso.nautilus.strategy import BAR, BOOK, QUOTE
+from kanso.nautilus.venue import PRINT_SIZE, venue_config, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -398,8 +398,15 @@ def agree(
     single fill model, a single round trip and a single book, and a stage whose versions were
     certified against different ones is refused rather than built from whichever came
     first. Nothing is built here, so `deploy` asks it before it writes a stage.
+
+    One exchange also applies every version's feed: under the print rules a bar of an
+    instrument moves the bid and ask the venue judges a taker on it marketable from past the
+    quote in force, so versions that between them ask one instrument for `bar` and for
+    `quote` are refused on a venue under either rule, as one hypothesis asking both is
+    refused by `kanso hyp validate`.
     """
     held: dict[str, tuple[str, VenueModel, float, bool]] = {}
+    asked: dict[str, dict[str, str]] = {}
     for label, hyp, model in versions:
         book = BOOK in hyp.data_requirements
         leverage = hyp.risk_limits.max_leverage
@@ -410,7 +417,29 @@ def agree(
                 continue
             _agree(venue, first, (label, model, leverage, book))
             held[venue] = (first[0], first[1], max(first[2], leverage), first[3])
-    return {venue: (model, leverage, book) for venue, (_, model, leverage, book) in held.items()}
+        for name in hyp.universe:
+            for kind in sorted({BAR, QUOTE} & set(hyp.required_of(name))):
+                asked.setdefault(name, {}).setdefault(kind, label)
+    agreed = {venue: (model, leverage, book) for venue, (_, model, leverage, book) in held.items()}
+    for name, kinds in sorted(asked.items()):
+        model = agreed[venues_of((name,))[0]][0]
+        if len(kinds) == 2 and model.costs.limit_fill in PRINT_SIZE:
+            _barred(name, model.costs.limit_fill, kinds[BAR], kinds[QUOTE])
+    return agreed
+
+
+def _barred(name: str, rule: str, bars: str, quotes: str) -> None:
+    """Refuse a print-rule venue fed bars and quotes of one instrument by two versions."""
+    venue = venues_of((name,))[0]
+    raise PreconditionError(
+        f"venues.{venue}.costs.limit_fill: {rule} fills a taker on {name} on the quote in "
+        f"force, and {bars} asks {name} for {BAR!r} where {quotes} asks it for {QUOTE!r}; one "
+        "venue applies both feeds, and a bar moves the book it judges a taker marketable "
+        "from past that quote",
+        remedy=f"`kanso strat retire {bars}` or `kanso strat retire {quotes}`, or ask {name} "
+        f"for {BAR!r} in neither hypothesis or for {QUOTE!r} in neither (data_by_instrument) "
+        "and re-certify",
+    )
 
 
 def _agree(
