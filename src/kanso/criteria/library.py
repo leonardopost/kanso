@@ -27,6 +27,7 @@ from hashlib import sha256
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Final
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kanso import __version__
 from kanso.criteria.context import Gate
@@ -45,12 +46,19 @@ from kanso.schemas import (
     parse_yaml,
 )
 from kanso.schemas.certification import PLAN_STAGES
+from kanso.schemas.screen import hours_minutes
 
 NO_IMPLEMENTATION: Final = "this version of kanso has no implementation for it"
 """Why a declared-but-unbuilt gate is refused, in the words the planner is retried with."""
 
 LIBRARY: Final = Path(__file__).resolve().parent / "library"
 """One YAML file per toolbox item, named by its id."""
+
+KIND_WORDS: Final = {
+    "hours": "span of clock times on one day, HH:MM-HH:MM",
+    "zone": "time zone this host knows",
+}
+"""How a refusal names a parameter type whose id alone would not say what to write."""
 
 
 @cache
@@ -181,8 +189,28 @@ def _typed(kind: str, value: ParamValue) -> bool:
             return isinstance(value, int | float) and not isinstance(value, bool)
         case "duration":
             return isinstance(value, str) and is_duration(value)
+        case "hours":
+            return isinstance(value, str) and _is_hours(value)
+        case "zone":
+            return isinstance(value, str) and _is_zone(value)
         case _:
             return isinstance(value, str)
+
+
+def _is_hours(value: str) -> bool:
+    try:
+        hours_minutes(value)
+    except ValidationError:
+        return False
+    return True
+
+
+def _is_zone(value: str) -> bool:
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 def _in_universe(kind: str, value: ParamValue, hyp: Hypothesis) -> bool:
@@ -201,11 +229,12 @@ def check_params(
 ) -> list[str]:
     """Every way these chosen values depart from what the item declares.
 
-    A value is checked for its declared type, then, for an `instrument`, for naming one of
-    the hypothesis's own universe ids, then for its range. The universe check lives here
-    rather than in one caller because the classifier's answer, the operator's own
-    `required_constraints` and a certification plan all pass through this function, and a
-    leg the hypothesis does not trade is wrong from whichever of them it came.
+    A value is checked for its declared type — an `hours` span and a `zone` for parsing as
+    one — then, for an `instrument`, for naming one of the hypothesis's own universe ids,
+    then for its range. The universe check lives here rather than in one caller because
+    the classifier's answer, the operator's own `required_constraints` and a certification
+    plan all pass through this function, and a leg the hypothesis does not trade is wrong
+    from whichever of them it came.
     """
     problems: list[str] = []
     for name, value in params.items():
@@ -214,7 +243,7 @@ def check_params(
             problems.append(f"{name}: {item.id} declares no such parameter")
             continue
         if not _typed(kind, value):
-            problems.append(f"{name}: {value!r} is not a {kind}")
+            problems.append(f"{name}: {value!r} is not a {KIND_WORDS.get(kind, kind)}")
             continue
         if not _in_universe(kind, value, hyp):
             problems.append(f"{name}: {value!r} is not in the universe ({', '.join(hyp.universe)})")

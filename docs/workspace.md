@@ -135,6 +135,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | declare `depth` on a hypothesis whose `data_requirements` does not list `book`, or lists `quote` | 3 · at `hyp validate`: depth is a view of a book the hypothesis holds, and level one reaches `on_quote_tick` from it alone |
 | bind a name the strategy's base class owns in `strategy.py` — `self._close = 3`, `def _fund(...)`, `size = 10` in the class body | 3 · at `hyp validate`, naming the name and the line; a warning in `doctor`'s `base names`; the baseline refused at `research begin` (2), and any card that carries it a `discard` by `strategy_integrity` |
 | name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
+| give `trading_hours` a `session` that is not `HH:MM-HH:MM` closing after it opens on one day, or a `tz` the host's zone database does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`, naming the parameter |
 | `hyp add` while the hypothesis has an active run | 2 · a run is pinned to the bytes it began with |
 | `research begin` on a hypothesis already running | 2 · one active run per hypothesis |
 | `research start` twice in one workspace | 2 · the pid file is the lock |
@@ -365,6 +366,8 @@ required_constraints:
   params: {min_pct: 95.0, max_pct: 105.0}
 - id: leg_edge               # the hedge leg's own spells clear a Sharpe of zero, every fold
   params: {leg: DEMO.SIM, min_sharpe: 0.0}
+- id: trading_hours          # every fill in regular hours, flat by each close; daylight saving moves it
+  params: {session: "09:30-16:00", tz: America/New_York}
 ```
 
 Before this existed, an instruction like that could only be prose in `program.md`, which

@@ -6,8 +6,12 @@ import re
 from pathlib import Path
 from typing import get_args
 
+import yaml
+
 from kanso.config import EnvConfig, ResearchConfig
+from kanso.criteria import catalogue, check_params
 from kanso.schemas import CardStatus
+from tests.criteria.builders import make_hyp
 from tests.docs.test_pages import scope_names
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +37,15 @@ def test_the_hypothesis_skill_names_the_spread_a_bar_only_hypothesis_needs() -> 
     text = skill(PACKAGED, "kanso-hypothesis")
     assert "`costs`, `risk_limits`: keep defaults" not in text
     assert "set `costs: {spread: fixed_bps, fixed_bps: <width>}`" in text
+
+
+def test_the_hypothesis_skill_writes_a_session_the_gate_accepts() -> None:
+    """The example is copied into hypotheses as written, so it must validate as written."""
+    text = skill(PACKAGED, "kanso-hypothesis")
+    found = re.search(r"`required_constraints: \[\{id: trading_hours, params: (\{.*?\})\}\]`", text)
+    assert found is not None
+    params = yaml.safe_load(found.group(1))
+    assert check_params(catalogue()["trading_hours"], params, make_hyp(), 4) == []
 
 
 def test_the_promote_skill_names_the_one_cost_a_broker_does_not_supply() -> None:

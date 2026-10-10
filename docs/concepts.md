@@ -661,7 +661,7 @@ certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are eight.
+already over. There are nine.
 
 | gate | what it refuses |
 |---|---|
@@ -671,8 +671,27 @@ already over. There are eight.
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
+| `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
+
+**A session is a clock in a zone, read date by date.** `trading_hours {session: "09:30-16:00",
+tz: America/New_York}` is 14:30 to 21:00 UTC on a January date and 13:30 to 20:00 on a July
+one, because each local date's session runs from the first instant that zone's clock reads the
+opening time or later to the first it reads the closing time or later. It is half-open, so a
+fill at 16:00:00 is outside it, and a reading a clock change repeats is taken at its first
+occurrence and one a change skips at the change itself. A position is every stretch an
+instrument's net quantity is away from zero, a reversal in one fill included, and one still
+open when the window closes is held to that close; it must open and close inside one session.
+So a strategy flat by its last fill of the day passes, and one that buys at 15:59 and sells at
+09:31 the next morning fails with both of its fills inside. The run is judged whole, an
+attached construct's with its host's fills, because a venue that takes no order outside the
+session refuses either. The session is the same on every date: no calendar of early closes is
+on file, so on a day the market closed at 13:00 a fill at 14:00 is judged against the stated
+close (`docs/backlog.md` row 168). It is the gate to require when the strategy's own clock is
+two constants in `strategy.py` that the loop may edit, and when the data runs past the session
+— quotes from 04:00 to 20:00 in New York, a venue printing round the clock — so a card could
+close against an extended-hours quote that no market order would have been filled at.
 
 `position_size` is the only one that carries a floor on size: `min_trades` floors the trade
 count, `maintenance_margin` the book's margin and `leg_edge` a leg's Sharpe, none of them a

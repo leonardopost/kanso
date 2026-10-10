@@ -113,7 +113,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 31
+    assert len(items) == 32
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -222,6 +222,40 @@ def test_an_instrument_parameter_names_one_of_the_universe_s_own_ids() -> None:
     assert problem == "leg: 'ELSEWHERE' is not in the universe (DEMO, OTHER)"
     (problem,) = check_params(item, {"leg": 7}, hyp, FOLDS)
     assert problem == "leg: 7 is not a instrument"
+
+
+@pytest.mark.parametrize(
+    ("params", "problems"),
+    [
+        ({"session": "09:30-16:00", "tz": "America/New_York"}, []),
+        ({"session": "00:00-24:00", "tz": "UTC"}, []),
+        (
+            {"session": "9:30-16:00", "tz": "America/New_York"},
+            ["session: '9:30-16:00' is not a span of clock times on one day, HH:MM-HH:MM"],
+        ),
+        (
+            {"session": "16:00-09:30", "tz": "America/New_York"},
+            ["session: '16:00-09:30' is not a span of clock times on one day, HH:MM-HH:MM"],
+        ),
+        (
+            {"session": "09:30-16:00", "tz": "America/Gotham"},
+            ["tz: 'America/Gotham' is not a time zone this host knows"],
+        ),
+        (
+            {"session": 930, "tz": "../etc/passwd"},
+            [
+                "session: 930 is not a span of clock times on one day, HH:MM-HH:MM",
+                "tz: '../etc/passwd' is not a time zone this host knows",
+            ],
+        ),
+    ],
+)
+def test_a_session_and_its_zone_are_refused_unless_they_read_as_one(
+    params: Any, problems: list[str]
+) -> None:
+    """A session a gate cannot read is refused where the parameters are checked — at
+    `hyp validate` for a hypothesis's own constraints — and never reaches a card."""
+    assert check_params(catalogue()["trading_hours"], params, make_hyp(), FOLDS) == problems
 
 
 def test_a_parameter_without_a_range_is_only_type_checked() -> None:
