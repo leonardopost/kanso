@@ -388,7 +388,9 @@ Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty
 instrument, and on a multiplied instrument — a future, an option — the price and the tick it
 is divided by are one contract's, `price x multiplier`, as is every notional the harness
 sizes, reserves or reads back on either path. Without the key, `submit_entry(id, side,
-notional=…)` sizes to the smaller of what was asked and what the risk limits leave — read on the smaller
+notional=…)` or `qty=…` sizes to the smaller of what was asked and what the risk limits leave,
+floored onto the instrument's lot — a `qty` the limits leave whole is submitted whole, never
+its notional divided back by the price — read on the smaller
 of the capital and the balance the sleeve has left, so an account that has lost money cannot
 borrow to keep its size, and one that has made money does not grow past its capital — and on
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market

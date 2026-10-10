@@ -6,16 +6,19 @@ which is cash less what its fills paid and were charged plus its positions at th
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.nautilus.sizing import UNFUNDED_ORDER, SizingError
-from kanso.nautilus.strategy import KansoStrategy
+from kanso.nautilus.strategy import KansoStrategy, _entry_units
 
 from .conftest import DEEP, DEMO, HEDGE, MINUTE_NS, SECOND_NS, bar, equity, flat, quote
 from .test_sleeve import config
@@ -121,6 +124,62 @@ def test_a_partial_entry_leaves_room_for_the_other_name(backtest) -> None:
     run = backtest(Halves(free()), data=two_names(), instruments=(DEMO, HEDGE))
 
     assert intents(run) == [("DEMO.XNAS", "BUY", 5_000.0), ("HEDGE.XNAS", "BUY", 2_500.0)]
+
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_an_entry_asked_in_shares_the_room_leaves_whole_submits_them_all(backtest, side) -> None:
+    """1,000 x 10.05 / 10.05 is 999.9999999999999 in floats, which the lot floor made 999:
+    measured on 2026-10-10, 32 of a lane's 638 entries went out one share short of the round
+    lot asked for, a sell of 999 against a bid showing 1,000 among them."""
+
+    class Asks(KansoStrategy):
+        def on_start(self) -> None:
+            self.bars = 0
+
+        def on_bar(self, bar_: object) -> None:
+            self.bars += 1
+            if self.bars == 3:
+                self.submit_entry(DEMO, side, qty=1_000)
+
+    run = backtest(Asks(free(universe=("DEMO.XNAS",))), data=flat(DEMO, close=10.05, volume=DEEP))
+
+    assert intents(run) == [("DEMO.XNAS", side, 1_000.0)]
+
+
+PRICES = st.integers(1, 10_000_000).map(lambda ticks: ticks / 1_000)
+"""Prices from 0.001 to 10,000.000 at a thousandth."""
+
+
+@given(price=PRICES, shares=st.integers(1, 100_000), slack=st.floats(0.0, 10.0))
+@example(price=18.007, shares=1_000, slack=0.0)
+@example(price=20.315, shares=500, slack=0.0)
+def test_shares_the_room_leaves_whole_are_submitted_whole_at_any_price(
+    price: float, shares: int, slack: float
+) -> None:
+    room = shares * price * (1.0 + slack)
+    for notional in (None, room):
+        raw = _entry_units(float(shares), notional, room, price)
+        assert KansoStrategy._quantise(equity(DEMO), raw) == Quantity.from_int(shares)
+
+
+@given(price=PRICES, lots=st.integers(1, 100_000), slack=st.floats(0.0, 10.0))
+def test_a_fractional_quantity_the_room_leaves_whole_is_submitted_whole(
+    price: float, lots: int, slack: float
+) -> None:
+    thousandths = SimpleNamespace(lot_size=None, size_increment="0.001", size_precision=3)
+    qty = lots / 1_000
+    raw = _entry_units(qty, None, qty * price * (1.0 + slack), price)
+    assert KansoStrategy._quantise(thousandths, raw) == Quantity(qty, 3)
+
+
+@given(price=PRICES, shares=st.integers(2, 100_000), share=st.floats(0.0, 0.999))
+def test_a_quantity_the_room_cuts_is_the_room_over_the_unit(
+    price: float, shares: int, share: float
+) -> None:
+    room = shares * price * share
+    assert _entry_units(float(shares), None, room, price) == room / price
+    assert _entry_units(float(shares), room / 2, room, price) == room / 2 / price
+    assert _entry_units(None, None, room, price) == room / price
 
 
 # --- the book the room is read on --------------------------------------------
