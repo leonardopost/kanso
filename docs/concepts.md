@@ -410,13 +410,28 @@ nothing and a card that trades spends the headroom on its fills: in the sample a
 and the discard each took about 2.7 times the baseline's wall (row 139 of `docs/backlog.md`).
 
 **The window streams to the child.** The parent starts the child first and hands it the
-window on its standard input while it runs: it reads the catalog an hour at a time when the
-hypothesis requires prints, quotes or a book and a day at a time otherwise, cuts each read
+window on its standard input while it runs: it reads the catalog in steps of an hour when the
+hypothesis requires prints, quotes or a book and of a day otherwise, cuts each read
 into chunks of at most 250,000 points — always between instants, so every point of an
-instant is in one chunk — and reads the next chunk only once the last is wholly written. The
-child runs a chunk before it reads the next, so the child holds the chunk it is running and
-the parent the read that chunk was cut from — an hour of prints, quotes or a book, a day of
-anything else — until every chunk of it is written; nothing of the window is ever on disk.
+instant is in one chunk — and reads the next chunk only once the last is wholly written. A
+read is one step, or that step and as many after it as the files it reads hold at most
+250,000 points over, counted off their footers before anything is read: the engine writes a
+file in row groups of 5,000 points, each stating its first and last instant, so a step whose
+groups hold more is read alone and a sparse window is read in as few reads as its points
+need, each of them one chunk. Reads are lengthened so only for a feed marked however its
+instants fall — every window of prints, quotes or a book, and any of several names (Delivery,
+below). One name's bars and custom points are marked chunk by chunk, so a read of
+several days would mark days a day's read left unmarked; that window is read a day at a time
+wherever its files hold a point, as it always was, and only the days no file meets are read
+together. On a workspace holding fifteen names' quotes and prints at whole minutes of the
+regular session, filed a month a file, January 2022 took 696 hourly reads and 207.5 s and
+now takes two reads and 0.8 s, handing on the same points and markers byte for byte; three
+years take 76 reads and 23.5 s, where they took 26,256 reads and 70 to 110 minutes. Three
+hours of one name's prints at 360,000 an hour are still read an hour at a time. The child
+runs a chunk before it reads the next, so the child holds the chunk it is running and the
+parent the read that chunk was cut from — an hour of a dense feed, a day of bars, or no more
+than a chunk of a sparse window — until every chunk of it is written; nothing of the window
+is ever on disk.
 Where a window is cut changes nothing. Prints, quotes and book changes are read in the order
 the catalog's files hold them, because the catalog's own sorted query leaves the points of one
 instant in an order that depends on the span asked for: on a day of OKX BTC-USDT-SWAP prints,
@@ -424,11 +439,16 @@ instant in an order that depends on the span asked for: on a day of OKX BTC-USDT
 card trading on twenty minutes of them sent 9,064 orders read by the hour and 9,060 read
 whole. Read from the files, the day's prints and its 10.8 million book changes come back in
 the same order either way. The suite reads a catalog of prints that share instants unevenly
-by the hour and whole, and runs one tick window read by the day, by the hour and by the hour
-cut to seven points a chunk — of one name, and of two whose quieter one's book changes
-always follow the other's and some of whose chunks hold its prints and none of its changes —
-one whose first hour holds book changes and no print, and one daily window cut to a bar a
-chunk; each is the card the whole window gives when it is run in one process. Measured on a day of BTC's book and prints on 2026-10-02: a fresh child holds about 0.2 GB of its own and 0.66–0.81 KB per point of the
+by the hour, as its files allow and whole, and runs one tick window read by the day, by the
+hour, by the hour cut to seven points a chunk and as its files allow — of one name, and of
+two whose quieter one's book changes always follow the other's and some of whose chunks hold
+its prints and none of its changes — one whose first hour holds book changes and no print,
+and one daily window cut to a bar a chunk; each is the card the whole window gives when it
+is run in one process. It also streams a sparse window of quotes and prints, a dense one of
+prints, two names' month of daily bars, and one name's daily bars with two settlements at one
+instant both ways, a step a read and as their files allow, and the ordered points and
+markers handed on are the same; read in one, the last would be marked on days a day's read
+leaves unmarked. Measured on a day of BTC's book and prints on 2026-10-02: a fresh child holds about 0.2 GB of its own and 0.66–0.81 KB per point of the
 chunk it runs, about 0.4 GB at the cap, and caps of 10,000, 50,000 and 200,000 points and
 none gave the identical card at about 10 ms of CPU an extra chunk. Read and staged a day at
 a time as before, the same day of a three-level book was estimated at 4.5 GB in the child and
@@ -1157,7 +1177,8 @@ was marked when some instant held two points of one kind. A card read its window
 time and a replay read it whole, so the two could decide differently, and a card cut finer
 would have depended on where it was cut. A feed is now marked whenever its universe holds
 more than one name or it requires prints, quotes or a book, and any other feed when some
-instant holds two points of a kind. At zero latency a lone point is dispatched the same
+instant of the chunk holds two points of a kind — which is why a card reads such a feed a day
+at a time wherever it holds a point, never several days at once (Card). At zero latency a lone point is dispatched the same
 marked or not. Under a `latency_ms`, a command that came due by a lone print or quote now
 lands before the author's handler for it, as it always did for a point that shared its
 instant: a modify sent on one quote with 20 ms to travel is answered before the handler of a
