@@ -83,6 +83,8 @@ BINDINGS = {
     "write_data files a series in the one directory class_to_filename and "
     "urisafe_identifier name, each file named by its first and last ts_init, and "
     "filter_files names its files whose interval meets a span, ends included or open",
+    "write_data writes a file in row groups of 5,000 rows, each footer stating its rows "
+    "and its least and greatest ts_init",
     "an order's events grow only at its end, and its strategy is handed each one as the "
     "order's last when the order takes it",
     "a level-two venue refuses to run a name it holds data and no book data for, and "
