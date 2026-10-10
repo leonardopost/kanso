@@ -1032,6 +1032,29 @@ def test_a_leg_edge_leg_the_universe_holds_is_admissible(ws: Workspace) -> None:
     assert [ref.id for ref in parsed.required_constraints or []] == ["leg_edge"]
 
 
+def test_a_trading_session_is_admissible_on_a_draft(ws: Workspace) -> None:
+    hours = {"id": "trading_hours", "params": {"session": "09:30-16:00", "tz": "America/New_York"}}
+
+    parsed = accepted(ws, document(required_constraints=[hours]))
+
+    assert parsed.required_constraints is not None
+    assert parsed.required_constraints[0].params == hours["params"]
+
+
+def test_a_trading_session_the_gate_cannot_read_is_refused_before_any_card_runs(
+    ws: Workspace,
+) -> None:
+    hours = {"id": "trading_hours", "params": {"session": "9:30-16:00", "tz": "US/Gotham"}}
+
+    failure = refused(ws, document(required_constraints=[hours]))
+
+    assert failure.message == (
+        "required_constraints.trading_hours.session: '9:30-16:00' is not a span of clock "
+        "times on one day, HH:MM-HH:MM; required_constraints.trading_hours.tz: 'US/Gotham' "
+        "is not a time zone this host knows"
+    )
+
+
 def test_a_required_constraint_is_held_to_the_same_rules_and_says_which_list(
     ws: Workspace,
 ) -> None:
