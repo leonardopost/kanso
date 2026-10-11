@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
-from kanso.models import reset_mock
+from kanso.models import Call, reset_mock
 from kanso.workspace import Workspace, find
 from tests.params import pairs
 
@@ -230,3 +231,13 @@ def fresh_cursors() -> Iterator[None]:
     reset_mock()
     yield
     reset_mock()
+
+
+@dataclass
+class Recorder:
+    """Every call that reached a client, so a test can read the prompt that went out."""
+
+    calls: list[Call]
+
+    def of(self, task: str) -> list[Call]:
+        return [call for call in self.calls if call.task_class == task]

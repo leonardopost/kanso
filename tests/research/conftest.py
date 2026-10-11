@@ -35,9 +35,13 @@ from kanso.data.loader import DatasetRef
 from kanso.env import write as write_envelope
 from kanso.hyp import add as register
 from kanso.hyp import set_status
-from kanso.schemas import Detected, Envelope, Plan
+from kanso.models import Answer, Call
+from kanso.models import router as router_module
+from kanso.schemas import Detected, Envelope, ModelSpec, Plan
 from kanso.state import StateStore
 from kanso.workspace import Workspace, find, init
+
+from .mocked import Recorder
 
 SYMBOL = "DEMO"
 VENUE = "XNAS"
@@ -442,3 +446,25 @@ def classify(ws: Workspace, store: StateStore, doc: dict[str, Any], strategy: by
 def registered(ws: Workspace, store: StateStore) -> str:
     """The demo hypothesis, classified, with a flat baseline strategy."""
     return classify(ws, store, DOCUMENT)
+
+
+@pytest.fixture
+def recorded(monkeypatch: pytest.MonkeyPatch) -> Recorder:
+    """Watch the router's one client seam without changing what the client does."""
+    seen = Recorder(calls=[])
+    build = router_module.client_for
+
+    def watching(root: Any, spec: ModelSpec) -> Any:
+        client = build(root, spec)
+
+        class Watched:
+            protocol = client.protocol
+
+            def complete(self, spec: ModelSpec, call: Call) -> Answer:
+                seen.calls.append(call)
+                return client.complete(spec, call)
+
+        return Watched()
+
+    monkeypatch.setattr(router_module, "client_for", watching)
+    return seen

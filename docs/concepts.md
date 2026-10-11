@@ -952,7 +952,23 @@ The syntax tree is read first. An instrument literal outside `universe`, a bar w
 aggregation is not `resolution`, and a subscription or handler for a type outside
 `data_requirements` are facts about the file, stated rather than judged, and they cost
 nothing. Only a file that passes them is shown to a model — the `align_check` task class —
-with the thesis, the file and the diff since the last check.
+with the thesis, the run's pinned `program.md`, the file, the diff since the last check, and
+the reasons this run was already rewound for (the newest ten, each once).
+
+**The program bounds the judgement.** `program.md` is where you say what the search may
+change and what it may not, and the model reads it with the thesis in that order: a change
+the program forbids, or one that contradicts something the thesis states outright, is drift;
+a change the program permits — a filter, a side, a size, a trigger, an exit it names — is
+aligned unless the thesis states the opposite or the program's own prohibitions exclude it;
+and a change that returns in a direction this run was already rewound for is drift again,
+unless the program permits it and the thesis does not say otherwise. The run's copy is the
+one read, because it is the one its proposer was told; an edit to the workspace file reaches
+the next run. Observed in a live workspace on 2026-10-11, before the model was shown either:
+a hypothesis whose program said "one side only if the evidence says one side pays" was
+rewound for trading one side, the run's best at the time, and for an entry filter its
+program listed; and another run's identical Friday skip was judged drift twice and then
+aligned, a verdict that stood, since no later check asks again about a file a check passed.
+So to widen or narrow what a hypothesis's search may do, edit `program.md` between runs.
 
 A drift is rewound rather than stopped: research is indefinite, and stopping it on a
 judgement call would hand the model a veto. The lane and `best` go back to the newest keep of
