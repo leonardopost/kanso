@@ -17,7 +17,8 @@ The rules enforced here are local to the file:
 * a derived leg is a declared function of legs: a `basket` of weights, a `spread` of two legs
   under a fixed or fitted hedge, or a `gap` between two venues' prices of one asset;
 * a lattice is finite and declared: lags are distinct and never zero, because the same
-  instant's co-movement is not a lead; thresholds and horizons are distinct;
+  instant's co-movement is not a lead; thresholds and horizons are distinct, and so are a
+  catch-up's entries, closes and stops, each on its own side of the gap it was entered at;
 * a grid exists whenever a measure samples on one, and no bar leg it samples is coarser.
 
 What the instrument store holds, what the measure library permits and what a bound
@@ -281,7 +282,41 @@ class Response(KansoModel):
         return self
 
 
-Measure = Annotated[LeadLag | Response, Field(discriminator="id")]
+class CatchUp(KansoModel):
+    """Whether trading a follower toward the move its leader made, until it has caught up,
+    clears the hurdle, and how often it could.
+
+    Every exit is a condition of the two series, never a clock: the position closes when the
+    gap it was entered on has shrunk to `close` of its size, and stops when it has grown to
+    `stop` times it. `max_hold` is a safety, counted when it fires. The follower's response to
+    its leader, `beta`, is fitted per pair — either sign — on the returns of `beta_over`, over
+    the window or its first fold, as a fitted spread is.
+    """
+
+    id: Literal["catch_up"]
+    leader: Name
+    followers: Name
+    within: Span
+    fit: Literal["window", "first_fold"]
+    beta_over: Span
+    enter_bp: list[Annotated[float, Field(gt=0, allow_inf_nan=False)]] = Field(min_length=1)
+    close: list[Annotated[float, Field(ge=0, lt=1, allow_inf_nan=False)]] = Field(min_length=1)
+    stop: list[Annotated[float, Field(gt=1, allow_inf_nan=False)]] = Field(min_length=1)
+    max_hold: Span
+    latency_ms: float = Field(ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _lattice(self) -> CatchUp:
+        for name in ("within", "beta_over", "max_hold"):
+            if span_ns(getattr(self, name), name) == 0:
+                raise ValueError(f"{name}: a span of zero measures nothing")
+        _distinct(self.enter_bp, "enter_bp")
+        _distinct(self.close, "close")
+        _distinct(self.stop, "stop")
+        return self
+
+
+Measure = Annotated[LeadLag | Response | CatchUp, Field(discriminator="id")]
 
 RangeEnd = float | Span
 """A range end: a number, or a span for a parameter that is one."""
@@ -294,7 +329,7 @@ class MeasureItem(KansoModel):
     longer than a day is not a lead, a thousand lags are not a lattice — and nothing more.
     """
 
-    id: Literal["lead_lag", "response"]
+    id: Literal["lead_lag", "response", "catch_up"]
     meaningful_when: NonEmpty
     ranges: dict[NonEmpty, tuple[RangeEnd, RangeEnd]]
 
@@ -377,6 +412,12 @@ class Screen(Versioned):
             if isinstance(measure, LeadLag):
                 self._known(measure.from_, f"{where}.from")
                 self._known(measure.to, f"{where}.to")
+            elif isinstance(measure, CatchUp):
+                if measure.leader not in self.legs and measure.leader not in self.derived:
+                    raise ValueError(f"{where}.leader: {measure.leader!r} is not a declared leg")
+                self._known(measure.followers, f"{where}.followers")
+                if self.members(measure.followers) == (measure.leader,):
+                    raise ValueError(f"{where}.followers: the leader cannot follow itself")
             else:
                 if measure.trigger.leg not in self.legs and measure.trigger.leg not in self.derived:
                     raise ValueError(
@@ -427,7 +468,8 @@ Judged = Literal["pass", "fail", "thin"]
 
 
 class ResponseStats(KansoModel):
-    """What a `response` cell's events came to, across the sessions it was live in.
+    """What a cell that trades — a `response` or a `catch_up` — came to, across the sessions
+    it was live in.
 
     Per event: `gross_bp` a taker would have made, `hurdle_bp` the venue model's round trip,
     `margin_bp` the two's difference, `drift_adjusted_bp` the signal the null is tested on.
@@ -447,6 +489,24 @@ class ResponseStats(KansoModel):
     drift_adjusted_bp: float = Field(allow_inf_nan=False)
 
 
+class CatchUpStats(KansoModel):
+    """How a `catch_up` cell's positions ended, and the response they were entered on.
+
+    `beta` is the follower's fitted response to its leader, `None` when the leader never moved
+    over the fit span, which leaves the pair's cells holding no value. Every scored position
+    ended one way: `closed` when its gap shrank to the close, `stopped` when it grew to the
+    stop, `capped` when `max_hold` came first. The holds those exits produced are an output,
+    and `hold_median_s` and `hold_p90_s` describe them.
+    """
+
+    beta: float | None = Field(default=None, allow_inf_nan=False)
+    closed: int = Field(ge=0)
+    stopped: int = Field(ge=0)
+    capped: int = Field(ge=0)
+    hold_median_s: float = Field(ge=0, allow_inf_nan=False)
+    hold_p90_s: float = Field(ge=0, allow_inf_nan=False)
+
+
 class Cell(KansoModel):
     """One cell of a result: what it measured, the evidence, and how it was judged.
 
@@ -458,7 +518,7 @@ class Cell(KansoModel):
     """
 
     measure: int = Field(ge=0)
-    id: Literal["lead_lag", "response"]
+    id: Literal["lead_lag", "response", "catch_up"]
     key: NonEmpty
     params: dict[NonEmpty, str | float]
     mean: float = Field(allow_inf_nan=False)
@@ -472,6 +532,7 @@ class Cell(KansoModel):
     in_sample_fit: bool = False
     clock_bound: bool = False
     response: ResponseStats | None = None
+    catch_up: CatchUpStats | None = None
     judged: Judged | None = None
     reason: str | None = None
 
@@ -489,8 +550,9 @@ class SeriesRead(KansoModel):
 class Summary(KansoModel):
     """What a result says as a whole, when a verdict was declared.
 
-    `worth_a_lane` is whether a `response` cell passed: a lead with no margin is
-    information, not a trade. `best` names the passing cells, the strongest first.
+    `worth_a_lane` is whether a cell that trades — a `response` or a `catch_up` — passed: a
+    lead with no margin is information, not a trade. `best` names the passing cells, the
+    strongest first.
     """
 
     declared: bool
@@ -539,12 +601,24 @@ def pairs(screen: Screen, measure: LeadLag) -> tuple[tuple[str, str], ...]:
     return tuple((a, b) for a in sources for b in targets if a != b)
 
 
+def followed(screen: Screen, measure: CatchUp) -> tuple[str, ...]:
+    """The followers a catch-up trades: every member of `followers` but its leader."""
+    return tuple(name for name in screen.members(measure.followers) if name != measure.leader)
+
+
 def cells(screen: Screen) -> tuple[int, ...]:
     """How many cells each measure holds: the family its correction is over."""
     counts: list[int] = []
     for measure in screen.measures:
         if isinstance(measure, LeadLag):
             counts.append(len(pairs(screen, measure)) * len(measure.lags))
+        elif isinstance(measure, CatchUp):
+            counts.append(
+                len(followed(screen, measure))
+                * len(measure.enter_bp)
+                * len(measure.close)
+                * len(measure.stop)
+            )
         else:
             counts.append(
                 len(measure.trigger.thresholds)

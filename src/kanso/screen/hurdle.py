@@ -36,7 +36,7 @@ import numpy as np
 from kanso.errors import ValidationError
 from kanso.nautilus import adapters
 from kanso.nautilus.costs import BPS, fill_cost, fixed_half_spread, quote_half_spread, tick_slip
-from kanso.schemas.screen import Response, Screen
+from kanso.schemas.screen import CatchUp, LeadLag, Screen, followed
 from kanso.schemas.venue import (
     DEFAULT_ACCOUNT,
     DEFAULT_CURRENCY,
@@ -57,7 +57,8 @@ TOUCHED: Final = frozenset({"quote", "book"})
 
 @dataclass(frozen=True)
 class Hurdles:
-    """The venue model of every leg a response trades, and what one round trip costs."""
+    """The venue model of every leg a response or a catch-up trades, and what one round trip
+    costs."""
 
     screen: Screen
     models: dict[str, VenueModel]
@@ -151,11 +152,14 @@ def shares(screen: Screen, name: str, betas: Mapping[str, float]) -> dict[str, f
 
 
 def traded(screen: Screen) -> tuple[str, ...]:
-    """Every catalog leg a response measure trades, its followers' legs expanded."""
+    """Every catalog leg a response or a catch-up trades, its followers' legs expanded."""
     found: list[str] = []
     for measure in screen.measures:
-        if isinstance(measure, Response):
-            for leg in screen.legs_of(measure.followers):
+        if isinstance(measure, LeadLag):
+            continue
+        names = followed(screen, measure) if isinstance(measure, CatchUp) else (measure.followers,)
+        for name in names:
+            for leg in screen.legs_of(name):
                 if leg not in found:
                     found.append(leg)
     return tuple(found)

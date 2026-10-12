@@ -1242,8 +1242,8 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `derived` | name → exactly one of `basket` (weights over legs), `spread` (`long`, `short`, `hedge: fixed` with `beta`, or `hedge: ols` with `fit: window` or `fit: first_fold`) or `gap` (`a`, `b`: one asset on two venues) |
 | `groups` | name → a list of legs and derived legs, for a measure to name at once |
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
-| `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`) or `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) |
-| `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a `response` cell `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3) |
+| `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`), `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) or `catch_up` (`leader`, a leg or derived leg; `followers`, never the leader alone; `within`, the trailing span the gap is measured over; `fit: window` or `first_fold` and `beta_over`, where and at what return span the follower's response to its leader is fitted; `enter_bp`, the gap and implied move that open a position; `close`, the share of the entry gap at which it has caught up, each at least 0 and under 1; `stop`, the multiple of it at which it has failed, each over 1; `max_hold`, the safety cap; `latency_ms`) |
+| `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a cell that trades — `response` or `catch_up` — `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`, both stated whatever the measures; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3) |
 | `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis |
 
 Each parameter of a measure has the range the measure library declares, and `kanso screen
@@ -1260,6 +1260,11 @@ validate` refuses one outside it (exit 3):
 | `response` | `horizon` | `1ms` | `1d` |
 | `response` | `horizons` (how many) | `1` | `32` |
 | `response` | `latency_ms` | `0` | `60000` |
+| `catch_up` | `within`, `beta_over`, `max_hold` | `1ms` | `1d` |
+| `catch_up` | `enter_bp` | `0.1` | `10000` |
+| `catch_up` | `close` | `0` | `1` |
+| `catch_up` | `stop` | `1` | `100` |
+| `catch_up` | `latency_ms` | `0` | `60000` |
 
 A result is rendered beside the screen as `<sha7>-s<snap7>-v<ver7>.yaml` — the screen's bytes,
 the snapshot and the measure library's version, the three pins its record in `state.db` is
@@ -1281,18 +1286,22 @@ A result holds one entry per cell:
 | `response.gross_bp`, `hurdle_bp`, `margin_bp` | per event: what a taker made (a quote or book follower buys the ask and sells the bid), the round trip charged, and the difference |
 | `response.ceiling_bp_day` | the margin summed a day over the live sessions: one notional on every event and no capacity limit, so a bound a search can approach and never exceed |
 | `response.hit_rate`, `drift_adjusted_bp` | the share of events whose gross was positive, and the drift-adjusted signal an event, the quantity `mean`, `t` and `p` test |
+| `catch_up.beta` | a `catch_up` cell only: the follower's fitted response to its leader, of either sign; absent when the leader never moved over the fit span, and then the pair's cells hold no value. Its `response` fields are its positions', read as a response's are |
+| `catch_up.closed`, `stopped`, `capped` | how many scored positions ended because the gap closed, because it grew to the stop, and because `max_hold` came first |
+| `catch_up.hold_median_s`, `hold_p90_s` | the holds those exits produced, in seconds: an output of the conditions, never an input |
 | `judged`, `reason` | `pass`, `fail` or `thin` under the verdict, and every clause the cell missed |
 
-The summary says whether the result is `worth_a_lane` — a `response` cell passed; a lead alone
-names no trade — counts the cells each way, and ranks the passing ones in `best`: responses by
-`ceiling_bp_day`, then leads by |t| whichever way they point, so a negative lag, the reverse
+The summary says whether the result is `worth_a_lane` — a cell that trades, `response` or
+`catch_up`, passed; a lead alone names no trade — counts the cells each way, and ranks the
+passing ones in `best`: cells that trade by `ceiling_bp_day`, then leads by |t| whichever way they point, so a negative lag, the reverse
 direction, can rank beside its mirror.
 
 Spans are `<n>(ms|s|m|h|d)` — finer than a hypothesis's grain, because a lead between two venues
 is measured in milliseconds — and a lag carries a sign, positive when `from` leads `to`. The
 followers of a response are `followers` and never `on`: YAML reads a bare `on` as the boolean
-true. Every list of a measure is a declared, finite lattice; its cells are the cross product,
-and `kanso screen validate` prints how many there are.
+true. Every list of a measure is a declared, finite lattice; its cells are the cross product —
+a catch-up's are follower by entry by close by stop — and `kanso screen validate` prints how
+many there are.
 
 ## `models.yaml`
 

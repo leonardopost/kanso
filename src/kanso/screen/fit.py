@@ -80,7 +80,11 @@ def session(
     x = np.log(grid.asof(series[spread.long], times))
     y = np.log(grid.asof(series[spread.short], times))
     both = ~(np.isnan(x) | np.isnan(y))
-    x, y = x[both], y[both]
+    return sample(x[both], y[both])
+
+
+def sample(x: np.ndarray, y: np.ndarray) -> Moments:
+    """The moments of paired samples with nothing missing: x regressed on y."""
     if not len(x):
         return Moments()
     mean_x = float(np.add.reduce(x) / len(x))

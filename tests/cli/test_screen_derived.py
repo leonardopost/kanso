@@ -10,32 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 from typer.testing import CliRunner
 
-from .conftest import INSTRUMENT, SPEC, at
+from .conftest import INSTRUMENT, OTHER, SPEC, at
 from .test_screen_run import OU, run_screen
-
-OTHER = "OTHR.SIM"
-
-
-@pytest.fixture
-def paired(runner: CliRunner, loaded: Path) -> Path:
-    """The loaded workspace with a second, independent hourly name and a fresh snapshot."""
-    entries = yaml.safe_load((loaded / "instruments.yaml").read_text(encoding="utf-8"))
-    entries[OTHER] = {**entries[INSTRUMENT], "nautilus_id": OTHER}
-    (loaded / "instruments.yaml").write_text(yaml.safe_dump(entries), encoding="utf-8")
-    spec = loaded / "other.yaml"
-    spec.write_text(yaml.safe_dump({**SPEC, "instruments": ["OTHR"], "seed": 11}), encoding="utf-8")
-    assert (
-        at(runner, loaded, "data", "instruments", "resolve", "--as-of", "2024-01-02").exit_code == 0
-    )
-    assert (
-        at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
-    )
-    assert at(runner, loaded, "data", "snapshot").exit_code == 0
-    return loaded
 
 
 def pair(fit: str, measures: list[dict[str, Any]]) -> dict[str, Any]:
