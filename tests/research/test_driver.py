@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import json
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +20,9 @@ from kanso.certify import certificate
 from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
 from kanso.hyp import STRATEGY_FILE
-from kanso.models import INSTRUCTIONS, Answer, Call, reset_mock, spend
-from kanso.models import router as router_module
+from kanso.models import INSTRUCTIONS, reset_mock, spend
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
-from kanso.schemas import ModelSpec
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -36,6 +33,7 @@ from .mocked import (  # noqa: F401
     DRIFTED,
     MARKER,
     SEED,
+    Recorder,
     fresh_cursors,
     proposal,
     scripted,
@@ -74,38 +72,6 @@ DENIED = (
 """A diff that applies and reaches for the cache, which `strategy_integrity` refuses."""
 
 SECOND_SEED = SEED.replace(b'mode = "flat"', b'mode = "flat"  # the second hypothesis')
-
-
-@dataclass
-class Recorder:
-    """Every call that reached a client, so a test can read the prompt that went out."""
-
-    calls: list[Call]
-
-    def of(self, task: str) -> list[Call]:
-        return [call for call in self.calls if call.task_class == task]
-
-
-@pytest.fixture
-def recorded(monkeypatch: pytest.MonkeyPatch) -> Recorder:
-    """Watch the router's one client seam without changing what the client does."""
-    seen = Recorder(calls=[])
-    build = router_module.client_for
-
-    def watching(root: Any, spec: ModelSpec) -> Any:
-        client = build(root, spec)
-
-        class Watched:
-            protocol = client.protocol
-
-            def complete(self, spec: ModelSpec, call: Call) -> Answer:
-                seen.calls.append(call)
-                return client.complete(spec, call)
-
-        return Watched()
-
-    monkeypatch.setattr(router_module, "client_for", watching)
-    return seen
 
 
 @pytest.fixture

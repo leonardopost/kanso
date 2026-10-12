@@ -15,4 +15,5 @@ metadata:
 
 ## Rules
 - The loop runs this check every `align_every` cards (`kanso.toml`).
+- The model reads the thesis with the run's pinned `program.md` and the reasons this run was already rewound for: what the program permits is aligned unless the thesis states the opposite, and a direction already refused is refused again unless the program permits it. A drift reason that contradicts what `program.md` permits is worth telling the operator; the remedy is an edit to `program.md` between runs, never to the verdict.
 - Do not "fix" alignment by editing `hypothesis.yaml` mid-run; the run's pin would no longer match (end the run first).

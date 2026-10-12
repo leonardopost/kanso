@@ -22,7 +22,7 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace
 
 from .conftest import DOCUMENT, classify
-from .mocked import ALIGNED, DRIFTED, SEED, fresh_cursors, scripted  # noqa: F401
+from .mocked import ALIGNED, DRIFTED, SEED, Recorder, fresh_cursors, scripted  # noqa: F401
 
 FOREIGN = SEED.replace(b"# end", b'Strategy.symbol = "OTHER.XNAS"\n\n# end')
 """A file that names an instrument the universe does not hold: drift the tree can prove."""
@@ -472,6 +472,74 @@ def test_the_first_check_of_a_run_differences_from_the_bytes_it_began_with(
     assert align.since(store, run) == 2
     align.check(ws, store, hyp_id)
     assert align.since(store, run) == 0
+
+
+# --- what the model is shown -------------------------------------------------
+
+PERMITTING = b"# program.md\n\n## What the search may change\n- One side only, if one side pays.\n"
+"""A program that leaves a choice to the search which a thesis read alone might not."""
+
+
+def test_the_judge_reads_the_program_the_run_pinned_beside_the_thesis(
+    ws: Workspace, store: StateStore, recorded: Recorder
+) -> None:
+    """What the search may change is the operator's to say, and `program.md` is where it is
+    said. Shown the thesis alone, a judge rewound a lane for trading one side under a program
+    that left the side to the search. The run's copy is what its proposer was told, so an
+    edit to the workspace file after the run began is not what its proposals are judged by."""
+    scripted(ws, align_check=[ALIGNED])
+    hyp_id = classify(ws, store, DOCUMENT, SEED)
+    program = ws.path("hypotheses", hyp_id, "program.md")
+    program.write_bytes(PERMITTING)
+    research.begin(ws, store, hyp_id)
+    program.write_bytes(b"# program.md\n\nAnything goes.\n")
+    write_lane(ws, hyp_id, REVERTING)
+
+    assert align.check(ws, store, hyp_id) == (True, None)
+
+    (call,) = recorded.of("align_check")
+    assert "One side only, if one side pays." in call.system
+    assert "Anything goes." not in call.system + call.user
+
+
+def test_the_reasons_this_run_was_rewound_for_reach_its_next_judgement(
+    ws: Workspace, store: StateStore, recorded: Recorder
+) -> None:
+    """One run's identical Friday skip was judged drift twice and then aligned, and the
+    aligned verdict stood, because no later check asks again about a file a check passed. A
+    judge shown its own verdicts on the run can answer a change that returns as it did before.
+    They move within a run, so they travel in the user turn and leave the cached prefix be."""
+    scripted(ws, align_check=[DRIFTED, ALIGNED])
+    hyp_id = started(ws, store)
+    write_lane(ws, hyp_id, REVERTING)
+    assert research.card(ws, store, hyp_id, "trade the trough").status == "keep"
+    assert align.check(ws, store, hyp_id) == (False, DRIFTED["reason"])
+    write_lane(ws, hyp_id, EDITED)
+
+    assert align.check(ws, store, hyp_id) == (True, None)
+
+    first, second = recorded.of("align_check")
+    assert "rewound_for" not in first.user, "nothing had been rewound yet"
+    assert "rewound_for" in second.user
+    assert str(DRIFTED["reason"]) in second.user
+    assert str(DRIFTED["reason"]) not in second.system
+
+
+def test_a_reason_given_twice_is_one_direction_and_only_this_run_s_are_read(
+    ws: Workspace, store: StateStore
+) -> None:
+    scripted(ws)
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    for reason in ("trades one side", "adds a filter", "trades one side", "skips Fridays", ""):
+        detail = {"run_id": run.run_id, "cards": 0, "sha": run.base_sha, "reason": reason}
+        store.event(align.DRIFTED, hyp_id, detail)
+    other = {"run_id": "another", "cards": 0, "sha": run.base_sha, "reason": "another run's"}
+    store.event(align.DRIFTED, hyp_id, other)
+
+    newest = ["skips Fridays", "trades one side", "adds a filter"]
+    assert align.rewound_for(store, run, align.REWOUND_LINES) == newest
+    assert align.rewound_for(store, run, 2) == newest[:2]
 
 
 # --- the inbox the escalation lands in ---------------------------------------

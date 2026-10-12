@@ -96,8 +96,8 @@ def test_the_stream_is_a_header_the_request_one_pickle_per_chunk_and_its_end(
     store: Path, request_for
 ) -> None:
     """The points are pickled a chunk at a time as the stream is asked for them, and a read
-    of daily bars is a day: no process holds the window, and no copy of it is held as bytes
-    beside the objects, which for a window of ticks is gigabytes."""
+    of one name's daily bars is a day: no process holds the window, and no copy of it is
+    held as bytes beside the objects, which for a window of ticks is gigabytes."""
     import pickle
 
     from kanso.nautilus import backtest as runner
@@ -729,8 +729,9 @@ def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identic
     two: bool,
 ) -> None:
     """A window of book changes and prints, several to an instant on some instants and one
-    on others, read a day at a time, an hour at a time, and an hour at a time cut to seven
-    points a chunk: the card is the card the whole window run in this process gives.
+    on others, read a day at a time, an hour at a time, an hour at a time cut to seven points
+    a chunk, and in the reads its files allow: the card is the card the whole window run in
+    this process gives.
 
     Seven points cut inside an hour, and leave chunks whose every instant holds one point of
     its kind — a feed that would go unmarked if whether it is marked were read off the
@@ -769,27 +770,32 @@ def test_a_tick_window_chunked_by_hour_by_point_cap_and_by_day_gives_the_identic
 
     monkeypatch.setattr(runner, "_cut", counted)
     carded: dict[str, Any] = {}
-    for name, read_ns, cap in (
-        ("day", runner.NS_PER_DAY, 10**9),
-        ("hour", runner.READ_TICK_NS, 10**9),
-        ("hour, seven points", runner.READ_TICK_NS, 7),
+    for name, read_ns, lengthened, cap in (
+        ("day", runner.NS_PER_DAY, 0, 10**9),
+        ("hour", runner.READ_TICK_NS, 0, 10**9),
+        ("hour, seven points", runner.READ_TICK_NS, 0, 7),
+        ("planned", runner.READ_TICK_NS, runner.READ_POINTS, runner.CHUNK_POINTS),
     ):
         chunks.clear()
         alone.clear()
         monkeypatch.setattr(runner, "READ_TICK_NS", read_ns)
+        monkeypatch.setattr(runner, "READ_POINTS", lengthened)
         monkeypatch.setattr(runner, "CHUNK_POINTS", cap)
         result = run_subprocess(request, store, lane)
         assert not result.crashed, result.traceback_tail
-        carded[name] = (result.run, result.intents, tuple(chunks))
+        carded[name] = (result.run, result.intents, tuple(chunks), any(alone))
 
-    assert {name: (ran, intents) for name, (ran, intents, _) in carded.items()} == {
+    assert {name: (ran, intents) for name, (ran, intents, *_) in carded.items()} == {
         name: (whole.run, whole.intents) for name in carded
     }
     assert len(carded["day"][2]) == 2, "a read of a day is a session"
     assert len(carded["hour"][2]) == 10, "five hours a session"
     assert max(carded["hour, seven points"][2]) <= 7
     assert len(carded["hour, seven points"][2]) > len(carded["hour"][2])
-    assert any(alone) is two, "a chunk holds the quiet name's prints and none of its changes"
+    assert len(carded["planned"][2]) == 1, "two sparse sessions are one read"
+    assert carded["hour, seven points"][3] is two, (
+        "a chunk holds the quiet name's prints and none of its changes"
+    )
 
 
 def test_a_tick_window_whose_first_hour_holds_only_book_changes_gives_the_identical_card(

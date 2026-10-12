@@ -82,6 +82,13 @@ a replace looks for what it removes among that directory's files so named, leavi
 instrument's directory of the class and never on the class's own, so it removes every
 instrument's points of the class over the span and leaves the series' files where they are.
 
+**A file's footer counts each row group and states its `ts_init` range.** `write_data`
+writes a file in row groups of `max_rows_per_group` rows, 5,000 unless the catalog is opened
+with another, and the footer of each states its rows and the least and greatest `ts_init`
+among them. So the points a span holds are at most the rows of the groups whose range meets
+it, read off the footers without reading a point, and a card's window is read in as few
+spans as that count allows (`kanso.nautilus.backtest._reads`).
+
 Availability timestamps
 -----------------------
 Every `Data` carries two nanosecond timestamps, `ts_event` (the economic
@@ -3231,6 +3238,41 @@ def _check_a_series_is_filed_in_its_own_directory() -> tuple[bool, str]:
     )
 
 
+def _check_a_footer_counts_each_row_group_and_states_its_ts_init_range() -> tuple[bool, str]:
+    """Write 12,001 prints, two to an instant, with `write_data`, and read the footer of the
+    file it writes: the rows of each group and the least and greatest `ts_init` it states."""
+    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    stamps = [1_000_000_000 * (10 + index // 2) for index in range(12_001)]
+    with tempfile.TemporaryDirectory() as directory:
+        catalog = ParquetDataCatalog(directory)
+        catalog.write_data([_sale("AAPL.XNAS", ts) for ts in stamps])
+        files = catalog.get_file_list_from_data_cls(TradeTick)
+        footer = pq.read_metadata(files[0])
+        column = footer.schema.names.index("ts_init")
+        groups = []
+        for index in range(footer.num_row_groups):
+            group = footer.row_group(index)
+            stated = group.column(column).statistics
+            groups.append(
+                (group.num_rows, stated.min, stated.max)
+                if stated is not None and stated.has_min_max
+                else (group.num_rows, None, None)
+            )
+    expected = [
+        (5_000, stamps[0], stamps[4_999]),
+        (5_000, stamps[5_000], stamps[9_999]),
+        (2_001, stamps[10_000], stamps[12_000]),
+    ]
+    holds = len(files) == 1 and groups == expected
+    return holds, (
+        f"write_data wrote {len(files)} file of 12,001 prints in row groups stating "
+        f"(rows, least ts_init, greatest ts_init) {groups}"
+    )
+
+
 def _check_delete_with_no_identifier_removes_a_series_of_no_instrument() -> tuple[bool, str]:
     """Write a point of a custom type of no instrument, and two names' prints, ask the
     engine to remove each class over every instant without naming an identifier, and see
@@ -4603,6 +4645,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "urisafe_identifier name, each file named by its first and last ts_init, and "
         "filter_files names its files whose interval meets a span, ends included or open",
         _check_a_series_is_filed_in_its_own_directory,
+    ),
+    (
+        "write_data writes a file in row groups of 5,000 rows, each footer stating its rows "
+        "and its least and greatest ts_init",
+        _check_a_footer_counts_each_row_group_and_states_its_ts_init_range,
     ),
     (
         "delete_data_range with no identifier removes the files of a series of no instrument",

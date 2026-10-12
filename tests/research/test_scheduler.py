@@ -559,6 +559,49 @@ def test_a_keep_a_drift_check_marked_is_never_where_a_reseed_starts(
     )
 
 
+def test_a_reseed_starts_only_from_a_keep_written_under_the_stalled_run_s_program(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`program.md` is pinned by a run like `hypothesis.yaml`, and a keep written to
+    another program's rules is not ground for this one's next run, however well it scored.
+
+    Measured in a live workspace on 2026-10-12: keeps under a temporary program and then
+    under the restored original, same hypothesis file, snapshot and criteria, and a reseed
+    that matched those three started the next run from a keep the restored program
+    forbids. The mirror case shows it is the stalled run's program that decides.
+    """
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    best = a_card(ws, store, REVERTING, seq=1, metric=3.0)
+    foreign = a_card(ws, store, WEAK, seq=2, metric=2.0, best=False)
+    own = a_card(ws, store, FLAT, seq=3, metric=1.0, best=False)
+    temporary = store.put_blob(b"# program\nflatten at the target\n")
+    store.connection.execute(
+        "UPDATE runs SET program_sha = ? WHERE hyp_id = ? AND run_id IN (SELECT run_id FROM"
+        " cards WHERE strategy_sha = ?)",
+        (temporary, hyp_id, foreign),
+    )
+    pins = {
+        (r.hypothesis_sha, r.snapshot_id, r.criteria_version)
+        for r in records.runs_of(store, hyp_id)
+    }
+    assert len(pins) == 1, "the three other pins are one"
+    stalled = records.runs_of(store, hyp_id)[-1]
+    assert stalled.program_sha != temporary
+    certificate(store, hyp_id, best)
+
+    _, second = stall_twice(ws, store, hyp_id)
+
+    assert second.reseed_from == own != foreign
+    assert passages.reseed_of(store, hyp_id) == own
+
+    store.connection.execute(
+        "UPDATE runs SET program_sha = ? WHERE run_id = ?", (temporary, stalled.run_id)
+    )
+    _, fourth = stall_twice(ws, store, hyp_id)
+
+    assert fourth.reseed_from == foreign, "under the temporary program, its keep is the best"
+
+
 def test_with_no_other_keep_the_reseed_is_the_stalled_run_s_base_or_nothing(
     ws: Workspace, store: StateStore
 ) -> None:

@@ -68,17 +68,31 @@ A drift never rewinds onto the bytes it found drifted. The verdict marks the car
 last check, and every other card of the run that carried those bytes, bar the baseline: a
 lane rewritten by hand can hand a pass to a keep it never held, and the newest keep no check
 had marked drifted could otherwise be the very file just judged.
+
+The model is shown what the proposer is shown about the bounds of the search: the run's
+pinned `program.md` beside the thesis, and the reasons this run was already rewound for.
+Shown the thesis alone, a judge has only its own reading of what the idea excludes, and the
+program is where the operator wrote down what the search may and may not change. Observed in
+a live workspace on 2026-10-11, where the judge saw no program: one hypothesis whose program
+said "one side only if the evidence says one side pays" was rewound for trading one side,
+the run's best at the time, and for an entry filter the program listed; another run's
+identical Friday skip was judged drift twice and then aligned, and the aligned verdict
+stood, since a later check never asks again about the file a check passed. So the program's
+permissions and prohibitions are stated to the model, and so are its own earlier verdicts
+on this run: a direction already refused is refused again unless the program permits it and
+the thesis does not say otherwise.
 """
 
 from __future__ import annotations
 
 import ast
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from kanso.hyp import HYPOTHESIS_FILE, STRATEGY_FILE, hypothesis_dir
+from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE, hypothesis_dir
 from kanso.inbox import escalate
 from kanso.models import CallInputs, route
 from kanso.research import diff as diffs
@@ -96,6 +110,7 @@ __all__ = [
     "HANDLERS",
     "MISALIGNED",
     "REASON_LIMIT",
+    "REWOUND_LINES",
     "TASK",
     "Checkpoint",
     "align_static",
@@ -103,6 +118,7 @@ __all__ = [
     "checkpoint",
     "lane_strategy",
     "problems",
+    "rewound_for",
     "since",
 ]
 
@@ -303,6 +319,15 @@ MISALIGNED: Final = "misaligned"
 
 _NO_REASON: Final = "the model reported drift without giving a reason"
 
+REWOUND_LINES: Final = 10
+"""How many of this run's drift reasons a check is shown, newest first.
+
+More than the proposer is shown, because the two read them for different things: the
+proposer needs the directions it should not take next, and the judge needs every direction it
+has refused in this run, so that it answers the same change the same way when it returns. A
+run that drifts more often than this repeats itself, and the newest reasons are the ones a
+returning change is likeliest to meet."""
+
 
 @dataclass(frozen=True)
 class Checkpoint:
@@ -389,7 +414,7 @@ def check(
         )
         return True, None
     if ok:
-        ok, reason = _ask(ws, store, hyp, source, mark, lane)
+        ok, reason = _ask(ws, store, hyp, run, source, mark, lane)
     _mark(store, run, mark.cards, aligned=ok)
     if ok:
         store.event(
@@ -418,11 +443,24 @@ def _ask(
     ws: Workspace,
     store: StateStore,
     hyp: Hypothesis,
+    run: RunRecord,
     source: bytes,
     mark: Checkpoint,
     lane: str,
 ) -> tuple[bool, str | None]:
-    """The model half: the thesis, the file, and what has changed since the last check."""
+    """The model half: the thesis and the run's pinned program, the file, what has changed
+    since the last check, and why this run was already rewound.
+
+    The program is the run's, not the workspace's: a `program.md` edited after the run began
+    is not what its proposer was told, so it is not what its proposals are judged by.
+    """
+    dynamic: dict[str, object] = {
+        STRATEGY_FILE: source.decode("utf-8", errors="replace"),
+        "diff_since_last_check": diffs.unified(store.get_blob(mark.sha), source),
+    }
+    rewound = rewound_for(store, run, REWOUND_LINES)
+    if rewound:
+        dynamic["rewound_for"] = rewound
     inputs = CallInputs(
         subject=hyp.id,
         stable={
@@ -430,16 +468,39 @@ def _ask(
             "mechanism": hyp.mechanism,
             "universe": sorted(hyp.universe),
             "horizon": hyp.horizon,
+            PROGRAM_FILE: store.get_blob(run.program_sha).decode("utf-8", errors="replace"),
         },
-        dynamic={
-            STRATEGY_FILE: source.decode("utf-8", errors="replace"),
-            "diff_since_last_check": diffs.unified(store.get_blob(mark.sha), source),
-        },
+        dynamic=dynamic,
     )
     answer = route(ws, store, TASK, inputs, lane=lane)
     if bool(answer.data["aligned"]):
         return True, None
     return False, str(answer.data["reason"]).strip() or _NO_REASON
+
+
+def rewound_for(store: StateStore, run: RunRecord, limit: int) -> list[str]:
+    """Why this run has been rewound, newest first: each reason a drift check gave, once.
+
+    A reason is a sentence about `strategy.py` and the hypothesis it is meant to test, so
+    unlike a failing certification gate's evidence it carries nothing measured on the
+    embargoed window and nothing measured at all. What it carries is the one thing the
+    rewound file cannot say: which direction a check refused, and why. The proposer reads it
+    to stay off that direction and the judge to answer it the same way again. A reason given
+    twice is one direction refused twice, so it is listed once and `limit` counts directions.
+    """
+    rows = store.connection.execute(
+        "SELECT detail FROM events WHERE kind = ? AND subject = ?"
+        " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC",
+        (DRIFTED, run.hyp_id, run.run_id),
+    ).fetchall()
+    said: list[str] = []
+    for row in rows:
+        reason = str(json.loads(str(row["detail"])).get("reason") or "")
+        if reason and reason not in said:
+            said.append(reason)
+        if len(said) == limit:
+            break
+    return said
 
 
 def _revert(ws: Workspace, store: StateStore, run: RunRecord, directory: Path) -> str:

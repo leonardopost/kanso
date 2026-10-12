@@ -194,19 +194,22 @@ def _tied_prints() -> list[object]:
     return made[:TIED_PRINTS]
 
 
+@pytest.mark.parametrize("lengthened", [False, True], ids=["an hour a read", "planned"])
 def test_prints_sharing_instants_are_read_in_file_order_however_the_window_is_read(
-    tmp_path: Path, request_for
+    tmp_path: Path, request_for, monkeypatch: pytest.MonkeyPatch, lengthened: bool
 ) -> None:
     """The points of one instant reach a run in the order the catalog's files hold them, read
-    whole as a run in process reads the window or an hour at a time as a card streams it: the
-    order of an instant's prints is part of what a card is handed, and a card must not
-    depend on where its window was cut."""
+    whole as a run in process reads the window, an hour at a time, or in the reads its files
+    allow as a card streams it: the order of an instant's prints is part of what a card is
+    handed, and a card must not depend on where its window was cut."""
     import pickle
 
     from kanso.nautilus import backtest as runner
 
     from .conftest import tick_hypothesis
 
+    if not lengthened:
+        monkeypatch.setattr(runner, "READ_POINTS", 0)
     document = tick_hypothesis().model_dump(mode="json")
     document["data_requirements"] = ["trade"]
     request = request_for(hypothesis_=Hypothesis.model_validate(document))
@@ -219,6 +222,9 @@ def test_prints_sharing_instants_are_read_in_file_order_however_the_window_is_re
     chunks = [record["groups"] for record in records if "groups" in record]
     streamed = [str(p.trade_id) for chunk in chunks for group in chunk for p in group]
 
-    assert len(chunks) == 5, "an hour a read: a little over four hours of prints"
+    if lengthened:
+        assert len(chunks) == 1, "a little over four hours of prints fit one read"
+    else:
+        assert len(chunks) == 5, "an hour a read: a little over four hours of prints"
     assert whole == in_file
     assert streamed == in_file
