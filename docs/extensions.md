@@ -229,8 +229,10 @@ impl: kanso.criteria.gates.min_trades
 
 `impl` is a dotted path to the object itself, not to a module, and its `id` is checked
 against the file's. A parameter is typed `int`, `float`, `duration` — each with a range —
-`bool`, `str`, or `instrument`, which names one id of the hypothesis's own universe and is
-refused wherever parameters are checked when it names anything else. A gate evaluates a
+`bool`, `str`, `instrument`, which names one id of the hypothesis's own universe, `hours`,
+clock times on one day written `HH:MM-HH:MM` and closing by `24:00`, or `zone`, an IANA
+time-zone name the host's zone database holds; each of the last three is refused wherever
+parameters are checked when it is not what it says. A gate evaluates a
 `GateContext` and returns a verdict with the numbers it decided on, or a skip saying what it
 could not judge — never a `False` it cannot support, because a `False` decides something (a
 card discarded, a live version demoted) and a skip decides nothing:

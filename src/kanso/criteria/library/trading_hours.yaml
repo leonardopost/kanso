@@ -1,0 +1,8 @@
+id: trading_hours
+kind: gate
+stage: card
+required: false
+meaningful_when: "When the strategy may trade only inside a daily session, as at a venue that takes no order outside regular hours: every fill inside it, every position flat by its close."
+params: {session: hours, tz: zone}
+ranges: {}
+impl: kanso.criteria.gates.trading_hours
