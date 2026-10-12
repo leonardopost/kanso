@@ -1260,7 +1260,9 @@ validate` refuses one outside it (exit 3):
 | `response` | `horizon` | `1ms` | `1d` |
 | `response` | `horizons` (how many) | `1` | `32` |
 | `response` | `latency_ms` | `0` | `60000` |
-| `catch_up` | `within`, `beta_over`, `max_hold` | `1ms` | `1d` |
+| `catch_up` | `within` | `1ms` | `1d` |
+| `catch_up` | `beta_over` | `1ms` | `1d` |
+| `catch_up` | `max_hold` | `1ms` | `1d` |
 | `catch_up` | `enter_bp` | `0.1` | `10000` |
 | `catch_up` | `close` | `0` | `1` |
 | `catch_up` | `stop` | `1` | `100` |
