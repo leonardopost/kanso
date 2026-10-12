@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import pickle
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from nautilus_trader.model.data import Bar, QuoteTick
+
 from kanso.nautilus.cross_section import (
     KansoCrossSection,
     is_marker,
@@ -11,7 +15,7 @@ from kanso.nautilus.cross_section import (
     with_cross_section,
     without_markers,
 )
-from tests.nautilus.strategy.conftest import DEMO, HEDGE, bar, quote, second_bar
+from tests.nautilus.strategy.conftest import DEMO, HEDGE, bar, quote, second_bar, trade
 
 
 def test_a_single_series_is_unmarked() -> None:
@@ -142,3 +146,63 @@ def test_different_bar_grains_at_the_same_instant_are_not_one_book() -> None:
 
     assert stream == (minute, second)
     assert not any(is_marker(point) for point in stream)
+
+
+def _made(kind: str, name: object, index: int) -> object:
+    if kind == "bar":
+        return bar(name, index, 10.0)  # type: ignore[arg-type]
+    if kind == "second":
+        return second_bar(name, 0, 10.0, ts_init=int(bar(DEMO, index, 1.0).ts_init))  # type: ignore[arg-type]
+    if kind == "quote":
+        return quote(name, index)  # type: ignore[arg-type]
+    return trade(name, index)  # type: ignore[arg-type]
+
+
+def _grain(point: object) -> str:
+    if isinstance(point, Bar):
+        return str(point.bar_type.spec)
+    return "quote" if isinstance(point, QuoteTick) else "trade"
+
+
+@settings(max_examples=80, deadline=None)
+@given(
+    drawn=st.lists(
+        st.tuples(
+            st.sampled_from(("bar", "second", "quote", "trade")),
+            st.sampled_from((DEMO, HEDGE)),
+            st.integers(min_value=0, max_value=3),
+        ),
+        max_size=30,
+    ),
+    coincident=st.booleans(),
+)
+def test_every_run_of_one_instant_and_grain_is_followed_by_a_marker_a_point(
+    drawn: list[tuple[str, object, int]], coincident: bool
+) -> None:
+    """The whole marking rule, against a reading of it by hand: consecutive points sharing an
+    instant and a grain are a cohort, and a marked stream follows each with one marker per
+    point, stamped at its instant; an unmarked stream is handed back as it came."""
+    points = tuple(sorted((_made(*each) for each in drawn), key=lambda p: int(p.ts_init)))
+    cohorts: list[list[object]] = []
+    for point in points:
+        if cohorts and (cohorts[-1][0].ts_init, _grain(cohorts[-1][0])) == (
+            point.ts_init,
+            _grain(point),
+        ):
+            cohorts[-1].append(point)
+        else:
+            cohorts.append([point])
+    stream = with_cross_section(points, coincident=coincident)
+
+    if not coincident and all(len(cohort) == 1 for cohort in cohorts):
+        assert stream == points
+        return
+    at = 0
+    for cohort in cohorts:
+        for point in cohort:
+            assert stream[at] is point
+            at += 1
+        for _ in cohort:
+            assert is_marker(stream[at]) and stream[at].ts_init == cohort[0].ts_init
+            at += 1
+    assert at == len(stream)

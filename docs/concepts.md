@@ -460,6 +460,28 @@ holds nothing but its warmup — kills the child first and is raised as the refu
 child whose stream stops before its end refuses it, and never reports the part it was
 handed as a card.
 
+**What a point costs a card.** A card's child does its work a point at a time — it folds
+the point into the marks the extraction strikes the equity curve at, orders it and marks its
+instant, hands it to the engine, and runs the venue's modules and the sleeve's handlers on it —
+and a window of prints and quotes carries a flush marker behind almost every point, which the
+engine delivers as an event of its own. So kanso keeps what it adds to a point to reading it
+once: the engine's own validation, which reads the first point of an `add_data` call and sorts
+every instrument id the cache holds to check it, is asked once for each kind of point in a
+chunk and not once for every run of one type, which in a marked stream is nearly every point;
+the marks are folded from the prices a quote, a print and a bar carry, read once each; the
+venue loads kanso's corporate actions, `Availability` and `Tape` as one module, so each event
+asks one module of each venue and not three; and the child's collector, which a point's marker
+and the tuples of its dispatch would otherwise run every 700 allocations, is held to longer
+intervals with everything the child holds before the window frozen out of its way. None of it
+moves a number: the same cards, run before and after on 2026-10-12 over three sessions of
+`crypto_proxies_0928`'s eight names — 11.9 million quotes and prints — gave byte-identical
+runs, one of 23 fills and one of 8,003. Run side by side, two pairs of the first took 633.2 s
+and 671.2 s of wall time (468.5 s and 485.3 s of the child's CPU) before and 412.9 s and
+434.8 s (292.0 s and 298.0 s) after, and the second 858.7 s before and 616.2 s after, its
+orders being the engine's to handle. Of what is left, about half is the engine's own dispatch,
+matching and identifiers, and half the Python the venue's modules, the harness and the sleeve
+run on every point and marker.
+
 **A replay streams its window as a card does.** `kanso replay run` and `parity` — and so the
 `parity_replay` certification gate — read the range through the reads and chunks a card's
 child is streamed, in the replaying process: the research path runs each chunk in the engine

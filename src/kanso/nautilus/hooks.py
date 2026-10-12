@@ -259,6 +259,16 @@ def deregister_modifier(bus: object, host: str, modifier: Modifier) -> None:
         del _REGISTRY[key]
 
 
+def any_attached() -> bool:
+    """Whether any modifier is attached to any host in this process.
+
+    A sleeve asks its overlays on every cohort it is handed; with nothing attached anywhere
+    `modifiers_for` finds nothing whatever it is asked, so the sleeve asks this first and
+    spells no host's names for nothing.
+    """
+    return bool(_REGISTRY)
+
+
 def modifiers_for(
     bus: object, hosts: str | Sequence[str], construct: str | None = None
 ) -> tuple[Modifier, ...]:

@@ -217,7 +217,7 @@ def backtest():
             engine=engine,
             strategy=strategy,
             modifiers=tuple(modifiers),
-            actions=tuple(loaded),
+            actions=tuple(loaded[0].parts),
         )
 
     yield run

@@ -112,6 +112,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_FLOOR, Decimal
+from functools import cache
 from math import fsum, prod
 from typing import Any, ClassVar, Final, NoReturn
 
@@ -174,6 +175,7 @@ from kanso.nautilus.hooks import (
     Decision,
     Hedge,
     HookContext,
+    any_attached,
     deregister_modifier,
     modifiers_for,
     register_modifier,
@@ -374,6 +376,19 @@ def _resolution_of_bar(bar: Bar) -> str:
             f"bar: aggregation {spec.aggregation!r} is not a duration kanso subscribes"
         )
     return f"{int(spec.step)}{unit}"
+
+
+@cache
+def _id_of(key: str) -> InstrumentId:
+    """The instrument id a name parses to, parsed once and kept.
+
+    Every point asks the portfolio what is held in its name, and an `InstrumentId` hashes by
+    formatting its name the first time it is hashed (`model/identifiers.pyx` of
+    nautilus_trader 1.231.0): one object a name keeps that hash, where one parsed a point
+    formatted the name again for every lookup. An id is a value, so which object asks
+    changes no answer.
+    """
+    return InstrumentId.from_str(key)
 
 
 def _signed(order: object, *, filled: bool) -> float:
@@ -1126,14 +1141,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_bar(bar, historical)
             return
-        if self._undelivered(bar.ts_init) or self._out_of_scope(
-            bar.bar_type.instrument_id.value, bar.ts_init
-        ):
+        key = bar.bar_type.instrument_id.value
+        if self._undelivered(bar.ts_init) or self._out_of_scope(key, bar.ts_init):
             return
         self._show_book(int(bar.ts_init))
         self._turn(int(bar.ts_init))
         self._delivered_ns = int(bar.ts_init)
-        key = bar.bar_type.instrument_id.value
         self._printed(key, float(bar.close), int(bar.ts_event), int(bar.ts_init))
         if not self._is_extra_bar(bar):
             self._last_bar[key] = bar
@@ -1148,14 +1161,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_quote_tick(tick, historical)
             return
-        if self._undelivered(tick.ts_init) or self._out_of_scope(
-            tick.instrument_id.value, tick.ts_init
-        ):
+        key = tick.instrument_id.value
+        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
             return
         self._show_book(int(tick.ts_init))
         self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
-        key = tick.instrument_id.value
         self._last_quote[key] = tick
         mid = (float(tick.bid_price) + float(tick.ask_price)) / 2.0
         self._printed(key, mid, int(tick.ts_event), int(tick.ts_init))
@@ -1175,14 +1186,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_trade_tick(tick, historical)
             return
-        if self._undelivered(tick.ts_init) or self._out_of_scope(
-            tick.instrument_id.value, tick.ts_init
-        ):
+        key = tick.instrument_id.value
+        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
             return
         self._show_book(int(tick.ts_init))
         self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
-        key = tick.instrument_id.value
         self._last_trade[key] = tick
         self._printed(key, float(tick.price), int(tick.ts_event), int(tick.ts_init))
         self._observe_price(key, float(tick.price), int(tick.ts_event))
@@ -1422,18 +1431,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._send_behind_modify()
         super().handle_quote_tick(tick, False)
         self._pay_owed()
-        self._consult_exit(tick.instrument_id)
+        instrument_id = tick.instrument_id
+        self._consult_exit(instrument_id)
         if not self._cfg.extra_resolutions:
-            self._overlay_due = (tick.instrument_id, None, None)
+            self._overlay_due = (instrument_id, None, None)
 
     def _dispatch_trade(self, tick: TradeTick) -> None:
         self._data_time = int(tick.ts_event)
         self._send_behind_modify()
         super().handle_trade_tick(tick, False)
         self._pay_owed()
-        self._consult_exit(tick.instrument_id)
+        instrument_id = tick.instrument_id
+        self._consult_exit(instrument_id)
         if not self._cfg.extra_resolutions:
-            self._overlay_due = (tick.instrument_id, None, None)
+            self._overlay_due = (instrument_id, None, None)
 
     def _dispatch_data(self, data: object) -> None:
         instrument_id = getattr(data, "instrument_id", None)
@@ -1785,7 +1796,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return any(order is held for held in self._clip_orders.get(key, ()))
 
     def _clips_filled(self, key: str) -> float:
-        return sum((_signed(order, filled=True) for order in self._clip_orders.get(key, ())), 0.0)
+        orders = self._clip_orders.get(key)
+        if not orders:
+            return 0.0
+        return sum((_signed(order, filled=True) for order in orders), 0.0)
 
     def _clips_intended(self, key: str) -> float:
         return self._clips_filled(key) + sum(
@@ -1798,7 +1812,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
 
     def _own_filled(self, key: str) -> float:
-        net = float(self.portfolio.net_position(InstrumentId.from_str(key)))
+        net = float(self.portfolio.net_position(_id_of(key)))
         return net - self._clips_filled(key)
 
     def _own_intended(self, key: str) -> float:
@@ -2194,6 +2208,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         20 ms. (At 2500 ms that sleeve modifies an order the venue has not taken yet, whose
         cancel goes out as it is taken, not from here.)
         """
+        if not self._behind_modify:
+            return
         held, self._behind_modify = self._behind_modify, {}
         for order in held.values():
             current = self._current(order)
@@ -2210,13 +2226,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         and an exit rule's own exit is asked for as the rule's, which its host cannot take
         back.
         """
+        if not self._owed:
+            return
         for (key, side), (qty, price, ruled) in list(self._owed.items()):
             if only is not None and (key, side) != only:
                 continue
             net = (
                 self._own_filled(key)
                 if self.sized
-                else float(self.portfolio.net_position(InstrumentId.from_str(key)))
+                else float(self.portfolio.net_position(_id_of(key)))
             )
             if net == 0 or (OrderSide.SELL if net > 0 else OrderSide.BUY) != side:
                 del self._owed[(key, side)]
@@ -2972,7 +2990,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     @staticmethod
     def _instrument_id(instrument_id: InstrumentId | str) -> InstrumentId:
         if isinstance(instrument_id, str):
-            return InstrumentId.from_str(instrument_id)
+            return _id_of(instrument_id)
         return instrument_id
 
     @staticmethod
@@ -3107,7 +3125,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         answer is dropped before any leg is built — a clip built and then refused would
         sit on the clip ledger for the rest of the run.
         """
-        if self._hedging or not self.is_running:
+        if self._hedging or not self.is_running or not any_attached():
             return
         clocks = [
             (modifier, clock)

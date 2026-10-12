@@ -92,6 +92,9 @@ class KansoCrossSection(Data):  # type: ignore[misc]
 
 MARKER_TYPE = DataType(KansoCrossSection)
 
+_PLAIN = (QuoteTick, TradeTick, Bar, OrderBookDelta, OrderBookDeltas)
+"""The market types, none of which is a marker or wraps one."""
+
 BAR = "bar"
 QUOTE = "quote"
 TRADE = "trade"
@@ -115,7 +118,7 @@ def coincident(hyp: "Hypothesis") -> bool:
 
 def is_marker(point: object) -> bool:
     """Whether this point is a cross-section flush, wrapped or already unwrapped."""
-    return isinstance(_inner(point), KansoCrossSection)
+    return type(point) not in _PLAIN and isinstance(_inner(point), KansoCrossSection)
 
 
 def without_markers(points: Sequence[object]) -> tuple[object, ...]:
@@ -264,31 +267,35 @@ def with_cross_section(points: Sequence[object], *, coincident: bool = False) ->
         if isinstance(cohort[0], (OrderBookDelta, OrderBookDeltas)):
             continue
         ts = int(cohort[0].ts_init)  # type: ignore[attr-defined]
-        out.extend(_marker(ts) for _ in cohort)
+        for _ in cohort:
+            out.append(_marker(ts))
     return tuple(out)
 
 
 def _cohorts(points: Sequence[object]) -> list[tuple[object, ...]]:
     """Consecutive runs sharing `(ts_init, kind)` after a stable `ts_init` sort."""
     found: list[tuple[object, ...]] = []
-    start = 0
-    while start < len(points):
-        head = points[start]
-        ts = int(head.ts_init)  # type: ignore[attr-defined]
-        kind = _kind(head)
-        end = start + 1
-        while (
-            end < len(points)
-            and int(points[end].ts_init) == ts  # type: ignore[attr-defined]
-            and _kind(points[end]) == kind
-        ):
-            end += 1
-        found.append(tuple(points[start:end]))
-        start = end
+    run: list[object] = []
+    held: tuple[int, str] | None = None
+    for point in points:
+        at = (int(point.ts_init), _kind(point))  # type: ignore[attr-defined]
+        if at != held:
+            if run:
+                found.append(tuple(run))
+            run = []
+            held = at
+        run.append(point)
+    if run:
+        found.append(tuple(run))
     return found
 
 
 def _kind(point: object) -> str:
+    kind = type(point)
+    if kind is QuoteTick:
+        return QUOTE
+    if kind is TradeTick:
+        return TRADE
     inner = _inner(point)
     if isinstance(inner, Bar):
         spec = inner.bar_type.spec
@@ -307,5 +314,7 @@ def _inner(point: object) -> object:
 
 
 def _marker(ts: int) -> CustomData:
-    inner = KansoCrossSection(n=1, ts_event=ts, ts_init=ts)
-    return CustomData(MARKER_TYPE, inner)
+    """A flush marker stamped `ts`. Built positionally — `customdataclass`'s initialiser takes
+    the two instants and then the fields in order (nautilus_trader 1.231.0) — because a tick
+    stream holds a marker a point and the keywords cost half the marker again."""
+    return CustomData(MARKER_TYPE, KansoCrossSection(ts, ts, 1))

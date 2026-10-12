@@ -644,6 +644,16 @@ type a call), and a quiet name's changes can follow another's in every run, so k
 held book's market data unvalidated and makes the refusal itself, of every point, a UTC day
 at a time (`kanso.nautilus.backtest._refuse_unbooked`).
 
+**An unvalidated `add_data` call runs points of several types in the order given.** The call
+says it assumes one type, and its validation does read the first point alone; unvalidated, it
+extends the stream with what it is handed and records each point under its own type, and
+`sort_data`'s stable sort keeps the order. Measured: quotes, prints and kanso's flush markers
+sharing instants, handed a validated call for the first run of each type and one unvalidated
+call for the rest, were handled exactly as the same stream handed a validated call a run. So
+kanso validates the first run of each kind of point in a chunk and hands the rest in calls of
+several types (`kanso.nautilus.backtest._load_stream`): a validated call sorts every
+instrument id the cache holds, and a marked tick stream changes type at almost every point.
+
 Claims a broker adapter makes
 -----------------------------
 A broker package binds to the engine's own adapter for that broker, and this module may
@@ -2852,6 +2862,132 @@ def _check_the_book_check_reads_the_first_point_of_a_call() -> tuple[bool, str]:
     )
 
 
+def _probe_mixed_call(*, runs: bool) -> list[tuple[str, int]]:
+    """A quote, a print and kanso's flush markers sharing instants, handed as kanso hands a
+    stream: a validated `add_data` call for each run of one type, or, with `runs` off, a
+    validated call for the first run of each kind and one unvalidated call for the rest. The
+    handlers a strategy was called in, with each point's `ts_init`."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import CustomData, QuoteTick, TradeTick
+    from nautilus_trader.model.enums import AccountType, AggressorSide, OmsType
+    from nautilus_trader.model.identifiers import ClientId, TradeId, Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
+
+    equity: Any = _sample_equity()
+    client = ClientId("KANSO")
+
+    def quote(ts: int) -> object:
+        return QuoteTick(
+            equity.id,
+            Price(10.0, 2),
+            Price(10.01, 2),
+            Quantity.from_int(100),
+            Quantity.from_int(100),
+            ts,
+            ts,
+        )
+
+    def trade(ts: int) -> object:
+        return TradeTick(
+            equity.id,
+            Price(10.0, 2),
+            Quantity.from_int(10),
+            AggressorSide.BUYER,
+            TradeId(f"T-{ts}"),
+            ts,
+            ts,
+        )
+
+    def marker(ts: int) -> object:
+        return CustomData(MARKER_TYPE, KansoCrossSection(n=1, ts_event=ts, ts_init=ts))
+
+    stream = [
+        quote(1), marker(1), trade(2), marker(2), quote(2), marker(2),
+        quote(3), quote(3), marker(3), marker(3), trade(4), marker(4), quote(5), marker(5),
+    ]  # fmt: skip
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[tuple[str, int]] = []
+
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+            self.subscribe_trade_ticks(equity.id)
+            self.subscribe_data(MARKER_TYPE, client_id=client)
+
+        def on_quote_tick(self, tick: Any) -> None:
+            self.calls.append(("quote", int(tick.ts_init)))
+
+        def on_trade_tick(self, tick: Any) -> None:
+            self.calls.append(("trade", int(tick.ts_init)))
+
+        def on_data(self, data: Any) -> None:
+            self.calls.append(("marker", int(data.ts_init)))
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        grouped: list[list[object]] = []
+        for point in stream:
+            if grouped and type(grouped[-1][0]) is type(point):
+                grouped[-1].append(point)
+            else:
+                grouped.append([point])
+        seen: set[type] = set()
+        rest: list[object] = []
+        for run in grouped:
+            kind = type(run[0])
+            if not runs and kind in seen:
+                rest.extend(run)
+                continue
+            seen.add(kind)
+            if rest:
+                engine.add_data(rest, validate=False, sort=False)
+                rest = []
+            custom = kind is CustomData
+            engine.add_data(run, client_id=client if custom else None, sort=False)
+        if rest:
+            engine.add_data(rest, validate=False, sort=False)
+        engine.sort_data()
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        return probe.calls
+    finally:
+        engine.dispose()
+
+
+def _check_an_unvalidated_call_takes_points_of_several_types() -> tuple[bool, str]:
+    """Why kanso validates the first run of each kind of a stream and hands the rest in
+    unvalidated calls of several types: the engine runs them as the runs it was handed."""
+    by_runs = _probe_mixed_call(runs=True)
+    mixed = _probe_mixed_call(runs=False)
+    expected = [
+        ("quote", 1), ("marker", 1), ("trade", 2), ("marker", 2), ("quote", 2), ("marker", 2),
+        ("quote", 3), ("quote", 3), ("marker", 3), ("marker", 3), ("trade", 4), ("marker", 4),
+        ("quote", 5), ("marker", 5),
+    ]  # fmt: skip
+    holds = by_runs == expected and mixed == expected
+    return holds, (
+        f"quotes, prints and flush markers sharing instants, handed a validated call a run of "
+        f"one type, were handled as {by_runs}; handed a validated call for the first run of "
+        f"each type and one unvalidated call for the rest, as {mixed}"
+    )
+
+
 def _check_close_cost_is_flat() -> tuple[bool, str]:
     """Count the pickle loads a run makes closing positions in two instruments in turn.
 
@@ -4907,6 +5043,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a level-two venue refuses to run a name it holds data and no book data for, and "
         "counts only the first point of each validated add_data call",
         _check_the_book_check_reads_the_first_point_of_a_call,
+    ),
+    (
+        "an unvalidated add_data call takes points of several types and runs them in the "
+        "order given, as calls of one type each would",
+        _check_an_unvalidated_call_takes_points_of_several_types,
     ),
     (
         "closing a position costs the same whatever was closed before it",
