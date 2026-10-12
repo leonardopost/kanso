@@ -12,12 +12,16 @@ from kanso import __version__
 from kanso.errors import ValidationError
 from kanso.screen import catalogue, check, screen_version
 from kanso.screen.library import LIBRARY
-from tests.schemas.test_screen import BASE, build
+from tests.schemas.test_screen import BASE, CATCH_UP, build
 
 
 def test_every_measure_a_screen_can_name_is_shipped_under_its_own_id() -> None:
-    assert sorted(catalogue()) == ["lead_lag", "response"]
-    assert sorted(path.stem for path in LIBRARY.glob("*.yaml")) == ["lead_lag", "response"]
+    assert sorted(catalogue()) == ["catch_up", "lead_lag", "response"]
+    assert sorted(path.stem for path in LIBRARY.glob("*.yaml")) == [
+        "catch_up",
+        "lead_lag",
+        "response",
+    ]
 
 
 def test_a_misfiled_measure_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,6 +43,7 @@ def test_the_version_is_the_package_s_and_a_digest_of_the_library() -> None:
 
 def test_a_screen_inside_every_range_is_admitted() -> None:
     check(build())
+    check(build(measures=[*BASE["measures"], CATCH_UP]))
 
 
 @pytest.mark.parametrize(
@@ -68,3 +73,21 @@ def test_a_parameter_outside_its_range_is_refused_naming_it(
     with pytest.raises(ValidationError, match=message) as refused:
         check(build(measures=measures))
     assert "kanso/screen/library/" in (refused.value.remedy or "")
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"within": "2d"}, r"measures\.0\.within: 172800s is outside the catch_up range"),
+        ({"beta_over": "2d"}, r"measures\.0\.beta_over: 172800s is outside"),
+        ({"max_hold": "2d"}, r"measures\.0\.max_hold: 172800s is outside"),
+        ({"enter_bp": [0.01]}, r"measures\.0\.enter_bp: 0\.01 is outside"),
+        ({"stop": [200]}, r"measures\.0\.stop: 200 is outside"),
+        ({"latency_ms": 120000}, r"measures\.0\.latency_ms: 120000 is outside"),
+    ],
+)
+def test_a_catch_up_parameter_outside_its_range_is_refused_naming_it(
+    change: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        check(build(measures=[{**CATCH_UP, **change}]))

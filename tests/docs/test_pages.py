@@ -931,7 +931,9 @@ def test_the_screen_ranges_the_docs_state_are_the_library_s() -> None:
     stated = {
         (measure, name): (low, high)
         for measure, name, low, high in re.findall(
-            r"^\| `(lead_lag|response)` \| `(\w+)`[^|]*\| `([^`]+)` \| `([^`]+)` \|$", text, re.M
+            r"^\| `(lead_lag|response|catch_up)` \| `(\w+)`[^|]*\| `([^`]+)` \| `([^`]+)` \|$",
+            text,
+            re.M,
         )
     }
     declared = {

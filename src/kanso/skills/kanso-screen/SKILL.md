@@ -17,7 +17,8 @@ A screen measures declared relationships between declared series over a declared
 ## Write the lattice from the mechanism, and keep it small
 - `legs`: `{instrument, type: bar|trade|quote|book, resolution}` (resolution for bars only). `derived`: `basket` (weights), `spread` (`long`, `short`, `hedge: fixed` + `beta`, or `hedge: ols` + `fit: window|first_fold`), `gap` (`a`, `b`: one asset on two venues). `groups` name sets of legs.
 - `lead_lag`: `from`, `to`, `estimator: grid` (needs `clock.grid`; every lag a whole number of steps) or `hy` (prints against prints, no grid), `lags` — never zero; positive means `from` leads.
-- `response`: `trigger` (`move_bp` + `within`, or `z` + `lookback`), `followers` (never `on`: YAML reads it as true), `side: with|against`, `horizons`, `latency_ms`.
+- `response`: `trigger` (`move_bp` + `within`, or `z` + `lookback`), `followers` (never `on`: YAML reads it as true), `side: with|against`, `horizons`, `latency_ms`. It holds for a fixed horizon.
+- `catch_up`: `leader`, `followers`, `within`, `fit: window|first_fold` + `beta_over`, `enter_bp`, `close` (share of the entry gap left, under 1), `stop` (multiple of it, over 1), `max_hold`, `latency_ms`. It trades the follower toward the move its leader made — either sign, beta fitted per pair — and exits on conditions: the gap closed or the gap grew. Use it whenever the thesis is "the follower catches up"; `max_hold` is a safety, not the rule. Prefer `fit: first_fold`.
 - Lags and horizons come from the mechanism: the route's latency as the operator states it for that venue, the follower's print rate, the hold the thesis claims. Every cell widens the family max-T corrects over: twenty considered cells beat two hundred speculative ones.
 - A response's latency is its measure's `latency_ms`; a `latency_ms` under `costs` is ignored by the screen, and `screen draft` carries the measure's into the hypothesis.
 - Every parameter has a range its measure declares (`docs/workspace.md`, `screens/<id>/`); `validate` refuses one outside it.
@@ -38,14 +39,15 @@ A screen measures declared relationships between declared series over a declared
 
 ## Read the result
 - `kanso screen show <id>` lists every cell of the newest result with why it was judged so; `--cell <key>` shows one in full; `--json` carries every field (`docs/workspace.md` names them).
-- For a response, `ceiling_bp_day` against the target first: the search can approach it, never exceed it. Then `margin_bp` per event, `events_per_day`, `folds` and `folds_same_sign` (net bp a day, fold by fold) and `unfilled`. Its `mean`, `t` and `p` test something else: the follower's drift-adjusted move at its mid, whether it follows at all. A pass needs both; a significant follow with a negative margin is a real effect a taker cannot earn.
+- For a response or a catch-up, `ceiling_bp_day` against the target first: the search can approach it, never exceed it. Then `margin_bp` per event, `events_per_day`, `folds` and `folds_same_sign` (net bp a day, fold by fold) and `unfilled`. Its `mean`, `t` and `p` test something else: the follower's drift-adjusted move at its mid, whether it follows at all. A pass needs both; a significant follow with a negative margin is a real effect a taker cannot earn.
+- For a catch-up, also `catch_up.beta` (absent: the leader never moved, the pair holds no value), `closed`/`stopped`/`capped` and the hold median and p90: many `capped` means the condition rarely resolves, and the holds are what the conditions produced.
 - For a lead, `mean` (the correlation) and `t`, and the lag with the largest mean; a negative lag is the reverse direction, so read a forward lead against its mirror. On a `grid`, each leg's `staleness`: a stale follower overstates a lead. Hayashi–Yoshida and response cells have none.
 - `in_sample_fit: true`: the spread was fitted on the data it was judged on — discount it. `clock_bound: true`: a sub-second lead between clocks that mean different things — do not trust it.
 - Every result is scoped to its grain, data types and latency. A null on bars is not a null on books: say so, and screen again on the finer data.
 
 ## Decide, and say who decides
 - Recommend; the operator decides. A screen never blocks a lane the operator wants running. Use it to order the queue and to set the lane's expectations.
-- For a passing response cell of a free screen: `kanso screen draft <screen> --cell <key> --as <new_id> --certify A..B`, then `kanso hyp validate`, `kanso hyp add`, `kanso classify`. Compare the baseline card with the cell's ceiling and margin; report a large gap as a finding.
+- For a passing response or catch-up cell of a free screen: `kanso screen draft <screen> --cell <key> --as <new_id> --certify A..B`, then `kanso hyp validate`, `kanso hyp add`, `kanso classify`. Compare the baseline card with the cell's ceiling and margin; report a large gap as a finding.
 
 ## Rules
 - kanso never runs git. Write no notes or summaries into the workspace: the result files and `state.db` are the record.

@@ -18,7 +18,7 @@ legs:                              # name: {instrument: <catalog id>, type: bar|
 clock:
   grid:                            # <n>(ms|s|m|h): the step a `grid` estimator samples on; no finer than a bar leg
   hours: overlap                   # overlap | {tz: America/New_York, span: "09:30-16:00"}
-measures:                          # lead_lag | response, each parameter within its range (docs/workspace.md, screens/<id>/); every list is a declared, finite lattice
+measures:                          # lead_lag | response | catch_up, each parameter within its range (docs/workspace.md, screens/<id>/); every list is a declared, finite lattice
 #  - id: lead_lag
 #    from: lead
 #    to: follow
@@ -30,6 +30,17 @@ measures:                          # lead_lag | response, each parameter within 
 #    side: with                    # with | against
 #    horizons: [5s, 30s]
 #    latency_ms: 5                 # the order round trip of the route you would trade through; the one a response uses
+#  - id: catch_up                  # trade the follower toward its leader's move until it has caught up; exits are conditions
+#    leader: btc
+#    followers: follow
+#    within: 5s                    # the trailing span the leader's move and the follower's are measured over
+#    fit: first_fold               # first_fold or window, where beta, the follower's response (either sign), is fitted
+#    beta_over: 1m                 # the return span beta is fitted at
+#    enter_bp: [5, 10]             # the implied move and the gap that open a position, each at least this, the same way
+#    close: [0, 0.5]               # caught up: the share of the entry gap left, under 1
+#    stop: [2]                     # failed: the multiple of the entry gap, over 1
+#    max_hold: 10m                 # a safety, counted when it fires; never the rule
+#    latency_ms: 5
 # verdict:                         # optional and never defaulted: declare it before you run, never after reading a result
 #   alpha: 0.05                    # family-wise, over every cell of a measure
 #   min_margin_bp: 1.0             # gross per event less the hurdle

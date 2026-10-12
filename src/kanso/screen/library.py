@@ -19,7 +19,7 @@ from typing import Final
 from kanso import __version__
 from kanso.errors import ValidationError
 from kanso.schemas import parse_yaml
-from kanso.schemas.screen import LeadLag, MeasureItem, Response, Screen, span_ns
+from kanso.schemas.screen import CatchUp, LeadLag, MeasureItem, Response, Screen, span_ns
 
 LIBRARY: Final = Path(__file__).resolve().parent / "library"
 
@@ -64,12 +64,22 @@ def check(screen: Screen) -> None:
                     )
 
 
-def _values(measure: LeadLag | Response) -> dict[str, list[float]]:
+def _values(measure: LeadLag | Response | CatchUp) -> dict[str, list[float]]:
     """Each ranged parameter of a measure, as numbers comparable with its range ends."""
     if isinstance(measure, LeadLag):
         return {
             "lag": [abs(span_ns(lag)) for lag in measure.lags],
             "lags": [len(measure.lags)],
+        }
+    if isinstance(measure, CatchUp):
+        return {
+            "within": [span_ns(measure.within)],
+            "beta_over": [span_ns(measure.beta_over)],
+            "enter_bp": list(measure.enter_bp),
+            "close": list(measure.close),
+            "stop": list(measure.stop),
+            "max_hold": [span_ns(measure.max_hold)],
+            "latency_ms": [measure.latency_ms],
         }
     trigger = measure.trigger
     values: dict[str, list[float]] = {
