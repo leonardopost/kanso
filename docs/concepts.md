@@ -312,11 +312,28 @@ margin per event, the events a day, and `ceiling_bp_day` — what one notional o
 earned a day, with no capacity limit and no sizing: a bound on what a search of the mechanism
 could find, held against a campaign's target in the same units its lanes are scored in.
 
+**A catch-up exits on conditions, never on a clock.** A `catch_up` cell trades a follower toward
+the move its leader already made, and holds it until the follower has caught up or the bet has
+failed. The follower's response to its leader, `beta`, is fitted per pair — either sign, so a
+name that moves against its leader is traded that way — as the slope of the follower's returns
+on the leader's over `beta_over`, on the window's first fold (`fit: first_fold`, which then
+scores none of the pair's cells) or on the window (`fit: window`, flagged `in_sample_fit`). At
+every instant either series moves, the gap is the leader's move over the trailing `within`
+times beta, less the follower's own move. A position opens when the implied move and the gap are
+each at least `enter_bp` the same way — the leader moved and the follower has not — and is
+followed from that anchor, so a leader that keeps moving moves the target. It closes when the
+gap has shrunk to `close` of its size at entry and stops when it has grown to `stop` times it;
+`max_hold` is a safety, counted when it fires. Entry and exit are the follower's first points
+after the declared latency, scored as a response is, against the same hurdle and the same null.
+The result adds the fitted beta, how many positions closed, stopped and were capped, and the
+median and 90th percentile of the holds — how long the rule holds is something the screen
+measures rather than something it is told.
+
 **Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
 `basket` is a weighted sum of its legs' log prices, a `spread` is `log long − beta log short`,
 and a `gap` is one asset's price on two venues as a fraction of the second. Each is live only
 where all its legs are, moves at the union of their points, and trades leg by leg in its
-shares when it is a response's follower. A spread's beta is stated, or fitted by least squares
+shares when it is a response's or a catch-up's follower. A spread's beta is stated, or fitted by least squares
 of one leg's log price on the other's over the window (`fit: window`), in which case every cell
 reading it carries `in_sample_fit: true`, or over the window's first fold (`fit: first_fold`),
 which then scores no cell that reads it, so the later folds judge a hedge they did not choose.
@@ -361,11 +378,11 @@ refuses a hypothesis whose certification window, with its embargo, meets a windo
 screen read for one of its instruments. Whichever arrives first, the data that chose an idea
 never judges it.
 
-**From a cell to a lane.** `kanso screen draft` writes one `response` cell as a draft
-hypothesis, registering nothing: its research window is the window the screen read, its
+**From a cell to a lane.** `kanso screen draft` writes one `response` or `catch_up` cell as a
+draft hypothesis, registering nothing: its research window is the window the screen read, its
 certification window is the operator's and starts no sooner than the embargo after it, its
 `program.md` carries the cell's numbers, and its `strategy.py` is the cell's own rule as a
-sleeve. So the lane's first act, the baseline card, re-measures the screened cell through the
+sleeve — a catch-up's with its fitted beta, its entry, its close, its stop and its cap. So the lane's first act, the baseline card, re-measures the screened cell through the
 runner with real fills — measured on the demo's lead, a margin of 9.20 bp an event in the screen
 and a net edge of 9.14 bp a trade on the drafted baseline — and a large gap between the two is
 itself a finding before any proposal is paid for.

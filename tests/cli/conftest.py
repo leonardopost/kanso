@@ -711,3 +711,25 @@ def mocked_ws(runner: CliRunner, loaded: Path) -> Path:
     classify(loaded)
     mocked.scripted(loaded)
     return loaded
+
+
+OTHER = "OTHR.SIM"
+"""A second synthetic hourly name, on its own seed, for screens of two series."""
+
+
+@pytest.fixture
+def paired(runner: CliRunner, loaded: Path) -> Path:
+    """The loaded workspace with a second, independent hourly name and a fresh snapshot."""
+    entries = yaml.safe_load((loaded / "instruments.yaml").read_text(encoding="utf-8"))
+    entries[OTHER] = {**entries[INSTRUMENT], "nautilus_id": OTHER}
+    (loaded / "instruments.yaml").write_text(yaml.safe_dump(entries), encoding="utf-8")
+    spec = loaded / "other.yaml"
+    spec.write_text(yaml.safe_dump({**SPEC, "instruments": ["OTHR"], "seed": 11}), encoding="utf-8")
+    assert (
+        at(runner, loaded, "data", "instruments", "resolve", "--as-of", "2024-01-02").exit_code == 0
+    )
+    assert (
+        at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
+    )
+    assert at(runner, loaded, "data", "snapshot").exit_code == 0
+    return loaded

@@ -239,3 +239,48 @@ def test_a_verdict_no_cell_could_pass_is_refused() -> None:
     with pytest.raises(ValidationError, match="smallest p 3 session"):
         build(verdict=verdict)
     build(verdict={**verdict, "min_sessions": 8})
+
+
+CATCH_UP: dict[str, Any] = {
+    "id": "catch_up",
+    "leader": "btc",
+    "followers": "follow",
+    "within": "5s",
+    "fit": "first_fold",
+    "beta_over": "1m",
+    "enter_bp": [5, 10],
+    "close": [0, 0.5],
+    "stop": [2],
+    "max_hold": "10m",
+    "latency_ms": 20,
+}
+
+
+def test_a_catch_up_counts_a_cell_per_follower_entry_close_and_stop() -> None:
+    screen = build(measures=[CATCH_UP])
+
+    assert cells(screen) == (3 * 2 * 2 * 1,)
+
+
+@pytest.mark.parametrize(
+    ("measure", "message"),
+    [
+        ({"leader": "nobody"}, "leader: 'nobody' is not a declared leg"),
+        ({"leader": "follow"}, "leader: 'follow' is not a declared leg"),
+        ({"followers": "nobody"}, "'nobody' is not a declared leg or group"),
+        ({"followers": "btc"}, "the leader cannot follow itself"),
+        ({"within": "0s"}, "within: a span of zero measures nothing"),
+        ({"max_hold": "0ms"}, "max_hold: a span of zero measures nothing"),
+        ({"enter_bp": [5, 5]}, "enter_bp: a value appears twice"),
+        ({"close": [0.5, 0.5]}, "close: a value appears twice"),
+        ({"stop": [2, 2]}, "stop: a value appears twice"),
+        ({"close": [1.0]}, "less than 1"),
+        ({"stop": [1.0]}, "greater than 1"),
+        ({"fit": "never"}, "window"),
+    ],
+)
+def test_a_catch_up_names_its_pair_and_ends_on_either_side_of_its_entry_gap(
+    measure: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        build(measures=[{**CATCH_UP, **measure}])

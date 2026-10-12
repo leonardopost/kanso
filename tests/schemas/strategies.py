@@ -66,6 +66,8 @@ from kanso.schemas import (
     parse_duration,
 )
 from kanso.schemas.screen import (
+    CatchUp,
+    CatchUpStats,
     Cell,
     Clock,
     Derived,
@@ -727,7 +729,7 @@ def screens(draw: st.DrawFn) -> Screen:
         )
     )
     horizons = draw(st.lists(st.integers(1, 3600), min_size=1, max_size=4, unique=True))
-    measures: list[LeadLag | Response] = [
+    measures: list[LeadLag | Response | CatchUp] = [
         LeadLag.model_validate(
             {
                 "id": "lead_lag",
@@ -745,6 +747,19 @@ def screens(draw: st.DrawFn) -> Screen:
             followers="g_follow",
             side=draw(st.sampled_from(["with", "against"])),
             horizons=[f"{horizon}s" for horizon in horizons],
+            latency_ms=draw(st.floats(0, 1000, allow_nan=False)),
+        ),
+        CatchUp(
+            id="catch_up",
+            leader=names[0],
+            followers="g_follow",
+            within=f"{draw(st.integers(1, 600))}s",
+            fit=draw(st.sampled_from(["window", "first_fold"])),
+            beta_over=f"{draw(st.integers(1, 3600))}s",
+            enter_bp=draw(st.lists(st.floats(0.1, 100), min_size=1, max_size=3, unique=True)),
+            close=draw(st.lists(st.floats(0, 0.99), min_size=1, max_size=2, unique=True)),
+            stop=draw(st.lists(st.floats(1.01, 10), min_size=1, max_size=2, unique=True)),
+            max_hold=f"{draw(st.integers(1, 3600))}s",
             latency_ms=draw(st.floats(0, 1000, allow_nan=False)),
         ),
     ]
@@ -788,9 +803,10 @@ FINITE = st.floats(-1e6, 1e6, allow_nan=False)
 @st.composite
 def screen_cells(draw: st.DrawFn) -> Cell:
     judged = draw(st.sampled_from([None, "pass", "fail", "thin"]))
+    kind = draw(st.sampled_from(["lead_lag", "response", "catch_up"]))
     return Cell(
         measure=draw(st.integers(0, 4)),
-        id=draw(st.sampled_from(["lead_lag", "response"])),
+        id=kind,
         key=draw(SAFE_TEXT),
         params={"from": "a", "to": "b", "lag": "1s"},
         mean=draw(FINITE),
@@ -803,6 +819,16 @@ def screen_cells(draw: st.DrawFn) -> Cell:
         staleness={"a": draw(st.floats(0, 1))},
         in_sample_fit=draw(st.booleans()),
         clock_bound=draw(st.booleans()),
+        catch_up=None
+        if kind != "catch_up"
+        else CatchUpStats(
+            beta=draw(st.none() | FINITE),
+            closed=draw(st.integers(0, 1000)),
+            stopped=draw(st.integers(0, 1000)),
+            capped=draw(st.integers(0, 1000)),
+            hold_median_s=draw(st.floats(0, 86_400)),
+            hold_p90_s=draw(st.floats(0, 86_400)),
+        ),
         judged=judged,
         reason=None if judged in (None, "pass") else draw(SAFE_TEXT),
     )

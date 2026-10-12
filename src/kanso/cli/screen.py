@@ -23,7 +23,7 @@ from kanso import screen
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import ValidationError
-from kanso.schemas.screen import Cell, LeadLag, ScreenResult
+from kanso.schemas.screen import CatchUp, Cell, LeadLag, ScreenResult
 from kanso.screen import draft, hurdle, records, run
 from kanso.workspace import Workspace
 
@@ -82,7 +82,7 @@ def show_command(
 def draft_command(
     ctx: typer.Context,
     screen_id: IdArgument,
-    cell: Annotated[str, typer.Option("--cell", metavar="C", help="A response cell.")],
+    cell: Annotated[str, typer.Option("--cell", metavar="C", help="A response or catch_up cell.")],
     new_id: Annotated[str, typer.Option("--as", metavar="NEW", help="The new hypothesis id.")],
     certify: Annotated[
         str | None,
@@ -90,7 +90,7 @@ def draft_command(
     ] = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Write a draft hypothesis from one response cell; register nothing."""
+    """Write a draft hypothesis from one response or catch_up cell; register nothing."""
     emit(
         as_json or global_json(ctx),
         lambda: _draft(open_workspace(ctx), screen_id, cell, new_id, certify),
@@ -178,7 +178,13 @@ def _summary_lines(valid: screen.Validated, path: Path) -> tuple[str, ...]:
         field("legs", ", ".join(f"{name} {leg.instrument}" for name, leg in spec.legs.items())),
     ]
     for index, (measure, count) in enumerate(zip(spec.measures, valid.cells, strict=True)):
-        detail = measure.estimator if isinstance(measure, LeadLag) else measure.side
+        detail: str
+        if isinstance(measure, LeadLag):
+            detail = measure.estimator
+        elif isinstance(measure, CatchUp):
+            detail = f"{measure.leader} leads · beta fitted on the {measure.fit.replace('_', ' ')}"
+        else:
+            detail = measure.side
         lines.append(indent(f"measure {index}  {measure.id} · {detail} · {count} cell(s)"))
     lines.append(field("cells", sum(valid.cells)))
     lines.append(field("verdict", "declared" if spec.verdict else "none declared"))
@@ -288,6 +294,17 @@ def _cell_detail(cell: Cell) -> tuple[str, ...]:
         unit = "net bp a day"
     else:
         unit = "mean"
+    if cell.catch_up is not None:
+        caught = cell.catch_up
+        beta = "none (the leader never moved)" if caught.beta is None else f"{caught.beta:+.4g}"
+        lines.append(
+            field(
+                "exits",
+                f"closed {caught.closed} · stopped {caught.stopped} · capped {caught.capped}"
+                f" · hold median {caught.hold_median_s:.4g} s, p90 {caught.hold_p90_s:.4g} s"
+                f" · beta {beta}",
+            )
+        )
     folds = ", ".join("—" if value is None else f"{value:+.4g}" for value in cell.folds)
     lines.append(field("folds", f"{folds} ({unit}) · {cell.folds_same_sign} share the sign"))
     if cell.staleness:

@@ -13,6 +13,8 @@ The order is the contract.
    a result already recorded under them is returned as it was, and nothing is read.
 4. **Measure**, one session at a time: every leg of the session is read once through the
    runner's reader, every measure takes its cells' values from it, and the session is let go.
+   What a measure fits first — a spread's hedge, a catch-up's response — is fitted before, on
+   the sessions of its fit span.
 5. **Judge** each measure's cells across sessions with its max-T null (`kanso.screen.nulls`),
    and, when the file declares a verdict, each cell against it.
 6. **Record** the result in `state.db`, render it beside the screen, and append `screened`.
@@ -29,7 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import numpy as np
 
@@ -37,6 +39,8 @@ from kanso.data.catalog import open_catalog
 from kanso.errors import PreconditionError
 from kanso.schemas import DateWindow
 from kanso.schemas.screen import (
+    CatchUp,
+    CatchUpStats,
     Cell,
     LeadLag,
     Response,
@@ -49,6 +53,7 @@ from kanso.schemas.screen import (
     span_ns,
 )
 from kanso.screen import (
+    catch_up,
     data,
     embargo,
     fit,
@@ -115,7 +120,8 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         draws=ws.config.screen.draws,
         folds=ws.config.research.folds,
         stamps=stamps,
-        betas=_fit(ws, screen, window, catalog, held),
+        betas=(betas := _fit(ws, screen, window, catalog, held)),
+        slopes=_slopes(ws, screen, window, catalog, held, betas),
     )
     cells = _measure(ws, context, window, catalog, held, priced)
     result = ScreenResult(
@@ -151,6 +157,7 @@ class Context:
     folds: int
     stamps: dict[str, str]
     betas: dict[str, float]
+    slopes: dict[int, dict[catch_up.Pair, float | None]]
 
 
 def _measure(
@@ -184,6 +191,20 @@ def _measure(
                 )
                 columns[index].append(values)
                 stale[index].append(staleness)
+            elif isinstance(measure, CatchUp):
+                assert hurdles is not None
+                columns[index].append(
+                    catch_up.session(
+                        screen,
+                        measure,
+                        series,
+                        span,
+                        overlap,
+                        context.betas,
+                        context.slopes[index],
+                        hurdles,
+                    )
+                )
             else:
                 assert hurdles is not None
                 columns[index].append(
@@ -195,6 +216,8 @@ def _measure(
     for index, measure in enumerate(screen.measures):
         if isinstance(measure, LeadLag):
             cells += _lead_lag_cells(context, index, measure, columns[index], stale[index], fold_of)
+        elif isinstance(measure, CatchUp):
+            cells += _catch_up_cells(context, index, measure, columns[index], fold_of)
         else:
             cells += _response_cells(context, index, measure, columns[index], fold_of)
     return [_judged(screen.verdict, cell) for cell in cells]
@@ -248,24 +271,78 @@ def _response_cells(
     fold_of: np.ndarray,
 ) -> list[Cell]:
     keys = response.cells(context.screen, measure)
-    tallies = [[day[row] for day in days] for row in range(len(keys))]
+    tallies: list[list[Tally | None]] = [[day[row] for day in days] for row in range(len(keys))]
+    found: list[Traded] = []
     for row, key in enumerate(keys):
-        if _fits(context.screen, (measure.trigger.leg, key.follower)) & {"first_fold"}:
-            tallies[row] = [
-                None if fold == 0 else day for day, fold in zip(tallies[row], fold_of, strict=True)
-            ]
+        fits = _fits(context.screen, (measure.trigger.leg, key.follower))
+        if "first_fold" in fits:
+            tallies[row] = _without_first_fold(tallies[row], fold_of)
+        found.append(Traded(key.name, key.params, tallies[row], "window" in fits))
+    return _traded_cells(context, index, "response", found, len(days), fold_of)
+
+
+def _catch_up_cells(
+    context: Context,
+    index: int,
+    measure: CatchUp,
+    days: list[list[catch_up.Tally | None]],
+    fold_of: np.ndarray,
+) -> list[Cell]:
+    """A catch-up's cells: a response's, with its pair's response and how its positions ended.
+
+    Its own fit counts as a spread's does: fitted on the first fold, that fold holds no value;
+    fitted on the window, every cell says it was judged on the data it was fitted on.
+    """
+    keys = catch_up.cells(context.screen, measure)
+    found: list[Traded] = []
+    for row, key in enumerate(keys):
+        fits = _fits(context.screen, (key.leader, key.follower)) | {measure.fit}
+        tallies: list[Tally | None] = [day[row] for day in days]
+        if "first_fold" in fits:
+            tallies = _without_first_fold(tallies, fold_of)
+        live = [day for day in tallies if isinstance(day, catch_up.Tally)]
+        beta = context.slopes[index].get((key.leader, key.follower))
+        exits = catch_up.exits(live, beta)
+        found.append(Traded(key.name, key.params, tallies, "window" in fits, exits))
+    return _traded_cells(context, index, "catch_up", found, len(days), fold_of)
+
+
+Tally = response.Tally | catch_up.Tally
+"""A session's positions in one cell that trades."""
+
+
+@dataclass(frozen=True)
+class Traded:
+    """One cell that trades, before it is judged: its name, its sessions, how it was fitted."""
+
+    name: str
+    params: dict[str, str | float]
+    tallies: list[Tally | None]
+    in_sample_fit: bool
+    exits: CatchUpStats | None = None
+
+
+def _traded_cells(
+    context: Context,
+    index: int,
+    kind: Literal["response", "catch_up"],
+    found: Sequence[Traded],
+    days: int,
+    fold_of: np.ndarray,
+) -> list[Cell]:
+    """Cells that trade, judged across sessions on their drift-adjusted signal."""
     signal = np.asarray(
-        [[np.nan if day is None else day.signal for day in row] for row in tallies],
+        [[np.nan if day is None else day.signal for day in item.tallies] for item in found],
         dtype=np.float64,
-    ).reshape(len(keys), len(days))
-    found = nulls.evidence(
+    ).reshape(len(found), days)
+    evidence = nulls.evidence(
         signal, context.draws, nulls.seed(context.sha, context.snapshot_id, index)
     )
     cells: list[Cell] = []
-    for row, key in enumerate(keys):
-        live = [day for day in tallies[row] if day is not None]
+    for row, item in enumerate(found):
+        live = [day for day in item.tallies if day is not None]
         margins = np.asarray(
-            [np.nan if day is None else day.gross - day.hurdle for day in tallies[row]],
+            [np.nan if day is None else day.gross - day.hurdle for day in item.tallies],
             dtype=np.float64,
         )
         stats = _stats(live)
@@ -273,22 +350,27 @@ def _response_cells(
         cells.append(
             Cell(
                 measure=index,
-                id="response",
-                key=key.name,
-                params=key.params,
-                mean=float(found.mean[row]),
-                se=float(found.se[row]),
-                t=float(found.t[row]),
-                p=float(found.p[row]),
-                sessions=int(found.sessions[row]),
+                id=kind,
+                key=item.name,
+                params=item.params,
+                mean=float(evidence.mean[row]),
+                se=float(evidence.se[row]),
+                t=float(evidence.t[row]),
+                p=float(evidence.p[row]),
+                sessions=int(evidence.sessions[row]),
                 folds=folds,
                 folds_same_sign=_same_sign(folds, stats.ceiling_bp_day),
-                in_sample_fit="window"
-                in _fits(context.screen, (measure.trigger.leg, key.follower)),
+                in_sample_fit=item.in_sample_fit,
                 response=stats,
+                catch_up=item.exits,
             )
         )
     return cells
+
+
+def _without_first_fold(tallies: list[Tally | None], fold_of: np.ndarray) -> list[Tally | None]:
+    """The first fold fitted what the cell reads, so its sessions hold no value for it."""
+    return [None if fold == 0 else day for day, fold in zip(tallies, fold_of, strict=True)]
 
 
 def _fit(
@@ -320,13 +402,65 @@ def _fit(
     return {name: fit.beta(name, found) for name, found in moments.items()}
 
 
+def _slopes(
+    ws: Workspace,
+    screen: Screen,
+    window: tuple[date, date],
+    catalog: Any,
+    held: dict[str, Any],
+    betas: dict[str, float],
+) -> dict[int, dict[catch_up.Pair, float | None]]:
+    """Every catch-up pair's response, from the sessions of its measure's fit span."""
+    measures = {
+        index: measure
+        for index, measure in enumerate(screen.measures)
+        if isinstance(measure, CatchUp)
+    }
+    if not measures:
+        return {}
+    days = sessions.days(screen, window)
+    fold_of = _folds(days, window, ws.config.research.folds)
+    bounds = sessions.window_ns(window)
+    overlap = screen.clock.hours == "overlap"
+    gathered = {
+        index: {pair: fit.Moments() for pair in catch_up.pairs(screen, measure)}
+        for index, measure in measures.items()
+    }
+    names = sorted(
+        {
+            leg
+            for index, measure in measures.items()
+            for pair in gathered[index]
+            for name in pair
+            for leg in screen.legs_of(name)
+        }
+    )
+    for day, fold in zip(days, fold_of.tolist(), strict=True):
+        wanted = [
+            index for index, measure in measures.items() if measure.fit == "window" or fold == 0
+        ]
+        if not wanted:
+            continue
+        series = sessions.read(catalog, held, screen, names, day, window)
+        opens, closes = sessions.hours_of(screen, day)
+        span = (max(opens, bounds[0]), min(closes, bounds[1]))
+        for index in wanted:
+            found = catch_up.moments(screen, measures[index], series, span, overlap, betas)
+            for pair, moments in found.items():
+                gathered[index][pair] = gathered[index][pair].merged(moments)
+    return {
+        index: {pair: catch_up.slope(moments) for pair, moments in found.items()}
+        for index, found in gathered.items()
+    }
+
+
 def _fits(screen: Screen, names: Sequence[str]) -> set[str]:
     """How the spreads these names read were fitted: `window`, `first_fold`, or neither."""
     spreads = fit.fitted(screen)
     return {str(spreads[name].fit) for name in names if name in spreads}
 
 
-def _stats(live: Sequence[response.Tally]) -> ResponseStats:
+def _stats(live: Sequence[Tally]) -> ResponseStats:
     """A cell's events, summed over the sessions it was live in."""
     events = sum(day.events for day in live)
     per = max(events, 1)
@@ -398,7 +532,7 @@ def _summary(verdict: ScreenVerdict | None, cells: Sequence[Cell]) -> Summary:
     ranked = sorted(passing, key=_rank)
     return Summary(
         declared=True,
-        worth_a_lane=any(cell.id == "response" for cell in passing),
+        worth_a_lane=any(cell.id != "lead_lag" for cell in passing),
         passed=len(passing),
         failed=sum(cell.judged == "fail" for cell in cells),
         thin=sum(cell.judged == "thin" for cell in cells),
@@ -445,7 +579,7 @@ def _staleness(sessions_seen: Sequence[dict[str, float]]) -> dict[str, float]:
 
 
 def _trades(screen: Screen) -> bool:
-    return any(isinstance(measure, Response) for measure in screen.measures)
+    return any(not isinstance(measure, LeadLag) for measure in screen.measures)
 
 
 def _refuse_unresolved(plans: Sequence[data.LegPlan]) -> None:

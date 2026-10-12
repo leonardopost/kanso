@@ -1,0 +1,10 @@
+id: catch_up
+meaningful_when: "When trading a follower toward the move its leader already made is the thesis, held until the follower has caught up or the gap has failed: per position, the follower's signed return from its first point after the latency to its first point after the exit condition held, against the round trip the venue model charges, one position at a time."
+ranges:
+  within: [1ms, 1d]
+  beta_over: [1ms, 1d]
+  enter_bp: [0.1, 10000]
+  close: [0, 1]
+  stop: [1, 100]
+  max_hold: [1ms, 1d]
+  latency_ms: [0, 60000]

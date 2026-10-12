@@ -151,7 +151,9 @@ def _tally(
             break
         direction = side * sign
         signal = direction * (levels[exit_] - levels[entry]) * BP
-        gross = _gross(screen, key.follower, series, times[entry], times[exit_], direction, signal)
+        gross = taker_gross(
+            screen, key.follower, series, times[entry], times[exit_], direction, signal
+        )
         hold = float(times[exit_] - times[entry])
         tally.events += 1
         tally.signal += signal - direction * drift * hold * BP
@@ -203,7 +205,7 @@ def _z(times: np.ndarray, levels: np.ndarray, lookback: int) -> np.ndarray:
     return np.divide(levels - mean, deviation, out=np.zeros(len(times)), where=usable)
 
 
-def _gross(
+def taker_gross(
     screen: Screen,
     follower: str,
     series: Mapping[str, Series],
