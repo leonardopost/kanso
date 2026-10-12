@@ -648,7 +648,13 @@ consecutive stalls on the same best — counted since the last reseed — say th
 ridge the climb cannot leave, so the scheduler **re-seeds**: the next run starts from the
 highest-scoring other keep under the stalled run's pins that is still aligned — a keep a
 drift check marked is not ground to start from — else from that run's own base,
-and from the best as before when there is neither. The decision is a `reseed` event and
+and from the best as before when there is neither. The pins are all four the stalled run
+carries: `hypothesis.yaml`, `program.md`, the snapshot and the criteria. The books and the
+cards a proposer is shown are selected by three, because a number does not depend on
+`program.md`; where a run starts does, since a keep is a file written to one program's
+rules. Measured in a live workspace on 2026-10-12: a hypothesis kept under a temporary
+program and then under its own restored one, and a reseed selecting by three started the
+next run from a keep the restored program forbids. The decision is a `reseed` event and
 rides on the `queued` passage, which `put_back` and `recover` keep; a decision written only
 at the stall did not survive a live workspace. The best is not cleared. A run's best and
 the hypothesis's are two records: a keep always moves the run's, and moves the
