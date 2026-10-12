@@ -1472,8 +1472,6 @@ class Marks:
                 float(point.high),  # type: ignore[attr-defined]
             )
             return
-        if is_marker(point):
-            return
         ts = self._admitted(point)
         low, high = _range_of(point)
         key = _instrument_of(point) or ""
@@ -1481,9 +1479,6 @@ class Marks:
         funding = _funding_of(point)
         if funding is not None:
             self.settle(ts, key, float(funding.rate))
-        if self.quotes and isinstance(point, QuoteTick):
-            half = quote_half_spread(float(point.bid_price), float(point.ask_price))
-            self._series.setdefault(str(point.instrument_id), []).append((ts, half))
 
     def _admitted(self, point: object) -> int:
         """The point's availability instant, refused outside the delivered span."""

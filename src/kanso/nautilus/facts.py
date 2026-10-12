@@ -2954,9 +2954,6 @@ def _probe_mixed_call(*, runs: bool) -> list[tuple[str, int]]:
                 rest.extend(run)
                 continue
             seen.add(kind)
-            if rest:
-                engine.add_data(rest, validate=False, sort=False)
-                rest = []
             custom = kind is CustomData
             engine.add_data(run, client_id=client if custom else None, sort=False)
         if rest:

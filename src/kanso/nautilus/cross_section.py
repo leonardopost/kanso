@@ -300,10 +300,6 @@ def _kind(point: object) -> str:
     if isinstance(inner, Bar):
         spec = inner.bar_type.spec
         return f"{BAR}:{spec.step}-{spec.aggregation}-{spec.price_type}"
-    if isinstance(inner, QuoteTick):
-        return QUOTE
-    if isinstance(inner, TradeTick):
-        return TRADE
     return type(inner).__name__
 
 
