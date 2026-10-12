@@ -382,6 +382,20 @@ def _signed(order: object, *, filled: bool) -> float:
     return float(-qty if order.side == OrderSide.SELL else qty)  # type: ignore[attr-defined]
 
 
+def _entry_units(qty: float | None, notional: float | None, room: float, unit: float) -> float:
+    """What an unsized entry asks for in units: the quantity asked for, cut to the room and to
+    the notional asked for, `unit` being one unit's notional.
+
+    A quantity they leave whole is that quantity, never its notional divided back by the unit:
+    1,000 x 18.007 / 18.007 is 999.9999999999999 in floats, which the lot floor makes 999.
+    One they cut is the cut notional over the unit, floored like any other.
+    """
+    cap = room if notional is None else min(room, abs(notional))
+    if qty is not None and abs(qty) * unit <= cap:
+        return abs(qty)
+    return cap / unit
+
+
 def _budget_of(modifier: object) -> float:
     """The budget a modifier's clips are sized to; zero for one without a config or a rule."""
     config = getattr(modifier, "modifier_config", None)
@@ -1889,10 +1903,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if room <= 0:
             return None
         unit = reference * float(instrument.multiplier)  # one contract's notional
-        wanted = room if qty is None else abs(qty) * unit
-        if notional is not None:
-            wanted = min(wanted, abs(notional))
-        raw = min(wanted, room) / unit
+        raw = _entry_units(qty, notional, room, unit)
         ctx = self._context(
             resolved_id, resolved_side, raw, price, "LIMIT" if price is not None else "MARKET"
         )

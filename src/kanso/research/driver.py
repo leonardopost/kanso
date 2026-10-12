@@ -137,7 +137,8 @@ GATE_LINES: Final = 10
 """How many failing certification gates are fed back into the next proposal."""
 
 DRIFT_LINES: Final = 3
-"""How many of a run's rewinds are fed back into the next proposal, newest first."""
+"""How many of a run's drift reasons are fed back into the next proposal, newest first, each
+once (`align.rewound_for`)."""
 
 REDUNDANT_LINES: Final = 10
 """How many books already measured are fed back into the next proposal, newest first.
@@ -157,7 +158,7 @@ lines in all, a third of a line per turn, and on the intraday hypothesis where t
 kind is 23% of the stream, 264 of 325 turns and 2.3 lines of the ten. That is the price of
 the newest ten being the newest ten, and it is paid in older repeats for newer books.
 
-Read across the pins rather than within the run, like `_recent` and unlike `_rewound_for`:
+Read across the pins rather than within the run, like `_recent` and unlike `align.rewound_for`:
 a rewind is a fact about one run's file, but a book already held is a fact about the
 hypothesis, and every reseed used to wipe the record of it. Measured on one live
 hypothesis, 560 of 991 refusals repeated an idea from an *earlier* run against 18 within
@@ -480,7 +481,7 @@ def _dynamic(
     failing = _failing_gates(store, active.hyp_id)
     if failing:
         facts["failing_certification_gates"] = failing
-    rewound = _rewound_for(store, active)
+    rewound = align.rewound_for(store, active, DRIFT_LINES)
     if rewound:
         facts["rewound_for"] = rewound
     redundant = _redundant_in(store, active)
@@ -648,24 +649,6 @@ same hypothesis file, the same snapshot and the same criteria, in whichever run.
 
 def _pins(active: RunRecord) -> tuple[str, str, str, str]:
     return (active.hyp_id, active.hypothesis_sha, active.snapshot_id, active.criteria_version)
-
-
-def _rewound_for(store: StateStore, active: RunRecord) -> list[str]:
-    """Why this run has been rewound, newest first: the reason each drift check gave.
-
-    A reason is a sentence about `strategy.py` and the hypothesis it is meant to test, both
-    of which the proposer is already shown in full, so unlike a failing certification gate's
-    evidence it carries nothing measured on the embargoed window and nothing measured at
-    all. What it carries is the one thing the rewound file cannot say: which direction the
-    check refused, and why.
-    """
-    rows = store.connection.execute(
-        "SELECT detail FROM events WHERE kind = ? AND subject = ?"
-        " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC LIMIT ?",
-        (align.DRIFTED, active.hyp_id, active.run_id, DRIFT_LINES),
-    ).fetchall()
-    said = [str(json.loads(str(row["detail"])).get("reason") or "") for row in rows]
-    return [reason for reason in said if reason]
 
 
 def _redundant_in(store: StateStore, active: RunRecord) -> list[dict[str, object]]:

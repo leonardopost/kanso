@@ -34,7 +34,9 @@ an environment allow-list and no path to any catalog: the parent reads the windo
 the catalog and streams the points to the child on its standard input, so a card has no
 route to data outside its window even if its code looked for one. The window travels in
 chunks cut between instants — reads of an hour for a feed of prints, quotes or a book and
-of a day otherwise, each cut to at most `CHUNK_POINTS` points — and the parent reads the
+of a day otherwise, or, for a feed marked however its instants fall, of as many as the
+files' footers say hold at most `READ_POINTS` points, each cut to at most `CHUNK_POINTS`
+points — and the parent reads the
 next chunk only once the last is written, so the parent holds one read of the window, which
 it keeps until every chunk cut from it is written, and the child holds the chunk it runs;
 nothing of the window is ever on disk. The parent supervises wall time and
@@ -116,7 +118,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 from functools import cache
-from itertools import chain
+from itertools import accumulate, chain
 from math import fsum
 from pathlib import Path
 from types import ModuleType
@@ -240,10 +242,13 @@ RESULT_FILE: Final = "result.pkl"
 OUTPUT_FILE: Final = "stderr.txt"
 
 READ_TICK_NS: Final = 3_600 * NS_PER_SECOND
-"""How much of a window of prints, quotes or a book the parent reads from the catalog at a
-time; any other window is read a day at a time. Measured on one perpetual swap's level-two book
-and prints: an hour's read costs at most 2.6 times per point what a twelve-hour read does,
-about three seconds over a whole day of BTC."""
+"""The step a window of prints, quotes or a book is read from the catalog in; any other
+window's step is a day. A read is one step, or that step and as many after it as the files
+it reads hold at most `READ_POINTS` points over (`_reads`; one name's bars and custom points
+excepted, `_chunked`), so a dense feed is read a step at a time and a sparse one in as few
+reads as its points need. Measured on one perpetual swap's
+level-two book and prints: an hour's read costs at most 2.6 times per point what a
+twelve-hour read does, about three seconds over a whole day of BTC."""
 
 CHUNK_POINTS: Final = 250_000
 """The most catalog points one chunk of a card's stream holds, unless one instant alone
@@ -251,6 +256,17 @@ holds more. Measured on a day of BTC's book and prints: a fresh child holds abou
 of its own plus 0.66-0.81 KB per point of the chunk it runs, so this is about 0.4 GB; and
 caps of 10,000, 50,000, 200,000 and none gave the identical card, at about 10 ms of CPU
 per extra chunk."""
+
+READ_POINTS: Final = CHUNK_POINTS
+"""The most points a read longer than its step may hold, counted off the footers of the
+files it reads before it is made (`_reads`). One chunk's worth, so a read lengthened past its
+step is a single chunk, and the parent holds no more of a sparse window at once than the
+child holds of a chunk. Measured on 2026-10-10 on a workspace holding fifteen names' quotes
+and prints at whole minutes of the regular session, filed a month a file: over January 2022,
+696 hourly reads, 160 of them holding anything, took 207.5 s, and two reads took 0.8 s to
+hand on the same 235,229 points and their markers byte for byte; over 2022-01-03..2024-12-31,
+76 reads took 23.5 s, where 26,256 hourly reads had taken 70 to 110 minutes. Three hours of
+one name's prints at 360,000 an hour were still read an hour at a time."""
 
 FEED_BYTES: Final = 64 * 1024
 """The most the parent writes to a card's standard input in one step of its watch."""
@@ -700,37 +716,43 @@ def _window_points(
     end: int,
 ) -> tuple[tuple[tuple[object, ...], ...], dict[str, int]]:
     """The points of one span, one type per group, and how many bars each grain served."""
-    from kanso.data.types import BUILTIN_TYPES, resolve_type
+    from kanso.data.types import resolve_type
 
-    hyp = request.hyp
     groups: list[tuple[object, ...]] = []
-    grains = _bar_grains(request)
-    loaded: dict[str, int] = {grain: 0 for grain in grains}
-    for requirement in sorted(hyp.data_requirements):
-        if requirement not in BUILTIN_TYPES:
-            custom = _custom_points(catalog, resolve_type(requirement), hyp.universe, start, end)
+    loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
+    for requirement, name, resolution in _series(request):
+        if name is None:
+            custom = _custom_points(
+                catalog, resolve_type(requirement), request.hyp.universe, start, end
+            )
             if custom:
                 groups.append(custom)
             continue
-        if requirement == "bar":
-            for resolution in grains:
-                for name in sorted(hyp.universe):
-                    if requirement not in hyp.required_of(name):
-                        continue
-                    found = market_points(catalog, requirement, held[name], resolution, start, end)
-                    found = _in_scope(found, name, scope)
-                    if found:
-                        loaded[resolution] += len(found)
-                        groups.append(found)
-            continue
-        for name in sorted(hyp.universe):
-            if requirement not in hyp.required_of(name):
-                continue
-            found = market_points(catalog, requirement, held[name], hyp.resolution, start, end)
-            found = _in_scope(found, name, scope)
-            if found:
-                groups.append(found)
+        found = market_points(catalog, requirement, held[name], resolution, start, end)
+        found = _in_scope(found, name, scope)
+        if found:
+            if requirement == "bar":
+                loaded[resolution] += len(found)
+            groups.append(found)
     return tuple(groups), loaded
+
+
+def _series(request: RunRequest) -> Iterator[tuple[str, str | None, str]]:
+    """Every series a span of the window is read as, in the order its groups are handed on:
+    each requirement in turn, a custom type once for the universe and the market together
+    (its name `None`), and a market type once for each name it is required of, at every
+    grain the request names for bars and at the hypothesis's resolution otherwise."""
+    from kanso.data.types import BUILTIN_TYPES
+
+    hyp = request.hyp
+    for requirement in sorted(hyp.data_requirements):
+        if requirement not in BUILTIN_TYPES:
+            yield requirement, None, ""
+            continue
+        for resolution in _bar_grains(request) if requirement == "bar" else (hyp.resolution,):
+            for name in sorted(hyp.universe):
+                if requirement in hyp.required_of(name):
+                    yield requirement, name, resolution
 
 
 def _refuse_missing_grain(request: RunRequest, loaded: Mapping[str, int]) -> None:
@@ -764,16 +786,25 @@ def market_points(
     A screen reads its legs through this function too (`kanso.screen.sessions`), so what a
     screen measures is what a card of the same instrument and span is handed.
     """
+    from kanso.nautilus.strategy import BAR
+
+    _refuse_if_unwanted()
+    data_cls, identifier = _filed_as(requirement, instrument, resolution)
+    if requirement == BAR:
+        return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
+    return _in_file_order(catalog, data_cls, identifier, start, end)
+
+
+def _filed_as(requirement: str, instrument: Any, resolution: str) -> tuple[type, str]:
+    """The class and the identifier the catalog files one instrument's series of a market
+    type under: the bar type the sleeve subscribes to for bars, the instrument otherwise."""
     from nautilus_trader.model.data import Bar, OrderBookDelta, QuoteTick, TradeTick
 
     from kanso.nautilus.strategy import BAR, BOOK, QUOTE, _bar_type
 
-    _refuse_if_unwanted()
     if requirement == BAR:
-        identifier = str(_bar_type(instrument.id, resolution))
-        return tuple(catalog.query(Bar, identifiers=[identifier], start=start, end=end))
-    data_cls = {QUOTE: QuoteTick, BOOK: OrderBookDelta}.get(requirement, TradeTick)
-    return _in_file_order(catalog, data_cls, str(instrument.id), start, end)
+        return Bar, str(_bar_type(instrument.id, resolution))
+    return {QUOTE: QuoteTick, BOOK: OrderBookDelta}.get(requirement, TradeTick), str(instrument.id)
 
 
 def _in_file_order(
@@ -2188,8 +2219,10 @@ def window_chunks(
 
     Each chunk is a slice of the span in time order, grouped one type per group, holding
     every point of its instants and at most `CHUNK_POINTS` of them unless one instant alone
-    holds more; the span is read an hour at a time for a feed of prints, quotes or a book
-    and a day at a time otherwise (`_chunked`). A caller that runs one chunk before it asks
+    holds more; the span is read in steps of an hour for a feed of prints, quotes or a book
+    and of a day otherwise, a read holding one step or, for a feed marked however its
+    instants fall, as many as hold at most `READ_POINTS` points (`_chunked`). A caller that
+    runs one chunk before it asks
     for the next — `execute_chunked`, `session.run_node_chunked` — holds one read and one
     chunk of the window and never the whole of it.
 
@@ -2230,27 +2263,132 @@ def _chunked(
 ) -> Iterator[tuple[tuple[object, ...], ...]]:
     """The delivered span as chunks, read from the catalog only as they are asked for.
 
-    The span is read a step at a time — an hour of a window of prints, quotes or a book, a
-    day of any other, aligned to UTC midnight — and each read is cut into chunks of at most
+    The span is read in steps — an hour of a window of prints, quotes or a book, a day of
+    any other, aligned to UTC midnight — each read one step, or more where the files it
+    reads hold few points (`_reads`), and each read is cut into chunks of at most
     `CHUNK_POINTS` points between instants (`_cut`), so whoever runs a chunk before asking
     for the next holds the read until every chunk cut from it is handed on, and the chunk.
     An overlay grain the catalog does not hold is refused once every read is done.
+
+    A read holds more than one step of points only for a hypothesis whose feed is marked
+    however its instants fall (`kanso.nautilus.cross_section.coincident`), which every
+    window of prints, quotes or a book is. Any other feed — one name's bars and custom
+    points — is marked chunk by chunk, where some instant of the chunk holds two points of a
+    kind, so a read of several days would mark the instants of days a day's read left
+    unmarked, and under a latency move where a command lands. Such a window is read a step
+    at a time wherever a row group meets the step, in exactly the chunks it always was, and
+    only the stretches no row group meets are read together.
     """
-    from kanso.nautilus.cross_section import TICK_KINDS
+    from kanso.nautilus.cross_section import TICK_KINDS, coincident
 
     opens, closes = request.delivered
     step = READ_TICK_NS if TICK_KINDS.intersection(request.hyp.data_requirements) else NS_PER_DAY
+    cap = READ_POINTS if coincident(request.hyp) else 0
     loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
     first = midnight_ns(day_of(opens))
-    for read_start in range(first + (opens - first) // step * step, closes, step):
-        start = max(opens, read_start)
-        end = min(closes, read_start + step) - 1
+    edge = first + (opens - first) // step * step
+    counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1))
+    for start, end in _reads(counted, edge, step, (opens, closes), cap):
         groups, counts = _window_points(request, catalog, held, scope, start, end)
         for grain, count in counts.items():
             loaded[grain] += count
         yield from _cut(groups, CHUNK_POINTS)
         del groups
     _refuse_missing_grain(request, loaded)
+
+
+def _reads(
+    counted: Sequence[tuple[int, int, int]],
+    edge: int,
+    step: int,
+    span: tuple[int, int],
+    cap: int,
+) -> Iterator[tuple[int, int]]:
+    """The reads `[start, end]` of `span`, `[opens, closes)`, in steps of `step` from `edge`.
+
+    Each read begins at a step's edge and holds that step and every step after it for as
+    long as the row groups that meet them — `counted`, each a first and a last `ts_init` and
+    the rows between — hold at most `cap` rows together. A point is a row of a group whose
+    range holds its instant, so a read longer than one step holds at most `cap` points
+    however the points lie inside their groups; a step whose groups alone hold more is read
+    alone, as every step was before; and a run of steps no group meets is never read a step
+    at a time. Where the reads fall changes nothing a card is handed (`_cut`,
+    `_in_file_order`).
+
+    The rows of the groups that meet steps `a` to `b` are those of the groups begun by step
+    `b` less those of the groups ended before step `a`, so both are summed once, in step
+    order, and each read is found by bisection.
+    """
+    opens, closes = span
+    starts = sorted(((first - edge) // step, rows) for first, _, rows in counted)
+    ends = sorted(((last - edge) // step, rows) for _, last, rows in counted)
+    begun_at = [at for at, _ in starts]
+    begun = list(accumulate((rows for _, rows in starts), initial=0))
+    ended_at = [at for at, _ in ends]
+    ended = list(accumulate((rows for _, rows in ends), initial=0))
+    final = (closes - 1 - edge) // step
+    at = 0
+    while at <= final:
+        fits = bisect.bisect_right(begun, cap + ended[bisect.bisect_right(ended_at, at - 1)]) - 1
+        to = final if fits == len(begun_at) else min(max(begun_at[fits] - 1, at), final)
+        yield max(opens, edge + at * step), min(closes, edge + (to + 1) * step) - 1
+        at = to + 1
+
+
+def _files_read(
+    request: RunRequest, catalog: Any, held: Mapping[str, Any], start: int, end: int
+) -> list[str]:
+    """Every file a read of the span `[start, end]` can take points from: each series' files
+    whose interval, read off the name, meets it, listing each class's files once.
+
+    These are the files the catalog's query is handed or finds itself: on nautilus_trader
+    1.231.0 both `_in_file_order` and `query` without files take a series' files from
+    `filter_files` with the same identifiers, and a file's name is its first and last
+    `ts_init`, so no point of the span lies in a file left out (`kanso.nautilus.facts`).
+    """
+    from kanso.data.types import resolve_type
+
+    listed: dict[type, list[str]] = {}
+    files: dict[str, None] = {}
+    for requirement, name, resolution in _series(request):
+        if name is None:
+            data_cls, identifiers = resolve_type(requirement), None
+        else:
+            data_cls, identifier = _filed_as(requirement, held[name], resolution)
+            identifiers = [identifier]
+        if data_cls not in listed:
+            listed[data_cls] = catalog.get_file_list_from_data_cls(data_cls)
+        found = catalog.filter_files(data_cls, listed[data_cls], identifiers, start, end)
+        files.update(dict.fromkeys(found))
+    return list(files)
+
+
+def _row_groups(files: Iterable[str]) -> list[tuple[int, int, int]]:
+    """The first and last `ts_init` of every row group of `files`, and its rows, read off
+    each file's footer and not its data.
+
+    The engine names no count of a file's rows, so this reads the footers with `pyarrow`, as
+    `kanso.data.catalog` does. On nautilus_trader 1.231.0 `write_data` writes a file in row
+    groups of 5,000 rows, each stating the least and greatest `ts_init` it holds
+    (`kanso.nautilus.facts`), so the rows of the groups that meet a span overstate what it
+    holds by no more than the part of a group at each of its ends, for each series. A group
+    that states no range is counted at every instant.
+    """
+    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
+    counted: list[tuple[int, int, int]] = []
+    for path in files:
+        footer = pq.read_metadata(path)
+        names = footer.schema.names
+        column = names.index("ts_init") if "ts_init" in names else None
+        for index in range(footer.num_row_groups):
+            group = footer.row_group(index)
+            stated = None if column is None else group.column(column).statistics
+            if stated is not None and stated.has_min_max:
+                counted.append((int(stated.min), int(stated.max), group.num_rows))
+            else:
+                counted.append((0, 2**64 - 1, group.num_rows))
+    return counted
 
 
 def _payload(
