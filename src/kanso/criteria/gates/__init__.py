@@ -31,12 +31,13 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
-from datetime import date, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta
 from hashlib import sha256
 from math import e, fsum, inf, sqrt
 from statistics import NormalDist, median
 from typing import ClassVar, Final
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 
@@ -62,12 +63,16 @@ from kanso.criteria.quantities import (
     years,
 )
 from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, Trade, day_of
+from kanso.errors import ValidationError
 from kanso.schemas import GateResult, parse_duration
+from kanso.schemas.screen import hours_minutes
 
 PERCENT: Final = 100.0
 """A share of capital is reported the way a risk limit states one."""
 
 NS_PER_DAY: Final = 86_400 * NS_PER_SECOND
+
+MINUTES_PER_DAY: Final = 1440
 
 EULER_MASCHERONI: Final = 0.5772156649015329
 """The constant in the expected maximum of a sample of Sharpe ratios."""
@@ -919,6 +924,201 @@ class _MinEventDays:
         return verdict(self.id, len(days) >= minimum, {"event_days": len(days), "min": minimum})
 
 
+class _TradingHours:
+    """Every fill inside a stated daily session, and every position flat by its close.
+
+    A venue that accepts no market order outside regular hours refuses what a backtest
+    fills at 16:30 against an extended-hours quote, so a strategy that trades there earns a
+    number no account could have earned. "Regular hours only" in a thesis is a sentence a
+    model reads, and two constants in `strategy.py` are lines the loop may edit; this is
+    the same instruction as a refusal, stated once in `hypothesis.yaml`.
+
+    `session` is clock times on one day and `tz` the zone that clock is kept in, so
+    daylight saving moves the session as the market moves it: `09:30-16:00` in
+    `America/New_York` is 14:30 to 21:00 UTC in January and 13:30 to 20:00 in July. On
+    each local date the session runs from the first instant the clock reads the opening
+    time or later to the first it reads the closing time or later, and is half-open: a
+    fill at the closing instant is outside it. So a time a clock change repeats is read
+    at its first occurrence and one it skips at the change itself (`first_reading`).
+
+    Two things are judged, both on exact instants. A fill is outside when it falls outside
+    the session of its own local date. A position is every stretch an instrument's net
+    quantity is away from zero, from the fill that opened it to the fill that closed it —
+    a reversal in one fill does not close it — and one still open when the window closes is
+    held to that close; it is held outside unless it opened and closed inside one session.
+    Its fills alone cannot say that: bought at 15:59 and sold at 09:31 the next morning, it
+    made two fills inside the session and was held all night.
+
+    The run is judged whole. An attached construct's run is its host and itself trading
+    together, and a venue refuses the host's order outside the session as it refuses the
+    candidate's.
+
+    The session is the same on every date: no calendar of early closes is on file, so a
+    fill at 14:00 on a day the market closed at 13:00 is judged against the stated close.
+    """
+
+    id: ClassVar[str] = "trading_hours"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        span, zone = text(ctx, "session"), text(ctx, "tz")
+        if span is None and zone is None:
+            return skipped(self.id, "no session was chosen, so no fill was timed")
+        session = _trading_session(span, zone)
+        if isinstance(session, str):
+            return verdict(self.id, False, {"refused": session, "session": span, "tz": zone})
+        fills = sorted(ctx.run.fills, key=lambda item: item.ts_ns)
+        if not fills:
+            return skipped(self.id, "no fill was made, so nothing was timed")
+        outside = [item for item in fills if not session.holds(item.ts_ns)]
+        spells = _spells_held(fills, ctx.run.bounds[1])
+        over = [spell for spell in spells if not session.holds_throughout(*spell[1:])]
+        return verdict(
+            self.id,
+            not outside and not over,
+            {
+                "session": span,
+                "tz": zone,
+                "n_fills": len(fills),
+                "n_fills_outside": len(outside),
+                "earliest_fill_outside": session.fill(outside[0]) if outside else None,
+                "latest_fill_outside": session.fill(outside[-1]) if outside else None,
+                "n_positions": len(spells),
+                "n_held_outside": len(over),
+                "earliest_held_outside": session.spell(*over[0]) if over else None,
+                "latest_held_outside": session.spell(*over[-1]) if over else None,
+            },
+        )
+
+
+def _trading_session(span: str | None, zone: str | None) -> TradingSession | str:
+    """The session these two parameters state, or why they state none."""
+    if span is None or zone is None:
+        return "a session is clock times in a zone, and only one of session and tz was chosen"
+    try:
+        opens, closes = hours_minutes(span)
+    except ValidationError:
+        return f"session: {span!r} is not HH:MM-HH:MM on one day"
+    try:
+        return TradingSession(opens, closes, ZoneInfo(zone))
+    except (ZoneInfoNotFoundError, ValueError):
+        return f"tz: {zone!r} is not a time zone this host knows"
+
+
+@dataclass(frozen=True)
+class TradingSession:
+    """A daily span of clock times in a zone, read date by date as instants.
+
+    `opens` and `closes` are minutes after local midnight, `closes` at most a whole day.
+    Each date's instants are worked out once and kept, since a window's fills fall on a
+    few hundred dates however many there are.
+    """
+
+    opens: int
+    closes: int
+    zone: ZoneInfo
+    _dates: dict[date, tuple[int, int]] = field(default_factory=dict, compare=False, repr=False)
+
+    def local(self, ts_ns: int) -> datetime:
+        """The instant on this session's clock, to the microsecond."""
+        seconds, rest = divmod(ts_ns, NS_PER_SECOND)
+        return datetime.fromtimestamp(seconds, self.zone).replace(microsecond=rest // 1000)
+
+    def bounds(self, day: date) -> tuple[int, int]:
+        """A local date's session as the half-open span of instants `[opens, closes)`."""
+        found = self._dates.get(day)
+        if found is None:
+            found = (
+                first_reading(day, self.opens, self.zone),
+                first_reading(day, self.closes, self.zone),
+            )
+            self._dates[day] = found
+        return found
+
+    def holds(self, ts_ns: int) -> bool:
+        """Whether an instant falls inside the session of its own local date."""
+        opens, closes = self.bounds(self.local(ts_ns).date())
+        return opens <= ts_ns < closes
+
+    def holds_throughout(self, opened: int, closed: int) -> bool:
+        """Whether a position held over `[opened, closed)` stayed inside one session."""
+        opens, closes = self.bounds(self.local(opened).date())
+        return opens <= opened and closed <= closes
+
+    def fill(self, item: Fill) -> dict[str, object]:
+        """A fill as the evidence names it: what, which way, and when on both clocks."""
+        return {
+            "instrument": item.instrument_id,
+            "side": item.side,
+            "ts_ns": item.ts_ns,
+            "local": self.local(item.ts_ns).isoformat(),
+        }
+
+    def spell(self, instrument: str, opened: int, closed: int) -> dict[str, object]:
+        """A position held outside, with the close of the session it opened in."""
+        _, closes = self.bounds(self.local(opened).date())
+        return {
+            "instrument": instrument,
+            "opened": self.local(opened).isoformat(),
+            "closed": self.local(closed).isoformat(),
+            "session_closed": self.local(closes).isoformat(),
+        }
+
+
+def first_reading(day: date, minute: int, zone: ZoneInfo) -> int:
+    """The first instant on `day` that `zone`'s clock reads `minute` past midnight or later.
+
+    In nanoseconds since the epoch; a minute of a whole day is the next day's first instant.
+    A reading a clock change repeats is the earlier of its two instants, which is what fold
+    zero resolves it to. A reading a change skips has no instant at all, and the first
+    instant past it is the change: fold one resolves it on the offset after the change, to
+    an instant before it, and fold zero on the offset before, to one after, so the change
+    lies between the two and is found by bisection on whole seconds, which is the grain
+    every transition in the zone database is stamped at.
+    """
+    day += timedelta(days=minute // MINUTES_PER_DAY)
+    hour, rest = divmod(minute % MINUTES_PER_DAY, 60)
+    wall = datetime.combine(day, time(hour, rest), tzinfo=zone)
+    after, before = int(wall.timestamp()), int(wall.replace(fold=1).timestamp())
+    if before >= after:
+        return after * NS_PER_SECOND
+    offset = _offset(before, zone)
+    while after - before > 1:
+        middle = (before + after) // 2
+        if _offset(middle, zone) == offset:
+            before = middle
+        else:
+            after = middle
+    return after * NS_PER_SECOND
+
+
+def _offset(seconds: int, zone: ZoneInfo) -> timedelta | None:
+    """The zone's offset from UTC at a whole second since the epoch."""
+    return datetime.fromtimestamp(seconds, zone).utcoffset()
+
+
+def _spells_held(fills: Sequence[Fill], closes: int) -> list[tuple[str, int, int]]:
+    """Every stretch an instrument's net quantity was away from zero, in opening order.
+
+    `(instrument, opened, closed)` from the fill that took the quantity off zero to the
+    one that brought it back, or to `closes` when none did. Quantities are summed rounded,
+    as `_orders` gathers them, so a fractional lot sold in pieces comes back to zero.
+    """
+    position: dict[str, float] = {}
+    opened: dict[str, int] = {}
+    spells: list[tuple[str, int, int]] = []
+    for item in fills:
+        before = position.get(item.instrument_id, 0.0)
+        signed = -item.qty if item.side == "SELL" else item.qty
+        after = round(before + signed, 9)
+        position[item.instrument_id] = after
+        if not before and after:
+            opened[item.instrument_id] = item.ts_ns
+        elif before and not after:
+            spells.append((item.instrument_id, opened.pop(item.instrument_id), item.ts_ns))
+    spells.extend((instrument, ts_ns, closes) for instrument, ts_ns in opened.items())
+    return sorted(spells, key=lambda spell: spell[1])
+
+
 SCENARIO_KEYS: Final = (
     "commission_bps",
     "commission_per_share",
@@ -1344,6 +1544,7 @@ walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()
 deflated_sharpe: Final[Gate] = _DeflatedSharpe()
 deflated_contribution: Final[Gate] = _DeflatedContribution()
 min_event_days: Final[Gate] = _MinEventDays()
+trading_hours: Final[Gate] = _TradingHours()
 cost_stress: Final[Gate] = _CostStress()
 cost_scenario: Final[Gate] = _CostScenario()
 bootstrap: Final[Gate] = _Bootstrap()

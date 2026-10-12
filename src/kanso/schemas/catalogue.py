@@ -17,7 +17,10 @@ or its fold count — so a toolbox item is written once and sized to each hypoth
 A parameter's type says what a chosen value must be. The numeric ones carry a range; an
 `instrument` is a string that names one id of the hypothesis's own universe, and a value
 naming anything else is refused wherever parameters are checked — a gate on one leg of a
-pair cannot be told about a leg the hypothesis does not trade.
+pair cannot be told about a leg the hypothesis does not trade. `hours` is a span of clock
+times on one day, `HH:MM-HH:MM`, closing after it opens and at `24:00` at the latest, and
+`zone` an IANA time-zone name the host's zone database holds; a value that is neither is
+refused where an `instrument` is, so a session a gate cannot read never reaches a card.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ NeedsHost = Literal["none", "sleeve", "portfolio"]
 ObjectiveMode = Literal["absolute", "relative"]
 Kind = Literal["objective", "gate"]
 GateStage = Literal["card", "cert", "paper", "live"]
-ParamType = Literal["int", "float", "bool", "str", "duration", "instrument"]
+ParamType = Literal["int", "float", "bool", "str", "duration", "instrument", "hours", "zone"]
 
 RANGE_ATTRS: Final = ("horizon", "resolution", "history_days", "folds")
 NUMERIC_PARAM_TYPES: Final = ("int", "float", "duration")

@@ -326,6 +326,7 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
         "maintenance_margin",
         "position_size",
         "leg_edge",
+        "trading_hours",
     }
     assert gates["strategy_integrity"]["required"] is True
     assert gates["min_trades"]["required"] is False
@@ -335,6 +336,8 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
     assert gates["maintenance_margin"]["params"] == gates["maintenance_margin"]["ranges"] == {}
     assert gates["min_trades"]["meaningful_when"]
     assert gates["position_size"]["params"] == {"min_pct": "float", "max_pct": "float"}
+    assert gates["trading_hours"]["params"] == {"session": "hours", "tz": "zone"}
+    assert gates["trading_hours"]["ranges"] == {}
     assert gates["position_size"]["ranges"] == {
         "min_pct": {"min": 0.0, "max": 1000.0},
         "max_pct": {"min": 0.0, "max": 1000.0},
