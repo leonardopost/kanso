@@ -333,7 +333,8 @@ def test_the_exchange_loads_the_modules_the_research_venue_loads(kernel: Any) ->
 
     client = sandbox.SimulatedVenue(kernel, venue())
 
-    assert [type(module) for module in client.exchange.modules] == [
+    assert [type(module) for module in client.exchange.modules] == [actions.KansoModules]
+    assert [type(module) for module in client.exchange.modules[0].parts] == [
         actions.CorporateActions,
         Availability,
         Tape,

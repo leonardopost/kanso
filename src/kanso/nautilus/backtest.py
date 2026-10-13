@@ -124,6 +124,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import IO, Any, Final
 
+from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+
 from kanso.criteria import CardRun, Fill, FundingPayment, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
@@ -141,6 +143,7 @@ from kanso.nautilus.costs import (
     reset,
     tick_slip,
 )
+from kanso.nautilus.cross_section import is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
@@ -276,6 +279,17 @@ END: Final = {"end": True}
 
 PARENT_POLL_S: Final = 0.5
 """How often a card asks whether the process that started it is still its parent."""
+
+COLLECTOR: Final = (20_000, 20, 20)
+"""The cyclic collector's thresholds in a card child, from the default (700, 10, 10).
+
+A card allocates a flush marker and the tuples of its dispatch for every point, nearly all of
+them garbage within the handler, and the default collects the young every 700 of them and
+the whole heap every hundred of those collections. Measured on 2026-10-12 in two pairs of
+cards of three sessions of eight names' quotes and prints run side by side, the collector
+took 5.8 % of the child's samples, and these thresholds took 6 % and 8 % off its CPU time
+with the same result and no more memory. The thresholds change when garbage is found, never
+what the card computes."""
 
 ORPHANED: Final = 3
 """The status a card exits with when it ended itself because the lane that started it was
@@ -1322,6 +1336,9 @@ def _own_peak_gb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _MAXRSS_BYTES / GIB
 
 
+_MARKET: Final = (QuoteTick, TradeTick, Bar)
+"""The market types a funding settlement never is, so `Marks.take` asks them nothing."""
+
 Point = tuple[int, str, float | None, float | None, float | None]
 """One stream point: `(ts_init, instrument, price, low, high)`. The price is the mark, and
 the last two are the adverse range the point spans — a bar's low and high, a quote's bid and
@@ -1404,23 +1421,67 @@ class Marks:
         self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
 
     def take(self, points: Iterable[object]) -> None:
-        """Fold a chunk of points, its funding settlements first (see the class)."""
-        held = tuple(points)
-        for point in held:
-            if _funding_of(point) is not None:
+        """Fold a chunk of points, its funding settlements first (see the class).
+
+        A quote, a print or a bar is never a settlement, so only the other points are asked,
+        and a flush marker folds nothing, so it is not handed on; a card folds every point of
+        its window here, once.
+        """
+        later: list[object] = []
+        for point in points:
+            if type(point) in _MARKET:
+                later.append(point)
+            elif is_marker(point):
+                continue
+            elif _funding_of(point) is None:
+                later.append(point)
+            else:
                 self.feed(point)
-        for point in held:
-            if _funding_of(point) is None:
-                self.feed(point)
+        for point in later:
+            self.feed(point)
 
     def feed(self, point: object) -> None:
-        """Fold one point: its instant, its mark, its range and, for a quote, its spread."""
-        from nautilus_trader.model.data import QuoteTick
+        """Fold one point: its instant, its mark, its range and, for a quote, its spread.
 
-        from kanso.nautilus.cross_section import is_marker
-
-        if is_marker(point):
+        A quote, a print and a bar are folded from the prices they carry, read once each,
+        and anything else as `_price_of`, `_range_of` and `_instrument_of` read it: the same
+        values either way, since those read a quote, a print and a bar exactly so.
+        """
+        kind = type(point)
+        if kind is QuoteTick:
+            ts = self._admitted(point)
+            bid = float(point.bid_price)  # type: ignore[attr-defined]
+            ask = float(point.ask_price)  # type: ignore[attr-defined]
+            key = point.instrument_id.value  # type: ignore[attr-defined]
+            self.fold(ts, key, (bid + ask) / 2.0, bid, ask)
+            if self.quotes:
+                self._series.setdefault(key, []).append((ts, quote_half_spread(bid, ask)))
             return
+        if kind is TradeTick:
+            ts = self._admitted(point)
+            price = float(point.price)  # type: ignore[attr-defined]
+            self.fold(ts, point.instrument_id.value, price, price, price)  # type: ignore[attr-defined]
+            return
+        if kind is Bar:
+            ts = self._admitted(point)
+            self.fold(
+                ts,
+                point.bar_type.instrument_id.value,  # type: ignore[attr-defined]
+                float(point.close),  # type: ignore[attr-defined]
+                float(point.low),  # type: ignore[attr-defined]
+                float(point.high),  # type: ignore[attr-defined]
+            )
+            return
+        ts = self._admitted(point)
+        low, high = _range_of(point)
+        key = _instrument_of(point) or ""
+        self.fold(ts, key, _price_of(point), low, high)
+        funding = _funding_of(point)
+        if funding is not None:
+            self.settle(ts, key, float(funding.rate))
+
+    def _admitted(self, point: object) -> int:
+        """The point's availability instant, refused outside the delivered span."""
         ts = int(point.ts_init)  # type: ignore[attr-defined]
         if not self.opens <= ts < self.closes:
             raise PreconditionError(
@@ -1428,15 +1489,7 @@ class Marks:
                 f"requested window {self.span[0]}..{self.span[1]}",
                 remedy="load the window the run asked for and nothing else",
             )
-        low, high = _range_of(point)
-        key = _instrument_of(point) or ""
-        self.fold(ts, key, _price_of(point), low, high)
-        funding = _funding_of(point)
-        if funding is not None:
-            self.settle(ts, key, float(funding.rate))
-        if self.quotes and isinstance(point, QuoteTick):
-            half = quote_half_spread(float(point.bid_price), float(point.ask_price))
-            self._series.setdefault(str(point.instrument_id), []).append((ts, half))
+        return ts
 
     def fold(
         self, ts: int, key: str, price: float | None, low: float | None, high: float | None
@@ -1445,7 +1498,10 @@ class Marks:
         if ts < self.measured:
             target = self.prefix
         else:
-            target = self._folds.setdefault((ts - self.measured) // self.period_ns, _Fold())
+            index = (ts - self.measured) // self.period_ns
+            target = self._folds.get(index)  # type: ignore[assignment]
+            if target is None:
+                target = self._folds[index] = _Fold()
             target.end = max(target.end, ts)
             if low is not None and high is not None:
                 target.lows[key] = min(target.lows.get(key, low), low)
@@ -1594,10 +1650,16 @@ def _price_of(point: object) -> float | None:
 
 def _funding_of(point: object) -> Any:
     """The funding settlement a point is, the catalog's wrapper taken off, or `None`."""
+    inner = getattr(point, "data", point)
+    return inner if isinstance(inner, _funding_type()) else None
+
+
+@cache
+def _funding_type() -> type:
+    """The funding type, imported once: `kanso.data` is not imported with this module."""
     from kanso.data.types import Funding
 
-    inner = getattr(point, "data", point)
-    return inner if isinstance(inner, Funding) else None
+    return Funding
 
 
 def _range_of(point: object) -> tuple[float | None, float | None]:
@@ -1624,12 +1686,26 @@ def _ordered(groups: Sequence[Sequence[object]], *, coincident: bool = False) ->
 
 
 def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -> None:
-    """Add the ordered stream in homogeneous type runs, then sort once.
+    """Add the ordered stream in order, validating the first run of each kind, then sort once.
 
-    The engine assumes one type per `add_data` call. Markers are `CustomData` and need
-    `CLIENT_ID`; bars, quotes and trades do not. Consecutive same-type runs keep the
-    insertion order `sort_data`'s stable sort then preserves, so a marker that follows
-    its cohort in the ordered stream still follows it after the sort.
+    The engine's validation reads the first point of an `add_data` call alone and assumes
+    the rest are of its type; what it does is idempotent for a kind of point — a type, and
+    the instrument or bar type the point is of — so a call validated for the first run of a
+    kind in a stream has done everything a call for each later run would. Markers are
+    `CustomData` and need `CLIENT_ID`; bars, quotes and trades do not. So each run of one
+    type that begins a kind not yet seen in this stream is added validated, and everything
+    between those runs is added unvalidated, a stretch of several types to a call, in the
+    order the ordered stream holds it — which `sort_data`'s stable sort then preserves, so a
+    marker that follows its cohort still follows it after the sort.
+
+    That is the stream the engine was handed a run to a call, in the same order, after the
+    same validations: what differs is the cost. A stream of prints and quotes marked
+    point by point changes type at almost every point, and a validated call sorts every
+    instrument id the cache holds, comparing ids by their names: measured on 2026-10-12 on
+    three sessions of eight names' quotes and prints, a call a run took 23 % of a card's
+    time. An unvalidated call is told nothing about the types it is handed, and needs to
+    be told nothing: it extends the stream and records each point under its own type
+    (`kanso.nautilus.facts`).
 
     Under `book` — a hypothesis that holds a level-two book — market data is added without
     the engine's validation, whose one consequence here is that it refuses to run a stream
@@ -1646,35 +1722,47 @@ def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -
     client was registered when the venue was added, and every instrument was added before
     any point.
     """
-    from nautilus_trader.model.data import (
-        Bar,
-        OrderBookDelta,
-        OrderBookDeltas,
-        QuoteTick,
-        TradeTick,
-    )
+    from nautilus_trader.model.data import OrderBookDelta, OrderBookDeltas
     from nautilus_trader.model.identifiers import ClientId
 
-    if not points:
-        return
+    plain = (Bar, QuoteTick, TradeTick, OrderBookDelta, OrderBookDeltas)
+    seen: set[tuple[type, object]] = set()
+    unchecked: list[object] = []
+    start = 0
+    while start < len(points):
+        first = points[start]
+        kind = type(first)
+        end = start + 1
+        while end < len(points) and type(points[end]) is kind:
+            end += 1
+        held = kind in plain
+        of = _kind_of(first)
+        if (book and held) or of in seen:
+            unchecked.extend(points[start:end])
+        else:
+            seen.add(of)
+            if unchecked:
+                engine.add_data(unchecked, validate=False, sort=False)
+                unchecked = []
+            engine.add_data(
+                list(points[start:end]),
+                client_id=None if held else ClientId(CLIENT_ID),
+                validate=True,
+                sort=False,
+            )
+        start = end
+    if unchecked:
+        engine.add_data(unchecked, validate=False, sort=False)
+    if points:
+        engine.sort_data()
 
-    def add(run: Sequence[object]) -> None:
-        plain = type(run[0]) in (Bar, QuoteTick, TradeTick, OrderBookDelta, OrderBookDeltas)
-        engine.add_data(
-            list(run),
-            client_id=None if plain else ClientId(CLIENT_ID),
-            validate=not (book and plain),
-            sort=False,
-        )
 
-    run: list[object] = []
-    for point in points:
-        if run and type(point) is not type(run[0]):
-            add(run)
-            run = []
-        run.append(point)
-    add(run)
-    engine.sort_data()
+def _kind_of(point: object) -> tuple[type, object]:
+    """What the engine's validation of a call reads off its first point: the point's type and
+    the bar type or instrument it is of, nothing for a point of neither."""
+    if type(point) is Bar:
+        return Bar, point.bar_type  # type: ignore[attr-defined]
+    return type(point), getattr(point, "instrument_id", None)
 
 
 # --- the extraction ----------------------------------------------------------
@@ -2878,7 +2966,9 @@ def main(argv: Sequence[str]) -> int:
     is what names it.
 
     The arguments are where the report goes and the pid of the process that started the
-    card, which it outlives by at most `PARENT_POLL_S` (`end_with`).
+    card, which it outlives by at most `PARENT_POLL_S` (`end_with`). Once the request is in
+    hand everything the child holds is moved out of the collector's way (`gc.freeze`) and
+    the collector runs less often (`COLLECTOR`), which moves no number.
 
     The stream is a sequence of pickles on standard input (`_stream`). The first names the
     workspace extensions the parent imported, and they are imported here before anything
@@ -2898,6 +2988,8 @@ def main(argv: Sequence[str]) -> int:
     handed = pickle.load(handle)
     reimport((str(directory), str(name)) for directory, name in handed["extensions"])
     payload = pickle.load(handle)
+    gc.freeze()
+    gc.set_threshold(*COLLECTOR)
     try:
         result = execute_chunked(payload["request"], payload["instruments"], _chunks(handle))
     except SizingError as refused:

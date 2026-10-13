@@ -593,8 +593,8 @@ def test_the_venue_module_parts_the_paths_intents_where_a_sleeve_acts_on_its_fil
         200.0,
     )
 
-    loaded = actions.modules
-    monkeypatch.setattr(actions, "modules", lambda venue: loaded(venue)[:1])
+    loaded = actions.parts
+    monkeypatch.setattr(actions, "parts", lambda venue: loaded(venue)[:1])
     node, engine = two_paths(AT_THE_QUOTE, points)
 
     assert fills_of(node) == fills_of(engine) == []
@@ -685,8 +685,8 @@ def test_parity_misses_the_paths_parting_on_a_stale_print_an_order_lands_on(
     ]
     assert compared(node, engine) == (None, 0)
 
-    loaded = actions.modules
-    monkeypatch.setattr(actions, "modules", lambda venue: loaded(venue)[:1])
+    loaded = actions.parts
+    monkeypatch.setattr(actions, "parts", lambda venue: loaded(venue)[:1])
     node, engine = posted(320, 9.9, STALE_PRINTS, latency_ms=20)
 
     skipped = [(40, 100.0, 9.9, True), (50, 100.0, 9.9, True), (60, 100.0, 9.9, True)]

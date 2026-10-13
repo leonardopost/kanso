@@ -20,8 +20,9 @@ most ordinary exit there is, and a run optimises exactly that number.
 a strategy decides, and cancelling standing orders across a corporate action is what a
 broker does rather than what its client does. So both of kanso's simulated venues load this
 module — the research path's through `BacktestEngine.add_venue(modules=...)`, the node
-path's through `kanso.nautilus.sandbox` — and a deployment against a real broker loads
-none, because there the broker has already done it. One mechanism, one instant, and
+path's through `kanso.nautilus.sandbox`, each as a part of the one module a venue loads
+(`modules`) — and a deployment against a real broker loads none, because there the broker
+has already done it. One mechanism, one instant, and
 `kanso replay parity` compares the two paths at a tolerance of zero across a split.
 
 **The account is left as the engine computed it.** A split moves no money, but the engine's
@@ -91,10 +92,23 @@ from kanso.nautilus.availability import Availability
 from kanso.nautilus.splits import Split
 from kanso.nautilus.tape import Tape
 
-__all__ = ["NAME", "TOPIC", "CorporateActions", "Restated", "last_price", "modules"]
+__all__ = [
+    "MODULES",
+    "NAME",
+    "TOPIC",
+    "CorporateActions",
+    "KansoModules",
+    "Restated",
+    "last_price",
+    "modules",
+    "parts",
+]
 
 NAME: Final = "CorporateActions"
 """What the venue's log calls this module, suffixed with the venue it was loaded into."""
+
+MODULES: Final = "Kanso"
+"""What the venue's log calls the one module it loads (`KansoModules`), suffixed likewise."""
 
 TOPIC: Final = "kanso.restated"
 """The bus topic a venue announces a split on, the moment it applies it and never before."""
@@ -327,18 +341,78 @@ def last_price(book: Any, position: Any) -> float:
     return float(position.last_event.last_px)
 
 
-def modules(venue: str) -> list[SimulationModule]:
-    """The simulation modules one venue loads, in the order it runs them, each named for the
-    venue it serves: the corporate actions first, which read the book a split restates and
-    pays in lieu from, then `Availability`, which may empty a top-of-book book before the
-    point is applied. The other way round, a split that the instrument's own point triggers,
-    stamped before the book's last update, would find the book already emptied: nothing to
-    restate, and no quote to value the fraction at. Then `Tape`, which under
+def parts(venue: str) -> list[SimulationModule]:
+    """kanso's simulation modules for one venue, in the order a venue runs them, each named
+    for the venue it serves: the corporate actions first, which read the book a split
+    restates and pays in lieu from, then `Availability`, which may empty a top-of-book book
+    before the point is applied. The other way round, a split that the instrument's own point
+    triggers, stamped before the book's last update, would find the book already emptied:
+    nothing to restate, and no quote to value the fraction at. Then `Tape`, which under
     `limit_fill: print_through` lands what is due by a print and tells the fill model the
     point in hand, after a split has restated the book and before the point is applied, and
-    under any other rule does nothing."""
+    under any other rule does nothing. A venue loads them as one module (`modules`)."""
     return [
         CorporateActions(SimulationModuleConfig(component_id=f"{NAME}-{venue}")),
         Availability(SimulationModuleConfig(component_id=f"{availability.NAME}-{venue}")),
         Tape(SimulationModuleConfig(component_id=f"{tape.NAME}-{venue}")),
     ]
+
+
+def modules(venue: str) -> list[SimulationModule]:
+    """The simulation modules one venue loads: kanso's `parts` for it, as one module."""
+    return [KansoModules(venue, parts(venue))]
+
+
+class KansoModules(SimulationModule):  # type: ignore[misc]
+    """kanso's simulation modules, loaded by a venue as one: each part is registered as the
+    exchange registers a module and handed every point it is handed, in order.
+
+    One module and not three because the exchange asks every module it loads on every event:
+    `process` after each point the engine delivers, and `pre_process` before each point it
+    matches, as calls from the engine into Python. No part acts on `process` — each acts on
+    the points it is handed — so the parts are asked nothing there, and a venue's every event
+    costs one call where it cost three. Measured on 2026-10-12 on a bare engine over 300,000
+    quotes across three venues, three modules that did nothing cost 0.85 µs an event more
+    than one; a card of a tick stream sends its venues two events a point, the point and its
+    flush marker.
+
+    Engine facts this relies on (nautilus_trader 1.231.0): `SimulatedExchange.__init__` calls
+    `register_base(portfolio=, msgbus=, cache=, clock=)` and then `register_venue(exchange)`
+    on each module it loads, both overridable from Python, as are `pre_process`, `process`,
+    `log_diagnostics` and `reset`.
+    """
+
+    def __init__(self, venue: str, loaded: list[SimulationModule]) -> None:
+        super().__init__(SimulationModuleConfig(component_id=f"{MODULES}-{venue}"))
+        self.parts: tuple[SimulationModule, ...] = tuple(loaded)
+        """The modules this one stands for, in the order each point is handed to them."""
+
+    def register_base(self, portfolio: Any, msgbus: Any, cache: Any, clock: Any) -> None:
+        """Register this module and every part as the exchange registers a module."""
+        super().register_base(portfolio=portfolio, msgbus=msgbus, cache=cache, clock=clock)
+        for part in self.parts:
+            part.register_base(portfolio=portfolio, msgbus=msgbus, cache=cache, clock=clock)
+
+    def register_venue(self, exchange: Any) -> None:
+        """Hold the exchange, and have every part hold it."""
+        super().register_venue(exchange)
+        for part in self.parts:
+            part.register_venue(exchange)
+
+    def pre_process(self, data: Any) -> None:
+        """Hand the point to every part, in order, before the venue matches it."""
+        for part in self.parts:
+            part.pre_process(data)
+
+    def process(self, ts_now: int) -> None:
+        """Nothing: every part acts on the points it is handed, and none on a clock tick."""
+
+    def log_diagnostics(self, logger: Any) -> None:
+        """What every part logs."""
+        for part in self.parts:
+            part.log_diagnostics(logger)
+
+    def reset(self) -> None:
+        """Reset every part."""
+        for part in self.parts:
+            part.reset()

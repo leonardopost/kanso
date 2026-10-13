@@ -41,7 +41,7 @@ the book the model answers. It asks with identical arguments for a print, for a 
 matched again after a command lands and for a quote locked at the price, so the model cannot
 tell from them which point it is matching or whether the order was on the book before it.
 `Tape`, a simulation module both of kanso's venues load after the corporate actions and
-`Availability` (`kanso.nautilus.actions.modules`), tells it: before each point the venue
+`Availability` (`kanso.nautilus.actions.parts`), tells it: before each point the venue
 applies, the point itself, and for a print the orders resting on the instrument's matching
 engine before it as limits, each with the price it rested at. A print's record — its price, the
 side it hit, the orders that rested before it with their prices and the share of its size each
@@ -275,8 +275,9 @@ class PrintThrough(FillModel):  # type: ignore[misc]
         until the next of either, its size shared across the orders it reaches when it
         arrives, and ends the last quote if it trades strictly outside it."""
         if isinstance(point, QuoteTick):
-            self._quote[point.instrument_id] = point
-            self._print[point.instrument_id] = None
+            instrument_id = point.instrument_id  # one object, so its name is formatted once
+            self._quote[instrument_id] = point
+            self._print[instrument_id] = None
         elif isinstance(point, TradeTick):
             self._print[point.instrument_id] = _Print(
                 point.price,

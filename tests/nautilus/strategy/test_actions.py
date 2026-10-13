@@ -152,12 +152,38 @@ def test_the_venue_runs_the_corporate_actions_before_availability() -> None:
     other two leave and before the point is applied."""
     loaded = actions.modules(VENUE.value)
 
-    assert [type(module) for module in loaded] == [actions.CorporateActions, Availability, Tape]
-    assert [str(module.id) for module in loaded] == [
+    assert [type(module) for module in loaded] == [actions.KansoModules]
+    assert str(loaded[0].id) == f"Kanso-{VENUE.value}"
+    assert [type(module) for module in loaded[0].parts] == [
+        actions.CorporateActions,
+        Availability,
+        Tape,
+    ]
+    assert [str(module.id) for module in loaded[0].parts] == [
         f"CorporateActions-{VENUE.value}",
         f"Availability-{VENUE.value}",
         f"Tape-{VENUE.value}",
     ]
+
+
+def test_the_venue_s_one_module_hands_its_parts_what_the_exchange_hands_it(backtest) -> None:
+    """The exchange loads one module and asks it alone; each part holds the exchange and the
+    bus it would hold loaded on its own, and is reset with it."""
+    run = backtest(Holder(config()), instruments=[equity(DEMO, info=SCHEDULE)], data=series())
+    loaded = run.actions[0].exchange.modules
+
+    assert [type(module) for module in loaded] == [actions.KansoModules]
+    assert loaded[0].parts == run.actions
+    assert all(part.exchange is loaded[0].exchange for part in run.actions)
+    assert all(part.msgbus is loaded[0].msgbus for part in run.actions)
+    assert [float(event.quantity_change) for event in held(run).adjustments] == [-905.0]
+
+    loaded[0].process(0)
+    loaded[0].log_diagnostics(None)
+    loaded[0].reset()
+
+    assert run.actions[0]._known == -1
+    assert run.actions[0]._due == []
 
 
 def test_a_reset_venue_re_reads_its_schedules(backtest) -> None:

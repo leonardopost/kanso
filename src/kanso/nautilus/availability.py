@@ -15,7 +15,8 @@ venue's book: a resting buy a later quote went through stayed unfilled, and a ma
 sent on a quote the venue had ignored filled against the book before it.
 
 `Availability` is a simulation module both of kanso's venues load, after the corporate
-actions (`kanso.nautilus.actions.modules`). Handed a quote or a print before the matching
+actions, as a part of the one module each venue loads (`kanso.nautilus.actions.parts`,
+`KansoModules`). Handed a quote or a print before the matching
 engine sees it, it empties that instrument's top-of-book book when the engine would
 otherwise skip the point, and only then; the engine then applies the point at its
 `ts_init`, as the sleeve is handed it. A top-of-book book holds one level a side, which the
@@ -38,8 +39,8 @@ Engine facts this module relies on (nautilus_trader 1.231.0). `kanso doctor` che
 two as engine facts (`kanso.nautilus.facts`), the second by loading this module alone on a
 venue, which also exercises the third and shows a module handed a quote and a print before
 the matching engine sees them. That a venue calls several modules in the order loaded is
-read from the engine's source; the order kanso loads them in is pinned by a test of
-`kanso.nautilus.actions.modules`. The book's own filter, the fifth, was measured on a bare
+read from the engine's source; the order kanso hands a point to them in is pinned by a test
+of `kanso.nautilus.actions.parts`. The book's own filter, the fifth, was measured on a bare
 book.
 
 * A top-of-book (`L1_MBP`) matching engine's `process_quote_tick` and `process_trade_tick`

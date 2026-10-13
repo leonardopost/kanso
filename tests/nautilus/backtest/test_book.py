@@ -351,6 +351,22 @@ def test_a_quote_and_a_trade_carry_their_own_range() -> None:
     assert _range_of(object()) == (None, None)
 
 
+def test_a_quote_marks_at_its_mid_and_a_trade_at_its_price() -> None:
+    """`_price_of` is what the node's end-of-window books are marked at, every point of the
+    window handed to it; a card's marks read a quote and a print from their own fields."""
+    from kanso.nautilus.backtest import _price_of
+
+    from .conftest import quotes, trades
+
+    quote = quotes(QUARTER)[0]
+    trade = trades(QUARTER)[0]
+    made = bars(QUARTER)[0]
+    assert _price_of(quote) == (float(quote.bid_price) + float(quote.ask_price)) / 2.0
+    assert _price_of(trade) == float(trade.price)
+    assert _price_of(made) == float(made.close)
+    assert _price_of(object()) is None
+
+
 def test_a_bar_s_range_is_its_low_and_its_high() -> None:
     from kanso.nautilus.backtest import _range_of
 
