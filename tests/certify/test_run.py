@@ -1125,7 +1125,21 @@ def test_the_instrument_a_point_belongs_to_is_read_off_the_point() -> None:
 
 
 def test_only_bars_carry_the_volume_a_capacity_gate_reads() -> None:
-    assert run._daily_volume([(a_quote(),)], ()) == {}, "a quote is not a day's traded notional"
+    evidence = run._Evidence(0, ())
+    evidence.take([(a_quote(),)])
+
+    assert evidence.daily_volume == {}, "a quote is not a day's traded notional"
+    assert evidence.lags == {(INSTRUMENT, "quote"): 0.0}, "but it was published, and when"
+
+
+def test_the_evidence_is_folded_a_chunk_at_a_time_and_each_chunk_handed_on_as_it_came() -> None:
+    """Two chunks of one day sum into the day; a chunk passes through the fold unchanged."""
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    first, second = [(a_bar_of(share, 100, "10.00"),)], [(a_bar_of(share, 300, "10.00"),)]
+    evidence = run._Evidence(0, (share,))
+
+    assert evidence.take(first) is first and evidence.take(second) is second
+    assert evidence.daily_volume == {"OTHER.XNAS": [4_000.0]}
 
 
 def a_manual(nautilus_id: str, override: dict[str, str], asset_class: str = "EQUITY") -> Any:
@@ -1184,10 +1198,11 @@ def test_a_day_s_volume_is_notional_in_contracts_and_in_shares_alike() -> None:
     assert type(perpetual).__name__ == "CryptoPerpetual" and float(perpetual.multiplier) == 0.01
     assert float(share.multiplier) == 1.0
     traded = [(a_bar_of(perpetual, 1_000, "40000.0"), a_bar_of(share, 1_000, "40000.00"))]
+    evidence = run._Evidence(0, (perpetual, share))
 
-    volume = run._daily_volume(traded, (perpetual, share))
+    evidence.take(traded)
 
-    assert volume == {
+    assert evidence.daily_volume == {
         "BTCUSDT-PERP.SIM": [1_000 * 40_000.0 * 0.01],
         "OTHER.XNAS": [1_000 * 40_000.0],
     }, "a thousand contracts of a hundredth of a coin are ten coins, not a thousand"
@@ -1271,21 +1286,26 @@ def test_a_subject_resolves_both_prefixes_once_and_every_run_of_a_window_is_hand
 def test_the_evidence_gates_are_shown_the_window_and_never_the_prefix(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The lags and the volume are the certification window's own."""
+    """The lags and the volume are the certification window's own: the subject's run is fed
+    the prefix, and the fold its chunks pass through on the way takes none of it."""
     a_warmed_subject(ws, store)
-    shown: list[Any] = []
-    observed = run._observed_lags
-    monkeypatch.setattr(
-        run, "_observed_lags", lambda groups: shown.append(groups) or observed(groups)
-    )
+    handed: list[int] = []
+    take = run._Evidence.take
+
+    def watched(evidence: Any, groups: Any) -> Any:
+        handed.extend(int(point.ts_init) for group in groups for point in group)
+        return take(evidence, groups)
+
+    monkeypatch.setattr(run._Evidence, "take", watched)
 
     made = certify(ws, store, HYP_ID)
 
     assert made.verdict == "pass"
-    (groups,) = shown
-    stamps = [int(point.ts_init) for group in groups for point in group]
-    assert len(stamps) == (CERTIFICATION[1] - CERTIFICATION[0]).days + 1
-    assert min(stamps) >= midnight_ns(CERTIFICATION[0])
+    opens = midnight_ns(CERTIFICATION[0])
+    assert min(handed) < opens, "the subject's run was handed its prefix through the fold"
+    assert len([stamp for stamp in handed if stamp >= opens]) == (
+        (CERTIFICATION[1] - CERTIFICATION[0]).days + 1
+    )
     (capacity,) = [gate for gate in made.gates if gate.id == "capacity_vs_adv"]
     window = [
         float(bar.volume) * float(bar.close)

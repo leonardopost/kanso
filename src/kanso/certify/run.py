@@ -38,12 +38,15 @@ certificate says which gate judged nothing and why, so a plan naming a gate whos
 machinery arrives with a later milestone still produces an honest verdict over the gates
 that did run.
 
-**A gate that perturbs a parameter runs the window again through this runner.** The
-certification window's instruments and points are already in hand, so a perturbation costs
-one engine run and no catalog read, and the perturbed run is extracted by exactly the
-arithmetic the unperturbed one was. Only the subject's own parameters can move — a
-sleeve's own configuration fields, or the construct parameters an attached modifier was
-composed with — never the capital, the risk limits or anything else the hypothesis injects.
+**A gate that perturbs a parameter runs the window again through this runner.** The window
+is read from the catalog again, a chunk at a time, as the first run read it, and the
+perturbed run is extracted by exactly the arithmetic the unperturbed one was. No window is
+held between runs: a certification holds one read and one chunk of the window it is running,
+whichever run that is, so what it costs does not grow with the window's length or with how
+many runs its plan makes, and a perturbation costs one engine run and one read of the window.
+Only the subject's own parameters can move — a sleeve's own configuration fields, or the
+construct parameters an attached modifier was composed with — never the capital, the risk
+limits or anything else the hypothesis injects.
 
 **A failed window spares the perturbation backtests.** The gates are evidence for a pass,
 and a certificate is the conjunction of the gates that judged, so once `embargoed_window` —
@@ -73,6 +76,7 @@ the availability gate measures.
 
 from __future__ import annotations
 
+import gc
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -236,21 +240,21 @@ class Subject:
 @dataclass(frozen=True)
 class Measured:
     """What one certification ran: both windows, the host or the benchmark beside them,
-    and the points.
+    and what the evidence gates read off the certification window's points.
 
-    The resolved instruments and the window's points are kept because a gate that
-    perturbs a parameter runs the certification window again, and re-reading the catalog
-    per perturbation would make a cheap arithmetic question an expensive one; the
-    instruments also carry the multiplier each day's volume is struck with, as every fill
-    of the runs was.
+    No point of either window is kept. The evidence the availability and capacity gates
+    read is folded from the certification window as the subject's run is handed it
+    (`_Evidence`), and a gate that perturbs a parameter reads the window again, a chunk at
+    a time, rather than finding it held: a window kept in hand for the perturbations is a
+    window's worth of memory for the whole certification, and the window of a hypothesis
+    on prints or quotes is what made one too large for any lane.
     """
 
     certification: CardRun
     research: CardRun
-    groups: tuple[tuple[object, ...], ...]
+    evidence: _Evidence
     host_certification: CardRun | None = None
     host_research: CardRun | None = None
-    instruments: tuple[object, ...] = ()
     benchmark_certification: CardRun | None = None
     benchmark_research: CardRun | None = None
 
@@ -565,9 +569,14 @@ def _tunable(subject: Subject) -> dict[str, float]:
 def _measure(subject: Subject) -> Measured:
     """Run the subject over both windows, with the host beside it for a relative construct.
 
-    The certification window's data is loaded here rather than inside the runner's own
-    entry point, because those points are also what the availability gate measures its
-    delays on and what the capacity gate compares a day's trading against.
+    Every window is read from the catalog a chunk at a time and each chunk runs before the
+    next is read, as a card's is (`backtest.run`), so the process certifying holds one read
+    and one chunk of a window whichever run it is making, and nothing of a window once its
+    run has ended. The subject's own run over the certification window is read here rather
+    than inside the runner's entry point, because its chunks also pass the evidence fold on
+    their way to the engine (`_Evidence`): the delays the availability gate measures and the
+    volume the capacity gate compares a day's trading against are taken from the very
+    chunks the subject is judged on.
 
     Every run is made in the process certifying rather than in a child per run, as a card
     is: the subject is a card that already passed the integrity gate and already ran, and
@@ -581,8 +590,12 @@ def _measure(subject: Subject) -> Measured:
     """
     request = _request(subject, subject.certification)
     backtest.stage_of(subject.hyp, subject.certification)
-    instruments, groups = backtest.window_data(request, subject.catalog)
-    certification = _ran(subject, lambda: backtest.execute(request, instruments, groups))
+    instruments, chunks = backtest.window_chunks(request, subject.catalog)
+    evidence = _Evidence(midnight_ns(subject.certification[0]), instruments)
+    certification = _ran(
+        subject,
+        lambda: backtest.execute_chunked(request, instruments, map(evidence.take, chunks)),
+    )
     research = _ran(
         subject, lambda: backtest.run(_request(subject, subject.research), subject.catalog)
     )
@@ -590,8 +603,7 @@ def _measure(subject: Subject) -> Measured:
     benchmark_research: CardRun | None = None
     if measures_benchmark(subject.hyp):
         benchmark_certification = _ran(
-            subject,
-            lambda: backtest.execute(backtest.benchmark(request), instruments, groups),
+            subject, lambda: backtest.run(backtest.benchmark(request), subject.catalog)
         )
         benchmark_research = _ran(
             subject,
@@ -617,17 +629,24 @@ def _measure(subject: Subject) -> Measured:
     return Measured(
         certification=certification,
         research=research,
-        groups=groups,
+        evidence=evidence,
         host_certification=host_certification,
         host_research=host_research,
-        instruments=instruments,
         benchmark_certification=benchmark_certification,
         benchmark_research=benchmark_research,
     )
 
 
 def _ran(subject: Subject, backtest_run: Callable[[], backtest.RunResult]) -> CardRun:
-    """One backtest, with an exception turned into a refusal that names what raised."""
+    """One backtest, with an exception turned into a refusal that names what raised.
+
+    What the run's engine leaves is collected before the next run begins. A disposed engine
+    leaves its orders, positions and components in reference cycles, which only the cyclic
+    collector frees and which it reaches when it gets round to them, so a certification
+    running one engine after another carried each one's until then: measured on 2026-10-14 on
+    eight sessions of one name's quotes, about 150 KB a run, the peak of each run above the
+    last's, and nothing of it once collected.
+    """
     try:
         return backtest_run().run
     except KansoError:
@@ -638,6 +657,8 @@ def _ran(subject: Subject, backtest_run: Callable[[], backtest.RunResult]) -> Ca
             f"{type(exc).__name__}: {exc}",
             remedy=f"research {subject.hyp.id} further, or certify a card that runs",
         ) from exc
+    finally:
+        gc.collect()
 
 
 # --- what the pinned data supports --------------------------------------------
@@ -664,69 +685,19 @@ def _inadmissible(ws: Workspace, snapshot: Snapshot) -> list[str]:
     return reasons
 
 
-def _window_only(
-    groups: Sequence[Sequence[object]], opens_ns: int
-) -> tuple[tuple[object, ...], ...]:
-    """The loaded points from the window's open on: what the evidence gates are shown.
+class _Evidence:
+    """What the evidence gates read off the certification window, folded a chunk at a time.
 
-    A warmed subject is fed its prefix before the window, and the prefix is in the groups
-    the runs were made from because a perturbation runs them again. The lags and the
-    volume the gates read are the window's own, so the prefix is cut here rather than
-    handed on: a publication delay observed before the window is not evidence about it.
-    """
-    return tuple(
-        tuple(point for point in group if int(cast("Any", point).ts_init) >= opens_ns)
-        for group in groups
-    )
+    The subject's run over the certification window is handed the window through `take`, a
+    chunk at a time, and each chunk is folded here on its way to the engine and handed on
+    unchanged: the smallest publication delay seen per instrument and data type, and each
+    instrument's traded notional per day. Nothing of a chunk is kept, so the evidence costs
+    a number per instrument and type and a number per instrument and day however long the
+    window is.
 
-
-def _dataset_facts(
-    ws: Workspace, snapshot: Snapshot, groups: Sequence[Sequence[object]]
-) -> tuple[DatasetFacts, ...]:
-    """Each pinned dataset with the delay it was published under and the one its class needs.
-
-    The observed delay is the smallest `ts_init - ts_event` seen in the window that was
-    just run, per instrument and type; a dataset the window held no point of is recorded
-    as infinitely late, since nothing in it was published too early.
-    """
-    observed = _observed_lags(groups)
-    held = manifests(ws)
-    return tuple(
-        DatasetFacts(
-            dataset_id=name,
-            type=held[name].type,
-            publication=held[name].publication,
-            min_lag_s=observed.get((held[name].instrument, held[name].type), inf),
-            required_lag_s=_required_lag(held[name]),
-        )
-        for name in snapshot.datasets
-    )
-
-
-def _observed_lags(groups: Sequence[Sequence[object]]) -> dict[tuple[str, str], float]:
-    """The smallest publication delay observed, per instrument and data type, in seconds."""
-    lags: dict[tuple[str, str], float] = {}
-    for group in groups:
-        for point in group:
-            stamped = cast("Any", point)
-            key = (_instrument_of(point), type_id_of(point))
-            delay = (int(stamped.ts_init) - int(stamped.ts_event)) / NANOS_PER_SECOND
-            lags[key] = min(lags.get(key, inf), delay)
-    return lags
-
-
-def _required_lag(manifest: Manifest) -> float:
-    """The delay this dataset's class is documented to have, in seconds; zero when none is."""
-    rule = PUBLICATION_RULES.get(manifest.publication_rule or "")
-    if rule is None or rule.lag is None:
-        return 0.0
-    return rule.lag.total_seconds()
-
-
-def _daily_volume(
-    groups: Sequence[Sequence[object]], instruments: Sequence[object]
-) -> dict[str, list[float]]:
-    """Each instrument's daily traded notional over the window, oldest first.
+    Only the points from the window's open on are folded. A warmed subject is fed its prefix
+    before the window, and the lags and the volume the gates read are the window's own: a
+    publication delay observed before the window is not evidence about it.
 
     A bar's volume counts the instrument's own unit — shares for a share, contracts for a
     perpetual or a future — and the runner strikes a fill's notional as `qty x px x
@@ -736,21 +707,69 @@ def _daily_volume(
     is a thousand times the capacity its contract count says, and one of a hundredth of a
     coin a hundredth of it.
     """
-    from nautilus_trader.model.data import Bar
 
-    multipliers = backtest.multipliers_of(instruments)
-    per_day: dict[str, dict[date, float]] = {}
-    for group in groups:
-        for point in group:
-            if not isinstance(point, Bar):
-                continue
-            name = str(point.bar_type.instrument_id)
-            days = per_day.setdefault(name, {})
-            day = day_of(int(point.ts_event))
-            days[day] = days.get(day, 0.0) + (
-                float(point.volume) * float(point.close) * multipliers.get(name, 1.0)
-            )
-    return {name: [days[day] for day in sorted(days)] for name, days in per_day.items()}
+    def __init__(self, opens_ns: int, instruments: Sequence[object]) -> None:
+        self.opens_ns = opens_ns
+        self.multipliers = backtest.multipliers_of(instruments)
+        self.lags: dict[tuple[str, str], float] = {}
+        """The smallest delay observed, per instrument and data type, in seconds."""
+        self._volume: dict[str, dict[date, float]] = {}
+
+    def take(self, groups: Sequence[Sequence[object]]) -> Sequence[Sequence[object]]:
+        """Fold one chunk's points from the window's open on, and hand the chunk back."""
+        from nautilus_trader.model.data import Bar
+
+        for group in groups:
+            for point in group:
+                stamped = cast("Any", point)
+                if int(stamped.ts_init) < self.opens_ns:
+                    continue
+                key = (_instrument_of(point), type_id_of(point))
+                delay = (int(stamped.ts_init) - int(stamped.ts_event)) / NANOS_PER_SECOND
+                self.lags[key] = min(self.lags.get(key, inf), delay)
+                if isinstance(point, Bar):
+                    name = str(point.bar_type.instrument_id)
+                    days = self._volume.setdefault(name, {})
+                    day = day_of(int(point.ts_event))
+                    days[day] = days.get(day, 0.0) + (
+                        float(point.volume) * float(point.close) * self.multipliers.get(name, 1.0)
+                    )
+        return groups
+
+    @property
+    def daily_volume(self) -> dict[str, list[float]]:
+        """Each instrument's daily traded notional over the window, oldest first."""
+        return {name: [days[day] for day in sorted(days)] for name, days in self._volume.items()}
+
+
+def _dataset_facts(
+    ws: Workspace, snapshot: Snapshot, lags: Mapping[tuple[str, str], float]
+) -> tuple[DatasetFacts, ...]:
+    """Each pinned dataset with the delay it was published under and the one its class needs.
+
+    The observed delay is the smallest `ts_init - ts_event` seen in the window that was
+    just run, per instrument and type (`_Evidence`); a dataset the window held no point of
+    is recorded as infinitely late, since nothing in it was published too early.
+    """
+    held = manifests(ws)
+    return tuple(
+        DatasetFacts(
+            dataset_id=name,
+            type=held[name].type,
+            publication=held[name].publication,
+            min_lag_s=lags.get((held[name].instrument, held[name].type), inf),
+            required_lag_s=_required_lag(held[name]),
+        )
+        for name in snapshot.datasets
+    )
+
+
+def _required_lag(manifest: Manifest) -> float:
+    """The delay this dataset's class is documented to have, in seconds; zero when none is."""
+    rule = PUBLICATION_RULES.get(manifest.publication_rule or "")
+    if rule is None or rule.lag is None:
+        return 0.0
+    return rule.lag.total_seconds()
 
 
 def _instrument_of(point: object) -> str:
@@ -831,17 +850,15 @@ def _judge(
         measured.benchmark_certification,
     )
     metrics = records.trial_metrics(store, subject.hyp.id)
-    judged = _window_only(measured.groups, midnight_ns(subject.certification[0]))
-    facts = _dataset_facts(ws, snapshot, judged)
-    volume = _daily_volume(judged, measured.instruments)
+    facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
+    volume = measured.evidence.daily_volume
     parameters = _tunable(subject)
 
     def rerun(overrides: Mapping[str, float]) -> CardRun:
-        """The subject over the certification window again, with parameters moved."""
+        """The subject over the certification window again, with parameters moved, read
+        from the catalog a chunk at a time as the first run was."""
         request = _request(subject, subject.certification, overrides=overrides)
-        return _ran(
-            subject, lambda: backtest.execute(request, measured.instruments, measured.groups)
-        )
+        return _ran(subject, lambda: backtest.run(request, subject.catalog))
 
     registry = gates()
     verdicts: dict[str, EvaluatedGate] = {}

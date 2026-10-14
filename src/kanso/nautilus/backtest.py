@@ -2242,14 +2242,25 @@ def _booked_to(
 
 
 def run(request: RunRequest, catalog_path: Path) -> RunResult:
-    """Run in this process, over the requested window and no other.
+    """Run in this process, over the requested window and no other, a chunk at a time.
 
     The window must be one the hypothesis declares; the forward window is never
     backtested, and a window it does not declare is refused before anything is read.
+
+    The window is read in the chunks a card's child is streamed (`window_chunks`), and each
+    chunk runs before the next is read (`execute_chunked`), so this process holds one read
+    and one chunk of the window and never the whole of it, and the card is the one a card's
+    child makes of the same request. Read whole, a run cost its process about three and a
+    half times what the window's points cost, and a certification, which held its window
+    whole between runs as well, paid that beside it: measured on 2026-10-14 in traced Python
+    heap on eight sessions of one name's quotes, a certification's runs peaked at 10.2 MB
+    over its window of 11,200 points and 16.2 MB over its research window of 16,800, and at
+    4.2 MB over either once each was read like this, in reads of 2,000 points
+    (`tests/certify/test_memory.py`).
     """
     stage_of(request.hyp, request.window)
-    instruments, groups = window_data(request, catalog_path)
-    return execute(request, instruments, groups)
+    instruments, chunks = window_chunks(request, catalog_path)
+    return execute_chunked(request, instruments, chunks)
 
 
 def run_subprocess(
