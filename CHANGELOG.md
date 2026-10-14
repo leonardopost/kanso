@@ -3,10 +3,16 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## v0.15.1
+## v0.16.0 — 2026-10-14
 
 - **An entry asked in units submits the units asked for.** `submit_entry(id, side, qty=…)` divided the quantity's notional back by the price and floored the result onto the lot, so a float under the whole number went out one lot short — 1,000 at 18.007 as 999; measured on 2026-10-10, 32 of one lane's 638 entries. A quantity the risk limits and any `notional` leave whole is now submitted whole; one they cut is sized as before. Cards measured on v0.15.0 or earlier keep the fills they were measured on.
 - **A certification streams its windows, and holds none of them between runs.** `kanso cert run` and a lane's certification child read both windows, every perturbation `param_plateau` makes and the composition a pass implies in a card's reads and chunks, a chunk at a time, where they read each window whole and kept the certification window for the whole certification; the lags and the daily volume the evidence gates read are folded as the chunks pass, and each run's engine is collected before the next. Measured on 2026-10-14: an operator's tick sleeve grew to 17 GB in-process, and its lane's child was killed at 2.78 GB beside cards of 0.4 GB. A perturbation now costs a read of the window as well as a run.
+- **`trading_hours`: a card gate that holds every fill and every position to a stated session.** Selected in `required_constraints` with a `session` and its `tz`; a card that fills, or holds a position, outside the session fails. "Regular hours only" becomes a refusal the operator states once in `hypothesis.yaml`, not constants in the `strategy.py` the research loop edits.
+- **`kanso screen`'s `catch_up`: a measure whose exits are conditions.** A follower is entered when it trails β times its leader's move by `enter_bp`, and left when the gap closes to `close` of its size or grows to `stop`; `max_hold` is only a safety. β is fitted per pair in either sign, on the first fold or the window; `kanso screen draft` writes a seed `strategy.py` for it.
+- **The alignment judge reads the run's `program.md` and its own earlier verdicts.** A change the program permits is no longer rewound as drift, and the same change is judged the same way twice.
+- **A reseed starts only from a keep written under the stalled run's `program.md`.** The reseed's choice of starting keep now matches the program's sha as well as the hypothesis, snapshot and criteria.
+- **A card's window is read in as few reads as its files' footers allow.** A window was read in fixed one-hour slices across its whole span, nights and weekends included; consecutive steps are now merged from the parquet row groups up to 250,000 points a read, so a sparse window takes a fraction of the reads (a 15-name 2022-2024 minute grid took 26,256).
+- **A card's child does less per point, and every number it makes is the same.** Tick cards run about 1.5 times faster in wall and CPU time with byte-identical results: data is added per kind, marks take a fast path, the venue is one module, and garbage collection is tuned.
 
 ## v0.15.0 — 2026-10-10
 
