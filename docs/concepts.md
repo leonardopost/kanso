@@ -166,7 +166,13 @@ what the run's baseline needed (`docs/workspace.md`, `envelope.yaml`). A stall's
 certification is a child held to the same figure for a card of the run it judges: both
 windows, every perturbation a gate runs and `parity_replay`'s node replay are made there,
 and the lane only reads back the certificate, or the refusal it raised, and records what the
-certification cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Measured on a
+certification cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Each of those
+runs reads its window a chunk at a time, as a card's child is fed it, and the child holds
+nothing of a run once it has ended, so what a certification holds — one read and one chunk
+of the window it is running, beside the engine running it — grows neither with its windows'
+length nor with how many runs its plan makes. Reading its windows whole, an operator's tick
+sleeve took 17 GB certified by hand, and its lane's child was killed at 2.78 GB beside cards
+of 0.4 GB (`docs/backlog.md` row 128). Measured on a
 16 GB host with six lanes at `mem_per_lane_gb` 2.5 while lanes still certified in their own
 process: two idle lanes held 2.9 GB and 4.1 GB after certifying, swap reached 13.3 GB, and
 nothing but killing them gave it back. A certification that needs more than the share is

@@ -6,6 +6,7 @@ One line per user-visible change, newest release first. The format is the one
 ## v0.15.1
 
 - **An entry asked in units submits the units asked for.** `submit_entry(id, side, qty=…)` divided the quantity's notional back by the price and floored the result onto the lot, so a float under the whole number went out one lot short — 1,000 at 18.007 as 999; measured on 2026-10-10, 32 of one lane's 638 entries. A quantity the risk limits and any `notional` leave whole is now submitted whole; one they cut is sized as before. Cards measured on v0.15.0 or earlier keep the fills they were measured on.
+- **A certification streams its windows, and holds none of them between runs.** `kanso cert run` and a lane's certification child read both windows, every perturbation `param_plateau` makes and the composition a pass implies in a card's reads and chunks, a chunk at a time, where they read each window whole and kept the certification window for the whole certification; the lags and the daily volume the evidence gates read are folded as the chunks pass, and each run's engine is collected before the next. Measured on 2026-10-14: an operator's tick sleeve grew to 17 GB in-process, and its lane's child was killed at 2.78 GB beside cards of 0.4 GB. A perturbation now costs a read of the window as well as a run.
 
 ## v0.15.0 — 2026-10-10
 

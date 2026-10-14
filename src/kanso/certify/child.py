@@ -1,9 +1,9 @@
 """A stall's certification, run in a child of the lane that stalled.
 
 A lane is a long-lived process, and a certification is the heaviest thing it is ever asked
-to do: both windows run in the process certifying, the certification window's points stay
-in hand for every run a perturbation gate makes, and `parity_replay` replays the subject on
-a trading node. Run in the lane itself, none of that was given back. Measured on an
+to do: both windows run in the process certifying, a perturbation gate runs the
+certification window again for every parameter it moves, and `parity_replay` replays the
+subject on a trading node. Run in the lane itself, none of that was given back. Measured on an
 operator's workspace on 2026-10-01 (kanso 0.13.1.dev3, macOS arm64, 16 GB, six lanes at
 `[env] mem_per_lane_gb` 2.5): once five lanes had certified, two idle ones held 2.9 GB and
 4.1 GB (peaks 6.3 GB and 9.1 GB) and one certifying held 7.5 GB, beside cards capped at

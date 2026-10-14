@@ -180,12 +180,14 @@ def test_the_lags_a_certification_observes_are_grouped_by_the_type_a_wrapped_poi
     """The window the certifier reads holds the settlements inside the catalog's wrapper,
     and the evidence it takes is keyed by the type inside: `funding`, settled at the
     instant it was published, beside the bars."""
-    _, groups = backtest.window_data(window_request(), catalog_path(perp_ws))
+    instruments, chunks = backtest.window_chunks(window_request(), catalog_path(perp_ws))
+    evidence = run._Evidence(midnight_ns(CERTIFICATION[0]), instruments)
 
-    observed = run._observed_lags(groups)
+    for chunk in chunks:
+        evidence.take(chunk)
 
-    assert set(observed) == {(PERP, "bar"), (PERP, "funding")}
-    assert observed[(PERP, "funding")] == 0.0
+    assert set(evidence.lags) == {(PERP, "bar"), (PERP, "funding")}
+    assert evidence.lags[(PERP, "funding")] == 0.0
 
 
 # --- a day's volume on a contract --------------------------------------------------
