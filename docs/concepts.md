@@ -1616,10 +1616,10 @@ next       kanso cert show demo_mr
 ```
 
 **The certificate's `objective` is measured the way a card's metric is**, and so is the
-`certification` number `embargoed_window` and `walk_forward_consistency` record: the
-hypothesis's objective over the certification window cut into the workspace's `[research]
-folds` calendar folds, reported as the mean of the folds `±` the standard error of their
-spread. It is not the mean of the window's sessions, and on a short window the two differ.
+`certification` number `embargoed_window` records: the hypothesis's objective over the
+certification window cut into the workspace's `[research] folds` calendar folds, reported as
+the mean of the folds `±` the error of that mean read off the window's per-period or
+per-trade series. It is not the mean of the window's sessions, and on a short window the two differ.
 Five sessions, Monday to Friday, in four folds are four spans of a day and a quarter; a
 session's period ends at its last event, and sessions that end after 18:00 UTC, as a US
 equity session does, put Thursday and Friday together in the last fold, each at half the
@@ -1672,6 +1672,20 @@ ninety-percent band of the resampled objective, which must reach above zero — 
 lies at or below zero says the population of trades carries no edge in whatever order it
 arrives, and a drawdown inside the limit does not make that a pass.
 
+`walk_forward_consistency` reads the research window alone: in how many of its folds the
+objective was positive, held to `min_positive_folds`. It once also required the certification
+estimate to beat the worst research fold, and that clause was deleted rather than made
+optional, because it measured nothing. Four research folds and a certification window a fold
+long are five draws of one quantity, so the certification draw is the lowest of the five a
+fifth of the time whatever the edge is, and selection inflates the research folds besides:
+simulated in October 2026 on the layout of an operator's 153 certificates — the planner had
+chosen the gate for every one of them — the clause passed a true edge about 0.42 of the time
+after fifty trials and 0.24 after five hundred, whatever its size, and more certification
+data lowered it. A clause whose pass rate does not move with the quantity it
+tests only refuses sound candidates at random, and a parameter that switched it on would only
+offer a planner those refusals. Whether the certification window holds the edge is
+`embargoed_window`'s question, asked against the research estimate.
+
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
@@ -1683,9 +1697,9 @@ the next proposal, and every `n_fail`-th consecutive failure writes an inbox ent
 hypothesis returns to research either way; only `kanso hyp retire` ends one.
 
 The ids alone, and never the evidence. A certification gate measures the certification
-window and records what it measured — `embargoed_window` and `walk_forward_consistency` both
-put the objective's value over that window in theirs — while the proposer that reads this
-feedback writes the next `strategy.py`. Handing it those numbers is a route from the
+window and records what it measured — `embargoed_window` puts the objective's value over that
+window in its evidence — while the proposer that reads this feedback writes the next
+`strategy.py`. Handing it those numbers is a route from the
 embargoed window into research, arriving as feedback rather than as a backtest request, and
 the embargo has no exception for feedback.
 

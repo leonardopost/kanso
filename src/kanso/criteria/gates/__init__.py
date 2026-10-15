@@ -679,7 +679,24 @@ class _EmbargoedWindow:
 
 
 class _WalkForwardConsistency:
-    """Most research folds positive, and the certification fold not the worst of them."""
+    """Most research folds positive: an edge that recurs rather than arriving once.
+
+    The gate once also required the certification window's estimate to exceed the worst
+    research fold, and that clause is gone because it measured nothing. Four research folds
+    and a certification window of a fold's length are five draws of one quantity, so the
+    certification one is the lowest of the five a fifth of the time whatever the edge is —
+    `1 − 1/(K+1)`, 0.80 at four folds — and the research folds of a selected candidate are
+    the ones selection inflated, which takes it to about 0.42 after fifty trials and 0.24
+    after five hundred: simulated in October 2026 on the layout of an operator's 153
+    certificates, every one of which the planner had given this gate. A clause whose pass
+    rate does not move with the quantity it tests has no power against anything; it only
+    refuses sound candidates at random, and more certification data made it refuse more
+    often, not less. It is not kept as a parameter whose absence means off, because a
+    planner offered it could only choose to add those refusals. Whether the certification
+    window holds the edge is `embargoed_window`'s question, asked against the research
+    estimate rather than its worst fold. What is left reads the research window alone: how
+    many of its folds the objective was positive in.
+    """
 
     id: ClassVar[str] = "walk_forward_consistency"
 
@@ -698,17 +715,15 @@ class _WalkForwardConsistency:
             ctx.host_research_run,
             ctx.benchmark_research_run,
         )
-        certified = _metric(objective, ctx.run, ctx, ctx.host_run, ctx.benchmark_run)
         positive = sum(1 for value in folds if value > 0)
         return verdict(
             self.id,
-            positive >= required and certified > min(folds),
+            positive >= required,
             {
                 "objective": objective.id,
                 "folds": list(folds),
                 "positive_folds": positive,
                 "min_positive_folds": required,
-                "certification": certified,
             },
         )
 

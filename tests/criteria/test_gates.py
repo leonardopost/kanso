@@ -746,9 +746,6 @@ def test_walk_forward_consistency_reads_the_research_folds_against_the_benchmark
     assert result.evidence["folds"] == pytest.approx(
         list(wf_sharpe_vs_hold.fold_values(RISING, 4, benchmark=HOLDING))
     )
-    assert result.evidence["certification"] == pytest.approx(
-        wf_sharpe_vs_hold.compute(RISING, 4, benchmark=RISING)[0]
-    ), "the certified run is differenced against the certification window's hold"
 
 
 def test_walk_forward_consistency_counts_positive_folds() -> None:
@@ -774,14 +771,20 @@ def test_walk_forward_consistency_fails_too_few_positive_folds() -> None:
     ).passed
 
 
-def test_walk_forward_consistency_fails_when_certification_is_the_worst_fold() -> None:
-    assert not walk_forward_consistency.evaluate(
+def test_walk_forward_consistency_does_not_judge_the_certification_window() -> None:
+    """A certification window worse than every research fold is `embargoed_window`'s to
+    refuse. Ranked against four selected research folds it is the worst a fifth of the time
+    or more whatever the edge, so a clause asking it not to be refused sound candidates at
+    random and was deleted; the gate reads the research folds and nothing else."""
+    result = walk_forward_consistency.evaluate(
         context(
             trading_run(-100.0, -100.0, -100.0, -100.0),
             params={"min_positive_folds": 1},
             research_run=trading_run(100.0, -50.0, 200.0, 300.0),
         )
-    ).passed
+    )
+    assert result.passed
+    assert "certification" not in result.evidence
 
 
 @pytest.mark.parametrize(

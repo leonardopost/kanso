@@ -464,10 +464,10 @@ def test_a_failing_certificate_hands_the_proposer_gate_ids_and_no_measurement(
 ) -> None:
     """The proposer learns which gate to work on. It never learns what the gate measured.
 
-    `embargoed_window` and `walk_forward_consistency` both record the objective over the
-    certification window in their evidence, and the proposer writes the next
-    `strategy.py`. Handing it that dict is a route from the embargoed window into
-    research, arriving as feedback rather than as a backtest request.
+    `embargoed_window` records the objective over the certification window in its
+    evidence, and the proposer writes the next `strategy.py`. Handing it that dict is a
+    route from the embargoed window into research, arriving as feedback rather than as a
+    backtest request.
     """
     classify(ws, store, DOCUMENT, FLAT)
     a_card(ws, store, FLAT)
