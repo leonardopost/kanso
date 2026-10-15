@@ -1811,11 +1811,20 @@ pointer to source that might change — it is a closed record of four things.
   field of which records its origin as `default`, `config` (`[research]` in `kanso.toml`),
   `broker`, `venue_override` (`venues.<MIC>` in `portfolio.yaml`) or `hypothesis`.
 - **`expectation`**: what composition measured by running that implementation over the
-  sleeve's certification window — the objective, a ninety-percent interval and the
-  ninety-fifth-percentile drawdown. The paper and live gates judge the deployment against
-  this band, so it is measured rather than declared. A sleeve measured against a
-  `benchmark` has the hold run over the same window, and its value and its band are
-  differences from it.
+  sleeve's certification window — the objective's value and its error (`se`), the return
+  periods it was read over (`periods`), the bootstrap's ninety-percent interval and the
+  ninety-fifth-percentile drawdown — and the capital all of it was struck at (`capital`).
+  The paper and live gates strike the band they judge a deployment by from the value, the
+  error and the periods, so it is measured rather than declared. It is struck at the share
+  the paper stage would fund the strategy with, because the objective a stage realises is
+  read on that share: a version whose dollar result does not scale with the money it is
+  handed — a fixed notional, a sizing budget — does not read the same contribution on
+  another capital, and the demo's sleeve under `wf_contribution_bps`, 10,000 of notional
+  capped at a fifth of its 40% share of the template's 100,000, is expected at 8.17 bp a day
+  on paper against the 4.09 its certificate measured over 100,000. A stage that funds
+  the version with another share — the live stage, after a promotion — has it measured again
+  there before it deploys. A sleeve measured against a `benchmark` has the hold run over the
+  same window, and its value and its band are differences from it.
 
 The identity really is the bytes. In a workspace that has just certified and composed:
 

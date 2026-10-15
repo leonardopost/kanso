@@ -40,6 +40,19 @@ strategy that would be funded at nothing is not deployed at all: it is escalated
 `deploy_blocked`, because a version trading no size produces no evidence and would sit on a
 stage forever without ever becoming promotable.
 
+**A version is judged at the capital it is given.** Its expectation — the value, error and
+period count its paper and live gates strike their band from — was measured at one capital,
+and a stage that funds it with another reads its objective on that other: a strategy whose
+dollar result does not scale with the money it is handed reads a contribution in basis points
+of the capital that many times larger or smaller. So a version admitted at a share other than
+the one its expectation was struck at — or one composed before an expectation recorded its
+capital — has it measured again at the share (`kanso.strategy.restruck`, one run over the
+certification window) before anything is written, and the strategy file, its row and an
+`expected` event carry the new one. Composition strikes it at the paper share in the first
+place, so this is a promotion's live share or a share the limits have since moved; a
+measurement that refuses — a book below its maintenance floor at the smaller share — refuses
+the deployment.
+
 **A node flattens before every stop, so a stage always restarts flat.** Simulated execution
 keeps no position across a restart, and the alternative — a record claiming a book the new
 node does not hold — loses positions silently. Each redeploy therefore closes a window and
@@ -49,8 +62,10 @@ redeploy shortens the window those gates have to work with.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from math import isclose
 from typing import TYPE_CHECKING, Final
 
 from kanso import strategy as strategies
@@ -70,7 +85,14 @@ from kanso.replay.record import Intent, Point, Session
 from kanso.replay.run import last_day
 from kanso.replay.target import Target
 from kanso.replay.target import resolve as resolve_target
-from kanso.schemas import Limits, Stage, StrategyFile, StrategyVersion, check_execution_client
+from kanso.schemas import (
+    Expectation,
+    Limits,
+    Stage,
+    StrategyFile,
+    StrategyVersion,
+    check_execution_client,
+)
 from kanso.schemas.strategy import PAPER_STATES
 from kanso.strategy import files as strategy_files
 from kanso.strategy import impl as strategy_impl
@@ -365,6 +387,7 @@ def _fund(
     working = files.stage_of(portfolio, stage)
     admitted: list[Admitted] = []
     blocked: list[str] = []
+    struck: dict[str, Expectation] = {}
     for candidate in chosen:
         strategy_id = candidate.file.id
         version = candidate.version.version
@@ -394,6 +417,9 @@ def _fund(
                 "stage's capital",
             )
             continue
+        restruck = _struck(ws, store, candidate, share)
+        if restruck is not None:
+            struck[strategy_id] = restruck
         joined_at = held.joined_at if held is not None and held.version == version else joined
         working = files.place(working, strategy_id, version, share, joined_at)
         admitted.append(
@@ -407,8 +433,19 @@ def _fund(
         )
     if working != files.stage_of(portfolio, stage):
         files.write(ws, files.with_stage(portfolio, stage, working))
-    _restate(ws, store, stage, chosen, admitted)
+    _restate(ws, store, stage, chosen, admitted, struck)
     return admitted, blocked
+
+
+def _struck(
+    ws: Workspace, store: StateStore, candidate: _Candidate, share: float
+) -> Expectation | None:
+    """The candidate's expectation measured again at this share, or `None` when it was
+    struck at this share already."""
+    held = candidate.version.expectation.capital
+    if held is not None and isclose(held, share):
+        return None
+    return strategies.restruck(ws, store, candidate.file.id, candidate.version, share)
 
 
 def _restate(
@@ -417,8 +454,10 @@ def _restate(
     stage: str,
     chosen: tuple[_Candidate, ...],
     admitted: list[Admitted],
+    struck: Mapping[str, Expectation],
 ) -> None:
-    """Write the version states into the strategy files and into the state rows together."""
+    """Write the version states — and any expectation struck again at the share — into the
+    strategy files and into the state rows together."""
     by_strategy = {one.strategy_id: one for one in admitted}
     for candidate in chosen:
         placed = by_strategy.get(candidate.file.id)
@@ -441,21 +480,49 @@ def _restate(
             capital=placed.capital,
             joined_at=placed.joined_at,
         )
-        strategy_files.write(ws, restated(candidate.file, updates))
+        expected = struck.get(candidate.file.id)
+        written = restated(
+            candidate.file, updates, {} if expected is None else {placed.version: expected}
+        )
+        strategy_files.write(ws, written)
+        if expected is not None:
+            strategy_files.expect(store, candidate.file.id, _version_of(written, placed.version))
+            store.event(
+                strategies.EXPECTED,
+                records.subject_of(candidate.file.id, placed.version),
+                {
+                    "stage": stage,
+                    "capital": placed.capital,
+                    "objective": expected.objective_id,
+                    "value": expected.value,
+                    "se": expected.se,
+                },
+            )
 
 
-def restated(file: StrategyFile, updates: dict[int, str]) -> StrategyFile:
-    """The strategy file with these versions moved to these states."""
-    return file.model_copy(
-        update={
-            "versions": [
-                version
-                if version.version not in updates
-                else version.model_copy(update={"state": updates[version.version]})
-                for version in file.versions
-            ]
-        }
-    )
+def restated(
+    file: StrategyFile,
+    updates: Mapping[int, str],
+    expectations: Mapping[int, Expectation] | None = None,
+) -> StrategyFile:
+    """The strategy file with these versions moved to these states, and carrying these
+    expectations."""
+    struck = expectations or {}
+
+    def changed(version: StrategyVersion) -> StrategyVersion:
+        update: dict[str, object] = {}
+        if version.version in updates:
+            update["state"] = updates[version.version]
+        if version.version in struck:
+            update["expectation"] = struck[version.version]
+        return version.model_copy(update=update) if update else version
+
+    return file.model_copy(update={"versions": [changed(version) for version in file.versions]})
+
+
+def _version_of(file: StrategyFile, number: int) -> StrategyVersion:
+    """One version of a strategy file, which the caller knows it holds."""
+    return next(version for version in file.versions if version.version == number)
 
 
 # --- restarting the node ------------------------------------------------------

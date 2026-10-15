@@ -13,8 +13,9 @@ backtest, a replay and a stage all resolve their classes out of, so the thing th
 certified and the thing that trades cannot be two programs.
 
 **The deployed capital is injected here.** Composition wrote the implementation's manifest
-with the capital the version was measured at; deployment assigns a share of the stage's
-capital, and a strategy sizes against the number it is given. So the sleeve's configuration
+with the capital its hypothesis states; deployment assigns a share of the stage's capital —
+the one the version's expectation is struck at — and a strategy sizes against the number it
+is given. So the sleeve's configuration
 is rebuilt with the deployed figure before the component is constructed, and every attached
 construct is re-pointed at the sleeve's final `StrategyId` rather than at its class name —
 without which two versions of the same generated class in one node would answer each other's
