@@ -8,7 +8,9 @@ from hypothesis import given
 from kanso.errors import ValidationError
 from kanso.replay.record import Session
 from kanso.schemas import (
+    DIGEST_COLUMNS,
     Card,
+    CardDigest,
     Certificate,
     CertificationPlan,
     ConstructItem,
@@ -42,6 +44,19 @@ def test_run_record_round_trips(value: RunRecord) -> None:
 @given(gen.cards())
 def test_card_round_trips(value: Card) -> None:
     assert parse_yaml(Card, dump_yaml(value)) == value
+
+
+@given(gen.digests())
+def test_card_digest_round_trips_through_the_json_a_card_row_holds(value: CardDigest) -> None:
+    """The digest is stored as JSON in its card's row and read back whole; gross less cost
+    is net, per trade and per session, whatever the numbers."""
+    assert CardDigest.model_validate(value.model_dump(mode="json")) == value
+    assert len(value.cells()) == len(DIGEST_COLUMNS)
+    if value.net_bps_per_trade is not None:
+        assert value.gross_bps_per_trade is not None and value.cost_bps_per_trade is not None
+        assert abs(
+            value.gross_bps_per_trade - value.cost_bps_per_trade - value.net_bps_per_trade
+        ) <= 1e-9 * max(1.0, abs(value.gross_bps_per_trade), abs(value.cost_bps_per_trade))
 
 
 @given(gen.plans())

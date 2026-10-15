@@ -834,7 +834,7 @@ def test_history_survives_every_restore(ws: Workspace, store: StateStore, regist
     assert statuses(store) == ["keep", "keep", "discard", "crash"]
     rows = results_tsv(store, registered).splitlines()
     assert len(rows) == 5
-    assert [row.split("\t")[-1] for row in rows[1:]] == [
+    assert [row.split("\t")[8] for row in rows[1:]] == [
         loop.BASELINE,
         "the trough rule",
         "one step",

@@ -75,3 +75,9 @@ def test_every_later_migration_applies_over_the_previous_release_and_keeps_its_r
 
     after = counts(previous_release_db)
     assert after == {**before, "events": before["events"] + 1}
+    # A card written before cards kept a digest reads back as one that recorded none.
+    conn = sqlite3.connect(previous_release_db)
+    try:
+        assert {row[0] for row in conn.execute("SELECT digest FROM cards")} == {None}
+    finally:
+        conn.close()

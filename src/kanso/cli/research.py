@@ -42,7 +42,7 @@ from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import PreconditionError, ValidationError
 from kanso.research import daemon, records
 from kanso.research.lanes import DEFAULT_LANE
-from kanso.schemas import GateResult
+from kanso.schemas import CardDigest, GateResult
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -204,6 +204,7 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
     lines = [
         field("card", f"{card.sha7} · {card.status} · {desc}"),
         field("metric", f"{card.metric:.6f} ± {card.metric_se:.6f} · {card.n_trades} trade(s)"),
+        *_digest_lines(card.digest),
         field("cost", f"{card.wall_s:.1f}s · {card.peak_mem_gb:.2f} GB · trial {trials}"),
         field("best", "none yet" if run.best_sha is None else f"{run.best_sha[:7]}"),
     ]
@@ -214,6 +215,49 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
     if card.crash_tail:
         lines += [indent(line) for line in card.crash_tail.splitlines()[-5:]]
     return Report(data=data, lines=tuple(lines))
+
+
+def _digest_lines(digest: CardDigest | None) -> list[str]:
+    """What a card's trades did, in two lines: how it traded, and what a trade and a session
+    earned. Nothing for a card that never ran to a result."""
+    if digest is None:
+        return []
+    traded = [
+        f"{_number(digest.trades_per_session, '.2f')} a session over {digest.sessions}",
+        f"hit {_share(digest.hit_rate)}",
+        f"hold {_seconds(digest.median_hold_s)}",
+        f"maker {_share(digest.maker_share)}",
+        f"filled {_share(digest.fill_ratio)}",
+    ]
+    edge = (
+        f"{_number(digest.net_bps_per_trade, '+.3f')} ± "
+        f"{_number(digest.net_bps_per_trade_se, '.3f')} bp a trade net "
+        f"(gross {_number(digest.gross_bps_per_trade, '+.3f')}, "
+        f"cost {_number(digest.cost_bps_per_trade, '.3f')}) · "
+        f"{_number(digest.net_bps_per_session, '+.3f')} bp a session net "
+        f"(gross {_number(digest.gross_bps_per_session, '+.3f')}, "
+        f"cost {_number(digest.cost_bps_per_session, '.3f')})"
+    )
+    return [field("trades", " · ".join(traded)), field("edge", edge)]
+
+
+def _number(value: float | None, spec: str) -> str:
+    return "n/a" if value is None else format(value, spec)
+
+
+def _share(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
+
+
+def _seconds(value: float | None) -> str:
+    """A hold as the unit it is easiest to read in: seconds, minutes or hours."""
+    if value is None:
+        return "n/a"
+    if value < 120:
+        return f"{value:.0f}s"
+    if value < 7200:
+        return f"{value / 60:.0f}m"
+    return f"{value / 3600:.1f}h"
 
 
 def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
@@ -423,7 +467,22 @@ def _show(ws: Workspace, hyp_id: str, sha: str | None, diff: str | None) -> Repo
         subject = _resolve(opened, hyp_id, sha, known)
         if diff is None:
             source = opened.get_blob(subject).decode("utf-8", errors="replace")
-            data: dict[str, Any] = {"id": hyp_id, "sha": subject, "source": source}
+            # The newest card that evaluated these bytes, its digest included; a best a
+            # store holds no card of reads as none rather than refusing the source.
+            card = next(
+                (
+                    c
+                    for c in reversed(records.cards_of(opened, hyp_id))
+                    if c.strategy_sha == subject
+                ),
+                None,
+            )
+            data: dict[str, Any] = {
+                "id": hyp_id,
+                "sha": subject,
+                "source": source,
+                "card": None if card is None else card.model_dump(mode="json", by_alias=True),
+            }
             return Report(data=data, lines=tuple(source.splitlines()))
         other = _resolve(opened, hyp_id, diff, known)
         left = opened.get_blob(subject).decode("utf-8", errors="replace")

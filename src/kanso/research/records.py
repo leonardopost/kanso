@@ -87,7 +87,7 @@ import yaml
 
 from kanso.criteria.run import CardRun, day_of
 from kanso.errors import PreconditionError
-from kanso.schemas import Card, GateResult, RunRecord, VenueModel
+from kanso.schemas import Card, CardDigest, GateResult, RunRecord, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -172,6 +172,7 @@ _CARD_COLUMNS = (
     "venue_model",
     "description",
     "created_at",
+    "digest",
 )
 
 _INSERT_CARD = (
@@ -400,6 +401,9 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
         json.dumps(card.venue_model.model_dump(mode="json"), sort_keys=True),
         card.desc,
         card.created_at.isoformat(),
+        None
+        if card.digest is None
+        else json.dumps(card.digest.model_dump(mode="json"), sort_keys=True),
     )
     store.connection.execute(_INSERT_CARD, values)
     return card
@@ -775,4 +779,7 @@ def _card(row: sqlite3.Row) -> Card:
         crash_tail=None if row["crash_tail"] is None else str(row["crash_tail"]),
         venue_model=VenueModel.model_validate(model),
         created_at=datetime.fromisoformat(str(row["created_at"])),
+        digest=None
+        if row["digest"] is None
+        else CardDigest.model_validate(json.loads(str(row["digest"]))),
     )

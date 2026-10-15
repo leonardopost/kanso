@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from nautilus_trader.model.instruments import Equity
 from typer.testing import CliRunner
 
@@ -195,7 +196,7 @@ def test_the_same_bytes_over_the_same_snapshot_are_a_known_result_and_a_redundan
         row.split("\t")
         for row in (registered / "hypotheses" / HYP_ID / "results.tsv").read_text().splitlines()[1:]
     ]
-    assert [(row[-2], row[-1]) for row in rows] == [
+    assert [(row[7], row[8]) for row in rows] == [
         ("discard", "baseline"),
         ("keep", "fade the rolling mean"),
         ("redundant", "again"),
@@ -304,13 +305,25 @@ def test_results_tsv_is_rendered_from_state_and_survives_a_restore(
         "peak_mem_gb",
         "status",
         "desc",
+        "trades_per_session",
+        "hit_rate",
+        "median_hold_s",
+        "maker_share",
+        "fill_ratio",
+        "gross_bps_per_trade",
+        "cost_bps_per_trade",
+        "net_bps_per_trade",
+        "net_bps_per_trade_se",
+        "gross_bps_per_session",
+        "cost_bps_per_session",
+        "net_bps_per_session",
     ]
-    assert [row.split("\t")[-1] for row in rows[1:]] == [
+    assert [row.split("\t")[8] for row in rows[1:]] == [
         "baseline",
         "fade the rolling mean",
         "a shorter memory",
     ]
-    assert [row.split("\t")[-2] for row in rows[1:]] == ["discard", "keep", "discard"]
+    assert [row.split("\t")[7] for row in rows[1:]] == ["discard", "keep", "discard"]
 
 
 def test_a_constraint_that_judged_nothing_says_why(runner: CliRunner, loaded: Path) -> None:
@@ -341,6 +354,60 @@ def test_a_card_reads_as_a_few_lines_for_a_human(runner: CliRunner, registered: 
     assert "keep" in result.stdout
     assert "strategy_integrity: pass" in result.stdout
     assert "min_trades: pass" in result.stdout
+    assert " a session over " in result.stdout, "how often it traded, beside the metric"
+    assert " bp a trade net (gross " in result.stdout, "and what a trade earned"
+
+
+def test_a_card_reports_what_its_trades_did_and_the_log_carries_the_same_numbers(
+    runner: CliRunner, registered: Path
+) -> None:
+    begin(runner, registered)
+    edit(registered, REVERTING)
+
+    kept = card(runner, registered, "fade the rolling mean")
+
+    digest = kept["digest"]
+    assert isinstance(digest, dict)
+    assert digest["trades_per_session"] * digest["sessions"] == pytest.approx(kept["n_trades"])
+    assert digest["gross_bps_per_trade"] - digest["cost_bps_per_trade"] == pytest.approx(
+        digest["net_bps_per_trade"]
+    )
+    assert digest["fill_ratio"] is None, "the strategy sends market orders only"
+    rows = (registered / "hypotheses" / HYP_ID / "results.tsv").read_text().splitlines()
+    cells = dict(zip(rows[0].split("\t"), rows[-1].split("\t"), strict=True))
+    assert cells["net_bps_per_trade"] == f"{digest['net_bps_per_trade']:.4f}"
+    assert cells["fill_ratio"] == ""
+
+
+def test_a_digest_reads_as_two_lines_and_a_number_it_lacks_reads_as_none() -> None:
+    """A hold is read in the unit it is easiest to read in, and an absent number is said to
+    be absent rather than printed as a zero."""
+    from kanso.cli.research import _digest_lines
+    from kanso.schemas import CardDigest
+
+    def hold(seconds: float | None) -> str:
+        traded = {
+            "hit_rate": 0.5,
+            "median_hold_s": seconds,
+            "gross_bps_per_trade": 3.0,
+            "cost_bps_per_trade": 1.0,
+            "net_bps_per_trade": 2.0,
+            "net_bps_per_trade_se": 0.5,
+        }
+        if seconds is None:
+            traded = dict.fromkeys(traded)
+        made = CardDigest(sessions=0, fills=0, **traded)
+        lines = _digest_lines(made)
+        assert len(lines) == 2 and "filled n/a" in lines[0] and "maker n/a" in lines[0]
+        return lines[0].split(" · ")[2]
+
+    assert [hold(s) for s in (None, 45.0, 960.0, 9000.0)] == [
+        "hold n/a",
+        "hold 45s",
+        "hold 16m",
+        "hold 2.5h",
+    ]
+    assert _digest_lines(None) == []
 
 
 # -- end and show -------------------------------------------------------------------
@@ -408,6 +475,7 @@ def test_show_prints_the_best_card_s_strategy(runner: CliRunner, registered: Pat
     document = payload(result)
     assert document["sha"] == kept["strategy_sha"]
     assert document["source"] == REVERTING
+    assert document["card"]["digest"] == kept["digest"], "the card that ran those bytes"
     assert at(runner, registered, "research", "show", HYP_ID).stdout.strip() == REVERTING.strip()
 
 

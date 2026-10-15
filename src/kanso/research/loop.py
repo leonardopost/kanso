@@ -87,6 +87,7 @@ from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, criteria_version, gates, objectives
 from kanso.criteria.context import verdict
+from kanso.criteria.digest import digest as digest_of
 from kanso.criteria.gates import strategy_integrity
 from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
@@ -118,6 +119,7 @@ from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
+    CardDigest,
     CardStatus,
     GateResult,
     Hypothesis,
@@ -806,6 +808,7 @@ def _record(
     directory: Path,
     tags: Sequence[Tag] = (),
     restore_all: bool = False,
+    digest: CardDigest | None = None,
 ) -> Card:
     """Write the card, then move `best` or restore the lane copy, then render the log.
 
@@ -830,6 +833,7 @@ def _record(
         crash_tail=crash_tail,
         venue_model=setup.venue_model,
         created_at=records.now(),
+        digest=digest,
     )
     records.record_card(store, run, made)
     if status == "keep":
@@ -969,6 +973,7 @@ def _judge(
         crash_tail=None,
         directory=directory,
         tags=tags,
+        digest=digest_of(result.run, result.intents),
     )
     if like is not None:
         _same_book(store, run, made.strategy_sha, desc, metric, floor, like)
