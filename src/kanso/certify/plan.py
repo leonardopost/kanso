@@ -54,6 +54,7 @@ from datetime import UTC, date, datetime, timedelta
 from math import isfinite, sqrt
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from kanso.certify.power import power, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
 from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
 from kanso.data.manifest import manifests
@@ -70,6 +71,7 @@ from kanso.schemas import (
     Hypothesis,
     PlanInputs,
     PlannedGate,
+    Power,
     Span,
     load_yaml,
     parse_yaml,
@@ -94,6 +96,7 @@ __all__ = [
     "plan",
     "plan_file",
     "plannable",
+    "power_of",
     "read_plan",
 ]
 
@@ -395,6 +398,37 @@ def complaints_about(
     one mistake per call.
     """
     return plan_complaints(included, excluded, hyp, folds, n_trials)
+
+
+# -- what the windows can resolve ----------------------------------------------
+
+
+def power_of(store: StateStore, pinned: CertificationPlan) -> Power | None:
+    """What this plan's certification window could resolve for the hypothesis's best card.
+
+    Stated from the card's own metric and error — the research estimate and the error of it
+    read off the research window's per-period or per-trade series — over the windows of the
+    hypothesis file the card's run pinned, which are the windows its certification will run.
+    Computed after the plan is pinned and never shown to the planner, which plans blind to
+    every result. `None` while the hypothesis has no best card to state it from.
+    """
+    best, _ = records.best_of(store, pinned.hyp_id)
+    if best is None:
+        return None
+    card = next(
+        c for c in reversed(records.cards_of(store, pinned.hyp_id)) if c.strategy_sha == best
+    )
+    run = next(run for run in records.runs_of(store, pinned.hyp_id) if run.run_id == card.run_id)
+    windows = parse_yaml(
+        Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), f"{pinned.hyp_id} pin"
+    ).windows
+    return power(
+        card.metric,
+        card.metric_se,
+        (windows.research.start, windows.research.end),
+        (windows.certification.start, windows.certification.end),
+        window_params(pinned),
+    )
 
 
 # -- the paper window a plan implies ------------------------------------------

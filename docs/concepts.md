@@ -1600,6 +1600,19 @@ remedy: run `kanso cert plan demo_mr --replan` to plan again
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
 
+**`cert plan` states what the windows can resolve.** Beside the plan it prints a `power` line
+for the hypothesis's best card: the research estimate and its error, the error the
+certification window is expected to carry — the research error scaled by the root of the
+ratio of the two windows' lengths, since periods and trades arrive at research's rate — the
+true value a one-sided five-percent test on that window detects four times in five, 2.49 of
+those errors, and the probability that `embargoed_window` passes if the truth is the
+research estimate and if it is zero, against its bar of `max(0, min_fraction × research)`.
+The first probability is optimistic by however much selection inflated the estimate; the
+second is the gate's false-pass rate on no edge at all, before any deflation. None of it is
+shown to the planner, which plans blind to every result; it is computed after the plan is
+pinned, for you, and a certificate records the same statement from the research window it
+runs again.
+
 **A paper window is chosen against the certification window, and `cert plan` says so when it
 is not.** The paper gate compares the objective a stage realises against the interval
 composition measured over the *certification* window: two estimates of the same quantity, and
@@ -1611,6 +1624,7 @@ has to say about the pair, and a short paper window you meant is a short paper w
 
 ```
 $ kanso cert plan demo_mr                 # the gates, the exclusions and the last two lines are elided
+power      resolves 3.834 at 80% · se 1.542 on the certification window from research's 9.987 ± 0.9719 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 warning    paper window 5d against a 145d certification window · the paper objective is about 5x noisier than the band it is judged against, so a version behaving as certified can read as drifted · raise min_duration or horizon_mult, or narrow windows.certification
 ```
 
@@ -1621,13 +1635,15 @@ engine version — every gate with the numbers it decided on, or the reason it j
 ```
 $ kanso cert run demo_mr
 verdict    demo_mr · f729a53 · pass
-gates      5 judged · 5 pass · 0 fail · 0 skipped
+gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  embargoed_window      certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
-           pass  parity_replay         compared=850, divergence=None, engine=20261002T225814Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261002T225809Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
+           pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
-objective  net_edge_bps 10.149871 ± 0.603055
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=1.0, standard_error_bps=0.9718893965424648, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+objective  net_edge_bps 10.149871 ± 1.412009
+power      resolves 3.834 at 80% · se 1.542 on the certification window from research's 9.987 ± 0.9719 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
@@ -1736,8 +1752,8 @@ seed that fired once — do not widen the search past any candidate the selectio
 spread it used is in the evidence as `trial_spread_bps`. `deflated_sharpe` deflates a Sharpe
 the same way, by the Sharpe's own error and the plain spread of its trials, all out of
 annualised units. Which of the three a plan carries is not the planner's to choose once the
-search has two trials (above). `min_event_days` is a card gate counting the distinct sessions any
-fill fell on, for a rule that fires on a regime or an event and could put its whole sample
+search has two trials (above). `min_event_days` is a card gate counting the distinct
+sessions any fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
 commission, a flat rate, a maker's rate or per-share charge, a slippage in ticks, a fixed

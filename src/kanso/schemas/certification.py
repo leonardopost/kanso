@@ -176,6 +176,37 @@ class ObjectiveResult(KansoModel):
     se: float = Field(ge=0)
 
 
+class Power(KansoModel):
+    """What a certification window can resolve, stated from research's own dispersion.
+
+    `research` and `research_se` are the objective and its error over the research window;
+    `standard_error` is the error the certification window is expected to carry,
+    `research_se` scaled by the root of the ratio of the two windows' calendar lengths, since
+    periods and trades arrive at research's rate. `resolves` is the true value a one-sided
+    five-percent test on that window detects four times in five, `(z₀.₉₅ + z₀.₈₀) ×
+    standard_error`. `bar` is what `embargoed_window` holds the certification estimate to —
+    above zero and at least `min_fraction` of `research` — and `pass_at_research` and
+    `pass_at_zero` the probability the estimate clears it if the truth is the research
+    estimate, and if it is nothing. The three are `None` when the plan sets no
+    `min_fraction`, which leaves the gate nothing to judge.
+    """
+
+    research: float
+    research_se: float = Field(ge=0)
+    standard_error: float = Field(ge=0)
+    resolves: float = Field(ge=0)
+    bar: float | None = None
+    pass_at_research: float | None = Field(default=None, ge=0, le=1)
+    pass_at_zero: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _a_bar_with_both_probabilities(self) -> Power:
+        stated = {self.bar is None, self.pass_at_research is None, self.pass_at_zero is None}
+        if len(stated) != 1:
+            raise ValueError("bar: states both pass probabilities, or neither does")
+        return self
+
+
 class Certificate(Versioned):
     """The immutable record of one plan run against one strategy under one engine."""
 
@@ -195,6 +226,10 @@ class Certificate(Versioned):
     n_trials: int = Field(ge=1)
     verdict: Verdict
     created_at: datetime
+    power: Power | None = None
+    """What the certification window could resolve, from the research window's dispersion;
+    `None` on a certificate written before it was stated, or struck on a snapshot nothing
+    could be measured on."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]

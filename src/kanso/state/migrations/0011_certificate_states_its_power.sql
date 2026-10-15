@@ -1,0 +1,11 @@
+-- A certificate states what its certification window could resolve, and the row says so too.
+--
+-- The certificates table is the index `cert show`, composition and the stall's repeat check
+-- read a certificate back from, column by column, as the document it was written from. A
+-- certificate now carries `power` -- the edge its window resolves at eighty percent and how
+-- likely `embargoed_window` was to pass at the research estimate and at zero, from the
+-- research window's own dispersion -- and a row without it would read back a certificate
+-- that said nothing about its power when its file said something. The column holds the
+-- statement as JSON; a row written before this migration holds NULL, which reads back as a
+-- certificate that stated none, which is what it was.
+ALTER TABLE certificates ADD COLUMN power TEXT;

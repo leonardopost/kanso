@@ -86,6 +86,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from kanso import ext
 from kanso.certify import certificate
 from kanso.certify.plan import plan as plan_for
+from kanso.certify.power import power, window_params
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
@@ -115,6 +116,7 @@ from kanso.schemas import (
     Hypothesis,
     ObjectiveResult,
     PlannedGate,
+    Power,
     RunRecord,
     StrategyFile,
     VenueModel,
@@ -296,7 +298,7 @@ def certify(
     )
     if registration.status != CANDIDATE:
         set_status(store, hyp_id, CANDIDATE)
-    evaluated, objective = _judge(ws, store, plan, subject)
+    evaluated, objective, stated = _judge(ws, store, plan, subject)
     made = Certificate(
         hyp_id=hyp_id,
         strategy_sha=subject.strategy_sha,
@@ -312,6 +314,7 @@ def certify(
         n_trials=n_trials,
         verdict=_verdict(evaluated),
         created_at=datetime.now(tz=UTC),
+        power=stated,
     )
     certificate.write(ws, store, made, subject.source)
     _apply(ws, store, made)
@@ -825,8 +828,11 @@ def _judge(
     store: StateStore,
     plan: CertificationPlan,
     subject: Subject,
-) -> tuple[list[EvaluatedGate], ObjectiveResult]:
-    """Evaluate the plan's certification gates, and measure the objective they judged."""
+) -> tuple[list[EvaluatedGate], ObjectiveResult, Power | None]:
+    """Evaluate the plan's certification gates, measure the objective they judged, and
+    state what the certification window could resolve from the research window's own
+    dispersion — the same statement `cert plan` makes from the card, here from the research
+    window run again."""
     planned = plan.stage_gates(CERT_STAGE)
     if not planned:  # pragma: no cover - the planner refuses a plan that reaches no stage
         raise PreconditionError(
@@ -840,6 +846,7 @@ def _judge(
         return (
             [_blocked(gate, snapshot, blocked) for gate in planned],
             ObjectiveResult(id=objective.id, value=0.0, se=0.0),
+            None,
         )
     measured = _measure(subject)
     compared = _parity(ws, store, plan, subject)
@@ -849,6 +856,10 @@ def _judge(
         measured.host_certification,
         measured.benchmark_certification,
     )
+    researched = objective.compute(
+        measured.research, subject.folds, measured.host_research, measured.benchmark_research
+    )
+    stated = power(*researched, subject.research, subject.certification, window_params(plan))
     metrics = records.trial_metrics(store, subject.hyp.id, objective.id)
     facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
     volume = measured.evidence.daily_volume
@@ -893,8 +904,10 @@ def _judge(
             session=compared,
         )
         verdicts[gate.id] = _evaluated(gate, found.evaluate(context))
-    return [verdicts[gate.id] for gate in planned], ObjectiveResult(
-        id=objective.id, value=value, se=se
+    return (
+        [verdicts[gate.id] for gate in planned],
+        ObjectiveResult(id=objective.id, value=value, se=se),
+        stated,
     )
 
 

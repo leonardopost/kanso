@@ -29,7 +29,7 @@ from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
 from kanso.criteria import library
 from kanso.criteria.gates.parity_replay import NO_PARITY
-from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_vs_hold
+from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.criteria.run import BPS, day_of, midnight_ns
 from kanso.data import snapshot as snapshots
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
@@ -378,6 +378,30 @@ def test_a_certificate_is_immutable_and_reads_back_as_it_was_written(
 
     assert load_yaml(Certificate, certificate.certificate_file(ws, made)) == made
     assert show(ws, store, HYP_ID) == made
+    assert made.power is not None, "the row reads back the power the file states"
+
+
+def test_a_certificate_states_its_power_from_the_research_window_it_ran_again(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The research estimate and its error are the objective's over the research window the
+    certification ran again; the certification window's expected error is that one scaled by
+    the root of the two windows' lengths; the bar is the plan's `min_fraction` of research."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=[{**CERT_GATES[0], "params": {"min_fraction": 0.5}}, *CERT_GATES[1:]])
+
+    made = certify(ws, store, HYP_ID)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+    measured = run._measure(subject)
+    research, error = wf_sharpe_net.compute(measured.research, subject.folds)
+    days = [(end - start).days + 1 for start, end in (subject.research, subject.certification)]
+    stated = made.power
+    assert stated is not None
+    assert (stated.research, stated.research_se) == pytest.approx((research, error))
+    assert stated.standard_error == pytest.approx(error * (days[0] / days[1]) ** 0.5)
+    assert stated.bar == pytest.approx(max(0.0, 0.5 * research))
 
 
 def test_the_name_the_refusal_checks_is_the_certificate_own(
@@ -752,6 +776,7 @@ def test_a_snapshot_of_unknown_publication_records_a_failing_verdict(
     assert made.verdict == "fail"
     assert all(not gate.passed for gate in made.gates)
     assert "nobody declared when its points became public" in str(made.gates[0].evidence)
+    assert made.power is None, "nothing was measured, so nothing is stated about power"
     assert _status(store, HYP_ID) == "researching", "a recorded fail, not an exit code"
 
 

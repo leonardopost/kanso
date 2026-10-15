@@ -18,6 +18,7 @@ from kanso.schemas import (
     InstrumentsFile,
     ModelsFile,
     Portfolio,
+    Power,
     RunRecord,
     StrategyFile,
     VenueModel,
@@ -51,6 +52,13 @@ def test_plan_round_trips(value: CertificationPlan) -> None:
 @given(gen.certificates())
 def test_certificate_round_trips(value: Certificate) -> None:
     assert parse_yaml(Certificate, dump_yaml(value)) == value
+
+
+@given(gen.powers())
+def test_power_round_trips(value: Power) -> None:
+    """A certificate's power statement reads back whole, either side of a judged bar."""
+    assert Power.model_validate(value.model_dump(mode="json")) == value
+    assert (value.bar is None) == (value.pass_at_research is None) == (value.pass_at_zero is None)
 
 
 @given(gen.strategy_files())

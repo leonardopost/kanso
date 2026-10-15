@@ -147,6 +147,36 @@ def test_a_paper_window_the_certification_window_can_judge_is_not(
     assert "warning" not in at(runner, researched, "cert", "plan", HYP_ID).stdout
 
 
+def test_the_plan_states_what_the_windows_resolve_for_the_best_card(
+    runner: CliRunner, researched: Path
+) -> None:
+    """Stated from the best card's own metric and error, after the plan is pinned: the window
+    gate's bar is a `min_fraction` of nothing, so an edge of zero clears it half the time."""
+    result = at(runner, researched, "cert", "plan", HYP_ID)
+    document = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
+    with StateStore(researched / "state.db") as store:
+        best = records.cards_of(store, HYP_ID)[-1]
+
+    stated = document["power"]
+    assert stated["research"] == best.metric
+    assert stated["research_se"] == best.metric_se
+    assert stated["resolves"] == pytest.approx(2.4865 * stated["standard_error"], rel=1e-4)
+    assert stated["bar"] == 0.0 and stated["pass_at_zero"] == 0.5
+    assert "power      resolves" in result.stdout
+    assert "embargoed_window passes" in result.stdout and "0.50 at zero" in result.stdout
+
+
+def test_a_plan_with_no_best_card_says_there_is_nothing_to_state_power_from(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    result = at(runner, mocked_ws, "cert", "plan", HYP_ID)
+    document = payload(at(runner, mocked_ws, "cert", "plan", HYP_ID, "--json"))
+
+    assert result.exit_code == Exit.OK
+    assert document["power"] is None
+    assert "no best card yet" in result.stdout
+
+
 def test_reading_a_pinned_plan_costs_nothing(runner: CliRunner, researched: Path) -> None:
     assert at(runner, researched, "cert", "plan", HYP_ID, "--json").exit_code == Exit.OK
 
@@ -322,6 +352,35 @@ def test_show_reads_as_the_verdict_and_its_gates(runner: CliRunner, researched: 
     assert result.exit_code == Exit.OK
     assert HYP_ID in result.stdout
     assert "embargoed_window" in result.stdout
+    assert "power      resolves" in result.stdout
+
+
+def test_the_certificate_states_the_power_the_plan_stated(
+    runner: CliRunner, researched: Path
+) -> None:
+    """The plan states it from the card, the certificate from the research window run again:
+    the same bytes over the same window, so the same numbers."""
+    planned = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))["power"]
+    made = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))
+
+    assert made["power"] == pytest.approx(planned)
+
+
+def test_a_certificate_whose_plan_sets_no_fraction_states_no_pass_probability(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    gates = [
+        dict(gate, params=pairs()) if gate["id"] == "embargoed_window" else gate
+        for gate in mocked.PLAN["gates"]
+    ]
+    mocked.scripted(mocked_ws, certify_plan=[{**mocked.PLAN, "gates": gates}])
+    begin(runner, mocked_ws)
+    keep(runner, mocked_ws)
+
+    result = at(runner, mocked_ws, "cert", "run", HYP_ID)
+
+    assert result.exit_code == Exit.OK
+    assert "embargoed_window sets no min_fraction, so no pass probability" in result.stdout
 
 
 def test_show_of_something_that_is_not_a_hypothesis_is_refused(
