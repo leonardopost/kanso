@@ -3,9 +3,9 @@
 A certification is a test, and a test has a size and a power before anyone looks at its
 result. kanso used to state neither: a plan named its gates, a certificate recorded its
 verdict, and nothing said whether the window the hypothesis declared could have told a real
-edge from none. Measured on an operator's record of 153 certificates, a window of 122
-sessions at a session's spread of 120 bp resolved +22 bp/day at a t of two and gave a true
-+15 bp/day a 27% chance, and no line of any of them said so.
+edge from none. Worked out in October 2026 on an operator's record of 153 certificates: a
+window of 122 sessions at a session's spread of 120 bp resolved +22 bp/day at a t of two and
+gave a true +15 bp/day a 27% chance, and no line of any of them said so.
 
 The statement is made from research's own numbers. The research estimate and its error are
 the objective and the error its card carried — the error of the mean read off the

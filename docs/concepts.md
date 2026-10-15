@@ -985,17 +985,18 @@ three degrees of freedom, scattering from half to one and a half times the true 
 to card, and blind to how many trades or periods produced them, so four folds that happened
 to agree read as a number known exactly. Read off the series, a card of a thousand trades
 carries the error of a thousand trades, and each fold's mean contributes the window's
-dispersion over its own count. A Sharpe's error is Mertens' — skewness and fat tails widen
-it — fold by fold. Each is widened for the serial correlation the series shows, at
-Newey–West's customary lag (four at a hundred periods, eleven at ten thousand trades), and
-never narrowed: the spread of fold means it replaced was robust to correlation inside a
-fold without saying so, and this is what keeps that robustness. The lag covers a handful of
-trades, not a session, so a scalper whose trades move together through a day is priced
-only in part (`docs/backlog.md` row 171). A relative or benchmark objective's error is the
-paired one wherever the two runs share their periods: a contribution's per-period
-differences, a difference of Sharpes by Memmel's correction of Jobson–Korkie, a per-trade
-edge's difference linearised period by period. That one number is the card's, the keep
-floor's, the redundancy floor's, a certificate's `±` and every deflation gate's.
+dispersion over its own count. A Sharpe's error is Mertens' — fat tails widen it, and skew
+widens or narrows it with the sign of the edge — fold by fold. Each is widened for the
+serial correlation the series shows, at Newey–West's customary lag (four at a hundred
+periods, eleven at ten thousand trades), and never narrowed: the spread of fold means it
+replaced was robust to correlation inside a fold without saying so, and this is what keeps
+that robustness. The lag covers a handful of trades, not a session, so a scalper whose
+trades move together through a day is priced only in part (`docs/backlog.md` row 171). A
+relative or benchmark objective's error is the paired one wherever the two runs share their
+periods: a contribution's per-period differences, a difference of Sharpes by Memmel's
+correction of Jobson–Korkie, a per-trade edge's difference linearised period by period. That
+one number is the card's, the keep floor's, the redundancy floor's, a certificate's `±` and
+every deflation gate's.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
