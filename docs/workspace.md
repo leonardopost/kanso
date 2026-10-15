@@ -1869,7 +1869,9 @@ remedy: end it with `kanso research end demo_mr`
 (exit 2).
 
 `kanso research end` removes the lane directory and nothing else — the cards, the blobs and
-the best all stay in state, and `results.tsv` still renders. `kanso research stop` removes
+the best all stay in state, and `results.tsv` still renders. A lane working the run when it
+ends lets it go: the card in flight is killed within a second and recorded nowhere, and the
+lane takes the next hypothesis without recording a failure. `kanso research stop` removes
 neither: it signals the daemon, waits for it to go and leaves every active run and every lane
 directory exactly where they are, so the next `start` resumes them. Stopping is meant to be
 cheap.

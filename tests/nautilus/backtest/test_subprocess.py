@@ -374,6 +374,43 @@ def test_a_card_no_longer_wanted_is_killed_at_the_watcher_s_next_ask(
     assert not (lane / runner.CARD_ROOM).exists()
 
 
+def test_a_card_whose_work_ended_as_it_exited_is_refused_before_its_room_is_read(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run a card was for is ended after the watcher's last ask, as the child exits, and
+    the end removes the lane directory with the card's room in it: the check's refusal is
+    raised, never a `FileNotFoundError` from reading the room.
+
+    Observed 2026-10-15 on 0.16.0, before the check was asked once the child had exited: a
+    lane whose run `research end` ended mid-card died reading the card's `stderr.txt`.
+    """
+    import shutil
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    watch = runner._watch
+    ended: list[bool] = []
+
+    def ongoing() -> None:
+        if ended:
+            raise PreconditionError("the run was ended", remedy="queue it again")
+
+    def ended_as_it_exits(child: Any, *bounds: Any, **fed: Any) -> Any:
+        outcome = watch(child, *bounds, **fed)
+        ended.append(True)
+        shutil.rmtree(lane)  # what `research end` does to the lane directory
+        return outcome
+
+    monkeypatch.setattr(runner, "_watch", ended_as_it_exits)
+    with runner.wanted(ongoing), pytest.raises(PreconditionError, match="ended") as failure:
+        run_subprocess(request_for(), store, lane)
+
+    assert ended == [True], "the child ran to its own exit"
+    assert failure.value.remedy == "queue it again"
+    assert not lane.exists()
+
+
 def test_a_card_nobody_wants_reads_no_window_and_starts_no_card(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:

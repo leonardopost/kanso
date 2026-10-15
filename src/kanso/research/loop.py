@@ -147,6 +147,7 @@ __all__ = [
     "card",
     "end",
     "mem_cap",
+    "ongoing",
 ]
 
 BASELINE: Final = "baseline"
@@ -200,7 +201,9 @@ class RedundantError(PreconditionError):
 
 
 class TakenError(PreconditionError):
-    """The operator took the hypothesis out of this lane's hands before its run began.
+    """The operator took the hypothesis out of this lane's hands: out of the queue before its
+    run began (`research queue remove`), or by ending the run the lane was working
+    (`research end`).
 
     Not a failure: nothing was wrong with the hypothesis or the lane, so a lane that meets
     it records nothing, owes the queue nothing and takes the next hypothesis at once.
@@ -1334,6 +1337,11 @@ def card(
     `RedundantError` refuses the caller another experiment: the check decides the status,
     never whether there is a record. `tags` are the proposer's account of the change, from
     `kanso.schemas.TAGS`; a card made by hand carries none.
+
+    A run the operator ends while its card runs is no longer one to record a card of: the
+    card is refused with `TakenError` at the next catalog read of its window, or within
+    `backtest.WANTED_POLL_S` of the end once its child runs — the child is killed — and
+    nothing is recorded (`ongoing`).
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
@@ -1363,31 +1371,34 @@ def card(
             tags=tags,
             restore_all=True,
         )
-    host_run = _host_run(
-        setup,
-        snapshot_id=run.snapshot_id,
-        budget_s=run.card_budget_s,
-        directory=directory,
-        cache=_HOST_RUNS.setdefault(run.run_id, {}),
-    )
-    benchmark_run = _benchmark_run(
-        setup,
-        snapshot_id=run.snapshot_id,
-        directory=directory,
-        cache=_HOST_RUNS.setdefault(run.run_id, {}),
-    )
-    result = backtest.run_subprocess(
-        _request(
+    still = partial(ongoing, store, run)
+    with backtest.wanted(still):
+        host_run = _host_run(
             setup,
-            source,
-            run.snapshot_id,
+            snapshot_id=run.snapshot_id,
             budget_s=run.card_budget_s,
-            mem_cap_gb=mem_cap(ws, run),
-        ),
-        setup.catalog,
-        directory,
-        setup.extensions,
-    )
+            directory=directory,
+            cache=_HOST_RUNS.setdefault(run.run_id, {}),
+        )
+        benchmark_run = _benchmark_run(
+            setup,
+            snapshot_id=run.snapshot_id,
+            directory=directory,
+            cache=_HOST_RUNS.setdefault(run.run_id, {}),
+        )
+        result = backtest.run_subprocess(
+            _request(
+                setup,
+                source,
+                run.snapshot_id,
+                budget_s=run.card_budget_s,
+                mem_cap_gb=mem_cap(ws, run),
+            ),
+            setup.catalog,
+            directory,
+            setup.extensions,
+        )
+    still()  # the card's last poll may have come before the end did
     return _judge(
         ws,
         store,
@@ -1425,6 +1436,32 @@ def _admitted(store: StateStore, hyp_id: str, lane: str) -> None:
             "does not begin its run",
             remedy=f"`kanso research queue add {hyp_id}` when you want it researched again",
         )
+
+
+def ongoing(store: StateStore, run: RunRecord) -> RunRecord:
+    """`run` as it stands now, refused with `TakenError` once it has ended.
+
+    `research end` closes a run from another process and removes its lane directory there,
+    whatever the lane working it is doing. The lane asks this before it writes a proposal
+    into the directory, before every catalog read of a card's window, every
+    `backtest.WANTED_POLL_S` while the card runs — the child is killed — once the child has
+    exited and before its output is read, once an alignment judge has answered
+    (`kanso.research.align.check`) and before the next proposal; so an end costs the card
+    or the answer in flight and nothing else, and is never read as the card's failure or
+    the lane's. Measured before this, on 0.16.0: a run ended while its card ran left the card
+    running to its end, and the lane then died with a `FileNotFoundError` reading the card's
+    output from the directory the end had removed. What the lane cached for the run goes
+    with it.
+    """
+    current = records.active(store, run.hyp_id)
+    if current is not None and current.run_id == run.run_id:
+        return current
+    _HOST_RUNS.pop(run.run_id, None)
+    raise TakenError(
+        f"the run {run.tag} of {run.hyp_id} was ended while lane {run.lane} worked it, so "
+        "nothing more is recorded for it",
+        remedy=f"`kanso research queue add {run.hyp_id}` when you want it researched again",
+    )
 
 
 def end(ws: Workspace, store: StateStore, hyp_id: str) -> RunRecord:

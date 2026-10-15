@@ -270,6 +270,11 @@ def run(
     call: the answer in hand is dropped, the lane directory is left as it was, and the run
     resumes at its next turn. The baseline is a card too, and the runner itself refuses to
     start one in a process told to stop (`kanso.nautilus.backtest.run_subprocess`).
+
+    A run the operator ends meanwhile (`research end`) is let go with `TakenError`: asked
+    once a proposal is in hand, before it is written into the lane directory the end
+    removed, while its card runs (`research_loop.card`), and before the next proposal. The
+    answer or the card in flight is dropped and nothing is recorded for it.
     """
     lane = lanes.check_lane(lane)
     if records.active(store, hyp_id) is None:
@@ -309,6 +314,7 @@ def run(
         if stop():
             reason = STOPPED
             break
+        research_loop.ongoing(store, active)  # nothing is written into a directory `end` removed
         lanes.write_atomic(directory / STRATEGY_FILE, candidate)
         made: Card | None
         try:
@@ -332,7 +338,7 @@ def run(
         if misses >= settings.stall_k:
             reason = STALLED
             break
-        active = records.require_active(store, hyp_id, lane)
+        active = research_loop.ongoing(store, active)
 
     if reason == STALLED:
         research_loop.end(ws, store, hyp_id)
