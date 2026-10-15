@@ -26,9 +26,11 @@ is a second definition of a quantity the toolbox already defines:
 * the **maker share** is the share of traded notional the venue reported as a maker's fill;
 * the **fill ratio** is the quantity filled on orders that carried a limit over the quantity
   submitted on such orders — a market order fills whatever it is offered, so only a priced
-  order can go unfilled. An order the emulator released at market fills with no limit, and
-  a modify that raised a quantity is not in the intent's, so the ratio is a reading, not an
-  identity; it can exceed one only through the second.
+  order can go unfilled. A fill's limit is the one `kanso.nautilus.costs.limit_at` reads off
+  the order's own events, and under nautilus_trader 1.231.0 an order the emulator released at
+  market keeps the events of the order it was made from and fills with no limit; a modify
+  that raised a quantity is not in the intent's either, so the ratio is a reading, not an
+  identity, and it can exceed one only through the second.
 
 Funding is a payment on what was held, not a fill cost, so it stays in gross and in net
 alike; a run with none of something reads `None` for what that something measures.
