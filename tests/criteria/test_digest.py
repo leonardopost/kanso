@@ -54,8 +54,8 @@ def test_every_number_of_the_digest_is_the_one_a_pencil_gets() -> None:
 
 
 def test_the_net_edge_per_trade_and_its_error_are_the_per_trade_objective_over_one_fold() -> None:
-    """One arithmetic: what the digest shows is what `net_edge_bps` reads over one fold,
-    the error read period by period."""
+    """One arithmetic: what the digest shows is what `net_edge_bps` reads and what the
+    `edge_per_trade` gate judges, the error read period by period."""
     made = digest(RUN, INTENTS)
 
     assert (made.net_bps_per_trade, made.net_bps_per_trade_se) == net_edge_bps.compute(RUN, 1)

@@ -410,6 +410,37 @@ def test_a_digest_reads_as_two_lines_and_a_number_it_lacks_reads_as_none() -> No
     assert _digest_lines(None) == []
 
 
+CHASE = REVERTING.replace(
+    "deviation < -0.3 and not self.long", "deviation > 0.3 and not self.long"
+).replace("deviation > 0.1 and self.long", "deviation < -0.1 and self.long")
+"""The fading strategy turned round: it buys a close above its rolling mean and sells one
+below, which on a reverting path loses on every round trip it makes."""
+
+
+def test_a_card_whose_trades_lose_on_average_is_refused_by_edge_per_trade(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """Required by the operator, the gate refuses the card however its book scored, and
+    its evidence is the number the card's digest records."""
+    from .conftest import classify
+
+    edge = {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}
+    path = write_hypothesis(loaded, required_constraints=[edge])
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+    begin(runner, loaded)
+    edit(loaded, CHASE)
+
+    refused = card(runner, loaded, "chase the deviation")
+
+    (judged,) = [gate for gate in refused["gate_results"] if gate["id"] == "edge_per_trade"]
+    assert refused["status"] == "discard" and judged["pass"] is False
+    assert judged["evidence"]["net_bps_per_trade"] < 0
+    assert judged["evidence"]["net_bps_per_trade"] == refused["digest"]["net_bps_per_trade"]
+    assert judged["evidence"]["se"] == refused["digest"]["net_bps_per_trade_se"]
+    assert refused["n_trades"] > 0
+
+
 # -- end and show -------------------------------------------------------------------
 
 

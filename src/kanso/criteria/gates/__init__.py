@@ -50,6 +50,7 @@ from kanso.criteria.context import (
     text,
     verdict,
 )
+from kanso.criteria.digest import edge_per_trade as edge_per_trade_of
 from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import REGISTRY, SHARPE_FAMILY, Objective, benchmark_level
 from kanso.criteria.quantities import (
@@ -963,6 +964,51 @@ class _MinEventDays:
         return verdict(self.id, len(days) >= minimum, {"event_days": len(days), "min": minimum})
 
 
+class _EdgePerTrade:
+    """The card's trades make money on average, by more than their own error says is noise.
+
+    The estimate is the card's mean net edge per closed trade in basis points of the
+    position opened — `pnl_net / notional`, after every fill cost the runner charged, over
+    the closed trades with a notional — and its error is the per-trade objective's own: the
+    edge linearised period by period, so a session's clips that one regime moves together
+    count as one session's worth, widened for serial correlation across periods. Both are
+    read over the whole window as one fold (`kanso.criteria.digest.edge_per_trade`), the
+    numbers a card's digest records as `net_bps_per_trade` and `net_bps_per_trade_se`, so
+    what the proposer and the operator are shown is what was judged. The gate passes when
+    `net − k_se × se > min_bps`, strictly: at `min_bps` zero and `k_se` zero, a card passes
+    exactly when its mean trade made money.
+
+    It exists because an objective struck on the book rewards trading less once every trade
+    loses: a contribution moves towards zero as the losing trades are dropped, and a card
+    that halves its clips at a worse loss per clip scores better and is kept. As a card gate
+    a failing card is not kept whatever it scored, so with it on a lane only a card whose
+    trades pay on average can become the best. A card that closed no trade has no edge — its
+    estimate and its error are zero — and fails at any `min_bps`, which the range holds at
+    zero or above: a card that did not trade did not show that a trade pays.
+    """
+
+    id: ClassVar[str] = "edge_per_trade"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        floor, k_se = number(ctx, "min_bps"), number(ctx, "k_se")
+        if floor is None or k_se is None:
+            return skipped(self.id, "no min_bps and k_se were chosen, so no edge was required")
+        edge, se = edge_per_trade_of(ctx.run)
+        lower = edge - k_se * se
+        return verdict(
+            self.id,
+            lower > floor,
+            {
+                "net_bps_per_trade": edge,
+                "se": se,
+                "k_se": k_se,
+                "lower": lower,
+                "min_bps": floor,
+                "n_trades": sum(1 for trade in ctx.run.trades if trade.notional > 0),
+            },
+        )
+
+
 class _TradingHours:
     """Every fill inside a stated daily session, and every position flat by its close.
 
@@ -1584,6 +1630,7 @@ deflated_sharpe: Final[Gate] = _DeflatedSharpe()
 deflated_contribution: Final[Gate] = _DeflatedContribution()
 deflated_edge: Final[Gate] = _DeflatedEdge()
 min_event_days: Final[Gate] = _MinEventDays()
+edge_per_trade: Final[Gate] = _EdgePerTrade()
 trading_hours: Final[Gate] = _TradingHours()
 cost_stress: Final[Gate] = _CostStress()
 cost_scenario: Final[Gate] = _CostScenario()

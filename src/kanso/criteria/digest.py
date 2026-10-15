@@ -16,7 +16,7 @@ is a second definition of a quantity the toolbox already defines:
   and its edge is `pnl_net / notional` in basis points; the card's net edge per trade and its
   error are `net_edge_bps` over the window as a single fold — the per-trade objective's own
   arithmetic, the error read period by period so a session's clips that move together count
-  as one session's worth;
+  as one session's worth — which is exactly what the `edge_per_trade` gate judges;
 * its **cost** is what its fills paid (`Trade.cost`) on the same notional, and its gross
   edge the net plus that cost, so gross less cost is net trade by trade;
 * a **session** is a UTC day the run struck a period end in — the days a signature reads —
