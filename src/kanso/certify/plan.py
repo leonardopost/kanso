@@ -30,12 +30,20 @@ cannot run would pin a proof that can never be produced. It is, for the same rea
 required of a plan written by this version. Paper and live gates are run by the stages
 rather than here, so they are offered whether or not their implementations exist yet.
 
+**A search is corrected for, whatever the planner thinks.** From a hypothesis's second
+trial a plan includes the gate the toolbox says `deflates` its objective: the subject a
+certificate judges is then the best of a search, and nothing else in a plan prices that.
+The planner is told so in the invariants and refused when it forgets, through the same
+check as any other complaint; how high that gate's bar sits is still its answer.
+
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
 second opinion, and a pinned plan this version can no longer run is refused with the
-replan that would fix it. `replan` re-runs the planner over the same closed set of inputs,
-as they read now, and mints the next `plan_version`; the plan a certificate names is
-therefore always recoverable.
+replan that would fix it — a plan pinned before the search reached two trials, or by a
+kanso that did not hold it to its correction, among them: the search it is checked against
+is the one the hypothesis has spent now. `replan` re-runs the planner over the same closed
+set of inputs, as they read now, and mints the next `plan_version`; the plan a certificate
+names is therefore always recoverable.
 """
 
 from __future__ import annotations
@@ -47,6 +55,7 @@ from math import isfinite, sqrt
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso.criteria import plan_complaints, plannable, resolve_bound
+from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import Registration, show
@@ -178,21 +187,22 @@ def plan(
             remedy=f"run `kanso classify {hyp_id}` first",
         )
     folds = ws.config.research.folds
+    trials = records.n_trials(store, hyp_id)
     pinned = read_plan(ws, hyp_id)
     if pinned is not None and not replan:
-        _refuse_unusable(pinned, hyp, folds)
+        _refuse_unusable(pinned, hyp, folds, trials)
         return pinned
 
     inputs = PlanInputs(
         hypothesis_sha=cast("str", registration.hypothesis_sha),
         construct=construct,
         data_availability=availability(ws, hyp),
-        n_trials=records.n_trials(store, hyp_id),
+        n_trials=trials,
     )
     accepted: list[Answered] = []
 
     def check(data: Mapping[str, object]) -> Sequence[str]:
-        answered, complaints = _read(data, hyp=hyp, folds=folds)
+        answered, complaints = _read(data, hyp=hyp, folds=folds, n_trials=trials)
         if answered is not None and not complaints:
             accepted.append(answered)
         return complaints
@@ -254,7 +264,7 @@ def _call_inputs(hyp: Hypothesis, inputs: PlanInputs, folds: int, check: Check) 
             "hypothesis": _document(hyp),
             "construct": inputs.construct.model_dump(mode="json", by_alias=True, exclude_none=True),
             "toolbox": _toolbox(hyp, folds),
-            "invariants": _invariants(),
+            "invariants": _invariants(hyp),
         },
         dynamic={
             "data_availability": inputs.data_availability.model_dump(mode="json"),
@@ -310,9 +320,24 @@ def _finite(value: float) -> float | None:
     return value if isfinite(value) else None
 
 
-def _invariants() -> dict[str, Any]:
-    """The structural invariants, as the facts they are, rather than as prose to infer."""
+def _invariants(hyp: Hypothesis) -> dict[str, Any]:
+    """The structural invariants, as the facts they are, rather than as prose to infer.
+
+    The search correction is stated as a rule over `n_trials` rather than folded into
+    `required_gates`: the gate it names follows from the hypothesis, which is the cached
+    prefix, and whether it is required follows from the trial count, which is not.
+    """
     offered = plannable()
+    gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
+    correction = (
+        []
+        if gate is None or hyp.objective is None
+        else [
+            f"when n_trials is {SEARCH_TRIALS} or more, {gate} is required as well and may "
+            f"not be excluded: it is the search correction for this hypothesis's objective, "
+            f"{hyp.objective.id}; its threshold is yours to choose inside its range"
+        ]
+    )
     return {
         "required_gates": sorted(item.id for item in offered.values() if item.required),
         "stages": list(PLAN_STAGES),
@@ -321,6 +346,7 @@ def _invariants() -> dict[str, Any]:
             "toolbox gives it",
             "every parameter value lies inside that parameter's stated range",
             "every required gate is included, and none of them is excluded",
+            *correction,
             "the plan includes at least one gate at each of the cert, paper and live stages",
             "no gate is named twice, and no gate is both included and excluded",
         ],
@@ -331,7 +357,7 @@ def _invariants() -> dict[str, Any]:
 
 
 def _read(
-    data: Mapping[str, object], *, hyp: Hypothesis, folds: int
+    data: Mapping[str, object], *, hyp: Hypothesis, folds: int, n_trials: int
 ) -> tuple[Answered | None, list[str]]:
     """One answer, read as a plan, and everything wrong with it.
 
@@ -348,7 +374,7 @@ def _read(
         )
     except ValidationError as exc:
         return None, [f"the answer is not a plan: {exc.message}"]
-    complaints = complaints_about(included, excluded, hyp, folds)
+    complaints = complaints_about(included, excluded, hyp, folds, n_trials)
     if complaints:
         return None, complaints
     return (included, excluded), []
@@ -359,6 +385,7 @@ def complaints_about(
     excluded: Sequence[ExcludedGate],
     hyp: Hypothesis,
     folds: int,
+    n_trials: int,
 ) -> list[str]:
     """Every way a plan departs from the toolbox, collected rather than raised.
 
@@ -367,7 +394,7 @@ def complaints_about(
     retry needs the whole list at once, so a plan is corrected in one call rather than
     one mistake per call.
     """
-    return plan_complaints(included, excluded, hyp, folds)
+    return plan_complaints(included, excluded, hyp, folds, n_trials)
 
 
 # -- the paper window a plan implies ------------------------------------------
@@ -413,9 +440,13 @@ def _rendered(seconds: float) -> str:
     return render_duration(timedelta(seconds=round(seconds)))
 
 
-def _refuse_unusable(pinned: CertificationPlan, hyp: Hypothesis, folds: int) -> None:
-    """Refuse a pinned plan this version can no longer run, naming the way out."""
-    problems = complaints_about(pinned.gates, pinned.excluded, hyp, folds)
+def _refuse_unusable(pinned: CertificationPlan, hyp: Hypothesis, folds: int, n_trials: int) -> None:
+    """Refuse a pinned plan this version can no longer run, naming the way out.
+
+    Checked against the search as it stands, `n_trials` now and not the count the plan was
+    made behind: a plan made before the second trial is not a plan for the best of many.
+    """
+    problems = complaints_about(pinned.gates, pinned.excluded, hyp, folds, n_trials)
     if problems:
         raise ValidationError(
             f"the plan pinned for {pinned.hyp_id} is not one this kanso can run: "

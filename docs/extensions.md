@@ -261,7 +261,12 @@ An objective's YAML carries `applies` and `priority` instead of `stage` and `req
 which hypotheses it is meaningful for, and which wins when several are — and its
 implementation returns `compute(run, folds) -> (metric, standard error)`. The standard error
 is not decoration: the keep rule compares a candidate against `max(min_delta, k_se × se)`,
-so an objective that returns a confident-looking zero there makes every card a keep.
+so an objective that returns a confident-looking zero there makes every card a keep. It is
+the error of the metric read off the series the metric is a mean of — the shipped objectives
+read it off the per-period returns or the per-trade edges, widened for serial correlation by
+`kanso.criteria.quantities.long_run_factor` — and every deflation gate and the power a
+certification states read it too. A new objective is claimed by exactly one gate's
+`deflates` list, or no plan behind two trials can be written for it.
 
 ## Writing one
 

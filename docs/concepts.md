@@ -1582,6 +1582,21 @@ the complaints back to the same model, then to the next tier up; a plan still in
 that fails the step. With no model configured there is nothing to fall back on and the step
 exits 2.
 
+**A search is corrected for, from its second trial.** Every objective has exactly one
+deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
+Sharpes, `deflated_contribution` for the contributions, `deflated_edge` for the per-trade
+edges — and once the hypothesis has spent two trials a plan includes it: the subject a
+certificate judges is then the best of a search, and nothing else in a plan prices that. The
+planner is told so in the invariants and sent back when it forgets; how high the gate's bar
+sits is still its answer. A plan pinned behind fewer trials, or by a kanso that did not hold
+it to this, is refused where it is read — by `cert plan` and by `cert run` — with the way out:
+
+```
+$ kanso cert run demo_mr
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan behind 4 trials includes it
+remedy: run `kanso cert plan demo_mr --replan` to plan again
+```
+
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
 
@@ -1710,14 +1725,18 @@ the embargo has no exception for feedback.
 The certified bytes are written beside the certificate as `<sha7>.py`, so a certified
 subject travels with the files even where `state.db` does not.
 
-Three gates read what the others cannot. `deflated_contribution` is the multiple-testing
-control for a run scored on a contribution, where `deflated_sharpe` skips: the research
-estimate in basis points per period, against the expected maximum of the search's trials in
-the same units, over the estimate's own standard error, reported as a probability and held
-to `min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
+Four gates read what the others cannot. `deflated_contribution` is the multiple-testing
+control for a run scored on a contribution, and `deflated_edge` for one scored on a per-trade
+edge, where `deflated_sharpe` skips: the research estimate in basis points per period or per
+trade, against the expected maximum of the search's trials in the same units, over the
+estimate's own error — the one its card carried — reported as a probability and held to
+`min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
 deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
 seed that fired once — do not widen the search past any candidate the selection weighed; the
-spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a card gate counting the distinct sessions any
+spread it used is in the evidence as `trial_spread_bps`. `deflated_sharpe` deflates a Sharpe
+the same way, by the Sharpe's own error and the plain spread of its trials, all out of
+annualised units. Which of the three a plan carries is not the planner's to choose once the
+search has two trials (above). `min_event_days` is a card gate counting the distinct sessions any
 fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share

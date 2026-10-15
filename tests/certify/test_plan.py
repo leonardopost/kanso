@@ -441,18 +441,79 @@ def test_the_planner_is_shown_the_pinned_bytes_not_a_since_edited_file(
     assert SECRET not in seen[0].system
 
 
+CORRECTED = {
+    "id": "deflated_edge",
+    "stage": "cert",
+    "params": pairs({"min_probability": 0.9}),
+    "rationale": "the search correction for a per-trade edge",
+}
+"""The demo hypothesis's search correction, as a planner would add it to the usable plan."""
+
+
 def test_the_trial_count_is_the_search_the_plan_will_be_read_against(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     a_card(store, metric=1.0, seq=1)
     a_card(store, metric=2.0, seq=2)
-    script(ws, certify_plan=[answer()])
+    script(ws, certify_plan=[answer(gates=gates_of(CORRECTED))])
     seen = prompts(monkeypatch)
 
     written = plan(ws, store, HYP_ID)
 
     assert written.inputs.n_trials == 2
     assert '"n_trials": 2' in seen[0].user
+
+
+def test_the_planner_is_told_which_gate_corrects_its_search_and_from_when(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate follows from the objective, which is the cached prefix; whether it is
+    required follows from the trial count, which is not."""
+    script(ws, certify_plan=[answer()])
+    seen = prompts(monkeypatch)
+
+    plan(ws, store, HYP_ID)
+
+    assert (
+        "when n_trials is 2 or more, deflated_edge is required as well and may not be "
+        "excluded: it is the search correction for this hypothesis's objective, net_edge_bps"
+    ) in seen[0].system
+
+
+def test_a_plan_behind_a_search_that_leaves_out_its_correction_is_retried(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a_card(store, metric=1.0, seq=1)
+    a_card(store, metric=2.0, seq=2)
+    script(ws, certify_plan=[answer(), answer(gates=gates_of(CORRECTED))])
+    seen = prompts(monkeypatch)
+
+    written = plan(ws, store, HYP_ID)
+
+    assert len(seen) == 2
+    assert "deflated_edge is the search correction for net_edge_bps" in seen[1].user
+    assert "deflated_edge" in [gate.id for gate in written.gates]
+    assert written.gates[-1].params == {"min_probability": 0.9}, "the threshold is the model's"
+
+
+def test_a_plan_pinned_before_the_search_is_refused_once_there_is_one(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A plan made behind one trial is not a plan for the best of two: it is refused where
+    it is read, `cert run` included, with the replan that writes one."""
+    a_card(store, metric=1.0, seq=1)
+    script(ws, certify_plan=[answer(), answer(gates=gates_of(CORRECTED))])
+    first = plan(ws, store, HYP_ID)
+    assert "deflated_edge" not in [gate.id for gate in first.gates]
+    a_card(store, metric=2.0, seq=2)
+
+    with pytest.raises(ValidationError) as refused:
+        plan(ws, store, HYP_ID)
+
+    assert "deflated_edge is the search correction for net_edge_bps" in refused.value.message
+    assert refused.value.remedy == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
+    replanned = plan(ws, store, HYP_ID, replan=True)
+    assert "deflated_edge" in [gate.id for gate in replanned.gates]
 
 
 def test_a_gate_with_no_implementation_is_not_offered_to_the_planner(

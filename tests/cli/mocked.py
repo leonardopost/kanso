@@ -159,6 +159,12 @@ PLAN: dict[str, Any] = {
             "rationale": "a candidate that repeats a deployed book adds risk, not return",
         },
         {
+            "id": "deflated_edge",
+            "stage": "cert",
+            "params": pairs({"min_probability": 0.9}),
+            "rationale": "required behind two trials: the search correction for a per-trade edge",
+        },
+        {
             "id": "paper_forward",
             "stage": "paper",
             "params": pairs({"min_duration": "5d", "horizon_mult": 20.0}),

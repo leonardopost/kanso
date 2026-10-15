@@ -90,6 +90,11 @@ def test_an_objective_is_not_staged_and_is_not_required() -> None:
         CriteriaItem.model_validate({**OBJECTIVE, "stage": "cert"})
     with pytest.raises(ValidationError, match="required"):
         CriteriaItem.model_validate({**OBJECTIVE, "required": True})
+    with pytest.raises(ValidationError, match="only a gate corrects for a search"):
+        CriteriaItem.model_validate({**OBJECTIVE, "deflates": ["net_edge_bps"]})
+    assert CriteriaItem.model_validate({**GATE, "deflates": ["net_edge_bps"]}).deflates == [
+        "net_edge_bps"
+    ]
 
 
 def test_an_objective_declares_applicability_and_priority() -> None:

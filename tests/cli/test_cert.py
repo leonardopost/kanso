@@ -227,7 +227,8 @@ def test_the_certificate_reads_as_the_verdict_then_the_gates(
     assert result.exit_code == Exit.OK
     assert "embargoed_window" in result.stdout
     assert "publication_lag" in result.stdout
-    assert "1 skipped" in result.stdout and "nothing is deployed" in result.stdout
+    assert "2 skipped" in result.stdout and "nothing is deployed" in result.stdout
+    assert "fewer than two trials" in result.stdout, "one card that traded is no search yet"
     assert "engine" in result.stdout and "snapshot" in result.stdout
 
 

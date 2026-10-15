@@ -92,6 +92,14 @@ CERT_GATES: list[dict[str, Any]] = [
 ]
 """The three cert gates every plan must carry, since all three are structural invariants."""
 
+SEARCHED: dict[str, Any] = {
+    "id": "deflated_sharpe",
+    "stage": "cert",
+    "params": {"min_dsr": 0.5},
+    "rationale": "required behind two trials: the search correction for a Sharpe",
+}
+"""The gate a plan for the demo's Sharpe carries once the search has two trials."""
+
 TAIL_GATES: list[dict[str, Any]] = [
     {
         "id": "paper_forward",
@@ -442,7 +450,7 @@ def test_the_failure_count_escalates_on_a_cadence_rather_than_once(
 ) -> None:
     """Every `n_fail`-th failure speaks. A threshold would have spoken once and stopped."""
     classify(ws, store, DOCUMENT, FLAT)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     policy = with_n_fail(ws, 2)
 
     seen: list[int] = []
@@ -556,7 +564,7 @@ def test_re_pinning_the_hypothesis_makes_the_same_bytes_a_fresh_certification(
     a new claim, not a repeat, and the two certificates sit side by side under two names."""
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, REVERTING)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     first = certify(ws, store, HYP_ID)
 
     moved = {**DOCUMENT, "costs": {**DOCUMENT["costs"], "commission_bps": 2.0}}
@@ -580,7 +588,7 @@ def test_the_same_bytes_under_the_same_pin_are_still_a_repeat(
 ) -> None:
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, REVERTING)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     certify(ws, store, HYP_ID)
     a_card(ws, store, REVERTING, seq=2)
 
@@ -852,7 +860,7 @@ def test_the_named_sha_is_certified_rather_than_the_best(ws: Workspace, store: S
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, FLAT, seq=1)
     named = a_card(ws, store, REVERTING, seq=2, best=False)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
 
     made = certify(ws, store, HYP_ID, sha=named[:10])
 

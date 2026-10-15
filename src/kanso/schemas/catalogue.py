@@ -143,12 +143,19 @@ class Applies(KansoModel):
 
 
 class CriteriaItem(KansoModel):
-    """One entry of the criteria toolbox: an objective or a gate."""
+    """One entry of the criteria toolbox: an objective or a gate.
+
+    `deflates` is a gate's claim to be the search correction for these objectives: the test
+    that prices how many trials went into selecting a result scored on one of them. Every
+    objective is claimed by exactly one gate, and a plan for a hypothesis that has spent two
+    trials includes that gate (`kanso.criteria.library.deflation_gate`).
+    """
 
     id: CatalogueId
     kind: Kind
     stage: GateStage | None = None
     required: bool | None = None
+    deflates: list[CatalogueId] | None = None
     applies: Applies | None = None
     priority: int | None = Field(default=None, ge=0)
     meaningful_when: str | None = Field(default=None, max_length=200)
@@ -180,6 +187,8 @@ class CriteriaItem(KansoModel):
             raise ValueError("stage: an objective is measured, not staged")
         if self.required is not None:
             raise ValueError("required: only gates are structural invariants")
+        if self.deflates is not None:
+            raise ValueError("deflates: only a gate corrects for a search")
         if self.applies is None:
             raise ValueError("applies: an objective declares the hypotheses it applies to")
         if self.priority is None:
