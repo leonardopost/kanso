@@ -90,10 +90,60 @@ def test_an_expectation_that_records_no_dispersion_strikes_no_band(recorded: Any
 
 
 def test_a_window_of_no_period_holds_nothing() -> None:
-    empty = Band(expected=0.0, low=-1.0, high=1.0, periods=0)
+    empty = Band(expected=0.0, low=-1.0, high=1.0, periods=0, folds=(1,))
 
     assert not empty.holds(0.0)
-    assert Band(expected=0.0, low=-1.0, high=1.0, periods=3).holds(0.0)
+    assert Band(expected=0.0, low=-1.0, high=1.0, periods=3, folds=(3,)).holds(0.0)
+
+
+def test_a_band_with_no_scoring_fold_or_a_thin_one_is_not_struck_and_holds_nothing() -> None:
+    assert not Band(expected=0.0, low=-1.0, high=1.0, periods=3).struck
+    assert not Band(expected=0.0, low=-1.0, high=1.0, periods=3).holds(0.0)
+    thin = Band(expected=0.0, low=-1.0, high=1.0, periods=9, folds=(4, 3, 2), minimum=4)
+    assert not thin.struck and not thin.holds(0.0)
+
+
+def test_a_sharpe_fold_is_weighed_by_its_exact_small_sample_variance() -> None:
+    """Twenty days in four folds of five: a Sharpe's fold weighs `(m − 1) / (m (m − 3))`,
+    twice a mean's `1/m` at five periods."""
+    run = build_run(tuple(float(day % 3) for day in range(20)))
+
+    band = prediction(wf_sharpe_net, expected(1.5, 0.4, 250), run, 4)
+
+    assert band is not None and band.struck
+    assert band.folds == (5, 5, 5, 5) and band.minimum == 4
+    weights = 4 * (5 - 1) / (5 * (5 - 3))
+    assert band.high - 1.5 == pytest.approx(Z * 0.4 * sqrt(1 + 250 * weights / 16))
+    mean_s = prediction(wf_contribution_bps, expected(1.5, 0.4, 250), run, 4)
+    assert mean_s is not None and band.high - band.low > mean_s.high - mean_s.low
+
+
+@pytest.mark.parametrize("days", [8, 12])
+def test_a_sharpe_window_whose_folds_hold_fewer_than_four_periods_strikes_no_band(
+    days: int,
+) -> None:
+    """Two or three periods a fold: a Sharpe of so few has no variance, so no band is struck,
+    and the window holds nothing until it has grown."""
+    run = build_run(tuple(float(day % 3) for day in range(days)))
+
+    band = prediction(wf_sharpe_net, expected(1.5, 0.4, 250), run, 4)
+
+    assert band is not None and not band.struck
+    assert band.folds == (days // 4,) * 4
+    assert (band.low, band.high) == (band.expected, band.expected)
+    assert not band.holds(band.expected)
+
+
+def test_a_per_trade_edge_window_that_closed_no_trade_strikes_no_band() -> None:
+    """Such a window realises zero whatever the version is, which a band centred on the folds
+    it filled — none — would hold."""
+    run = build_run((0.0,) * 20)
+
+    band = prediction(net_edge_bps, expected(10.0, 1.0, 120), run, 4)
+
+    assert band is not None and not band.struck and band.folds == ()
+    assert band.expected == 0.0 == net_edge_bps.compute(run, 4)[0]
+    assert not band.holds(0.0)
 
 
 def _coverage(paper_days: int, trials: int, seed: int) -> tuple[float, float]:
@@ -131,6 +181,37 @@ def test_a_version_that_is_what_was_certified_lands_inside_nine_times_in_ten(
     assert inside == pytest.approx(COVERAGE, abs=0.04)
     assert confident == pytest.approx(old, abs=0.06)
     assert confident < inside
+
+
+def _sharpe_coverage(paper_days: int, trials: int, seed: int) -> tuple[float, float]:
+    """How often a version that is what was certified lands inside the Sharpe band struck for
+    `paper_days` against 250 certified, and how often below it, as `live_drift` judges."""
+    rng = np.random.default_rng(seed)
+    inside = below = 0
+    for _ in range(trials):
+        certified = build_run(tuple(rng.normal(100.0, 1000.0, 250)), capital=CAPITAL)
+        value, se = wf_sharpe_net.compute(certified, 4)
+        paper = build_run(tuple(rng.normal(100.0, 1000.0, paper_days)), capital=CAPITAL)
+        realised = wf_sharpe_net.compute(paper, 4)[0]
+        band = prediction(wf_sharpe_net, expected(value, se, 250), paper, 4)
+        assert band is not None and band.struck
+        inside += band.holds(realised)
+        below += realised < band.low
+    return inside / trials, below / trials
+
+
+@pytest.mark.parametrize("paper_days", [16, 40])
+def test_a_sharpe_version_that_is_what_was_certified_lands_inside_nine_times_in_ten(
+    paper_days: int,
+) -> None:
+    """Simulated: 600 paper windows of four and of ten days a fold. A fold's Sharpe weighed by
+    `1/m`, as a mean's error is, held 0.75 and 0.87 of them and let 0.10 and 0.05 fall below
+    (October 2026, these seeds); weighed by its exact variance it holds 0.91 and 0.91, and
+    0.03 and 0.03 fall below."""
+    inside, below = _sharpe_coverage(paper_days, 600, seed=paper_days)
+
+    assert inside == pytest.approx(COVERAGE, abs=0.04)
+    assert below <= 0.05
 
 
 def test_a_version_whose_edge_is_gone_falls_below_its_band() -> None:

@@ -120,11 +120,11 @@ SAMPLING_FLOOR: Final = 0.1
 Both are estimates of the same objective and their scatter goes as the inverse square root
 of the window. `paper_forward` judges the paper result against a band struck for the paper
 window's own length (`kanso.criteria.band`), so a version behaving exactly as certified lands
-inside it nine times in ten however short the window — but at a tenth that band is more than
-three times as wide as the certification value's own, and a version that has lost its edge
-lands inside it too unless the edge was certified that many errors clear of zero. The line
-is drawn on a continuum, so it is drawn generously: it warns about the plans that are
-certainly mis-sized rather than about the borderline ones.
+inside it about nine times in ten at any length that strikes one — but at a tenth that band
+is more than three times as wide as the certification value's own, and a version that has
+lost its edge lands inside it too unless the edge was certified that many errors clear of
+zero. The line is drawn on a continuum, so it is drawn generously: it warns about the plans
+that are certainly mis-sized rather than about the borderline ones.
 """
 
 CERT_STAGE: Final = "cert"
@@ -449,9 +449,10 @@ def paper_window_note(ws: Workspace, store: StateStore, pinned: CertificationPla
     what composition measured over the *certification* window, widened for the paper
     window's own length: the certification value's error and the paper window's, together.
     The shorter the paper window, the wider the band — `√(1 + certification/paper)` times
-    the certification value's own, more than three at a tenth — so a version behaving as
-    certified still passes nine times in ten, and one that has stopped working passes too
-    unless its certified edge stands that many errors clear of zero.
+    the certification value's own, more than three at a tenth, and a Sharpe's wider still at
+    a few periods a fold — so a version behaving as certified still passes about nine times
+    in ten, and one that has stopped working passes too unless its certified edge stands
+    that many errors clear of zero.
 
     It is a note and not a refusal. The plan is the planner's, the windows are the
     operator's, and a short paper window is a defensible choice — it is only one made in

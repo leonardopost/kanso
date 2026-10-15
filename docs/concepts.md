@@ -1635,8 +1635,8 @@ carries no `power`.
 is not.** The paper gate compares the objective a stage realises against a band struck for the
 paper window's own length from what composition measured over the *certification* window —
 the value's error and the paper window's, together (*Promotion and demotion*). A version
-behaving as certified lands inside it nine times in ten however short the window, but a
-short window widens the band until a version that has stopped working lands inside it too:
+behaving as certified lands inside it about nine times in ten at any length that strikes one,
+but a short window widens the band until a version that has stopped working lands inside it too:
 a fortnight against a year strikes a band about five times as wide as the certification
 value's own. So under a tenth of the certification window the command warns — with the two
 spans and how much wider the band is — while pinning the plan anyway. The plan is the
@@ -1938,25 +1938,42 @@ is a fail. `docs/cli.md` has the pass.
 **The band is a prediction band for the paper window, not a confidence band of the
 certification.** The realised value and the certified one are two estimates of one quantity,
 the paper window's usually the shorter, and their difference varies as both do. Each fold of
-a window of `m` periods varies as `s²/m`, `s² = se² × N` the per-period dispersion the
+a window of `m` periods varies as `s² × w(m)`, `s² = se² × N` the per-period dispersion the
 certification window's `N` periods showed — its own error says so — so the band is
 
 ```
-expected ± 1.645 × √(se² + se² × N × Σ 1/m_k / K²)
+expected ± 1.645 × √(se² + se² × N × Σ w(m_k) / K²)
 ```
 
-over the paper window's `K = [research] folds` folds of `m_k` periods. In `K` equal folds of a
-window of `M` periods that is `expected ± 1.645 × se × √(1 + N/M)`: a version that is what was
-certified lands inside nine times in ten whatever the window's length, and the evidence states
-the band, that coverage and the periods it was struck for. `expected` is the certified value
-scaled to the folds the window filled, since the objective scores a fold holding nothing as
-zero. The interval composition recorded — the bootstrap's band of the certification value —
-is not what paper is judged against: a version behaving exactly as certified lands inside it
-26% of the time over five sessions against 122 and 76% even over 122, and above it as often
-as below. A short paper window makes the band wide enough to hold a version that stopped
-working, which is what `cert plan` warns about; `live_drift` holds a live version to the lower
-end of the band struck for its rolling window, which one behaving as certified falls below one
-time in twenty.
+over the paper window's `K = [research] folds` folds of `m_k` periods. For a contribution or a
+per-trade edge `w(m) = 1/m`, the variance of a mean, and in `K` equal folds of a window of `M`
+periods the band is `expected ± 1.645 × se × √(1 + N/M)`. For a Sharpe `w(m) = (m − 1) / (m (m
+− 3))`, the exact variance of a Sharpe of `m` normal periods — three times `1/m` at four, twice
+at five — and a window any of whose scoring folds holds fewer than four periods strikes no
+band at all, because a Sharpe of two or three periods has no variance: weighed by `1/m`, a
+version that is what was certified landed inside 0.54 of the time over ten sessions and fell
+below up to 0.18 of the time. `expected` is the certified value scaled to the folds the window
+filled, since the objective scores a fold holding nothing as zero; a window that filled no
+fold — a per-trade edge's that closed no trade — strikes no band either, since it realises
+zero whatever the version is.
+
+Its coverage is nominal — ninety percent, a normal approximation — and the evidence states it
+with the band, the periods it was struck for and what each fold held (`fold_periods`, against
+`fold_minimum`). Simulated in October 2026, a version that is what was certified landed inside
+0.87 to 0.94 of the time on normal, Student-t3 and sparse books of every family at every
+length that strikes a band — 0.98 for a per-trade edge trading a few times a week over five
+sessions — and 0.82 to 0.85 on a contribution whose periods are autocorrelated at 0.3; regime
+shifts were not simulated (`docs/backlog.md`). The interval
+composition recorded — the bootstrap's band of the certification value — is not what paper is
+judged against: a version behaving exactly as certified lands inside it 26% of the time over
+five sessions against 122 and 76% even over 122, and above it as often as below. A short paper
+window makes the band wide enough to hold a version that stopped working, which is what `cert
+plan` warns about. A window too thin to strike a band fails, so the version is not promotable
+until its paper window has grown enough — for a Sharpe, four periods a fold whatever the plan
+chose. `live_drift` holds a live version to the lower end of the band struck for its rolling
+window — opened back through its live tenure until it strikes one — which a version behaving
+as certified falls below nominally one time in twenty, 0.014 to 0.075 of the time a look in
+simulation.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

@@ -12,9 +12,15 @@ clock, so a stage replaying at speed zero is measured in market time like every 
 sleeve's certification window, at the capital the stage holds it at, and recorded the
 objective's value, its error and the periods it was read over. The realised paper objective
 must fall inside the band those strike for the paper window this gate is judging — a
-prediction band for a window of that many periods, which a version that is what was
-certified lands inside nine times in ten however short the window (`kanso.criteria.band`);
-the evidence states the band, its coverage and the periods it was struck for. Inside, not
+prediction band for a window of that many periods, whose nominal coverage is nine in ten at
+any length that strikes one (`kanso.criteria.band`); the evidence states the band, its
+coverage, the periods it was struck for and what each fold held. A window too thin to strike
+one fails until it is not: a Sharpe's window any of whose scoring folds holds fewer than four
+periods — a Sharpe of two or three has no variance to band — and a window whose every fold
+scores the constant zero, a per-trade edge's that closed no trade, which realises zero
+whatever the version is. The paper window keeps growing until the band is struck, so a
+Sharpe's paper window is in effect at least four periods a fold, whatever the plan chose.
+Inside, not
 merely above it: a result above the band is not a better strategy; it is the paper stage
 failing to reproduce the model that was certified, and promoting on it would promote an
 unexplained difference. An expectation that records no error — composed before kanso
@@ -105,9 +111,11 @@ class _PaperForward:
                 "objective": objective.id,
                 "realised": realised,
                 "expected": band.expected,
-                "band": [band.low, band.high],
+                "band": [band.low, band.high] if band.struck else None,
                 "coverage": band.coverage,
                 "n_periods": band.periods,
+                "fold_periods": list(band.folds),
+                "fold_minimum": band.minimum,
                 "max_drawdown_pct": observed,
                 "limit_pct": limit,
                 "constraints": constraints,

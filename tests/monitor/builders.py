@@ -7,8 +7,9 @@ writes them directly and stays a test of the pass rather than of the runner.
 The arithmetic is chosen to be checkable by eye: a run whose daily return never varies has a
 zero Sharpe on every fold, so the realised objective is exactly zero and a band either
 contains it or does not. A version's expectation carries a small error (`SE`), so the band a
-twenty-day window strikes from it is a third of a unit either side of its value: a value of
-zero holds the flat run's zero, and one of 1.5 or −1.5 leaves it below or above.
+twenty-day window strikes from it is about four tenths of a unit either side of its value — a
+Sharpe's fold of five periods weighs twice what a mean's would — so a value of zero holds the
+flat run's zero, and one of 1.5 or −1.5 leaves it below or above.
 """
 
 from __future__ import annotations

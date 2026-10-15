@@ -334,20 +334,25 @@ more recently fails with `elapsed_s` and `required_s` in its evidence rather tha
 skipped. It then requires the objective the stage realised to fall **inside** the band struck
 for the paper window from the version's expectation — its value, its error and the periods
 it was read over, widened for the paper window's own periods (`docs/concepts.md`, *Promotion
-and demotion*) — which a version that is what was certified lands inside nine times in ten, and
-the evidence records `expected`, `band`, `coverage` and `n_periods` — and a result above the
-band fails exactly as one below it does, because a stage that out-performs its certification is
-not reproducing the model that was certified, and promoting on it would promote an
-unexplained difference. An expectation that records no error — composed before kanso recorded one — is
-skipped by both this gate and `live_drift`, naming that, until the stage's next deploy
-measures it: after an upgrade, `kanso portfolio deploy --stage paper` (and `--stage live`
-where a version is live) strikes every such version at once. Of the sleeve's card-stage
+and demotion*) — which a version that is what was certified lands inside nominally nine times
+in ten, and the evidence records `expected`, `band`, `coverage`, `n_periods`, `fold_periods`
+and `fold_minimum` — and a result above the band fails exactly as one below it does, because a
+stage that out-performs its certification is not reproducing the model that was certified, and
+promoting on it would promote an unexplained difference. A window too thin to strike a band
+fails with `band: null` until it has grown: a Sharpe's whose scoring folds hold fewer than four
+periods each, and a per-trade edge's that closed no trade. An expectation that records no error
+— composed before kanso recorded one — is skipped by this gate, naming that, and `live_drift`
+holds it to the lower end of the interval it was composed with (`floor_of: ci90`), as kanso
+did before, until the stage's next deploy measures it: after an upgrade, `kanso portfolio
+deploy --stage paper` (and `--stage live` where a version is live) strikes every such version
+at once. Of the sleeve's card-stage
 constraints the drawdown limit and, when the sleeve holds cards to it, `maintenance_margin`
 are judged on the stage's own run, and a breach of either fails; `min_trades` is recorded as
 skipped, since a research-window count cannot be met in a paper window. `live_drift` fails a
-live version whose objective over its rolling window — the paper window's length — falls
-below the lower end of the band struck for that window, and skips a window that holds no
-period.
+live version whose objective over its rolling window — the paper window's length, opened back
+through the version's live tenure a period at a time while it is too thin to strike a band —
+falls below the lower end of the band struck for that window, and skips a window that holds no
+period and a tenure that holds no window thick enough.
 
 ## Models
 

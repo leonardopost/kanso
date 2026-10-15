@@ -2,7 +2,7 @@ id: live_drift
 kind: gate
 stage: live
 required: false
-meaningful_when: "Informative once live as long as on paper; fails when the rolling objective falls below the band struck for a window that long, as a version behaving as certified does 1 time in 20."
+meaningful_when: "Informative once live as long as on paper; fails below the band struck for a window that long (nominally 1 in 20 for a certified version); a window too thin for a band is lengthened."
 params: {}
 ranges: {}
 impl: kanso.criteria.gates.live_drift.gate

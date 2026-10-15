@@ -116,14 +116,59 @@ def test_a_result_below_the_band_fails() -> None:
 
 def test_the_band_is_struck_for_the_paper_window_and_states_its_coverage() -> None:
     """Twenty paper days in four folds of five, against fifty-five certified: the value's
-    error widened by the paper window's own, `√(1 + 55 × 4/5 / 16)`."""
+    error widened by the paper window's own. A Sharpe's fold of five periods weighs
+    `(5 − 1) / (5 × 2)`, its exact small-sample variance, so `√(1 + 55 × 4 × 0.4 / 16)`."""
     result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), value=1.0))
 
-    half = 1.6448536269514722 * SE * sqrt(1 + PERIODS * (4 / 5) / 16)
+    half = 1.6448536269514722 * SE * sqrt(1 + PERIODS * (4 * 0.4) / 16)
     assert result.evidence["expected"] == 1.0
     assert result.evidence["band"] == pytest.approx([1.0 - half, 1.0 + half])
     assert result.evidence["coverage"] == 0.9
     assert result.evidence["n_periods"] == 20
+    assert (result.evidence["fold_periods"], result.evidence["fold_minimum"]) == ([5] * 4, 4)
+
+
+@pytest.mark.parametrize("days", [8, 12])
+def test_a_sharpe_window_too_thin_for_its_band_fails_until_it_is_not(days: int) -> None:
+    """Folds of two or three periods: a Sharpe of so few has no variance to band, so the
+    gate fails — the version is not promotable yet — however long the plan's floor, and the
+    evidence says what each fold held and needs; sixteen days strike the band."""
+
+    def judged(run: CardRun) -> GateResult:
+        return gate.evaluate(gate_context(params=PARAMS, record=stage_record(), run=run, se=WIDE))
+
+    thin = judged(run_over((100.0, 120.0) * (days // 2)))
+    grown = judged(run_over((100.0, 120.0) * 8))
+
+    assert not thin.passed and thin.skipped is None
+    assert thin.evidence["elapsed_s"] >= thin.evidence["required_s"]
+    assert thin.evidence["band"] is None
+    assert thin.evidence["fold_periods"] == [days // 4] * 4
+    assert thin.evidence["fold_minimum"] == 4
+    assert grown.passed and grown.evidence["fold_periods"] == [4] * 4
+
+
+def test_a_per_trade_edge_window_that_closed_no_trade_fails() -> None:
+    """It realises zero whatever the version is: no evidence, so not promotable."""
+    edge = hypothesis(objective={"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 1.0}})
+    expectation = {
+        "objective_id": "net_edge_bps",
+        "value": 10.0,
+        "ci90": [8.0, 12.0],
+        "se": 1.0,
+        "periods": 55,
+    }
+
+    result = gate.evaluate(
+        replace(
+            gate_context(params=PARAMS, record=stage_record(), hyp=edge),
+            expectation=expectation,
+        )
+    )
+
+    assert not result.passed
+    assert result.evidence["realised"] == 0.0 == result.evidence["expected"]
+    assert result.evidence["band"] is None and result.evidence["fold_periods"] == []
 
 
 def test_an_expectation_with_no_error_strikes_no_band_and_says_so() -> None:
@@ -186,7 +231,7 @@ def test_a_result_above_the_band_fails_too() -> None:
 
 def test_a_drawdown_past_the_hypothesis_limit_fails() -> None:
     """The one card-stage constraint a paper window can still judge."""
-    sank = run_over((100.0, -30_000.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0))
+    sank = run_over((100.0, -30_000.0, *(100.0,) * 14))
 
     result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), run=sank, se=WIDE))
 
@@ -213,7 +258,7 @@ def test_a_constraint_a_deployment_cannot_run_is_named_as_such() -> None:
 def test_a_sleeve_without_a_drawdown_constraint_judges_no_drawdown() -> None:
     """Only the sleeve's own constraints are evaluated, so an undeclared one is not."""
     bare = hypothesis(constraints=[{"id": "strategy_integrity"}])
-    sank = run_over((100.0, -30_000.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0))
+    sank = run_over((100.0, -30_000.0, *(100.0,) * 14))
 
     result = gate.evaluate(
         gate_context(params=PARAMS, record=stage_record(), run=sank, hyp=bare, se=WIDE)
