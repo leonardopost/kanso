@@ -348,7 +348,10 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     again = records.cards_of(store, registered)[-1]
     assert (again.status, again.metric) == ("redundant", kept.metric)
     assert records.n_trials(store, registered) == 3
-    assert records.trial_metrics(store, registered) == [kept.metric, again.metric]
+    assert records.trial_metrics(store, registered, "wf_sharpe_net") == [
+        kept.metric,
+        again.metric,
+    ]
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert event.detail["like"] == kept.sha7
     assert event.detail["pct"] == 100.0

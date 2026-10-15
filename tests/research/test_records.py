@@ -12,7 +12,7 @@ import pytest
 from kanso.criteria.run import CardRun, Held, Trade, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
-from kanso.schemas import RunRecord
+from kanso.schemas import Card, Costs, RunRecord, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -120,7 +120,83 @@ def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateS
     ]
     assert cards[-3].n_trades > 0
     assert records.n_trials(store, hyp_id) == len(cards)
-    assert records.trial_metrics(store, hyp_id) == [cards[-3].metric]
+    assert records.trial_metrics(store, hyp_id, "wf_sharpe_net") == [cards[-3].metric]
+
+
+def pinned_run(store: StateStore, hyp_id: str, n: int, pin: bytes) -> RunRecord:
+    """A closed run of `hyp_id` whose pinned hypothesis file is `pin`."""
+    blob = store.put_blob(pin)
+    made = records.insert(
+        store,
+        RunRecord(
+            run_id=f"run-{n}",
+            hyp_id=hyp_id,
+            tag=f"20240101-{n}",
+            lane="op",
+            dir=f"runs/op/{hyp_id}",
+            base_sha=blob,
+            hypothesis_sha=blob,
+            program_sha=blob,
+            snapshot_id="snap",
+            criteria_version=f"0.{n}.0",
+            card_budget_s=60.0,
+            baseline_wall_s=1.0,
+            baseline_peak_mem_gb=1.0,
+            started_at=records.now(),
+        ),
+    )
+    return records.close(store, made)
+
+
+def scored(store: StateStore, run: RunRecord, metric: float, n_trades: int = 5) -> None:
+    """One card of `run`, at `metric`, that traded `n_trades` times."""
+    records.record_card(
+        store,
+        run,
+        Card.model_validate(
+            {
+                "run_id": run.run_id,
+                "lane": "op",
+                "strategy_sha": store.put_blob(f"{run.run_id}-{metric}".encode()),
+                "metric": metric,
+                "metric_se": 0.1,
+                "n_trials": 1,
+                "n_trades": n_trades,
+                "wall_s": 1.0,
+                "peak_mem_gb": 0.1,
+                "status": "discard",
+                "desc": "a card",
+                "venue_model": resolve_venue_model(
+                    "XNAS",
+                    hypothesis_costs=Costs.model_validate(DOCUMENT["costs"]),
+                    max_leverage=1.0,
+                    quotes_available=False,
+                ),
+                "created_at": records.now(),
+            }
+        ),
+    )
+
+
+def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
+    store: StateStore, registered: str
+) -> None:
+    """Re-pinned from a per-trade edge to a contribution and on to a newer file under the
+    same contribution: the edge's cards are a search in other units and are not trials of
+    the contribution, while the re-pin under the same objective continues its search. A pin
+    that names no objective scores nothing anyone deflates."""
+    edge = pinned_run(store, registered, 1, b"objective: {id: net_edge_bps}\n")
+    first = pinned_run(store, registered, 2, b"objective: {id: wf_contribution_bps}\n")
+    again = pinned_run(store, registered, 3, b"id: x\nobjective: {id: wf_contribution_bps}\n")
+    bare = pinned_run(store, registered, 4, b"id: x\n")
+    for run, metric in ((edge, 40.0), (first, 1.5), (edge, 55.0), (again, 2.5), (bare, 9.0)):
+        scored(store, run, metric)
+    scored(store, again, 7.0, n_trades=0)
+
+    assert records.trial_metrics(store, registered, "wf_contribution_bps") == [1.5, 2.5]
+    assert records.trial_metrics(store, registered, "net_edge_bps") == [40.0, 55.0]
+    assert records.trial_metrics(store, registered, "wf_sharpe_net") == []
+    assert records.n_trials(store, registered) == 6, "every card is still counted"
 
 
 def a_run(held: tuple[Held, ...] = (), trades: tuple[Trade, ...] = (), days: int = 3) -> CardRun:

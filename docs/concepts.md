@@ -72,7 +72,7 @@ to certify is worth saying out loud and is not kanso's to act on.
 `failed` survives as a status on hypotheses ended by a version of kanso that ended them:
 `n_fail` consecutive failing certificates wrote it, the queue treated it as over, and no
 command could bring one back — the remedy printed was to register the idea again under a new
-id, which resets the trial count `deflated_sharpe` prices the search by. Nothing writes it
+id, which resets the trial count the deflation gates price the search by. Nothing writes it
 now, `kanso research queue add` takes such a hypothesis back, and `kanso hyp resume` clears
 the failure count with it.
 
@@ -717,10 +717,14 @@ explores at the default.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.
 
-One certification gate deflates the result by that search, and it counts a narrower set: a
-**trial** is a card that ran to a result and traded. A crash produced no metric to compare
-and a card that placed no order did not trade the hypothesis, so neither is a candidate the
-selection could have kept. A redundant card is one — it ran, it traded, and the keep rule
+The deflation gates price the result by that search, and they count a narrower set: a
+**trial** is a card that ran to a result, traded, and was scored under the objective being
+deflated — the one the hypothesis file each card's run pinned names. A crash produced no
+metric to compare and a card that placed no order did not trade the hypothesis, so neither is
+a candidate the selection could have kept; a card scored under another objective is a number
+in other units, and a spread taken across a per-trade edge and a contribution is the spread
+of neither. Nothing else about the pins narrows the set — a re-pin under the same objective,
+a newer snapshot or a kanso upgrade is the same search going on. A redundant card is one — it ran, it traded, and the keep rule
 was asked before the signature, so it would have been kept had it beaten the best. That
 another candidate held the same book makes it a correlated trial rather than no trial, and
 how much less than one a correlated trial is worth is open on the same terms as the

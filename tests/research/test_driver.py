@@ -254,7 +254,10 @@ def test_a_redundant_card_is_recorded_and_the_next_proposal_is_told_what_it_repe
     kept = records.cards_of(store, prepared_hyp)[1]
     repeat = records.cards_of(store, prepared_hyp)[2]
     assert (repeat.desc, repeat.metric) == ("the same bet again", kept.metric)
-    assert records.trial_metrics(store, prepared_hyp) == [kept.metric, repeat.metric]
+    assert records.trial_metrics(store, prepared_hyp, "wf_sharpe_net") == [
+        kept.metric,
+        repeat.metric,
+    ]
     walked = driver.coverage(store, records.require_active(store, prepared_hyp))
     assert walked["signal_mean_reversion"] == {
         "count": 2,

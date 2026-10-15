@@ -14,9 +14,11 @@ one run are ordered and countable without a scan.
 `n_trials` counts every card of every run of the hypothesis — baselines and crashes
 included — because it numbers the cards and stamps the certificate, and no card may be
 dropped from a count that is part of a filename. `trial_metrics` is the narrower set the
-deflated Sharpe consumes: the cards that ran to a result and traded. A crash and a card
-that placed no order are edits that failed, not candidates the selection could have
-chosen, so counting them widens the search on paper without widening it in fact. A
+deflation gates consume: the cards that ran to a result and traded, scored under the
+objective being deflated. A crash and a card that placed no order are edits that failed,
+not candidates the selection could have chosen, so counting them widens the search on
+paper without widening it in fact; a card scored under another objective is a number in
+other units, so counting it measures the spread of a search that never happened. A
 redundant card is in both, because it is the other way round — it ran, it traded, and the
 selection ranked its number and declined it. That another candidate held the same book
 makes it a correlated trial, not a non-trial, and dropping it was measured costing
@@ -80,6 +82,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
+
+import yaml
 
 from kanso.criteria.run import CardRun, day_of
 from kanso.errors import PreconditionError
@@ -320,13 +324,24 @@ def n_trials(store: StateStore, hyp_id: str) -> int:
     return int(row[0])
 
 
-def trial_metrics(store: StateStore, hyp_id: str) -> list[float]:
-    """The metric of every card of this hypothesis that ran to a result and traded.
+def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[float]:
+    """The metric of every card of this hypothesis that ran to a result, traded, and was
+    scored under `objective_id`.
 
     The multiple-comparisons set: one entry per candidate the selection could have kept,
     so its count and its spread describe the same search. A crash produced no metric to
     compare and a card that placed no order did not trade the hypothesis, and neither is
     excluded from `n_trials`, which counts cards.
+
+    A card scored under another objective is excluded. A hypothesis re-pinned from a
+    per-trade edge to a contribution has a search in basis points per trade behind it and one
+    in basis points per period, and a spread taken across both is the spread of neither:
+    measured on an operator's workspace in October 2026, mixing the two moved one expected
+    maximum from 0.055 to 1.82. The objective is read from the hypothesis file each card's run
+    pinned, as a plain mapping, so a pin written under an older schema is still read. Nothing
+    else about the pins narrows the set: a re-pin under the same objective, a newer snapshot or
+    a kanso upgrade is the same search continuing, and a set that reset at each of them would
+    price a search by its latest stretch.
 
     A redundant card is one of these. The keep rule is asked before the signature, so a
     candidate that beat the best would have been kept whatever it resembled: it is a
@@ -338,11 +353,26 @@ def trial_metrics(store: StateStore, hyp_id: str) -> list[float]:
     never a set quietly narrowed until a bar is passed.
     """
     rows = store.connection.execute(
-        "SELECT metric FROM cards WHERE hyp_id = ? AND status != 'crash' AND n_trades > 0"
-        " ORDER BY card_id",
+        "SELECT cards.metric, runs.hypothesis_sha FROM cards JOIN runs USING (run_id)"
+        " WHERE cards.hyp_id = ? AND cards.status != 'crash' AND cards.n_trades > 0"
+        " ORDER BY cards.card_id",
         (hyp_id,),
     ).fetchall()
-    return [float(row["metric"]) for row in rows]
+    scored: dict[str, str | None] = {}
+    for row in rows:
+        pin = str(row["hypothesis_sha"])
+        if pin not in scored:
+            scored[pin] = _objective_of(store, pin)
+    return [
+        float(row["metric"]) for row in rows if scored[str(row["hypothesis_sha"])] == objective_id
+    ]
+
+
+def _objective_of(store: StateStore, pin: str) -> str | None:
+    """The objective a pinned hypothesis file names, or `None` when it names none."""
+    found = yaml.safe_load(store.get_blob(pin).decode("utf-8"))
+    objective = found.get("objective") if isinstance(found, dict) else None
+    return str(objective["id"]) if isinstance(objective, dict) and "id" in objective else None
 
 
 def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:

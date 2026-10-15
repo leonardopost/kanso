@@ -849,7 +849,7 @@ def _judge(
         measured.host_certification,
         measured.benchmark_certification,
     )
-    metrics = records.trial_metrics(store, subject.hyp.id)
+    metrics = records.trial_metrics(store, subject.hyp.id, objective.id)
     facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
     volume = measured.evidence.daily_volume
     parameters = _tunable(subject)

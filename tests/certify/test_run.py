@@ -1068,7 +1068,8 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
     made = certify(ws, store, HYP_ID)
 
     (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
-    assert deflated.evidence["trials"] == len(records.trial_metrics(store, HYP_ID)) == 2
+    trials = records.trial_metrics(store, HYP_ID, "wf_sharpe_net")
+    assert deflated.evidence["trials"] == len(trials) == 2
     assert records.n_trials(store, HYP_ID) == made.n_trials == 4
 
 
