@@ -23,7 +23,7 @@ from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
-from tests.certify.test_run import a_card, write_plan
+from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, write_plan
 
 from .conftest import (
     ATTACHED_HOST,
@@ -358,7 +358,7 @@ def test_a_hypothesis_that_keeps_failing_keeps_getting_lanes(
     it to take, and no command anywhere could give it back.
     """
     hyp_id = classify(ws, store, DOCUMENT, FLAT)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])  # five trials behind it by the last
     policy = tuned(ws, n_fail=3)  # read by the child that certifies, so it is on disk
 
     for attempt in range(1, 6):

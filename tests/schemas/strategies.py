@@ -46,6 +46,7 @@ from kanso.schemas import (
     PlanInputs,
     PlannedGate,
     Portfolio,
+    Power,
     Resolved,
     RiskLimits,
     Routing,
@@ -363,6 +364,25 @@ def plans(draw: st.DrawFn) -> CertificationPlan:
     )
 
 
+PROBABILITY = st.floats(min_value=0.0, max_value=1.0, allow_nan=False)
+
+
+@st.composite
+def powers(draw: st.DrawFn) -> Power:
+    """A power statement, with or without the window gate's pass probabilities."""
+    se = draw(NON_NEGATIVE)
+    judged = draw(st.booleans())
+    return Power(
+        research=draw(FINITE),
+        research_se=draw(NON_NEGATIVE),
+        standard_error=se,
+        resolves=2.486 * se,
+        bar=draw(NON_NEGATIVE) if judged else None,
+        pass_at_research=draw(PROBABILITY) if judged else None,
+        pass_at_zero=draw(PROBABILITY) if judged else None,
+    )
+
+
 @st.composite
 def certificates(draw: st.DrawFn) -> Certificate:
     ids = draw(st.lists(CATALOGUE_IDS, min_size=1, max_size=5, unique=True))
@@ -397,6 +417,7 @@ def certificates(draw: st.DrawFn) -> Certificate:
         n_trials=draw(st.integers(1, 5000)),
         verdict="pass" if all(g.passed for g in evaluated) else "fail",
         created_at=draw(TIMESTAMPS),
+        power=draw(st.none() | powers()),
     )
 
 

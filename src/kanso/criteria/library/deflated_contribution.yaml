@@ -2,7 +2,8 @@ id: deflated_contribution
 kind: gate
 stage: cert
 required: false
-meaningful_when: "Only for a contribution objective, and only with two or more trials that ran and traded: it deflates the research contribution by its own error and by how wide the search that found it was."
+deflates: [wf_contribution_bps, marginal_wf_contribution_bps]
+meaningful_when: "The search correction for a contribution: the research contribution against the expected maximum of the trials, over its own per-period error. Required, threshold set, from the second card."
 params: {min_probability: float}
 ranges: {min_probability: [0.5, 0.999]}
 impl: kanso.criteria.gates.deflated_contribution

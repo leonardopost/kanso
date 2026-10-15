@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import date, timedelta
 from math import nextafter
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ from kanso.criteria.gates import (
     cost_stress,
     deflated_sharpe,
     embargoed_window,
+    expected_maximum,
     leg_edge,
     maintenance_margin,
     max_drawdown,
@@ -32,6 +34,7 @@ from kanso.criteria.gates import (
     walk_forward_consistency,
 )
 from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
+from kanso.criteria.quantities import periods_per_year, variance
 from kanso.criteria.run import NS_PER_SECOND, Fill
 from kanso.errors import PreconditionError
 from tests.criteria.builders import (
@@ -746,9 +749,6 @@ def test_walk_forward_consistency_reads_the_research_folds_against_the_benchmark
     assert result.evidence["folds"] == pytest.approx(
         list(wf_sharpe_vs_hold.fold_values(RISING, 4, benchmark=HOLDING))
     )
-    assert result.evidence["certification"] == pytest.approx(
-        wf_sharpe_vs_hold.compute(RISING, 4, benchmark=RISING)[0]
-    ), "the certified run is differenced against the certification window's hold"
 
 
 def test_walk_forward_consistency_counts_positive_folds() -> None:
@@ -774,14 +774,20 @@ def test_walk_forward_consistency_fails_too_few_positive_folds() -> None:
     ).passed
 
 
-def test_walk_forward_consistency_fails_when_certification_is_the_worst_fold() -> None:
-    assert not walk_forward_consistency.evaluate(
+def test_walk_forward_consistency_does_not_judge_the_certification_window() -> None:
+    """A certification window worse than every research fold is `embargoed_window`'s to
+    refuse. Ranked against four selected research folds it is the worst a fifth of the time
+    or more whatever the edge, so a clause asking it not to be refused sound candidates at
+    random and was deleted; the gate reads the research folds and nothing else."""
+    result = walk_forward_consistency.evaluate(
         context(
             trading_run(-100.0, -100.0, -100.0, -100.0),
             params={"min_positive_folds": 1},
             research_run=trading_run(100.0, -50.0, 200.0, 300.0),
         )
-    ).passed
+    )
+    assert result.passed
+    assert "certification" not in result.evidence
 
 
 @pytest.mark.parametrize(
@@ -999,13 +1005,37 @@ def test_deflated_sharpe_without_its_context_judges_nothing(overrides: Any) -> N
     assert result.passed and result.skipped is not None
 
 
-def test_deflated_sharpe_is_skipped_when_the_deflation_denominator_collapses() -> None:
-    skewed = build_run((1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.2))
-    result = deflated_sharpe.evaluate(
-        sharpe_context(research_run=skewed, run=skewed, research_folds=1)
+def test_deflated_sharpe_deflates_by_the_error_the_card_carried() -> None:
+    """The estimate, its error and the trials' spread, all out of annualised units: the
+    error is the objective's own — Mertens' variance of a Sharpe, fold by fold — and not one
+    the gate computes for itself, so the deflation reads the number the card reported."""
+    research = build_run((3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0))
+    result = deflated_sharpe.evaluate(sharpe_context())
+    scale = periods_per_year(research) ** 0.5
+    estimate, error = wf_sharpe_net.compute(research, 4)
+    expected = expected_maximum(variance((1.0, 1.2, 0.9, 1.1)) / scale**2, 4)
+    assert result.evidence["sharpe"] == pytest.approx(estimate / scale)
+    assert result.evidence["standard_error"] == pytest.approx(error / scale)
+    assert result.evidence["expected_maximum"] == pytest.approx(expected)
+    assert result.evidence["dsr"] == pytest.approx(
+        NormalDist().cdf((estimate / scale - expected) / (error / scale))
     )
+
+
+def test_deflated_sharpe_judges_nothing_on_a_research_window_too_short_for_an_error() -> None:
+    short = build_run((3.0, -1.0))
+    result = deflated_sharpe.evaluate(sharpe_context(research_run=short, research_folds=1))
     assert result.passed
-    assert result.skipped is not None and "not positive" in result.skipped
+    assert result.skipped is not None and "too short" in result.skipped
+
+
+def test_deflated_sharpe_judges_nothing_when_a_marginal_sharpe_has_no_host() -> None:
+    marginal = make_hyp(
+        objective={"id": "marginal_wf_sharpe", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    result = deflated_sharpe.evaluate(sharpe_context(hyp=marginal))
+    assert result.passed
+    assert result.skipped is not None and "host's run" in result.skipped
 
 
 # --- cost_stress ------------------------------------------------------------------

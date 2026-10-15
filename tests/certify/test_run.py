@@ -29,7 +29,7 @@ from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
 from kanso.criteria import library
 from kanso.criteria.gates.parity_replay import NO_PARITY
-from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_vs_hold
+from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.criteria.run import BPS, day_of, midnight_ns
 from kanso.data import snapshot as snapshots
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
@@ -91,6 +91,14 @@ CERT_GATES: list[dict[str, Any]] = [
     },
 ]
 """The three cert gates every plan must carry, since all three are structural invariants."""
+
+SEARCHED: dict[str, Any] = {
+    "id": "deflated_sharpe",
+    "stage": "cert",
+    "params": {"min_dsr": 0.5},
+    "rationale": "required behind two trials: the search correction for a Sharpe",
+}
+"""The gate a plan for the demo's Sharpe carries once the search has two trials."""
 
 TAIL_GATES: list[dict[str, Any]] = [
     {
@@ -370,6 +378,30 @@ def test_a_certificate_is_immutable_and_reads_back_as_it_was_written(
 
     assert load_yaml(Certificate, certificate.certificate_file(ws, made)) == made
     assert show(ws, store, HYP_ID) == made
+    assert made.power is not None, "the row reads back the power the file states"
+
+
+def test_a_certificate_states_its_power_from_the_research_window_it_ran_again(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The research estimate and its error are the objective's over the research window the
+    certification ran again; the certification window's expected error is that one scaled by
+    the root of the two windows' lengths; the bar is the plan's `min_fraction` of research."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=[{**CERT_GATES[0], "params": {"min_fraction": 0.5}}, *CERT_GATES[1:]])
+
+    made = certify(ws, store, HYP_ID)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+    measured = run._measure(subject)
+    research, error = wf_sharpe_net.compute(measured.research, subject.folds)
+    days = [(end - start).days + 1 for start, end in (subject.research, subject.certification)]
+    stated = made.power
+    assert stated is not None
+    assert (stated.research, stated.research_se) == pytest.approx((research, error))
+    assert stated.standard_error == pytest.approx(error * (days[0] / days[1]) ** 0.5)
+    assert stated.bar == pytest.approx(max(0.0, 0.5 * research))
 
 
 def test_the_name_the_refusal_checks_is_the_certificate_own(
@@ -442,7 +474,7 @@ def test_the_failure_count_escalates_on_a_cadence_rather_than_once(
 ) -> None:
     """Every `n_fail`-th failure speaks. A threshold would have spoken once and stopped."""
     classify(ws, store, DOCUMENT, FLAT)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     policy = with_n_fail(ws, 2)
 
     seen: list[int] = []
@@ -464,10 +496,10 @@ def test_a_failing_certificate_hands_the_proposer_gate_ids_and_no_measurement(
 ) -> None:
     """The proposer learns which gate to work on. It never learns what the gate measured.
 
-    `embargoed_window` and `walk_forward_consistency` both record the objective over the
-    certification window in their evidence, and the proposer writes the next
-    `strategy.py`. Handing it that dict is a route from the embargoed window into
-    research, arriving as feedback rather than as a backtest request.
+    `embargoed_window` records the objective over the certification window in its
+    evidence, and the proposer writes the next `strategy.py`. Handing it that dict is a
+    route from the embargoed window into research, arriving as feedback rather than as a
+    backtest request.
     """
     classify(ws, store, DOCUMENT, FLAT)
     a_card(ws, store, FLAT)
@@ -556,7 +588,7 @@ def test_re_pinning_the_hypothesis_makes_the_same_bytes_a_fresh_certification(
     a new claim, not a repeat, and the two certificates sit side by side under two names."""
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, REVERTING)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     first = certify(ws, store, HYP_ID)
 
     moved = {**DOCUMENT, "costs": {**DOCUMENT["costs"], "commission_bps": 2.0}}
@@ -580,7 +612,7 @@ def test_the_same_bytes_under_the_same_pin_are_still_a_repeat(
 ) -> None:
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, REVERTING)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     certify(ws, store, HYP_ID)
     a_card(ws, store, REVERTING, seq=2)
 
@@ -744,6 +776,7 @@ def test_a_snapshot_of_unknown_publication_records_a_failing_verdict(
     assert made.verdict == "fail"
     assert all(not gate.passed for gate in made.gates)
     assert "nobody declared when its points became public" in str(made.gates[0].evidence)
+    assert made.power is None, "nothing was measured, so nothing is stated about power"
     assert _status(store, HYP_ID) == "researching", "a recorded fail, not an exit code"
 
 
@@ -852,7 +885,7 @@ def test_the_named_sha_is_certified_rather_than_the_best(ws: Workspace, store: S
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, FLAT, seq=1)
     named = a_card(ws, store, REVERTING, seq=2, best=False)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
 
     made = certify(ws, store, HYP_ID, sha=named[:10])
 
@@ -1068,7 +1101,8 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
     made = certify(ws, store, HYP_ID)
 
     (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
-    assert deflated.evidence["trials"] == len(records.trial_metrics(store, HYP_ID)) == 2
+    trials = records.trial_metrics(store, HYP_ID, "wf_sharpe_net")
+    assert deflated.evidence["trials"] == len(trials) == 2
     assert records.n_trials(store, HYP_ID) == made.n_trials == 4
 
 

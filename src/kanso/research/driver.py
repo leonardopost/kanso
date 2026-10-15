@@ -626,8 +626,8 @@ def _failing_gates(store: StateStore, hyp_id: str) -> list[str]:
 
     Never the evidence. A certification gate measures the certification window, and its
     evidence says so in numbers: `embargoed_window` records `certification`, and
-    `walk_forward_consistency` records `certification` and the value of every fold. This
-    list is read by the proposer, which writes the next `strategy.py`, so handing it that
+    `cost_stress` and `bootstrap` record what they measured over it. This list is read by
+    the proposer, which writes the next `strategy.py`, so handing it that
     dict is a route from the embargoed window into research — the one thing the embargo
     exists to refuse, arriving through the door marked feedback rather than through a
     backtest request. An id names what to work on and measures nothing.

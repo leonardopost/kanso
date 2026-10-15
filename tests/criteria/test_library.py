@@ -76,6 +76,12 @@ PLAN: dict[str, Any] = {
         },
         {"id": "bootstrap", "stage": "cert", "params": {"n": 1000}, "rationale": "path risk"},
         {
+            "id": "deflated_edge",
+            "stage": "cert",
+            "params": {"min_probability": 0.95},
+            "rationale": "forty trials behind a per-trade edge",
+        },
+        {
             "id": "walk_forward_consistency",
             "stage": "cert",
             "params": {"min_positive_folds": 3},
@@ -113,7 +119,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 32
+    assert len(items) == 33
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -398,3 +404,89 @@ def test_an_item_pointing_at_another_implementation_is_refused(elsewhere: Any) -
     )
     with pytest.raises(ValidationError, match="implements a different item"):
         lib.gates()
+
+
+# --- the search correction -----------------------------------------------------------
+
+
+def test_every_objective_is_deflated_by_exactly_one_gate() -> None:
+    """A search scored on any objective has a gate that prices it, and only one, so which
+    gate a plan must carry is a fact read off the toolbox and never a choice."""
+    items = catalogue()
+    claims = [objective for item in items.values() if item.deflates for objective in item.deflates]
+    shipped = sorted(item.id for item in items.values() if item.kind == "objective")
+    assert sorted(claims) == shipped
+    assert {objective: lib.deflation_gate(objective) for objective in shipped} == {
+        "wf_sharpe_net": "deflated_sharpe",
+        "marginal_wf_sharpe": "deflated_sharpe",
+        "wf_sharpe_vs_hold": "deflated_sharpe",
+        "net_edge_bps": "deflated_edge",
+        "marginal_net_edge_bps": "deflated_edge",
+        "wf_contribution_bps": "deflated_contribution",
+        "marginal_wf_contribution_bps": "deflated_contribution",
+    }
+    assert lib.deflation_gate("no_such_objective") is None
+
+
+def test_each_deflation_gate_deflates_the_family_its_implementation_judges() -> None:
+    """The yaml's claim and the code's family are one list written twice; they agree."""
+    from kanso.criteria import gates as implemented
+    from kanso.criteria.gates import CONTRIBUTION_FAMILY, EDGE_FAMILY
+    from kanso.criteria.objectives import SHARPE_FAMILY
+
+    families = {
+        "deflated_sharpe": SHARPE_FAMILY,
+        "deflated_contribution": CONTRIBUTION_FAMILY,
+        "deflated_edge": EDGE_FAMILY,
+    }
+    for gate, family in families.items():
+        assert set(catalogue()[gate].deflates or ()) == family
+        assert gate in implemented()
+
+
+def test_a_plan_behind_two_cards_without_its_search_correction_is_refused() -> None:
+    with pytest.raises(
+        ValidationError,
+        match=r"deflated_edge is the search correction for net_edge_bps, and a plan includes "
+        r"it once n_trials, every card of the hypothesis, reaches 2 \(it is 40\)",
+    ):
+        validate_plan(without("deflated_edge"), make_hyp(), FOLDS)
+
+
+def test_a_search_correction_without_its_threshold_is_refused() -> None:
+    """A deflation gate with no threshold skips, and a skip passes: naming it bare would
+    satisfy the rule and price nothing. The value is still the planner's to choose."""
+    bare = replacing("deflated_edge", params={})
+    with pytest.raises(
+        ValidationError,
+        match="gates.deflated_edge.min_probability: is not set, and the search correction "
+        "judges nothing without its threshold",
+    ):
+        validate_plan(bare, make_hyp(), FOLDS)
+    first = {**bare, "inputs": {**PLAN["inputs"], "n_trials": 1}}
+    validate_plan(first, make_hyp(), FOLDS)
+
+
+def test_a_plan_behind_two_cards_may_not_exclude_its_search_correction() -> None:
+    excluded = {**without("deflated_edge"), "excluded": [{"id": "deflated_edge", "reason": "no"}]}
+    with pytest.raises(ValidationError, match="excluded.deflated_edge: is the search correction"):
+        validate_plan(excluded, make_hyp(), FOLDS)
+
+
+def test_a_plan_before_the_second_card_need_not_correct_for_a_search() -> None:
+    """One card is not a search: nothing was selected over anything."""
+    first = {**without("deflated_edge"), "inputs": {**PLAN["inputs"], "n_trials": 1}}
+    validate_plan(first, make_hyp(), FOLDS)
+
+
+def test_the_correction_required_is_the_one_for_the_hypothesis_s_objective() -> None:
+    """A contribution's search is priced by its own gate, and a per-trade edge's gate does
+    not stand in for it."""
+    contribution = make_hyp(
+        objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    with pytest.raises(ValidationError, match="deflated_contribution is the search correction"):
+        validate_plan(PLAN, contribution, FOLDS)
+    assert lib.required_deflation(make_hyp(objective=None, constraints=None), 40) is None
+    assert lib.required_deflation(contribution, 1) is None
+    assert lib.required_deflation(contribution, 2) == "deflated_contribution"

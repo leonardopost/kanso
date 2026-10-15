@@ -72,7 +72,7 @@ to certify is worth saying out loud and is not kanso's to act on.
 `failed` survives as a status on hypotheses ended by a version of kanso that ended them:
 `n_fail` consecutive failing certificates wrote it, the queue treated it as over, and no
 command could bring one back — the remedy printed was to register the idea again under a new
-id, which resets the trial count `deflated_sharpe` prices the search by. Nothing writes it
+id, which resets the trial count the deflation gates price the search by. Nothing writes it
 now, `kanso research queue add` takes such a hypothesis back, and `kanso hyp resume` clears
 the failure count with it.
 
@@ -412,10 +412,10 @@ restore. Three proposals into the demo:
 
 ```
 sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc
-93510e2	0.000000	0.000000	1	0	3.147	0.216	discard	baseline
-f729a53	9.986730	1.064759	2	1003	8.366	0.241	keep	fade a 2-sigma deviation from a 60-bar rolling mean
-340620b	5.285159	0.928893	3	1164	8.720	0.246	discard	exit at 1 sigma rather than half a sigma
-020aef2	0.000000	0.000000	4	0	1.003	0.213	crash	scale by a rolling sigma helper that does not exist (intentional crash)
+93510e2	0.000000	0.000000	1	0	5.266	0.216	discard	baseline
+f729a53	9.986730	1.065174	2	1003	14.121	0.231	keep	fade a 2-sigma deviation from a 60-bar rolling mean
+340620b	5.285159	0.838720	3	1164	13.954	0.249	discard	exit at 1 sigma rather than half a sigma
+020aef2	0.000000	0.000000	4	0	1.334	0.213	crash	scale by a rolling sigma helper that does not exist (intentional crash)
 ```
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
@@ -717,10 +717,14 @@ explores at the default.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.
 
-One certification gate deflates the result by that search, and it counts a narrower set: a
-**trial** is a card that ran to a result and traded. A crash produced no metric to compare
-and a card that placed no order did not trade the hypothesis, so neither is a candidate the
-selection could have kept. A redundant card is one — it ran, it traded, and the keep rule
+The deflation gates price the result by that search, and they count a narrower set: a
+**trial** is a card that ran to a result, traded, and was scored under the objective being
+deflated — the one the hypothesis file each card's run pinned names. A crash produced no
+metric to compare and a card that placed no order did not trade the hypothesis, so neither is
+a candidate the selection could have kept; a card scored under another objective is a number
+in other units, and a spread taken across a per-trade edge and a contribution is the spread
+of neither. Nothing else about the pins narrows the set — a re-pin under the same objective,
+a newer snapshot or a kanso upgrade is the same search going on. A redundant card is one — it ran, it traded, and the keep rule
 was asked before the signature, so it would have been kept had it beaten the best. That
 another candidate held the same book makes it a correlated trial rather than no trial, and
 how much less than one a correlated trial is worth is open on the same terms as the
@@ -969,10 +973,33 @@ When a card's number is an improvement rather than an accident. Three clauses, a
 they are the loop's whole defence against fitting noise.
 
 **A metric arrives with its own noise floor.** The objective is computed on each of the
-research window's contiguous folds; the metric is their mean and `metric_se` their standard
-error. An improvement counts only when it clears `max(min_delta, k_se × metric_se)` — the
-operator's smallest interesting difference and the spread of the folds that produced the
-number. Both parameters are fixed at classification, before any result is seen.
+research window's contiguous folds; the metric is their mean, and `metric_se` is the error
+of that mean read off the series it is a mean of — the per-period returns for a contribution
+or a Sharpe, the per-trade edges taken period by period for a per-trade objective. An
+improvement counts only when it clears `max(min_delta, k_se × metric_se)` — the operator's
+smallest interesting difference and the error of the number that would become the best. Both
+parameters are fixed at classification, before any result is seen.
+
+The error was once the spread of the fold means over the root of their count: four numbers,
+three degrees of freedom, scattering from half to one and a half times the true error card
+to card, and blind to how many trades or periods produced them, so four folds that happened
+to agree read as a number known exactly. Read off the series, each fold's mean contributes
+the window's dispersion over its own count of periods. A Sharpe's error is Mertens' — fat
+tails widen it, and skew widens or narrows it with the sign of the edge — fold by fold. A
+per-trade edge is a ratio, what the trades earned over how many there were, and its error is
+read off how far each period's trades moved it: forty clips a session that one regime moves
+together are one session's worth of evidence, not forty draws. Read trade by trade, sixty
+simulated sessions of twenty and forty clips whose trades shared a fiftieth to a tenth of
+their variance reported 0.62 to 0.84 of the error the edge really had; read period by
+period, 0.97 to 1.15. Each is widened for the serial correlation the series shows across
+periods, at Newey–West's customary lag (four at a hundred periods), and never narrowed: the
+spread of fold means it replaced was robust to correlation inside a fold without saying so,
+and this is what keeps that robustness. How well that holds, and where it falls short, is
+`docs/backlog.md` row 171. A relative or benchmark objective's error is the paired one
+wherever the two runs share their periods: a contribution's per-period differences, a
+difference of Sharpes by Memmel's correction of Jobson–Korkie, a per-trade edge's difference
+linearised period by period. That one number is the card's, the keep floor's, the redundancy
+floor's, a certificate's `±` and every deflation gate's.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
@@ -981,22 +1008,33 @@ none scores zero and is averaged in like the rest. Over a research window of mon
 folds hold nearly as many sessions each and the two means nearly agree; over a window of a
 few sessions they need not, and that is the window a certificate measures (below).
 
-Here is the rule refusing a real improvement. The hypothesis carries `min_delta: 0.0` and
-`k_se: 1.0`; the neutral baseline above scored `0.000000`:
+Here is the rule on the filter. The hypothesis carries `min_delta: 0.0` and `k_se: 1.0`;
+the neutral baseline above scored `0.000000`:
 
 ```
 $ kanso research card demo_filter --desc "withhold entries in the first ten minutes of each hour"
-card       45cc54c · discard · withhold entries in the first ten minutes of each hour
-metric     0.273688 ± 0.437542 · 844 trade(s)
-cost       3.9s · 0.32 GB · trial 2
-best       f72bc11
-           strategy_integrity: pass — n_problems=0, problems=[]
-           max_drawdown: pass — limit_pct=15.0, max_drawdown_pct=0.3480137950000208
+error: 4d00282 held the same book as 2c6529e on 257 of 261 sessions (98%) and scored 0.273688 against its 0, inside the 0.461477 that separates two results here, so its result is already known and it is not an experiment; it is recorded as a redundant card and the lane copy has been restored
+remedy: move the result further than 0.461477 — a different instrument, side, set of sessions or holding over a session's end, or a size that changes the number and not only the book; `kanso research show demo_filter --sha 2c6529e` prints the card it repeats
 ```
 
-Every constraint passed and the metric went up. It was discarded anyway: `0.273688 − 0.0` is
-less than `max(0.0, 1.0 × 0.437542)`. The folds disagree with each other by more than the
-improvement is worth, so the improvement is not yet distinguishable from the disagreement.
+Every constraint passed and the metric went up, and it was not kept: `0.273688 − 0.0` is less
+than `max(0.0, 1.0 × 0.461477)`, the error of a difference of per-trade edges over 844 trades
+paired session by session with the host's, so the improvement is not yet distinguishable
+from the noise it was measured in. Declined by the keep rule, it was then a repeat — the same
+book as the baseline on 98% of sessions, a number within the same floor — and is recorded
+`redundant` (Card, above). Withholding the first half of each hour moves further:
+
+```
+$ kanso research card demo_filter --desc "withhold entries in the first half of each hour"
+card       9ea5a0b · keep · withhold entries in the first half of each hour
+metric     1.436577 ± 0.882818 · 549 trade(s)
+cost       8.4s · 0.23 GB · trial 3
+best       9ea5a0b
+           strategy_integrity: pass — n_problems=0, problems=[]
+           max_drawdown: pass — limit_pct=15.0, max_drawdown_pct=0.20953873499999465
+```
+
+`1.436577 − 0.0` clears `max(0.0, 1.0 × 0.882818)`, and the card is the run's best.
 
 **The comparison is strict.** Equal is not better. A loop that kept ties drifts across a
 plateau of indistinguishable strategies and calls the drift progress.
@@ -1548,8 +1586,49 @@ the complaints back to the same model, then to the next tier up; a plan still in
 that fails the step. With no model configured there is nothing to fall back on and the step
 exits 2.
 
+**A search is corrected for, from its second card.** Every objective has exactly one
+deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
+Sharpes, `deflated_contribution` for the contributions, `deflated_edge` for the per-trade
+edges — and once the hypothesis's `n_trials`, every card it has, reaches two, a plan
+includes it with its threshold set: the subject a certificate judges is then the best of a
+search, and nothing else in a plan prices that. A deflation gate named without its threshold
+would skip, and a skip passes, so a bare one is refused like a missing one. The planner is
+told so in the invariants and sent back when it forgets; how high the gate's bar sits is
+still its answer. A plan pinned before the second card, or by a kanso that did not hold it
+to this, is refused where it is read — by `cert plan` and by `cert run` — with the way out:
+
+```
+$ kanso cert run demo_mr
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan includes it once n_trials, every card of the hypothesis, reaches 2 (it is 4)
+remedy: run `kanso cert plan demo_mr --replan` to plan again
+```
+
+The requirement counts cards and the gate counts trials. `n_trials` is what a certificate is
+stamped with, a baseline and a crash among it; the gate prices the narrower set of trials
+defined above, and while fewer than two of the cards are trials of the objective it skips,
+which passes — nothing has yet been chosen over anything. A hypothesis re-pinned to another
+objective starts that set again (`docs/backlog.md` row 173).
+
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
+
+**`cert plan` states what the windows can resolve.** Beside the plan it prints a `power` line
+for the hypothesis's best card: the research estimate and its error, the error the
+certification window is expected to carry — the research error scaled by the root of the
+ratio of the two windows' lengths, since periods and trades arrive at research's rate — the
+true value a one-sided five-percent test on that window detects four times in five, 2.49 of
+those errors, and the probability that `embargoed_window` passes if the truth is the
+research estimate and if it is zero, against its bar of `max(0, min_fraction × research)`.
+The first probability is optimistic by however much selection inflated the estimate; the
+second is the gate's false-pass rate on no edge at all, before any deflation. None of it is
+shown to the planner, which plans blind to every result; it is computed after the plan is
+pinned, for you, from the metric and error the best card recorded, and a certificate
+records the same statement from the research window it runs again. For a card this kanso
+measured the two agree; a card kept before 0.17 recorded the spread of its fold means as its
+error, and until research keeps a new best the plan's line is struck from that. An error of
+zero — every trade in one period, or one period in the window — is no dispersion to work
+from, and nothing is stated: the plan says so on its `power` line, and the certificate
+carries no `power`.
 
 **A paper window is chosen against the certification window, and `cert plan` says so when it
 is not.** The paper gate compares the objective a stage realises against the interval
@@ -1562,6 +1641,7 @@ has to say about the pair, and a short paper window you meant is a short paper w
 
 ```
 $ kanso cert plan demo_mr                 # the gates, the exclusions and the last two lines are elided
+power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 warning    paper window 5d against a 145d certification window · the paper objective is about 5x noisier than the band it is judged against, so a version behaving as certified can read as drifted · raise min_duration or horizon_mult, or narrow windows.certification
 ```
 
@@ -1572,13 +1652,15 @@ engine version — every gate with the numbers it decided on, or the reason it j
 ```
 $ kanso cert run demo_mr
 verdict    demo_mr · f729a53 · pass
-gates      5 judged · 5 pass · 0 fail · 0 skipped
+gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  embargoed_window      certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
-           pass  parity_replay         compared=850, divergence=None, engine=20261002T225814Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261002T225809Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
+           pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
-objective  net_edge_bps 10.149871 ± 0.603055
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+objective  net_edge_bps 10.149871 ± 1.322442
+power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
@@ -1586,10 +1668,10 @@ next       kanso cert show demo_mr
 ```
 
 **The certificate's `objective` is measured the way a card's metric is**, and so is the
-`certification` number `embargoed_window` and `walk_forward_consistency` record: the
-hypothesis's objective over the certification window cut into the workspace's `[research]
-folds` calendar folds, reported as the mean of the folds `±` the standard error of their
-spread. It is not the mean of the window's sessions, and on a short window the two differ.
+`certification` number `embargoed_window` records: the hypothesis's objective over the
+certification window cut into the workspace's `[research] folds` calendar folds, reported as
+the mean of the folds `±` the error of that mean read off the window's per-period or
+per-trade series. It is not the mean of the window's sessions, and on a short window the two differ.
 Five sessions, Monday to Friday, in four folds are four spans of a day and a quarter; a
 session's period ends at its last event, and sessions that end after 18:00 UTC, as a US
 equity session does, put Thursday and Friday together in the last fold, each at half the
@@ -1597,9 +1679,9 @@ weight of Monday, Tuesday or Wednesday. Sessions earning 10, 20, 30, 40 and 50 b
 capital average 30 bp; the certificate records `(10 + 20 + 30 + 45) / 4 = 26.25`. The same
 bytes run in process return those five sessions exactly; the arithmetic is what differs.
 Which sessions share a fold follows from the hour the periods end — a daily bar published
-at 16:00 UTC puts Wednesday with Thursday instead — and the standard error is the spread of
-four fold means, so two sessions that disagree inside one fold cancel there rather than
-widening it. A fold that holds no period at all scores zero: Monday to Sunday in four folds
+at 16:00 UTC puts Wednesday with Thursday instead — and the error weighs each fold's mean by
+the sessions it holds, the window's dispersion over each fold's count. A fold that holds no
+period at all scores zero, and adds nothing to the error: Monday to Sunday in four folds
 leaves the last, from Saturday morning on, empty, and the week above is certified at
 `(10 + 25 + 45 + 0) / 4 = 20`. Only a window whose folds hold the same number of sessions
 each is certified at its mean per session; `docs/backlog.md` row 110 says what closing the
@@ -1642,6 +1724,20 @@ ninety-percent band of the resampled objective, which must reach above zero — 
 lies at or below zero says the population of trades carries no edge in whatever order it
 arrives, and a drawdown inside the limit does not make that a pass.
 
+`walk_forward_consistency` reads the research window alone: in how many of its folds the
+objective was positive, held to `min_positive_folds`. It once also required the certification
+estimate to beat the worst research fold, and that clause was deleted rather than made
+optional, because it measured nothing. Four research folds and a certification window a fold
+long are five draws of one quantity, so the certification draw is the lowest of the five a
+fifth of the time whatever the edge is, and selection inflates the research folds besides:
+simulated in October 2026 on the layout of an operator's 153 certificates — the planner had
+chosen the gate for every one of them — the clause passed a true edge about 0.42 of the time
+after fifty trials and 0.24 after five hundred, whatever its size, and more certification
+data lowered it. A clause whose pass rate does not move with the quantity it
+tests only refuses sound candidates at random, and a parameter that switched it on would only
+offer a planner those refusals. Whether the certification window holds the edge is
+`embargoed_window`'s question, asked against the research estimate.
+
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
@@ -1653,24 +1749,28 @@ the next proposal, and every `n_fail`-th consecutive failure writes an inbox ent
 hypothesis returns to research either way; only `kanso hyp retire` ends one.
 
 The ids alone, and never the evidence. A certification gate measures the certification
-window and records what it measured — `embargoed_window` and `walk_forward_consistency` both
-put the objective's value over that window in theirs — while the proposer that reads this
-feedback writes the next `strategy.py`. Handing it those numbers is a route from the
+window and records what it measured — `embargoed_window` puts the objective's value over that
+window in its evidence — while the proposer that reads this feedback writes the next
+`strategy.py`. Handing it those numbers is a route from the
 embargoed window into research, arriving as feedback rather than as a backtest request, and
 the embargo has no exception for feedback.
 
 The certified bytes are written beside the certificate as `<sha7>.py`, so a certified
 subject travels with the files even where `state.db` does not.
 
-Three gates read what the others cannot. `deflated_contribution` is the multiple-testing
-control for a run scored on a contribution, where `deflated_sharpe` skips: the research
-estimate in basis points per period, against the expected maximum of the search's trials in
-the same units, over the estimate's own standard error, reported as a probability and held
-to `min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
+Four gates read what the others cannot. `deflated_contribution` is the multiple-testing
+control for a run scored on a contribution, and `deflated_edge` for one scored on a per-trade
+edge, where `deflated_sharpe` skips: the research estimate in basis points per period or per
+trade, against the expected maximum of the search's trials in the same units, over the
+estimate's own error — the one its card carried — reported as a probability and held to
+`min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
 deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
 seed that fired once — do not widen the search past any candidate the selection weighed; the
-spread it used is in the evidence as `trial_spread_bps`. `min_event_days` is a card gate counting the distinct sessions any
-fill fell on, for a rule that fires on a regime or an event and could put its whole sample
+spread it used is in the evidence as `trial_spread_bps`. `deflated_sharpe` deflates a Sharpe
+the same way, by the Sharpe's own error and the plain spread of its trials, all out of
+annualised units. Which of the three a plan carries is not the planner's to choose once the
+hypothesis has two cards (above). `min_event_days` is a card gate counting the distinct
+sessions any fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
 commission, a flat rate, a maker's rate or per-share charge, a slippage in ticks, a fixed

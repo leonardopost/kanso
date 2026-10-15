@@ -42,6 +42,7 @@ from kanso.schemas.certification import (
     ObjectiveResult,
     PlanInputs,
     PlannedGate,
+    Power,
     Span,
     Verdict,
 )
@@ -181,6 +182,7 @@ __all__ = [
     "ObjectiveParams",
     "ObjectiveRef",
     "ObjectiveResult",
+    "Power",
     "OpenWindow",
     "Origins",
     "ParamType",

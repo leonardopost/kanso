@@ -22,6 +22,7 @@ certify_plan:
       - {id: parity_replay, stage: cert, params: [{name: ts_ns, value: 0}], rationale: "required; the live code path and the research one must submit the same orders"}
       - {id: cost_stress, stage: cert, params: [{name: mult_a, value: 2}, {name: mult_b, value: 3}], rationale: "30m horizon: edge is cost-sensitive"}
       - {id: bootstrap, stage: cert, params: [{name: n, value: 1000}], rationale: "drawdown band and objective CI for paper/live gates"}
+      - {id: deflated_edge, stage: cert, params: [{name: min_probability, value: 0.95}], rationale: "the search correction for a per-trade edge; required behind two or more trials"}
       - {id: paper_forward, stage: paper, params: [{name: min_duration, value: 5d}, {name: horizon_mult, value: 20}], rationale: "≥1 paper gate required"}
       - {id: live_drift, stage: live, params: [], rationale: "≥1 live gate required"}
     excluded:

@@ -94,7 +94,14 @@ and which construct are chosen at runtime by a model from catalogues that declar
 capabilities and ranges. There are no default plans, no default thresholds and no non-LLM
 fallback for a decision an agent is supposed to make: with no model configured the step
 exits 2. The framework's own opinions are structural invariants and the construct taxonomy,
-and nothing else.
+and nothing else. One of those invariants is that a search is priced: every objective is
+claimed by exactly one deflation gate, the one whose library file `deflates` it, and once a
+hypothesis's `n_trials` — every card it has — reaches two, a plan that leaves that gate out,
+or names it without its threshold, is refused — by the planner's own check, and again by
+`cert plan` and `cert run` on a plan already pinned — with `kanso cert plan ID --replan` as
+the way out. Whether a search is corrected for is not a decision; how high the bar sits is,
+and stays the model's. `criteria/library.py` holds the rule and
+`tests/criteria/test_library.py` fails when an objective has no gate or a plan escapes it.
 
 **Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,
 `httpx`, `numpy`, and the standard library. `pyarrow`, `pandas` and `msgspec` are reachable

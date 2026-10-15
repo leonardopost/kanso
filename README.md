@@ -206,13 +206,15 @@ kanso portfolio show
 ```
 $ kanso cert run demo_mr                       # its trailing written/source/next lines are elided
 verdict    demo_mr · f729a53 · pass
-gates      5 judged · 5 pass · 0 fail · 0 skipped
+gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  embargoed_window      certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
-           pass  parity_replay         compared=850, divergence=None, engine=20261002T225814Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261002T225809Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
+           pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
-objective  net_edge_bps 10.149871 ± 0.603055
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+objective  net_edge_bps 10.149871 ± 1.322442
+power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 
 $ kanso portfolio show

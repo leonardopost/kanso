@@ -603,7 +603,7 @@ window, snapshot, venue model, costs, splits, capital, sizing budget, warmup and
 policy, with every order in the warmup dropped like the strategy's — and never gated by `max_hold`, because it
 is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
 of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
-fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
+fold by fold, with the paired error of a difference of Sharpes on the same periods. The hold is run on every
 path that measures the objective — each card of a run (once per run, in a child of the lane
 as a card is, then reused), both
 certification windows (a `param_plateau` perturbation moves the strategy and never the

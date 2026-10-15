@@ -348,7 +348,10 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     again = records.cards_of(store, registered)[-1]
     assert (again.status, again.metric) == ("redundant", kept.metric)
     assert records.n_trials(store, registered) == 3
-    assert records.trial_metrics(store, registered) == [kept.metric, again.metric]
+    assert records.trial_metrics(store, registered, "wf_sharpe_net") == [
+        kept.metric,
+        again.metric,
+    ]
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert event.detail["like"] == kept.sha7
     assert event.detail["pct"] == 100.0
@@ -536,7 +539,7 @@ def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_to
     opened and closed a position in, and was flat only at the instant it was sampled.
 
     The floor is widened to admit any number, because the share is the clause under test
-    and WEAK's own result is 23 floors from the baseline's, which the test below is for.
+    and not whether WEAK's result is the baseline's, which the test below is about.
     """
     monkeypatch.setattr(loop, "_noise_floor", lambda *_: float("inf"))
     workspace = tuned(ws, redundant_pct=30)
@@ -551,26 +554,40 @@ def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_to
     assert event.detail["like"] == run.base_sha[:7]
 
 
+PEAKING = REVERTING.replace(
+    b"if first > second > third and not self.long", b"if first < second < third and not self.long"
+).replace(
+    b"elif first < second < third and self.long", b"elif first > second > third and self.long"
+)
+"""The trough-buyer turned round: it buys the peak and sells the trough, and loses on every
+tooth of the saw."""
+
+
 def test_a_book_already_held_that_earned_another_number_is_a_discard_not_a_repeat(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
     """The matcher's premise, tested rather than asserted, on the run above with its own
-    floor back: WEAK holds the baseline's book on 10 of 31 sessions and scores -0.061605
-    against the baseline's 0.0, twenty-three times the 0.002631 that separates two results
-    here. Its result is not already known, so it is a card of the ordinary kind — counted,
-    coverable and shown to the next proposal as a change that was tried and measured.
-    """
-    workspace = tuned(ws, redundant_pct=30)
-    run = loop.begin(workspace, store, registered)
-    edit(workspace, run, WEAK)
+    floor back: PEAKING holds the baseline's book on 9 of 31 sessions and scores -15.6129
+    against the baseline's 0.0, nine times the 1.6095 that separates two results here — half
+    its error of 3.219, a Sharpe over 31 sessions being known to no better than that. Its
+    result is not already known, so it is a card of the ordinary kind — counted, coverable
+    and shown to the next proposal as a change that was tried and measured.
 
-    made = loop.card(workspace, store, registered, "buy any fall")
+    WEAK was this test's candidate while the error was the spread of four fold Sharpes, which
+    agreed to 0.0026 on the saw-tooth; read off the sessions, its -0.0616 is inside the
+    floor, and a repeat.
+    """
+    workspace = tuned(ws, redundant_pct=29)
+    run = loop.begin(workspace, store, registered)
+    edit(workspace, run, PEAKING)
+
+    made = loop.card(workspace, store, registered, "buy the peak")
 
     assert made.status == "discard"
     assert store.events(kind=loop.REDUNDANT, subject=registered) == []
     setup = loop._setup(workspace, store, loop._pinned(workspace, store, run))
     floor = loop._noise_floor(setup, made.metric_se)
-    assert abs(made.metric - 0.0) > 20 * floor, "the baseline is flat and this one is not"
+    assert abs(made.metric - 0.0) > 9 * floor, "the baseline is flat and this one is not"
     # The book did match at the configured share, so the share is not what let it through.
     books = {
         str(row["strategy_sha"]): json.loads(str(row["signature"]))
@@ -578,7 +595,7 @@ def test_a_book_already_held_that_earned_another_number_is_a_discard_not_a_repea
     }
     base, candidate = books[run.base_sha], books[made.strategy_sha]
     shared = base.keys() & candidate.keys()
-    assert (sum(1 for day in shared if base[day] == candidate[day]), len(shared)) == (10, 31)
+    assert (sum(1 for day in shared if base[day] == candidate[day]), len(shared)) == (9, 31)
 
 
 def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(
@@ -1378,8 +1395,9 @@ def test_every_card_of_a_run_is_differenced_against_one_hold(
 
     assert derived == [RESEARCH]
     trough = records.cards_of(store, hyp_id)[1]
-    assert (trough.metric, trough.metric_se) == pytest.approx((14.527, 2.255), abs=1e-3), (
-        "measured on the saw-tooth: the trough-buyer's 15.689 by wf_sharpe_net, less the hold's"
+    assert (trough.metric, trough.metric_se) == pytest.approx((14.527, 2.777), abs=1e-3), (
+        "measured on the saw-tooth: the trough-buyer's 15.689 by wf_sharpe_net, less the hold's,"
+        " its error Memmel's on the two paired return series"
     )
     assert [key for key in loop._HOST_RUNS[run.run_id] if key.startswith("benchmark")] == [
         f"benchmark@{run.snapshot_id}@None"

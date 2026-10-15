@@ -5,20 +5,28 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.criteria.quantities import (
     DAYS_PER_YEAR,
     contribution_bps,
+    contribution_series,
     correlation,
     drawdown_pct,
     edge_bps,
+    edge_series,
+    long_run_factor,
     mean,
     moments,
     periods_per_year,
     sharpe,
+    sharpe_difference_variance,
+    sharpe_variance,
     standard_error,
     stdev,
     variance,
+    variances_of_means,
     years,
 )
 from tests.criteria.builders import build_run, trade
@@ -184,3 +192,103 @@ def test_a_continuous_series_annualises_at_its_own_calendar() -> None:
     assert all(run.bounds[0] <= ts < run.bounds[1] for ts in ends)
     assert periods_per_year(run) == pytest.approx(DAYS_PER_YEAR, abs=1e-9)
     assert abs(periods_per_year(run) - 365) < 0.5
+
+
+# -- the error of a mean ----------------------------------------------------------------
+
+
+def test_the_allowance_widens_a_persistent_series_by_its_bartlett_weighted_autocovariance() -> None:
+    """1, 2, 3, 4: deviations of -1.5, -0.5, 0.5 and 1.5, a lag of one at four points, an
+    autocovariance of 1.25 against a variance of 5, weighted by a half: 1 + 2 x 0.125."""
+    assert long_run_factor([1.0, 2.0, 3.0, 4.0]) == pytest.approx(1.25)
+
+
+def test_the_allowance_never_narrows_an_error() -> None:
+    """A series whose neighbours disagree is not evidence its mean is known better."""
+    assert long_run_factor([1.0, -1.0] * 50) == 1.0
+
+
+def test_the_allowance_has_nothing_to_estimate_on_a_short_or_flat_series() -> None:
+    assert long_run_factor([]) == long_run_factor([3.0, 9.0]) == 1.0
+    assert long_run_factor([2.0, 2.0, 2.0, 2.0]) == 1.0
+
+
+def test_the_allowance_reads_four_lags_at_a_hundred_and_twenty_two_sessions() -> None:
+    """floor(4 (122/100)^(2/9)) is four: a series that holds each value for ten sessions is
+    widened more than one that holds it for five, and one that holds it for two — positive at
+    lag one, negative at two and three — is not widened at all."""
+    tens = [float(i // 10 % 2) for i in range(122)]
+    fives = [float(i // 5 % 2) for i in range(122)]
+    twos = [float(i // 2 % 2) for i in range(122)]
+    assert long_run_factor(tens) > long_run_factor(fives) > 1.0 == long_run_factor(twos)
+
+
+@given(st.lists(st.floats(-1e6, 1e6, allow_nan=False), max_size=60))
+def test_the_allowance_is_at_least_one_and_finite(values: list[float]) -> None:
+    factor = long_run_factor(values)
+    assert factor >= 1.0
+    assert factor < float("inf")
+
+
+def test_each_fold_mean_varies_by_the_window_s_dispersion_over_its_own_count() -> None:
+    """Six points of variance 3.5 cut 3, 2, 1 and an empty fold, which varies by nothing;
+    the points alternate, so the allowance leaves them alone."""
+    series = [1.0, 4.0, 1.0, 4.0, 1.0, 4.0]
+    spread = variance(series)
+    assert variances_of_means(series, [3, 2, 1, 0]) == pytest.approx(
+        [spread / 3, spread / 2, spread, 0.0]
+    )
+
+
+def test_the_edge_series_is_in_the_order_trades_closed_and_skips_no_notional() -> None:
+    later = trade(date(2024, 1, 3), pnl=30.0)
+    earlier = trade(date(2024, 1, 1), pnl=10.0)
+    empty = trade(date(2024, 1, 2), pnl=5.0, notional=0.0)
+    run = build_run((0.0, 0.0, 0.0), trades=(later, empty, earlier))
+    assert edge_series(run) == pytest.approx((10.0, 30.0))
+    assert edge_bps(run) == pytest.approx(20.0)
+
+
+def test_the_contribution_series_is_each_period_on_the_capital() -> None:
+    run = build_run((10.0, -20.0), capital=100_000.0)
+    assert contribution_series(run) == pytest.approx((1.0, -2.0))
+    assert mean(contribution_series(run)) == pytest.approx(contribution_bps(run))
+
+
+WEEK = (date(2024, 1, 1), date(2024, 1, 7))
+
+
+def test_a_sharpe_varies_by_mertens_over_its_periods_annualised() -> None:
+    """Normal returns: (1 + SR^2/2) / (n - 1) per period, times periods per year."""
+    returns = [1.0, 3.0, 2.0, 4.0]
+    ratio = mean(returns) / stdev(returns)
+    per_year = 4 / years(WEEK)
+    expected = per_year * (1 + ratio**2 / 2) / 3
+    assert sharpe_variance(returns, WEEK, 1.0, None) == pytest.approx(expected)
+    assert sharpe_variance(returns, WEEK, 2.0, None) == pytest.approx(2 * expected)
+
+
+def test_a_sharpe_reads_the_shape_of_the_returns_and_falls_back_where_it_is_not_positive() -> None:
+    returns = [1.0, 3.0, 2.0, 4.0]
+    ratio = mean(returns) / stdev(returns)
+    per_year = 4 / years(WEEK)
+    skewed = sharpe_variance(returns, WEEK, 1.0, (0.5, 4.0))
+    assert skewed == pytest.approx(per_year * (1 - 0.5 * ratio + 0.75 * ratio**2) / 3)
+    assert sharpe_variance(returns, WEEK, 1.0, (50.0, 1.0)) == pytest.approx(
+        sharpe_variance(returns, WEEK, 1.0, None)
+    )
+
+
+def test_a_sharpe_that_cannot_vary_varies_by_nothing() -> None:
+    assert sharpe_variance([2.0], WEEK, 1.0, None) == 0.0
+    assert sharpe_variance([2.0, 2.0, 2.0], WEEK, 1.0, None) == 0.0
+
+
+def test_a_paired_difference_of_sharpes_varies_by_memmel() -> None:
+    own, against = [1.0, 3.0, 2.0, 4.0], [2.0, 2.5, 1.0, 3.0]
+    a, b = mean(own) / stdev(own), mean(against) / stdev(against)
+    rho = 0.6
+    per_year = 4 / years(WEEK)
+    expected = per_year * (2 * (1 - rho) + (a**2 + b**2 - 2 * a * b * rho**2) / 2) / 3
+    assert sharpe_difference_variance(own, against, WEEK, 1.0, rho) == pytest.approx(expected)
+    assert sharpe_difference_variance(own, own, WEEK, 1.0, 1.0) == pytest.approx(0.0)

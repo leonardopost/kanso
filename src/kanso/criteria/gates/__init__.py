@@ -55,15 +55,15 @@ from kanso.criteria.objectives import REGISTRY, SHARPE_FAMILY, Objective, benchm
 from kanso.criteria.quantities import (
     correlation,
     drawdown_pct,
+    edge_series,
     mean,
-    moments,
     periods_per_year,
     stdev,
     variance,
     years,
 )
 from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, Trade, day_of
-from kanso.errors import ValidationError
+from kanso.errors import PreconditionError, ValidationError
 from kanso.schemas import GateResult, parse_duration
 from kanso.schemas.screen import hours_minutes
 
@@ -679,7 +679,24 @@ class _EmbargoedWindow:
 
 
 class _WalkForwardConsistency:
-    """Most research folds positive, and the certification fold not the worst of them."""
+    """Most research folds positive: an edge that recurs rather than arriving once.
+
+    The gate once also required the certification window's estimate to exceed the worst
+    research fold, and that clause is gone because it measured nothing. Four research folds
+    and a certification window of a fold's length are five draws of one quantity, so the
+    certification one is the lowest of the five a fifth of the time whatever the edge is —
+    `1 − 1/(K+1)`, 0.80 at four folds — and the research folds of a selected candidate are
+    the ones selection inflated, which takes it to about 0.42 after fifty trials and 0.24
+    after five hundred: simulated in October 2026 on the layout of an operator's 153
+    certificates, every one of which the planner had given this gate. A clause whose pass
+    rate does not move with the quantity it tests has no power against anything; it only
+    refuses sound candidates at random, and more certification data made it refuse more
+    often, not less. It is not kept as a parameter whose absence means off, because a
+    planner offered it could only choose to add those refusals. Whether the certification
+    window holds the edge is `embargoed_window`'s question, asked against the research
+    estimate rather than its worst fold. What is left reads the research window alone: how
+    many of its folds the objective was positive in.
+    """
 
     id: ClassVar[str] = "walk_forward_consistency"
 
@@ -698,17 +715,15 @@ class _WalkForwardConsistency:
             ctx.host_research_run,
             ctx.benchmark_research_run,
         )
-        certified = _metric(objective, ctx.run, ctx, ctx.host_run, ctx.benchmark_run)
         positive = sum(1 for value in folds if value > 0)
         return verdict(
             self.id,
-            positive >= required and certified > min(folds),
+            positive >= required,
             {
                 "objective": objective.id,
                 "folds": list(folds),
                 "positive_folds": positive,
                 "min_positive_folds": required,
-                "certification": certified,
             },
         )
 
@@ -721,12 +736,14 @@ class _DeflatedSharpe:
     trials' own metrics: their count is how many candidates the maximum was taken over
     and their spread is the distribution it was taken from, so both must describe the
     same set or the bar is measured against a search that never happened. That set is
-    `trial_metrics`, which excludes a crash and a card that placed no order — those are
-    edits that failed rather than candidates the selection could have chosen — and includes
-    one refused as redundant, which is a candidate the selection ranked and declined. The
-    length,
-    skewness and kurtosis of the research return series supply the sampling distribution.
-    Both the estimate and the spread are taken back out of annualised units first, so the
+    `trial_metrics`, which excludes a crash, a card that placed no order and a card scored
+    under another objective — the first two are edits that failed rather than candidates the
+    selection could have chosen, the third a number in other units — and includes one
+    refused as redundant, which is a candidate the selection ranked and declined. The
+    estimate's own error is the objective's, the one its card carried: Mertens' variance of a
+    Sharpe for skewed and fat-tailed returns, fold by fold, widened for serial correlation,
+    and Memmel's paired one for a Sharpe differenced against a host or a hold. The estimate,
+    the error and the spread are all taken back out of annualised units first, so the
     deflation is done in the units the return series was actually sampled in.
     """
 
@@ -736,56 +753,60 @@ class _DeflatedSharpe:
         floor = number(ctx, "min_dsr")
         if floor is None:
             return skipped(self.id, "no minimum was chosen, so no deflation was required")
-        objective = _objective(ctx)
-        if objective is None:
-            return skipped(self.id, NO_OBJECTIVE)
-        if objective.id not in SHARPE_FAMILY:
-            return skipped(
-                self.id,
-                f"the objective {objective.id} is not a Sharpe, so no card computed one to deflate",
-            )
-        if ctx.research_run is None:
-            return skipped(self.id, NO_RESEARCH_RUN)
-        metrics = list(ctx.trial_metrics)
-        if len(metrics) < 2:
-            return skipped(self.id, "fewer than two trials, so the trial spread is unknown")
-        returns = ctx.research_run.returns
-        shape = moments(returns)
-        if len(returns) < 3 or shape is None:
-            return skipped(self.id, "the research return series is too short or does not vary")
-        scale = sqrt(periods_per_year(ctx.research_run))
-        estimate = (
-            _metric(
-                objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
-            )
-            / scale
-        )
-        expected = self._expected_maximum(
-            variance(metrics) / periods_per_year(ctx.research_run), len(metrics)
-        )
-        skewness, kurtosis = shape
-        denominator = 1 - skewness * estimate + (kurtosis - 1) / 4 * estimate**2
-        if denominator <= 0:
-            return skipped(self.id, "the sampling variance of the estimate is not positive")
-        dsr = NormalDist().cdf((estimate - expected) * sqrt(len(returns) - 1) / sqrt(denominator))
+        found = _deflatable(self.id, ctx, SHARPE_FAMILY, "a Sharpe")
+        if isinstance(found, GateResult):
+            return found
+        research, metrics, (estimate, error) = found
+        if len(research.returns) < 3:
+            return skipped(self.id, "the research return series is too short to give an error")
+        scale = sqrt(periods_per_year(research))
+        expected = expected_maximum(variance(metrics) / periods_per_year(research), len(metrics))
+        if error <= 0:
+            return skipped(self.id, "the research return series does not vary")
+        dsr = NormalDist().cdf((estimate / scale - expected) / (error / scale))
         return verdict(
             self.id,
             dsr >= floor,
             {
                 "dsr": dsr,
                 "min_dsr": floor,
-                "sharpe": estimate,
+                "sharpe": estimate / scale,
+                "standard_error": error / scale,
                 "expected_maximum": expected,
                 "trials": len(metrics),
-                "skew": skewness,
-                "kurtosis": kurtosis,
             },
         )
 
-    @staticmethod
-    def _expected_maximum(trial_variance: float, n_trials: int) -> float:
-        """The Sharpe a search of this width is expected to produce from pure noise."""
-        return expected_maximum(trial_variance, n_trials)
+
+def _deflatable(
+    gate: str, ctx: GateContext, family: frozenset[str], kind: str
+) -> tuple[CardRun, list[float], tuple[float, float]] | GateResult:
+    """What every deflation gate needs before it can judge — the research run, the trials and
+    the research estimate with its error — or the skip that says which was missing.
+
+    The estimate and its error are the objective's own over the research run, the numbers a
+    card of these bytes carried, so a deflation never computes an error of its own.
+    """
+    objective = _objective(ctx)
+    if objective is None:
+        return skipped(gate, NO_OBJECTIVE)
+    if objective.id not in family:
+        return skipped(
+            gate, f"the objective {objective.id} is not {kind}, so no card computed one to deflate"
+        )
+    research = ctx.research_run
+    if research is None:
+        return skipped(gate, NO_RESEARCH_RUN)
+    metrics = list(ctx.trial_metrics)
+    if len(metrics) < 2:
+        return skipped(gate, "fewer than two trials, so the trial spread is unknown")
+    try:
+        measured = objective.compute(
+            research, ctx.research_folds, ctx.host_research_run, ctx.benchmark_research_run
+        )
+    except PreconditionError as missing:
+        return skipped(gate, missing.message[:200])
+    return research, metrics, measured
 
 
 def expected_maximum(trial_variance: float, n_trials: int) -> float:
@@ -827,20 +848,69 @@ def robust_variance(values: Sequence[float]) -> float:
 CONTRIBUTION_FAMILY: Final = frozenset({"wf_contribution_bps", "marginal_wf_contribution_bps"})
 """The objectives that read a mean net return per period in basis points of the capital."""
 
+EDGE_FAMILY: Final = frozenset({"net_edge_bps", "marginal_net_edge_bps"})
+"""The objectives that read a mean net profit per closed trade in basis points."""
+
+
+def _deflated_mean(
+    gate: str,
+    ctx: GateContext,
+    family: frozenset[str],
+    kind: str,
+    units: tuple[str, str],
+) -> GateResult:
+    """A mean objective's research estimate, deflated by how many trials went into selecting
+    it: the probability it exceeds the expected maximum of the search by its own error.
+
+    `units` names the estimate's evidence key and what its error was read off — periods or
+    trades — which is all that differs between a contribution and a per-trade edge.
+    """
+    floor = number(ctx, "min_probability")
+    if floor is None:
+        return skipped(gate, "no minimum was chosen, so no deflation was required")
+    found = _deflatable(gate, ctx, family, kind)
+    if isinstance(found, GateResult):
+        return found
+    research, metrics, (estimate, error) = found
+    name, counted = units
+    count_of = len(research.returns) if counted == "periods" else len(edge_series(research))
+    if count_of < 3:
+        return skipped(gate, f"the research window holds too few {counted} to give an error")
+    if error <= 0:
+        return skipped(gate, "the research estimate's error is zero, so nothing deflates it")
+    spread = robust_variance(metrics)
+    expected = expected_maximum(spread, len(metrics))
+    probability = NormalDist().cdf((estimate - expected) / error)
+    return verdict(
+        gate,
+        probability >= floor,
+        {
+            "probability": probability,
+            "min_probability": floor,
+            name: estimate,
+            "standard_error_bps": error,
+            "expected_maximum_bps": expected,
+            "trial_spread_bps": sqrt(spread),
+            "trials": len(metrics),
+            counted: count_of,
+        },
+    )
+
 
 class _DeflatedContribution:
     """The research contribution, deflated by how many trials went into selecting it.
 
-    The contribution's sampling error is the standard error of the per-period net returns in
-    basis points of the capital over the research window — of the differences against the
-    host's for the marginal form — and the expected maximum it is measured against is built
-    from the trials' own metrics, in the same units: their count is how many candidates the
-    selection took the maximum over and their spread is the distribution it took it from
+    The contribution's sampling error is the objective's own — the error of a mean of the
+    per-period net returns in basis points of the capital over the research window, of the
+    paired per-period differences against the host's for the marginal form, widened for
+    serial correlation — and the expected maximum it is measured against is built from the
+    trials' own metrics, in the same units: their count is how many candidates the selection
+    took the maximum over and their spread is the distribution it took it from
     (`trial_metrics`, the same set `deflated_sharpe` reads), read robustly as 1.4826 times
-    their median absolute deviation (`robust_variance`), so a few trials that blew up do
-    not widen the search past any candidate the selection weighed. The probability reported is
-    that of the estimate exceeding that maximum by its own error, and the gate passes when
-    it clears the floor chosen for it. A t-statistic on the contribution deflated for the
+    their median absolute deviation (`robust_variance`), so a few trials that blew up do not
+    widen the search past any candidate the selection weighed. The probability reported is
+    that of the estimate exceeding that maximum by its own error, and the gate passes when it
+    clears the floor chosen for it. A t-statistic on the contribution deflated for the
     search, in short — the multiple-testing control a per-period objective has where a
     Sharpe has its deflated ratio.
     """
@@ -848,61 +918,30 @@ class _DeflatedContribution:
     id: ClassVar[str] = "deflated_contribution"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
-        floor = number(ctx, "min_probability")
-        if floor is None:
-            return skipped(self.id, "no minimum was chosen, so no deflation was required")
-        objective = _objective(ctx)
-        if objective is None:
-            return skipped(self.id, NO_OBJECTIVE)
-        if objective.id not in CONTRIBUTION_FAMILY:
-            return skipped(
-                self.id,
-                f"the objective {objective.id} is not a contribution, so no card computed one",
-            )
-        if ctx.research_run is None:
-            return skipped(self.id, NO_RESEARCH_RUN)
-        metrics = list(ctx.trial_metrics)
-        if len(metrics) < 2:
-            return skipped(self.id, "fewer than two trials, so the trial spread is unknown")
-        series = _contribution_series(objective, ctx.research_run, ctx.host_research_run)
-        if series is None or len(series) < 3:
-            return skipped(self.id, "the research return series is too short to give an error")
-        error = stdev(series) / sqrt(len(series))
-        if error <= 0:
-            return skipped(self.id, "the research return series does not vary")
-        estimate = _metric(
-            objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
-        )
-        spread = robust_variance(metrics)
-        expected = expected_maximum(spread, len(metrics))
-        probability = NormalDist().cdf((estimate - expected) / error)
-        return verdict(
-            self.id,
-            probability >= floor,
-            {
-                "probability": probability,
-                "min_probability": floor,
-                "contribution_bps": estimate,
-                "standard_error_bps": error,
-                "expected_maximum_bps": expected,
-                "trial_spread_bps": sqrt(spread),
-                "trials": len(metrics),
-                "periods": len(series),
-            },
+        return _deflated_mean(
+            self.id, ctx, CONTRIBUTION_FAMILY, "a contribution", ("contribution_bps", "periods")
         )
 
 
-def _contribution_series(
-    objective: Objective, run: CardRun, host: CardRun | None
-) -> tuple[float, ...] | None:
-    """The per-period net returns a contribution is the mean of, in basis points of the
-    capital: the run's own, or its differences against the host's for the marginal form."""
-    own = tuple(r / run.capital * BPS for r in run.returns)
-    if objective.id == "wf_contribution_bps":
-        return own
-    if host is None or len(host.returns) != len(run.returns):
-        return None
-    return tuple(r - h / host.capital * BPS for r, h in zip(own, host.returns, strict=True))
+class _DeflatedEdge:
+    """The research per-trade edge, deflated by how many trials went into selecting it.
+
+    The same test as `deflated_contribution`, on the sub-daily default: the estimate is the
+    research edge in basis points per trade, its error the objective's own — the edge
+    linearised period by period, so trades of one session that move together count as one
+    session's worth, widened for serial correlation across periods, and for the marginal form
+    the two runs' linearisations differenced period by period — and the bar the expected
+    maximum of the search's trials scored under the same objective, from their count and
+    their robust spread. Until it existed a run scored on a per-trade edge
+    reached a certificate with nothing pricing the search behind it: both other deflations
+    skip it, and the embargo's fraction of a selected maximum is only an implicit, partial
+    correction, gone altogether when the research number is at or below zero.
+    """
+
+    id: ClassVar[str] = "deflated_edge"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        return _deflated_mean(self.id, ctx, EDGE_FAMILY, "a per-trade edge", ("edge_bps", "trades"))
 
 
 class _MinEventDays:
@@ -1543,6 +1582,7 @@ embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()
 deflated_sharpe: Final[Gate] = _DeflatedSharpe()
 deflated_contribution: Final[Gate] = _DeflatedContribution()
+deflated_edge: Final[Gate] = _DeflatedEdge()
 min_event_days: Final[Gate] = _MinEventDays()
 trading_hours: Final[Gate] = _TradingHours()
 cost_stress: Final[Gate] = _CostStress()
