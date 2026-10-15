@@ -1189,6 +1189,7 @@ def test_bootstrap_resamples_the_trade_sequence_and_passes_an_edge_inside_the_li
     result = bootstrap.evaluate(context(run, params={"n": 200}, strategy_sha="a" * 64))
     assert result.evidence["mdd_p95"] == pytest.approx(0.0)
     assert result.evidence["objective_ci90"] == pytest.approx([10.0, 10.0])
+    assert result.evidence["statistic"] == "edge_bps"
     assert result.passed
 
 
@@ -1249,6 +1250,7 @@ def test_bootstrap_of_a_sharpe_objective_reports_a_sharpe_interval() -> None:
     )
     low, high = result.evidence["objective_ci90"]
     assert low < high
+    assert result.evidence["statistic"] == "trade_sharpe"
 
 
 def test_bootstrap_of_a_benchmark_objective_is_a_band_of_differences_from_the_hold() -> None:

@@ -910,7 +910,8 @@ The harness settles a period on a point delivered to the sleeve itself, so a gro
 the sleeve never subscribes to that holds a period's only point moves the runner's period end
 and not the harness's, and `balance` lags one period until the sleeve is handed a point.
 `bootstrap` resamples closed trades' net P&L, which holds neither the carry nor a transfer, so
-its `mdd_p95` understates the drawdown a levered book recorded. The harness's period close is
+its `mdd_p95` understates the drawdown a levered book recorded — except under a contribution
+objective, whose resample is of return periods, which hold the carry and still no transfer. The harness's period close is
 out of reach both ways: its attribute reads are denied, and a `strategy.py` that defines a
 method of the same name binds a name the base owns, which the same gate refuses, sized or not.
 
@@ -1657,7 +1658,7 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
            pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
-           pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
+           pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979], statistic=edge_bps
            pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
@@ -1720,9 +1721,21 @@ evidence for a pass, and a certificate whose window failed cannot pass — while
 certificate lists its gates in the plan's order as before. A window gate that judged nothing
 spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
 percentile of the resampled drawdown against `risk_limits.max_drawdown_pct`, and the
-ninety-percent band of the resampled objective, which must reach above zero — a band that
-lies at or below zero says the population of trades carries no edge in whatever order it
-arrives, and a drawdown inside the limit does not make that a pass.
+ninety-percent band of the objective's statistic on the resample, which must reach above
+zero — a band that lies at or below zero says the population of trades carries no edge in
+whatever order it arrives (of periods, for a contribution), and a drawdown inside the limit
+does not make that a pass. What it
+resamples is what the objective is a mean of, and its evidence names the statistic: a
+contribution resamples the window's return periods, so its band (`contribution_bps`) is in
+basis points of the capital per period, the unit of its value; every other objective
+resamples the closed trades, as a mean edge per trade (`edge_bps`) or a Sharpe of their P&L
+annualised by the trades the window held per year (`trade_sharpe`, a statistic of the
+Sharpe's family rather than the objective's own Sharpe of period returns — `docs/backlog.md`
+row 178). Before 0.17 a contribution was banded by its per-trade edge in basis points of
+notional, beside a value in basis points of capital a day — off by the trades a day times
+their notional over the capital — so a version reproducing its certification could not
+pass paper; a certificate written then still carries that band, and composition does not
+reuse a band whose evidence does not name its statistic.
 
 `walk_forward_consistency` reads the research window alone: in how many of its folds the
 objective was positive, held to `min_positive_folds`. It once also required the certification
