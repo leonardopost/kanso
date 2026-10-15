@@ -201,14 +201,15 @@ def test_an_expectation_composed_before_it_recorded_its_capital_is_struck_at_the
     assert len(store.events(kind="expected")) == 1
 
 
-def test_a_version_whose_book_breaches_its_floor_at_the_share_is_refused_before_any_write(
+def test_a_version_whose_book_breaches_its_floor_at_the_share_is_blocked_and_escalated(
     ws: Workspace,
     store: StateStore,
     composed_strategy: StrategyFile,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Measured again at a smaller share, a fixed-notional book is the more levered one; a
-    floor it falls through there refuses the deployment, as composition refuses one."""
+    floor it falls through there blocks that version — escalated with the way out — and does
+    not raise out of the stage, which every other version on it would be halted with."""
     from kanso import strategy as strategies
     from kanso.errors import PreconditionError
 
@@ -219,11 +220,20 @@ def test_a_version_whose_book_breaches_its_floor_at_the_share_is_refused_before_
     written = files.read(ws)
     monkeypatch.setattr(strategies, "restruck", breached)
 
-    with pytest.raises(PreconditionError, match="falls to 40% of its gross"):
-        deploy(ws, store, "paper")
+    made = deploy(ws, store, "paper")
 
+    subject = f"{composed_strategy.id}@1"
+    assert made.blocked == (subject,) and made.admitted == ()
     assert files.read(ws) == written
     assert strategies.require(ws, composed_strategy.id).latest().state == "composed"
+    row = store.connection.execute(
+        "SELECT summary, actions FROM escalations WHERE kind = 'deploy_blocked' AND subject = ?",
+        (subject,),
+    ).fetchone()
+    assert "with 20000, and measured again at that share it is refused" in row[0]
+    assert "falls to 40% of its gross" in row[0]
+    assert f"kanso strat retire {subject}" in row[1]
+    assert store.events(kind="expected") == []
 
 
 def test_a_replaced_version_retires(

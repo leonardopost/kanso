@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from kanso import strategy as strategies
-from kanso.errors import Exit, KansoError
+from kanso.errors import Exit, KansoError, PreconditionError
 from kanso.portfolio import approvals, demote, deploy, files, promote
-from kanso.schemas import StrategyFile
+from kanso.schemas import Expectation, StrategyFile, StrategyVersion
 from kanso.state import StateStore
 from kanso.strategy import files as strategy_files
 from kanso.workspace import Workspace
@@ -34,6 +36,10 @@ def make_promotable(ws: Workspace, store: StateStore, strategy_id: str) -> int:
         (strategy_id, latest.version),
     )
     return latest.version
+
+
+def _breached(*_: object) -> Expectation:
+    raise PreconditionError("the composed version's book falls to 40% of its gross")
 
 
 @pytest.fixture
@@ -176,6 +182,78 @@ def test_a_version_the_live_venue_cannot_hold_is_refused_before_it_is_approved(
     assert files.read(ws) == portfolio
 
 
+def test_a_promotion_strikes_the_live_share_s_expectation_once_and_moves_it_with_the_version(
+    ws: Workspace, store: StateStore, promotable: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`live_drift` judges the version in the live share's units, so the expectation is
+    measured at that share before the approval — and written with the move, so the live
+    deploy that follows does not measure it a second time."""
+    real = strategies.restruck
+    measured: list[float] = []
+
+    def counted(
+        ws_: Workspace, store_: StateStore, sid: str, version: StrategyVersion, capital: float
+    ) -> Expectation:
+        measured.append(capital)
+        return real(ws_, store_, sid, version, capital)
+
+    monkeypatch.setattr(strategies, "restruck", counted)
+
+    promote(ws, store, promotable, operator="Leonardo")
+
+    held = files.held(files.stage_of(files.read(ws), "live"), promotable)
+    assert held is not None and measured == [held.capital]
+    assert strategies.require(ws, promotable).latest().expectation.capital == held.capital
+    (event,) = store.events(kind="expected")
+    assert (event.detail["stage"], event.detail["capital"]) == ("live", held.capital)
+    row = store.connection.execute(
+        "SELECT expectation FROM strategy_versions WHERE strategy_id = ?", (promotable,)
+    ).fetchone()
+    assert json.loads(row[0])["capital"] == held.capital
+
+
+def test_a_version_whose_book_breaches_its_floor_at_the_live_share_is_refused_before_it_is_approved(
+    ws: Workspace, store: StateStore, promotable: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refused (exit 2) with the approval unrecorded and nothing moved — not inside the live
+    deploy, after the approval, with the version on neither stage."""
+    monkeypatch.setattr(strategies, "restruck", _breached)
+    portfolio = files.read(ws)
+
+    with pytest.raises(KansoError) as raised:
+        promote(ws, store, promotable, operator="Leonardo")
+
+    assert raised.value.code == Exit.PRECONDITION
+    assert "measured again at the 20000 the live stage would fund it with" in raised.value.message
+    assert "falls to 40% of its gross" in raised.value.message
+    assert f"kanso strat retire {promotable}@1" in (raised.value.remedy or "")
+    assert approvals(store, promotable, 1) == []
+    assert strategies.require(ws, promotable).latest().state == "promotable"
+    assert files.read(ws) == portfolio
+    assert [e.detail["stage"] for e in store.events(kind="deployed")] == ["paper"]
+
+
+def test_a_live_share_below_the_version_s_budgets_is_not_measured(
+    ws: Workspace, store: StateStore, promotable: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live deploy blocks a sized version at a share under its budgets before it would
+    measure anything, so the promotion measures nothing there either (backlog row 185)."""
+    import yaml
+
+    from kanso.strategy import impl
+
+    path = impl.manifest_file(ws, promotable, 1)
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    manifest["sleeve"]["config"]["sizing_budget"] = 30_000.0
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(strategies, "restruck", _breached)
+
+    made = promote(ws, store, promotable, operator="Leonardo")
+
+    assert made.deployments[0].blocked == (f"{promotable}@1",)
+    assert store.events(kind="expected") == []
+
+
 def test_a_halted_live_stage_refuses_a_promotion_into_it(
     ws: Workspace, store: StateStore, promotable: str
 ) -> None:
@@ -203,6 +281,51 @@ def test_a_demotion_returns_the_version_to_the_paper_stage(
     assert files.held(files.stage_of(files.read(ws), "live"), promotable) is None
     assert files.held(files.stage_of(files.read(ws), "paper"), promotable) is not None
     assert made.halted == ()
+
+
+def test_a_demotion_redeploys_the_live_stage_before_the_paper_one(
+    ws: Workspace, store: StateStore, promotable: str
+) -> None:
+    """The stage holding the money is not made to wait for the paper share's measurement."""
+    promote(ws, store, promotable, operator="Leonardo")
+
+    made = demote(ws, store, promotable)
+
+    assert [one.stage for one in made.deployments] == ["live", "paper"]
+    assert [one.label for one in made.deployments[1].admitted] == [f"{promotable}@1"]
+
+
+def test_a_demoted_version_paper_cannot_hold_at_its_share_is_blocked_and_the_rest_deploys(
+    ws: Workspace, store: StateStore, promotable: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured at the paper share and refused, the demoted version is blocked on paper and
+    escalated; the live stage was redeployed first, and the other version on paper deploys."""
+    deployable(ws, store, "other")
+    promote(ws, store, promotable, operator="Leonardo")
+    real = strategies.restruck
+
+    def breached(
+        ws_: Workspace, store_: StateStore, sid: str, version: StrategyVersion, capital: float
+    ) -> Expectation:
+        if sid == promotable:
+            _breached()
+        return real(ws_, store_, sid, version, capital)
+
+    monkeypatch.setattr(strategies, "restruck", breached)
+
+    made = demote(ws, store, promotable)
+
+    live, paper = made.deployments
+    assert (live.stage, paper.stage) == ("live", "paper")
+    assert paper.blocked == (f"{promotable}@1",)
+    assert [one.label for one in paper.admitted] == ["other@1"]
+    assert strategies.require(ws, promotable).latest().state == "paper"
+    assert files.held(files.stage_of(files.read(ws), "live"), promotable) is None
+    summary = store.connection.execute(
+        "SELECT summary FROM escalations WHERE kind = 'deploy_blocked' AND subject = ?",
+        (f"{promotable}@1",),
+    ).fetchone()
+    assert "falls to 40% of its gross" in summary[0]
 
 
 def test_a_demotion_of_a_version_that_is_not_live_is_refused(

@@ -49,9 +49,14 @@ the one its expectation was struck at — or one composed before an expectation 
 capital — has it measured again at the share (`kanso.strategy.restruck`, one run over the
 certification window) before anything is written, and the strategy file, its row and an
 `expected` event carry the new one. Composition strikes it at the paper share in the first
-place, so this is a promotion's live share or a share the limits have since moved; a
-measurement that refuses — a book below its maintenance floor at the smaller share — refuses
-the deployment.
+place, and `promote` at the live share before it records the approval, so this is a share
+the limits have since moved, a demoted version's return to paper, or an upgraded
+workspace's first deploy. A measurement that refuses — a book below its maintenance floor at
+the smaller share — blocks that version and nothing else: it is not admitted, it is
+escalated as `deploy_blocked` with `kanso strat retire` as the way out, and the rest of the
+stage deploys, so one version a share cannot hold never halts a stage every other version
+is on. It is measured again, and refused again, at each deploy of the stage until it is
+retired or funded at a share its book holds.
 
 **A node flattens before every stop, so a stage always restarts flat.** Simulated execution
 keeps no position across a restart, and the alternative — a record claiming a book the new
@@ -71,7 +76,7 @@ from typing import TYPE_CHECKING, Final
 from kanso import strategy as strategies
 from kanso.criteria.run import day_of
 from kanso.env.envelope import engine_version
-from kanso.errors import ApprovalError, PreconditionError
+from kanso.errors import ApprovalError, KansoError, PreconditionError
 from kanso.inbox import escalate
 from kanso.nautilus import node
 from kanso.nautilus.cross_section import without_markers
@@ -110,7 +115,10 @@ __all__ = [
     "Admitted",
     "Deployment",
     "clock_of",
+    "budgets",
     "deploy",
+    "record_expected",
+    "restrike",
     "served_to",
 ]
 
@@ -403,8 +411,8 @@ def _fund(
                 f"stages.{stage} has no capital left to fund {candidate.subject}",
             )
             continue
-        budgets = _budgets(ws, strategy_id, version)
-        if share < budgets:
+        needed = budgets(ws, strategy_id, version)
+        if share < needed:
             blocked.append(candidate.subject)
             escalate(
                 ws,
@@ -412,12 +420,27 @@ def _fund(
                 BLOCKED,
                 candidate.subject,
                 f"stages.{stage} funds {candidate.subject} with {share:g} and its budgets sum "
-                f"to {budgets:g}; a sized version deployed below its budgets would size every "
+                f"to {needed:g}; a sized version deployed below its budgets would size every "
                 "order over the money it has — raise limits.per_strategy_max_pct or the "
                 "stage's capital",
             )
             continue
-        restruck = _struck(ws, store, candidate, share)
+        try:
+            restruck = restrike(ws, store, strategy_id, candidate.version, share)
+        except KansoError as refused:
+            blocked.append(candidate.subject)
+            escalate(
+                ws,
+                store,
+                BLOCKED,
+                candidate.subject,
+                f"stages.{stage} funds {candidate.subject} with {share:g}, and measured again "
+                f"at that share it is refused: {refused.message}",
+                actions=" · ".join(
+                    (f"kanso strat retire {candidate.subject}", "kanso portfolio show")
+                ),
+            )
+            continue
         if restruck is not None:
             struck[strategy_id] = restruck
         joined_at = held.joined_at if held is not None and held.version == version else joined
@@ -437,15 +460,15 @@ def _fund(
     return admitted, blocked
 
 
-def _struck(
-    ws: Workspace, store: StateStore, candidate: _Candidate, share: float
+def restrike(
+    ws: Workspace, store: StateStore, strategy_id: str, version: StrategyVersion, share: float
 ) -> Expectation | None:
-    """The candidate's expectation measured again at this share, or `None` when it was
-    struck at this share already."""
-    held = candidate.version.expectation.capital
+    """This version's expectation measured again at `share`, or `None` when it was struck at
+    `share` already; a measurement's refusal is raised to the caller."""
+    held = version.expectation.capital
     if held is not None and isclose(held, share):
         return None
-    return strategies.restruck(ws, store, candidate.file.id, candidate.version, share)
+    return strategies.restruck(ws, store, strategy_id, version, share)
 
 
 def _restate(
@@ -486,18 +509,26 @@ def _restate(
         )
         strategy_files.write(ws, written)
         if expected is not None:
-            strategy_files.expect(store, candidate.file.id, _version_of(written, placed.version))
-            store.event(
-                strategies.EXPECTED,
-                records.subject_of(candidate.file.id, placed.version),
-                {
-                    "stage": stage,
-                    "capital": placed.capital,
-                    "objective": expected.objective_id,
-                    "value": expected.value,
-                    "se": expected.se,
-                },
-            )
+            record_expected(store, written, placed.version, stage)
+
+
+def record_expected(store: StateStore, file: StrategyFile, version: int, stage: str) -> None:
+    """Index the expectation a written strategy file's version now carries, struck for this
+    stage, and append the `expected` event that says so."""
+    held = _version_of(file, version)
+    strategy_files.expect(store, file.id, held)
+    expected = held.expectation
+    store.event(
+        strategies.EXPECTED,
+        records.subject_of(file.id, version),
+        {
+            "stage": stage,
+            "capital": expected.capital,
+            "objective": expected.objective_id,
+            "value": expected.value,
+            "se": expected.se,
+        },
+    )
 
 
 def restated(
@@ -597,7 +628,7 @@ def _seeded(store: StateStore, stage: str, placed: Placement) -> Placement:
     return replace(placed, cushion=cushion, settled_ns=settled_ns)
 
 
-def _budgets(ws: Workspace, strategy_id: str, version: int) -> float:
+def budgets(ws: Workspace, strategy_id: str, version: int) -> float:
     """What a sized version needs funded: the sleeve's budget and its sized overlays' together."""
     manifest = strategy_impl.read_manifest(ws, strategy_id, version)
     return sum(
