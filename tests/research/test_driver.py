@@ -23,6 +23,7 @@ from kanso.hyp import STRATEGY_FILE
 from kanso.models import INSTRUCTIONS, reset_mock, spend
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
+from kanso.schemas import CardDigest
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -476,6 +477,13 @@ def test_every_fact_the_proposer_is_sent_is_named_in_its_instruction() -> None:
     assert f"`{STRATEGY_FILE}`" in said, "the file itself, which is not a constant key"
 
 
+def test_the_instruction_names_every_number_a_recent_card_s_digest_carries() -> None:
+    """A field the proposer is shown and never told the meaning of is a number it guesses at."""
+    said = INSTRUCTIONS["propose"]
+    assert "`n_trades`" in said and "`digest`" in said
+    assert [name for name in CardDigest.model_fields if f"`{name}`" not in said] == []
+
+
 def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None:
     """A signature's mark is per session — the instrument, the side, and whether it was
     still on at the end — so the same holding moved to another hour of the same session
@@ -576,6 +584,30 @@ def test_recent_cards_reach_across_runs_under_the_same_pins(
     # tail and the repair are both read from that one row.
     payload = json.loads(first.user)
     assert "crash_tail" not in payload and "repair" not in payload
+
+
+def test_each_recent_card_that_ran_shows_its_trades_and_its_edge_per_trade(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A metric alone cannot say whether it moved because each trade earned more or because
+    the strategy traded less, so a card that ran reaches the proposer with its trade count
+    and its digest: the same numbers the card recorded. A crash ran to no result and
+    carries neither a digest nor a trade."""
+    scripted(ws, propose=[proposal("revert"), proposal("boom"), proposal("weak")])
+
+    driver.run(ws, store, prepared_hyp, cards=3)
+
+    shown = json.loads(recorded.of("propose")[-1].user)["recent_cards"]
+    baseline, kept, crashed = records.cards_of(store, prepared_hyp)[:3]
+    assert [card["status"] for card in shown] == ["keep", "keep", "crash"]
+    assert [card["n_trades"] for card in shown] == [0, kept.n_trades, 0]
+    assert kept.n_trades > 0 and kept.digest is not None
+    assert shown[1]["digest"]["net_bps_per_trade"] == round(kept.digest.net_bps_per_trade, 4)
+    assert shown[1]["digest"]["sessions"] == kept.digest.sessions
+    assert set(shown[1]["digest"]) == set(type(kept.digest).model_fields)
+    assert shown[0]["digest"]["net_bps_per_trade"] is None, "the flat baseline closed nothing"
+    assert "digest" not in shown[2] and crashed.digest is None
+    assert baseline.digest is not None
 
 
 def test_a_redundant_result_from_an_earlier_run_reaches_the_next_one(

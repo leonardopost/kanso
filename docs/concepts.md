@@ -441,7 +441,8 @@ numbers, and records them with the card:
 Gross is before fill costs and net after, so gross less cost is net, per trade and per
 session; funding, which is a payment on what was held and not a fill cost, stays in both. A
 number with nothing to be read off — an edge with no closed trade, a share with no fill — is
-`null`, never a zero. `research card` prints it as a `trades` line and an `edge`
+`null`, never a zero. The proposer is shown every recent card's `n_trades` and digest beside
+its metric, rounded to four places; `research card` prints it as a `trades` line and an `edge`
 line and carries it under `--json` as `digest`; `research show --json` carries the newest card
 of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc`, appended so
 that a reader taking the first nine columns by position reads what it always read, an absent
