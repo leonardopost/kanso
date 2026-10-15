@@ -97,6 +97,7 @@ from kanso.inbox import escalate
 from kanso.models import CallInputs, route
 from kanso.research import diff as diffs
 from kanso.research import lanes, records
+from kanso.research import loop as research_loop
 from kanso.schemas import Hypothesis, RunRecord, is_duration, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -388,7 +389,9 @@ def check(
     since the last check and is an event, and a drift also marks every card that carried
     the drifted bytes, reverts the lane copy, re-points `best`, rewrites the workspace copy
     and escalates. The lane's bytes are stored either way, since the next check differences
-    from them.
+    from them. A run the operator ended while the model answered is refused with
+    `loop.TakenError` and the verdict dropped, so an end leaves the best where it was and
+    the lane directory removed.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     hyp = parse_yaml(
@@ -415,6 +418,7 @@ def check(
         return True, None
     if ok:
         ok, reason = _ask(ws, store, hyp, run, source, mark, lane)
+        research_loop.ongoing(store, run)  # a run ended while the model answered is let go
     _mark(store, run, mark.cards, aligned=ok)
     if ok:
         store.event(

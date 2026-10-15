@@ -12,12 +12,15 @@ so no model is asked about it and nothing is escalated, however a model would ha
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from kanso import inbox, research
 from kanso.errors import ValidationError
 from kanso.models import spend
 from kanso.research import align, lanes, records, scheduler
+from kanso.research import loop as research_loop
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -273,6 +276,39 @@ def test_a_proposal_that_kept_is_put_to_the_model_and_its_drift_rewound(
     assert [entry.kind for entry in inbox.unread(store)] == ["misaligned"]
     run = records.require_active(store, hyp_id)
     assert align.checkpoint(store, run) == align.Checkpoint(2, run.base_sha, judged=True)
+
+
+def test_a_run_ended_while_the_model_judges_it_is_rewound_nowhere(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`research end` lands while the model is judging the run: the verdict is dropped, so
+    a drift moves no best the end left standing and puts back no lane directory it removed.
+
+    Acting on it rewound the hypothesis's best and wrote the lane copy back after the end.
+    """
+    scripted(ws, align_check=[DRIFTED])
+    hyp_id = started(ws, store)
+    write_lane(ws, hyp_id, REVERTING)
+    kept = research.card(ws, store, hyp_id, "trade the trough")
+    assert kept.status == "keep"
+    ask = align._ask
+
+    def ending(*args: Any, **kwargs: Any) -> Any:
+        verdict = ask(*args, **kwargs)
+        research.end(ws, store, hyp_id)
+        return verdict
+
+    monkeypatch.setattr(align, "_ask", ending)
+
+    with pytest.raises(research_loop.TakenError, match="was ended while lane op worked it"):
+        align.check(ws, store, hyp_id)
+
+    assert spend(store, lane="op").calls == 1
+    assert records.best_of(store, hyp_id) == (kept.strategy_sha, kept.metric)
+    assert workspace_file(ws, hyp_id) == REVERTING
+    assert not lanes.lane_dir(ws, "op", hyp_id).exists()
+    assert aligned_flags(store, hyp_id) == [1, 1]
+    assert inbox.unread(store) == []
 
 
 def test_the_syntax_tree_still_reads_the_base(ws: Workspace, store: StateStore) -> None:

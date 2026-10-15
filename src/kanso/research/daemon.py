@@ -693,6 +693,10 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
     the lane held it stays out. One taken out before its run began is not a failure at
     all: the lane lets go of it at the next catalog read of its baseline, or within a
     second of the card (`loop.begin`), records nothing and claims the next hypothesis
+    without waiting. Nor is a run the operator ended while the lane worked it
+    (`research end`): the answer a model was writing is dropped, and the card in flight is
+    let go at the next catalog read of its window or killed within a second of the end
+    (`loop.ongoing`); no card is recorded for it, and the lane claims the next hypothesis
     without waiting.
 
     A turn that ended in a stall is where `[research] explore_after_stalls` is read: after
@@ -728,7 +732,7 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
                     ws, store, subject, cards=CARDS_PER_TURN, lane=lane, stop=stopping
                 )
             except TakenError:
-                continue  # the operator took it back before its run began; take the next
+                continue  # the operator took it back, or ended its run; take the next
             except KansoError as exc:
                 if stopping():
                     break  # the card was interrupted, not failed; the run resumes next start

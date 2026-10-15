@@ -839,6 +839,34 @@ def test_a_removal_that_lands_during_the_baseline_is_honoured_before_the_run_exi
     assert research_loop.BASELINE_FAILED not in kinds, "the operator's word, not a failure"
 
 
+def test_a_run_ended_while_the_model_answers_is_let_go_and_nothing_is_written(
+    ws: Workspace, store: StateStore, prepared_hyp: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`research end` lands while the proposer is answering: the answer is dropped before it
+    is written into the lane directory the end removed, and no card is recorded for it.
+
+    Writing it first put the directory back, and the card then refused the run as having
+    none, which a daemon lane recorded as its failure and backed off from."""
+    scripted(ws, propose=[proposal("revert")])
+    run = research_loop.begin(ws, store, prepared_hyp, lane="l1")
+    cards = records.cards_of(store, prepared_hyp)
+    propose = driver._propose
+
+    def ending(*args: Any, **kwargs: Any) -> Any:
+        answer = propose(*args, **kwargs)
+        research_loop.end(ws, store, prepared_hyp)
+        return answer
+
+    monkeypatch.setattr(driver, "_propose", ending)
+
+    with pytest.raises(research_loop.TakenError, match="was ended while lane l1 worked it"):
+        driver.run(ws, store, prepared_hyp, cards=1, lane="l1")
+
+    assert records.cards_of(store, prepared_hyp) == cards
+    assert not (ws.root / run.dir).exists(), "the answer put back the directory `end` removed"
+    assert research_loop._HOST_RUNS.get(run.run_id) is None
+
+
 def test_two_lanes_never_touch_each_other_s_files(ws: Workspace, store: StateStore) -> None:
     scripted(ws, propose=[proposal("revert")])
     first = classify(ws, store, DOCUMENT, SEED)

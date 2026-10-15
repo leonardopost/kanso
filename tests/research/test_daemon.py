@@ -319,6 +319,58 @@ def test_a_removal_during_the_window_load_frees_the_lane_at_the_next_read(
     assert scheduler.queued(store) == [] and scheduler.claimed(store, waiting)
 
 
+def test_a_run_ended_while_its_card_runs_frees_the_lane_and_records_no_card(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`kanso research end` while the lane's card runs: the card is killed at the watcher's
+    next ask, no card is recorded and nothing as a failure, and the lane claims the next
+    hypothesis at once.
+
+    Observed 2026-10-15 on 0.16.0: the end removed the lane directory under a running card,
+    the card ran on to its end, and the lane then died with a `FileNotFoundError` reading the
+    card's `stderr.txt` from the directory, to be started again by the daemon.
+    """
+    hyp_id = classify(ws, store, DOCUMENT, SLOW_SEED)
+    waiting = classify(ws, store, document(id="demo_two"))
+    run = research_loop.begin(ws, store, hyp_id, lane="l1")
+    scheduler.enqueue(store, waiting)
+    scripted(ws, propose=[proposal("slow")], align_check=[ALIGNED])
+    baseline = records.cards_of(store, hyp_id)
+    watch = backtest._watch
+    watched: list[Any] = []
+
+    def ended_once_running(child: Any, *bounds: Any, **fed: Any) -> Any:
+        watched.append(child)
+        with StateStore(ws.path("state.db")) as operator:
+            research_loop.end(ws, operator, hyp_id)  # what `kanso research end` does
+        return watch(child, *bounds, **fed)
+
+    drive = research_driver.run
+    driven: list[str] = []
+
+    def driving(opened_ws: Workspace, opened: StateStore, subject: str, **kwargs: Any) -> Any:
+        driven.append(subject)
+        if subject == waiting:
+            daemon.request_stop()  # the lane took the next one, which is all this test asks
+            return SimpleNamespace(ended=False)
+        return drive(opened_ws, opened, subject, **kwargs)
+
+    waited: list[float] = []
+    monkeypatch.setattr(backtest, "_watch", ended_once_running)
+    monkeypatch.setattr(research_driver, "run", driving)
+    monkeypatch.setattr(daemon, "_wait", waited.append)
+
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
+
+    assert [child.returncode for child in watched] == [-signal.SIGKILL]
+    assert driven == [hyp_id, waiting]
+    assert waited == [], "an end is the operator's word, not a failure to back off from"
+    assert records.cards_of(store, hyp_id) == baseline, "a card was recorded for the ended run"
+    assert daemon.LANE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
+    assert records.active(store, hyp_id) is None and not (ws.root / run.dir).exists()
+    assert scheduler.queued(store) == [] and scheduler.claimed(store, waiting)
+
+
 def test_a_hypothesis_retired_while_a_lane_held_it_stays_out_and_the_lane_lives(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

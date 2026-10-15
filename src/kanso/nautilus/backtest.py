@@ -307,23 +307,26 @@ def resume() -> None:
     _INTERRUPT.clear()
 
 
-_WANTED: list[Callable[[], None]] = []
+_WANTED: list[Callable[[], object]] = []
 """The checks the `wanted` blocks this process is inside have registered, innermost last."""
 
 
 @contextlib.contextmanager
-def wanted(check: Callable[[], None]) -> Iterator[None]:
+def wanted(check: Callable[[], object]) -> Iterator[None]:
     """Read windows and run cards, inside the block, only for as long as `check` passes.
 
     `check` raises once the work is not wanted any more — a lane's claim on the hypothesis
     whose baseline it is preparing, taken back by `research queue remove`
-    (`kanso.research.loop.begin`) — and is asked before every catalog query for points this
-    process makes (the one lookup of the universe's definitions a read begins with is not
-    one), before a card is spawned, and every `WANTED_POLL_S` while one runs, which is
-    killed before the refusal is raised. So a refusal costs at most the query in flight or
-    a poll of the card. Measured before this, on 0.13.1.dev1: four lanes whose claims were
-    taken back went on reading their windows for nineteen minutes, because the claim was
-    asked about only once the window had been read and the baseline had run on it.
+    (`kanso.research.loop.begin`), or the run whose card it is, ended by `research end`
+    (`kanso.research.loop.ongoing`) — and is asked before every catalog query for points
+    this process makes (the one lookup of the universe's definitions a read begins with is
+    not one), before a card is spawned, every `WANTED_POLL_S` while one runs, which is
+    killed before the refusal is raised, and once more when it has exited, before anything
+    it wrote is read: the work that stopped being wanted may have taken the card's room
+    with it. So a refusal costs at most the query in flight or a poll of the card. Measured
+    before this, on 0.13.1.dev1: four lanes whose claims were taken back went on reading
+    their windows for nineteen minutes, because the claim was asked about only once the
+    window had been read and the baseline had run on it.
     """
     _WANTED.append(check)
     try:
@@ -2633,9 +2636,10 @@ def _supervised(
         mem_cap_gb=request.mem_cap_gb,
         feed=payload,
     )
-    tail = _tail((room / OUTPUT_FILE).read_text(encoding="utf-8", errors="replace"))
     if breach == INTERRUPTED:
         raise _interrupted()
+    _refuse_if_unwanted()  # the child may have exited after the watch last asked
+    tail = _tail((room / OUTPUT_FILE).read_text(encoding="utf-8", errors="replace"))
     if breach is not None:
         return _crashed(request, wall_s, peak_gb, breach, tail)
     return _reported(request, result_path, wall_s, peak_gb, tail)
