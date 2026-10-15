@@ -382,12 +382,12 @@ def test_a_probe_that_cannot_reach_the_vendor_fails_rather_than_concluding() -> 
 
 SPARSE = Endpoint(
     dataset="financials",
-    template="/vX/reference/financials",
+    template="/stocks/financials/v1/income-statements",
     params=(
-        ("ticker", "{ticker}"),
-        ("period_of_report_date.gte", "{start}"),
-        ("period_of_report_date.lte", "{end}"),
-        ("limit", "100"),
+        ("tickers", "{ticker}"),
+        ("period_end.gte", "{start}"),
+        ("period_end.lte", "{end}"),
+        ("limit", "1000"),
     ),
 )
 """A quarterly listing, shaped as the source serves it: the key and the window are both
@@ -399,12 +399,15 @@ over `filing_date`, and splits and dividends over their own dates."""
 class Listing:
     """A sparse listing that answers a dated request and an undated one differently.
 
-    Measured, and the reason this fixture exists: `/vX/reference/financials` and
+    Measured, and the reason this fixture exists: the statements listings and
     `/v1/reference/sec/filings` answer a fourteen-day window with `200` and no rows, and
-    the identical request with the dates taken off with `200` and a full page. `/v3/
-    reference/splits` does the same. A fixture answering the fortnight with rows encodes a
-    hope — statements are quarterly and filings episodic, so a fortnight holds nothing in
-    the ordinary case — and it is what let a probe ask the wrong question and look right.
+    the identical request with the dates taken off with `200` and a full page — measured
+    again for `/stocks/financials/v1/income-statements` on 2026-10-15, whose fortnight to
+    2026-10-14 held nothing and whose undated page held a thousand rows, as the
+    `/vX/reference/financials` it replaced did. `/v3/reference/splits` does the same. A
+    fixture answering the fortnight with rows encodes a hope — statements are quarterly and
+    filings episodic, so a fortnight holds nothing in the ordinary case — and it is what
+    let a probe ask the wrong question and look right.
 
     `dated` and `undated` are the two answers, and `reference` is the control endpoint's,
     so a test sets the three knobs the protocol actually turns on.
@@ -452,8 +455,8 @@ def test_the_question_that_settles_it_is_the_same_one_with_the_dates_taken_off()
     first, second = replay.asked
     assert any(name.endswith(".gte") for name in first.params)
     assert not any(name.endswith((".gte", ".lte")) for name in second.params)
-    assert second.params["ticker"] == "AAPL"
-    assert second.params["limit"] == "100"
+    assert second.params["tickers"] == "AAPL"
+    assert second.params["limit"] == "1000"
 
 
 def test_the_same_listing_refused_is_still_an_entitlement_failure() -> None:
@@ -630,8 +633,8 @@ def test_taking_the_window_off_leaves_the_key_and_the_page_size_alone() -> None:
     wide = SPARSE.unwindowed()
 
     assert wide.request("AAPL") == (
-        "/vX/reference/financials",
-        {"ticker": "AAPL", "limit": "100"},
+        "/stocks/financials/v1/income-statements",
+        {"tickers": "AAPL", "limit": "1000"},
     )
     assert wide.dataset == SPARSE.dataset
 

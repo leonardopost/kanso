@@ -1,0 +1,158 @@
+{
+  "source": "Massive REST API (api.massive.com), the operator's Stocks Advanced plan",
+  "authentication": "the key in an `Authorization: Bearer` header; no key is in any url or body here",
+  "recorded_with": "kanso's own transport (the engine's HttpClient, nautilus_trader 1.231.0), from the operator's machine",
+  "files": {
+    "income_statements_AAPL.json": {
+      "url": "https://api.massive.com/stocks/financials/v1/income-statements?tickers=AAPL&period_end.gte=2026-01-01&period_end.lte=2026-06-30&sort=period_end.asc&limit=1000&timeframe=quarterly",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:20Z",
+      "body": "verbatim"
+    },
+    "balance_sheets_AAPL.json": {
+      "url": "https://api.massive.com/stocks/financials/v1/balance-sheets?tickers=AAPL&period_end.gte=2026-01-01&period_end.lte=2026-06-30&sort=period_end.asc&limit=1000&timeframe=quarterly",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:21Z",
+      "body": "verbatim"
+    },
+    "cash_flow_statements_AAPL.json": {
+      "url": "https://api.massive.com/stocks/financials/v1/cash-flow-statements?tickers=AAPL&period_end.gte=2026-01-01&period_end.lte=2026-06-30&sort=period_end.asc&limit=1000&timeframe=quarterly",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:21Z",
+      "body": "verbatim"
+    },
+    "filings_index_AAPL.json": {
+      "url": "https://api.massive.com/stocks/filings/vX/index?form_type.any_of=10-K%2C10-K%2FA%2C10-KT%2C10-KT%2FA%2C10-Q%2C10-Q%2FA%2C10-QT%2C10-QT%2FA%2C20-F%2C20-F%2FA%2C40-F%2C40-F%2FA&filing_date.gte=2026-05-01&filing_date.lte=2026-07-31&sort=filing_date.asc&limit=1000&cik=0000320193",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:21Z",
+      "body": "verbatim"
+    },
+    "acceptance_0000320193-26-000013.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings/0000320193-26-000013",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:21Z",
+      "body": "verbatim"
+    },
+    "acceptance_0000320193-26-000020.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings/0000320193-26-000020",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:22Z",
+      "body": "verbatim"
+    },
+    "acceptance_0000320193-17-000009.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings/0000320193-17-000009",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:22Z",
+      "body": "verbatim",
+      "note": "AAPL's 10-Q of 2017-08-02: held, with no acceptance_datetime"
+    },
+    "acceptance_0000950170-25-010491.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings/0000950170-25-010491",
+      "status": 404,
+      "recorded_at": "2026-10-15T03:47:22Z",
+      "body": "verbatim",
+      "note": "MSFT's 10-Q of 2025-01-29: listed by the filings index, not held here"
+    },
+    "filings_index_MSFT_after_hours.json": {
+      "url": "https://api.massive.com/stocks/filings/vX/index?form_type.any_of=10-K%2C10-K%2FA%2C10-KT%2C10-KT%2FA%2C10-Q%2C10-Q%2FA%2C10-QT%2C10-QT%2FA%2C20-F%2C20-F%2FA%2C40-F%2C40-F%2FA&filing_date.gte=2020-07-30&filing_date.lte=2020-07-31&sort=filing_date.asc&limit=1000&cik=0000789019",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:22Z",
+      "body": "verbatim",
+      "note": "one 10-K listed under the day it was accepted and the day it was dated"
+    },
+    "acceptance_0001564590-20-034944.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings/0001564590-20-034944",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:23Z",
+      "body": "verbatim",
+      "note": "MSFT's 10-K, accepted 20:44 Eastern on 2020-07-30 and dated 2020-07-31"
+    },
+    "filings_ignores_issuer.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings?ticker=AAPL&cik=0000320193&filing_date=20260731&limit=3",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:23Z",
+      "body": "verbatim",
+      "note": "asked for AAPL by ticker and by CIK; served three other issuers' filings"
+    },
+    "filings_iso_date.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings?filing_date.gte=2026-07-31&filing_date.lte=2026-07-31&limit=3",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:23Z",
+      "body": "verbatim",
+      "note": "an ISO filing date matches nothing; YYYYMMDD matches the day"
+    },
+    "income_statements_BABA.json": {
+      "url": "https://api.massive.com/stocks/financials/v1/income-statements?tickers=BABA&period_end.gte=2025-01-01&period_end.lte=2026-06-30&sort=period_end.asc&limit=1000&timeframe=annual",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:23Z",
+      "body": "verbatim"
+    },
+    "filings_index_BABA.json": {
+      "url": "https://api.massive.com/stocks/filings/vX/index?form_type.any_of=10-K%2C10-K%2FA%2C10-KT%2C10-KT%2FA%2C10-Q%2C10-Q%2FA%2C10-QT%2C10-QT%2FA%2C20-F%2C20-F%2FA%2C40-F%2C40-F%2FA&filing_date.gte=2026-05-20&filing_date.lte=2026-05-20&sort=filing_date.asc&limit=1000&cik=0001577552",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:47:24Z",
+      "body": "verbatim"
+    },
+    "acceptance_0001193125-26-231755.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings/0001193125-26-231755",
+      "status": 404,
+      "recorded_at": "2026-10-15T03:47:24Z",
+      "body": "verbatim",
+      "note": "BABA's 20-F of 2026-05-20"
+    },
+    "financials_retired.json": {
+      "url": "https://api.massive.com/vX/reference/financials?ticker=AAPL&limit=100",
+      "status": 410,
+      "recorded_at": "2026-10-15T03:47:24Z",
+      "body": "verbatim",
+      "note": "the listing kanso first read, after its sunset of 2026-10-09"
+    },
+    "market_income_statements.json": {
+      "url": "https://api.massive.com/stocks/financials/v1/income-statements?sort=period_end.asc&limit=1000",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:48:43Z",
+      "body": "trimmed: the first 1 of the 1000 rows the page carried, in the order served; every other field as served",
+      "note": "market-wide, no issuer and no window: what an entitlement probe is answered with"
+    },
+    "market_balance_sheets.json": {
+      "url": "https://api.massive.com/stocks/financials/v1/balance-sheets?sort=period_end.asc&limit=1000",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:48:45Z",
+      "body": "trimmed: the first 1 of the 1000 rows the page carried, in the order served; every other field as served",
+      "note": "market-wide, no issuer and no window: what an entitlement probe is answered with"
+    },
+    "market_cash_flow_statements.json": {
+      "url": "https://api.massive.com/stocks/financials/v1/cash-flow-statements?sort=period_end.asc&limit=1000",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:48:46Z",
+      "body": "trimmed: the first 1 of the 1000 rows the page carried, in the order served; every other field as served",
+      "note": "market-wide, no issuer and no window: what an entitlement probe is answered with"
+    },
+    "market_filings_index.json": {
+      "url": "https://api.massive.com/stocks/filings/vX/index?form_type.any_of=10-K%2C10-K%2FA%2C10-KT%2C10-KT%2FA%2C10-Q%2C10-Q%2FA%2C10-QT%2C10-QT%2FA%2C20-F%2C20-F%2FA%2C40-F%2C40-F%2FA&sort=filing_date.asc&limit=1000",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:48:46Z",
+      "body": "trimmed: the first 1 of the 1000 rows the page carried, in the order served; every other field as served",
+      "note": "market-wide, no issuer and no window: what an entitlement probe is answered with"
+    },
+    "market_filings.json": {
+      "url": "https://api.massive.com/v1/reference/sec/filings?order=desc&sort=filing_date&limit=1000",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:48:47Z",
+      "body": "trimmed: the first 1 of the 1000 rows the page carried, in the order served; every other field as served",
+      "note": "market-wide, no issuer and no window: what an entitlement probe is answered with"
+    },
+    "filings_index_AAPL_2017-08-02.json": {
+      "url": "https://api.massive.com/stocks/filings/vX/index?form_type.any_of=10-K%2C10-K%2FA%2C10-KT%2C10-KT%2FA%2C10-Q%2C10-Q%2FA%2C10-QT%2C10-QT%2FA%2C20-F%2C20-F%2FA%2C40-F%2C40-F%2FA&filing_date.gte=2017-08-02&filing_date.lte=2017-08-02&sort=filing_date.asc&limit=1000&cik=0000320193",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:48:47Z",
+      "body": "verbatim"
+    },
+    "filings_index_MSFT_2025-01-29.json": {
+      "url": "https://api.massive.com/stocks/filings/vX/index?form_type.any_of=10-K%2C10-K%2FA%2C10-KT%2C10-KT%2FA%2C10-Q%2C10-Q%2FA%2C10-QT%2C10-QT%2FA%2C20-F%2C20-F%2FA%2C40-F%2C40-F%2FA&filing_date.gte=2025-01-29&filing_date.lte=2025-01-29&sort=filing_date.asc&limit=1000&cik=0000789019",
+      "status": 200,
+      "recorded_at": "2026-10-15T03:48:47Z",
+      "body": "verbatim"
+    }
+  }
+}

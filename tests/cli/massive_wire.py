@@ -180,7 +180,7 @@ here as it is live — which is what makes the endpoint a probe chooses load bea
 LISTINGS = {
     "/v3/reference/splits": "splits",
     "/v3/reference/dividends": "dividends",
-    "/vX/reference/financials": "financials",
+    "/stocks/financials/v1/income-statements": "financials",
     "/v1/reference/sec/filings": "filings",
 }
 """Where each reference listing lives, version prefix and all.
@@ -191,12 +191,14 @@ one answers a plain 404 — no envelope, no sentence, neither a refusal nor an e
 Spelled out here rather than imported from the adapter: a fixture that took the path from
 the code under test would follow a wrong prefix instead of catching it."""
 
-CEILING = {"splits": 1000, "dividends": 1000, "financials": 100, "filings": 1000}
+CEILING = {"splits": 1000, "dividends": 1000, "financials": 50_000, "filings": 1000}
 """The widest page each listing serves, measured, and every one of them written down.
 
-A ceiling belongs to one endpoint. The financials listing rejects a page of a thousand
-outright — a client error, not a trimmed answer, so a limit borrowed from the listing next
-door yields no rows at all and reads as a dataset the plan excludes."""
+A ceiling belongs to one endpoint. The statements listing kanso read until its sunset of
+2026-10-09 rejected a page of a thousand outright — a client error, not a trimmed answer,
+so a limit borrowed from the listing next door yielded no rows at all and read as a
+dataset the plan excludes. Its successor documents fifty thousand and was measured serving
+every page asked of it up to that, on 2026-10-15."""
 
 EXCLUDED = frozenset({"filings"})
 """The listings this plan does not include, refused with the sentence that means four
@@ -242,7 +244,7 @@ def _generic(ticker: str) -> Response:
     return rejected() if ticker.startswith("O:") else served([_definition(ticker)])
 
 
-DATED = ("execution_date", "ex_dividend_date", "period_of_report_date", "filing_date")
+DATED = ("execution_date", "ex_dividend_date", "period_end", "filing_date")
 """The date fields the four listings are windowed on, one per listing.
 
 Named here so a windowed request can be recognised, because a listing answers one very

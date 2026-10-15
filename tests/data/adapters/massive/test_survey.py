@@ -51,7 +51,7 @@ TICKERS = "/v3/reference/tickers"
 LISTINGS = {
     "/v3/reference/splits": "splits",
     "/v3/reference/dividends": "dividends",
-    "/vX/reference/financials": "financials",
+    "/stocks/financials/v1/income-statements": "financials",
     "/v1/reference/sec/filings": "filings",
 }
 """Where each reference listing lives, version prefix and all. Spelled out here rather
@@ -174,9 +174,9 @@ def test_a_listing_is_asked_of_the_whole_market_and_reported_without_a_key(
 
 
 def test_the_page_size_survives_the_window_being_taken_off(ws: Workspace) -> None:
-    """Only the dates are dropped. The financials listing rejects a page of a thousand
-    outright, so a request that lost its own `limit` on the way would fail as a client
-    error and be read as a dataset the plan excludes."""
+    """Only the dates are dropped. A listing's page size is its own — the statements
+    listing kanso read until 2026-10-09 rejected a page of a thousand outright — so a
+    request that lost its `limit` on the way is a request nobody measured."""
     vendor = Vendor()
 
     run(ws, vendor)
