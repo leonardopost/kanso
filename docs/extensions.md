@@ -266,7 +266,8 @@ the error of the metric read off the series the metric is a mean of — the ship
 read it off the per-period returns or the per-trade edges, widened for serial correlation by
 `kanso.criteria.quantities.long_run_factor` — and every deflation gate and the power a
 certification states read it too. A new objective is claimed by exactly one gate's
-`deflates` list, or no plan behind two trials can be written for it.
+`deflates` list: `tests/criteria/test_library.py` fails until it is, and a plan is held to
+include that gate only for an objective some gate claims.
 
 ## Writing one
 

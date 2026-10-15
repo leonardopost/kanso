@@ -15,8 +15,9 @@ between one and the fold count this workspace actually uses, whatever that is.
 Plan validation enforces the structural invariants and nothing else. Every gate exists,
 runs at the stage the toolbox says it runs at, and carries values inside its ranges; every
 gate the toolbox marks required is present and none of them is excluded; the plan reaches
-all three stages; and once the hypothesis has spent `SEARCH_TRIALS` trials, the plan
-includes the gate that `deflates` its objective — a result selected from a search is
+all three stages; and once the hypothesis's `n_trials` — every card it has, the count a
+certificate is stamped with — reaches `SEARCH_TRIALS`, the plan includes the gate that
+`deflates` its objective, with its threshold set — a result selected from a search is
 priced for the search, and that is a structural fact about selection, not a judgement
 about this hypothesis. Which of the remaining gates to include, and with which values —
 that gate's threshold among them — is the planner's decision and is not second-guessed
@@ -59,8 +60,9 @@ LIBRARY: Final = Path(__file__).resolve().parent / "library"
 """One YAML file per toolbox item, named by its id."""
 
 SEARCH_TRIALS: Final = 2
-"""From how many trials a plan must correct for the search: two cards are already a choice
-of one over another, and the maximum of two draws is above the mean of either."""
+"""From how many cards — `n_trials` — a plan must correct for the search: two cards are
+already a choice of one over another, and the maximum of two draws is above the mean of
+either."""
 
 KIND_WORDS: Final = {
     "hours": "span of clock times on one day, HH:MM-HH:MM",
@@ -174,7 +176,7 @@ def deflation_gate(objective_id: str) -> str | None:
 
 def required_deflation(hyp: Hypothesis, n_trials: int) -> str | None:
     """The deflation gate a plan for this hypothesis must include, or `None` when it need
-    include none: before its second trial, or with no objective to deflate."""
+    include none: before its second card, or with no objective to deflate."""
     if hyp.objective is None or n_trials < SEARCH_TRIALS:
         return None
     return deflation_gate(hyp.objective.id)
@@ -302,11 +304,14 @@ def plan_complaints(
     All of them at once, because the planner is allowed one retry: a plan corrected one
     complaint at a time would cost a call per mistake.
 
-    `n_trials` is how many trials the search behind the plan has spent. From
-    `SEARCH_TRIALS` on, the gate that `deflates` the hypothesis's objective is held to what
-    a required gate is held to — present, and not excluded — because the result a
-    certificate judges is then the best of a search, and nothing else in a plan prices one.
-    Its threshold stays the planner's.
+    `n_trials` is the hypothesis's count of cards, every one of every run, the count a
+    certificate is stamped with. From `SEARCH_TRIALS` on, the gate that `deflates` the
+    hypothesis's objective is held to more than a required gate is — present, not excluded,
+    and with every parameter it declares set — because the result a certificate judges is
+    then the best of a search, nothing else in a plan prices one, and a deflation gate with
+    no threshold skips, which passes. The threshold's value stays the planner's. The gate
+    itself prices the narrower set of `trial_metrics`, and skips while fewer than two of
+    the cards are trials of its objective: until then nothing was chosen over anything.
 
     A gate this version has no implementation for is not part of the toolbox a plan may
     draw on. It is neither offered to the planner, nor accepted from one, nor required of
@@ -349,13 +354,21 @@ def plan_complaints(
     )
     correction = required_deflation(hyp, n_trials)
     searched = (
-        f"is the search correction for {hyp.objective.id}, and a plan behind {n_trials} "
-        "trials includes it"
+        f"is the search correction for {hyp.objective.id}, and a plan includes it once "
+        f"n_trials, every card of the hypothesis, reaches {SEARCH_TRIALS} (it is {n_trials})"
         if correction is not None and hyp.objective is not None
         else ""
     )
     if correction in offered and correction not in named:
         complaints.append(f"gates: {correction} {searched}")
+    elif correction in offered:
+        chosen = next(gate.params for gate in included if gate.id == correction)
+        complaints.extend(
+            f"gates.{correction}.{name}: is not set, and the search correction judges nothing "
+            "without its threshold; the value is yours, inside its range"
+            for name in offered[correction].params
+            if name not in chosen
+        )
     for left in excluded:
         item = items.get(left.id)
         if item is None or item.kind != "gate":

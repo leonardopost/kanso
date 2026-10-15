@@ -1583,20 +1583,28 @@ the complaints back to the same model, then to the next tier up; a plan still in
 that fails the step. With no model configured there is nothing to fall back on and the step
 exits 2.
 
-**A search is corrected for, from its second trial.** Every objective has exactly one
+**A search is corrected for, from its second card.** Every objective has exactly one
 deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
 Sharpes, `deflated_contribution` for the contributions, `deflated_edge` for the per-trade
-edges — and once the hypothesis has spent two trials a plan includes it: the subject a
-certificate judges is then the best of a search, and nothing else in a plan prices that. The
-planner is told so in the invariants and sent back when it forgets; how high the gate's bar
-sits is still its answer. A plan pinned behind fewer trials, or by a kanso that did not hold
-it to this, is refused where it is read — by `cert plan` and by `cert run` — with the way out:
+edges — and once the hypothesis's `n_trials`, every card it has, reaches two, a plan
+includes it with its threshold set: the subject a certificate judges is then the best of a
+search, and nothing else in a plan prices that. A deflation gate named without its threshold
+would skip, and a skip passes, so a bare one is refused like a missing one. The planner is
+told so in the invariants and sent back when it forgets; how high the gate's bar sits is
+still its answer. A plan pinned before the second card, or by a kanso that did not hold it
+to this, is refused where it is read — by `cert plan` and by `cert run` — with the way out:
 
 ```
 $ kanso cert run demo_mr
-error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan behind 4 trials includes it
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan includes it once n_trials, every card of the hypothesis, reaches 2 (it is 4)
 remedy: run `kanso cert plan demo_mr --replan` to plan again
 ```
+
+The requirement counts cards and the gate counts trials. `n_trials` is what a certificate is
+stamped with, a baseline and a crash among it; the gate prices the narrower set of trials
+defined above, and while fewer than two of the cards are trials of the objective it skips,
+which passes — nothing has yet been chosen over anything. A hypothesis re-pinned to another
+objective starts that set again (`docs/backlog.md` row 173).
 
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
@@ -1753,7 +1761,7 @@ seed that fired once — do not widen the search past any candidate the selectio
 spread it used is in the evidence as `trial_spread_bps`. `deflated_sharpe` deflates a Sharpe
 the same way, by the Sharpe's own error and the plain spread of its trials, all out of
 annualised units. Which of the three a plan carries is not the planner's to choose once the
-search has two trials (above). `min_event_days` is a card gate counting the distinct
+hypothesis has two cards (above). `min_event_days` is a card gate counting the distinct
 sessions any fill fell on, for a rule that fires on a regime or an event and could put its whole sample
 into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share

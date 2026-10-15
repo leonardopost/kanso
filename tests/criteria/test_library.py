@@ -444,22 +444,36 @@ def test_each_deflation_gate_deflates_the_family_its_implementation_judges() -> 
         assert gate in implemented()
 
 
-def test_a_plan_behind_two_trials_without_its_search_correction_is_refused() -> None:
+def test_a_plan_behind_two_cards_without_its_search_correction_is_refused() -> None:
     with pytest.raises(
         ValidationError,
-        match="deflated_edge is the search correction for "
-        "net_edge_bps, and a plan behind 40 trials includes it",
+        match=r"deflated_edge is the search correction for net_edge_bps, and a plan includes "
+        r"it once n_trials, every card of the hypothesis, reaches 2 \(it is 40\)",
     ):
         validate_plan(without("deflated_edge"), make_hyp(), FOLDS)
 
 
-def test_a_plan_behind_two_trials_may_not_exclude_its_search_correction() -> None:
+def test_a_search_correction_without_its_threshold_is_refused() -> None:
+    """A deflation gate with no threshold skips, and a skip passes: naming it bare would
+    satisfy the rule and price nothing. The value is still the planner's to choose."""
+    bare = replacing("deflated_edge", params={})
+    with pytest.raises(
+        ValidationError,
+        match="gates.deflated_edge.min_probability: is not set, and the search correction "
+        "judges nothing without its threshold",
+    ):
+        validate_plan(bare, make_hyp(), FOLDS)
+    first = {**bare, "inputs": {**PLAN["inputs"], "n_trials": 1}}
+    validate_plan(first, make_hyp(), FOLDS)
+
+
+def test_a_plan_behind_two_cards_may_not_exclude_its_search_correction() -> None:
     excluded = {**without("deflated_edge"), "excluded": [{"id": "deflated_edge", "reason": "no"}]}
     with pytest.raises(ValidationError, match="excluded.deflated_edge: is the search correction"):
         validate_plan(excluded, make_hyp(), FOLDS)
 
 
-def test_a_plan_before_the_second_trial_need_not_correct_for_a_search() -> None:
+def test_a_plan_before_the_second_card_need_not_correct_for_a_search() -> None:
     """One card is not a search: nothing was selected over anything."""
     first = {**without("deflated_edge"), "inputs": {**PLAN["inputs"], "n_trials": 1}}
     validate_plan(first, make_hyp(), FOLDS)

@@ -147,8 +147,9 @@ class CriteriaItem(KansoModel):
 
     `deflates` is a gate's claim to be the search correction for these objectives: the test
     that prices how many trials went into selecting a result scored on one of them. Every
-    objective is claimed by exactly one gate, and a plan for a hypothesis that has spent two
-    trials includes that gate (`kanso.criteria.library.deflation_gate`).
+    objective is claimed by exactly one gate, and a plan for a hypothesis whose `n_trials`
+    has reached two includes that gate with its threshold set
+    (`kanso.criteria.library.deflation_gate`).
     """
 
     id: CatalogueId

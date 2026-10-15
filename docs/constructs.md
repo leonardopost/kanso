@@ -325,7 +325,7 @@ horizon. The `deflated_sharpe` gate skips a run scored on it, as it does the per
 since no card computed a Sharpe to deflate; `deflated_contribution` is its multiple-testing
 control instead — the research contribution against the expected maximum of the search's
 trials, over the error of the per-period returns it is the mean of, passed at
-`min_probability` — as `deflated_edge` is the per-trade edge's, and from the second trial a
+`min_probability` — as `deflated_edge` is the per-trade edge's, and from the second card a
 plan carries whichever of the three its objective names (`docs/concepts.md`, Certification);
 the bootstrap, cost-stress, cost-scenario, walk-forward and plateau gates read it as they
 read any objective.

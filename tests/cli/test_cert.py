@@ -314,6 +314,46 @@ def test_a_sha_that_is_not_a_sha_is_refused(runner: CliRunner, researched: Path)
     assert "prefix" in payload(result)["error"]
 
 
+def unpinned(root: Path, gate_id: str, params: dict[str, Any] | None = None) -> None:
+    """Rewrite the pinned plan without one gate, or with its parameters replaced: a plan as
+    an earlier kanso, or a planner it did not hold to the rule, could have left it."""
+    document = plan_document(root)
+    document["gates"] = [
+        dict(gate, params=params) if params is not None and gate["id"] == gate_id else gate
+        for gate in document["gates"]
+        if params is not None or gate["id"] != gate_id
+    ]
+    (root / "certificates" / HYP_ID / "plan.yaml").write_text(
+        yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "said"),
+    [
+        (None, "deflated_edge is the search correction for net_edge_bps"),
+        ({}, "gates.deflated_edge.min_probability: is not set"),
+    ],
+)
+def test_a_pinned_plan_that_does_not_price_the_search_is_refused_by_plan_and_run(
+    runner: CliRunner, researched: Path, params: dict[str, Any] | None, said: str
+) -> None:
+    """Behind two cards a plan carries its search correction with its threshold set; one
+    pinned without either is refused where it is read, with the replan that writes one."""
+    assert at(runner, researched, "cert", "plan", HYP_ID, "--json").exit_code == Exit.OK
+    unpinned(researched, "deflated_edge", params)
+
+    for command in ("plan", "run"):
+        result = at(runner, researched, "cert", command, HYP_ID, "--json")
+        document = payload(result)
+        assert result.exit_code == Exit.VALIDATION, document
+        assert said in document["error"]
+        assert document["remedy"] == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
+    assert certificates(researched) == []
+    replanned = at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json")
+    assert replanned.exit_code == Exit.OK and payload(replanned)["plan_version"] == 2
+
+
 def test_a_hypothesis_with_no_card_has_nothing_to_certify(
     runner: CliRunner, mocked_ws: Path
 ) -> None:

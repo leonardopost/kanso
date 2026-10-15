@@ -30,16 +30,17 @@ cannot run would pin a proof that can never be produced. It is, for the same rea
 required of a plan written by this version. Paper and live gates are run by the stages
 rather than here, so they are offered whether or not their implementations exist yet.
 
-**A search is corrected for, whatever the planner thinks.** From a hypothesis's second
-trial a plan includes the gate the toolbox says `deflates` its objective: the subject a
-certificate judges is then the best of a search, and nothing else in a plan prices that.
-The planner is told so in the invariants and refused when it forgets, through the same
-check as any other complaint; how high that gate's bar sits is still its answer.
+**A search is corrected for, whatever the planner thinks.** Once a hypothesis's `n_trials`
+— every card it has — reaches two, a plan includes the gate the toolbox says `deflates` its
+objective, with its threshold set: the subject a certificate judges is then the best of a
+search, and nothing else in a plan prices that. The planner is told so in the invariants
+and refused when it forgets, through the same check as any other complaint; how high that
+gate's bar sits is still its answer.
 
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
 second opinion, and a pinned plan this version can no longer run is refused with the
-replan that would fix it — a plan pinned before the search reached two trials, or by a
+replan that would fix it — a plan pinned before the hypothesis's second card, or by a
 kanso that did not hold it to its correction, among them: the search it is checked against
 is the one the hypothesis has spent now. `replan` re-runs the planner over the same closed
 set of inputs, as they read now, and mints the next `plan_version`; the plan a certificate
@@ -338,7 +339,8 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
         else [
             f"when n_trials is {SEARCH_TRIALS} or more, {gate} is required as well and may "
             f"not be excluded: it is the search correction for this hypothesis's objective, "
-            f"{hyp.objective.id}; its threshold is yours to choose inside its range"
+            f"{hyp.objective.id}; set its threshold, whose value is yours to choose inside "
+            "its range"
         ]
     )
     return {
@@ -478,7 +480,7 @@ def _refuse_unusable(pinned: CertificationPlan, hyp: Hypothesis, folds: int, n_t
     """Refuse a pinned plan this version can no longer run, naming the way out.
 
     Checked against the search as it stands, `n_trials` now and not the count the plan was
-    made behind: a plan made before the second trial is not a plan for the best of many.
+    made behind: a plan made before the second card is not a plan for the best of many.
     """
     problems = complaints_about(pinned.gates, pinned.excluded, hyp, folds, n_trials)
     if problems:
