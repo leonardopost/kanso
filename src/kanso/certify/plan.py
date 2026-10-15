@@ -118,11 +118,13 @@ SAMPLING_FLOOR: Final = 0.1
 """The share of the certification window a paper window is warned for falling under.
 
 Both are estimates of the same objective and their scatter goes as the inverse square root
-of the window, so at a tenth the paper result is drawn from a distribution more than three
-times as wide as the one the ninety-percent band was drawn from — and a version behaving
-exactly as certified lands outside that band more often than inside it. The line is drawn
-on a continuum, so it is drawn generously: it warns about the plans that are certainly
-mis-sized rather than about the borderline ones.
+of the window. `paper_forward` judges the paper result against a band struck for the paper
+window's own length (`kanso.criteria.band`), so a version behaving exactly as certified lands
+inside it about nine times in ten at any length that strikes one — but at a tenth that band
+is more than three times as wide as the certification value's own, and a version that has
+lost its edge lands inside it too unless the edge was certified that many errors clear of
+zero. The line is drawn on a continuum, so it is drawn generously: it warns about the plans
+that are certainly mis-sized rather than about the borderline ones.
 """
 
 CERT_STAGE: Final = "cert"
@@ -441,15 +443,16 @@ def power_of(store: StateStore, pinned: CertificationPlan) -> Power | None:
 
 
 def paper_window_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) -> str | None:
-    """Say so when this plan's paper window is too short to be judged by its own band.
+    """Say so when this plan's paper window is too short for its band to refuse anything.
 
-    A paper gate compares the objective realised on the stage against the interval
-    composition measured over the *certification* window, and the two are estimates of the
-    same quantity at different precision: the shorter the paper window, the wider the
-    result scatters around a band that does not widen with it. The scatter goes as the
-    square root of the ratio, so a paper window a tenth of the certification window is
-    roughly three times noisier than the band it must fall inside, and a version that is
-    behaving exactly as certified reads as drifted more often than not.
+    A paper gate compares the objective realised on the stage against a band struck from
+    what composition measured over the *certification* window, widened for the paper
+    window's own length: the certification value's error and the paper window's, together.
+    The shorter the paper window, the wider the band — `√(1 + certification/paper)` times
+    the certification value's own, more than three at a tenth, and a Sharpe's wider still at
+    a few periods a fold — so a version behaving as certified still passes about nine times
+    in ten, and one that has stopped working passes too unless its certified edge stands
+    that many errors clear of zero.
 
     It is a note and not a refusal. The plan is the planner's, the windows are the
     operator's, and a short paper window is a defensible choice — it is only one made in
@@ -463,9 +466,9 @@ def paper_window_note(ws: Workspace, store: StateStore, pinned: CertificationPla
         return None
     return (
         f"paper window {_rendered(paper)} against a {_rendered(certification)} certification "
-        f"window · the paper objective is about {sqrt(certification / paper):.0f}x noisier than "
-        "the band it is judged against, so a version behaving as certified can read as drifted "
-        "· raise min_duration or horizon_mult, or narrow windows.certification"
+        f"window · the paper band is about {sqrt(1 + certification / paper):.0f}x as wide as the "
+        "certification value's own, so a version that has lost its edge can land inside it "
+        "· raise min_duration or horizon_mult"
     )
 
 

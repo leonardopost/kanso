@@ -120,7 +120,7 @@ def sized(min_duration: str) -> dict[str, Any]:
     return {**mocked.PLAN, "gates": gates}
 
 
-def test_a_paper_window_too_short_for_its_own_band_is_warned_about(
+def test_a_paper_window_too_short_for_its_band_to_refuse_anything_is_warned_about(
     runner: CliRunner, researched: Path
 ) -> None:
     """The fixture certifies over 61 days and its plan judges paper over five: a warning."""
@@ -131,7 +131,7 @@ def test_a_paper_window_too_short_for_its_own_band_is_warned_about(
     assert "warning" in result.stdout
     assert "paper window 5d against a 61d certification window" in result.stdout
     (warning,) = document["warnings"]
-    assert "noisier than the band" in warning
+    assert "as wide as the certification value's own" in warning
     assert plan_document(researched)["plan_version"] == 1, "a warning pins the plan all the same"
 
 

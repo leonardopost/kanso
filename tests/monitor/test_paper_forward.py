@@ -4,18 +4,32 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date
+from math import sqrt
 
+import numpy as np
 import pytest
 
 from kanso.criteria.gates.paper_forward import (
+    NO_DISPERSION,
     NOT_A_PAPER_TEST,
     TRADES_UNREACHABLE,
     gate,
 )
-from kanso.criteria.objectives import wf_sharpe_vs_hold
+from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_vs_hold
+from kanso.criteria.run import CardRun
 from kanso.errors import PreconditionError
+from kanso.schemas import GateResult
 
-from .builders import flat_run, gate_context, hypothesis, run_over, stage_record
+from .builders import (
+    PERIODS,
+    SE,
+    WIDE,
+    flat_run,
+    gate_context,
+    hypothesis,
+    run_over,
+    stage_record,
+)
 
 HOLD = {
     "benchmark": {"hold": "first_leg"},
@@ -77,7 +91,7 @@ def test_a_benchmark_objective_realises_the_difference_from_the_stage_s_hold() -
             run=varied,
             hyp=hypothesis(**HOLD),
             benchmark=hold,
-            ci90=(-100.0, 100.0),
+            se=WIDE,
         )
     )
 
@@ -93,26 +107,133 @@ def test_a_benchmark_objective_on_a_stage_that_stored_no_hold_is_refused() -> No
 
 
 def test_a_result_below_the_band_fails() -> None:
-    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), ci90=(1.0, 2.0)))
+    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), value=1.5))
 
     assert not result.passed
-    assert result.evidence["ci90"] == [1.0, 2.0]
+    low, high = result.evidence["band"]
+    assert result.evidence["realised"] < low < 1.5 < high
+
+
+def test_the_band_is_struck_for_the_paper_window_and_states_its_coverage() -> None:
+    """Twenty paper days in four folds of five, against fifty-five certified: the value's
+    error widened by the paper window's own. A Sharpe's fold of five periods weighs
+    `(5 − 1) / (5 × 2)`, its exact small-sample variance, so `√(1 + 55 × 4 × 0.4 / 16)`."""
+    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), value=1.0))
+
+    half = 1.6448536269514722 * SE * sqrt(1 + PERIODS * (4 * 0.4) / 16)
+    assert result.evidence["expected"] == 1.0
+    assert result.evidence["band"] == pytest.approx([1.0 - half, 1.0 + half])
+    assert result.evidence["coverage"] == 0.9
+    assert result.evidence["n_periods"] == 20
+    assert (result.evidence["fold_periods"], result.evidence["fold_minimum"]) == ([5] * 4, 4)
+
+
+@pytest.mark.parametrize("days", [8, 12])
+def test_a_sharpe_window_too_thin_for_its_band_fails_until_it_is_not(days: int) -> None:
+    """Folds of two or three periods: a Sharpe of so few has no variance to band, so the
+    gate fails — the version is not promotable yet — however long the plan's floor, and the
+    evidence says what each fold held and needs; sixteen days strike the band."""
+
+    def judged(run: CardRun) -> GateResult:
+        return gate.evaluate(gate_context(params=PARAMS, record=stage_record(), run=run, se=WIDE))
+
+    thin = judged(run_over((100.0, 120.0) * (days // 2)))
+    grown = judged(run_over((100.0, 120.0) * 8))
+
+    assert not thin.passed and thin.skipped is None
+    assert thin.evidence["elapsed_s"] >= thin.evidence["required_s"]
+    assert thin.evidence["band"] is None
+    assert thin.evidence["fold_periods"] == [days // 4] * 4
+    assert thin.evidence["fold_minimum"] == 4
+    assert grown.passed and grown.evidence["fold_periods"] == [4] * 4
+
+
+def test_a_per_trade_edge_window_that_closed_no_trade_fails() -> None:
+    """It realises zero whatever the version is: no evidence, so not promotable."""
+    edge = hypothesis(objective={"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 1.0}})
+    expectation = {
+        "objective_id": "net_edge_bps",
+        "value": 10.0,
+        "ci90": [8.0, 12.0],
+        "se": 1.0,
+        "periods": 55,
+    }
+
+    result = gate.evaluate(
+        replace(
+            gate_context(params=PARAMS, record=stage_record(), hyp=edge),
+            expectation=expectation,
+        )
+    )
+
+    assert not result.passed
+    assert result.evidence["realised"] == 0.0 == result.evidence["expected"]
+    assert result.evidence["band"] is None and result.evidence["fold_periods"] == []
+
+
+def test_an_expectation_with_no_error_strikes_no_band_and_says_so() -> None:
+    """An expectation composed before kanso recorded an error is not judged by a guess."""
+    older = replace(
+        gate_context(params=PARAMS, record=stage_record()),
+        expectation={"objective_id": "wf_sharpe_net", "value": 0.0, "ci90": [-0.5, 0.5]},
+    )
+
+    result = gate.evaluate(older)
+
+    assert result.passed
+    assert result.skipped == NO_DISPERSION
+
+
+def test_a_contribution_version_that_reproduces_its_certification_passes() -> None:
+    """The unit the contribution is certified in is the unit paper realises it in.
+
+    A fixed-notional book earning 4 bp of its capital a day at a dispersion of 6, certified
+    over 105 days and run on paper for 60 more from the same process, lands inside; the same
+    book with its edge gone does not. Under a band of per-trade edges neither statement held:
+    the realised bp a day was compared with a band in bp of each trade's notional.
+    """
+    contribution = hypothesis(
+        objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    rng = np.random.default_rng(16)
+    certified = run_over(tuple(rng.normal(40.0, 60.0, 105)), start=date(2023, 9, 1))
+    value, se = wf_contribution_bps.compute(certified, 4)
+    expectation = {
+        "objective_id": "wf_contribution_bps",
+        "value": value,
+        "ci90": [value, value],
+        "se": se,
+        "periods": 105,
+    }
+    alive = run_over(tuple(rng.normal(40.0, 60.0, 60)))
+    dead = run_over(tuple(rng.normal(0.0, 60.0, 60)))
+    record = stage_record(clock=date(2024, 4, 29))
+
+    def judged(run: CardRun) -> GateResult:
+        return gate.evaluate(
+            replace(
+                gate_context(params=PARAMS, record=record, run=run, hyp=contribution),
+                expectation=expectation,
+            )
+        )
+
+    assert judged(alive).passed
+    assert not judged(dead).passed
+    assert judged(dead).evidence["realised"] < judged(dead).evidence["band"][0]
 
 
 def test_a_result_above_the_band_fails_too() -> None:
     """A paper stage that beats its own certified model has not reproduced it."""
-    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), ci90=(-2.0, -1.0)))
+    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), value=-1.5))
 
     assert not result.passed
 
 
 def test_a_drawdown_past_the_hypothesis_limit_fails() -> None:
     """The one card-stage constraint a paper window can still judge."""
-    sank = run_over((100.0, -30_000.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0))
+    sank = run_over((100.0, -30_000.0, *(100.0,) * 14))
 
-    result = gate.evaluate(
-        gate_context(params=PARAMS, record=stage_record(), run=sank, ci90=(-100.0, 100.0))
-    )
+    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), run=sank, se=WIDE))
 
     assert not result.passed
     assert result.evidence["max_drawdown_pct"] > 15.0
@@ -137,10 +258,10 @@ def test_a_constraint_a_deployment_cannot_run_is_named_as_such() -> None:
 def test_a_sleeve_without_a_drawdown_constraint_judges_no_drawdown() -> None:
     """Only the sleeve's own constraints are evaluated, so an undeclared one is not."""
     bare = hypothesis(constraints=[{"id": "strategy_integrity"}])
-    sank = run_over((100.0, -30_000.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0))
+    sank = run_over((100.0, -30_000.0, *(100.0,) * 14))
 
     result = gate.evaluate(
-        gate_context(params=PARAMS, record=stage_record(), run=sank, hyp=bare, ci90=(-100.0, 100.0))
+        gate_context(params=PARAMS, record=stage_record(), run=sank, hyp=bare, se=WIDE)
     )
 
     assert result.passed
@@ -171,7 +292,7 @@ def test_it_skips_without_a_stage_record() -> None:
 
 
 def test_it_skips_without_an_expectation() -> None:
-    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), ci90=None))
+    result = gate.evaluate(gate_context(params=PARAMS, record=stage_record(), value=None))
 
     assert result.passed
     assert result.skipped is not None

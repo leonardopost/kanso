@@ -2,7 +2,7 @@ id: bootstrap
 kind: gate
 stage: cert
 required: false
-meaningful_when: "Informative with at least two closed trades: how deep the drawdown could have been had the same trades arrived in another order, and whether the resampled objective's 90% band reaches above zero."
+meaningful_when: "Needs two closed trades, or two return periods for a contribution, which resamples periods: the drawdown had they come in another order, and whether the statistic's 90% band tops zero."
 params: {n: int}
 ranges: {n: [100, 100000]}
 impl: kanso.criteria.gates.bootstrap

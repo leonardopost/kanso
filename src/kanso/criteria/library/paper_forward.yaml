@@ -2,7 +2,7 @@ id: paper_forward
 kind: gate
 stage: paper
 required: false
-meaningful_when: "Measured from the version's current joined_at, and a redeploy flattens the stage and restarts that clock, so a long minimum duration is expensive to reach."
+meaningful_when: "Judged against a nominal 90% band for the paper window's length, from joined_at; a redeploy restarts it. A short window's band is wide; a Sharpe's window fails until each fold holds 4 periods."
 params: {min_duration: duration, horizon_mult: float}
 ranges: {min_duration: [1d, 365d], horizon_mult: [1, 1000]}
 impl: kanso.criteria.gates.paper_forward.gate

@@ -86,6 +86,22 @@ def test_show_of_one_version_carries_its_band_and_its_pins(
     assert version["pins"]["nautilus_version"]
     low, high = version["expectation"]["ci90"]
     assert low <= version["expectation"]["value"] <= high
+    assert version["expectation"]["capital"] == 40_000.0, "the paper stage's share"
+
+
+def test_show_of_one_version_says_what_its_stage_band_is_struck_from(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The value's error, the periods it was read over and the capital it was struck at."""
+    version = payload(at(runner, deployed, "strat", "show", f"{HYP_ID}@1", "--json"))
+    expected = version["expectation"]
+
+    result = at(runner, deployed, "strat", "show", f"{HYP_ID}@1")
+
+    assert result.exit_code == Exit.OK
+    line = next(line for line in result.stdout.splitlines() if line.startswith("expect"))
+    assert f"{expected['value']:.6f} ± {expected['se']:.6f} [" in line
+    assert line.endswith(f" · {expected['periods']} periods at 40,000")
 
 
 def test_a_version_the_strategy_does_not_have_is_refused(runner: CliRunner, deployed: Path) -> None:

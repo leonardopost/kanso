@@ -4,31 +4,122 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date
+from math import sqrt
 
+import pytest
+
+from kanso.criteria.band import Z
 from kanso.criteria.gates.daily_loss_kill import gate as daily_loss_kill
 from kanso.criteria.gates.fill_quality_drift import gate as fill_quality_drift
+from kanso.criteria.gates.live_drift import LEGACY, NO_DISPERSION, NO_PERIOD, THIN
 from kanso.criteria.gates.live_drift import gate as live_drift
 from kanso.criteria.objectives import wf_sharpe_vs_hold
 from kanso.monitor.stage import SIMULATED
 
-from .builders import gate_context, hypothesis, run_over, stage_record
+from .builders import PERIODS, SE, flat_run, gate_context, hypothesis, run_over, stage_record
 
 DAY_S = 86_400.0
 WEEK_S = 7 * DAY_S
+CONTRIBUTION = {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
 
 
 # --- live_drift ---------------------------------------------------------------
 
 
 def test_a_live_book_still_inside_its_band_passes() -> None:
-    """A flat run scores zero, and a floor below zero is not fallen through."""
-    result = live_drift.evaluate(
-        gate_context(stage="live", record=stage_record(stage="live", paper_window_s=WEEK_S))
-    )
+    """A flat run scores zero, and a floor below zero is not fallen through.
 
+    The floor is the lower end of the band struck for the rolling window, not of the
+    certification window's: the value's error widened by the window's own folds. A week of
+    daily periods is too thin for a Sharpe's band — its folds hold one or two — so the window
+    is opened back through the tenure until each of its four folds holds four.
+    """
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+    result = live_drift.evaluate(gate_context(stage="live", record=record))
+
+    closes = record.clock_ns + 1
+    week = flat_run().between(closes - int(WEEK_S * 1_000_000_000), closes)
+    assert [len(fold.returns) for fold in week.folds(4)] == [1, 2, 2, 2]
     assert result.passed
     assert result.skipped is None
-    assert result.evidence["floor"] == -0.5
+    assert result.evidence["fold_periods"] == [4, 4, 4, 4]
+    assert result.evidence["n_periods"] == 16
+    # A Sharpe's fold of four periods weighs (4 − 1) / (4 × 1), three times a mean's 1/4.
+    assert result.evidence["floor"] == pytest.approx(-Z * SE * sqrt(1 + PERIODS * 3.0 / 16))
+    assert result.evidence["expected"] == 0.0
+
+
+def test_a_rolling_window_with_no_period_is_not_judged() -> None:
+    """A week the stage replayed no data into says nothing, and demotes nothing."""
+    quiet = run_over((0.0,) * 5)
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+
+    result = live_drift.evaluate(gate_context(stage="live", record=record, run=quiet))
+
+    assert result.passed
+    assert result.skipped == NO_PERIOD
+
+
+def test_a_tenure_too_thin_for_a_sharpe_band_is_not_judged() -> None:
+    """Ten live days hold no window whose four folds each hold four periods."""
+    record = stage_record(stage="live", joined=date(2024, 3, 11), paper_window_s=WEEK_S)
+    short = run_over((100.0, 120.0) * 5, start=date(2024, 3, 11))
+
+    result = live_drift.evaluate(gate_context(stage="live", record=record, run=short))
+
+    assert result.passed
+    assert result.skipped == THIN
+
+
+def test_a_contribution_s_rolling_window_is_not_lengthened() -> None:
+    """A contribution's fold of one period has its band, so the rolling week is the week."""
+    result = live_drift.evaluate(
+        gate_context(
+            stage="live",
+            record=stage_record(stage="live", paper_window_s=WEEK_S),
+            hyp=hypothesis(objective=CONTRIBUTION),
+        )
+    )
+
+    assert result.skipped is None
+    assert result.evidence["n_periods"] == 7
+    assert result.evidence["fold_periods"] == [1, 2, 2, 2]
+
+
+def test_an_expectation_with_no_error_is_held_to_the_interval_it_carries() -> None:
+    """Composed before kanso recorded an error, a live version is judged as kanso judged it
+    before — by its interval's lower end — rather than by nothing until a redeploy."""
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+    older = {"objective_id": "wf_sharpe_net", "value": 0.0, "ci90": [-0.5, 0.5]}
+
+    held = live_drift.evaluate(
+        replace(gate_context(stage="live", record=record), expectation=older)
+    )
+    fallen = live_drift.evaluate(
+        replace(
+            gate_context(stage="live", record=record),
+            expectation={**older, "ci90": [0.5, 1.5]},
+        )
+    )
+
+    assert held.passed and held.skipped is None
+    assert (held.evidence["floor"], held.evidence["floor_of"]) == (-0.5, LEGACY)
+    assert held.evidence["n_periods"] == 7
+    assert not fallen.passed
+    assert fallen.evidence["realised"] == 0.0 < fallen.evidence["floor"] == 0.5
+
+
+def test_an_expectation_with_no_error_and_no_interval_strikes_no_floor_and_says_so() -> None:
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+    older = replace(
+        gate_context(stage="live", record=record),
+        expectation={"objective_id": "wf_sharpe_net", "value": 0.0},
+    )
+
+    result = live_drift.evaluate(older)
+
+    assert result.passed
+    assert result.skipped == NO_DISPERSION
 
 
 def test_a_live_book_below_the_lower_bound_fails() -> None:
@@ -36,7 +127,7 @@ def test_a_live_book_below_the_lower_bound_fails() -> None:
         gate_context(
             stage="live",
             record=stage_record(stage="live", paper_window_s=WEEK_S),
-            ci90=(1.0, 2.0),
+            value=1.5,
         )
     )
 
@@ -50,7 +141,7 @@ def test_beating_the_band_is_not_a_failure() -> None:
         gate_context(
             stage="live",
             record=stage_record(stage="live", paper_window_s=WEEK_S),
-            ci90=(-3.0, -2.0),
+            value=-2.5,
         )
     )
 
@@ -58,13 +149,23 @@ def test_beating_the_band_is_not_a_failure() -> None:
 
 
 def test_the_rolling_window_is_the_paper_window_not_the_whole_book() -> None:
-    """Twenty live days rolled over a week leaves seven return periods."""
-    result = live_drift.evaluate(
+    """Twenty live days rolled over a week leaves seven return periods; a Sharpe's week,
+    lengthened to the sixteen days its band needs, is still not the whole book."""
+    contribution = live_drift.evaluate(
+        gate_context(
+            stage="live",
+            record=stage_record(stage="live", paper_window_s=WEEK_S),
+            hyp=hypothesis(objective=CONTRIBUTION),
+        )
+    )
+    sharpe = live_drift.evaluate(
         gate_context(stage="live", record=stage_record(stage="live", paper_window_s=WEEK_S))
     )
 
-    assert result.evidence["n_periods"] == 7
-    assert result.evidence["rolling_window"] == ["2024-03-14", "2024-03-20"]
+    assert contribution.evidence["n_periods"] == 7
+    assert contribution.evidence["rolling_window"] == ["2024-03-14", "2024-03-20"]
+    assert sharpe.evidence["n_periods"] == 16
+    assert sharpe.evidence["rolling_window"] == ["2024-03-05", "2024-03-20"]
 
 
 def test_the_benchmark_rolls_with_the_book() -> None:
@@ -86,8 +187,11 @@ def test_the_benchmark_rolls_with_the_book() -> None:
         )
     )
 
+    # The week is opened back to the sixteen days a Sharpe's four folds need, and the
+    # benchmark is rolled over the same sixteen.
     closes = record.clock_ns + 1
-    opens = closes - int(WEEK_S * 1_000_000_000)
+    opens = closes - 16 * 86_400_000_000_000
+    assert result.evidence["n_periods"] == 16
     rolled = wf_sharpe_vs_hold.compute(
         varied.between(opens, closes), 4, benchmark=hold.between(opens, closes)
     )[0]
@@ -126,7 +230,7 @@ def test_it_skips_without_an_expectation_or_an_objective() -> None:
     record = stage_record(stage="live", paper_window_s=WEEK_S)
 
     assert (
-        live_drift.evaluate(gate_context(stage="live", record=record, ci90=None)).skipped
+        live_drift.evaluate(gate_context(stage="live", record=record, value=None)).skipped
         is not None
     )
     assert (

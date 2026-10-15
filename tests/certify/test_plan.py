@@ -889,7 +889,8 @@ def test_the_shipped_demo_script_plans_the_demo_hypothesis(
 def test_a_paper_window_far_shorter_than_the_certification_window_is_warned_about(
     ws: Workspace, store: StateStore
 ) -> None:
-    """The demo certifies over 145 days; a five-day paper window is judged by that band."""
+    """The demo certifies over 145 days; a five-day paper window strikes a band too wide to
+    refuse a version that stopped working."""
     script(
         ws,
         certify_plan=[
@@ -902,7 +903,7 @@ def test_a_paper_window_far_shorter_than_the_certification_window_is_warned_abou
 
     assert note is not None
     assert "paper window 5d against a 145d certification window" in note
-    assert "noisier than the band" in note
+    assert "as wide as the certification value's own" in note
     assert "min_duration" in note and "horizon_mult" in note
 
 

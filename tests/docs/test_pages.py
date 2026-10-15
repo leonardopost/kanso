@@ -540,6 +540,34 @@ def test_the_concepts_page_states_both_sides_of_the_paper_gate() -> None:
     assert "above the band as much a fail as below it" in promotion
 
 
+def test_the_pages_state_the_band_a_paper_window_is_judged_by_and_its_coverage() -> None:
+    """The band is a prediction band for the paper window, and what its evidence records is
+    what the gate records; the bootstrap's three statistics are the ones it names."""
+    from kanso.criteria.band import COVERAGE, SHARPE_FOLD
+    from kanso.criteria.gates import CONTRIBUTION_BAND, EDGE_BAND, SHARPE_BAND
+    from kanso.criteria.gates.paper_forward import gate
+    from tests.monitor.builders import gate_context, stage_record
+
+    promotion = prose(section(page("concepts.md"), "Promotion and demotion"))
+    assert "expected ± 1.645 × √(se² + se² × N × Σ w(m_k) / K²)" in promotion
+    assert SHARPE_FOLD == 4 and "fewer than four periods strikes no band" in promotion
+    assert "Its coverage is nominal" in promotion
+    assert "whatever the window's length" not in promotion
+    monitoring = prose(section(page("cli.md"), "Monitoring"))
+    evidence = gate.evaluate(
+        gate_context(params={"min_duration": "5d", "horizon_mult": 5.0}, record=stage_record())
+    ).evidence
+    for key in ("expected", "band", "coverage", "n_periods", "fold_periods", "fold_minimum"):
+        assert key in evidence and f"`{key}`" in monitoring, key
+    assert evidence["coverage"] == COVERAGE == 0.9 and "nominally nine times" in monitoring
+    assert "`floor_of: ci90`" in monitoring
+    certification = prose(
+        section(page("concepts.md"), "Certification, the plan and the certificate")
+    )
+    for name in (CONTRIBUTION_BAND, EDGE_BAND, SHARPE_BAND):
+        assert f"(`{name}`" in certification, name
+
+
 def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
     """The engine's top-of-book venue ignored a quote or a print stamped before its book's
     last update while the sleeve was handed it; the page says the venue now applies it, and
