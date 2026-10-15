@@ -1,18 +1,21 @@
-"""The filings index, and the reference-document vocabulary the fundamentals share.
+"""The filings indexes, and the reference-document vocabulary the fundamentals share.
 
 A **filing** is the document a financial statement arrives in, and its *acceptance
 instant* is the moment the regulator's system took it — which is the moment it became
 public. That instant is the only timestamp a fundamental point may carry as `ts_init`, so
-this module reads the index that holds it and joins on the accession the statement names.
+this module finds it, and it takes two of the source's indexes to do so. A statement names
+its issuer's CIK and the day of the filing that carried it and nothing else about that
+filing; the *filings index* lists an issuer's periodic reports by the day they were filed,
+and the *acceptance index* holds each report's instant under its accession. Neither holds
+both, measured on 2026-10-15: the first serves no instant, and the second ignores every
+issuer filter it is asked with.
 
-The index registers no data type and writes no dataset. A filing record adds no series
-over the statement it carries: what it adds is the instant, and an instant is a stamp
-rather than a point. `filings` is nonetheless a product in its own right — an operator or
-a command may list what an issuer filed over a window — so the record is a value with a
-payload, not a private tuple.
+The indexes register no data type and write no dataset. A filing adds no series over the
+statement it carries: what it adds is the instant, and an instant is a stamp rather than a
+point.
 
-It also holds what the three fundamental datasets share, because all three are read the
-same way and the rules below must be stated once rather than three times.
+The module also holds what the fundamental datasets share, because they are read the same
+way and the rules below must be stated once rather than for each.
 
 **A listing is probed without the ticker.** A reference listing filtered to one issuer
 answers with no rows for two quite different reasons — the plan excludes the dataset, and
@@ -34,11 +37,17 @@ minutes ago and refuses now is asked about again, at the grain the source gates 
 the probe's outcome is what gets raised. Nothing here reads the vendor's sentence, which
 is byte-identical for four different conditions.
 
-**An instant carries its zone or it is refused.** A timestamp with no offset is ambiguous
-by hours, and reading a wall clock as UTC moves a publication *earlier* by the offset —
-the direction that hands a strategy information it did not have. Nothing here defaults a
-zone, and a date is widened to the end of its day for the same reason: the later bound is
-the one that cannot leak.
+**An instant is read in the zone it was measured in, or it is refused.** A timestamp with
+no offset is ambiguous by hours, and reading a wall clock as UTC moves a publication
+*earlier* by the offset — the direction that hands a strategy information it did not have.
+The acceptance index serves its instant as a bare `YYYYMMDDHHMMSS` clock, and that clock was
+measured to be the regulator's own Eastern time: over four filing days either side of a
+daylight-saving change (2025-11-03, 2026-02-13, 2026-05-01, 2026-07-31; 626 filings) every
+value fell between 06:00:59 and 21:50:45, which is the window the regulator's system
+accepts filings in, Eastern, in winter and summer alike; read as UTC the window would have
+moved by an hour between the seasons. So that clock is read as `America/New_York` and
+nothing else is read without a zone. A date is widened to the end of its day for the same
+reason: the later bound is the one that cannot leak.
 
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
@@ -50,10 +59,11 @@ than a float of seconds, which is what the engine's `ts_event` and `ts_init` are
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Collection, Iterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, NoReturn
+from zoneinfo import ZoneInfo
 
 from kanso.data.adapters.massive.client import MassiveClient, Signal
 from kanso.data.adapters.massive.entitlement import (
@@ -74,20 +84,20 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "ACCEPTANCE_FIELD",
     "ASSET_CLASS",
+    "EDGAR_ZONE",
     "FILINGS",
+    "FILINGS_INDEX",
     "PAGE_LIMIT",
+    "PERIODIC_FORMS",
     "VENDOR",
     "AcceptanceIndex",
-    "Filing",
     "accession_of",
     "day_end_ns",
     "day_start_ns",
     "decoded",
+    "edgar_instant_ns",
     "encoded",
     "explain",
-    "filing_of",
-    "filings",
-    "instant_ns",
     "listing",
     "offered",
     "parse_day",
@@ -118,49 +128,97 @@ cursor carries the rest.
 
 **A ceiling is a property of one endpoint, never of the adapter.** Each listing has its
 own, measured against the source and spelled beside the endpoint it belongs to: this is
-the number the splits, dividends and filings listings answer to, and the financials
-listing rejects it outright with a client error and carries a smaller one of its own. An
-endpoint added later measures its ceiling rather than inheriting a number that happened to
-work elsewhere."""
-
-TICKER_PARAM: Final = "ticker"
-"""The parameter that narrows a listing to one issuer, and the one `offered` drops."""
+the number the splits, dividends and acceptance listings answer to. An endpoint added
+later measures its ceiling rather than inheriting a number that happened to work
+elsewhere."""
 
 ACCEPTANCE_FIELD: Final = "acceptance_datetime"
-"""The row field carrying the instant the regulator accepted the document."""
+"""The acceptance index's field carrying the instant the regulator accepted the document,
+as the Eastern `YYYYMMDDHHMMSS` clock `edgar_instant_ns` reads."""
 
-FILED_FIELD: Final = "filing_date"
-PERIOD_FIELD: Final = "period_of_report_date"
-FORM_FIELD: Final = "type"
 ACCESSION_FIELD: Final = "accession_number"
 SOURCE_FIELD: Final = "source_url"
-TICKER_FIELD: Final = "ticker"
+FORM_FIELD: Final = "form_type"
+CIK_PARAM: Final = "cik"
+FILED_FIELD: Final = "filing_date"
 """The field names a filing row carries. Named here, once each, so that confirming the
 vendor's spelling against a live answer is one edit rather than a search."""
+
+EDGAR_ZONE: Final = "America/New_York"
+"""The zone the acceptance index's clock is stated in: the regulator's own, measured."""
+
+EDGAR_CLOCK: Final = "%Y%m%d%H%M%S"
+"""How the acceptance index spells an instant: fourteen digits and no zone."""
+
+PERIODIC_FORMS: Final = (
+    "10-K",
+    "10-K/A",
+    "10-KT",
+    "10-KT/A",
+    "10-Q",
+    "10-Q/A",
+    "10-QT",
+    "10-QT/A",
+    "20-F",
+    "20-F/A",
+    "40-F",
+    "40-F/A",
+)
+"""The forms a periodic financial statement arrives in: the annual and quarterly reports,
+their transition-period and amended forms, and the two annual reports of an issuer
+outside the United States. A day's other filings — an 8-K's press release, an insider's
+Form 4 — are not where a statement comes from, so they never stamp one."""
+
+INDEX_PAGE_LIMIT: Final = "1000"
+"""Rows per page of the filings index. It serves up to ten thousand; an issuer's periodic
+reports over sixteen years are seventy-odd rows, so the first page is the whole answer."""
 
 FILINGS: Final = Endpoint(
     dataset="filings",
     template="/v1/reference/sec/filings",
-    params=(
-        (TICKER_PARAM, "{ticker}"),
-        ("filing_date.gte", "{start}"),
-        ("filing_date.lte", "{end}"),
-        ("order", "asc"),
-        ("sort", "filing_date"),
-        ("limit", PAGE_LIMIT),
-    ),
+    params=(("order", "desc"), ("sort", "filing_date"), ("limit", PAGE_LIMIT)),
 )
-"""The filings listing: what an issuer filed over a window, and when each was accepted.
+"""The acceptance index: the one listing that holds a filing's acceptance instant.
 
-Asked over the *filing* date, because that is the date the vendor indexes a document by
-and the one date a statement that lacks its own acceptance instant still carries — which
-is what makes the join possible at all without guessing a window.
+It is asked for one document at a time, under its accession — `{template}/{accession}` —
+and only probed as a listing, market-wide and with no window, because as a listing it
+narrows by nothing a statement could name. Measured on 2026-10-15: it ignores `ticker` and
+`cik` alike (asked for AAPL's filings it serves Worthington Steel's and Crane's), it
+compares `filing_date` as a `YYYYMMDD` string so an ISO date matches nothing, it files a
+report accepted after the evening cut-off under the day it was accepted rather than the day
+the regulator dated it, and it does not hold every instant: it lists many reports with no
+acceptance field at all (AAPL's 10-K of 2012-10-31 and 10-Q of 2017-08-02 among them), and
+some not at all (MSFT's 10-Q of 2025-01-29 and NVDA's of 2024-11-20 answer 404 under their
+own accessions). The source serves no other copy of the instant: its file listing for a
+report holds the documents but not the submission header the regulator stamps it in.
 
 **The version prefix is measured, not shared.** This listing is served under `/v1` and
 answers a plain HTTP 404 — no vendor envelope, no entitlement sentence — under any other,
-which is neither a refusal nor an empty window and must not be read as one. The vendor
-versions its listings one at a time, so the prefix beside a neighbouring endpoint says
-nothing about this one."""
+which is neither a refusal nor an empty window and must not be read as one."""
+
+FILINGS_INDEX: Final = Endpoint(
+    dataset="filings_index",
+    template="/stocks/filings/vX/index",
+    params=(
+        ("form_type.any_of", ",".join(PERIODIC_FORMS)),
+        ("filing_date.gte", "{start}"),
+        ("filing_date.lte", "{end}"),
+        ("sort", "filing_date.asc"),
+        ("limit", INDEX_PAGE_LIMIT),
+    ),
+)
+"""The filings index: an issuer's periodic reports, by the day the regulator dated them.
+
+Asked by CIK — the issuer key a statement names, which outlives a change of ticker, and
+which is passed beside the endpoint rather than in it, so the probe and a refusal's account
+still name the instrument's own ticker — and by form, both of which it honours, measured:
+MSFT's periodic reports since 2009 are 72 rows, every one under MSFT's own CIK. It serves
+no acceptance instant, which is why the acceptance index is asked after it. A report
+accepted after the evening cut-off is listed under both the day it was accepted and the day
+it was dated (MSFT's 10-K of 2020-07-31), so the day a statement names finds it either way."""
+
+GONE: Final = 410
+"""The status a source answers on a path it has retired."""
 
 _ACCESSION: Final = re.compile(r"(\d{10})-?(\d{2})-?(\d{6})")
 """An accession number, dashed or not. The regulator's own form is `0000320193-20-000096`
@@ -198,24 +256,28 @@ def day_end_ns(day: date) -> int:
     return day_start_ns(day + timedelta(days=1)) - 1
 
 
-def instant_ns(value: object, field: str) -> int:
-    """A vendor instant as UTC nanoseconds, refused unless it names its own zone."""
+def edgar_instant_ns(value: object, field: str) -> int:
+    """An acceptance instant as the acceptance index serves it, in UTC nanoseconds.
+
+    The index spells it as fourteen digits with no zone, and the zone is the regulator's
+    Eastern time, measured (see the module's account). Anything else is refused rather than
+    read in some zone: a clock read in the wrong one moves a publication by hours, and half
+    the wrong zones move it earlier. Where the clock falls in the hour a daylight-saving
+    change repeats, the later of its two instants is taken — the bound that cannot leak;
+    the regulator accepts nothing at that hour, so it decides nothing in practice.
+    """
     text = str(value).strip()
     try:
-        moment = datetime.fromisoformat(text)
+        if len(text) != 14 or not text.isdigit():
+            raise ValueError(text)
+        clock = datetime.strptime(text, EDGAR_CLOCK)
     except ValueError:
         raise ValidationError(
-            f"massive: {field} is {text!r}, which is not an ISO-8601 instant",
+            f"massive: {field} is {text!r}, which is not the YYYYMMDDHHMMSS clock the "
+            "acceptance index was measured serving",
             remedy="the vendor changed this field's shape; the adapter must be updated to it",
         ) from None
-    if moment.tzinfo is None:
-        raise ValidationError(
-            f"massive: {field} is {text!r}, which names no time zone; reading a wall clock as "
-            "UTC moves a publication earlier by the offset, and earlier is the direction that "
-            "hands a strategy information it did not have",
-            remedy="the source must serve this instant with an offset for it to be usable",
-        )
-    return to_ns(moment)
+    return to_ns(clock.replace(tzinfo=ZoneInfo(EDGAR_ZONE), fold=1))
 
 
 def accession_of(row: Mapping[str, Any], *fields: str) -> str:
@@ -240,13 +302,15 @@ def accession_of(row: Mapping[str, Any], *fields: str) -> str:
 def offered(endpoint: Endpoint) -> Endpoint:
     """The same listing asked of the whole market: the request whose emptiness means something.
 
-    Dropping the ticker filter is what turns "no rows" from an ambiguity into evidence.
+    Dropping the issuer filter is what turns "no rows" from an ambiguity into evidence.
     Filtered to one issuer, an empty answer is either a plan that excludes the listing or
     an issuer that did nothing; unfiltered, an empty answer over a fortnight of the whole
-    market is the plan, because somebody splits, declares and files every week.
+    market is the plan, because somebody splits, declares and files every week. The filter
+    is whichever parameter carries the issuer — `ticker`, `tickers` or `cik`, as each
+    listing spells it — so it is found by what it carries rather than by its name.
     """
     return replace(
-        endpoint, params=tuple(item for item in endpoint.params if item[0] != TICKER_PARAM)
+        endpoint, params=tuple(item for item in endpoint.params if "{ticker}" not in item[1])
     )
 
 
@@ -297,10 +361,23 @@ def listing(
     of a range, and yielding what it got would record a short span as a complete one. So
     a refusal is explained by probing and a rejected shape is refused outright; only rows
     and a genuinely empty answer come back as data.
+
+    A path the source has retired is said to be one. It answers HTTP 410 (`GONE`), which is
+    a client error like a malformed request, and the remedy for a malformed request — check
+    the parameters — sends an operator after a mistake they did not make: measured, the
+    statements listing kanso first read was retired on 2026-10-09 and answered every request
+    that way.
     """
     path, params = endpoint.request(ticker, window)
     params.update(extra or {})
     for page in client.pages(path, params):
+        if page.status == GONE:
+            raise MalformedRequestError(
+                f"massive: the source has retired {path}, where the {endpoint.dataset} "
+                f"listing is asked (HTTP {page.status})",
+                remedy="upgrade to a kanso that asks the listing's successor: "
+                "`uv lock --upgrade-package kanso && uv sync`",
+            )
         if page.signal is Signal.BAD_REQUEST:
             raise MalformedRequestError(
                 f"massive: the {endpoint.dataset} listing rejected the request for {ticker} "
@@ -333,13 +410,19 @@ def encoded(spec: KansoModel) -> dict[str, str]:
 
 
 def decoded(params: Mapping[str, str], lists: Sequence[str]) -> dict[str, object]:
-    """The inverse of `encoded`, leaving every coercion to the model."""
+    """The inverse of `encoded`, leaving every coercion to the model.
+
+    An empty value is an absent one, a list's included: `encoded` writes a list left out
+    and a list of nothing alike, and only the first is one a spec can hold.
+    """
     out: dict[str, object] = {}
     for name, raw in params.items():
-        if name in lists:
+        if raw == "":
+            out[name] = None
+        elif name in lists:
             out[name] = [part for part in raw.split(",") if part]
         else:
-            out[name] = None if raw == "" else raw
+            out[name] = raw
     return out
 
 
@@ -354,119 +437,93 @@ def ticker_of(ref: DatasetRef, instruments: Sequence[str]) -> str:
     return symbol
 
 
-# --- the index itself -----------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class Filing:
-    """One document an issuer filed, and the instant it became public."""
-
-    accession: str
-    form: str
-    ticker: str
-    filed_on: date
-    accepted_ns: int
-    source_url: str
-    period_end: date | None = None
-
-    def payload(self) -> dict[str, object]:
-        """The filing as a plain record, for `--json` and for an operator to read."""
-        return {
-            "accession": self.accession,
-            "form": self.form,
-            "ticker": self.ticker,
-            "filed_on": self.filed_on.isoformat(),
-            "accepted_ns": self.accepted_ns,
-            "period_end": self.period_end.isoformat() if self.period_end else None,
-            "source_url": self.source_url,
-        }
-
-
-def filing_of(row: Mapping[str, Any]) -> Filing:
-    """One filing row as a record, or a refusal naming what the row lacks.
-
-    A row with no acceptance instant is refused rather than dated from its filing day:
-    the filing day is a day and the acceptance is an instant, and inventing the second
-    from the first is exactly the substitution this whole adapter refuses to make.
-    """
-    filed = parse_day(row.get(FILED_FIELD), f"filings.{FILED_FIELD}")
-    accepted = instant_ns(row.get(ACCEPTANCE_FIELD), f"filings.{ACCEPTANCE_FIELD}")
-    period = row.get(PERIOD_FIELD)
-    return Filing(
-        accession=accession_of(row),
-        form=str(row.get(FORM_FIELD, "")),
-        ticker=str(row.get(TICKER_FIELD, "")),
-        filed_on=filed,
-        accepted_ns=accepted,
-        source_url=str(row.get(SOURCE_FIELD, "")),
-        period_end=parse_day(period, f"filings.{PERIOD_FIELD}") if period is not None else None,
-    )
-
-
-def filings(
-    client: MassiveClient,
-    ticker: str,
-    window: tuple[date, date],
-    *,
-    endpoint: Endpoint = FILINGS,
-    as_of: date | None = None,
-) -> Iterator[Filing]:
-    """Every filing an issuer made over a window of filing days, in the order served."""
-    for row in listing(client, endpoint, ticker, window, as_of=as_of):
-        yield filing_of(row)
+# --- the two indexes, joined ------------------------------------------------------------
 
 
 class AcceptanceIndex:
-    """Acceptance instants by accession, fetched one filing day at a time.
+    """When an issuer's periodic reports were accepted, by the day the regulator dated them.
 
-    A statement that carries no acceptance instant of its own still carries the day it
-    was filed, so the index is asked for exactly that day and joined on the accession.
-    That is why nothing here guesses how long after a period end a filing lands: the day
-    is read off the row rather than assumed, and one request settles every statement
-    filed on it.
+    A statement names its issuer's CIK and the day of the filing that carried it, and
+    nothing else about that filing. So its instant is found in two steps, both the
+    source's: the filings index lists the issuer's periodic reports by the day they were
+    dated — one walk over the days the statements name, asked by CIK — and the acceptance
+    index is then asked for each report the day holds, under its accession. One request
+    settles every statement a report carried, because a report's instant is kept.
 
-    A row the index cannot read — no accession, no readable instant — is skipped rather
-    than refused, because this is a lookup: the caller that finds no answer raises the
-    failure, and it can name the accession while this cannot. A *refused* listing is the
-    other thing entirely and is not skipped: it leaves the index as the outcome a probe
-    established, so "the plan excludes the filings index" never arrives as "no match".
+    A day is stamped at the latest acceptance among its periodic reports: whichever of them
+    carried the statement, that bound is not early. A day that holds no periodic report, or
+    holds one the acceptance index has no instant for, has no stamp, and `of` says so with
+    `None` rather than reaching for the day itself. Measured on 2026-10-15, the acceptance
+    index held an instant for 56 of the 65 days AAPL's quarterly statements since 2009 name
+    and 51 of NVDA's 66; a foreign issuer's 20-F and 40-F are not held at all.
+
+    Each row is checked for the CIK and the form it was asked for, though the filings index
+    was measured honouring both: the acceptance index ignores every issuer filter it is
+    given, and a filter some later version ignores should cost a stamp, never a wrong one.
+    A *refused* index is not a missing stamp: it leaves as the outcome a probe establishes,
+    so "the plan excludes the filings index" never arrives as "no instant".
     """
 
     def __init__(
         self,
         client: MassiveClient,
         ticker: str,
+        cik: str,
+        filed: Collection[date],
         *,
-        endpoint: Endpoint = FILINGS,
         as_of: date | None = None,
     ) -> None:
         self._client = client
         self._ticker = ticker
-        self._endpoint = endpoint
+        self._cik = cik
+        self._window = (min(filed), max(filed)) if filed else None
         self._as_of = as_of
-        self._days: dict[date, dict[str, int]] = {}
+        self._reports: dict[date, tuple[str, ...]] | None = None
+        self._accepted: dict[str, int | None] = {}
 
-    def of(self, accession: str, filed_on: date) -> int | None:
-        """The instant that accession was accepted, or `None` when the day holds no such row."""
-        if not accession:
+    def of(self, filed_on: date) -> tuple[int, str] | None:
+        """The latest acceptance among the periodic reports dated `filed_on`, and its
+        accession, or `None` when the day holds none or holds one with no instant."""
+        reports = self._listed().get(filed_on, ())
+        found = [(self._instant(accession), accession) for accession in reports]
+        stamped = [(instant, accession) for instant, accession in found if instant is not None]
+        if not found or len(stamped) < len(found):
             return None
-        return self._day(filed_on).get(accession)
+        return max(stamped)
 
-    def days(self) -> tuple[date, ...]:
-        """The filing days this index has fetched, in the order it fetched them."""
-        return tuple(self._days)
+    def _listed(self) -> dict[date, tuple[str, ...]]:
+        if self._reports is not None:
+            return self._reports
+        days: dict[date, list[str]] = {}
+        if self._window is not None:
+            for row in listing(
+                self._client,
+                FILINGS_INDEX,
+                self._ticker,
+                self._window,
+                extra={CIK_PARAM: self._cik},
+                as_of=self._as_of,
+            ):
+                accession = accession_of(row)
+                if not accession or row.get(CIK_PARAM) != self._cik:
+                    continue
+                if str(row.get(FORM_FIELD, "")) not in PERIODIC_FORMS:
+                    continue
+                held = days.setdefault(
+                    parse_day(row.get(FILED_FIELD), "filings_index.filing_date"), []
+                )
+                if accession not in held:
+                    held.append(accession)
+        self._reports = {day: tuple(found) for day, found in days.items()}
+        return self._reports
 
-    def _day(self, filed_on: date) -> dict[str, int]:
-        held = self._days.get(filed_on)
-        if held is not None:
-            return held
-        found: dict[str, int] = {}
-        for row in listing(
-            self._client, self._endpoint, self._ticker, (filed_on, filed_on), as_of=self._as_of
-        ):
-            accession = accession_of(row)
-            moment = row.get(ACCEPTANCE_FIELD)
-            if accession and moment is not None:
-                found[accession] = instant_ns(moment, f"filings.{ACCEPTANCE_FIELD}")
-        self._days[filed_on] = found
+    def _instant(self, accession: str) -> int | None:
+        if accession in self._accepted:
+            return self._accepted[accession]
+        page = next(self._client.pages(f"{FILINGS.template}/{accession}"))
+        if page.signal is Signal.REFUSED:
+            explain(self._client, FILINGS, self._ticker, as_of=self._as_of)
+        moment = page.rows[0].get(ACCEPTANCE_FIELD) if page.rows else None
+        found = None if moment is None else edgar_instant_ns(moment, f"filings.{ACCEPTANCE_FIELD}")
+        self._accepted[accession] = found
         return found

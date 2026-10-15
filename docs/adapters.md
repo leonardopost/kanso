@@ -321,12 +321,41 @@ and that has three visible consequences here.
   covered from its first declaration to its last, and an issuer that declared none over
   the range is refused as empty — measured, AAPL asked for 2006-07-03..2026-09-05 is
   covered 2012-10-25..2026-07-30, and AMZN is refused. `docs/backlog.md` row 92.
-- **Financials** are `delayed` under the `fundamental` publication rule, stamped from the
-  source's own acceptance instant or from the filings index joined on the accession
-  number — the rule derives no lag of its own and requires the source to state the instant.
-  A row carrying neither is refused, and so is a range old enough that the source stamps no
-  acceptance instants at all. Being refused is the point: the alternative is a statement
-  that appears to have been public before it was filed.
+- **Financials** are `delayed` under the `fundamental` publication rule, which derives no
+  lag of its own and requires the source to state the instant. They come from the three
+  statements listings that replaced `/vX/reference/financials` when the source retired it
+  on 2026-10-09 (it now answers HTTP 410, and kanso says so rather than calling the request
+  malformed). A spec names `timeframe` — `quarterly` (the default), `annual` or `ttm` — and
+  may name `statements`, any of `income_statement`, `balance_sheet` and
+  `cash_flow_statement`; left out, it is every statement the grain has, and a balance
+  sheet has no `ttm`, so asking for one is refused. Each point is one statement for one
+  period: `items` holds every figure the row carries under `<statement>.<field>`
+  (`income_statement.revenue`), and `units` is empty because the source states none. A
+  concept a filing did not report separately is served as `0.0`.
+
+  Three measured facts decide when a point becomes public, and the second is the one to
+  plan around:
+
+  - The source serves each period **once, as its most recent filing stated it**, and names
+    only that filing's day. A restatement has replaced the original, which is not served.
+    So a period is stamped at the acceptance of that most recent filing: on 2026-10-15 the
+    median AAPL quarter's income statement named a filing 398 days after the quarter ended,
+    because the next year's 10-Q repeats a quarter's income and cash flow, and its balance
+    sheet one 34 days after. A later load stamps a period later, as further filings repeat
+    it.
+  - The instant comes from the source's two filings indexes: the filings index lists the
+    issuer's periodic reports on that day, and the acceptance index holds each report's
+    acceptance, read as the regulator's Eastern clock it was measured serving. A row whose
+    report the acceptance index holds no instant for is **dropped**, never stamped from a
+    date. Measured over quarterly statements since 2009, 173 of AAPL's 200 rows are
+    stamped, 171 of MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207 and 165 of BRK.B's 198.
+  - An issuer outside the United States files 20-F and 40-F reports, which the acceptance
+    index does not hold, so its statements cannot be stamped; a series none of whose rows
+    can be stamped is refused, saying so.
+
+  Being refused or dropped is the point: the alternative is a statement that appears to
+  have been public before it was filed. `docs/backlog.md` row 170 has what fuller coverage
+  would need.
 
 ### Configuration
 

@@ -1,0 +1,15 @@
+{
+ "status": "OK",
+ "request_id": "77a2b6267278449fbcfe3b282cc092a7",
+ "results": [
+  {
+   "cik": "0000790381",
+   "issuer_name": "MOTORS MECHANICAL REINSURANCE CO LTD",
+   "form_type": "10-Q",
+   "filing_date": "1993-05-17",
+   "filing_url": "https://www.sec.gov/Archives/edgar/data/790381/0000790381-93-000008.txt",
+   "accession_number": "0000790381-93-000008"
+  }
+ ],
+ "next_url": "https://api.massive.com/stocks/filings/vX/index?cursor=AQwRDA8EMTAtSw8GMTAtSy9BDwUxMC1LVA8HMTAtS1QvQQ8EMTAtUQ8GMTAtUS9BDwUxMC1RVA8HMTAtUVQvQQ8EMjAtRg8GMjAtRi9BDwQ0MC1GDwY0MC1GL0ECAwABBQABAfvoAwACAQn79FMBDxQwMDAwOTMxNzYzLTk5LTAwMTg2Mg=="
+}

@@ -1,4 +1,4 @@
-"""Financial statements, stamped at the instant the filing was accepted.
+"""Financial statements, stamped at the instant the filing carrying them was accepted.
 
 A statement is the one data class where the two engine timestamps are furthest apart and
 where confusing them is most expensive. `ts_event` is the end of the period the figures
@@ -7,31 +7,45 @@ no fixed offset. A backtest stamped at the period end would buy on a quarter's r
 the day the quarter closed and would look extraordinary for a reason that has nothing to
 do with the strategy.
 
-**The acceptance instant comes from the source or the point is refused.** kanso's
-publication rule for this data class derives no lag and says so: the source must supply
-the filing instant. So there are exactly two admissible origins, and both are the
-source's own — the row's acceptance field, and the filings index joined on the accession
-the row names, asked for the row's own filing day. A row with neither is refused. It is
-not stamped from the period end, not from the filing date, and not from the moment of the
-fetch: each of those would be an availability kanso invented, and the whole point of this
-module is that it does not.
+**The source serves each period once, as its latest filing stated it.** Three listings —
+income statements, balance sheets, cash flow statements — answer one row per period, and
+the row's `filing_date` is "the most recent SEC filing that included this period's data"
+in the source's own words: a figure restated by a later filing has replaced the original,
+and the original and the day it was first public are not served at all. So a period is
+stamped at the acceptance of that most recent filing, which is the one instant at which
+the figures served were certainly public; stamping them at the first filing instead would
+hand a strategy a restatement before it was made. It is late on purpose, and measured
+late: a quarter's income and cash flow figures are carried again by the next year's
+quarterly report, so on 2026-10-15 the median AAPL quarter's income statement named a
+filing 398 days after the quarter ended (its balance sheet, which the next year's report
+does not repeat, one 34 days after); the latest quarter is stamped at its own report until
+the next one repeats it, so a later load stamps it later.
 
-**Vendor-computed ratios are not read.** Only the statement sections are taken from a
-row; anything else it carries is ignored on purpose. A served ratio has no derivable
-publication instant of its own — it is computed from figures of different vintages and is
-typically served only as a current snapshot — so it cannot be evaluated point in time.
-kanso computes ratios in a strategy from the figures below and the prices beside them,
-where the availability of every input is known.
+**The acceptance instant comes from the source or the point is not made.** The rows carry
+no instant and no accession, only the CIK and that filing day, so the instant is the
+source's filings indexes joined on both (`filings.AcceptanceIndex`): the latest acceptance
+among the periodic reports the issuer filed that day. A row the indexes cannot stamp is
+dropped, never stamped from its filing day, its period end or the moment of the fetch, and
+a series none of whose rows can be stamped is refused, naming why. Measured on 2026-10-15
+over quarterly statements since 2009, the indexes stamp 173 of AAPL's 200 rows, 171 of
+MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207 and 165 of BRK.B's 198 — the rest name a
+report the source lists without its instant — and none of a foreign issuer's, whose 20-F
+and 40-F reports the acceptance index does not hold.
 
-**A figure keeps its unit.** `items` holds the numbers and `units` holds what each is
-counted in, under the same key, because revenue in dollars over shares outstanding is a
-ratio and revenue in dollars over shares in thousands is a wrong answer. Keys are
-`<statement>.<tag>`, the source's own tags under the section they came from.
+**Vendor-computed ratios are not read.** The statements listings serve figures, not
+ratios; the source's ratios listing is not asked. A ratio has no publication instant of
+its own — it is computed from figures of different vintages and prices — so it cannot be
+evaluated point in time. kanso computes ratios in a strategy from the figures below and
+the prices beside them, where the availability of every input is known.
 
-**Restatements are further points, never overwrites.** A revised statement arrives as
-another point for the same period with a later acceptance instant, so "the figure known
-at time t" is the latest point at or before t — which is exactly how the engine delivers
-them, since it orders by `ts_init`.
+**A figure is what the source served, under its own name.** `items` maps
+`<statement>.<field>` — `income_statement.revenue`, `balance_sheet.total_assets` — to every
+number a row carries, the fiscal year and quarter aside. The source states no unit for any
+of them, so `units` is empty rather than filled in: its documentation calls each one a
+number, the per-share and share-count fields say so by name, and the rest are amounts in a
+currency it does not name (USD for every domestic issuer measured). It spells a concept a
+filing did not report separately as `0.0` — AAPL's quarterly `interest_expense`, which its
+filings fold into other income — so a zero is the source's figure and not proof of none.
 
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
@@ -60,14 +74,13 @@ from pydantic import Field, model_validator
 from kanso.data.adapters.massive.client import MassiveClient
 from kanso.data.adapters.massive.entitlement import Endpoint, Entitlements
 from kanso.data.adapters.massive.filings import (
-    ACCEPTANCE_FIELD,
+    FILINGS,
+    FILINGS_INDEX,
     VENDOR,
     AcceptanceIndex,
-    accession_of,
     day_end_ns,
     decoded,
     encoded,
-    instant_ns,
     listing,
     parse_day,
     require,
@@ -81,12 +94,16 @@ from kanso.errors import ValidationError
 from kanso.schemas.base import KansoModel, NonEmpty
 
 __all__ = [
-    "ACCEPTANCE",
-    "FINANCIALS",
+    "BALANCE_SHEETS",
+    "CASH_FLOW_STATEMENTS",
+    "DATASET",
+    "ENDPOINTS",
     "FINANCIALS_PAGE_LIMIT",
+    "INCOME_STATEMENTS",
     "INDEXED",
     "PUBLICATION_RULE",
     "STATEMENTS",
+    "TIMEFRAMES",
     "TYPE_ID",
     "FinancialStatement",
     "FinancialsLoader",
@@ -100,77 +117,101 @@ TYPE_ID: Final = "financial_statement"
 PUBLICATION_RULE: Final = "fundamental"
 """The data class whose publication rule these points are stamped under. It derives no
 lag and requires the source to supply the filing instant, which is what this module does
-and why a row without one is refused."""
+and why a row without one is not made into a point."""
 
-STATEMENTS: Final = (
+DATASET: Final = "financials"
+"""What the three statements listings are, together: one product the plan includes or
+does not, probed once, and the vendor dataset every financials ref records."""
+
+Statement = Literal["income_statement", "balance_sheet", "cash_flow_statement"]
+Timeframe = Literal["annual", "quarterly", "ttm"]
+
+STATEMENTS: Final[tuple[Statement, ...]] = (
     "income_statement",
     "balance_sheet",
     "cash_flow_statement",
-    "comprehensive_income",
 )
-"""The sections read out of a row. Anything else the source carries beside them is left
-where it is: a derived quantity has no publication instant of its own."""
+"""The statements the source serves, each from its own listing. The comprehensive-income
+section the retired listing carried has no successor, so it is no longer among them."""
 
-FIGURES_FIELD: Final = "financials"
-PERIOD_FIELD: Final = "period_of_report_date"
+TIMEFRAMES: Final[dict[Timeframe, str]] = {
+    "quarterly": "quarterly",
+    "annual": "annual",
+    "ttm": "trailing_twelve_months",
+}
+"""A spec's reporting grain as the source spells it."""
+
+FISCAL_PERIODS: Final[dict[Timeframe, str]] = {"annual": "FY", "ttm": "TTM"}
+"""How a point names its fiscal period where the grain is not a quarter. A quarterly
+point is `Q` and the quarter the source serves; these are the spellings the retired
+listing used, kept so a strategy that read them reads them still."""
+
+UNSTAMPED: Final[dict[Timeframe, frozenset[Statement]]] = {"ttm": frozenset({"balance_sheet"})}
+"""The statements a grain has none of. A balance sheet is a balance at an instant, so it
+has no trailing twelve months: measured, the source answers that request with no rows."""
+
+PERIOD_FIELD: Final = "period_end"
 FILED_FIELD: Final = "filing_date"
-TIMEFRAME_FIELD: Final = "timeframe"
-FISCAL_PERIOD_FIELD: Final = "fiscal_period"
+CIK_FIELD: Final = "cik"
 FISCAL_YEAR_FIELD: Final = "fiscal_year"
-SOURCE_FILING_FIELD: Final = "source_filing_url"
-VALUE_KEY: Final = "value"
-UNIT_KEY: Final = "unit"
-"""The row fields this listing carries. Named once each so that confirming the vendor's
-spelling against a live answer is one edit rather than a search."""
+FISCAL_QUARTER_FIELD: Final = "fiscal_quarter"
+"""The row fields this module reads by name. Named once each so that confirming the
+vendor's spelling against a live answer is one edit rather than a search."""
 
-ACCEPTANCE: Final = "acceptance"
+IDENTITY: Final = frozenset({FISCAL_YEAR_FIELD, FISCAL_QUARTER_FIELD})
+"""The numbers a row carries that are not figures: they say which period it is."""
+
 INDEXED: Final = "filings_index"
-"""Where a point's availability came from: the row's own acceptance instant, or the
-filings index joined on the accession. Both are the source's; there is no third."""
+"""Where every point's availability came from: the filings indexes, joined on the
+issuer and the day of the filing that carried the period."""
 
-FINANCIALS_PAGE_LIMIT: Final = "100"
-"""Rows per page of the financials listing, and this one endpoint's own ceiling.
+FINANCIALS_PAGE_LIMIT: Final = "1000"
+"""Rows per page of each statements listing. The source documents fifty thousand and
+answered every page asked of it up to that, measured; one issuer's history at one grain is
+under seventy rows, so the first page is the whole answer and the cursor is a formality."""
 
-Measured, not assumed: the listing serves a hundred rows a page and rejects a request for
-a thousand outright, with a client error rather than an empty page — so a limit borrowed
-from a neighbouring listing does not fetch fewer statements, it fetches none. The number
-therefore lives here, beside the endpoint that has it, rather than in a shared page size
-the next endpoint added would inherit without measuring its own.
 
-A smaller page is not a smaller answer: the cursor carries the rest, and a walk over it
-returns every row a wider page would have. What the ceiling costs is requests, not data.
-"""
+def _statements(path: str) -> Endpoint:
+    return Endpoint(
+        dataset=DATASET,
+        template=path,
+        params=(
+            ("tickers", "{ticker}"),
+            (PERIOD_FIELD + ".gte", "{start}"),
+            (PERIOD_FIELD + ".lte", "{end}"),
+            ("sort", PERIOD_FIELD + ".asc"),
+            ("limit", FINANCIALS_PAGE_LIMIT),
+        ),
+    )
 
-FINANCIALS: Final = Endpoint(
-    dataset="financials",
-    template="/vX/reference/financials",
-    params=(
-        ("ticker", "{ticker}"),
-        (PERIOD_FIELD + ".gte", "{start}"),
-        (PERIOD_FIELD + ".lte", "{end}"),
-        ("order", "asc"),
-        ("sort", PERIOD_FIELD),
-        ("limit", FINANCIALS_PAGE_LIMIT),
-    ),
-)
-"""Periodic statements, asked over the period they report on — which is the date these
-points' `ts_event` and therefore the dataset's span are stated in.
 
-Ordering and sorting are the source's own and are served as asked; only the page size is
-this listing's to cap, which `FINANCIALS_PAGE_LIMIT` records. The version prefix is this
-listing's own too — the source versions each listing on its own schedule, so a neighbour
-served under a different one is no evidence about this path either way."""
+INCOME_STATEMENTS: Final = _statements("/stocks/financials/v1/income-statements")
+BALANCE_SHEETS: Final = _statements("/stocks/financials/v1/balance-sheets")
+CASH_FLOW_STATEMENTS: Final = _statements("/stocks/financials/v1/cash-flow-statements")
+"""The three statements listings, asked over the period they report on — which is the date
+these points' `ts_event` and therefore the dataset's span are stated in.
+
+They replaced `/vX/reference/financials`, which the source deprecated with a sunset of
+2026-10-09 and now answers with HTTP 410. Each narrows to an issuer by `tickers`, matching
+a row whose ticker list holds the one asked for, and each answers every period of that
+issuer once."""
+
+ENDPOINTS: Final[dict[Statement, Endpoint]] = {
+    "income_statement": INCOME_STATEMENTS,
+    "balance_sheet": BALANCE_SHEETS,
+    "cash_flow_statement": CASH_FLOW_STATEMENTS,
+}
 
 
 @customdataclass
 class FinancialStatement(Data):  # type: ignore[misc]
-    """One issuer's figures for one reporting period, as one filing stated them.
+    """One issuer's figures for one statement and reporting period, as a filing stated them.
 
     `ts_event` is the last instant of the period the figures cover and `ts_init` the
-    instant the filing was accepted. `items` maps `<statement>.<tag>` to a number and
-    `units` maps the same keys to what each number counts; `accession` names the document
-    the figures came from and `stamped_from` says which of the two admissible origins the
-    availability instant was read from.
+    instant the filing was accepted. `items` maps `<statement>.<field>` to a number and
+    `units` maps the same keys to what each counts, where the source states it; `accession`
+    names the filing whose acceptance stamped the point and `stamped_from` where that
+    instant was read from.
     """
 
     instrument_id: InstrumentId
@@ -184,14 +225,20 @@ class FinancialStatement(Data):  # type: ignore[misc]
 
 
 class FinancialsSpec(KansoModel):
-    """A financials spec: which issuers, which reporting grain, over which period ends."""
+    """A financials spec: which issuers, which statements, which grain, over which period ends.
+
+    `statements` names the listings asked; left out, it is every statement the grain has —
+    all three quarterly or annually, and the income and cash flow statements for a trailing
+    twelve months, since a balance sheet has none.
+    """
 
     loader: Literal["massive_financials"] = "massive_financials"
     instruments: list[NonEmpty] = Field(min_length=1)
     venue: NonEmpty
     start: date
     end: date
-    timeframe: Literal["annual", "quarterly", "ttm"] = "quarterly"
+    timeframe: Timeframe = "quarterly"
+    statements: list[Statement] | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _validate(self) -> "FinancialsSpec":
@@ -199,53 +246,71 @@ class FinancialsSpec(KansoModel):
             raise ValueError(f"end: {self.end} is before start {self.start}")
         if len(set(self.instruments)) != len(self.instruments):
             raise ValueError("instruments: repeats a ticker")
+        if self.statements is not None:
+            if len(set(self.statements)) != len(self.statements):
+                raise ValueError("statements: repeats a statement")
+            none = sorted(set(self.statements) & UNSTAMPED.get(self.timeframe, frozenset()))
+            if none:
+                raise ValueError(
+                    f"statements: {', '.join(none)} has no {self.timeframe} figures — a "
+                    "balance sheet is a balance at an instant, not a sum over a year; ask it "
+                    "quarterly or annually"
+                )
         return self
 
     @property
     def span(self) -> tuple[date, date]:
         return (self.start, self.end)
 
+    @property
+    def asked(self) -> tuple[Statement, ...]:
+        """The statements this spec asks for, in the source's order."""
+        if self.statements is not None:
+            return tuple(name for name in STATEMENTS if name in self.statements)
+        absent = UNSTAMPED.get(self.timeframe, frozenset())
+        return tuple(name for name in STATEMENTS if name not in absent)
+
 
 def statement_of(
     row: Mapping[str, Any],
+    statement: Statement,
     spec: FinancialsSpec,
     instrument: InstrumentId,
-    index: AcceptanceIndex,
+    stamp: tuple[int, str],
 ) -> FinancialStatement:
-    """One row as a statement, or a refusal naming what stopped it becoming one.
+    """One row of one statement as a point, stamped at `stamp`, or a refusal naming why not.
 
-    Every refusal here is a refusal to invent an availability. A row is a statement when
-    the source says which period it covers, when the filing carrying it was accepted, and
-    what the figures are; a row missing any of the three is not one.
+    `stamp` is the acceptance instant and the accession of the filing the row names. What
+    is refused here is a row that contradicts itself — a filing accepted before the period
+    it reports on ended, or a statement with no figures — which no join could repair.
     """
-    period = parse_day(row.get(PERIOD_FIELD), f"financials.{PERIOD_FIELD}")
+    period = parse_day(row.get(PERIOD_FIELD), f"{statement}.{PERIOD_FIELD}")
     ts_event = day_end_ns(period)
-    accession = accession_of(row, SOURCE_FILING_FIELD)
-    accepted, stamped_from = _accepted(row, accession, index)
+    accepted, accession = stamp
     if accepted <= ts_event:
         raise ValidationError(
-            f"massive: a statement for the period ending {period} was accepted at or before "
+            f"massive: a {statement} for the period ending {period} was accepted at or before "
             "the end of that period, which is not a publication instant",
-            remedy="the vendor's acceptance field is wrong for this row; report it upstream",
+            remedy="the source's filings indexes disagree with its statements; report it upstream",
         )
-    items, units = _figures(row)
+    items = _figures(row, statement)
     if not items:
         raise ValidationError(
-            f"massive: the statement for the period ending {period} carries no figures under "
-            f"{', '.join(STATEMENTS)}",
-            remedy="narrow the range to periods the source holds statements for",
+            f"massive: the {statement} for the period ending {period} carries no figures",
+            remedy="the vendor changed this listing's shape; the adapter must be updated to it",
         )
+    quarter = row.get(FISCAL_QUARTER_FIELD)
     return FinancialStatement(
         ts_event=ts_event,
         ts_init=accepted,
         instrument_id=instrument,
-        timeframe=str(row.get(TIMEFRAME_FIELD, spec.timeframe)),
-        fiscal_period=str(row.get(FISCAL_PERIOD_FIELD, "")),
+        timeframe=spec.timeframe,
+        fiscal_period=FISCAL_PERIODS.get(spec.timeframe, f"Q{quarter}" if quarter else ""),
         fiscal_year=str(row.get(FISCAL_YEAR_FIELD, "")),
         accession=accession,
-        stamped_from=stamped_from,
+        stamped_from=INDEXED,
         items=items,
-        units=units,
+        units={},
     )
 
 
@@ -264,12 +329,19 @@ class FinancialsLoader:
     as_of: date | None = None
 
     def discover(self, spec: Mapping[str, object]) -> list[DatasetRef]:
-        """One dataset per issuer, after establishing that the plan includes the listing."""
+        """One dataset per issuer, once the plan is shown to include what stamping needs.
+
+        That is the statements and both filings indexes: a statement with no instant is
+        not a point, so a plan without either index could serve rows and stamp none.
+        """
         parsed = FinancialsSpec.model_validate(dict(spec))
         entitlements = Entitlements(self.client, as_of=self.as_of)
         found: list[DatasetRef] = []
         for ticker in parsed.instruments:
-            require(entitlements, FINANCIALS, ticker)
+            for name in parsed.asked:
+                require(entitlements, ENDPOINTS[name], ticker)
+            require(entitlements, FILINGS_INDEX, ticker)
+            require(entitlements, FILINGS, ticker)
             instrument = str(instrument_id(ticker, parsed.venue))
             found.append(
                 DatasetRef(
@@ -282,7 +354,7 @@ class FinancialsLoader:
                     publication="delayed",
                     publication_rule=PUBLICATION_RULE,
                     vendor=VENDOR,
-                    vendor_dataset=FINANCIALS.dataset,
+                    vendor_dataset=DATASET,
                     request_params=encoded(parsed),
                 )
             )
@@ -298,7 +370,7 @@ class FinancialsLoader:
         return arrow_batches(self.load(ref, window), resolve_type(ref.type))
 
     def manifest(self, ref: DatasetRef) -> Manifest:
-        """What the listing actually served over the dataset's whole span."""
+        """What the listings actually served, and could be stamped, over the whole span."""
         return manifest_for(ref, self.id, self.load(ref, ref.span))
 
     def _points(
@@ -306,75 +378,75 @@ class FinancialsLoader:
     ) -> Iterator[object]:
         ticker = ticker_of(ref, spec.instruments)
         instrument = instrument_id(ticker, spec.venue)
-        index = AcceptanceIndex(self.client, ticker, as_of=self.as_of)
+        served: list[tuple[Statement, Mapping[str, Any]]] = [
+            (name, row)
+            for name in spec.asked
+            for row in listing(
+                self.client,
+                ENDPOINTS[name],
+                ticker,
+                window,
+                extra={"timeframe": TIMEFRAMES[spec.timeframe]},
+                as_of=self.as_of,
+            )
+        ]
+        indexes = _indexes(self.client, ticker, served, self.as_of)
         found: list[FinancialStatement] = []
-        for row in listing(
-            self.client,
-            FINANCIALS,
-            ticker,
-            window,
-            extra={TIMEFRAME_FIELD: spec.timeframe},
-            as_of=self.as_of,
-        ):
-            statement = statement_of(row, spec, instrument, index)
+        for name, row in served:
+            index = indexes.get(str(row.get(CIK_FIELD, "")))
+            filed = row.get(FILED_FIELD)
+            stamp = (
+                index.of(parse_day(filed, f"{name}.{FILED_FIELD}"))
+                if index is not None and filed is not None
+                else None
+            )
+            if stamp is None:
+                continue
+            statement = statement_of(row, name, spec, instrument, stamp)
             if window[0] <= utc_day(statement.ts_event) <= window[1]:
                 found.append(statement)
+        if served and not found:
+            raise ValidationError(
+                f"massive: {ticker}'s statements over {window[0]}..{window[1]} name "
+                f"{len(served)} rows and the source's filings indexes hold an acceptance "
+                "instant for the filing behind none of them",
+                remedy=(
+                    "kanso stamps a statement only at an instant the source serves; an issuer "
+                    "outside the United States files 20-F and 40-F reports the acceptance "
+                    "index does not hold, so its statements cannot be loaded from this source"
+                ),
+            )
         yield from sorted(found, key=lambda point: (point.ts_init, point.ts_event))
 
 
-def _accepted(row: Mapping[str, Any], accession: str, index: AcceptanceIndex) -> tuple[int, str]:
-    """The instant this filing was accepted, and which of the two origins it came from."""
-    served = row.get(ACCEPTANCE_FIELD)
-    if served is not None:
-        return instant_ns(served, f"financials.{ACCEPTANCE_FIELD}"), ACCEPTANCE
-    filed = row.get(FILED_FIELD)
-    if filed is None:
-        raise ValidationError(
-            f"massive: a statement for the period ending {row.get(PERIOD_FIELD)!r} carries "
-            f"neither {ACCEPTANCE_FIELD} nor {FILED_FIELD}, so nothing says when it became "
-            "public and there is no day to ask the filings index about",
-            remedy=(
-                "narrow the range to periods the source stamps; a statement dated from its "
-                "period end would hand a strategy figures weeks before they existed"
-            ),
-        )
-    joined = index.of(accession, parse_day(filed, f"financials.{FILED_FIELD}"))
-    if joined is None:
-        raise ValidationError(
-            f"massive: a statement for the period ending {row.get(PERIOD_FIELD)!r} carries no "
-            f"{ACCEPTANCE_FIELD}, and the filings index holds no acceptance instant for "
-            f"accession {accession or '(none named)'} on {filed}",
-            remedy=(
-                "narrow the range to periods the source stamps; a statement dated from its "
-                "filing day would claim an availability the source did not serve"
-            ),
-        )
-    return joined, INDEXED
+def _indexes(
+    client: MassiveClient,
+    ticker: str,
+    served: list[tuple[Statement, Mapping[str, Any]]],
+    as_of: date | None,
+) -> dict[str, AcceptanceIndex]:
+    """One acceptance index per issuer key the rows name, over the filing days they name.
+
+    One issuer has one CIK, measured; a ticker the source has carried for two issuers would
+    name two, and each row is then stamped by its own issuer's filings.
+    """
+    days: dict[str, set[date]] = {}
+    for name, row in served:
+        cik, filed = row.get(CIK_FIELD), row.get(FILED_FIELD)
+        if cik and filed is not None:
+            days.setdefault(str(cik), set()).add(parse_day(filed, f"{name}.{FILED_FIELD}"))
+    return {
+        cik: AcceptanceIndex(client, ticker, cik, filed, as_of=as_of) for cik, filed in days.items()
+    }
 
 
-def _figures(row: Mapping[str, Any]) -> tuple[dict[str, float], dict[str, str]]:
-    """The numbers and their units, section by named section and nothing else."""
-    figures = row.get(FIGURES_FIELD)
-    items: dict[str, float] = {}
-    units: dict[str, str] = {}
-    if not isinstance(figures, Mapping):
-        return items, units
-    for statement in STATEMENTS:
-        section = figures.get(statement)
-        if not isinstance(section, Mapping):
-            continue
-        for tag, figure in section.items():
-            if not isinstance(figure, Mapping):
-                continue
-            value = figure.get(VALUE_KEY)
-            if isinstance(value, bool) or not isinstance(value, int | float):
-                continue
-            key = f"{statement}.{tag}"
-            items[key] = float(value)
-            unit = figure.get(UNIT_KEY)
-            if isinstance(unit, str) and unit:
-                units[key] = unit
-    return items, units
+def _figures(row: Mapping[str, Any], statement: Statement) -> dict[str, float]:
+    """Every number a row carries, under its statement, the fiscal year and quarter aside."""
+    return {
+        f"{statement}.{field}": float(value)
+        for field, value in row.items()
+        if field not in IDENTITY and not isinstance(value, bool) and isinstance(value, int | float)
+    }
 
 
 def _spec_of(ref: DatasetRef) -> FinancialsSpec:
@@ -385,7 +457,7 @@ def _spec_of(ref: DatasetRef) -> FinancialsSpec:
             f"dataset {ref.dataset_id!r} carries no financials spec; refs come from "
             "FinancialsLoader.discover and are not built by hand"
         )
-    return FinancialsSpec.model_validate(decoded(params, ("instruments",)))
+    return FinancialsSpec.model_validate(decoded(params, ("instruments", "statements")))
 
 
 register_custom_type(TYPE_ID, FinancialStatement)

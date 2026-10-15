@@ -1,0 +1,45 @@
+{
+ "status": "OK",
+ "request_id": "34fb8c72e88949dba9da18387fc3197b",
+ "results": [
+  {
+   "tickers": [
+    "NVDA"
+   ],
+   "cik": "0001045810",
+   "period_end": "2009-04-26",
+   "filing_date": "2010-05-21",
+   "fiscal_quarter": 1,
+   "fiscal_year": 2010,
+   "timeframe": "quarterly",
+   "revenue": 664231000.0,
+   "cost_of_revenue": 474535000.0,
+   "gross_profit": 189696000.0,
+   "selling_general_administrative": 118864000.0,
+   "research_development": 301797000.0,
+   "depreciation_depletion_amortization": 0.0,
+   "other_operating_expenses": 0.0,
+   "total_operating_expenses": 420661000.0,
+   "operating_income": -230965000.0,
+   "interest_expense": 0.0,
+   "interest_income": 6124000.0,
+   "other_income_expense": 20000.0,
+   "total_other_income_expense": 6144000.0,
+   "income_before_income_taxes": -224821000.0,
+   "income_taxes": -23483000.0,
+   "discontinued_operations": 0.0,
+   "equity_in_affiliates": 0.0,
+   "extraordinary_items": 0.0,
+   "consolidated_net_income_loss": -201338000.0,
+   "noncontrolling_interest": 0.0,
+   "preferred_stock_dividends_declared": 0.0,
+   "net_income_loss_attributable_common_shareholders": -201338000.0,
+   "basic_earnings_per_share": -0.01,
+   "diluted_earnings_per_share": -0.01,
+   "basic_shares_outstanding": 21692280000.0,
+   "diluted_shares_outstanding": 21692280000.0,
+   "ebitda": -180307000.0
+  }
+ ],
+ "next_url": "https://api.massive.com/stocks/financials/v1/income-statements?cursor=AAICAAEBAAEB--gDAAIBCfvWcgEPCjAwMDEwMDI2Mzg="
+}

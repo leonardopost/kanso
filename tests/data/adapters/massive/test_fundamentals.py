@@ -1,4 +1,4 @@
-"""Corporate actions, financial statements and the filings index that stamps them.
+"""Corporate actions, financial statements and the filings indexes that stamp them.
 
 Three properties are what these tests exist for, and every case here is one of them.
 
@@ -7,31 +7,35 @@ with no rows both when the plan excludes it and when the issuer did nothing, so 
 fixture vendor holds rows for other issuers too: a market-wide probe sees them, a
 per-issuer fetch does not, and the four outcomes come apart under the identical sentence.
 
-**An availability is read, never invented.** A statement is stamped at the instant its
-filing was accepted or it is refused; a corporate action is stamped at the day it was
-announced where the source serves one and at the day it took effect where it does not,
-and the dataset says which by its publication class. No test here accepts a point stamped
-from a period end, a fetch time, or a date the source did not serve.
+**An availability is read, never invented.** A statement is stamped at the instant the
+filing its row names was accepted, or it is not a point; a corporate action is stamped at
+the day it was announced where the source serves one and at the day it took effect where
+it does not, and the dataset says which by its publication class. No test here accepts a
+point stamped from a period end, a fetch time, or a date the source did not serve.
 
 **Coverage is what was served.** The vendor holds fewer days than the spec asks for, and
 the manifest records the days it held.
 
-**The fixture answers where the source answers and no wider.** It routes on the whole
-path, version prefix included, and rejects a page wider than a listing serves — because
-both of those were once wrong in this adapter and neither was visible to a fixture that
-matched on the tail of a URL and ignored `limit`. A frozen vendor that answers anything
-asked of it proves only that the code is self-consistent.
+**The statements and both filings indexes answer as they were recorded answering.** Every
+answer the financials tests read is a response recorded from the live source on 2026-10-15
+(`fixtures/fundamentals/`, with `provenance.json` beside it), served only for exactly the
+request it was recorded for: a request nothing was recorded for fails the test rather than
+being answered by a guess. The fixtures they replace recorded what their author expected —
+a filings row naming its issuer, an acceptance instant with a zone, an index that honoured
+an issuer filter — and the live source does none of the three.
 
 Nothing here opens a socket, reads a credential or carries a recorded secret.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
@@ -47,49 +51,49 @@ from kanso.data.adapters.massive.corporate_actions import (
     CorporateActionsSpec,
     endpoints_for,
 )
-from kanso.data.adapters.massive.entitlement import Endpoint
 from kanso.data.adapters.massive.errors import (
     EmptyResultError,
     MalformedRequestError,
     NotEntitledError,
 )
 from kanso.data.adapters.massive.filings import (
-    ACCEPTANCE_FIELD,
     FILINGS,
-    PAGE_LIMIT,
+    FILINGS_INDEX,
+    PERIODIC_FORMS,
     AcceptanceIndex,
-    Filing,
     accession_of,
     day_end_ns,
     day_start_ns,
+    decoded,
+    edgar_instant_ns,
     encoded,
-    filing_of,
-    filings,
-    instant_ns,
     listing,
     offered,
     parse_day,
     ticker_of,
 )
 from kanso.data.adapters.massive.financials import (
-    ACCEPTANCE,
-    FINANCIALS,
+    BALANCE_SHEETS,
+    CASH_FLOW_STATEMENTS,
+    ENDPOINTS,
     FINANCIALS_PAGE_LIMIT,
+    INCOME_STATEMENTS,
     INDEXED,
     STATEMENTS,
     FinancialsLoader,
     FinancialsSpec,
     FinancialStatement,
+    statement_of,
 )
 from kanso.data.catalog import write
-from kanso.data.loader import DatasetRef, utc_day
+from kanso.data.loader import DatasetRef, to_ns, utc_day
 from kanso.data.loaders.points import instrument_id
 from kanso.data.manifest import shortfall
 from kanso.data.publication import check_delayed
 from kanso.data.types import CorporateAction, resolve_type
 from kanso.errors import Exit, ValidationError
 
-from . import Replay, body, definition, missing, nothing, over_limit, served
+from . import Replay, body, definition, missing, nothing, refused, served
 
 TODAY = date(2026, 9, 4)
 """The day every probe here runs on. Frozen, because a probe's recent window is measured
@@ -106,7 +110,7 @@ INSTRUMENT = f"{TICKER}.{VENUE}"
 
 SPAN = (date(2020, 1, 1), date(2024, 12, 31))
 
-LISTINGS = frozenset({"splits", "dividends", "financials", "filings"})
+LISTINGS = frozenset({"splits", "dividends"})
 
 CURSOR = "https://api.massive.com/next/{name}"
 """Where a paged fixture's cursor points. The client follows an absolute URL verbatim, so
@@ -122,27 +126,12 @@ ARCHIVE = (
 PATHS = {
     "/v3/reference/splits": "splits",
     "/v3/reference/dividends": "dividends",
-    "/vX/reference/financials": "financials",
-    "/v1/reference/sec/filings": "filings",
 }
-"""Where each listing lives, version prefix and all.
-
-Corrected against the live source: the filings index is served under `/v1` and answers a
-plain 404 under anything else. The fixture used to route on the tail of a URL, which made
-every prefix equally acceptable and let a wrong one pass the whole suite — so it now
-matches the path whole, and a path the source does not serve is a 404 here as there.
-"""
+"""Where each corporate-actions listing lives, version prefix and all. The fixture matches
+the path whole, so a path the source does not serve is a 404 here as there."""
 
 CONTROL = "/v3/reference/tickers/"
 """The control endpoint, which is asked per ticker and so matched by prefix."""
-
-CEILING = {"financials": 100}
-"""The most rows a listing serves in one page, measured.
-
-The financials listing rejects a wider page outright rather than trimming it, and the
-three reference listings serve a thousand. A fixture that ignored `limit` — as this one
-did — cannot tell a page size that works from one that fails on the first live request.
-"""
 
 
 def listing_of(url: str) -> str | None:
@@ -157,19 +146,15 @@ def listing_of(url: str) -> str | None:
 
 @dataclass
 class Vendor:
-    """A plan the fixture serves under, in the terms the source gates on.
+    """A plan the corporate-actions fixture serves under, in the terms the source gates on.
 
     `rows` holds every issuer's rows for each listing; a request naming a ticker is
     filtered to it and a market-wide probe is not, which is exactly the asymmetry the
     probe protocol rests on. `granted` is what the plan includes, `known` is whether the
     reference endpoint recognises the key, and `sentence` is the vendor's prose — a knob
-    only so a test can change it and prove no outcome moved.
-
-    Two answers are refusals of the request rather than of the plan, and both are the
-    source's own measured behaviour: a path it does not serve is a 404 with no envelope,
-    and a `limit` above a listing's ceiling is a client error rather than a short page.
-    `paged` and `page_size` say how many rows a page holds while the cursor carries the
-    rest, so a walk can be proved at the page size a listing actually serves.
+    only so a test can change it and prove no outcome moved. A path the source does not
+    serve is a 404 with no envelope, its own measured behaviour. `paged` and `page_size`
+    say how many rows a page holds while the cursor carries the rest.
     """
 
     rows: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -190,9 +175,6 @@ class Vendor:
                 {"status": "NOT_AUTHORIZED", "request_id": "frozen", "message": self.sentence},
                 403,
             )
-        ceiling = CEILING.get(name)
-        if ceiling is not None and int(params.get("limit", ceiling)) > ceiling:
-            return over_limit(ceiling)
         found = self.rows.get(name, [])
         if "ticker" in params:
             found = [row for row in found if row.get("ticker") == params["ticker"]]
@@ -203,7 +185,7 @@ class Vendor:
         return served(found[: self.page_size], next_url=CURSOR.format(name=name))
 
 
-def transport(vendor: Vendor) -> tuple[MassiveClient, Replay]:
+def transport(vendor: Any) -> tuple[MassiveClient, Replay]:
     """A client over one frozen vendor, and the record of what it was asked."""
     replay = Replay(vendor)
     return MassiveClient("test-key-not-a-secret", transport=replay), replay
@@ -212,11 +194,6 @@ def transport(vendor: Vendor) -> tuple[MassiveClient, Replay]:
 def actions_loader(vendor: Vendor) -> tuple[CorporateActionsLoader, Replay]:
     client, replay = transport(vendor)
     return CorporateActionsLoader(client=client, as_of=TODAY), replay
-
-
-def financials_loader(vendor: Vendor) -> tuple[FinancialsLoader, Replay]:
-    client, replay = transport(vendor)
-    return FinancialsLoader(client=client, as_of=TODAY), replay
 
 
 # --- rows the vendor holds ------------------------------------------------------------
@@ -253,72 +230,9 @@ def dividend_row(
     return row
 
 
-def figures(revenue: float = 94_930_000_000.0) -> dict[str, Any]:
-    """One row's statement sections, plus a section this loader must not read."""
-    return {
-        "income_statement": {
-            "revenues": {"value": revenue, "unit": "USD", "label": "Revenues", "order": 100},
-            "basic_earnings_per_share": {"value": 1.4, "unit": "USD / shares", "order": 200},
-        },
-        "balance_sheet": {"assets": {"value": 331_612_000_000.0, "unit": "USD"}},
-        "ratios": {"price_to_earnings": {"value": 31.2, "unit": "ratio"}},
-    }
-
-
-def financials_row(
-    period: date,
-    *,
-    ticker: str = TICKER,
-    accepted: str | None = "2024-08-02T20:41:20Z",
-    filed: date | None = None,
-    sections: Mapping[str, Any] | None = None,
-    accession: str | None = ACCESSION,
-) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "ticker": ticker,
-        "period_of_report_date": period.isoformat(),
-        "timeframe": "quarterly",
-        "fiscal_period": "Q3",
-        "fiscal_year": "2024",
-        "financials": figures() if sections is None else sections,
-    }
-    if accepted is not None:
-        row[ACCEPTANCE_FIELD] = accepted
-    if filed is not None:
-        row["filing_date"] = filed.isoformat()
-    if accession is not None:
-        row["source_filing_url"] = ARCHIVE
-    return row
-
-
-def filing_row(
-    filed: date,
-    *,
-    ticker: str = TICKER,
-    accession: str = ACCESSION,
-    accepted: str | None = "2024-08-02T20:41:20Z",
-    period: date | None = None,
-    source: str = ARCHIVE,
-) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "ticker": ticker,
-        "filing_date": filed.isoformat(),
-        "accession_number": accession,
-        "type": "10-Q",
-        "source_url": source,
-    }
-    if accepted is not None:
-        row[ACCEPTANCE_FIELD] = accepted
-    if period is not None:
-        row["period_of_report_date"] = period.isoformat()
-    return row
-
-
 ELSEWHERE: dict[str, dict[str, Any]] = {
     "splits": split_row(date(2019, 1, 2), ticker=OTHER),
     "dividends": dividend_row(date(2019, 1, 3), ticker=OTHER, declared=date(2019, 1, 2)),
-    "financials": financials_row(date(2019, 1, 1), ticker=OTHER),
-    "filings": filing_row(date(2019, 1, 4), ticker=OTHER, accession="0000000001-19-000001"),
 }
 """One row per listing from an issuer nobody is asking about.
 
@@ -334,18 +248,6 @@ def held(**rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
 def actions_spec(**overrides: Any) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "loader": "massive_corporate_actions",
-        "instruments": [TICKER],
-        "venue": VENUE,
-        "start": SPAN[0].isoformat(),
-        "end": SPAN[1].isoformat(),
-    }
-    spec.update(overrides)
-    return spec
-
-
-def financials_spec(**overrides: Any) -> dict[str, Any]:
-    spec: dict[str, Any] = {
-        "loader": "massive_financials",
         "instruments": [TICKER],
         "venue": VENUE,
         "start": SPAN[0].isoformat(),
@@ -371,19 +273,6 @@ def test_a_day_is_bounded_at_both_ends() -> None:
     assert day_end_ns(day) == day_start_ns(day + timedelta(days=1)) - 1
     assert utc_day(day_start_ns(day)) == day
     assert utc_day(day_end_ns(day)) == day
-
-
-def test_an_instant_carries_its_zone_or_is_refused() -> None:
-    zulu = instant_ns("2024-08-02T20:41:20Z", "financials.acceptance_datetime")
-    offset = instant_ns("2024-08-02T16:41:20-04:00", "financials.acceptance_datetime")
-    assert zulu == offset
-    with pytest.raises(ValidationError) as naive:
-        instant_ns("2024-08-02T16:41:20", "financials.acceptance_datetime")
-    assert "no time zone" in naive.value.message
-    assert "earlier" in naive.value.message
-    with pytest.raises(ValidationError) as nonsense:
-        instant_ns("20240802164120", "financials.acceptance_datetime")
-    assert "ISO-8601" in nonsense.value.message
 
 
 def test_an_accession_is_read_or_recovered_but_never_guessed() -> None:
@@ -517,64 +406,6 @@ def test_a_spec_round_trips_through_the_ref_it_is_carried_on() -> None:
     parsed = CorporateActionsSpec.model_validate(actions_spec(kinds=["dividend"]))
     assert encoded(parsed)["kinds"] == "dividend"
     assert encoded(parsed)["start"] == "2020-01-01"
-
-
-# --- the filings index ----------------------------------------------------------------
-
-
-def test_a_filing_is_a_record_of_a_document_and_an_instant() -> None:
-    vendor = Vendor(rows={"filings": [filing_row(date(2024, 8, 2), period=date(2024, 6, 29))]})
-    client, _ = transport(vendor)
-    found = list(filings(client, TICKER, (date(2024, 8, 1), date(2024, 8, 3))))
-    assert [filing.accession for filing in found] == [ACCESSION]
-    assert found[0].accepted_ns == instant_ns("2024-08-02T20:41:20Z", "x")
-    assert found[0].payload() == {
-        "accession": ACCESSION,
-        "form": "10-Q",
-        "ticker": TICKER,
-        "filed_on": "2024-08-02",
-        "accepted_ns": found[0].accepted_ns,
-        "period_end": "2024-06-29",
-        "source_url": ARCHIVE,
-    }
-
-
-def test_a_filing_with_no_acceptance_instant_is_refused() -> None:
-    with pytest.raises(ValidationError) as failure:
-        filing_of(filing_row(date(2024, 8, 2), accepted=None))
-    assert ACCEPTANCE_FIELD in failure.value.message
-
-
-def test_a_filing_without_a_period_carries_none() -> None:
-    assert filing_of(filing_row(date(2024, 8, 2))).period_end is None
-
-
-def test_the_index_asks_once_per_filing_day_and_skips_what_it_cannot_read() -> None:
-    day = date(2024, 8, 2)
-    vendor = Vendor(
-        rows={
-            "filings": [
-                filing_row(day),
-                filing_row(day, accession="", source="", accepted="2024-08-02T21:00:00Z"),
-                filing_row(day, accession="0000320193-24-000099", accepted=None),
-            ]
-        }
-    )
-    client, replay = transport(vendor)
-    index = AcceptanceIndex(client, TICKER)
-    assert index.of(ACCESSION, day) == instant_ns("2024-08-02T20:41:20Z", "x")
-    assert index.of("0000320193-24-000099", day) is None
-    assert index.of("", day) is None
-    assert index.days() == (day,)
-    assert len(replay.asked) == 1
-
-
-def test_the_index_reads_an_accession_from_a_row_that_names_none() -> None:
-    day = date(2024, 8, 2)
-    row = filing_row(day)
-    del row["accession_number"]
-    client, _ = transport(Vendor(rows={"filings": [row]}))
-    assert AcceptanceIndex(client, TICKER).of(ACCESSION, day) is not None
 
 
 # --- corporate actions: the spec ------------------------------------------------------
@@ -779,301 +610,620 @@ def test_a_ref_built_by_hand_carries_no_spec() -> None:
     assert "carries no corporate-actions spec" in failure.value.message
 
 
-# --- financials -----------------------------------------------------------------------
+# --- the recorded source: statements and both filings indexes -------------------------
+
+FUNDAMENTALS = Path(__file__).parent / "fixtures" / "fundamentals"
+
+PROVENANCE: dict[str, Any] = json.loads((FUNDAMENTALS / "provenance.json").read_text("utf-8"))
+
+ISSUER_PARAMS = frozenset({"tickers", "cik", "ticker"})
+"""The parameters that narrow a listing to one issuer. A request carrying none is a probe."""
 
 
-def statements_of(
-    vendor: Vendor, spec: dict[str, Any] | None = None, window: tuple[date, date] = SPAN
-) -> list[Any]:
-    loader, _ = financials_loader(vendor)
+def request_key(url: str, params: Mapping[str, str]) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """A request as a path and its parameters, wherever the parameters were spelled."""
+    parts = urlsplit(url)
+    asked = {**dict(parse_qsl(parts.query)), **params}
+    return parts.path, tuple(sorted(asked.items()))
+
+
+RECORDED: dict[tuple[str, tuple[tuple[str, str], ...]], str] = {
+    request_key(meta["url"], {}): name for name, meta in PROVENANCE["files"].items()
+}
+"""Which recording answers which request: exactly the one it was recorded for."""
+
+MARKET = {
+    INCOME_STATEMENTS.template: "market_income_statements.json",
+    BALANCE_SHEETS.template: "market_balance_sheets.json",
+    CASH_FLOW_STATEMENTS.template: "market_cash_flow_statements.json",
+    FILINGS_INDEX.template: "market_filings_index.json",
+    FILINGS.template: "market_filings.json",
+}
+"""What a market-wide probe of each listing was answered with, whatever window it names:
+the probe asks a fortnight and then nothing, and either way the market holds rows."""
+
+
+def fundamental(name: str) -> Response:
+    """One recorded answer: its body as served and its status as recorded."""
+    return Response(
+        status=int(PROVENANCE["files"][name]["status"]), body=(FUNDAMENTALS / name).read_bytes()
+    )
+
+
+def rows_of(name: str) -> list[dict[str, Any]]:
+    """The rows a recorded listing served, in the order served."""
+    found: list[dict[str, Any]] = json.loads(fundamental(name).body)["results"]
+    return found
+
+
+def recorded(*, instead: Mapping[str, str] | None = None) -> Any:
+    """The source as recorded, answering each request with exactly what it was answered.
+
+    `instead` swaps one recording for another by file name, which is how a test shows what
+    a load does with an answer the source gave elsewhere — a 404 in place of a report it
+    holds — without writing an answer the source never gave.
+    """
+    swaps = dict(instead or {})
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        path, asked = request_key(url, params)
+        if path.startswith(CONTROL):
+            return served([definition(TICKER)])
+        name = RECORDED.get((path, asked))
+        if name is None and not ISSUER_PARAMS & dict(asked).keys():
+            name = MARKET.get(path)
+        if name is None:
+            pytest.fail(f"asked {path} with {dict(asked)}, which nothing was recorded for")
+        return fundamental(swaps.get(name, name))
+
+    return answer
+
+
+def financials_loader(answer: Any = None) -> tuple[FinancialsLoader, Replay]:
+    client, replay = transport(answer or recorded())
+    return FinancialsLoader(client=client, as_of=TODAY), replay
+
+
+def financials_spec(**overrides: Any) -> dict[str, Any]:
+    """AAPL's quarters ending in the first half of 2026: what the statements were recorded for."""
+    spec: dict[str, Any] = {
+        "loader": "massive_financials",
+        "instruments": [TICKER],
+        "venue": VENUE,
+        "start": "2026-01-01",
+        "end": "2026-06-30",
+    }
+    spec.update(overrides)
+    return spec
+
+
+FIRST_HALF = (date(2026, 1, 1), date(2026, 6, 30))
+
+Q2_ACCEPTED = to_ns(datetime(2026, 5, 1, 10, 1, 0, tzinfo=UTC))
+Q3_ACCEPTED = to_ns(datetime(2026, 7, 31, 10, 1, 2, tzinfo=UTC))
+"""AAPL's two 10-Qs, accepted at 06:01:00 and 06:01:02 Eastern daylight time — the
+recorded `20260501060100` and `20260731060102`, four hours behind UTC."""
+
+
+def statements_of(spec: dict[str, Any] | None = None, answer: Any = None) -> list[Any]:
+    loader, _ = financials_loader(answer)
     ref = loader.discover(spec or financials_spec())[0]
-    return list(loader.load(ref, window))
+    return list(loader.load(ref, ref.span))
 
 
-def test_a_statement_is_stamped_at_the_instant_its_filing_was_accepted() -> None:
-    period = date(2024, 6, 29)
-    vendor = Vendor(rows={"financials": [financials_row(period)]})
-    (point,) = statements_of(vendor)
-    assert isinstance(point, FinancialStatement)
-    assert point.ts_event == day_end_ns(period)
-    assert point.ts_init == instant_ns("2024-08-02T20:41:20Z", "x")
-    assert point.ts_init > point.ts_event
-    assert point.stamped_from == ACCEPTANCE
-    assert point.accession == ACCESSION
-    assert (point.fiscal_period, point.fiscal_year, point.timeframe) == ("Q3", "2024", "quarterly")
+# --- the acceptance clock -------------------------------------------------------------
 
 
-def test_a_statement_keeps_its_figures_and_their_units_and_drops_the_ratios() -> None:
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29))]})
-    (point,) = statements_of(vendor)
-    assert point.items["income_statement.revenues"] == 94_930_000_000.0
-    assert point.units["income_statement.revenues"] == "USD"
-    assert point.items["balance_sheet.assets"] == 331_612_000_000.0
-    assert not any(key.startswith("ratios.") for key in point.items)
-    assert set(key.split(".")[0] for key in point.items) <= set(STATEMENTS)
+@pytest.mark.parametrize(
+    ("clock", "utc"),
+    [
+        ("20260731060102", datetime(2026, 7, 31, 10, 1, 2, tzinfo=UTC)),
+        ("20260213160000", datetime(2026, 2, 13, 21, 0, 0, tzinfo=UTC)),
+        ("20200730204446", datetime(2020, 7, 31, 0, 44, 46, tzinfo=UTC)),
+    ],
+)
+def test_the_acceptance_clock_is_read_as_the_regulator_s_eastern_time(
+    clock: str, utc: datetime
+) -> None:
+    """Four hours behind UTC in summer and five in winter, as the regulator's clock is."""
+    assert edgar_instant_ns(clock, "filings.acceptance_datetime") == to_ns(utc)
+
+
+def test_a_clock_the_fall_back_repeats_is_read_as_its_later_instant() -> None:
+    """01:30 happens twice on 2026-11-01; the later is the bound that cannot leak."""
+    assert edgar_instant_ns("20261101013000", "x") == to_ns(
+        datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
+    )
+
+
+@pytest.mark.parametrize("value", ["2026-07-31T06:01:02Z", "2026073106010", "2026073106010x", ""])
+def test_an_acceptance_clock_of_any_other_shape_is_refused(value: str) -> None:
+    with pytest.raises(ValidationError) as failure:
+        edgar_instant_ns(value, "filings.acceptance_datetime")
+    assert "YYYYMMDDHHMMSS" in failure.value.message
+    assert "filings.acceptance_datetime" in failure.value.message
+
+
+# --- the two filings indexes ----------------------------------------------------------
+
+
+def test_the_acceptance_index_ignores_an_issuer_and_reads_a_date_as_digits() -> None:
+    """Why it is asked one report at a time: recorded, a listing for AAPL by ticker and by
+    CIK served three other issuers' reports, and an ISO filing date matched nothing."""
+    issuers = {
+        row["entities"][0]["company_data"]["ticker"]
+        for row in rows_of("filings_ignores_issuer.json")
+    }
+    assert issuers and TICKER not in issuers
+    assert rows_of("filings_iso_date.json") == []
+    assert (
+        "acceptance_datetime"
+        not in json.loads(fundamental("acceptance_0000320193-17-000009.json").body)["results"]
+    )
+
+
+def acceptance_index(
+    ticker: str, cik: str, *days: date, answer: Any = None
+) -> tuple[AcceptanceIndex, Replay]:
+    client, replay = transport(answer or recorded())
+    return AcceptanceIndex(client, ticker, cik, set(days)), replay
+
+
+def test_a_day_is_stamped_at_its_periodic_report_s_acceptance() -> None:
+    index, replay = acceptance_index(TICKER, "0000320193", date(2026, 5, 1), date(2026, 7, 31))
+    assert index.of(date(2026, 7, 31)) == (Q3_ACCEPTED, "0000320193-26-000020")
+    assert index.of(date(2026, 5, 1)) == (Q2_ACCEPTED, "0000320193-26-000013")
+    assert index.of(date(2026, 6, 1)) is None
+    assert index.of(date(2026, 7, 31)) == (Q3_ACCEPTED, "0000320193-26-000020")
+    walks = [item for item in replay.asked if FILINGS_INDEX.template in item.url]
+    lookups = [item for item in replay.asked if FILINGS.template + "/" in item.url]
+    assert len(walks) == 1, "one walk of the filings index over the days the rows name"
+    assert walks[0].params["cik"] == "0000320193"
+    assert len(lookups) == 2, "each report's instant is asked for once and kept"
+    assert all(item.params == {} for item in lookups)
+
+
+def test_a_report_accepted_after_the_cut_off_stamps_the_day_it_was_dated() -> None:
+    """MSFT's 10-K was accepted at 20:44 Eastern on 07-30 and dated 07-31; a statement
+    naming 07-31 is stamped at that acceptance, which is the 31st in UTC."""
+    index, _ = acceptance_index(OTHER, "0000789019", date(2020, 7, 30), date(2020, 7, 31))
+    expected = (to_ns(datetime(2020, 7, 31, 0, 44, 46, tzinfo=UTC)), "0001564590-20-034944")
+    assert index.of(date(2020, 7, 31)) == expected
+    assert index.of(date(2020, 7, 30)) == expected
+
+
+@pytest.mark.parametrize(
+    ("ticker", "cik", "day"),
+    [
+        (TICKER, "0000320193", date(2017, 8, 2)),
+        (OTHER, "0000789019", date(2025, 1, 29)),
+    ],
+)
+def test_a_report_the_acceptance_index_holds_no_instant_for_stamps_nothing(
+    ticker: str, cik: str, day: date
+) -> None:
+    """Held without the field (AAPL's 10-Q of 2017-08-02) or not held at all (MSFT's 10-Q of
+    2025-01-29, a 404): either way there is no instant, and the day is not stamped."""
+    index, _ = acceptance_index(ticker, cik, day)
+    assert index.of(day) is None
+
+
+def test_a_row_for_another_issuer_or_another_form_stamps_nothing() -> None:
+    """The filings index honours its filters, measured; a version that stopped would cost a
+    stamp here, never stamp a statement from someone else's report or a press release."""
+    day = "2026-07-31"
+    rows = [
+        {
+            "cik": "0000000001",
+            "form_type": "10-Q",
+            "filing_date": day,
+            "accession_number": "0000000001-26-000001",
+        },
+        {
+            "cik": "0000320193",
+            "form_type": "8-K",
+            "filing_date": day,
+            "accession_number": "0000320193-26-000019",
+        },
+    ]
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if FILINGS_INDEX.template in url:
+            return served(rows)
+        pytest.fail(f"asked {url}: no report that day is the issuer's periodic one")
+
+    index, _ = acceptance_index(TICKER, "0000320193", date(2026, 7, 31), answer=answer)
+    assert index.of(date(2026, 7, 31)) is None
+
+
+def test_a_day_with_two_reports_is_stamped_at_the_later_and_at_none_if_either_has_none() -> None:
+    day = date(2026, 7, 31)
+    early, late = "0000320193-26-000020", "0000320193-26-000021"
+    accepted = {early: "20260731060102", late: "20260731163000"}
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if FILINGS_INDEX.template in url:
+            return served(
+                [
+                    {
+                        "cik": "0000320193",
+                        "form_type": "10-Q",
+                        "filing_date": "2026-07-31",
+                        "accession_number": early,
+                    },
+                    {
+                        "cik": "0000320193",
+                        "form_type": "10-Q/A",
+                        "filing_date": "2026-07-31",
+                        "accession_number": late,
+                    },
+                ]
+            )
+        accession = url.rsplit("/", 1)[1]
+        if accepted.get(accession) is None:
+            return body({"status": "NOT_FOUND", "message": "Filing not found."}, 404)
+        return body(
+            {
+                "status": "OK",
+                "results": {
+                    "accession_number": accession,
+                    "acceptance_datetime": accepted[accession],
+                },
+            }
+        )
+
+    index, _ = acceptance_index(TICKER, "0000320193", day, answer=answer)
+    assert index.of(day) == (to_ns(datetime(2026, 7, 31, 20, 30, tzinfo=UTC)), late)
+
+    accepted[late] = None  # type: ignore[assignment]
+    index, _ = acceptance_index(TICKER, "0000320193", day, answer=answer)
+    assert index.of(day) is None
+
+
+def test_an_index_of_no_days_asks_nothing() -> None:
+    index, replay = acceptance_index(TICKER, "0000320193")
+    assert index.of(date(2026, 7, 31)) is None
+    assert replay.asked == []
+
+
+def test_a_refused_acceptance_index_is_the_plan_and_not_a_missing_instant() -> None:
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if CONTROL in url:
+            return served([definition(TICKER)])
+        if FILINGS_INDEX.template in url:
+            return fundamental("filings_index_AAPL.json")
+        return refused()
+
+    index, _ = acceptance_index(TICKER, "0000320193", date(2026, 7, 31), answer=answer)
+    with pytest.raises(NotEntitledError):
+        index.of(date(2026, 7, 31))
+
+
+def test_the_filings_index_is_asked_by_cik_and_by_periodic_form() -> None:
+    path, params = FILINGS_INDEX.request(TICKER, (date(2026, 5, 1), date(2026, 7, 31)))
+    assert path == "/stocks/filings/vX/index"
+    assert params["form_type.any_of"].split(",") == list(PERIODIC_FORMS)
+    assert (params["filing_date.gte"], params["filing_date.lte"]) == ("2026-05-01", "2026-07-31")
+    assert "{ticker}" not in json.dumps(params), "the CIK travels beside the endpoint"
+    assert offered(FILINGS) == FILINGS
+
+
+# --- financials: what a statement is --------------------------------------------------
+
+
+def test_a_statement_is_stamped_at_the_acceptance_of_the_filing_its_row_names() -> None:
+    points = statements_of()
+    assert all(isinstance(point, FinancialStatement) for point in points)
+    assert len(points) == 6, "three statements for each of two quarters"
+    by_quarter = {point.fiscal_period: point for point in points}
+    q2, q3 = by_quarter["Q2"], by_quarter["Q3"]
+    assert (q2.ts_event, q2.ts_init) == (day_end_ns(date(2026, 3, 28)), Q2_ACCEPTED)
+    assert (q3.ts_event, q3.ts_init) == (day_end_ns(date(2026, 6, 27)), Q3_ACCEPTED)
+    assert (q3.accession, q3.stamped_from) == ("0000320193-26-000020", INDEXED)
+    assert (q3.fiscal_year, q3.timeframe) == ("2026", "quarterly")
+    assert [point.ts_init for point in points] == sorted(point.ts_init for point in points)
+    assert all(point.ts_init > point.ts_event for point in points)
+
+
+def test_a_statement_keeps_every_figure_under_its_statement_and_states_no_unit() -> None:
+    """The source names no unit, so none is written; a zero it serves is kept as served."""
+    points = statements_of()
+    income = next(
+        p for p in points if p.fiscal_period == "Q3" and "income_statement.revenue" in p.items
+    )
+    served_row = rows_of("income_statements_AAPL.json")[-1]
+    assert income.items["income_statement.revenue"] == served_row["revenue"] == 109_417_000_000.0
+    assert income.items["income_statement.interest_expense"] == 0.0
+    assert income.items["income_statement.basic_earnings_per_share"] == 2.03
+    assert not {"income_statement.fiscal_year", "income_statement.fiscal_quarter"} & set(
+        income.items
+    )
+    assert income.units == {}
+    assert {key.split(".")[0] for point in points for key in point.items} == set(STATEMENTS)
+    assert all(len({key.split(".")[0] for key in point.items}) == 1 for point in points)
 
 
 def test_a_figure_that_is_not_a_number_is_not_a_figure() -> None:
-    sections = {
-        "income_statement": {
-            "revenues": {"value": 1.0, "unit": ""},
-            "flagged": {"value": True},
-            "worded": {"value": "n/a"},
-            "shapeless": 3,
-        },
-        "balance_sheet": ["not a section"],
+    row = {
+        "period_end": "2026-06-27",
+        "revenue": 1.0,
+        "flagged": True,
+        "worded": "n/a",
+        "tickers": ["AAPL"],
+        "fiscal_year": 2026,
     }
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29), sections=sections)]})
-    (point,) = statements_of(vendor)
-    assert list(point.items) == ["income_statement.revenues"]
-    assert point.units == {}
+    spec = FinancialsSpec.model_validate(financials_spec())
+    point = statement_of(
+        row, "income_statement", spec, instrument_id(TICKER, VENUE), (Q3_ACCEPTED, "x")
+    )
+    assert point.items == {"income_statement.revenue": 1.0}
 
 
-@pytest.mark.parametrize("sections", [{}, {"ratios": {"pe": {"value": 3.0}}}, "nothing"])
-def test_a_row_with_no_figures_is_not_a_statement(sections: Any) -> None:
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29), sections=sections)]})
+def test_a_row_with_no_figures_is_not_a_statement() -> None:
+    row = {
+        "period_end": "2026-06-27",
+        "fiscal_year": 2026,
+        "fiscal_quarter": 3,
+        "tickers": ["AAPL"],
+    }
+    spec = FinancialsSpec.model_validate(financials_spec())
     with pytest.raises(ValidationError) as failure:
-        statements_of(vendor)
+        statement_of(
+            row, "income_statement", spec, instrument_id(TICKER, VENUE), (Q3_ACCEPTED, "x")
+        )
     assert "no figures" in failure.value.message
 
 
 def test_a_statement_accepted_before_its_period_ended_is_refused() -> None:
-    vendor = Vendor(
-        rows={"financials": [financials_row(date(2024, 6, 29), accepted="2024-06-29T00:00:01Z")]}
-    )
+    row = {"period_end": "2026-06-27", "revenue": 1.0}
+    spec = FinancialsSpec.model_validate(financials_spec())
+    early = (day_end_ns(date(2026, 6, 27)), "x")
     with pytest.raises(ValidationError) as failure:
-        statements_of(vendor)
+        statement_of(row, "income_statement", spec, instrument_id(TICKER, VENUE), early)
     assert "not a publication instant" in failure.value.message
 
 
-def test_a_statement_with_no_acceptance_is_joined_on_its_own_filing_day() -> None:
-    period, filed = date(2024, 6, 29), date(2024, 8, 2)
-    vendor = Vendor(
-        rows={
-            "financials": [financials_row(period, accepted=None, filed=filed)],
-            "filings": [filing_row(filed)],
-        }
+@pytest.mark.parametrize(("timeframe", "named"), [("annual", "FY"), ("ttm", "TTM")])
+def test_a_point_names_a_grain_that_is_not_a_quarter_as_the_retired_listing_did(
+    timeframe: str, named: str
+) -> None:
+    row = {"period_end": "2026-06-27", "revenue": 1.0, "fiscal_quarter": 4, "fiscal_year": 2026}
+    spec = FinancialsSpec.model_validate(
+        financials_spec(timeframe=timeframe, statements=["income_statement"])
     )
-    loader, replay = financials_loader(vendor)
-    (ref,) = loader.discover(financials_spec())
-    (point,) = list(loader.load(ref, SPAN))
-    assert point.stamped_from == INDEXED
-    assert point.ts_init == instant_ns("2024-08-02T20:41:20Z", "x")
-    asked = [item for item in replay.asked if "sec/filings" in item.url]
-    assert [item.params["filing_date.gte"] for item in asked] == ["2024-08-02"]
+    point = statement_of(
+        row, "income_statement", spec, instrument_id(TICKER, VENUE), (Q3_ACCEPTED, "x")
+    )
+    assert (point.fiscal_period, point.timeframe) == (named, timeframe)
 
 
-def test_a_statement_the_index_cannot_answer_for_is_refused() -> None:
-    period, filed = date(2024, 6, 29), date(2024, 8, 2)
-    vendor = Vendor(
-        rows={
-            "financials": [financials_row(period, accepted=None, filed=filed)],
-            "filings": [filing_row(filed, accession="0000320193-24-000099")],
-        }
+# --- financials: what can and cannot be stamped ---------------------------------------
+
+
+def test_a_row_naming_a_report_without_an_instant_is_dropped_and_the_rest_kept() -> None:
+    """The source holding no instant for AAPL's Q2 report, as it holds none for its 10-Q of
+    2017-08-02: the Q2 statements are not points and the Q3 ones still are."""
+    answer = recorded(
+        instead={"acceptance_0000320193-26-000013.json": "acceptance_0000320193-17-000009.json"}
+    )
+    points = statements_of(answer=answer)
+    assert {point.fiscal_period for point in points} == {"Q3"}
+    assert len(points) == 3
+
+
+def test_a_series_of_which_nothing_can_be_stamped_is_refused_naming_why() -> None:
+    """BABA files 20-Fs, which the acceptance index does not hold: recorded, its 20-F of
+    2026-05-20 is listed by the filings index and answers 404 under its accession."""
+    spec = financials_spec(
+        instruments=["BABA"],
+        start="2025-01-01",
+        end="2026-06-30",
+        timeframe="annual",
+        statements=["income_statement"],
     )
     with pytest.raises(ValidationError) as failure:
-        statements_of(vendor)
-    assert ACCESSION in failure.value.message
-    assert "filings index" in failure.value.message
+        statements_of(spec)
+    assert "BABA" in failure.value.message
+    assert "none of them" in failure.value.message
+    assert "20-F" in str(failure.value.remedy)
 
 
-def test_a_statement_with_no_day_to_ask_about_is_refused() -> None:
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29), accepted=None)]})
+def test_a_row_with_no_filing_day_or_no_issuer_is_dropped() -> None:
+    rows = rows_of("income_statements_AAPL.json")
+    rows[0] = {key: value for key, value in rows[0].items() if key != "filing_date"}
+    rows[1] = {key: value for key, value in rows[1].items() if key != "cik"}
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if INCOME_STATEMENTS.template in url and "tickers" in params:
+            return served(rows)
+        return recorded()(url, params)
+
     with pytest.raises(ValidationError) as failure:
-        statements_of(vendor)
-    assert "filing_date" in failure.value.message
-    assert "period end" in str(failure.value.remedy)
+        statements_of(financials_spec(statements=["income_statement"]), answer=answer)
+    assert "none of them" in failure.value.message
 
 
-def test_a_restatement_is_another_point_with_a_later_availability() -> None:
-    period = date(2024, 6, 29)
-    vendor = Vendor(
-        rows={
-            "financials": [
-                financials_row(period),
-                financials_row(period, accepted="2024-11-01T18:00:00Z"),
-            ]
-        }
-    )
-    first, second = statements_of(vendor)
-    assert first.ts_event == second.ts_event
-    assert first.ts_init < second.ts_init
-
-
-def test_a_financials_dataset_declares_a_delayed_publication_it_can_prove() -> None:
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29))]})
-    loader, replay = financials_loader(vendor)
-    (ref,) = loader.discover(financials_spec(timeframe="annual"))
-    assert ref.publication == "delayed"
-    assert ref.publication_rule == "fundamental"
-    assert ref.type == "financial_statement"
-    assert ref.vendor_dataset == "financials"
-    points = list(loader.load(ref, SPAN))
-    assert check_delayed(points, ref.publication_rule).id == "fundamental"
-    fetch = [item for item in replay.asked if item.params.get("ticker") == TICKER]
-    assert fetch[0].params["timeframe"] == "annual"
-
-
-def test_a_financials_window_is_applied_to_what_came_back() -> None:
-    vendor = Vendor(
-        rows={
-            "financials": [
-                financials_row(date(2020, 6, 27)),
-                financials_row(date(2024, 6, 29)),
-            ]
-        }
-    )
-    points = statements_of(vendor, None, (date(2024, 1, 1), date(2024, 12, 31)))
-    assert [utc_day(point.ts_event) for point in points] == [date(2024, 6, 29)]
-
-
-def test_the_financials_manifest_records_the_periods_that_were_served() -> None:
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29))]})
-    loader, _ = financials_loader(vendor)
-    (ref,) = loader.discover(financials_spec())
-    manifest = loader.manifest(ref)
-    assert manifest.span == (date(2024, 6, 29), date(2024, 6, 29))
-    assert manifest.publication == "delayed"
-    assert shortfall(ref.span, manifest.span) is not None
-    tables = loader.load_arrow(ref, SPAN)
-    assert tables is not None
-    assert sum(table.num_rows for table in tables) == 1
+# --- financials: the spec, the request and the dataset --------------------------------
 
 
 def test_the_financials_spec_refuses_what_it_cannot_mean() -> None:
-    with pytest.raises(ValidationError):
-        FinancialsSpec.model_validate(financials_spec(start="2024-01-01", end="2023-01-01"))
-    with pytest.raises(ValidationError):
-        FinancialsSpec.model_validate(financials_spec(instruments=[TICKER, TICKER]))
+    for bad in (
+        financials_spec(start="2024-01-01", end="2023-01-01"),
+        financials_spec(instruments=[TICKER, TICKER]),
+        financials_spec(statements=[]),
+        financials_spec(statements=["income_statement", "income_statement"]),
+        financials_spec(statements=["ratios"]),
+    ):
+        with pytest.raises(ValidationError):
+            FinancialsSpec.model_validate(bad)
 
 
-def test_a_financials_ref_built_by_hand_carries_no_spec() -> None:
-    loader, _ = financials_loader(Vendor())
-    ref = DatasetRef(
-        dataset_id="x",
-        instrument=INSTRUMENT,
-        type="financial_statement",
-        resolution=None,
-        span=SPAN,
-        adjusted=False,
-        publication="delayed",
-        publication_rule="fundamental",
-    )
+def test_a_balance_sheet_has_no_trailing_twelve_months() -> None:
+    """Measured: the balance sheets listing answers a trailing-twelve-month request with no
+    rows, so a spec asking for one is refused and one left to default does not ask it."""
     with pytest.raises(ValidationError) as failure:
-        list(loader.load(ref, SPAN))
-    assert "carries no financials spec" in failure.value.message
+        FinancialsSpec.model_validate(
+            financials_spec(timeframe="ttm", statements=["balance_sheet"])
+        )
+    assert "balance at an instant" in str(failure.value)
+    assert FinancialsSpec.model_validate(financials_spec(timeframe="ttm")).asked == (
+        "income_statement",
+        "cash_flow_statement",
+    )
+    assert FinancialsSpec.model_validate(financials_spec()).asked == STATEMENTS
+
+
+def test_a_spec_with_its_statements_left_out_round_trips_through_its_ref() -> None:
+    for spec in (
+        financials_spec(),
+        financials_spec(statements=["cash_flow_statement", "income_statement"]),
+    ):
+        parsed = FinancialsSpec.model_validate(spec)
+        again = FinancialsSpec.model_validate(
+            decoded(encoded(parsed), ("instruments", "statements"))
+        )
+        assert again == parsed
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "asked"),
+    [("quarterly", "quarterly"), ("annual", "annual"), ("ttm", "trailing_twelve_months")],
+)
+def test_each_statement_is_asked_over_its_period_at_the_grain_the_source_spells(
+    timeframe: str, asked: str
+) -> None:
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if "tickers" in params:
+            return nothing()
+        return recorded()(url, params)
+
+    loader, replay = financials_loader(answer)
+    (ref,) = loader.discover(financials_spec(timeframe=timeframe))
+    assert list(loader.load(ref, ref.span)) == []
+    fetched = [item for item in replay.asked if "tickers" in item.params]
+    assert [item.url.split("api.massive.com")[1] for item in fetched] == [
+        ENDPOINTS[name].template
+        for name in FinancialsSpec.model_validate(financials_spec(timeframe=timeframe)).asked
+    ]
+    for item in fetched:
+        assert item.params["tickers"] == TICKER
+        assert item.params["timeframe"] == asked
+        assert (item.params["period_end.gte"], item.params["period_end.lte"]) == (
+            "2026-01-01",
+            "2026-06-30",
+        )
+        assert item.params["sort"] == "period_end.asc"
+        assert item.params["limit"] == FINANCIALS_PAGE_LIMIT
+
+
+def test_discovery_establishes_the_statements_and_both_indexes_once_for_the_universe() -> None:
+    loader, replay = financials_loader()
+    loader.discover(financials_spec(instruments=[TICKER, OTHER, "IBM"]))
+    probed = [item.url.split("api.massive.com")[1].split("?")[0] for item in replay.asked]
+    assert sorted(probed) == sorted(
+        [INCOME_STATEMENTS.template, FILINGS_INDEX.template, FILINGS.template]
+    )
+    assert not any(ISSUER_PARAMS & item.params.keys() for item in replay.asked)
 
 
 def test_an_unentitled_financials_listing_is_a_plan_failure_not_a_floor() -> None:
-    vendor = Vendor(rows={}, granted=LISTINGS - {"financials"})
-    loader, _ = financials_loader(vendor)
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if CONTROL in url:
+            return served([definition(TICKER)])
+        if INCOME_STATEMENTS.template in url:
+            return refused()
+        return recorded()(url, params)
+
+    loader, _ = financials_loader(answer)
     with pytest.raises(NotEntitledError) as failure:
         loader.discover(financials_spec())
     assert failure.value.code is Exit.PRECONDITION
     assert failure.value.fatal is False
 
 
-def test_the_filings_endpoint_is_asked_over_the_filing_date() -> None:
-    assert dict(FILINGS.params)["filing_date.gte"] == "{start}"
-    assert isinstance(FINANCIALS, Endpoint)
-    assert dict(FINANCIALS.params)["period_of_report_date.gte"] == "{start}"
+def test_a_financials_dataset_declares_a_delayed_publication_it_can_prove() -> None:
+    loader, _ = financials_loader()
+    (ref,) = loader.discover(financials_spec())
+    assert (ref.publication, ref.publication_rule) == ("delayed", "fundamental")
+    assert (ref.type, ref.vendor_dataset) == ("financial_statement", "financials")
+    points = list(loader.load(ref, ref.span))
+    assert check_delayed(points, ref.publication_rule).id == "fundamental"
 
 
-# --- the paths and the page sizes the source actually serves --------------------------
+def test_a_financials_window_is_applied_to_what_came_back() -> None:
+    """Asked for the second quarter alone and answered with the half year it was recorded
+    over, the load keeps the quarter it asked for and nothing else."""
+    by_path = {
+        INCOME_STATEMENTS.template: "income_statements_AAPL.json",
+        BALANCE_SHEETS.template: "balance_sheets_AAPL.json",
+        CASH_FLOW_STATEMENTS.template: "cash_flow_statements_AAPL.json",
+    }
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        path = urlsplit(url).path
+        if "tickers" in params and path in by_path:
+            return fundamental(by_path[path])
+        return recorded()(url, params)
+
+    loader, _ = financials_loader(answer)
+    (ref,) = loader.discover(financials_spec())
+    points = list(loader.load(ref, (date(2026, 4, 1), date(2026, 6, 30))))
+    assert {utc_day(point.ts_event) for point in points} == {date(2026, 6, 27)}
 
 
-def test_the_filings_index_is_asked_for_under_the_version_that_serves_it() -> None:
-    """Measured: `/v1/reference/sec/filings` answers and every other prefix does not."""
-    day = date(2024, 8, 2)
-    client, replay = transport(Vendor(rows={"filings": [filing_row(day)]}))
-    found = list(filings(client, TICKER, (day, day)))
-    assert [filing.accession for filing in found] == [ACCESSION]
-    assert replay.asked[0].path.split("?")[0] == "v1/reference/sec/filings"
+def test_the_financials_manifest_records_the_periods_that_were_served() -> None:
+    loader, _ = financials_loader()
+    (ref,) = loader.discover(financials_spec())
+    manifest = loader.manifest(ref)
+    assert manifest.span == (date(2026, 3, 28), date(2026, 6, 27))
+    assert manifest.row_count == 6
+    assert shortfall(ref.span, manifest.span) is not None
+    tables = loader.load_arrow(ref, ref.span)
+    assert tables is not None
+    assert sum(table.num_rows for table in tables) == 6
+
+
+def test_a_financials_ref_built_by_hand_carries_no_spec() -> None:
+    loader, _ = financials_loader()
+    ref = DatasetRef(
+        dataset_id="x",
+        instrument=INSTRUMENT,
+        type="financial_statement",
+        resolution=None,
+        span=FIRST_HALF,
+        adjusted=False,
+        publication="delayed",
+        publication_rule="fundamental",
+    )
+    with pytest.raises(ValidationError) as failure:
+        list(loader.load(ref, FIRST_HALF))
+    assert "carries no financials spec" in failure.value.message
+
+
+# --- the paths the source serves, and the one it retired ------------------------------
+
+
+def test_the_retired_statements_listing_is_named_as_retired() -> None:
+    """Recorded after its sunset: HTTP 410 and `GONE`. Read as a malformed request it would
+    send an operator to check parameters that were never wrong."""
+    retired = replace(INCOME_STATEMENTS, template="/vX/reference/financials")
+    client, _ = transport(lambda url, params: fundamental("financials_retired.json"))
+    with pytest.raises(MalformedRequestError) as failure:
+        list(listing(client, retired, TICKER, FIRST_HALF))
+    assert "retired /vX/reference/financials" in failure.value.message
+    assert "410" in failure.value.message
+    assert "uv lock --upgrade-package kanso" in str(failure.value.remedy)
 
 
 def test_a_listing_asked_for_under_the_wrong_version_is_a_404_and_not_a_refusal() -> None:
-    """A wrong prefix is a rejected request, which is a different thing to say than a plan.
-
-    The prefix this endpoint was first built with is the one under test here: the source
-    answers it with a bare 404 — no entitlement sentence, no empty page — so nothing can
-    mistake a mistyped path for a dataset the plan excludes or a window that held nothing.
-    """
-    stale = replace(FILINGS, template="/vX/reference/sec/filings")
-    client, _ = transport(Vendor(rows={"filings": [filing_row(date(2024, 8, 2))]}))
+    """A wrong prefix is a rejected request, which is a different thing to say than a plan:
+    the source answers it with a bare 404 — no entitlement sentence, no empty page."""
+    stale = replace(SPLITS, template="/vX/reference/splits")
+    client, _ = transport(Vendor(rows={"splits": [split_row(date(2021, 8, 31))]}))
     with pytest.raises(MalformedRequestError) as failure:
-        list(filings(client, TICKER, (date(2024, 8, 1), date(2024, 8, 3)), endpoint=stale))
+        list(listing(client, stale, TICKER, SPAN))
     assert "rejected the request" in failure.value.message
     assert "404" in failure.value.message
-
-
-def test_the_financials_listing_asks_for_a_page_the_source_will_serve() -> None:
-    """The ceiling is this endpoint's own, and the reference listings' is ten times it."""
-    assert dict(FINANCIALS.params)["limit"] == FINANCIALS_PAGE_LIMIT
-    assert int(FINANCIALS_PAGE_LIMIT) <= CEILING["financials"]
-    assert dict(FILINGS.params)["limit"] == PAGE_LIMIT
-    assert int(PAGE_LIMIT) > CEILING["financials"]
-
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29))]})
-    loader, replay = financials_loader(vendor)
-    (ref,) = loader.discover(financials_spec())
-    (point,) = list(loader.load(ref, SPAN))
-    assert point.ts_event == day_end_ns(date(2024, 6, 29))
-    assert {item.params["limit"] for item in replay.asked if "limit" in item.params} == {
-        FINANCIALS_PAGE_LIMIT
-    }
-
-
-def test_a_financials_page_wider_than_the_source_serves_is_rejected_outright() -> None:
-    """The limit this endpoint was first built with, and what the source does with it.
-
-    Not a short page and not an empty one: the request itself is refused, so a listing
-    asked for a thousand rows returns no statements at all rather than fewer of them.
-    """
-    wide = replace(
-        FINANCIALS,
-        params=tuple(
-            (name, PAGE_LIMIT if name == "limit" else value) for name, value in FINANCIALS.params
-        ),
-    )
-    client, _ = transport(Vendor(rows={"financials": [financials_row(date(2024, 6, 29))]}))
-    with pytest.raises(MalformedRequestError) as failure:
-        list(listing(client, wide, TICKER, SPAN))
-    assert "rejected the request" in failure.value.message
-
-
-def test_the_financials_listing_walks_its_cursor_at_the_page_the_source_serves() -> None:
-    """A hundred rows a page is not a hundred-row answer: the cursor carries the rest."""
-    periods = [date(2020, 1, 1) + timedelta(days=10 * step) for step in range(150)]
-    vendor = Vendor(
-        rows={"financials": [financials_row(period) for period in periods]},
-        paged=True,
-        page_size=int(FINANCIALS_PAGE_LIMIT),
-    )
-    loader, replay = financials_loader(vendor)
-    (ref,) = loader.discover(financials_spec())
-    points = list(loader.load(ref, SPAN))
-    assert [utc_day(point.ts_event) for point in points] == periods
-
-    walk = [
-        item for item in replay.asked if item.params.get("ticker") == TICKER or "/next/" in item.url
-    ]
-    assert len(walk) == 2
-    assert walk[0].params["limit"] == FINANCIALS_PAGE_LIMIT
-    assert walk[1].url == CURSOR.format(name="financials")
-    assert loader.manifest(ref).row_count == len(periods)
-
-
-def test_a_filing_record_is_a_value() -> None:
-    filing = Filing(
-        accession=ACCESSION,
-        form="10-Q",
-        ticker=TICKER,
-        filed_on=date(2024, 8, 2),
-        accepted_ns=1,
-        source_url=ARCHIVE,
-    )
-    assert filing.period_end is None
-    assert filing.payload()["accession"] == ACCESSION
 
 
 # --- into the store -------------------------------------------------------------------
@@ -1088,13 +1238,12 @@ class Store:
 
 def test_a_financials_dataset_is_one_the_store_accepts(tmp_path: Path) -> None:
     """The delayed publication it declares is one its own timestamps carry."""
-    vendor = Vendor(rows={"financials": [financials_row(date(2024, 6, 29))]})
-    loader, _ = financials_loader(vendor)
+    loader, _ = financials_loader()
     (ref,) = loader.discover(financials_spec())
-    written = write(Store(root=tmp_path), loader.load(ref, SPAN), ref=ref, source=loader.id)
+    written = write(Store(root=tmp_path), loader.load(ref, ref.span), ref=ref, source=loader.id)
     assert written.manifest.publication == "delayed"
     assert written.manifest.publication_rule == "fundamental"
-    assert written.manifest.span == (date(2024, 6, 29), date(2024, 6, 29))
+    assert written.manifest.span == (date(2026, 3, 28), date(2026, 6, 27))
     assert written.manifest.vendor == "massive"
     assert written.truncated
     assert "missing" in str(written.shortfall)
