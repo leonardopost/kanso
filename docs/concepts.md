@@ -412,10 +412,10 @@ restore. Three proposals into the demo:
 
 ```
 sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc
-93510e2	0.000000	0.000000	1	0	3.147	0.216	discard	baseline
-f729a53	9.986730	1.064759	2	1003	8.366	0.241	keep	fade a 2-sigma deviation from a 60-bar rolling mean
-340620b	5.285159	0.928893	3	1164	8.720	0.246	discard	exit at 1 sigma rather than half a sigma
-020aef2	0.000000	0.000000	4	0	1.003	0.213	crash	scale by a rolling sigma helper that does not exist (intentional crash)
+93510e2	0.000000	0.000000	1	0	4.077	0.215	discard	baseline
+f729a53	9.986730	0.971889	2	1003	10.487	0.235	keep	fade a 2-sigma deviation from a 60-bar rolling mean
+340620b	5.285159	0.759555	3	1164	12.993	0.228	discard	exit at 1 sigma rather than half a sigma
+020aef2	0.000000	0.000000	4	0	1.382	0.214	crash	scale by a rolling sigma helper that does not exist (intentional crash)
 ```
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
@@ -969,10 +969,29 @@ When a card's number is an improvement rather than an accident. Three clauses, a
 they are the loop's whole defence against fitting noise.
 
 **A metric arrives with its own noise floor.** The objective is computed on each of the
-research window's contiguous folds; the metric is their mean and `metric_se` their standard
-error. An improvement counts only when it clears `max(min_delta, k_se × metric_se)` — the
-operator's smallest interesting difference and the spread of the folds that produced the
-number. Both parameters are fixed at classification, before any result is seen.
+research window's contiguous folds; the metric is their mean, and `metric_se` is the error
+of that mean read off the series it is a mean of — the per-period returns for a contribution
+or a Sharpe, the per-trade edges for a per-trade objective. An improvement counts only when
+it clears `max(min_delta, k_se × metric_se)` — the operator's smallest interesting
+difference and the error of the number that would become the best. Both parameters are
+fixed at classification, before any result is seen.
+
+The error was once the spread of the fold means over the root of their count: four numbers,
+three degrees of freedom, scattering from half to one and a half times the true error card
+to card, and blind to how many trades or periods produced them, so four folds that happened
+to agree read as a number known exactly. Read off the series, a card of a thousand trades
+carries the error of a thousand trades, and each fold's mean contributes the window's
+dispersion over its own count. A Sharpe's error is Mertens' — skewness and fat tails widen
+it — fold by fold. Each is widened for the serial correlation the series shows, at
+Newey–West's customary lag (four at a hundred periods, eleven at ten thousand trades), and
+never narrowed: the spread of fold means it replaced was robust to correlation inside a
+fold without saying so, and this is what keeps that robustness. The lag covers a handful of
+trades, not a session, so a scalper whose trades move together through a day is priced
+only in part (`docs/backlog.md` row 171). A relative or benchmark objective's error is the
+paired one wherever the two runs share their periods: a contribution's per-period
+differences, a difference of Sharpes by Memmel's correction of Jobson–Korkie, a per-trade
+edge's difference linearised period by period. That one number is the card's, the keep
+floor's, the redundancy floor's, a certificate's `±` and every deflation gate's.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
@@ -981,22 +1000,33 @@ none scores zero and is averaged in like the rest. Over a research window of mon
 folds hold nearly as many sessions each and the two means nearly agree; over a window of a
 few sessions they need not, and that is the window a certificate measures (below).
 
-Here is the rule refusing a real improvement. The hypothesis carries `min_delta: 0.0` and
-`k_se: 1.0`; the neutral baseline above scored `0.000000`:
+Here is the rule on the filter. The hypothesis carries `min_delta: 0.0` and `k_se: 1.0`;
+the neutral baseline above scored `0.000000`:
 
 ```
 $ kanso research card demo_filter --desc "withhold entries in the first ten minutes of each hour"
-card       45cc54c · discard · withhold entries in the first ten minutes of each hour
-metric     0.273688 ± 0.437542 · 844 trade(s)
-cost       3.9s · 0.32 GB · trial 2
-best       f72bc11
-           strategy_integrity: pass — n_problems=0, problems=[]
-           max_drawdown: pass — limit_pct=15.0, max_drawdown_pct=0.3480137950000208
+error: 4d00282 held the same book as 2c6529e on 257 of 261 sessions (98%) and scored 0.273688 against its 0, inside the 0.461477 that separates two results here, so its result is already known and it is not an experiment; it is recorded as a redundant card and the lane copy has been restored
+remedy: move the result further than 0.461477 — a different instrument, side, set of sessions or holding over a session's end, or a size that changes the number and not only the book; `kanso research show demo_filter --sha 2c6529e` prints the card it repeats
 ```
 
-Every constraint passed and the metric went up. It was discarded anyway: `0.273688 − 0.0` is
-less than `max(0.0, 1.0 × 0.437542)`. The folds disagree with each other by more than the
-improvement is worth, so the improvement is not yet distinguishable from the disagreement.
+Every constraint passed and the metric went up, and it was not kept: `0.273688 − 0.0` is less
+than `max(0.0, 1.0 × 0.461477)`, the error of a difference of per-trade edges over 844 trades
+paired session by session with the host's, so the improvement is not yet distinguishable
+from the noise it was measured in. Declined by the keep rule, it was then a repeat — the same
+book as the baseline on 98% of sessions, a number within the same floor — and is recorded
+`redundant` (Card, above). Withholding the first half of each hour moves further:
+
+```
+$ kanso research card demo_filter --desc "withhold entries in the first half of each hour"
+card       9ea5a0b · keep · withhold entries in the first half of each hour
+metric     1.436577 ± 0.882818 · 549 trade(s)
+cost       8.4s · 0.23 GB · trial 3
+best       9ea5a0b
+           strategy_integrity: pass — n_problems=0, problems=[]
+           max_drawdown: pass — limit_pct=15.0, max_drawdown_pct=0.20953873499999465
+```
+
+`1.436577 − 0.0` clears `max(0.0, 1.0 × 0.882818)`, and the card is the run's best.
 
 **The comparison is strict.** Equal is not better. A loop that kept ties drifts across a
 plateau of indistinguishable strategies and calls the drift progress.
@@ -1597,9 +1627,9 @@ weight of Monday, Tuesday or Wednesday. Sessions earning 10, 20, 30, 40 and 50 b
 capital average 30 bp; the certificate records `(10 + 20 + 30 + 45) / 4 = 26.25`. The same
 bytes run in process return those five sessions exactly; the arithmetic is what differs.
 Which sessions share a fold follows from the hour the periods end — a daily bar published
-at 16:00 UTC puts Wednesday with Thursday instead — and the standard error is the spread of
-four fold means, so two sessions that disagree inside one fold cancel there rather than
-widening it. A fold that holds no period at all scores zero: Monday to Sunday in four folds
+at 16:00 UTC puts Wednesday with Thursday instead — and the error weighs each fold's mean by
+the sessions it holds, the window's dispersion over each fold's count. A fold that holds no
+period at all scores zero, and adds nothing to the error: Monday to Sunday in four folds
 leaves the last, from Saturday morning on, empty, and the week above is certified at
 `(10 + 25 + 45 + 0) / 4 = 20`. Only a window whose folds hold the same number of sessions
 each is certified at its mean per session; `docs/backlog.md` row 110 says what closing the

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from itertools import product
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.criteria import applicable_objectives, catalogue, objectives
 from kanso.criteria.objectives import (
@@ -28,6 +31,14 @@ from kanso.criteria.objectives import (
     wf_sharpe_net,
     wf_sharpe_vs_hold,
 )
+from kanso.criteria.quantities import (
+    contribution_series,
+    long_run_factor,
+    moments,
+    sharpe_variance,
+    variance,
+)
+from kanso.criteria.run import midnight_ns
 from kanso.errors import PreconditionError
 from kanso.schemas import Applies, Hypothesis
 from kanso.schemas.hypothesis import Mechanism
@@ -58,10 +69,28 @@ def edges(*values: float) -> Any:
     )
 
 
-def test_the_metric_is_the_mean_of_the_folds_and_the_error_their_spread() -> None:
+def test_the_metric_is_the_mean_of_the_folds_and_the_error_that_of_the_per_trade_mean() -> None:
+    """Four trades at 100, 200, 300 and 400 bp, one a fold: the variance of a trade is
+    50,000/3, and a series that climbs is persistent, so the allowance widens it by 1.25 —
+    one plus the Bartlett-weighted first autocovariance, 3,125 over 12,500 at lag one."""
     metric, error = net_edge_bps.compute(edges(100.0, 200.0, 300.0, 400.0), 4)
     assert metric == pytest.approx(250.0)
-    assert error == pytest.approx((50_000 / 3) ** 0.5 / 2)
+    assert error == pytest.approx((1.25 * 50_000 / 3) ** 0.5 / 2)
+
+
+def test_the_error_reads_the_trade_count_where_the_spread_of_folds_read_nothing() -> None:
+    """Every fold closes a 100 and a 300: four fold means of 200 agree exactly, and the spread
+    of the folds called that a zero error. Eight trades with a standard deviation of 106.9
+    say the mean is known to 106.9/sqrt(8); the trades alternate, so nothing is widened."""
+    days = [date(2024, 1, 1 + i) for i in range(4)]
+    run = build_run(
+        FOUR_DAYS,
+        trades=tuple(trade(day, pnl=pnl) for day in days for pnl in (100.0, 300.0)),
+    )
+    metric, error = net_edge_bps.compute(run, 4)
+    assert metric == pytest.approx(200.0)
+    assert net_edge_bps.fold_values(run, 4) == pytest.approx((200.0,) * 4)
+    assert error == pytest.approx((80_000 / 7) ** 0.5 / 8**0.5)
 
 
 def test_the_fold_values_are_the_statistic_on_each_contiguous_span() -> None:
@@ -81,7 +110,7 @@ def test_a_relative_objective_differences_the_folds_pairwise() -> None:
     assert values == pytest.approx((50.0, -50.0, 200.0, -100.0))
     metric, error = marginal_net_edge_bps.compute(candidate, 4, host)
     assert metric == pytest.approx(25.0)
-    assert error > 0
+    assert error == pytest.approx(17_500**0.5 / 2)
 
 
 def test_a_relative_objective_refuses_to_measure_without_a_host() -> None:
@@ -162,7 +191,7 @@ def test_the_contribution_is_the_return_per_period_on_the_capital_fold_by_fold()
     run = build_run((10.0, 20.0, 30.0, 40.0), capital=100_000.0)
     assert wf_contribution_bps.fold_values(run, 4) == pytest.approx((1.0, 2.0, 3.0, 4.0))
     metric, error = wf_contribution_bps.compute(run, 4)
-    assert (metric, error) == pytest.approx((2.5, (5 / 3) ** 0.5 / 2))
+    assert (metric, error) == pytest.approx((2.5, (1.25 * 5 / 3) ** 0.5 / 2))
 
 
 def test_a_period_in_cash_contributes_zero_and_pulls_the_mean_down() -> None:
@@ -336,3 +365,139 @@ def test_an_unaggregated_resolution_is_the_finest_grain_there_is() -> None:
 def test_the_history_length_counts_both_end_days() -> None:
     hyp: Hypothesis = make_hyp()
     assert history_days(hyp) == 366
+
+
+# -- the error each objective reports ---------------------------------------------------
+
+
+def shifted(run: Any, hours: int) -> Any:
+    """The same run with every period struck `hours` earlier: the same returns, not the same
+    instants, so it pairs with nothing struck at midnight."""
+    return build_run(
+        run.returns,
+        trades=run.trades,
+        capital=run.capital,
+        ends=tuple(end - hours * 3_600 * 10**9 for end in run.period_ends_ns),
+    )
+
+
+def test_a_fold_that_holds_no_period_adds_nothing_to_the_error() -> None:
+    """The week of seven days in four folds: the last holds nothing and scores the constant
+    zero. The other three hold one, two and two sessions of a five-session series."""
+    run = build_run(WEEK, capital=40_000.0, days=7)
+    series = contribution_series(run)
+    spread = variance(series) * long_run_factor(series)
+    _, error = wf_contribution_bps.compute(run, 4)
+    assert error == pytest.approx((spread / 1 + spread / 2 + spread / 2) ** 0.5 / 4)
+
+
+def test_a_marginal_contribution_that_adds_a_constant_is_known_exactly() -> None:
+    """Paired by period, a modifier that adds 2 bp to every session of a host whose sessions
+    swing widely has a difference that does not vary at all."""
+    host = build_run((10.0, -50.0, 80.0, -30.0), capital=100_000.0)
+    combined = build_run((30.0, -30.0, 100.0, -10.0), capital=100_000.0)
+    metric, error = marginal_wf_contribution_bps.compute(combined, 4, host=host)
+    assert (metric, error) == pytest.approx((2.0, 0.0))
+
+
+def test_a_marginal_contribution_whose_periods_do_not_pair_sums_both_errors() -> None:
+    host = build_run((10.0, -50.0, 80.0, -30.0), capital=100_000.0)
+    combined = build_run((30.0, -30.0, 100.0, -10.0), capital=100_000.0)
+    _, own = wf_contribution_bps.compute(combined, 4)
+    _, against = wf_contribution_bps.compute(host, 4)
+    _, error = marginal_wf_contribution_bps.compute(combined, 4, host=shifted(host, 1))
+    assert error == pytest.approx((own**2 + against**2) ** 0.5)
+
+
+def test_a_marginal_edge_that_adds_a_constant_to_every_trade_is_known_exactly() -> None:
+    """Paired by the period each trade closed in, a modifier that improves every trade of a
+    host by 10 bp moves each period's influence on the edge not at all."""
+    days = [date(2024, 1, 1 + i) for i in range(4)]
+    host = build_run(
+        FOUR_DAYS,
+        trades=tuple(trade(d, pnl=p) for d, p in zip(days, (100, 300, -200, 500), strict=True)),
+    )
+    combined = build_run(
+        FOUR_DAYS,
+        trades=tuple(
+            trade(d, pnl=p + 10) for d, p in zip(days, (100, 300, -200, 500), strict=True)
+        ),
+    )
+    metric, error = marginal_net_edge_bps.compute(combined, 4, host=host)
+    assert metric == pytest.approx(10.0)
+    assert error == pytest.approx(0.0)
+    _, apart = marginal_net_edge_bps.compute(combined, 4, host=shifted(host, 1))
+    _, own = net_edge_bps.compute(combined, 4)
+    _, against = net_edge_bps.compute(host, 4)
+    assert apart == pytest.approx((own**2 + against**2) ** 0.5)
+
+
+def test_a_marginal_edge_reads_only_the_folds_a_run_traded_in() -> None:
+    """Monday to Sunday in four folds, periods struck at 16:00 on the five weekdays. The
+    host trades Monday to Thursday and the combined run Monday and Tuesday, then Thursday
+    at 20:00 — after Thursday's period, which is the last of its fold, so it counts there.
+    The third fold, Wednesday afternoon to Friday, holds a trade of each; the last, from
+    Saturday morning, holds no period at all and adds nothing."""
+    days = [date(2024, 1, 1 + i) for i in range(7)]
+    ends = tuple(midnight_ns(day) + 16 * 3_600 * 10**9 for day in days[:5])
+    host = build_run(
+        (0.0,) * 5,
+        days=7,
+        ends=ends,
+        trades=tuple(trade(day, pnl=p) for day, p in zip(days, (10, 30, 20, 40), strict=False)),
+    )
+    late = trade(days[3], pnl=70.0)
+    late = replace(late, closed_ns=midnight_ns(days[3]) + 20 * 3_600 * 10**9)
+    combined = build_run(
+        (0.0,) * 5,
+        days=7,
+        ends=ends,
+        trades=(trade(days[0], pnl=12.0), trade(days[1], pnl=28.0), late),
+    )
+    assert [len(fold.period_ends_ns) for fold in combined.folds(4)] == [2, 1, 2, 0]
+    _, error = marginal_net_edge_bps.compute(combined, 4, host=host)
+    assert error > 0.0
+    alone = build_run((0.0,) * 5, days=7, ends=ends, trades=host.trades[:1])
+    assert marginal_net_edge_bps.compute(alone, 4, host=alone) == pytest.approx((0.0, 0.0))
+
+
+def test_an_absolute_sharpe_varies_by_mertens_fold_by_fold() -> None:
+    returns = (1.0, 3.0, 2.0, 4.0, 1.0, 5.0, 2.0, 6.0)
+    run = build_run(returns)
+    shape = moments(returns)
+    factor = long_run_factor(returns)
+    expected = sum(
+        sharpe_variance(fold.returns, fold.window, factor, shape) for fold in run.folds(4)
+    )
+    assert wf_sharpe_net.compute(run, 4)[1] == pytest.approx(expected**0.5 / 4)
+
+
+def test_a_marginal_sharpe_of_a_modifier_that_changes_nothing_is_known_exactly() -> None:
+    """Paired by Memmel, the same returns twice differ by nothing; struck at other instants
+    they are two independent Sharpes, and the error is both of theirs."""
+    run = build_run((1.0, 3.0, 2.0, 4.0, 1.0, 5.0, 2.0, 6.0))
+    assert marginal_wf_sharpe.compute(run, 4, host=run) == pytest.approx((0.0, 0.0))
+    _, own = wf_sharpe_net.compute(run, 4)
+    _, apart = marginal_wf_sharpe.compute(run, 4, host=shifted(run, 1))
+    assert apart == pytest.approx((2 * own**2) ** 0.5)
+
+
+def test_a_benchmark_sharpe_is_paired_against_the_hold_as_a_marginal_one_is_against_a_host() -> (
+    None
+):
+    candidate = build_run((1.0, 3.0, 2.0, 4.0, 1.0, 5.0, 2.0, 6.0))
+    hold = build_run((1.0, 2.0, 1.0, 2.0, 3.0, 1.0, 3.0, 1.0))
+    assert wf_sharpe_vs_hold.compute(candidate, 4, benchmark=hold)[1] == pytest.approx(
+        marginal_wf_sharpe.compute(candidate, 4, host=hold)[1]
+    )
+
+
+@given(st.lists(st.floats(-1_000.0, 1_000.0, allow_nan=False), min_size=1, max_size=40))
+def test_one_fold_s_error_is_the_per_period_error_of_the_mean_widened(returns: list[float]) -> None:
+    run = build_run(tuple(returns), capital=100_000.0)
+    series = contribution_series(run)
+    _, error = wf_contribution_bps.compute(run, 1)
+    assert error >= 0.0
+    assert error == pytest.approx(
+        (variance(series) * long_run_factor(series) / len(series)) ** 0.5, abs=1e-12
+    )

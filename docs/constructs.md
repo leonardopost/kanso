@@ -334,9 +334,13 @@ error: objective.id: 'net_edge_bps' does not apply to this hypothesis; the appli
 ```
 
 The relative objectives are **differenced fold by fold**, not as a difference of two
-summaries, so the standard error an improvement has to clear is the paired one. That is what
-makes the keep rule's noise floor mean anything for an attached construct: the host's own
-variation is subtracted out before the spread is measured.
+summaries, and their error is the paired one wherever the combined run and the host's struck
+their returns at the same instants: the per-period differences of a contribution, Memmel's
+correction of Jobson–Korkie for a difference of Sharpes, and for a per-trade edge each run's
+edge linearised period by period and differenced, since no trade of one run is a trade of the
+other. That is what makes the keep rule's noise floor mean anything for an attached
+construct: the host's own variation is subtracted out before the error is measured. Runs
+whose periods differ are taken as independent, which can only overstate the error.
 
 `wf_sharpe_vs_hold` is the same pairing against a benchmark rather than a host. It applies
 only where the hypothesis declares `benchmark: {hold: first_leg}` (`docs/workspace.md`), and

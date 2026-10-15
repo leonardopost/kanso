@@ -755,7 +755,7 @@ def _measure(
     host_run: CardRun | None,
     benchmark_run: CardRun | None = None,
 ) -> tuple[float, float]:
-    """The objective and its standard error over the run's folds."""
+    """The objective over the run's folds, and the error of that mean."""
     ref = setup.hyp.objective
     if ref is None:  # pragma: no cover - a classified hypothesis always carries one
         return 0.0, 0.0
