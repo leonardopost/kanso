@@ -284,6 +284,7 @@ def test_a_certificate_with_no_bootstrap_gate_resamples_this_modules_own_count(
 def test_an_attached_constructs_evidence_describes_another_subject_and_is_not_reused(
     ws: Workspace, store: StateStore
 ) -> None:
+    whole_paper_stage(ws)
     certified_sleeve(ws, store)
     first = compose(ws, store, HYP_ID)
     certified_filter(

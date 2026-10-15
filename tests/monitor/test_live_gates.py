@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date
+from math import sqrt
 
+import pytest
+
+from kanso.criteria.band import Z
 from kanso.criteria.gates.daily_loss_kill import gate as daily_loss_kill
 from kanso.criteria.gates.fill_quality_drift import gate as fill_quality_drift
+from kanso.criteria.gates.live_drift import NO_DISPERSION, NO_PERIOD
 from kanso.criteria.gates.live_drift import gate as live_drift
 from kanso.criteria.objectives import wf_sharpe_vs_hold
 from kanso.monitor.stage import SIMULATED
 
-from .builders import gate_context, hypothesis, run_over, stage_record
+from .builders import PERIODS, SE, flat_run, gate_context, hypothesis, run_over, stage_record
 
 DAY_S = 86_400.0
 WEEK_S = 7 * DAY_S
@@ -21,14 +26,46 @@ WEEK_S = 7 * DAY_S
 
 
 def test_a_live_book_still_inside_its_band_passes() -> None:
-    """A flat run scores zero, and a floor below zero is not fallen through."""
-    result = live_drift.evaluate(
-        gate_context(stage="live", record=stage_record(stage="live", paper_window_s=WEEK_S))
-    )
+    """A flat run scores zero, and a floor below zero is not fallen through.
 
+    The floor is the lower end of the band struck for the rolling week, not of the
+    certification window's: the value's error widened by the week's own folds.
+    """
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+    result = live_drift.evaluate(gate_context(stage="live", record=record))
+
+    closes = record.clock_ns + 1
+    week = flat_run().between(closes - int(WEEK_S * 1_000_000_000), closes)
+    assert [len(fold.returns) for fold in week.folds(4)] == [1, 2, 2, 2]
+    # A Sharpe's fold of one period scores nothing, so three folds of two strike the band.
     assert result.passed
     assert result.skipped is None
-    assert result.evidence["floor"] == -0.5
+    assert result.evidence["floor"] == pytest.approx(-Z * SE * sqrt(1 + PERIODS * 1.5 / 16))
+    assert result.evidence["expected"] == 0.0
+
+
+def test_a_rolling_window_with_no_period_is_not_judged() -> None:
+    """A week the stage replayed no data into says nothing, and demotes nothing."""
+    quiet = run_over((0.0,) * 5)
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+
+    result = live_drift.evaluate(gate_context(stage="live", record=record, run=quiet))
+
+    assert result.passed
+    assert result.skipped == NO_PERIOD
+
+
+def test_an_expectation_with_no_error_strikes_no_floor_and_says_so() -> None:
+    record = stage_record(stage="live", paper_window_s=WEEK_S)
+    older = replace(
+        gate_context(stage="live", record=record),
+        expectation={"objective_id": "wf_sharpe_net", "value": 0.0, "ci90": [-0.5, 0.5]},
+    )
+
+    result = live_drift.evaluate(older)
+
+    assert result.passed
+    assert result.skipped == NO_DISPERSION
 
 
 def test_a_live_book_below_the_lower_bound_fails() -> None:
@@ -36,7 +73,7 @@ def test_a_live_book_below_the_lower_bound_fails() -> None:
         gate_context(
             stage="live",
             record=stage_record(stage="live", paper_window_s=WEEK_S),
-            ci90=(1.0, 2.0),
+            value=1.5,
         )
     )
 
@@ -50,7 +87,7 @@ def test_beating_the_band_is_not_a_failure() -> None:
         gate_context(
             stage="live",
             record=stage_record(stage="live", paper_window_s=WEEK_S),
-            ci90=(-3.0, -2.0),
+            value=-2.5,
         )
     )
 
@@ -126,7 +163,7 @@ def test_it_skips_without_an_expectation_or_an_objective() -> None:
     record = stage_record(stage="live", paper_window_s=WEEK_S)
 
     assert (
-        live_drift.evaluate(gate_context(stage="live", record=record, ci90=None)).skipped
+        live_drift.evaluate(gate_context(stage="live", record=record, value=None)).skipped
         is not None
     )
     assert (

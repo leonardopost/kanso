@@ -354,7 +354,8 @@ host (every attached construct but `alpha`) have no objective that measures a ho
 series: `templates/strategy_hold.py` through the same runner, so its costs, splits, book and
 warmup are the strategy's own arithmetic. The bootstrap band a certificate and an expectation
 record for it is the resampled Sharpe of the strategy's trades less the hold's fold-wise
-Sharpe, so the paper and live gates compare a realised difference with a band of differences.
+Sharpe, a band of differences; the paper and live gates compare a realised difference with
+the band they strike from the expectation's value — a difference — and its paired error.
 
 ## Adding one
 

@@ -1,8 +1,14 @@
 """Whether a live version is still the version that was measured, or has drifted below it.
 
-A strategy that passed its paper window arrives on the live stage carrying one number: the
-interval composition measured for its objective. This gate re-measures that objective on the
-live book and asks only that it has not fallen through the bottom of that interval.
+A strategy that passed its paper window arrives on the live stage carrying what composition
+measured of its objective — the value, its error and the periods it was read over, struck
+again at the share the live stage funds it with. This gate re-measures that objective on the
+live book and asks only that it has not fallen through the bottom of the band those strike
+for the window it re-measures over: a prediction band for a window of that many periods
+(`kanso.criteria.band`), whose lower end a version that is what was certified falls below
+one time in twenty. A confidence band of the certified value would be no floor for a window
+a fraction of the certification window's length — a version behaving exactly as certified
+would fall through it far more often than that, and be demoted for being measured.
 
 **The comparison is one-sided.** A version doing better than expected is not evidence of a
 fault, and demoting on it would demote every version that met a good market. Only the lower
@@ -25,6 +31,7 @@ from __future__ import annotations
 
 from typing import ClassVar, Final
 
+from kanso.criteria.band import prediction
 from kanso.criteria.context import Gate, GateContext, skipped, verdict
 from kanso.criteria.objectives import REGISTRY, Objective
 from kanso.monitor.stage import NS_PER_SECOND, StageRecord
@@ -34,7 +41,12 @@ NO_STAGE: Final = "no stage record was supplied, so there is no clock to roll ag
 NO_PAPER_WINDOW: Final = "the paper window that set the expectation is unknown"
 NO_EXPECTATION: Final = "the version carries no expectation, so there is no floor to hold"
 NO_OBJECTIVE: Final = "the hypothesis carries no objective to measure"
+NO_DISPERSION: Final = (
+    "the version's expectation records no error or period count, so no floor can be struck "
+    "for the rolling window; the stage's next deploy measures it again"
+)
 TOO_SHORT: Final = "live for less than the paper window, so the two are not yet comparable"
+NO_PERIOD: Final = "the rolling window holds no return period, so there is nothing to judge"
 
 
 class _LiveDrift:
@@ -48,8 +60,7 @@ class _LiveDrift:
         window_s = ctx.session.paper_window_s
         if window_s is None or window_s <= 0:
             return skipped(self.id, NO_PAPER_WINDOW)
-        floor = _floor(ctx)
-        if floor is None:
+        if ctx.expectation is None:
             return skipped(self.id, NO_EXPECTATION)
         objective = _objective(ctx)
         if objective is None:
@@ -59,29 +70,27 @@ class _LiveDrift:
         closes = ctx.session.clock_ns + 1
         opens = closes - int(window_s * NS_PER_SECOND)
         rolling = ctx.run.between(opens, closes)
+        band = prediction(objective, ctx.expectation, rolling, ctx.research_folds)
+        if band is None:
+            return skipped(self.id, NO_DISPERSION)
+        if not band.periods:
+            return skipped(self.id, NO_PERIOD)
         # The benchmark rolls with the book: a difference is only paired over one span.
         against = None if ctx.benchmark_run is None else ctx.benchmark_run.between(opens, closes)
         realised = objective.compute(rolling, ctx.research_folds, ctx.host_run, against)[0]
         return verdict(
             self.id,
-            realised >= floor,
+            realised >= band.low,
             {
                 "objective": objective.id,
                 "realised": realised,
-                "floor": floor,
+                "floor": band.low,
+                "expected": band.expected,
                 "window_s": window_s,
                 "rolling_window": [rolling.window[0].isoformat(), rolling.window[1].isoformat()],
-                "n_periods": len(rolling.returns),
+                "n_periods": band.periods,
             },
         )
-
-
-def _floor(ctx: GateContext) -> float | None:
-    """The lower bound of the version's 90% interval, or `None` when it has none."""
-    values = (ctx.expectation or {}).get("ci90")
-    if not isinstance(values, list | tuple) or len(values) != 2:
-        return None
-    return float(values[0])
 
 
 def _objective(ctx: GateContext) -> Objective | None:

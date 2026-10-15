@@ -1632,18 +1632,21 @@ from, and nothing is stated: the plan says so on its `power` line, and the certi
 carries no `power`.
 
 **A paper window is chosen against the certification window, and `cert plan` says so when it
-is not.** The paper gate compares the objective a stage realises against the interval
-composition measured over the *certification* window: two estimates of the same quantity, and
-the shorter one scatters more widely around a band that does not widen with it. So a plan
-that judges a fortnight against a year is asking a sound version to look drifted, and the
-command warns — with the two spans and how much noisier the shorter one is — while pinning
-the plan anyway. The plan is the planner's and the windows are yours; the warning is all kanso
-has to say about the pair, and a short paper window you meant is a short paper window you get.
+is not.** The paper gate compares the objective a stage realises against a band struck for the
+paper window's own length from what composition measured over the *certification* window —
+the value's error and the paper window's, together (*Promotion and demotion*). A version
+behaving as certified lands inside it nine times in ten however short the window, but a
+short window widens the band until a version that has stopped working lands inside it too:
+a fortnight against a year strikes a band about five times as wide as the certification
+value's own. So under a tenth of the certification window the command warns — with the two
+spans and how much wider the band is — while pinning the plan anyway. The plan is the
+planner's and the windows are yours; the warning is all kanso has to say about the pair, and a
+short paper window you meant is a short paper window you get.
 
 ```
 $ kanso cert plan demo_mr                 # the gates, the exclusions and the last two lines are elided
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
-warning    paper window 5d against a 145d certification window · the paper objective is about 5x noisier than the band it is judged against, so a version behaving as certified can read as drifted · raise min_duration or horizon_mult, or narrow windows.certification
+warning    paper window 5d against a 145d certification window · the paper band is about 5x as wide as the certification value's own, so a version that has lost its edge can land inside it · raise min_duration or horizon_mult
 ```
 
 **A certificate is immutable, and that is what makes it evidence.** It records one
@@ -1926,11 +1929,34 @@ deployment, demotion, halting a stage. Moving a version onto real capital does n
 What moves a paper version to `promotable` is one gate, `paper_forward`, and it is strict
 both ways: the version must have been on the stage for the longer of the plan's minimum
 duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
-objective it realised must fall **inside** the ninety-percent interval composition
-measured, above the band as much a fail as below it, because a stage that out-performs its
+objective it realised must fall **inside** the band struck for the paper window it realised
+it over, above the band as much a fail as below it, because a stage that out-performs its
 certification is not reproducing what was certified. Of the sleeve's card-stage constraints it
 judges `max_drawdown` and `maintenance_margin` on the stage's own run, and a breach of either
 is a fail. `docs/cli.md` has the pass.
+
+**The band is a prediction band for the paper window, not a confidence band of the
+certification.** The realised value and the certified one are two estimates of one quantity,
+the paper window's usually the shorter, and their difference varies as both do. Each fold of
+a window of `m` periods varies as `s²/m`, `s² = se² × N` the per-period dispersion the
+certification window's `N` periods showed — its own error says so — so the band is
+
+```
+expected ± 1.645 × √(se² + se² × N × Σ 1/m_k / K²)
+```
+
+over the paper window's `K = [research] folds` folds of `m_k` periods. In `K` equal folds of a
+window of `M` periods that is `expected ± 1.645 × se × √(1 + N/M)`: a version that is what was
+certified lands inside nine times in ten whatever the window's length, and the evidence states
+the band, that coverage and the periods it was struck for. `expected` is the certified value
+scaled to the folds the window filled, since the objective scores a fold holding nothing as
+zero. The interval composition recorded — the bootstrap's band of the certification value —
+is not what paper is judged against: a version behaving exactly as certified lands inside it
+26% of the time over five sessions against 122 and 76% even over 122, and above it as often
+as below. A short paper window makes the band wide enough to hold a version that stopped
+working, which is what `cert plan` warns about; `live_drift` holds a live version to the lower
+end of the band struck for its rolling window, which one behaving as certified falls below one
+time in twenty.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything
