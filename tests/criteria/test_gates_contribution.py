@@ -164,14 +164,14 @@ def test_deflated_contribution_deflates_by_the_error_the_card_carried() -> None:
 
 # --- deflated_edge --------------------------------------------------------------
 
-EDGE_DAYS = [date(2024, 1, 1 + i) for i in range(4)]
-EDGES = tuple(trade(day, pnl=pnl) for day in EDGE_DAYS for pnl in (10.0, 30.0))
-"""Two trades a day for four days, at 10 and 30 bp: a mean of 20 bp a trade whose eight
-trades alternate, so the error is the plain 10.69/sqrt(8)."""
+EDGE_DAYS = [date(2024, 1, 1 + i) for i in range(8)]
+EDGES = tuple(trade(day, pnl=pnl) for day, pnl in zip(EDGE_DAYS, (10.0, 30.0) * 4, strict=True))
+"""A trade a day for eight days, at 10 and 30 bp in turn: a mean of 20 bp a trade whose eight
+sessions alternate, so the error is the plain 10.69/sqrt(8)."""
 
 
 def edge_context(**overrides: Any) -> Any:
-    research = build_run((0.0,) * 4, trades=EDGES)
+    research = build_run((0.0,) * 8, trades=EDGES)
     fields: dict[str, Any] = {
         "hyp": make_hyp(),
         "stage": "cert",
@@ -210,12 +210,14 @@ def test_deflated_edge_fails_an_edge_a_wide_search_would_have_found_by_chance() 
 
 
 def test_the_marginal_edge_is_deflated_against_the_host_paired_by_period() -> None:
-    """20 bp a trade against a host's 5, 15, -5 and 25: ten more a trade, and an error read
-    off the period-by-period differences of the two runs' influence on their edges."""
+    """20 bp a trade against a host's 5, 15, -5 and 25 twice over: ten more a trade, and an
+    error read off the period-by-period differences of the two runs' influence on their
+    edges."""
     host = build_run(
-        (0.0,) * 4,
+        (0.0,) * 8,
         trades=tuple(
-            trade(day, pnl=pnl) for day, pnl in zip(EDGE_DAYS, (5.0, 15.0, -5.0, 25.0), strict=True)
+            trade(day, pnl=pnl)
+            for day, pnl in zip(EDGE_DAYS, (5.0, 15.0, -5.0, 25.0) * 2, strict=True)
         ),
     )
     marginal = make_hyp(
@@ -241,8 +243,13 @@ def test_deflated_edge_is_skipped_on_a_contribution() -> None:
         {"params": {}},
         {"trial_metrics": (1.0,)},
         {"research_run": None},
-        {"research_run": build_run((0.0,) * 4, trades=EDGES[:2])},
-        {"research_run": build_run((0.0,) * 4, trades=tuple(trade(d, pnl=5.0) for d in EDGE_DAYS))},
+        {"research_run": build_run((0.0,) * 8, trades=EDGES[:2])},
+        {"research_run": build_run((0.0,) * 8, trades=tuple(trade(d, pnl=5.0) for d in EDGE_DAYS))},
+        {
+            "research_run": build_run(
+                (0.0,) * 8, trades=tuple(trade(d, pnl=p) for d in EDGE_DAYS for p in (10.0, 30.0))
+            )
+        },
     ],
 )
 def test_deflated_edge_without_its_context_judges_nothing(overrides: Any) -> None:

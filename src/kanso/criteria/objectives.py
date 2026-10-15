@@ -14,9 +14,13 @@ freedom — which scattered from half to one and a half times the true error car
 and never read the trade count at all. Folds are disjoint spans, so the mean of `K` fold
 values has the variance `Σ Var(v_k) / K²`, and each fold value's variance is read off the
 window's own per-period or per-trade series: the variance of a mean over the fold's count
-for the contribution and the per-trade edge, Mertens' variance of a Sharpe for a Sharpe,
-each widened — never narrowed — for serial correlation (`quantities.long_run_factor`). A
-fold whose value is the constant zero by construction contributes nothing. That one number
+of periods for the contribution, Mertens' variance of a Sharpe for a Sharpe, and for the
+per-trade edge the variance of its linearisation period by period — the edge is a ratio of
+what the trades earned to how many there were, and its error is read off how far each
+period's trades moved it, so the trades of one session that one regime moves together are
+priced as one session's worth and not as so many independent draws. Each is widened — never
+narrowed — for serial correlation across periods (`quantities.long_run_factor`). A fold
+whose value is the constant zero by construction contributes nothing. That one number
 is what a card's `metric_se`, the keep floor, the redundancy floor, a certificate's `±`,
 every deflation gate and the power a certification is stated at read; none of them
 computes an error of its own.
@@ -24,8 +28,8 @@ computes an error of its own.
 A relative or benchmark objective's error is the paired one wherever the two runs share
 their periods, because the host's own variation is in both and is not what a marginal
 improvement has to beat: a contribution's per-period differences, a difference of Sharpes
-by Memmel's correction of Jobson–Korkie, a difference of per-trade edges by linearising
-each run's per-trade mean period by period (trades of two runs pair nowhere else). Runs
+by Memmel's correction of Jobson–Korkie, a difference of per-trade edges by differencing the
+two runs' linearisations period by period (trades of two runs pair nowhere else). Runs
 whose periods differ are taken as independent and their variances summed, which can only
 overstate the error of two runs that share trades.
 
@@ -66,7 +70,6 @@ from kanso.criteria.quantities import (
     contribution_series,
     correlation,
     edge_bps,
-    edge_series,
     long_run_factor,
     mean,
     moments,
@@ -219,58 +222,76 @@ def _contribution_variances(
 
 
 def _edge_variances(run: CardRun, own: Folds, against: CardRun | None, other: Folds) -> list[float]:
-    """A per-trade edge is a mean of per-trade returns: the variance of each fold's mean
-    over its trades, or of the difference of two runs' means linearised period by period."""
+    """A per-trade edge's variance, read period by period: each fold's edge linearised over
+    its periods, or the period-by-period difference of two runs' for a marginal one.
+
+    Not the variance of a mean of the trades taken one by one. That reads forty clips a
+    session as forty draws, and simulated in October 2026 on sixty sessions of twenty and of
+    forty trades it reported 0.62 to 0.84 of the spread the edge actually had once a fiftieth
+    to a tenth of each trade's variance was a session effect the session's trades shared —
+    a scalper's ordinary case — so the keep floor, a certificate's `±` and the deflation were
+    each that much too narrow. Read period by period, the same runs reported 0.97 to 1.15;
+    on trades that share nothing it is the per-trade error again, on fewer degrees of
+    freedom.
+    """
     if against is None:
-        return _of_means(own, edge_series)
+        return _linearised(own, edge_bps(run))
     if not _paired(run, against):
-        return _summed(_of_means(own, edge_series), _of_means(other, edge_series))
+        return _summed(_linearised(own, edge_bps(run)), _linearised(other, edge_bps(against)))
     ratios = edge_bps(run), edge_bps(against)
     differences: list[float] = []
     counts: list[int] = []
     for mine, theirs in zip(own, other, strict=True):
-        ends = mine.period_ends_ns
-        if not ends or not (mine.trades or theirs.trades):
+        found = (_influence(mine, ratios[0]), _influence(theirs, ratios[1]))
+        width = next((len(part) for part in found if part is not None), 0)
+        if not width:
             counts.append(0)
             continue
-        differences.extend(
-            a - b
-            for a, b in zip(
-                _influence(mine, ends, ratios[0]),
-                _influence(theirs, ends, ratios[1]),
-                strict=True,
-            )
-        )
-        counts.append(len(ends))
+        a, b = (part if part is not None else [0.0] * width for part in found)
+        differences.extend(x - y for x, y in zip(a, b, strict=True))
+        counts.append(width)
     return variances_of_means(differences, counts)
 
 
-def _influence(fold: CardRun, ends: tuple[int, ...], ratio: float) -> list[float]:
-    """Each period's first-order contribution to this fold's per-trade edge.
+def _linearised(folds: Folds, ratio: float) -> list[float]:
+    """The variance of each fold's per-trade edge, read off its periods' influences on it."""
+    each = [_influence(fold, ratio) for fold in folds]
+    return variances_of_means(
+        [u for part in each if part is not None for u in part],
+        [0 if part is None else len(part) for part in each],
+    )
+
+
+def _influence(fold: CardRun, ratio: float) -> list[float] | None:
+    """Each period's first-order contribution to this fold's per-trade edge, or `None` for a
+    fold that closed no trade, whose edge is the constant zero and varies by nothing.
 
     A fold's edge is a ratio — what its trades earned over how many there were — and to first
     order it moves by the mean over its periods of `u_p = (E_p − R·M_p) / M̄`, `E_p` the edges
     of the trades closing in period `p`, `M_p` their count, `M̄` the fold's trades per period
-    and `R` the run's edge over the window. Two runs over the same periods therefore differ by
-    the mean of `u_p − u'_p`, and its variance is read off those differences as any mean's is
-    — which is how a per-trade edge is paired when no trade of one run is a trade of the
-    other. Taking `R` over the window rather than the fold leaves a fold's own departure from
-    it in the differences, which can only widen the error. A trade belongs to the first period
-    ending at or after its close; one that closed after the fold's last period end, which a
-    fold's calendar edge can leave it, to the last. A run that closed nothing in the fold
-    scores the constant zero there, and contributes nothing.
+    and `R` the run's edge over the window. Its variance is therefore read off the `u_p` as any
+    mean's is, over the fold's periods, and trades of one period that move together move one
+    `u_p`; two runs over the same periods differ by the mean of `u_p − u'_p`, which is how a
+    per-trade edge is paired when no trade of one run is a trade of the other. Taking `R`
+    over the window rather than the fold leaves a fold's own departure from it in the
+    influences, which can only widen the error. A trade belongs to the first period ending at
+    or after its close; one that closed after the fold's last period end, which a fold's
+    calendar edge can leave it, to the last; and a fold that holds no period end at all holds
+    its trades in one period.
     """
-    totals = [0.0] * len(ends)
-    counts = [0] * len(ends)
+    ends = fold.period_ends_ns
+    periods = max(len(ends), 1)
+    totals = [0.0] * periods
+    counts = [0] * periods
     for trade in fold.trades:
         if trade.notional > 0:
-            at = min(bisect_left(ends, trade.closed_ns), len(ends) - 1)
+            at = min(bisect_left(ends, trade.closed_ns), periods - 1)
             totals[at] += trade.pnl_net / trade.notional * BPS
             counts[at] += 1
     traded = sum(counts)
     if not traded:
-        return totals
-    per_period = traded / len(ends)
+        return None
+    per_period = traded / periods
     return [(e - ratio * m) / per_period for e, m in zip(totals, counts, strict=True)]
 
 

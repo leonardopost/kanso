@@ -412,10 +412,10 @@ restore. Three proposals into the demo:
 
 ```
 sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc
-93510e2	0.000000	0.000000	1	0	4.077	0.215	discard	baseline
-f729a53	9.986730	0.971889	2	1003	10.487	0.235	keep	fade a 2-sigma deviation from a 60-bar rolling mean
-340620b	5.285159	0.759555	3	1164	12.993	0.228	discard	exit at 1 sigma rather than half a sigma
-020aef2	0.000000	0.000000	4	0	1.382	0.214	crash	scale by a rolling sigma helper that does not exist (intentional crash)
+93510e2	0.000000	0.000000	1	0	5.266	0.216	discard	baseline
+f729a53	9.986730	1.065174	2	1003	14.121	0.231	keep	fade a 2-sigma deviation from a 60-bar rolling mean
+340620b	5.285159	0.838720	3	1164	13.954	0.249	discard	exit at 1 sigma rather than half a sigma
+020aef2	0.000000	0.000000	4	0	1.334	0.213	crash	scale by a rolling sigma helper that does not exist (intentional crash)
 ```
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
@@ -975,28 +975,31 @@ they are the loop's whole defence against fitting noise.
 **A metric arrives with its own noise floor.** The objective is computed on each of the
 research window's contiguous folds; the metric is their mean, and `metric_se` is the error
 of that mean read off the series it is a mean of — the per-period returns for a contribution
-or a Sharpe, the per-trade edges for a per-trade objective. An improvement counts only when
-it clears `max(min_delta, k_se × metric_se)` — the operator's smallest interesting
-difference and the error of the number that would become the best. Both parameters are
-fixed at classification, before any result is seen.
+or a Sharpe, the per-trade edges taken period by period for a per-trade objective. An
+improvement counts only when it clears `max(min_delta, k_se × metric_se)` — the operator's
+smallest interesting difference and the error of the number that would become the best. Both
+parameters are fixed at classification, before any result is seen.
 
 The error was once the spread of the fold means over the root of their count: four numbers,
 three degrees of freedom, scattering from half to one and a half times the true error card
 to card, and blind to how many trades or periods produced them, so four folds that happened
-to agree read as a number known exactly. Read off the series, a card of a thousand trades
-carries the error of a thousand trades, and each fold's mean contributes the window's
-dispersion over its own count. A Sharpe's error is Mertens' — fat tails widen it, and skew
-widens or narrows it with the sign of the edge — fold by fold. Each is widened for the
-serial correlation the series shows, at Newey–West's customary lag (four at a hundred
-periods, eleven at ten thousand trades), and never narrowed: the spread of fold means it
-replaced was robust to correlation inside a fold without saying so, and this is what keeps
-that robustness. The lag covers a handful of trades, not a session, so a scalper whose
-trades move together through a day is priced only in part (`docs/backlog.md` row 171). A
-relative or benchmark objective's error is the paired one wherever the two runs share their
-periods: a contribution's per-period differences, a difference of Sharpes by Memmel's
-correction of Jobson–Korkie, a per-trade edge's difference linearised period by period. That
-one number is the card's, the keep floor's, the redundancy floor's, a certificate's `±` and
-every deflation gate's.
+to agree read as a number known exactly. Read off the series, each fold's mean contributes
+the window's dispersion over its own count of periods. A Sharpe's error is Mertens' — fat
+tails widen it, and skew widens or narrows it with the sign of the edge — fold by fold. A
+per-trade edge is a ratio, what the trades earned over how many there were, and its error is
+read off how far each period's trades moved it: forty clips a session that one regime moves
+together are one session's worth of evidence, not forty draws. Read trade by trade, sixty
+simulated sessions of twenty and forty clips whose trades shared a fiftieth to a tenth of
+their variance reported 0.62 to 0.84 of the error the edge really had; read period by
+period, 0.97 to 1.15. Each is widened for the serial correlation the series shows across
+periods, at Newey–West's customary lag (four at a hundred periods), and never narrowed: the
+spread of fold means it replaced was robust to correlation inside a fold without saying so,
+and this is what keeps that robustness. How well that holds, and where it falls short, is
+`docs/backlog.md` row 171. A relative or benchmark objective's error is the paired one
+wherever the two runs share their periods: a contribution's per-period differences, a
+difference of Sharpes by Memmel's correction of Jobson–Korkie, a per-trade edge's difference
+linearised period by period. That one number is the card's, the keep floor's, the redundancy
+floor's, a certificate's `±` and every deflation gate's.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
@@ -1638,7 +1641,7 @@ has to say about the pair, and a short paper window you meant is a short paper w
 
 ```
 $ kanso cert plan demo_mr                 # the gates, the exclusions and the last two lines are elided
-power      resolves 3.834 at 80% · se 1.542 on the certification window from research's 9.987 ± 0.9719 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 warning    paper window 5d against a 145d certification window · the paper objective is about 5x noisier than the band it is judged against, so a version behaving as certified can read as drifted · raise min_duration or horizon_mult, or narrow windows.certification
 ```
 
@@ -1655,9 +1658,9 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
-           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=1.0, standard_error_bps=0.9718893965424648, trades=1003, trial_spread_bps=3.485274634516859, trials=2
-objective  net_edge_bps 10.149871 ± 1.412009
-power      resolves 3.834 at 80% · se 1.542 on the certification window from research's 9.987 ± 0.9719 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+objective  net_edge_bps 10.149871 ± 1.322442
+power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py

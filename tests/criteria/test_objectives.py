@@ -78,19 +78,60 @@ def test_the_metric_is_the_mean_of_the_folds_and_the_error_that_of_the_per_trade
     assert error == pytest.approx((1.25 * 50_000 / 3) ** 0.5 / 2)
 
 
-def test_the_error_reads_the_trade_count_where_the_spread_of_folds_read_nothing() -> None:
-    """Every fold closes a 100 and a 300: four fold means of 200 agree exactly, and the spread
-    of the folds called that a zero error. Eight trades with a standard deviation of 106.9
-    say the mean is known to 106.9/sqrt(8); the trades alternate, so nothing is widened."""
-    days = [date(2024, 1, 1 + i) for i in range(4)]
+def test_the_error_reads_the_sessions_where_the_spread_of_folds_read_nothing() -> None:
+    """Every fold closes a 100 one session and a 300 the next: four fold means of 200 agree
+    exactly, and the spread of the folds called that a zero error. Eight sessions with a
+    standard deviation of 106.9 say the mean is known to 106.9/sqrt(8); they alternate, so
+    nothing is widened."""
+    days = [date(2024, 1, 1 + i) for i in range(8)]
     run = build_run(
-        FOUR_DAYS,
-        trades=tuple(trade(day, pnl=pnl) for day in days for pnl in (100.0, 300.0)),
+        (0.0,) * 8,
+        trades=tuple(
+            trade(day, pnl=pnl) for day, pnl in zip(days, (100.0, 300.0) * 4, strict=True)
+        ),
     )
     metric, error = net_edge_bps.compute(run, 4)
     assert metric == pytest.approx(200.0)
     assert net_edge_bps.fold_values(run, 4) == pytest.approx((200.0,) * 4)
     assert error == pytest.approx((80_000 / 7) ** 0.5 / 8**0.5)
+
+
+def test_trades_one_session_moves_together_are_priced_as_one_session() -> None:
+    """Ten clips a session at one edge are one draw of that session, not ten: the edge and
+    its error are those of the same sessions closing one trade each. Read trade by trade the
+    error would be a third as wide, and every floor it sets would be too."""
+    days = [date(2024, 1, 1 + i) for i in range(8)]
+    session = (40.0, -10.0, 25.0, 5.0, 60.0, -30.0, 15.0, 20.0)
+    once = build_run(
+        (0.0,) * 8,
+        trades=tuple(trade(day, pnl=pnl) for day, pnl in zip(days, session, strict=True)),
+    )
+    clipped = build_run(
+        (0.0,) * 8,
+        trades=tuple(
+            trade(day, pnl=pnl) for day, pnl in zip(days, session, strict=True) for _ in range(10)
+        ),
+    )
+    assert net_edge_bps.compute(clipped, 4) == pytest.approx(net_edge_bps.compute(once, 4))
+    assert net_edge_bps.compute(once, 4)[1] > 0.0
+
+
+def test_a_fold_that_holds_no_period_end_holds_its_trades_in_one() -> None:
+    """Two days in four folds of half a day, periods struck at 06:00 and trades closed at
+    15:00: the afternoon folds hold a trade each and no period end, and each is one period.
+    The morning folds closed nothing and score zero. Two periods at 10 and 30 bp about the
+    window's edge of 20 vary by 200, over one period a fold."""
+    days = [date(2024, 1, 1), date(2024, 1, 2)]
+    run = build_run(
+        (0.0, 0.0),
+        ends=tuple(midnight_ns(day) + 6 * 3_600 * 10**9 for day in days),
+        trades=tuple(trade(day, pnl=pnl) for day, pnl in zip(days, (10.0, 30.0), strict=True)),
+    )
+    assert [len(fold.period_ends_ns) for fold in run.folds(4)] == [1, 0, 1, 0]
+    assert [len(fold.trades) for fold in run.folds(4)] == [0, 1, 0, 1]
+    metric, error = net_edge_bps.compute(run, 4)
+    assert metric == pytest.approx((0.0 + 10.0 + 0.0 + 30.0) / 4)
+    assert error == pytest.approx((200.0 + 200.0) ** 0.5 / 4)
 
 
 def test_the_fold_values_are_the_statistic_on_each_contiguous_span() -> None:

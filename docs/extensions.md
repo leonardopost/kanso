@@ -263,7 +263,8 @@ implementation returns `compute(run, folds) -> (metric, standard error)`. The st
 is not decoration: the keep rule compares a candidate against `max(min_delta, k_se × se)`,
 so an objective that returns a confident-looking zero there makes every card a keep. It is
 the error of the metric read off the series the metric is a mean of — the shipped objectives
-read it off the per-period returns or the per-trade edges, widened for serial correlation by
+read it off the per-period returns, or the per-trade edges taken period by period so that
+trades one session moves together count once, widened for serial correlation by
 `kanso.criteria.quantities.long_run_factor` — and every deflation gate and the power a
 certification states read it too. A new objective is claimed by exactly one gate's
 `deflates` list: `tests/criteria/test_library.py` fails until it is, and a plan is held to

@@ -877,7 +877,7 @@ def _deflated_mean(
     if count_of < 3:
         return skipped(gate, f"the research window holds too few {counted} to give an error")
     if error <= 0:
-        return skipped(gate, f"the research window's {counted} do not vary")
+        return skipped(gate, "the research estimate's error is zero, so nothing deflates it")
     spread = robust_variance(metrics)
     expected = expected_maximum(spread, len(metrics))
     probability = NormalDist().cdf((estimate - expected) / error)
@@ -927,11 +927,12 @@ class _DeflatedEdge:
     """The research per-trade edge, deflated by how many trials went into selecting it.
 
     The same test as `deflated_contribution`, on the sub-daily default: the estimate is the
-    research edge in basis points per trade, its error the objective's own — the error of a
-    mean of per-trade net edges, widened for serial correlation along the order the trades
-    closed, and for the marginal form the two runs' edges paired period by period — and the
-    bar the expected maximum of the search's trials scored under the same objective, from
-    their count and their robust spread. Until it existed a run scored on a per-trade edge
+    research edge in basis points per trade, its error the objective's own — the edge
+    linearised period by period, so trades of one session that move together count as one
+    session's worth, widened for serial correlation across periods, and for the marginal form
+    the two runs' linearisations differenced period by period — and the bar the expected
+    maximum of the search's trials scored under the same objective, from their count and
+    their robust spread. Until it existed a run scored on a per-trade edge
     reached a certificate with nothing pricing the search behind it: both other deflations
     skip it, and the embargo's fraction of a selected maximum is only an implicit, partial
     correction, gone altogether when the research number is at or below zero.
