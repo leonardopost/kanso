@@ -408,11 +408,15 @@ def complaints_about(
 def power_of(store: StateStore, pinned: CertificationPlan) -> Power | None:
     """What this plan's certification window could resolve for the hypothesis's best card.
 
-    Stated from the card's own metric and error — the research estimate and the error of it
-    read off the research window's per-period or per-trade series — over the windows of the
-    hypothesis file the card's run pinned, which are the windows its certification will run.
-    Computed after the plan is pinned and never shown to the planner, which plans blind to
-    every result. `None` while the hypothesis has no best card to state it from.
+    Stated from the metric and error the card recorded — the research estimate and the
+    error the kanso that measured the card read off it — over the windows of the hypothesis
+    file the card's run pinned, which are the windows its certification will run. Recorded,
+    not measured again: a plan runs no backtest, so a card kept before kanso read its error
+    off the per-period or per-trade series carries the spread of its fold means, and the
+    power `cert run` states from the research window run again can differ from this one
+    until research keeps a new best. Computed after the plan is pinned and never shown to the
+    planner, which plans blind to every result. `None` while the hypothesis has no best card,
+    or when the best card's error is zero (`kanso.certify.power`).
     """
     best, _ = records.best_of(store, pinned.hyp_id)
     if best is None:

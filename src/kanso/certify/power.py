@@ -23,6 +23,11 @@ follow:
   estimate it is optimistic by however much selection inflated that estimate; at zero it
   is the gate's false-pass rate on a candidate with no edge at all, before any deflation.
 
+Nothing is stated from an error of zero. A research window whose trades all fall in one
+period, or that holds one period, has no dispersion to read, and its zero error is the
+absence of information, not certainty: stated, it would say the certification window
+resolves an edge of nothing and passes the research estimate for sure.
+
 Nothing here is shown to the planner. A plan is made blind to research's results, and the
 power is computed after it is pinned, for the operator, the way the paper-window note is.
 """
@@ -64,12 +69,15 @@ def power(
     research_window: tuple[date, date],
     certification_window: tuple[date, date],
     window_params: Mapping[str, ParamValue] | None,
-) -> Power:
-    """What the certification window resolves, and how likely the window gate is to pass.
+) -> Power | None:
+    """What the certification window resolves, and how likely the window gate is to pass;
+    `None` when the research error is zero, which states no dispersion to work from.
 
     `window_params` are the parameters the plan gave `embargoed_window`; without a numeric
     `min_fraction` the gate judges nothing and no pass probability is stated.
     """
+    if research_se <= 0.0:
+        return None
     se = research_se * sqrt(window_days(research_window) / window_days(certification_window))
     fraction = None if window_params is None else window_params.get("min_fraction")
     stated: dict[str, float] = {}
@@ -90,14 +98,8 @@ def power(
 
 
 def _passes(truth: float, bar: float, se: float) -> float:
-    """The probability an estimate of `truth` with error `se` clears the window gate's bar.
-
-    The gate passes an estimate above zero and at least `min_fraction` of the research one,
-    so with no error at all it passes the truth exactly when the truth is above the bar, or
-    on it when the bar is above zero.
-    """
-    if se == 0.0:
-        return 1.0 if truth > bar or truth == bar > 0.0 else 0.0
+    """The probability an estimate of `truth` with error `se` clears the window gate's bar:
+    above zero and at least `min_fraction` of the research one."""
     return NormalDist().cdf((truth - bar) / se)
 
 

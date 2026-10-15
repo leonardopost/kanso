@@ -1619,8 +1619,13 @@ research estimate and if it is zero, against its bar of `max(0, min_fraction × 
 The first probability is optimistic by however much selection inflated the estimate; the
 second is the gate's false-pass rate on no edge at all, before any deflation. None of it is
 shown to the planner, which plans blind to every result; it is computed after the plan is
-pinned, for you, and a certificate records the same statement from the research window it
-runs again.
+pinned, for you, from the metric and error the best card recorded, and a certificate
+records the same statement from the research window it runs again. For a card this kanso
+measured the two agree; a card kept before 0.17 recorded the spread of its fold means as its
+error, and until research keeps a new best the plan's line is struck from that. An error of
+zero — every trade in one period, or one period in the window — is no dispersion to work
+from, and nothing is stated: the plan says so on its `power` line, and the certificate
+carries no `power`.
 
 **A paper window is chosen against the certification window, and `cert plan` says so when it
 is not.** The paper gate compares the objective a stage realises against the interval

@@ -35,7 +35,7 @@ def test_the_resolvable_edge_is_two_and_a_half_errors_of_the_certification_windo
     assert abs(RESOLVES - (1.6449 + 0.8416)) < 1e-4
     stated = power(10.0, 3.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.5})
     se = 3.0 * (365 / 90) ** 0.5
-    assert stated.standard_error == pytest.approx(se)
+    assert stated is not None and stated.standard_error == pytest.approx(se)
     assert stated.resolves == pytest.approx(RESOLVES * se)
 
 
@@ -44,7 +44,7 @@ def test_the_window_gate_passes_above_its_bar_at_the_research_estimate_and_at_ze
     at zero falls short of it by as many."""
     stated = power(10.0, 3.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.5})
     se = 3.0 * (365 / 90) ** 0.5
-    assert stated.bar == 5.0
+    assert stated is not None and stated.bar == 5.0
     assert stated.pass_at_research == pytest.approx(NormalDist().cdf(5.0 / se))
     assert stated.pass_at_zero == pytest.approx(NormalDist().cdf(-5.0 / se))
 
@@ -52,21 +52,23 @@ def test_the_window_gate_passes_above_its_bar_at_the_research_estimate_and_at_ze
 def test_a_bar_of_zero_passes_no_edge_half_the_time() -> None:
     """At `min_fraction` zero, or a research estimate at or below zero, the gate asks only
     for a positive estimate, and an edge of nothing is positive half the time."""
-    assert power(10.0, 3.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.0}).pass_at_zero == 0.5
-    assert power(-4.0, 3.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.5}).bar == 0.0
+    zero_bar = power(10.0, 3.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.0})
+    below = power(-4.0, 3.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.5})
+    assert zero_bar is not None and zero_bar.pass_at_zero == 0.5
+    assert below is not None and below.bar == 0.0
 
 
-def test_with_no_error_the_gate_passes_exactly_what_clears_its_bar() -> None:
-    stated = power(10.0, 0.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.5})
-    assert (stated.resolves, stated.pass_at_research, stated.pass_at_zero) == (0.0, 1.0, 0.0)
-    level = power(10.0, 0.0, RESEARCH, CERTIFICATION, {"min_fraction": 1})
-    assert level.pass_at_research == 1.0, "an estimate on a bar above zero meets it"
-    assert power(0.0, 0.0, RESEARCH, CERTIFICATION, {"min_fraction": 1}).pass_at_research == 0.0
+def test_an_error_of_zero_states_nothing() -> None:
+    """One trade, or one period, has no dispersion: a zero error is no information, and
+    stated it would resolve an edge of nothing and pass the research estimate for sure."""
+    assert power(10.0, 0.0, RESEARCH, CERTIFICATION, {"min_fraction": 0.5}) is None
+    assert power(0.0, 0.0, RESEARCH, CERTIFICATION, None) is None
 
 
 def test_a_plan_that_sets_no_fraction_states_what_resolves_and_no_probability() -> None:
     for params in (None, {}, {"min_fraction": True}):
         stated = power(10.0, 3.0, RESEARCH, CERTIFICATION, params)
+        assert stated is not None
         assert stated.bar is stated.pass_at_research is stated.pass_at_zero is None
         assert stated.resolves > 0
 
@@ -105,7 +107,7 @@ def test_a_power_states_both_probabilities_or_neither() -> None:
 
 @given(
     st.floats(-100.0, 100.0, allow_nan=False),
-    st.floats(0.0, 50.0, allow_nan=False),
+    st.floats(1e-6, 50.0, allow_nan=False),
     st.integers(1, 2000),
     st.integers(1, 2000),
     st.floats(0.0, 1.0, allow_nan=False),
@@ -119,6 +121,7 @@ def test_a_window_four_times_as_long_halves_the_edge_it_resolves(
     long = (opens, date.fromordinal(opens.toordinal() + 4 * certification_days - 1))
     near = power(research, se, research_window, short, {"min_fraction": fraction})
     far = power(research, se, research_window, long, {"min_fraction": fraction})
+    assert near is not None and far is not None
     assert far.resolves == pytest.approx(near.resolves / 2)
     assert near.pass_at_zero is not None and near.pass_at_research is not None
     assert near.pass_at_zero <= near.pass_at_research or research < 0

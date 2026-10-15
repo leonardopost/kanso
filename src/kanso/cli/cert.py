@@ -24,8 +24,10 @@ the pair costs and pins the plan either way.
 `plan`, `run` and `show` each state the certification's power on a `power` line: the edge
 the certification window resolves at eighty percent, and how likely `embargoed_window` is
 to pass if the truth is the research estimate and if it is zero, from the research window's
-own dispersion (`kanso.certify.power`). `plan` states it for the best card as it stands, and
-says so when there is none yet; a certificate records the one its run measured.
+own dispersion (`kanso.certify.power`). `plan` states it for the best card as it stands,
+from the error that card recorded, and says so when there is nothing to state it from; a
+certificate records the one its run measured, from the research window run again. The two
+agree for a card this kanso measured, and can differ for one an earlier kanso did.
 """
 
 from __future__ import annotations
@@ -57,8 +59,12 @@ IdArgument = Annotated[str, typer.Argument(metavar="ID", help="The hypothesis id
 MARK, GATE = 6, 22
 """Widths of the stage-or-verdict column and the gate-id column of the gate lists."""
 
-NO_BEST = "no best card yet, so nothing to state what the windows resolve from"
-"""What `plan` says on its power line before research has kept anything."""
+NO_BEST = (
+    "nothing to state what the windows resolve from: no best card yet, or the best card's "
+    "error is zero"
+)
+"""What `plan` says on its power line before research has kept anything, or when what it
+kept carries no dispersion to work from."""
 
 NEXT: dict[str, str] = {
     "certified": "kanso cert show {id}",

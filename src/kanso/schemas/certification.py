@@ -228,8 +228,9 @@ class Certificate(Versioned):
     created_at: datetime
     power: Power | None = None
     """What the certification window could resolve, from the research window's dispersion;
-    `None` on a certificate written before it was stated, or struck on a snapshot nothing
-    could be measured on."""
+    `None` on a certificate written before it was stated, struck on a snapshot nothing could
+    be measured on, or measured on a research window whose error is zero — one trade, or one
+    period — which has no dispersion to state it from."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]
