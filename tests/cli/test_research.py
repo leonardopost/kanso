@@ -13,6 +13,7 @@ import pytest
 from nautilus_trader.model.instruments import Equity
 from typer.testing import CliRunner
 
+from kanso.criteria.gates import periods_margin
 from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
 from kanso.errors import Exit
 from kanso.state import StateStore
@@ -444,7 +445,9 @@ def test_a_card_whose_trades_lose_on_average_is_refused_by_edge_per_trade(
     # One draw of a search of two: the fading card and this one. The flat baseline traded
     # nothing, so it is no draw.
     assert judged["evidence"]["trials"] == 2
-    assert judged["evidence"]["margin"] == 1.0, "k_se stands above two trials' 0.52"
+    evidence = judged["evidence"]
+    assert evidence["normal_margin"] == 1.0, "k_se stands above two trials' 0.52"
+    assert evidence["margin"] == periods_margin(1.0, evidence["periods_with_trades"])
 
 
 # -- end and show -------------------------------------------------------------------

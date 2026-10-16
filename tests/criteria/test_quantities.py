@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import date
+from math import acos, cos, pi, sqrt, tan
+from statistics import NormalDist
 
 import pytest
 from hypothesis import given
@@ -25,6 +27,7 @@ from kanso.criteria.quantities import (
     sharpe_variance,
     standard_error,
     stdev,
+    student_t_quantile,
     variance,
     variances_of_means,
     years,
@@ -292,3 +295,43 @@ def test_a_paired_difference_of_sharpes_varies_by_memmel() -> None:
     expected = per_year * (2 * (1 - rho) + (a**2 + b**2 - 2 * a * b * rho**2) / 2) / 3
     assert sharpe_difference_variance(own, against, WEEK, 1.0, rho) == pytest.approx(expected)
     assert sharpe_difference_variance(own, own, WEEK, 1.0, 1.0) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    ("probability", "df", "tabled"),
+    [
+        (0.975, 1, 12.7062),
+        (0.975, 2, 4.3027),
+        (0.975, 3, 3.1824),
+        (0.975, 10, 2.2281),
+        (0.95, 30, 1.6973),
+        (0.995, 29, 2.7564),
+        (0.975, 120, 1.9799),
+    ],
+)
+def test_a_student_t_quantile_is_the_tabled_one(probability: float, df: int, tabled: float) -> None:
+    """Against the printed table of the t distribution, to the four places it prints."""
+    assert student_t_quantile(probability, df) == pytest.approx(tabled, abs=5e-5)
+
+
+@given(st.floats(min_value=0.5, max_value=0.999999))
+def test_a_student_t_quantile_has_the_closed_forms_of_one_two_and_four_degrees(
+    probability: float,
+) -> None:
+    """One degree of freedom is the Cauchy, two and four have quantiles in closed form."""
+    u = probability
+    shape = 4 * u * (1 - u)
+    four = 2 * sqrt(cos(acos(sqrt(shape)) / 3) / sqrt(shape) - 1)
+    assert student_t_quantile(u, 1) == pytest.approx(tan(pi * (u - 0.5)), rel=1e-9, abs=1e-12)
+    assert student_t_quantile(u, 2) == pytest.approx(
+        (2 * u - 1) / sqrt(2 * u * (1 - u)), rel=1e-9, abs=1e-12
+    )
+    assert student_t_quantile(u, 4) == pytest.approx(four, rel=1e-7, abs=1e-7)
+
+
+def test_a_student_t_quantile_is_symmetric_and_falls_to_the_normal_s() -> None:
+    assert student_t_quantile(0.5, 7) == 0.0
+    assert student_t_quantile(0.025, 3) == -student_t_quantile(0.975, 3)
+    normal = NormalDist().inv_cdf(0.975)
+    assert student_t_quantile(0.975, 5000) == pytest.approx(normal, abs=1e-3)
+    assert student_t_quantile(0.975, 5000) > normal

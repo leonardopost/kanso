@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date
-from math import floor, fsum, sqrt
+from math import cos, floor, fsum, pi, sin, sqrt, tan
 
 import numpy as np
 
@@ -75,6 +75,48 @@ def standard_error(values: Sequence[float]) -> float:
     if not values:
         return 0.0
     return stdev(values) / sqrt(len(values))
+
+
+def student_t_quantile(probability: float, df: int) -> float:
+    """The `probability` quantile of a Student's t of `df` degrees of freedom, `df` at least one.
+
+    For a whole number of degrees of freedom the chance `P(|T| ≤ √df · tan θ)` is a finite sum
+    in `θ` (Abramowitz and Stegun 26.7.3 and 26.7.4), so the quantile is that sum inverted by
+    bisection on `θ` in `[0, π/2)`, to the float's resolution, with nothing beyond the
+    standard library: at one degree of freedom it is the Cauchy's `tan(π(p − ½))`, and as
+    `df` grows it falls to the normal's. The distribution is symmetric, so a probability
+    below a half is the negative of its complement's quantile, and a half is zero exactly.
+    """
+    if probability < 0.5:
+        return -student_t_quantile(1.0 - probability, df)
+    target = 2.0 * probability - 1.0
+    low, high = 0.0, pi / 2
+    for _ in range(64):
+        middle = (low + high) / 2
+        if _t_central(middle, df) < target:
+            low = middle
+        else:
+            high = middle
+    return sqrt(df) * tan(low)
+
+
+def _t_central(theta: float, df: int) -> float:
+    """`P(|T| ≤ √df · tan θ)` for a Student's t of `df` degrees of freedom: for an even `df`,
+    `sin θ` times `1 + ½cos²θ + (1·3)/(2·4)cos⁴θ + …` to the power `df − 2`; for an odd one,
+    `(2/π)(θ + sin θ (cos θ + ⅔cos³θ + (2·4)/(3·5)cos⁵θ + …))` to the power `df − 2`."""
+    sine, cosine = sin(theta), cos(theta)
+    squared = cosine * cosine
+    if df % 2 == 0:
+        term = total = 1.0
+        for j in range(1, df // 2):
+            term *= (2 * j - 1) / (2 * j) * squared
+            total += term
+        return sine * total
+    term, total = cosine, 0.0
+    for j in range((df - 1) // 2):
+        total += term
+        term *= (2 * j + 2) / (2 * j + 3) * squared
+    return 2 / pi * (theta + sine * total)
 
 
 def long_run_factor(values: Sequence[float]) -> float:

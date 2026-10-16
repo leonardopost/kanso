@@ -18,8 +18,10 @@ is a second definition of a quantity the toolbox already defines:
   arithmetic, the error read period by period so a session's clips that move together count
   as one session's worth — which is exactly what the `edge_per_trade` gate judges. Read that
   way the error has as many degrees of freedom as the window has periods that closed a
-  trade, and trades that all closed in one period move one period's influence, which is
-  zero by construction: their error reads zero whatever they did, so it is `None` below two;
+  trade, less one, and on `p` of them reads low by `√((p − 1)/p)`, which the gate's margin
+  allows for (`gates.periods_margin`) and the number recorded here does not; trades that all
+  closed in one period move one period's influence, which is zero by construction: their
+  error reads zero whatever they did, so it is `None` below two;
 * its **cost** is what its fills paid (`Trade.cost`) on the same notional, and its gross
   edge the net plus that cost, so gross less cost is net trade by trade;
 * a **session** is a UTC day the run struck a period end in — the days a signature reads —

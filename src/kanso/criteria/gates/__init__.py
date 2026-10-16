@@ -60,6 +60,7 @@ from kanso.criteria.quantities import (
     mean,
     periods_per_year,
     stdev,
+    student_t_quantile,
     variance,
     years,
 )
@@ -972,6 +973,25 @@ def search_margin(trials: int) -> float:
     return expected_maximum(1.0, trials) if trials >= 2 else 0.0
 
 
+def periods_margin(errors: float, periods: int) -> float:
+    """`errors` of a normal error, restated as a multiple of a per-trade error read period by
+    period off `periods` periods that closed a trade, at least two: the same chance of being
+    cleared by a card whose trades earn nothing.
+
+    Read that way the error is the per-period influences' over the window, which sum to zero
+    and are zero outside the `p` periods that traded, so it is `√(N/(N − 1))` of the error of
+    the mean of `p` period totals taken as `p` draws with no degree of freedom spent — low by
+    `√((p − 1)/p)` against the one that spends it, the window's `N` periods being many more
+    than `p` — and an edge over the corrected error is a Student's t of `p − 1` degrees of
+    freedom, not a normal, wherever the period totals are normal: a Cauchy at two periods.
+    So the margin is that t's quantile at the normal's chance of clearing `errors`, widened
+    by `√(p/(p − 1))`: one error is 2.60 of them over two periods, 1.15 over eight and 1.004
+    over 252; three are 333 over two, 4.84 over eight and 3.04 over 252. Zero is zero.
+    """
+    freedom = periods - 1
+    return student_t_quantile(NormalDist().cdf(errors), freedom) * sqrt(periods / freedom)
+
+
 class _EdgePerTrade:
     """The card's trades make money on average, by more than their own error says is noise.
 
@@ -984,14 +1004,28 @@ class _EdgePerTrade:
     numbers a card's digest records as `net_bps_per_trade` and `net_bps_per_trade_se`, so
     what the proposer and the operator are shown is what was judged. The gate passes when
     `net − margin × se > min_bps`, strictly, over trades that closed in at least two of the
-    window's periods, where `margin` is the larger of `k_se` and `search_margin(trials)`: on
-    a hypothesis's first card, at `min_bps` zero and `k_se` zero, a card whose trades closed
-    in two periods or more passes exactly when its mean trade made money.
+    window's periods, where `margin` is `periods_margin` of the larger of `k_se` and
+    `search_margin(trials)` — the evidence's `normal_margin` — over the periods that closed
+    a trade: on a hypothesis's first card, at `min_bps` zero and `k_se` zero, a card whose
+    trades closed in two periods or more passes exactly when its mean trade made money.
+
+    The margin is a chance, and the periods set its width. An error read period by period
+    has the degrees of freedom of the periods that closed a trade, and on few of them it
+    reads low and the edge over it has tails a normal does not: measured in October 2026 on
+    cards whose trades earn nothing, held to `normal_margin` errors as if normal, those that
+    traded on two sessions passed at `k_se` 1 0.31 of the time rather than 0.16, and 0.14
+    rather than 0.0011 as the 500th card of a search. Restated on its degrees of freedom,
+    `normal_margin` is cleared by such a card with the normal's chance `1 − Φ(normal_margin)`
+    wherever each period's trades sum to a normal — measured 0.148 to 0.163 at `k_se` 1 on
+    two to thirty sessions against 0.159, and at or below it on heavy-tailed trades four to a
+    session — so the rates below hold on two sessions as on two hundred. Where the periods
+    hold unequal numbers of heavy-tailed trades it runs a little above: up to 0.18 at `k_se`
+    1 and 0.014 as the fiftieth card, on two to ten sessions.
 
     The margin grows with the search. A lane draws hundreds of cards, and one whose trades
-    earn nothing still clears `k_se` errors by chance with probability `1 − Φ(k_se)` — at
+    earn nothing still clears `k_se` errors' chance with probability `1 − Φ(k_se)` — at
     `k_se` 1, one card in six — so a fixed margin lets zero-edge cards through in proportion
-    to the search's length. So the margin is never below the expected maximum of `trials`
+    to the search's length. So `normal_margin` is never below the expected maximum of `trials`
     standard normals: 0 errors on one card, 0.52 at 2 trials, 2.28 at 50 and 3.05 at 500.
     `trials` is this card and every card of the hypothesis before it that ran to a result and
     traded, under any objective (`GateContext.trials`). Each card is held to the search as it
@@ -1004,10 +1038,11 @@ class _EdgePerTrade:
     stay the agents' choice; the search sets only a floor under `k_se`.
 
     An error read period by period is zero whenever every trade closed in one period, however
-    far apart the trades landed — each period's influence on the mean is zero — so a card that
-    traded once, or traded one session's clips, would pass on a positive mean at any `k_se`.
-    That is the trade-less route the gate is there to close, taken to its end, so such a card
-    fails at any `k_se`, its error stated as `None` and its periods in `periods_with_trades`.
+    far apart the trades landed — each period's influence on the mean is zero — and has no
+    degree of freedom to restate a margin on, so a card that traded once, or traded one
+    session's clips, fails at any `k_se`, its error and margin stated as `None` and its
+    periods in `periods_with_trades`. Trading less to pass therefore ends at two periods, where
+    the margin is widest.
 
     It exists because an objective struck on the book rewards trading less once every trade
     loses: a contribution moves towards zero as the losing trades are dropped, and a card
@@ -1026,8 +1061,9 @@ class _EdgePerTrade:
             return skipped(self.id, "no min_bps and k_se were chosen, so no edge was required")
         edge, se, periods = edge_per_trade_of(ctx.run)
         searched = search_margin(ctx.trials)
-        margin = max(k_se, searched)
-        lower = None if se is None else edge - margin * se
+        normal = max(k_se, searched)
+        margin = None if se is None else periods_margin(normal, periods)
+        lower = None if se is None or margin is None else edge - margin * se
         return verdict(
             self.id,
             lower is not None and lower > floor,
@@ -1037,6 +1073,7 @@ class _EdgePerTrade:
                 "k_se": k_se,
                 "trials": ctx.trials,
                 "expected_maximum": searched,
+                "normal_margin": normal,
                 "margin": margin,
                 "lower": lower,
                 "min_bps": floor,
