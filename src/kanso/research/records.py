@@ -27,7 +27,9 @@ selected over — a hundredfold in the count they deflate by. What a correlated 
 worth is not settled by counting it: the metric enters the spread as well as the count,
 and a set dominated by repeats of one book narrows the spread faster than the count
 widens the term beside it. `docs/backlog.md` row 59 holds the measurement of both
-directions and the reason nothing else changes here.
+directions and the reason nothing else changes here. `candidates` counts those cards under
+every objective: a card gate that holds one card's edge to the width of the search behind it
+needs how many draws there were and no spread, so it has no units to keep apart.
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
@@ -87,7 +89,7 @@ import yaml
 
 from kanso.criteria.run import CardRun, day_of
 from kanso.errors import PreconditionError
-from kanso.schemas import Card, GateResult, RunRecord, VenueModel
+from kanso.schemas import Card, CardDigest, GateResult, RunRecord, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -98,6 +100,7 @@ __all__ = [
     "Superseded",
     "active",
     "best_of",
+    "candidates",
     "cards_of",
     "close",
     "insert",
@@ -172,6 +175,7 @@ _CARD_COLUMNS = (
     "venue_model",
     "description",
     "created_at",
+    "digest",
 )
 
 _INSERT_CARD = (
@@ -368,6 +372,22 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
     ]
 
 
+def candidates(store: StateStore, hyp_id: str) -> int:
+    """How many cards of this hypothesis ran to a result and traded, under any objective.
+
+    The cards `trial_metrics` reads, before it narrows them to one objective: that set holds
+    a spread, which must be in one objective's units, while this is a count of draws of a
+    number that has none — an edge measured in its own errors, which is what
+    `edge_per_trade` holds a card to. A re-pin to another objective continues the search
+    for a card whose trades pay, so the cards before it still count.
+    """
+    row = store.connection.execute(
+        "SELECT COUNT(*) FROM cards WHERE hyp_id = ? AND status != 'crash' AND n_trades > 0",
+        (hyp_id,),
+    ).fetchone()
+    return int(row[0])
+
+
 def _objective_of(store: StateStore, pin: str) -> str | None:
     """The objective a pinned hypothesis file names, or `None` when it names none."""
     found = yaml.safe_load(store.get_blob(pin).decode("utf-8"))
@@ -400,6 +420,9 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
         json.dumps(card.venue_model.model_dump(mode="json"), sort_keys=True),
         card.desc,
         card.created_at.isoformat(),
+        None
+        if card.digest is None
+        else json.dumps(card.digest.model_dump(mode="json"), sort_keys=True),
     )
     store.connection.execute(_INSERT_CARD, values)
     return card
@@ -775,4 +798,7 @@ def _card(row: sqlite3.Row) -> Card:
         crash_tail=None if row["crash_tail"] is None else str(row["crash_tail"]),
         venue_model=VenueModel.model_validate(model),
         created_at=datetime.fromisoformat(str(row["created_at"])),
+        digest=None
+        if row["digest"] is None
+        else CardDigest.model_validate(json.loads(str(row["digest"]))),
     )

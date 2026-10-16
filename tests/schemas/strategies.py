@@ -14,6 +14,7 @@ from kanso.schemas import (
     Benchmark,
     Book,
     Card,
+    CardDigest,
     Certificate,
     CertificationPlan,
     ConstraintRef,
@@ -304,6 +305,34 @@ def gate_results(draw: st.DrawFn) -> GateResult:
 
 
 @st.composite
+def digests(draw: st.DrawFn) -> CardDigest:
+    """A card digest: per-trade numbers all present or all absent — the edge's error absent
+    alone where the trades closed in one period — per-session numbers present exactly when a
+    session was measured, and gross the net plus the cost."""
+    sessions = draw(st.integers(0, 500))
+    fills = draw(st.integers(0, 10000))
+    traded = draw(st.booleans())
+    net, cost = draw(FINITE), draw(NON_NEGATIVE)
+    net_session, cost_session = draw(FINITE), draw(NON_NEGATIVE)
+    return CardDigest(
+        sessions=sessions,
+        fills=fills,
+        trades_per_session=draw(NON_NEGATIVE) if sessions else None,
+        hit_rate=draw(PROBABILITY) if traded else None,
+        median_hold_s=draw(NON_NEGATIVE) if traded else None,
+        maker_share=draw(st.none() | PROBABILITY) if fills else None,
+        fill_ratio=draw(st.none() | NON_NEGATIVE),
+        gross_bps_per_trade=net + cost if traded else None,
+        cost_bps_per_trade=cost if traded else None,
+        net_bps_per_trade=net if traded else None,
+        net_bps_per_trade_se=draw(st.none() | NON_NEGATIVE) if traded else None,
+        gross_bps_per_session=net_session + cost_session if sessions else None,
+        cost_bps_per_session=cost_session if sessions else None,
+        net_bps_per_session=net_session if sessions else None,
+    )
+
+
+@st.composite
 def cards(draw: st.DrawFn) -> Card:
     status = draw(st.sampled_from(["keep", "discard", "crash", "redundant"]))
     return Card(
@@ -326,6 +355,7 @@ def cards(draw: st.DrawFn) -> Card:
         crash_tail=draw(SAFE_TEXT) if status == "crash" else None,
         venue_model=draw(venue_models()),
         created_at=draw(TIMESTAMPS),
+        digest=None if status == "crash" else draw(st.none() | digests()),
     )
 
 

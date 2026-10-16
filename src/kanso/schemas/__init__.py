@@ -92,10 +92,12 @@ from kanso.schemas.models import (
 )
 from kanso.schemas.portfolio import Deployment, Limits, Portfolio, Stage, Stages
 from kanso.schemas.run import (
+    DIGEST_COLUMNS,
     RESULTS_COLUMNS,
     RESULTS_HEADER,
     TAGS,
     Card,
+    CardDigest,
     CardStatus,
     GateResult,
     RunRecord,
@@ -128,6 +130,7 @@ from kanso.schemas.venue import (
 from kanso.schemas.yamlio import dump_yaml, load_yaml, parse_yaml, write_yaml
 
 __all__ = [
+    "DIGEST_COLUMNS",
     "DURATION_PATTERN",
     "RESOLUTION_PATTERN",
     "RESULTS_COLUMNS",
@@ -142,6 +145,7 @@ __all__ = [
     "Applies",
     "AttachedRef",
     "Card",
+    "CardDigest",
     "CardStatus",
     "CatalogueId",
     "Certificate",

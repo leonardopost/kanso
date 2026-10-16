@@ -571,19 +571,33 @@ def _skeleton(source: bytes) -> str | None:
 
 
 def _summary(row: sqlite3.Row) -> dict[str, object]:
-    """One card as the proposer sees it: what was tried, what it scored, and what refused it.
+    """One card as the proposer sees it: what was tried, what it scored, how its trades did
+    it, and what refused it.
 
     The gates that did not pass carry their evidence, because a card discarded before any
     backtest ran — the whole of `strategy_integrity` — otherwise reaches the proposer as a
     metric of zero with no reason, and a proposer told nothing repeats itself.
+
+    A card that ran carries its trade count and its digest, because a metric alone cannot
+    say how it moved. Measured on a live scalping lane scored on a contribution, a search
+    shown only the number went from -133 to -37 bp a day by cutting its trades by three
+    quarters while the loss on each trade got slightly worse: it was rewarded for trading
+    less and could not see that it was. The numbers are rounded to four places, which is
+    finer than any of them is known to, so the prompt carries the reading and not the bits.
     """
     made: dict[str, object] = {
         "sha7": str(row["strategy_sha"])[:7],
         "status": str(row["status"]),
         "metric": float(row["metric"]),
         "metric_se": float(row["metric_se"] or 0.0),
+        "n_trades": int(row["n_trades"]),
         "desc": str(row["description"]),
     }
+    if row["digest"] is not None:
+        made["digest"] = {
+            name: round(value, 4) if isinstance(value, float) else value
+            for name, value in json.loads(str(row["digest"])).items()
+        }
     refused = _refused(row)
     if refused:
         made["failed_gates"] = refused
@@ -719,7 +733,8 @@ def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Ro
     """
     rows = store.connection.execute(
         "SELECT cards.strategy_sha, cards.status, cards.metric, cards.metric_se,"
-        " cards.description, cards.crash_tail, cards.gate_results FROM cards"
+        " cards.n_trades, cards.digest, cards.description, cards.crash_tail,"
+        " cards.gate_results FROM cards"
         f"{_PINNED} ORDER BY cards.card_id DESC LIMIT ?",
         (*_pins(active), limit),
     ).fetchall()

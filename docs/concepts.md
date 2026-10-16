@@ -411,12 +411,47 @@ evaluate, record. Four outcomes, and each does something different to the lane.
 restore. Three proposals into the demo:
 
 ```
-sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc
-93510e2	0.000000	0.000000	1	0	5.266	0.216	discard	baseline
-f729a53	9.986730	1.065174	2	1003	14.121	0.231	keep	fade a 2-sigma deviation from a 60-bar rolling mean
-340620b	5.285159	0.838720	3	1164	13.954	0.249	discard	exit at 1 sigma rather than half a sigma
-020aef2	0.000000	0.000000	4	0	1.334	0.213	crash	scale by a rolling sigma helper that does not exist (intentional crash)
+sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc	trades_per_session	hit_rate	median_hold_s	maker_share	fill_ratio	gross_bps_per_trade	cost_bps_per_trade	net_bps_per_trade	net_bps_per_trade_se	gross_bps_per_session	cost_bps_per_session	net_bps_per_session
+93510e2	0.000000	0.000000	1	0	6.168	0.185	discard	baseline	0.0000									0.0000	0.0000	0.0000
+f729a53	9.986730	1.065174	2	1003	14.868	0.216	keep	fade a 2-sigma deviation from a 60-bar rolling mean	3.8429	0.7498	960.0000	0.0000		15.0843	5.0038	10.0805	1.0545	5.7693	1.9137	3.8556
+340620b	5.285159	0.838720	3	1164	13.608	0.214	discard	exit at 1 sigma rather than half a sigma	4.4598	0.7474	540.0000	0.0000		10.3818	5.0026	5.3792	0.8191	4.6091	2.2204	2.3887
+020aef2	0.000000	0.000000	4	0	1.588	0.196	crash	scale by a rolling sigma helper that does not exist (intentional crash)												
 ```
+
+**A card that ran carries a digest of what its trades did.** A metric is one number, and one
+number cannot say how it moved: a per-trade edge rises when every trade earns more and when
+the trades that lost are dropped, and a contribution falls when the trades get worse and when
+the book merely trades less. Shown only the number, a search scored on a contribution that
+loses on every trade is rewarded for trading less and cannot see that it was. So the lane
+reads, off the run the card was scored on and the orders its strategy submitted, a dozen more
+numbers, and records them with the card:
+
+| field | what it is |
+|---|---|
+| `sessions`, `fills` | the UTC days the run struck a period end in — the days a signature reads — and its executions |
+| `trades_per_session` | closed trades over sessions |
+| `hit_rate` | the share of closed trades whose `pnl_net` was above zero |
+| `median_hold_s` | the median seconds from a trade's entry fill to its exit fill |
+| `maker_share` | the share of traded notional the venue reported as a maker's fill |
+| `fill_ratio` | the quantity filled on orders that carried a limit over the quantity submitted on such orders; `null` when the strategy sent none. An order the emulator released at market fills with no limit, and a modify that raised a quantity is not in the order as submitted, so it is a reading rather than an identity |
+| `net_bps_per_trade`, `net_bps_per_trade_se` | the mean of `pnl_net / notional` over the closed trades, in basis points of the position opened, and its error: the per-trade objective over the whole window as one fold, the error read period by period. What `edge_per_trade` judges. Read that way an error has as many degrees of freedom as periods that closed a trade, less one, and on `p` such periods reads low by `√((p − 1)/p)` — 0.71 of the error on two, 0.94 on eight — which the gate's margin allows for and this number does not; it is zero by construction when one period closed them all, however far apart they landed, so with fewer than two the error is `null` |
+| `cost_bps_per_trade`, `gross_bps_per_trade` | the mean of `cost / notional` on the same trades, and the net plus it |
+| `net_bps_per_session`, `cost_bps_per_session`, `gross_bps_per_session` | in basis points of the capital, per session: the sum of the returns — what the book made, an open position's mark included — every fill's cost, and the net plus it |
+
+Gross is before fill costs and net after, so gross less cost is net, per trade and per
+session; funding, which is a payment on what was held and not a fill cost, stays in both. A
+number with nothing to be read off — an edge with no closed trade, a share with no fill — is
+`null`, never a zero. The proposer is shown every recent card's `n_trades` and digest beside
+its metric, rounded to four places; `research card` prints it as a `trades` line and an `edge`
+line and carries it under `--json` as `digest`; `research show --json` carries the newest card
+of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc`, appended so
+that a reader taking the first nine columns by position reads what it always read, an absent
+number an empty cell. A crash, a card refused before or during its backtest, and a card
+recorded before 0.17 carry none. In the sample above the keep closed 3.84 trades a session,
+three in four of them winners, held for a median of 16 minutes and netting 10.08 ± 1.05 bp of
+the position — 15.08 gross less 5.00 of cost — and the discard after it traded more, 4.46 a
+session, for 5.38 net: its number fell because each trade earned less, not because it traded
+less. The demo sends market orders only, so `fill_ratio` is empty.
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
 research window — and the warmup sessions before it, when the hypothesis declares them —
@@ -430,7 +465,7 @@ starts from the hypothesis's best, or from the card a re-seed names, so its base
 already includes that strategy's fills. A hypothesis's first run starts from the workspace's
 `strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
 nothing and a card that trades spends the headroom on its fills: in the sample above the keep
-and the discard each took about 2.7 times the baseline's wall (row 139 of `docs/backlog.md`).
+and the discard took 2.4 and 2.2 times the baseline's wall (row 139 of `docs/backlog.md`).
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog in steps of an hour when the
@@ -736,7 +771,7 @@ certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are nine.
+already over. There are ten.
 
 | gate | what it refuses |
 |---|---|
@@ -748,6 +783,7 @@ already over. There are nine.
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
+| `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin starts as a number of normal errors, `normal_margin`: the larger of `k_se` and the expected maximum of `trials` standard normals — 0 on a hypothesis's first card, 0.52 at 2 trials, 2.28 at 50, 3.05 at 500 — where `trials` is the card and every card of the hypothesis before it that ran to a result and traded, under any objective. It is then struck on the error's own degrees of freedom: over `p` periods that closed a trade the edge over its error is a Student's t of `p − 1` degrees of freedom and the error reads low by `√((p − 1)/p)`, so `margin` is that t's quantile at the normal's chance of clearing `normal_margin`, times `√(p/(p − 1))` — at `k_se` 1, 2.60 errors over two periods, 1.15 over eight, 1.02 over sixty; as the fiftieth card, 39 over two, 3.1 over eight, 2.36 over sixty. The evidence carries `trials`, `expected_maximum`, `normal_margin` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 **A session is a clock in a zone, read date by date.** `trading_hours {session: "09:30-16:00",
@@ -767,6 +803,33 @@ close (`docs/backlog.md` row 169). It is the gate to require when the strategy's
 two constants in `strategy.py` that the loop may edit, and when the data runs past the session
 — quotes from 04:00 to 20:00 in New York, a venue printing round the clock — so a card could
 close against an extended-hours quote that no market order would have been filled at.
+
+`edge_per_trade` is the one that judges a trade rather than the book. An objective struck on
+the book rewards trading less once every trade loses: a contribution moves towards zero as
+losing trades are dropped, so a card that cuts its clips by three quarters at a slightly worse
+loss per clip scores better and is kept — measured on an operator's scalping lane, from −133
+to −37 bp a day. A failing card gate means no keep, so with `edge_per_trade` on a lane only a
+card whose trades make money on average, by `min_bps` and a margin of errors beyond zero, over
+at least two return periods, can become its best: on a daily period, trading less only goes as
+far as trading on two sessions, never as far as one trade that happened to pay — and two
+sessions' error has one degree of freedom, so the margin there is wide: at `k_se` 1 the mean
+must clear 2.6 of its stated errors, and as the fiftieth card 39. The margin is a chance, struck
+on the periods the card traded in. A card whose trades earn nothing clears `k_se` 1 by chance
+one time in six, on two sessions as on two hundred — measured on such cards trading once a
+session on 2 to 30 sessions of 252, 0.15 to 0.16 of them passed, where a margin read as normal
+errors passed 0.31 on two sessions and 0.18 on ten; where sessions hold unequal numbers of
+heavy-tailed clips it was up to 0.18 (`docs/backlog.md` row 196). So a lane that draws
+hundreds of cards would pass such a card every sixth one at a fixed margin; holding each card
+to the expected maximum of the cards drawn so far, when that is the larger, makes the count
+that pass grow with the logarithm of the search instead of its length — over 500 cards at
+`k_se` 1, about 3.3 rather than 79, most of them among the first fifty, while the search is
+narrow and `k_se` is the bar. That count is a sum of each card's chance, so it holds however
+alike the cards are (`docs/backlog.md` row 190 says what it leaves open). A real edge pays for
+that bar: simulated on forty clips a session that share a session's luck, as the thousandth
+card, an edge of +1.5 bp a clip passed 0.44 of the time over 60 sessions and 0.88 over 122,
+and +1.0 bp 0.10 and 0.38. It is chosen like any other card gate — by the classifier, inside
+its ranges, or by you under `required_constraints` — and never by default; the search moves
+only the floor under `k_se`.
 
 `position_size` is the only one that carries a floor on size: `min_trades` floors the trade
 count, `maintenance_margin` the book's margin and `leg_edge` a leg's Sharpe, none of them a

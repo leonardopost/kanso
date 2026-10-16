@@ -14,11 +14,19 @@ A card's `tags` are the proposer's own account of what the change was, drawn fro
 vocabulary `TAGS` fixes. The vocabulary is the package's rather than the model's because
 the tags are read back as a coverage table keyed by them, and a table keyed by whatever
 each answer happened to say would never have two rows in the same cell.
+
+A card that ran carries a `digest`: what its trades did, beside the one number it is scored
+on. The metric alone cannot say how it moved — a per-trade edge that rose because the worst
+half of the clips were dropped and one that rose because every clip earned more read the
+same, and a contribution that fell because the book traded less reads like one whose trades
+got worse — and the proposer, the operator and `results.tsv` were each shown that number and
+nothing else.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from math import isclose
 from typing import Annotated, Final, Literal, get_args
 
 from pydantic import Field, StringConstraints, model_validator
@@ -69,6 +77,24 @@ RunTag = Annotated[str, StringConstraints(pattern=r"^[0-9]{8}-[0-9]+$")]
 
 LaneName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]{1,16}$")]
 
+DIGEST_COLUMNS: Final = (
+    "trades_per_session",
+    "hit_rate",
+    "median_hold_s",
+    "maker_share",
+    "fill_ratio",
+    "gross_bps_per_trade",
+    "cost_bps_per_trade",
+    "net_bps_per_trade",
+    "net_bps_per_trade_se",
+    "gross_bps_per_session",
+    "cost_bps_per_session",
+    "net_bps_per_session",
+)
+"""The digest's numbers a `results.tsv` row carries after `desc`: appended rather than
+inserted, so a reader that takes the first nine columns by position reads what it always
+read."""
+
 RESULTS_COLUMNS: Final = (
     "sha7",
     "metric",
@@ -79,8 +105,92 @@ RESULTS_COLUMNS: Final = (
     "peak_mem_gb",
     "status",
     "desc",
+    *DIGEST_COLUMNS,
 )
 RESULTS_HEADER: Final = "\t".join(RESULTS_COLUMNS)
+
+Bps = Annotated[float, Field(allow_inf_nan=False)]
+Share = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+Positive = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+
+class CardDigest(KansoModel):
+    """What a card's trades did: how often it traded, how it filled, and what each trade and
+    each session earned before and after costs.
+
+    Computed by `kanso.criteria.digest` from the run the card measured — its fills, its
+    closed trades, its return series — and the orders it submitted, once, in the lane, and
+    recorded with the card. Per trade is in basis points of the position opened, over the
+    closed trades with a notional, as the per-trade objective reads them; per session is in
+    basis points of the capital, over the UTC days the run struck a period end in. Gross is
+    before fill costs and net after, so gross less cost is net in both; funding, which is a
+    payment on what was held and not a fill cost, stays in gross. A number that has nothing
+    to be read off — a rate with no trade, a share with no fill, the error of an edge whose
+    trades closed in fewer than two periods, which an error read period by period reads as
+    zero whatever they did — is `None`, never zero.
+    """
+
+    sessions: int = Field(ge=0)
+    fills: int = Field(ge=0)
+    trades_per_session: Positive | None = None
+    hit_rate: Share | None = None
+    median_hold_s: Positive | None = None
+    maker_share: Share | None = None
+    fill_ratio: Positive | None = None
+    gross_bps_per_trade: Bps | None = None
+    cost_bps_per_trade: Bps | None = None
+    net_bps_per_trade: Bps | None = None
+    net_bps_per_trade_se: Positive | None = None
+    gross_bps_per_session: Bps | None = None
+    cost_bps_per_session: Bps | None = None
+    net_bps_per_session: Bps | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> CardDigest:
+        per_trade = (
+            self.hit_rate,
+            self.median_hold_s,
+            self.gross_bps_per_trade,
+            self.cost_bps_per_trade,
+            self.net_bps_per_trade,
+        )
+        if len({value is None for value in per_trade}) != 1:
+            raise ValueError(
+                "net_bps_per_trade: the per-trade numbers are read off the same closed trades, "
+                "so they are all stated or all absent"
+            )
+        if self.net_bps_per_trade is None and self.net_bps_per_trade_se is not None:
+            raise ValueError("net_bps_per_trade_se: an error is an edge's, and none is stated")
+        per_session = (
+            self.trades_per_session,
+            self.gross_bps_per_session,
+            self.cost_bps_per_session,
+            self.net_bps_per_session,
+        )
+        if any((value is None) != (self.sessions == 0) for value in per_session):
+            raise ValueError(
+                "net_bps_per_session: the per-session numbers are stated exactly when the run "
+                "measured a session"
+            )
+        if self.fills == 0 and self.maker_share is not None:
+            raise ValueError("maker_share: a run with no fill made no share of them as a maker")
+        for gross, cost, net in (
+            (self.gross_bps_per_trade, self.cost_bps_per_trade, self.net_bps_per_trade),
+            (self.gross_bps_per_session, self.cost_bps_per_session, self.net_bps_per_session),
+        ):
+            if gross is not None and cost is not None and net is not None:
+                scale = max(1.0, abs(gross), abs(cost), abs(net))
+                if not isclose(gross - cost, net, rel_tol=0.0, abs_tol=1e-9 * scale):
+                    raise ValueError(f"gross: {gross} less the cost {cost} is not the net {net}")
+        return self
+
+    def cells(self) -> tuple[str, ...]:
+        """The `results.tsv` cells of `DIGEST_COLUMNS`, an absent number an empty cell."""
+        return tuple(_cell(getattr(self, name)) for name in DIGEST_COLUMNS)
+
+
+def _cell(value: float | None) -> str:
+    return "" if value is None else f"{value:.4f}"
 
 
 class GateResult(KansoModel):
@@ -149,6 +259,9 @@ class Card(KansoModel):
     crash_tail: str | None = None
     venue_model: VenueModel
     created_at: datetime
+    digest: CardDigest | None = None
+    """What the card's trades did; `None` for a card that never ran to a result — a crash,
+    one refused before or during its backtest — and for one recorded before cards kept it."""
 
     @property
     def sha7(self) -> str:
@@ -157,6 +270,7 @@ class Card(KansoModel):
 
     def row(self) -> str:
         """The `results.tsv` line for this card."""
+        digest = ("",) * len(DIGEST_COLUMNS) if self.digest is None else self.digest.cells()
         return "\t".join(
             (
                 self.sha7,
@@ -168,6 +282,7 @@ class Card(KansoModel):
                 f"{self.peak_mem_gb:.3f}",
                 self.status,
                 self.desc,
+                *digest,
             )
         )
 
@@ -178,6 +293,8 @@ class Card(KansoModel):
         if self.status == "crash":
             if self.metric != 0:
                 raise ValueError("metric: a crashed card measured nothing and reports 0")
+            if self.digest is not None:
+                raise ValueError("digest: a crashed card measured nothing and digests nothing")
         elif self.crash_tail is not None:
             raise ValueError(f"crash_tail: only a crashed card carries one, not a {self.status}")
         return self

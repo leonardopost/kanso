@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from nautilus_trader.model.instruments import Equity
 from typer.testing import CliRunner
 
+from kanso.criteria.gates import periods_margin
 from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
 from kanso.errors import Exit
 from kanso.state import StateStore
@@ -195,7 +197,7 @@ def test_the_same_bytes_over_the_same_snapshot_are_a_known_result_and_a_redundan
         row.split("\t")
         for row in (registered / "hypotheses" / HYP_ID / "results.tsv").read_text().splitlines()[1:]
     ]
-    assert [(row[-2], row[-1]) for row in rows] == [
+    assert [(row[7], row[8]) for row in rows] == [
         ("discard", "baseline"),
         ("keep", "fade the rolling mean"),
         ("redundant", "again"),
@@ -304,13 +306,25 @@ def test_results_tsv_is_rendered_from_state_and_survives_a_restore(
         "peak_mem_gb",
         "status",
         "desc",
+        "trades_per_session",
+        "hit_rate",
+        "median_hold_s",
+        "maker_share",
+        "fill_ratio",
+        "gross_bps_per_trade",
+        "cost_bps_per_trade",
+        "net_bps_per_trade",
+        "net_bps_per_trade_se",
+        "gross_bps_per_session",
+        "cost_bps_per_session",
+        "net_bps_per_session",
     ]
-    assert [row.split("\t")[-1] for row in rows[1:]] == [
+    assert [row.split("\t")[8] for row in rows[1:]] == [
         "baseline",
         "fade the rolling mean",
         "a shorter memory",
     ]
-    assert [row.split("\t")[-2] for row in rows[1:]] == ["discard", "keep", "discard"]
+    assert [row.split("\t")[7] for row in rows[1:]] == ["discard", "keep", "discard"]
 
 
 def test_a_constraint_that_judged_nothing_says_why(runner: CliRunner, loaded: Path) -> None:
@@ -341,6 +355,99 @@ def test_a_card_reads_as_a_few_lines_for_a_human(runner: CliRunner, registered: 
     assert "keep" in result.stdout
     assert "strategy_integrity: pass" in result.stdout
     assert "min_trades: pass" in result.stdout
+    assert " a session over " in result.stdout, "how often it traded, beside the metric"
+    assert " bp a trade net (gross " in result.stdout, "and what a trade earned"
+
+
+def test_a_card_reports_what_its_trades_did_and_the_log_carries_the_same_numbers(
+    runner: CliRunner, registered: Path
+) -> None:
+    begin(runner, registered)
+    edit(registered, REVERTING)
+
+    kept = card(runner, registered, "fade the rolling mean")
+
+    digest = kept["digest"]
+    assert isinstance(digest, dict)
+    assert digest["trades_per_session"] * digest["sessions"] == pytest.approx(kept["n_trades"])
+    assert digest["gross_bps_per_trade"] - digest["cost_bps_per_trade"] == pytest.approx(
+        digest["net_bps_per_trade"]
+    )
+    assert digest["fill_ratio"] is None, "the strategy sends market orders only"
+    rows = (registered / "hypotheses" / HYP_ID / "results.tsv").read_text().splitlines()
+    cells = dict(zip(rows[0].split("\t"), rows[-1].split("\t"), strict=True))
+    assert cells["net_bps_per_trade"] == f"{digest['net_bps_per_trade']:.4f}"
+    assert cells["fill_ratio"] == ""
+
+
+def test_a_digest_reads_as_two_lines_and_a_number_it_lacks_reads_as_none() -> None:
+    """A hold is read in the unit it is easiest to read in, and an absent number is said to
+    be absent rather than printed as a zero."""
+    from kanso.cli.research import _digest_lines
+    from kanso.schemas import CardDigest
+
+    def hold(seconds: float | None) -> str:
+        traded = {
+            "hit_rate": 0.5,
+            "median_hold_s": seconds,
+            "gross_bps_per_trade": 3.0,
+            "cost_bps_per_trade": 1.0,
+            "net_bps_per_trade": 2.0,
+            "net_bps_per_trade_se": 0.5,
+        }
+        if seconds is None:
+            traded = dict.fromkeys(traded)
+        made = CardDigest(sessions=0, fills=0, **traded)
+        lines = _digest_lines(made)
+        assert len(lines) == 2 and "filled n/a" in lines[0] and "maker n/a" in lines[0]
+        return lines[0].split(" · ")[2]
+
+    assert [hold(s) for s in (None, 45.0, 960.0, 9000.0)] == [
+        "hold n/a",
+        "hold 45s",
+        "hold 16m",
+        "hold 2.5h",
+    ]
+    assert _digest_lines(None) == []
+
+
+CHASE = REVERTING.replace(
+    "deviation < -0.3 and not self.long", "deviation > 0.3 and not self.long"
+).replace("deviation > 0.1 and self.long", "deviation < -0.1 and self.long")
+"""The fading strategy turned round: it buys a close above its rolling mean and sells one
+below, which on a reverting path loses on every round trip it makes."""
+
+
+def test_a_card_whose_trades_lose_on_average_is_refused_by_edge_per_trade(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """Required by the operator, the gate refuses the card however its book scored, and
+    its evidence is the number the card's digest records."""
+    from .conftest import classify
+
+    edge = {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}
+    path = write_hypothesis(loaded, required_constraints=[edge])
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+    begin(runner, loaded)
+    edit(loaded, REVERTING)
+    assert card(runner, loaded, "fade the deviation")["n_trades"] > 0
+    edit(loaded, CHASE)
+
+    refused = card(runner, loaded, "chase the deviation")
+
+    (judged,) = [gate for gate in refused["gate_results"] if gate["id"] == "edge_per_trade"]
+    assert refused["status"] == "discard" and judged["pass"] is False
+    assert judged["evidence"]["net_bps_per_trade"] < 0
+    assert judged["evidence"]["net_bps_per_trade"] == refused["digest"]["net_bps_per_trade"]
+    assert judged["evidence"]["se"] == refused["digest"]["net_bps_per_trade_se"]
+    assert refused["n_trades"] > 0
+    # One draw of a search of two: the fading card and this one. The flat baseline traded
+    # nothing, so it is no draw.
+    assert judged["evidence"]["trials"] == 2
+    evidence = judged["evidence"]
+    assert evidence["normal_margin"] == 1.0, "k_se stands above two trials' 0.52"
+    assert evidence["margin"] == periods_margin(1.0, evidence["periods_with_trades"])
 
 
 # -- end and show -------------------------------------------------------------------
@@ -408,6 +515,7 @@ def test_show_prints_the_best_card_s_strategy(runner: CliRunner, registered: Pat
     document = payload(result)
     assert document["sha"] == kept["strategy_sha"]
     assert document["source"] == REVERTING
+    assert document["card"]["digest"] == kept["digest"], "the card that ran those bytes"
     assert at(runner, registered, "research", "show", HYP_ID).stdout.strip() == REVERTING.strip()
 
 

@@ -321,6 +321,7 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
         "strategy_integrity",
         "min_trades",
         "min_event_days",
+        "edge_per_trade",
         "max_hold",
         "max_drawdown",
         "maintenance_margin",
@@ -344,6 +345,12 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
     }
     assert gates["leg_edge"]["params"] == {"leg": "instrument", "min_sharpe": "float"}
     assert gates["leg_edge"]["ranges"] == {"min_sharpe": {"min": -10.0, "max": 10.0}}
+    assert gates["edge_per_trade"]["required"] is False
+    assert gates["edge_per_trade"]["params"] == {"min_bps": "float", "k_se": "float"}
+    assert gates["edge_per_trade"]["ranges"] == {
+        "min_bps": {"min": 0.0, "max": 50.0},
+        "k_se": {"min": 0.0, "max": 3.0},
+    }
 
 
 def test_an_unbounded_range_arrives_as_an_open_end(ws: Workspace) -> None:

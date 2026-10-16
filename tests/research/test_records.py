@@ -98,6 +98,9 @@ def test_a_card_comes_back_as_it_was_written(
     assert read.venue_model.venue == "XNAS"
     assert read.aligned is True
     assert read.crash_tail is None
+    assert read.digest is not None and read.digest == written.digest
+    assert read.digest.trades_per_session is not None
+    assert read.digest.trades_per_session * read.digest.sessions == pytest.approx(read.n_trades)
 
 
 def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateStore) -> None:
@@ -119,8 +122,15 @@ def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateS
         ("crash", 0),
     ]
     assert cards[-3].n_trades > 0
+    # The digest is the same split: what ran digests its trades, what traded nothing has
+    # sessions and no edge, and a crash digests nothing.
+    kept, idle, crashed = (card.digest for card in cards[-3:])
+    assert kept is not None and kept.net_bps_per_trade is not None
+    assert idle is not None and idle.net_bps_per_trade is None and idle.trades_per_session == 0
+    assert crashed is None
     assert records.n_trials(store, hyp_id) == len(cards)
     assert records.trial_metrics(store, hyp_id, "wf_sharpe_net") == [cards[-3].metric]
+    assert records.candidates(store, hyp_id) == 1
 
 
 def pinned_run(store: StateStore, hyp_id: str, n: int, pin: bytes) -> RunRecord:
@@ -197,6 +207,7 @@ def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
     assert records.trial_metrics(store, registered, "net_edge_bps") == [40.0, 55.0]
     assert records.trial_metrics(store, registered, "wf_sharpe_net") == []
     assert records.n_trials(store, registered) == 6, "every card is still counted"
+    assert records.candidates(store, registered) == 5, "a count has no units to keep apart"
 
 
 def a_run(held: tuple[Held, ...] = (), trades: tuple[Trade, ...] = (), days: int = 3) -> CardRun:

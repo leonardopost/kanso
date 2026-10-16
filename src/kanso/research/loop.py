@@ -87,6 +87,7 @@ from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, criteria_version, gates, objectives
 from kanso.criteria.context import verdict
+from kanso.criteria.digest import digest as digest_of
 from kanso.criteria.gates import strategy_integrity
 from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
@@ -118,6 +119,7 @@ from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
+    CardDigest,
     CardStatus,
     GateResult,
     Hypothesis,
@@ -672,6 +674,7 @@ def _context(
     directory: Path,
     params: Mapping[str, Any] | None = None,
     benchmark_run: CardRun | None = None,
+    trials: int = 1,
 ) -> GateContext:
     return GateContext(
         hyp=setup.hyp,
@@ -687,6 +690,7 @@ def _context(
         strategy_sha=strategy_sha,
         lane_dir=directory,
         pinned={HYPOTHESIS_FILE: run.hypothesis_sha, PROGRAM_FILE: run.program_sha},
+        trials=trials,
     )
 
 
@@ -728,8 +732,13 @@ def _constraints(
     strategy_sha: str,
     directory: Path,
     benchmark_run: CardRun | None = None,
+    trials: int,
 ) -> list[GateResult]:
-    """Every card-stage gate the classification chose, apart from the one already run."""
+    """Every card-stage gate the classification chose, apart from the one already run.
+
+    `trials` is the search this card is one draw of: the hypothesis's cards that ran to a
+    result and traded before it, and this one.
+    """
     registry = gates()
     results: list[GateResult] = []
     for ref in setup.hyp.card_gates:
@@ -744,6 +753,7 @@ def _constraints(
             directory=directory,
             params=ref.params,
             benchmark_run=benchmark_run,
+            trials=trials,
         )
         results.append(registry[ref.id].evaluate(ctx))
     return results
@@ -806,6 +816,7 @@ def _record(
     directory: Path,
     tags: Sequence[Tag] = (),
     restore_all: bool = False,
+    digest: CardDigest | None = None,
 ) -> Card:
     """Write the card, then move `best` or restore the lane copy, then render the log.
 
@@ -830,6 +841,7 @@ def _record(
         crash_tail=crash_tail,
         venue_model=setup.venue_model,
         created_at=records.now(),
+        digest=digest,
     )
     records.record_card(store, run, made)
     if status == "keep":
@@ -929,6 +941,7 @@ def _judge(
         strategy_sha=strategy_sha,
         directory=directory,
         benchmark_run=benchmark_run,
+        trials=records.candidates(store, run.hyp_id) + 1,
     )
     metric, se = _measure(setup, result.run, host_run, benchmark_run)
     passed = integrity.passed and all(gate.passed for gate in constraints)
@@ -969,6 +982,7 @@ def _judge(
         crash_tail=None,
         directory=directory,
         tags=tags,
+        digest=digest_of(result.run, result.intents),
     )
     if like is not None:
         _same_book(store, run, made.strategy_sha, desc, metric, floor, like)

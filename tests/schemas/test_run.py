@@ -8,7 +8,16 @@ from typing import Any
 import pytest
 
 from kanso.errors import ValidationError
-from kanso.schemas import RESULTS_HEADER, TAGS, Card, GateResult, RunRecord, resolve_venue_model
+from kanso.schemas import (
+    DIGEST_COLUMNS,
+    RESULTS_HEADER,
+    TAGS,
+    Card,
+    CardDigest,
+    GateResult,
+    RunRecord,
+    resolve_venue_model,
+)
 
 SHA = "a" * 64
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -93,8 +102,115 @@ def test_the_results_row() -> None:
         "1.000",
         "keep",
         "widen the band",
+        *[""] * len(DIGEST_COLUMNS),
     ]
     assert len(card.row().split("\t")) == len(RESULTS_HEADER.split("\t"))
+
+
+DIGEST: dict[str, Any] = {
+    "sessions": 20,
+    "fills": 80,
+    "trades_per_session": 2.0,
+    "hit_rate": 0.55,
+    "median_hold_s": 1800.0,
+    "maker_share": 0.25,
+    "fill_ratio": 0.5,
+    "gross_bps_per_trade": 3.5,
+    "cost_bps_per_trade": 4.0,
+    "net_bps_per_trade": -0.5,
+    "net_bps_per_trade_se": 0.25,
+    "gross_bps_per_session": 1.5,
+    "cost_bps_per_session": 1.6,
+    "net_bps_per_session": -0.1,
+}
+
+
+def test_a_digest_fills_the_columns_after_the_description() -> None:
+    """Appended, not inserted: the nine columns a reader took by position are where they
+    were, and the description is still the ninth."""
+    card = Card.model_validate({**CARD, "digest": DIGEST})
+    cells = card.row().split("\t")
+    assert cells[7:9] == ["keep", "widen the band"]
+    assert dict(zip(DIGEST_COLUMNS, cells[9:], strict=True)) == {
+        "trades_per_session": "2.0000",
+        "hit_rate": "0.5500",
+        "median_hold_s": "1800.0000",
+        "maker_share": "0.2500",
+        "fill_ratio": "0.5000",
+        "gross_bps_per_trade": "3.5000",
+        "cost_bps_per_trade": "4.0000",
+        "net_bps_per_trade": "-0.5000",
+        "net_bps_per_trade_se": "0.2500",
+        "gross_bps_per_session": "1.5000",
+        "cost_bps_per_session": "1.6000",
+        "net_bps_per_session": "-0.1000",
+    }
+
+
+def test_an_absent_digest_number_is_an_empty_cell_and_not_a_zero() -> None:
+    quiet = CardDigest.model_validate(
+        {**DIGEST, "fill_ratio": None, "maker_share": None, "fills": 0}
+    )
+    cells = dict(zip(DIGEST_COLUMNS, quiet.cells(), strict=True))
+    assert (cells["fill_ratio"], cells["maker_share"]) == ("", "")
+
+
+def test_a_crashed_card_digests_nothing() -> None:
+    with pytest.raises(ValidationError, match="digest"):
+        Card.model_validate(
+            {**CARD, "status": "crash", "metric": 0.0, "crash_tail": "boom", "digest": DIGEST}
+        )
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"hit_rate": None}, "net_bps_per_trade"),
+        ({"sessions": 0}, "net_bps_per_session"),
+        ({"trades_per_session": None}, "net_bps_per_session"),
+        ({"fills": 0}, "maker_share"),
+        ({"gross_bps_per_trade": 4.5}, "gross"),
+        ({"cost_bps_per_session": 2.0}, "gross"),
+        ({"hit_rate": 1.5}, "hit_rate"),
+        ({"net_bps_per_trade_se": -1.0}, "net_bps_per_trade_se"),
+    ],
+)
+def test_a_digest_states_its_numbers_together_and_they_add_up(
+    change: dict[str, Any], field: str
+) -> None:
+    with pytest.raises(ValidationError, match=field):
+        CardDigest.model_validate({**DIGEST, **change})
+
+
+def test_an_edge_whose_trades_closed_in_one_period_states_no_error() -> None:
+    """An error read period by period is zero by construction when one period holds every
+    trade, so the edge stands without one; an error with no edge stands for nothing."""
+    alone = CardDigest.model_validate({**DIGEST, "net_bps_per_trade_se": None})
+    assert alone.net_bps_per_trade == -0.5 and alone.net_bps_per_trade_se is None
+    assert dict(zip(DIGEST_COLUMNS, alone.cells(), strict=True))["net_bps_per_trade_se"] == ""
+    no_edge = dict.fromkeys(
+        (
+            "hit_rate",
+            "median_hold_s",
+            "gross_bps_per_trade",
+            "cost_bps_per_trade",
+            "net_bps_per_trade",
+        )
+    )
+    with pytest.raises(ValidationError, match="net_bps_per_trade_se"):
+        CardDigest.model_validate({**DIGEST, **no_edge})
+
+
+def test_a_run_that_closed_nothing_digests_its_sessions_alone() -> None:
+    idle = CardDigest(
+        sessions=5,
+        fills=0,
+        trades_per_session=0.0,
+        **dict.fromkeys(
+            ("gross_bps_per_session", "cost_bps_per_session", "net_bps_per_session"), 0.0
+        ),
+    )
+    assert idle.net_bps_per_trade is None and idle.hit_rate is None
 
 
 def test_a_crashed_card_measures_nothing() -> None:
@@ -109,7 +225,7 @@ def test_a_redundant_card_reports_what_it_measured() -> None:
     status is the only thing that says the result was already known."""
     repeat = Card.model_validate({**CARD, "status": "redundant", "metric": 1.25})
     assert (repeat.status, repeat.metric) == ("redundant", 1.25)
-    assert repeat.row().split("\t")[-2] == "redundant"
+    assert repeat.row().split("\t")[7] == "redundant"
     with pytest.raises(ValidationError, match="crash_tail"):
         Card.model_validate({**CARD, "status": "redundant", "crash_tail": "boom"})
 

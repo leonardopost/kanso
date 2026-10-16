@@ -368,6 +368,8 @@ required_constraints:
   params: {leg: DEMO.SIM, min_sharpe: 0.0}
 - id: trading_hours          # every fill in regular hours, flat by each close; daylight saving moves it
   params: {session: "09:30-16:00", tz: America/New_York}
+- id: edge_per_trade         # no keep unless the mean trade nets an error above zero, more as the search widens
+  params: {min_bps: 0.0, k_se: 1.0}
 ```
 
 Before this existed, an instruction like that could only be prose in `program.md`, which
@@ -1222,7 +1224,14 @@ want to start from your own code, that is what `kanso research begin --from-work
 for, and it clears `best` so the history says what happened.
 
 `results.tsv` is rendered from state after every card, so restoring a lane from the best
-never loses a row. Deleting it loses nothing.
+never loses a row. Deleting it loses nothing. Its columns are `sha7 metric metric_se n_trials
+n_trades wall_s peak_mem_gb status desc`, then the card's digest — `trades_per_session
+hit_rate median_hold_s maker_share fill_ratio gross_bps_per_trade cost_bps_per_trade
+net_bps_per_trade net_bps_per_trade_se gross_bps_per_session cost_bps_per_session
+net_bps_per_session`, what its trades did (`docs/concepts.md`, Card) — appended after `desc` so
+that the first nine columns sit where they always sat. A digest number with nothing to be read
+off, and every digest cell of a crash, of a card refused before or during its backtest and of
+a card recorded before 0.17, is empty.
 
 ## `screens/<id>/`
 
