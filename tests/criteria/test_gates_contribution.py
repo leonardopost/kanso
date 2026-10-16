@@ -13,6 +13,8 @@ from typing import Any
 import pytest
 
 from kanso.criteria.gates import (
+    CONTRIBUTION_BAND,
+    bootstrap,
     cost_scenario,
     deflated_contribution,
     deflated_edge,
@@ -611,3 +613,71 @@ def test_cost_scenario_reproduces_a_card_charged_its_ticks() -> None:
         context(priced, hyp=make_hyp(**CONTRIBUTION_HYP), params={"slippage_ticks": 1.0})
     )
     assert alone.skipped is None
+
+
+# --- bootstrap ----------------------------------------------------------------
+
+
+def test_a_contribution_is_banded_in_its_own_unit_from_its_return_periods() -> None:
+    """Eight days earning 40 a day on 100,000 is 4 bp of capital a day, whatever the trades'
+    own edge: one 10,000-notional trade a day earns 40 bp of its notional, which is what the
+    band used to be — ten times the value it was recorded beside."""
+    run = build_run(
+        (40.0,) * 8,
+        trades=tuple(trade(START + timedelta(days=day), pnl=40.0) for day in range(8)),
+    )
+    ctx = context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 200}, strategy_sha="d" * 64)
+
+    result = bootstrap.evaluate(ctx)
+
+    assert result.evidence["statistic"] == CONTRIBUTION_BAND
+    assert result.evidence["objective_ci90"] == pytest.approx([4.0, 4.0])
+    assert wf_contribution_bps.compute(run, 4)[0] == pytest.approx(4.0)
+    assert result.passed
+
+
+def test_a_contribution_s_band_holds_its_value_and_a_losing_one_fails() -> None:
+    run = build_run(RETURNS)
+    value = wf_contribution_bps.compute(run, 4)[0]
+
+    result = bootstrap.evaluate(
+        context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 2_000}, strategy_sha="d" * 64)
+    )
+    losing = bootstrap.evaluate(
+        context(
+            build_run(tuple(-abs(r) for r in RETURNS)),
+            hyp=make_hyp(**CONTRIBUTION_HYP),
+            params={"n": 2_000},
+            strategy_sha="d" * 64,
+        )
+    )
+
+    low, high = result.evidence["objective_ci90"]
+    assert low < value < high
+    assert result.passed
+    assert losing.evidence["objective_ci90"][1] < 0 and not losing.passed
+
+
+def test_a_contribution_s_drawdown_is_drawn_from_its_periods_not_its_trades() -> None:
+    """Three good days and one that loses a fifth of the capital, with no closed trade at all:
+    the path the objective's periods trace is the one whose depth is judged."""
+    run = build_run((60.0, -200.0, 60.0, 60.0), capital=1_000.0)
+
+    result = bootstrap.evaluate(
+        context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 200}, strategy_sha="d" * 64)
+    )
+
+    assert result.skipped is None
+    assert result.evidence["mdd_p95"] >= 20.0 > result.evidence["limit_pct"]
+    assert not result.passed
+
+
+def test_a_contribution_with_one_period_has_nothing_to_resample_however_many_trades() -> None:
+    run = build_run((40.0,), trades=tuple(trade(START, pnl=10.0) for _ in range(5)))
+
+    result = bootstrap.evaluate(
+        context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 200}, strategy_sha="d" * 64)
+    )
+
+    assert result.passed
+    assert result.skipped == "fewer than two return periods, so there is nothing to resample"

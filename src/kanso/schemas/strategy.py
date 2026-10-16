@@ -69,13 +69,25 @@ class Pins(KansoModel):
 
 
 class Expectation(KansoModel):
-    """What composition measured, and the band monitoring judges the realised result by."""
+    """What composition measured, and what monitoring judges the realised result by.
+
+    `value` is the objective over the certification window and `ci90` the bootstrap's
+    ninety-percent band of it; `se` is the value's standard error as the objective reads
+    it and `periods` the return periods the window held, which together are the
+    per-period dispersion a paper or live window's own band is struck from
+    (`kanso.criteria.band`); `capital` is the capital all of it was struck at, which a
+    stage that funds the version with another share strikes it again at. The three are
+    absent from an expectation composed before kanso recorded them.
+    """
 
     objective_id: CatalogueId
     value: float
     ci90: tuple[float, float]
     mdd_p95: float = Field(ge=0)
     window: DateWindow
+    se: float | None = Field(default=None, ge=0)
+    periods: int | None = Field(default=None, ge=0)
+    capital: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _interval_ordered(self) -> Expectation:

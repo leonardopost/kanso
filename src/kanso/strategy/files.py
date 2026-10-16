@@ -30,6 +30,7 @@ __all__ = [
     "STRATEGIES",
     "STRATEGY_FILE",
     "appended",
+    "expect",
     "impl_dir",
     "read",
     "record",
@@ -144,6 +145,14 @@ def record(store: StateStore, strategy_id: str, version: StrategyVersion) -> Non
             _dump(version.expectation.model_dump(mode="json")),
             version.created_at.isoformat(),
         ),
+    )
+
+
+def expect(store: StateStore, strategy_id: str, version: StrategyVersion) -> None:
+    """Index the expectation a version now carries, after a stage struck it again."""
+    store.connection.execute(
+        "UPDATE strategy_versions SET expectation = ? WHERE strategy_id = ? AND version = ?",
+        (_dump(version.expectation.model_dump(mode="json")), strategy_id, version.version),
     )
 
 

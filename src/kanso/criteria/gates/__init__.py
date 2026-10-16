@@ -1428,22 +1428,49 @@ class _CostStress:
         )
 
 
-class _Bootstrap:
-    """What the trade sequence could have looked like, and how deep it could have drawn.
+CONTRIBUTION_BAND: Final = "contribution_bps"
+"""The contribution family's band: the mean of resampled return periods, in bp of capital."""
 
-    A replication resamples the closed trades with replacement, keeping the population and
-    losing the order, and rebuilds the equity path from the starting capital. The gate
-    judges both of the numbers it records. The path gives the drawdown distribution, whose
-    ninety-fifth percentile is held to the hypothesis's limit; the same draw gives the
-    objective's own statistic, whose ninety-percent band must reach above zero — a band
-    that lies at or below zero says the population of trades carries no edge in whatever
-    order it arrives, and a drawdown inside the limit does not make that a pass. The band
-    is also what becomes a deployed version's expectation. The statistic is the run's
-    objective family measured on the resampled trades — a Sharpe of the trade series, or
-    its mean edge per trade — less, for an objective measured against a benchmark, what
-    the benchmark scored on the same statistic over the same folds: a hold has no trades
-    of its own to resample, and the band a paper stage judges a realised difference
-    against has to be one of differences.
+EDGE_BAND: Final = "edge_bps"
+"""A per-trade edge's band: the mean of resampled closed trades' edges, in bp of notional."""
+
+SHARPE_BAND: Final = "trade_sharpe"
+"""The Sharpe family's band: a Sharpe of resampled closed trades' P&L, annualised by the
+trades the window held per year."""
+
+
+def band_statistic(objective: Objective) -> str:
+    """What `bootstrap` resamples for this objective, by the name its evidence records it
+    under — which is what a band is reused by, so a band of one statistic is never read
+    as another's."""
+    if objective.statistic == CONTRIBUTION_BAND:
+        return CONTRIBUTION_BAND
+    return SHARPE_BAND if objective.id in SHARPE_FAMILY else EDGE_BAND
+
+
+class _Bootstrap:
+    """What the run could have looked like, and how deep it could have drawn.
+
+    A replication resamples the run with replacement, keeping the population and losing the
+    order, and rebuilds the equity path from the starting capital. What is resampled is
+    what the objective is a mean of. A contribution — the mean return per period in basis
+    points of the capital — resamples the window's **return periods**, so its band is in
+    basis points of the capital per period, the unit its value and a paper stage's
+    realised contribution are in; every other objective resamples the **closed trades**,
+    and its statistic is a Sharpe of their P&L or their mean edge per trade. The evidence
+    names which (`statistic`). The gate judges both of the numbers it records. The path
+    gives the drawdown distribution, whose ninety-fifth percentile is held to the
+    hypothesis's limit; the same draw gives the statistic, whose ninety-percent band must
+    reach above zero — a band that lies at or below zero says the population carries no
+    edge in whatever order it arrives, and a drawdown inside the limit does not make that a
+    pass. For an objective measured against a benchmark the statistic is less what the
+    benchmark scored on the same statistic over the same folds: a hold has no trades of its
+    own to resample, and the band has to be one of differences.
+
+    The band is composition's `ci90`. It is a confidence band of the certification
+    window's statistic, not the band a paper window of another length is judged against:
+    that one is struck from the value's error and the window's periods
+    (`kanso.criteria.band`).
     """
 
     id: ClassVar[str] = "bootstrap"
@@ -1455,15 +1482,22 @@ class _Bootstrap:
         objective = _objective(ctx)
         if objective is None:
             return skipped(self.id, NO_OBJECTIVE)
-        if len(ctx.run.trades) < 2:
+        statistic = band_statistic(objective)
+        if statistic == CONTRIBUTION_BAND:
+            if len(ctx.run.returns) < 2:
+                return skipped(
+                    self.id, "fewer than two return periods, so there is nothing to resample"
+                )
+        elif len(ctx.run.trades) < 2:
             return skipped(self.id, "fewer than two closed trades, so there is nothing to resample")
         limit = ctx.hyp.risk_limits.max_drawdown_pct
-        low, high, worst = self._resample(ctx, objective, replications)
+        low, high, worst = self._resample(ctx, objective, statistic, replications)
         return verdict(
             self.id,
             worst <= limit and high > 0,
             {
                 "objective": objective.id,
+                "statistic": statistic,
                 "objective_ci90": [low, high],
                 "mdd_p95": worst,
                 "limit_pct": limit,
@@ -1473,15 +1507,19 @@ class _Bootstrap:
 
     @staticmethod
     def _resample(
-        ctx: GateContext, objective: Objective, replications: int
+        ctx: GateContext, objective: Objective, statistic: str, replications: int
     ) -> tuple[float, float, float]:
         trades = ctx.run.trades
-        pnl = np.array([t.pnl_net for t in trades], dtype=float)
+        capital = ctx.run.capital
+        moves = (
+            np.array(ctx.run.returns, dtype=float)
+            if statistic == CONTRIBUTION_BAND
+            else np.array([t.pnl_net for t in trades], dtype=float)
+        )
         edge = np.array(
             [t.pnl_net / t.notional * BPS if t.notional > 0 else 0.0 for t in trades],
             dtype=float,
         )
-        capital = ctx.run.capital
         per_year = len(trades) / years(ctx.run.window)
         rng = np.random.default_rng(
             int.from_bytes(sha256(ctx.strategy_sha.encode()).digest()[:8], "big")
@@ -1490,16 +1528,17 @@ class _Bootstrap:
         statistics: list[np.ndarray] = []
         for start in range(0, replications, BLOCK):
             width = min(BLOCK, replications - start)
-            draws = rng.integers(0, len(trades), size=(width, len(trades)))
-            sample = pnl[draws]
+            draws = rng.integers(0, len(moves), size=(width, len(moves)))
+            sample = moves[draws]
             path = capital + np.cumsum(sample, axis=1)
             peak = np.maximum(np.maximum.accumulate(path, axis=1), capital)
             drawdowns.append(((peak - path) / capital * 100.0).max(axis=1))
-            statistics.append(
-                _sharpe_of(sample, per_year)
-                if objective.id in SHARPE_FAMILY
-                else edge[draws].mean(axis=1)
-            )
+            if statistic == CONTRIBUTION_BAND:
+                statistics.append(sample.mean(axis=1) / capital * BPS)
+            elif statistic == SHARPE_BAND:
+                statistics.append(_sharpe_of(sample, per_year))
+            else:
+                statistics.append(edge[draws].mean(axis=1))
         spread = np.concatenate(statistics) - benchmark_level(
             objective, ctx.research_folds, ctx.benchmark_run
         )

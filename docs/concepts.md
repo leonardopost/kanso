@@ -955,7 +955,8 @@ The harness settles a period on a point delivered to the sleeve itself, so a gro
 the sleeve never subscribes to that holds a period's only point moves the runner's period end
 and not the harness's, and `balance` lags one period until the sleeve is handed a point.
 `bootstrap` resamples closed trades' net P&L, which holds neither the carry nor a transfer, so
-its `mdd_p95` understates the drawdown a levered book recorded. The harness's period close is
+its `mdd_p95` understates the drawdown a levered book recorded — except under a contribution
+objective, whose resample is of return periods, which hold the carry and still no transfer. The harness's period close is
 out of reach both ways: its attribute reads are denied, and a `strategy.py` that defines a
 method of the same name binds a name the base owns, which the same gate refuses, sized or not.
 
@@ -1676,18 +1677,21 @@ from, and nothing is stated: the plan says so on its `power` line, and the certi
 carries no `power`.
 
 **A paper window is chosen against the certification window, and `cert plan` says so when it
-is not.** The paper gate compares the objective a stage realises against the interval
-composition measured over the *certification* window: two estimates of the same quantity, and
-the shorter one scatters more widely around a band that does not widen with it. So a plan
-that judges a fortnight against a year is asking a sound version to look drifted, and the
-command warns — with the two spans and how much noisier the shorter one is — while pinning
-the plan anyway. The plan is the planner's and the windows are yours; the warning is all kanso
-has to say about the pair, and a short paper window you meant is a short paper window you get.
+is not.** The paper gate compares the objective a stage realises against a band struck for the
+paper window's own length from what composition measured over the *certification* window —
+the value's error and the paper window's, together (*Promotion and demotion*). A version
+behaving as certified lands inside it about nine times in ten at any length that strikes one,
+but a short window widens the band until a version that has stopped working lands inside it too:
+a fortnight against a year strikes a band about five times as wide as the certification
+value's own. So under a tenth of the certification window the command warns — with the two
+spans and how much wider the band is — while pinning the plan anyway. The plan is the
+planner's and the windows are yours; the warning is all kanso has to say about the pair, and a
+short paper window you meant is a short paper window you get.
 
 ```
 $ kanso cert plan demo_mr                 # the gates, the exclusions and the last two lines are elided
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
-warning    paper window 5d against a 145d certification window · the paper objective is about 5x noisier than the band it is judged against, so a version behaving as certified can read as drifted · raise min_duration or horizon_mult, or narrow windows.certification
+warning    paper window 5d against a 145d certification window · the paper band is about 5x as wide as the certification value's own, so a version that has lost its edge can land inside it · raise min_duration or horizon_mult
 ```
 
 **A certificate is immutable, and that is what makes it evidence.** It records one
@@ -1702,7 +1706,7 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
            pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
-           pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
+           pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979], statistic=edge_bps
            pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
@@ -1765,9 +1769,21 @@ evidence for a pass, and a certificate whose window failed cannot pass — while
 certificate lists its gates in the plan's order as before. A window gate that judged nothing
 spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
 percentile of the resampled drawdown against `risk_limits.max_drawdown_pct`, and the
-ninety-percent band of the resampled objective, which must reach above zero — a band that
-lies at or below zero says the population of trades carries no edge in whatever order it
-arrives, and a drawdown inside the limit does not make that a pass.
+ninety-percent band of the objective's statistic on the resample, which must reach above
+zero — a band that lies at or below zero says the population of trades carries no edge in
+whatever order it arrives (of periods, for a contribution), and a drawdown inside the limit
+does not make that a pass. What it
+resamples is what the objective is a mean of, and its evidence names the statistic: a
+contribution resamples the window's return periods, so its band (`contribution_bps`) is in
+basis points of the capital per period, the unit of its value; every other objective
+resamples the closed trades, as a mean edge per trade (`edge_bps`) or a Sharpe of their P&L
+annualised by the trades the window held per year (`trade_sharpe`, a statistic of the
+Sharpe's family rather than the objective's own Sharpe of period returns — `docs/backlog.md`
+row 178). Before 0.17 a contribution was banded by its per-trade edge in basis points of
+notional, beside a value in basis points of capital a day — off by the trades a day times
+their notional over the capital — so a version reproducing its certification could not
+pass paper; a certificate written then still carries that band, and composition does not
+reuse a band whose evidence does not name its statistic.
 
 `walk_forward_consistency` reads the research window alone: in how many of its folds the
 objective was positive, held to `min_positive_folds`. It once also required the certification
@@ -1843,11 +1859,20 @@ pointer to source that might change — it is a closed record of four things.
   field of which records its origin as `default`, `config` (`[research]` in `kanso.toml`),
   `broker`, `venue_override` (`venues.<MIC>` in `portfolio.yaml`) or `hypothesis`.
 - **`expectation`**: what composition measured by running that implementation over the
-  sleeve's certification window — the objective, a ninety-percent interval and the
-  ninety-fifth-percentile drawdown. The paper and live gates judge the deployment against
-  this band, so it is measured rather than declared. A sleeve measured against a
-  `benchmark` has the hold run over the same window, and its value and its band are
-  differences from it.
+  sleeve's certification window — the objective's value and its error (`se`), the return
+  periods it was read over (`periods`), the bootstrap's ninety-percent interval and the
+  ninety-fifth-percentile drawdown — and the capital all of it was struck at (`capital`).
+  The paper and live gates strike the band they judge a deployment by from the value, the
+  error and the periods, so it is measured rather than declared. It is struck at the share
+  the paper stage would fund the strategy with, because the objective a stage realises is
+  read on that share: a version whose dollar result does not scale with the money it is
+  handed — a fixed notional, a sizing budget — does not read the same contribution on
+  another capital, and the demo's sleeve under `wf_contribution_bps`, 10,000 of notional
+  capped at a fifth of its 40% share of the template's 100,000, is expected at 8.17 bp a day
+  on paper against the 4.09 its certificate measured over 100,000. A stage that funds
+  the version with another share — the live stage, after a promotion — has it measured again
+  there before it deploys. A sleeve measured against a `benchmark` has the hold run over the
+  same window, and its value and its band are differences from it.
 
 The identity really is the bytes. In a workspace that has just certified and composed:
 
@@ -1949,11 +1974,51 @@ deployment, demotion, halting a stage. Moving a version onto real capital does n
 What moves a paper version to `promotable` is one gate, `paper_forward`, and it is strict
 both ways: the version must have been on the stage for the longer of the plan's minimum
 duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
-objective it realised must fall **inside** the ninety-percent interval composition
-measured, above the band as much a fail as below it, because a stage that out-performs its
+objective it realised must fall **inside** the band struck for the paper window it realised
+it over, above the band as much a fail as below it, because a stage that out-performs its
 certification is not reproducing what was certified. Of the sleeve's card-stage constraints it
 judges `max_drawdown` and `maintenance_margin` on the stage's own run, and a breach of either
 is a fail. `docs/cli.md` has the pass.
+
+**The band is a prediction band for the paper window, not a confidence band of the
+certification.** The realised value and the certified one are two estimates of one quantity,
+the paper window's usually the shorter, and their difference varies as both do. Each fold of
+a window of `m` periods varies as `s² × w(m)`, `s² = se² × N` the per-period dispersion the
+certification window's `N` periods showed — its own error says so — so the band is
+
+```
+expected ± 1.645 × √(se² + se² × N × Σ w(m_k) / K²)
+```
+
+over the paper window's `K = [research] folds` folds of `m_k` periods. For a contribution or a
+per-trade edge `w(m) = 1/m`, the variance of a mean, and in `K` equal folds of a window of `M`
+periods the band is `expected ± 1.645 × se × √(1 + N/M)`. For a Sharpe `w(m) = (m − 1) / (m (m
+− 3))`, the exact variance of a Sharpe of `m` normal periods — three times `1/m` at four, twice
+at five — and a window any of whose scoring folds holds fewer than four periods strikes no
+band at all, because a Sharpe of two or three periods has no variance: weighed by `1/m`, a
+version that is what was certified landed inside 0.54 of the time over ten sessions and fell
+below up to 0.18 of the time. `expected` is the certified value scaled to the folds the window
+filled, since the objective scores a fold holding nothing as zero; a window that filled no
+fold — a per-trade edge's that closed no trade — strikes no band either, since it realises
+zero whatever the version is.
+
+Its coverage is nominal — ninety percent, a normal approximation — and the evidence states it
+with the band, the periods it was struck for and what each fold held (`fold_periods`, against
+`fold_minimum`). Simulated in October 2026, a version that is what was certified landed inside
+0.87 to 0.94 of the time on normal, Student-t3 and sparse books of every family at every
+length that strikes a band — 0.98 for a per-trade edge trading a few times a week over five
+sessions — and 0.82 to 0.85 on a contribution whose periods are autocorrelated at 0.3; regime
+shifts were not simulated (`docs/backlog.md`). The interval
+composition recorded — the bootstrap's band of the certification value — is not what paper is
+judged against: a version behaving exactly as certified lands inside it 26% of the time over
+five sessions against 122 and 76% even over 122, and above it as often as below. A short paper
+window makes the band wide enough to hold a version that stopped working, which is what `cert
+plan` warns about. A window too thin to strike a band fails, so the version is not promotable
+until its paper window has grown enough — for a Sharpe, four periods a fold whatever the plan
+chose. `live_drift` holds a live version to the lower end of the band struck for its rolling
+window — opened back through its live tenure until it strikes one — which a version behaving
+as certified falls below nominally one time in twenty, 0.014 to 0.075 of the time a look in
+simulation.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

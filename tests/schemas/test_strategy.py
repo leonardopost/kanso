@@ -96,6 +96,19 @@ def test_the_confidence_interval_is_ordered() -> None:
         build(version(1, "paper", expectation={**EXPECTATION, "ci90": [1.8, 0.4]}))
 
 
+def test_an_expectation_composed_before_its_dispersion_was_recorded_still_reads() -> None:
+    """`se`, `periods` and `capital` are absent from a file an earlier kanso wrote."""
+    held = build(version(1, "paper")).latest().expectation
+
+    assert (held.se, held.periods, held.capital) == (None, None, None)
+
+
+def test_an_expectation_s_dispersion_and_capital_are_bounded() -> None:
+    for field, value in (("se", -0.1), ("periods", -1), ("capital", 0.0)):
+        with pytest.raises(ValidationError, match=field):
+            build(version(1, "paper", expectation={**EXPECTATION, field: value}))
+
+
 def test_a_strategy_has_at_least_one_version() -> None:
     with pytest.raises(ValidationError, match="versions"):
         build()

@@ -2011,7 +2011,9 @@ strategies/<id>/impl/<version>/        the manifest and a verbatim copy of every
 
 `strategy.yaml` gains a version each time a construct attaches and each time the sleeve
 itself is certified with different bytes; earlier versions are never rewritten, only their
-`state` moves.
+`state` moves — and their `expectation`, which `deploy` measures again when a stage funds the
+version with a share other than the `capital` it was struck at, and appends an `expected`
+event saying so.
 
 `kanso strat compose` writes both, and a passing certificate composes on its own, so these
 are usually not commands you type. `impl/<version>/` is the **one directory a backtest, a
