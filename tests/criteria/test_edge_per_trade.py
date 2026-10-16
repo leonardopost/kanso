@@ -7,12 +7,13 @@ one fold — so what the proposer and the operator are shown is what the gate ju
 from __future__ import annotations
 
 from datetime import timedelta
+from statistics import NormalDist
 
 import pytest
 
 from kanso.criteria import CardRun
 from kanso.criteria.digest import digest
-from kanso.criteria.gates import edge_per_trade
+from kanso.criteria.gates import edge_per_trade, expected_maximum, search_margin
 from kanso.schemas import GateResult
 from tests.criteria.builders import START, build_run, context, trade
 
@@ -24,8 +25,8 @@ def run_of(*edges_bps: float) -> CardRun:
     return build_run((1.0,) * len(edges_bps), trades=trades)
 
 
-def judged(run: CardRun, **params: float) -> GateResult:
-    return edge_per_trade.evaluate(context(run, params=params))
+def judged(run: CardRun, trials: int = 1, **params: float) -> GateResult:
+    return edge_per_trade.evaluate(context(run, params=params, trials=trials))
 
 
 WINNING = run_of(12.0, 8.0, 10.0, 11.0, 9.0, 10.0)
@@ -44,6 +45,8 @@ def test_trades_that_pay_on_average_pass_and_say_by_how_much() -> None:
     )
     assert (result.evidence["k_se"], result.evidence["min_bps"]) == (1.0, 0.0)
     assert (result.evidence["n_trades"], result.evidence["periods_with_trades"]) == (6, 6)
+    assert (result.evidence["trials"], result.evidence["expected_maximum"]) == (1, 0.0)
+    assert result.evidence["margin"] == 1.0, "one card is no search: the margin is k_se"
 
 
 def test_trades_that_lose_on_average_fail_however_the_book_scored() -> None:
@@ -111,6 +114,71 @@ def test_clips_that_all_closed_in_one_session_fail_however_they_spread() -> None
     assert spread.passed, "two sessions are enough to read an error off; the mean made money"
     assert spread.evidence["periods_with_trades"] == 2 and spread.evidence["se"] > 0
     assert not judged(two_sessions, min_bps=0.0, k_se=1.0).passed
+
+
+SEARCHED = run_of(12.0, -4.0, 10.0, 2.0, 8.0, -2.0, 9.0, 5.0)
+"""Eight trades netting 5 bp on average at an error of about 2.06: about 2.4 errors clear."""
+
+
+@pytest.mark.parametrize(
+    ("trials", "expected", "passes"),
+    [(1, 0.0, True), (2, 0.5198, True), (50, 2.2763, True), (500, 3.0525, False)],
+)
+def test_the_margin_is_k_se_or_the_search_s_expected_maximum_whichever_is_more(
+    trials: int, expected: float, passes: bool
+) -> None:
+    """The same card at `k_se` 1, one draw of searches of 1, 2, 50 and 500 cards: the
+    expected maximum of that many standard normals is 0, 0.52, 2.28 and 3.05 errors, so the
+    margin is `k_se` until fifty trials have raised it, and an edge 2.4 errors clear of zero
+    that passes as one of fifty fails as one of five hundred."""
+    result = judged(SEARCHED, trials=trials, min_bps=0.0, k_se=1.0)
+
+    evidence = result.evidence
+    assert evidence["trials"] == trials
+    assert evidence["expected_maximum"] == pytest.approx(expected, abs=1e-4)
+    assert evidence["margin"] == max(1.0, evidence["expected_maximum"])
+    assert evidence["lower"] == pytest.approx(
+        evidence["net_bps_per_trade"] - evidence["margin"] * evidence["se"]
+    )
+    assert 2.4 < evidence["net_bps_per_trade"] / evidence["se"] < 2.5
+    assert result.passed is passes
+
+
+def test_a_k_se_above_the_search_s_expected_maximum_stands() -> None:
+    """The search sets a floor under `k_se` and never lowers it: at fifty trials the
+    expected maximum is 2.28 errors, and a `k_se` of 3 is still the margin."""
+    result = judged(SEARCHED, trials=50, min_bps=0.0, k_se=3.0)
+
+    assert result.evidence["margin"] == 3.0
+    assert not result.passed
+
+
+def test_the_search_margin_is_the_deflation_s_expected_maximum_at_one_error() -> None:
+    """One card is no search, and from two on the margin is the expected maximum the
+    deflation gates compute, at a spread of one error, rising with the search."""
+    assert search_margin(1) == 0.0
+    widths = (2, 3, 10, 50, 500, 5000)
+    assert [search_margin(n) for n in widths] == [expected_maximum(1.0, n) for n in widths]
+    assert [search_margin(n) for n in widths] == sorted(search_margin(n) for n in widths)
+
+
+@pytest.mark.parametrize(
+    ("k_se", "fixed", "searched"), [(1.0, 79.33, 3.32), (2.0, 11.38, 2.26), (3.0, 0.67, 0.67)]
+)
+def test_zero_edge_cards_pass_with_the_log_of_the_search_not_its_length(
+    k_se: float, fixed: float, searched: float
+) -> None:
+    """The figures the gate and `docs/concepts.md` state: over 500 cards whose edge in its
+    own errors is a standard normal, the expected count that pass is each card's chance
+    summed — which holds however the cards are correlated — at a fixed `k_se` and at the
+    margin each card is held to as one of the cards drawn so far."""
+    tail = NormalDist().cdf
+    each = [1 - tail(max(k_se, search_margin(n))) for n in range(1, 501)]
+
+    assert 500 * (1 - tail(k_se)) == pytest.approx(fixed, abs=0.01)
+    assert sum(each) == pytest.approx(searched, abs=0.01)
+    if k_se == 1.0:
+        assert sum(each[:50]) > sum(each) / 2, "most of them early, while the search is narrow"
 
 
 @pytest.mark.parametrize("params", [{}, {"min_bps": 0.0}, {"k_se": 1.0}])

@@ -130,6 +130,7 @@ def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateS
     assert crashed is None
     assert records.n_trials(store, hyp_id) == len(cards)
     assert records.trial_metrics(store, hyp_id, "wf_sharpe_net") == [cards[-3].metric]
+    assert records.candidates(store, hyp_id) == 1
 
 
 def pinned_run(store: StateStore, hyp_id: str, n: int, pin: bytes) -> RunRecord:
@@ -206,6 +207,7 @@ def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
     assert records.trial_metrics(store, registered, "net_edge_bps") == [40.0, 55.0]
     assert records.trial_metrics(store, registered, "wf_sharpe_net") == []
     assert records.n_trials(store, registered) == 6, "every card is still counted"
+    assert records.candidates(store, registered) == 5, "a count has no units to keep apart"
 
 
 def a_run(held: tuple[Held, ...] = (), trades: tuple[Trade, ...] = (), days: int = 3) -> CardRun:

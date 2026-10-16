@@ -429,6 +429,8 @@ def test_a_card_whose_trades_lose_on_average_is_refused_by_edge_per_trade(
     assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
     classify(loaded)
     begin(runner, loaded)
+    edit(loaded, REVERTING)
+    assert card(runner, loaded, "fade the deviation")["n_trades"] > 0
     edit(loaded, CHASE)
 
     refused = card(runner, loaded, "chase the deviation")
@@ -439,6 +441,10 @@ def test_a_card_whose_trades_lose_on_average_is_refused_by_edge_per_trade(
     assert judged["evidence"]["net_bps_per_trade"] == refused["digest"]["net_bps_per_trade"]
     assert judged["evidence"]["se"] == refused["digest"]["net_bps_per_trade_se"]
     assert refused["n_trades"] > 0
+    # One draw of a search of two: the fading card and this one. The flat baseline traded
+    # nothing, so it is no draw.
+    assert judged["evidence"]["trials"] == 2
+    assert judged["evidence"]["margin"] == 1.0, "k_se stands above two trials' 0.52"
 
 
 # -- end and show -------------------------------------------------------------------

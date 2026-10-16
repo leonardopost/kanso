@@ -76,6 +76,9 @@ class GateContext:
       cards and both are counted by the `n_trials` a certificate records. A card refused
       as redundant is a trial: it ran, it traded, and the keep rule was asked before its
       signature was, so the selection ranked its number and declined it;
+    * `trials` is how many candidates the search behind `run` has drawn, `run` among them:
+      on a card, the hypothesis's cards that ran to a result and traded under any
+      objective, and this one. It is 1 — no search — wherever no caller counts one;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
       pinned, which is what the scope rule is checked against;
     * `datasets` are the pinned snapshot's datasets with their observed and documented
@@ -110,6 +113,7 @@ class GateContext:
     benchmark_run: CardRun | None = None
     benchmark_research_run: CardRun | None = None
     trial_metrics: Sequence[float] = ()
+    trials: int = 1
     lane_dir: Path | None = None
     pinned: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     datasets: Sequence[DatasetFacts] = ()

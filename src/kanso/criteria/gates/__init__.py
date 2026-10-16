@@ -964,6 +964,14 @@ class _MinEventDays:
         return verdict(self.id, len(days) >= minimum, {"event_days": len(days), "min": minimum})
 
 
+def search_margin(trials: int) -> float:
+    """How many of their own errors the best of `trials` cards whose trades earn nothing is
+    expected to clear by chance: the expected maximum of that many standard normals, by the
+    approximation the deflation gates use (`expected_maximum` at a spread of one error), and
+    zero for one card, which is no search."""
+    return expected_maximum(1.0, trials) if trials >= 2 else 0.0
+
+
 class _EdgePerTrade:
     """The card's trades make money on average, by more than their own error says is noise.
 
@@ -975,9 +983,25 @@ class _EdgePerTrade:
     read over the whole window as one fold (`kanso.criteria.digest.edge_per_trade`), the
     numbers a card's digest records as `net_bps_per_trade` and `net_bps_per_trade_se`, so
     what the proposer and the operator are shown is what was judged. The gate passes when
-    `net − k_se × se > min_bps`, strictly, over trades that closed in at least two of the
-    window's periods: at `min_bps` zero and `k_se` zero, a card whose trades closed in two
-    periods or more passes exactly when its mean trade made money.
+    `net − margin × se > min_bps`, strictly, over trades that closed in at least two of the
+    window's periods, where `margin` is the larger of `k_se` and `search_margin(trials)`: on
+    a hypothesis's first card, at `min_bps` zero and `k_se` zero, a card whose trades closed
+    in two periods or more passes exactly when its mean trade made money.
+
+    The margin grows with the search. A lane draws hundreds of cards, and one whose trades
+    earn nothing still clears `k_se` errors by chance with probability `1 − Φ(k_se)` — at
+    `k_se` 1, one card in six — so a fixed margin lets zero-edge cards through in proportion
+    to the search's length. So the margin is never below the expected maximum of `trials`
+    standard normals: 0 errors on one card, 0.52 at 2 trials, 2.28 at 50 and 3.05 at 500.
+    `trials` is this card and every card of the hypothesis before it that ran to a result and
+    traded, under any objective (`GateContext.trials`). Each card is held to the search as it
+    stood when it ran, so the expected count of zero-edge cards that pass grows with the
+    logarithm of the search rather than with its length: over 500 cards, about 3.3 at `k_se`
+    1 rather than 79, 2.3 at `k_se` 2 rather than 11, and 0.67 at `k_se` 3 either way. That
+    count is a sum of each card's chance, so it holds however the cards are correlated;
+    correlated cards are fewer independent draws than their number, which makes the margin
+    wider than their search, never narrower. Which gates run and their `min_bps` and `k_se`
+    stay the agents' choice; the search sets only a floor under `k_se`.
 
     An error read period by period is zero whenever every trade closed in one period, however
     far apart the trades landed — each period's influence on the mean is zero — so a card that
@@ -1001,7 +1025,9 @@ class _EdgePerTrade:
         if floor is None or k_se is None:
             return skipped(self.id, "no min_bps and k_se were chosen, so no edge was required")
         edge, se, periods = edge_per_trade_of(ctx.run)
-        lower = None if se is None else edge - k_se * se
+        searched = search_margin(ctx.trials)
+        margin = max(k_se, searched)
+        lower = None if se is None else edge - margin * se
         return verdict(
             self.id,
             lower is not None and lower > floor,
@@ -1009,6 +1035,9 @@ class _EdgePerTrade:
                 "net_bps_per_trade": edge,
                 "se": se,
                 "k_se": k_se,
+                "trials": ctx.trials,
+                "expected_maximum": searched,
+                "margin": margin,
                 "lower": lower,
                 "min_bps": floor,
                 "n_trades": sum(1 for trade in ctx.run.trades if trade.notional > 0),

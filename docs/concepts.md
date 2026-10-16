@@ -783,7 +783,7 @@ already over. There are ten.
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
-| `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less `k_se` of that mean's error, at or below `min_bps`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
+| `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin is the larger of `k_se` and the expected maximum of `trials` standard normals — 0 on a hypothesis's first card, 0.52 at 2 trials, 2.28 at 50, 3.05 at 500 — where `trials` is the card and every card of the hypothesis before it that ran to a result and traded, under any objective, and the evidence carries `trials`, `expected_maximum` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 **A session is a clock in a zone, read date by date.** `trading_hours {session: "09:30-16:00",
@@ -809,10 +809,19 @@ the book rewards trading less once every trade loses: a contribution moves towar
 losing trades are dropped, so a card that cuts its clips by three quarters at a slightly worse
 loss per clip scores better and is kept — measured on an operator's scalping lane, from −133
 to −37 bp a day. A failing card gate means no keep, so with `edge_per_trade` on a lane only a
-card whose trades make money on average, by `k_se` errors and `min_bps` beyond zero, over
-at least two return periods, can become its best: on a daily period, trading less only
-goes as far as trading on two sessions, never as far as one trade that happened to pay. It is chosen like any other card gate — by the classifier, inside its ranges,
-or by you under `required_constraints` — and never by default.
+card whose trades make money on average, by `min_bps` and a margin of errors beyond zero, over
+at least two return periods, can become its best: on a daily period, trading less only goes as
+far as trading on two sessions, never as far as one trade that happened to pay. The margin is
+`k_se` until the search makes it more. A card whose trades earn nothing clears one error by
+chance one time in six, so a lane that draws hundreds of cards would pass such a card every
+sixth one at a fixed margin; holding each card to the expected maximum of the cards drawn so
+far, when that is the larger, makes the count that pass grow with the logarithm of the search
+instead of its length — over 500 cards at `k_se` 1, about 3.3 rather than 79, most of them
+among the first fifty, while the search is narrow and `k_se` is the bar. That count is a sum
+of each card's chance, so it holds however alike the cards are (`docs/backlog.md` row 190
+says what it leaves open). It is chosen like any other
+card gate — by the classifier, inside its ranges, or by you under `required_constraints` — and
+never by default; the search moves only the floor under `k_se`.
 
 `position_size` is the only one that carries a floor on size: `min_trades` floors the trade
 count, `maintenance_margin` the book's margin and `leg_edge` a leg's Sharpe, none of them a
