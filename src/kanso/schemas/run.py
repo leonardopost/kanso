@@ -125,7 +125,9 @@ class CardDigest(KansoModel):
     basis points of the capital, over the UTC days the run struck a period end in. Gross is
     before fill costs and net after, so gross less cost is net in both; funding, which is a
     payment on what was held and not a fill cost, stays in gross. A number that has nothing
-    to be read off — a rate with no trade, a share with no fill — is `None`, never zero.
+    to be read off — a rate with no trade, a share with no fill, the error of an edge whose
+    trades closed in fewer than two periods, which an error read period by period reads as
+    zero whatever they did — is `None`, never zero.
     """
 
     sessions: int = Field(ge=0)
@@ -151,13 +153,14 @@ class CardDigest(KansoModel):
             self.gross_bps_per_trade,
             self.cost_bps_per_trade,
             self.net_bps_per_trade,
-            self.net_bps_per_trade_se,
         )
         if len({value is None for value in per_trade}) != 1:
             raise ValueError(
                 "net_bps_per_trade: the per-trade numbers are read off the same closed trades, "
                 "so they are all stated or all absent"
             )
+        if self.net_bps_per_trade is None and self.net_bps_per_trade_se is not None:
+            raise ValueError("net_bps_per_trade_se: an error is an edge's, and none is stated")
         per_session = (
             self.trades_per_session,
             self.gross_bps_per_session,

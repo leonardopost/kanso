@@ -182,6 +182,25 @@ def test_a_digest_states_its_numbers_together_and_they_add_up(
         CardDigest.model_validate({**DIGEST, **change})
 
 
+def test_an_edge_whose_trades_closed_in_one_period_states_no_error() -> None:
+    """An error read period by period is zero by construction when one period holds every
+    trade, so the edge stands without one; an error with no edge stands for nothing."""
+    alone = CardDigest.model_validate({**DIGEST, "net_bps_per_trade_se": None})
+    assert alone.net_bps_per_trade == -0.5 and alone.net_bps_per_trade_se is None
+    assert dict(zip(DIGEST_COLUMNS, alone.cells(), strict=True))["net_bps_per_trade_se"] == ""
+    no_edge = dict.fromkeys(
+        (
+            "hit_rate",
+            "median_hold_s",
+            "gross_bps_per_trade",
+            "cost_bps_per_trade",
+            "net_bps_per_trade",
+        )
+    )
+    with pytest.raises(ValidationError, match="net_bps_per_trade_se"):
+        CardDigest.model_validate({**DIGEST, **no_edge})
+
+
 def test_a_run_that_closed_nothing_digests_its_sessions_alone() -> None:
     idle = CardDigest(
         sessions=5,

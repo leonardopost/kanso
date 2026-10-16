@@ -59,7 +59,7 @@ def test_the_net_edge_per_trade_and_its_error_are_the_per_trade_objective_over_o
     made = digest(RUN, INTENTS)
 
     assert (made.net_bps_per_trade, made.net_bps_per_trade_se) == net_edge_bps.compute(RUN, 1)
-    assert (made.net_bps_per_trade, made.net_bps_per_trade_se) == edge_per_trade(RUN)
+    assert (made.net_bps_per_trade, made.net_bps_per_trade_se, 4) == edge_per_trade(RUN)
     assert made.net_bps_per_trade == edge_bps(RUN)
     assert made.net_bps_per_trade_se is not None and made.net_bps_per_trade_se > 0
 
@@ -103,3 +103,28 @@ def test_a_strategy_that_sent_only_market_orders_has_no_fill_ratio() -> None:
     made = digest(RUN, ((at(START), "DEMO", "BUY", 100.0, "MARKET", None),))
 
     assert made.fill_ratio is None
+
+
+def test_trades_that_all_closed_in_one_period_state_no_error() -> None:
+    """An error read period by period is zero when one period holds every trade, whatever
+    the trades did, so the digest states none rather than an edge known exactly."""
+    clips = tuple(trade(START, edge) for edge in (200.0, -150.0, 80.0, -120.0, 5.0))
+    run = build_run((1.0,) * 20, trades=clips)
+
+    made = digest(run)
+
+    assert net_edge_bps.compute(run, 1)[1] == 0.0, "the objective's own error reads zero"
+    assert made.net_bps_per_trade == pytest.approx(3.0)
+    assert made.net_bps_per_trade_se is None
+    assert edge_per_trade(run)[1:] == (None, 1)
+
+
+def test_a_trade_closed_after_the_last_period_end_counts_in_the_last_period() -> None:
+    """As the per-trade error reads it: the first period ending at or after its close, else
+    the last — so a trade closing after every period end shares the last period."""
+    late = trade(START + timedelta(days=1), 4.0)
+    run = build_run((1.0, 1.0), trades=(trade(START, 2.0), late))
+    shifted = build_run((1.0,), trades=(trade(START, 2.0), late), days=2)
+
+    assert edge_per_trade(run)[2] == 2
+    assert edge_per_trade(shifted)[2] == 1

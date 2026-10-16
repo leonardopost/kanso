@@ -368,7 +368,7 @@ required_constraints:
   params: {leg: DEMO.SIM, min_sharpe: 0.0}
 - id: trading_hours          # every fill in regular hours, flat by each close; daylight saving moves it
   params: {session: "09:30-16:00", tz: America/New_York}
-- id: edge_per_trade         # no keep unless the mean trade nets more than one error above zero
+- id: edge_per_trade         # no keep unless the mean trade nets one error above zero, over two periods or more
   params: {min_bps: 0.0, k_se: 1.0}
 ```
 

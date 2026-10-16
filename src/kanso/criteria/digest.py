@@ -16,7 +16,10 @@ is a second definition of a quantity the toolbox already defines:
   and its edge is `pnl_net / notional` in basis points; the card's net edge per trade and its
   error are `net_edge_bps` over the window as a single fold — the per-trade objective's own
   arithmetic, the error read period by period so a session's clips that move together count
-  as one session's worth — which is exactly what the `edge_per_trade` gate judges;
+  as one session's worth — which is exactly what the `edge_per_trade` gate judges. Read that
+  way the error has as many degrees of freedom as the window has periods that closed a
+  trade, and trades that all closed in one period move one period's influence, which is
+  zero by construction: their error reads zero whatever they did, so it is `None` below two;
 * its **cost** is what its fills paid (`Trade.cost`) on the same notional, and its gross
   edge the net plus that cost, so gross less cost is net trade by trade;
 * a **session** is a UTC day the run struck a period end in — the days a signature reads —
@@ -38,9 +41,11 @@ alike; a run with none of something reads `None` for what that something measure
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Sequence
 from math import fsum
 from statistics import median
+from typing import Final
 
 from kanso.criteria.objectives import net_edge_bps
 from kanso.criteria.quantities import mean
@@ -52,10 +57,30 @@ Intent = tuple[int, str, str, float, str, float | None]
 `price` the limit it carried or `None` for an order that carried none."""
 
 
-def edge_per_trade(run: CardRun) -> tuple[float, float]:
-    """The run's mean net edge per closed trade in basis points of the position opened, and
-    the error of that mean: the per-trade objective over the window as one fold."""
-    return net_edge_bps.compute(run, 1)
+MIN_PERIODS: Final = 2
+"""The fewest periods that closed a trade an error read period by period says anything of."""
+
+
+def edge_per_trade(run: CardRun) -> tuple[float, float | None, int]:
+    """The run's mean net edge per closed trade in basis points of the position opened, the
+    error of that mean — the per-trade objective over the window as one fold — and how many
+    of the window's periods closed those trades.
+
+    The error is `None` when fewer than `MIN_PERIODS` did: `objectives._influence` gives each
+    period `(E_p − R·M_p) / M̄`, and when one period holds every trade that period's `E_p` is
+    `R·M_p` and every other's `E_p` and `M_p` are zero, so the error is zero however far apart
+    the trades landed — one trade, or a session of clips, would read as an edge known
+    exactly. A trade is counted in the period that error reads it in: the first ending at or
+    after its close, the last for one that closed after every period end.
+    """
+    (whole,) = run.folds(1)
+    edge, se = net_edge_bps.compute(run, 1)
+    ends = whole.period_ends_ns
+    last = max(len(ends), 1) - 1
+    periods = len(
+        {min(bisect_left(ends, t.closed_ns), last) for t in whole.trades if t.notional > 0}
+    )
+    return edge, (se if periods >= MIN_PERIODS else None), periods
 
 
 def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:
@@ -72,7 +97,7 @@ def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:
         )
     )
     if traded:
-        net, se = edge_per_trade(run)
+        net, se, _ = edge_per_trade(run)
         cost = mean([t.cost / t.notional * BPS for t in traded])
         per_trade = {
             "hit_rate": sum(1 for t in traded if t.pnl_net > 0) / len(traded),

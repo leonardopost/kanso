@@ -975,15 +975,22 @@ class _EdgePerTrade:
     read over the whole window as one fold (`kanso.criteria.digest.edge_per_trade`), the
     numbers a card's digest records as `net_bps_per_trade` and `net_bps_per_trade_se`, so
     what the proposer and the operator are shown is what was judged. The gate passes when
-    `net − k_se × se > min_bps`, strictly: at `min_bps` zero and `k_se` zero, a card passes
-    exactly when its mean trade made money.
+    `net − k_se × se > min_bps`, strictly, over trades that closed in at least two of the
+    window's periods: at `min_bps` zero and `k_se` zero, a card whose trades closed in two
+    periods or more passes exactly when its mean trade made money.
+
+    An error read period by period is zero whenever every trade closed in one period, however
+    far apart the trades landed — each period's influence on the mean is zero — so a card that
+    traded once, or traded one session's clips, would pass on a positive mean at any `k_se`.
+    That is the trade-less route the gate is there to close, taken to its end, so such a card
+    fails at any `k_se`, its error stated as `None` and its periods in `periods_with_trades`.
 
     It exists because an objective struck on the book rewards trading less once every trade
     loses: a contribution moves towards zero as the losing trades are dropped, and a card
     that halves its clips at a worse loss per clip scores better and is kept. As a card gate
     a failing card is not kept whatever it scored, so with it on a lane only a card whose
     trades pay on average can become the best. A card that closed no trade has no edge — its
-    estimate and its error are zero — and fails at any `min_bps`, which the range holds at
+    estimate is zero, in no period — and fails at any `min_bps`, which the range holds at
     zero or above: a card that did not trade did not show that a trade pays.
     """
 
@@ -993,11 +1000,11 @@ class _EdgePerTrade:
         floor, k_se = number(ctx, "min_bps"), number(ctx, "k_se")
         if floor is None or k_se is None:
             return skipped(self.id, "no min_bps and k_se were chosen, so no edge was required")
-        edge, se = edge_per_trade_of(ctx.run)
-        lower = edge - k_se * se
+        edge, se, periods = edge_per_trade_of(ctx.run)
+        lower = None if se is None else edge - k_se * se
         return verdict(
             self.id,
-            lower > floor,
+            lower is not None and lower > floor,
             {
                 "net_bps_per_trade": edge,
                 "se": se,
@@ -1005,6 +1012,7 @@ class _EdgePerTrade:
                 "lower": lower,
                 "min_bps": floor,
                 "n_trades": sum(1 for trade in ctx.run.trades if trade.notional > 0),
+                "periods_with_trades": periods,
             },
         )
 

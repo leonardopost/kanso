@@ -43,7 +43,7 @@ def test_trades_that_pay_on_average_pass_and_say_by_how_much() -> None:
         result.evidence["net_bps_per_trade"] - result.evidence["se"]
     )
     assert (result.evidence["k_se"], result.evidence["min_bps"]) == (1.0, 0.0)
-    assert result.evidence["n_trades"] == 6
+    assert (result.evidence["n_trades"], result.evidence["periods_with_trades"]) == (6, 6)
 
 
 def test_trades_that_lose_on_average_fail_however_the_book_scored() -> None:
@@ -73,8 +73,44 @@ def test_a_card_that_closed_no_trade_showed_no_edge_and_fails() -> None:
     result = judged(build_run((0.0, 0.0)), min_bps=0.0, k_se=1.0)
 
     assert not result.passed
-    assert result.evidence["n_trades"] == 0
-    assert (result.evidence["net_bps_per_trade"], result.evidence["se"]) == (0.0, 0.0)
+    assert (result.evidence["n_trades"], result.evidence["periods_with_trades"]) == (0, 0)
+    assert (result.evidence["net_bps_per_trade"], result.evidence["se"]) == (0.0, None)
+
+
+@pytest.mark.parametrize("k_se", [0.0, 3.0])
+def test_one_trade_that_made_money_showed_no_error_and_fails(k_se: float) -> None:
+    """A single trade: the error read period by period is zero by construction, and a card
+    that traded once has not shown that a trade pays, at any `k_se`."""
+    once = build_run((1.0,) * 20, trades=(trade(START, 0.5),))
+
+    result = judged(once, min_bps=0.0, k_se=k_se)
+
+    assert not result.passed
+    assert result.evidence["net_bps_per_trade"] == pytest.approx(0.5)
+    assert (result.evidence["se"], result.evidence["lower"]) == (None, None)
+    assert (result.evidence["n_trades"], result.evidence["periods_with_trades"]) == (1, 1)
+    assert digest(once).net_bps_per_trade_se is None, "the digest states no error either"
+
+
+def test_clips_that_all_closed_in_one_session_fail_however_they_spread() -> None:
+    """Five clips of one session at +200, -150, +80, -120 and +5 bp: their mean is +3 and
+    their period-by-period error zero, which would pass at any `k_se`. Spread over two
+    sessions the same clips have an error to read, and it is wide."""
+    edges = (200.0, -150.0, 80.0, -120.0, 5.0)
+    one_session = build_run((1.0,) * 20, trades=tuple(trade(START, e) for e in edges))
+    two_sessions = build_run(
+        (1.0,) * 20,
+        trades=tuple(trade(START + timedelta(days=i % 2), e) for i, e in enumerate(edges)),
+    )
+
+    refused = judged(one_session, min_bps=0.0, k_se=3.0)
+    spread = judged(two_sessions, min_bps=0.0, k_se=0.0)
+
+    assert not refused.passed
+    assert refused.evidence["periods_with_trades"] == 1 and refused.evidence["se"] is None
+    assert spread.passed, "two sessions are enough to read an error off; the mean made money"
+    assert spread.evidence["periods_with_trades"] == 2 and spread.evidence["se"] > 0
+    assert not judged(two_sessions, min_bps=0.0, k_se=1.0).passed
 
 
 @pytest.mark.parametrize("params", [{}, {"min_bps": 0.0}, {"k_se": 1.0}])

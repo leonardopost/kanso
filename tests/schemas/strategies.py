@@ -306,8 +306,9 @@ def gate_results(draw: st.DrawFn) -> GateResult:
 
 @st.composite
 def digests(draw: st.DrawFn) -> CardDigest:
-    """A card digest: per-trade numbers all present or all absent, per-session numbers
-    present exactly when a session was measured, and gross the net plus the cost."""
+    """A card digest: per-trade numbers all present or all absent — the edge's error absent
+    alone where the trades closed in one period — per-session numbers present exactly when a
+    session was measured, and gross the net plus the cost."""
     sessions = draw(st.integers(0, 500))
     fills = draw(st.integers(0, 10000))
     traded = draw(st.booleans())
@@ -324,7 +325,7 @@ def digests(draw: st.DrawFn) -> CardDigest:
         gross_bps_per_trade=net + cost if traded else None,
         cost_bps_per_trade=cost if traded else None,
         net_bps_per_trade=net if traded else None,
-        net_bps_per_trade_se=draw(NON_NEGATIVE) if traded else None,
+        net_bps_per_trade_se=draw(st.none() | NON_NEGATIVE) if traded else None,
         gross_bps_per_session=net_session + cost_session if sessions else None,
         cost_bps_per_session=cost_session if sessions else None,
         net_bps_per_session=net_session if sessions else None,
