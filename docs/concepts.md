@@ -1766,6 +1766,17 @@ leaves the last, from Saturday morning on, empty, and the week above is certifie
 each is certified at its mean per session; `docs/backlog.md` row 110 says what closing the
 difference would take.
 
+**A certificate also records its window's net per trade** (`net_per_trade`), struck from the
+certification run its gates judged and never from a second run of the window: the mean net
+profit per closed trade in basis points of the position each opened, costs applied once by
+the runner — the per-trade edge `edge_per_trade` reads, over the window as one fold — with
+its error clustered by session, so a session's clips that move together count once whatever
+the hypothesis's return period, `net_t`, the value over that error, and how many sessions
+and trades it was struck over. `cert run` and `cert show` print it on a `per trade` line
+after `power`, and a window that closed no trade records none. It is what a book ranks its
+members by (*Stages*); a certificate written before kanso recorded it carries none, which a
+book ranks after every member that does.
+
 Certifying the same bytes again under the same plan **and** the same engine is refused:
 
 ```
@@ -1995,7 +2006,59 @@ the simulated venue holds a close to the first open position in the name, whoeve
 closes a name's positions in that order, each by the version that holds it, so each close
 finds its own and both end the window flat. Nor do they compete for
 the market: each is filled against the whole touch as if it traded alone, and two that hold
-opposite sides of a name are each charged their own legs, where a broker would net them.
+opposite sides of a name are each charged their own legs, where a broker would net them. A
+book (below) is where versions share one capital, one room and one touch.
+
+**A book runs several versions on one capital, and hands its room out in its own order.**
+The runner can run a book (`kanso.nautilus.book.execute_book`, and `run_book` over a
+catalog): every member's generated sleeve in one engine, at the book's capital, each trading
+its own position and costed once in its own extraction, beside one ledger that decides how
+much of the book each entry takes. The block it runs under (`SharedBook`) states the capital,
+`leverage.rth` — four, the only value accepted — `max_name_c` if a name is capped, and the
+ranking the book uses, `rank_key: net_per_trade_bp` and `k_min`, both required: kanso does
+not pick the order of a book's members. Leverage before and after regular hours is not set
+yet, so a block that declares it is refused and every entry outside 09:30–16:00 New York time
+is refused; a block that names a daily target or a daily stop is refused too, since neither
+exists in this version. The engine serves its strategies in the order they subscribed and
+hands a point only to its own name's subscribers (`kanso doctor` checks the first), so neither
+decides who is served first: a member's `submit_entry` is collected and returns `None`, and
+once every member has handled the marker that closes the instant, the instant's entries are
+placed — by the `edge_bp` the entry states, the predicted move less the round trip's cost at
+the instant, highest first, an entry with none last; then by the member's rank, its
+certificate's net per trade (above zero, on at least `k_min` sessions, or after every member
+that is ranked), its `net_t`, the earlier `joined_at` and the strategy id; then by name. Each
+is sized by its own member's rule first and then cut to the smallest of the book's room —
+`min(capital, balance) × 4` less every member's open positions at the latest quote's mid or
+their own cost, its resting entries at their limits and its market orders in flight at the
+price they were sized at, over the entry's own round trip — the name's cap, and, for a taker,
+what is left of the size the latest quote displays on its side, one budget per name, side and
+instant: the venue fills two takers of one touch from all of it (`kanso doctor` checks it),
+and the book does not. The balance is the capital plus every member's realised net profit.
+An entry opposite to any member's position, working entry or entry in flight in the name is
+refused, as is one its own rule sized below a lot or one the cut left below a lot, counted
+by the cap that bound it; a smaller entry is placed and recorded with what was asked. Each
+refusal is counted once, per member and per New York session — `book_closed`,
+`outside_rth_unset`, `opposite_refused`, `below_c_min`, `name_cap`, `touch`, `room`,
+`no_size`, and `unfilled` for a resting entry that filled nothing — and the run reports the
+book's equity, its gross after each instant at which members asked for entries, and how many
+of those left it at its room: the peak, the mean and the share are over the instants at which
+members asked for entries, whether or not any was placed, not over every instant of the
+window. **A member sends orders only through `submit_entry` and `submit_exit`.** Its entries
+are the book's to place, as above; its exits are its own, sized by `submit_exit` never past
+flat, counting its orders still working on that side (`docs/workspace.md`), and sent in the
+handler. It may cancel its orders. Anything else it sends is refused (`book_entry`), naming the
+member, whatever the order is — `submit_order`, `submit_order_list` and `modify_order` called
+by the member, a leg an overridden `hedges()` returns, the engine's `close_position` — since
+the book hands room only to entries it sizes, and an order kanso did not size can take a
+position past flat or past the room. kanso's own orders are let through each as the very
+order kanso is sending, and once, so an order a member builds itself and sends from a handler
+the engine runs inside one's submission (`on_order_submitted`) is refused like any other. An
+exit at market that cancels the member's exit resting on its side takes that one out of the
+book's gross at once with no latency stated, since the cancel lands before anything further
+is matched. The session clock is New York's for every member, whatever its venue. A member
+is run at the book's capital and window; one with an attached construct, a `book` policy or
+a level-two book is refused. No stage holds a book yet: `portfolio.yaml` names no shared
+block and a stage node runs no ledger, which is the next step (`docs/backlog.md`).
 
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the

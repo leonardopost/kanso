@@ -134,6 +134,10 @@ BINDINGS = {
     "strategy's sum",
     "under the NETTING OMS the simulated venue holds a reduce-only close to the first "
     "open position in the instrument sorted by id, whichever strategy's it is",
+    "a topic's handlers at one priority are called in the order they subscribed, higher "
+    "priorities first, whatever order their strategies were added in",
+    "two market orders sent into one name at one instant on a level-one venue are each "
+    "filled from the whole touch, neither sharing what the other took",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -277,3 +281,19 @@ def test_a_reduce_only_close_is_held_to_the_first_position_in_the_name_by_id() -
         {a: -5.0, b: 95.0},
         {},
     )
+
+
+def test_handlers_at_one_priority_are_called_in_the_order_they_subscribed() -> None:
+    """What the book's allotment refuses to rest on: the strategy added first, subscribing
+    to prints late, hears a print after the one added second, and a bus calls a higher
+    priority first and then one priority's handlers in subscription order."""
+    heard, called = facts._probe_subscription_order()
+
+    assert heard == ["B", "A"], "subscription order, not the order the strategies were added"
+    assert called == ["first", "second", "third"]
+
+
+def test_two_takers_on_one_touch_are_each_filled_from_all_of_it() -> None:
+    """What the book's shared touch budget is for: the venue fills each market order from
+    the whole touch, so two buys of 80 under an ask of 100 both fill at the ask."""
+    assert facts._probe_two_takers_on_one_touch() == [("A", 80.0, 10.01), ("B", 80.0, 10.01)]

@@ -74,6 +74,7 @@ __all__ = [
     "arm",
     "batched",
     "book",
+    "closed",
     "coincident",
     "is_marker",
     "ordered",
@@ -85,9 +86,21 @@ __all__ = [
 
 @customdataclass
 class KansoCrossSection(Data):  # type: ignore[misc]
-    """The flush signal for one buffered handler of a coincident grain."""
+    """The flush signal for one buffered handler of a coincident grain.
+
+    `n` is `FLUSH` on every marker of a stream `ordered` makes, and `CLOSES` on the last
+    marker of each instant in a book's stream (`closed`), which is where the book hands out
+    the instant's room; a sleeve flushes on either alike.
+    """
 
     n: int
+
+
+FLUSH = 1
+"""A marker that flushes one buffered handler."""
+
+CLOSES = 0
+"""A marker that flushes one buffered handler and closes its instant (`closed`)."""
 
 
 MARKER_TYPE = DataType(KansoCrossSection)
@@ -272,6 +285,31 @@ def with_cross_section(points: Sequence[object], *, coincident: bool = False) ->
     return tuple(out)
 
 
+def closed(points: Sequence[object]) -> tuple[object, ...]:
+    """A marked stream with the last marker of each instant made the one that closes it.
+
+    A book hands out the room of an instant once every entry of that instant has been made,
+    and the last marker at a `ts_init` is the last handler any member is held for there: the
+    stream is sorted by `ts_init` and the markers of a cohort follow it, so nothing at the
+    instant is dispatched after it except a book's changes, whose handler is never held. So
+    that marker carries `CLOSES` and every other `FLUSH`; a sleeve flushes on both alike, and
+    only the book reads the difference (`kanso.nautilus.book`). A stream with no marker is
+    returned as it was.
+    """
+    out = list(points)
+    last: int | None = None
+    for index, point in enumerate(out):
+        at = int(point.ts_init)  # type: ignore[attr-defined]
+        if last is not None and at != int(out[last].ts_init):  # type: ignore[attr-defined]
+            out[last] = _marker(int(out[last].ts_init), CLOSES)  # type: ignore[attr-defined]
+            last = None
+        if is_marker(point):
+            last = index
+    if last is not None:
+        out[last] = _marker(int(out[last].ts_init), CLOSES)  # type: ignore[attr-defined]
+    return tuple(out)
+
+
 def _cohorts(points: Sequence[object]) -> list[tuple[object, ...]]:
     """Consecutive runs sharing `(ts_init, kind)` after a stable `ts_init` sort."""
     found: list[tuple[object, ...]] = []
@@ -309,8 +347,8 @@ def _inner(point: object) -> object:
     return point
 
 
-def _marker(ts: int) -> CustomData:
+def _marker(ts: int, n: int = FLUSH) -> CustomData:
     """A flush marker stamped `ts`. Built positionally — `customdataclass`'s initialiser takes
     the two instants and then the fields in order (nautilus_trader 1.231.0) — because a tick
     stream holds a marker a point and the keywords cost half the marker again."""
-    return CustomData(MARKER_TYPE, KansoCrossSection(ts, ts, 1))
+    return CustomData(MARKER_TYPE, KansoCrossSection(ts, ts, n))

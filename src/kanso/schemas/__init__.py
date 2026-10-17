@@ -23,6 +23,7 @@ from kanso.schemas.base import (
     Sha256,
     Versioned,
 )
+from kanso.schemas.book import BookLeverage, SharedBook
 from kanso.schemas.catalogue import (
     Applies,
     ConstructItem,
@@ -39,6 +40,7 @@ from kanso.schemas.certification import (
     DataAvailability,
     EvaluatedGate,
     ExcludedGate,
+    NetPerTrade,
     ObjectiveResult,
     PlanInputs,
     PlannedGate,
@@ -182,6 +184,7 @@ __all__ = [
     "Mechanism",
     "ModelSpec",
     "ModelsFile",
+    "NetPerTrade",
     "NonEmpty",
     "ObjectiveParams",
     "ObjectiveRef",
@@ -202,6 +205,7 @@ __all__ = [
     "Resolved",
     "RiskLimits",
     "Book",
+    "BookLeverage",
     "Sizing",
     "Benchmark",
     "FIRST_LEG",
@@ -211,6 +215,7 @@ __all__ = [
     "RoutingEntry",
     "RunRecord",
     "Sha256",
+    "SharedBook",
     "SleeveRef",
     "Span",
     "Stage",

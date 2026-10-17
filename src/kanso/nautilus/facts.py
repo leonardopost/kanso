@@ -412,6 +412,16 @@ is. A fill model that hands the engine a simulated book does change it: a zero-q
 among the fills it answers ends the fill before the check (below), which is how `print_through`
 fills a print beyond a resting limit by the print's own size (`kanso.nautilus.tape`).
 
+The venue shares nothing among takers either: two strategies sending market orders into one
+name at one instant are each filled from the touch as if alone. Measured: under a quote of
+9.99/10.01 showing 100 a side, two strategies each buying 80 at market on it are filled 80
+and 80, both at 10.01. So a book does not leave
+that to the venue. Its ledger hands every taker entry of an instant its share of one budget
+per name and side — the size the latest quote displays — in the book's own order, and cuts
+the entry to it before it is sent (`kanso.nautilus.book`); the venue still charges nothing
+and the runner still charges each fill once. A book's resting orders, and its entries in a
+name no quote has been seen for, are credited by the venue as this section states.
+
 **What a fill model can decide.** The matching engine asks its fill model,
 `get_orderbook_for_fill_simulation`, for the fills of every order it has matched — a market
 order, a limit marketable when it lands, and a resting limit a point reached, marked `MAKER` —
@@ -562,6 +572,26 @@ first ends flat, since each fill is applied before the next close is matched. So
 flatten, which sends `close_position`'s reduce-only order, closes a name's positions in the
 cache's order by id, each by the strategy that holds it (`kanso.nautilus.node._flatten`);
 `submit_exit` never sets the flag.
+
+Dispatch
+--------
+**A topic's handlers at one priority are called in the order they subscribed, not in the
+order their components were registered.** `MessageBus.subscribe` keeps its subscriptions in a
+dict in the order they were made and hands a topic's matches over as `sorted(subs,
+reverse=True)`, and `Subscription.__lt__` compares `priority` alone (`common/component.pyx`),
+so a stable sort leaves handlers of one priority in subscription order; a priority may not be
+below zero, where every strategy's own subscriptions sit. A strategy subscribes its data when
+it starts, and the trader starts strategies in the order they were added, so the two orders
+agree until one subscribes later than its start. Measured: of two strategies on one name,
+the one added first subscribing to prints only on its first quote and the one added second
+subscribing at its start, a print reaches the second first; on a bare bus two handlers at
+priority zero subscribed in turn are called in that order, after one at priority one. And a
+point reaches only its own instrument's subscribers, so points of two names at one instant
+reach them in the stream's order (`sort_data` keeps it, above). Neither order is a rule a
+book can rank its members by, so kanso's book does not let either decide which entry is
+handed room first: every member's entries of an instant are collected and handed room in
+the book's own order once every member has handled the marker that closes the instant
+(`kanso.nautilus.book`).
 
 Risk configuration
 ------------------
@@ -1756,6 +1786,144 @@ def _check_a_reduce_only_close_is_held_to_the_name_s_first_position() -> tuple[b
         f"id) = {seen}. The venue holds a reduce-only close to the first open position in "
         "the instrument sorted by id — the mate's, on either side — and fills the strategy's "
         "own with what that allows; closed in that order, each close finds its own first"
+    )
+
+
+def _probe_subscription_order() -> tuple[list[str], list[str]]:
+    """Who hears a print first, and in which order a bare bus calls three handlers.
+
+    Two strategies on one name: `A`, added first, subscribes to quotes at its start and to
+    prints only on its first quote; `B`, added second, subscribes to prints at its start. A
+    quote at minute one, a print at minute two. Returns the tags in the order the print
+    reached them, and the order a bus calls handlers subscribed `second` and `third` at
+    priority zero and then `first` at priority one."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType
+    from nautilus_trader.model.identifiers import TraderId, Venue
+    from nautilus_trader.model.objects import Money
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    heard: list[str] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str, *, late: bool) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.late = late
+
+        def on_start(self) -> None:
+            if self.late:
+                self.subscribe_quote_ticks(equity.id)
+            else:
+                self.subscribe_trade_ticks(equity.id)
+
+        def on_quote_tick(self, tick: object) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            heard.append(self.order_id_tag)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote")[:1])
+        engine.add_data(_limit_points("trade", 10.0)[1:])
+        engine.add_strategy(Probe("A", late=True))
+        engine.add_strategy(Probe("B", late=False))
+        engine.run()
+    finally:
+        engine.dispose()
+    bus = MessageBus(trader_id=TraderId("KANSO-001"), clock=TestClock())
+    called: list[str] = []
+    for name, priority in (("second", 0), ("third", 0), ("first", 1)):
+        bus.subscribe(
+            topic="kanso.order", handler=lambda _, n=name: called.append(n), priority=priority
+        )
+    bus.publish(topic="kanso.order", msg="point")
+    return heard, called
+
+
+def _probe_two_takers_on_one_touch() -> list[tuple[str, float, float]]:
+    """Two strategies each buying 80 at market on the first quote, 9.99/10.01 showing 100 a
+    side, on one level-one venue; returns each fill as (tag, quantity, price)."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    fills: list[tuple[str, float, float]] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.sent = False
+
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+
+        def on_quote_tick(self, tick: object) -> None:
+            if not self.sent:
+                self.sent = True
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(80))
+                )
+
+        def on_order_filled(self, event: Any) -> None:
+            fills.append((self.order_id_tag, float(event.last_qty), float(event.last_px)))
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote", 9.99, 10.01))
+        engine.add_strategy(Probe("A"))
+        engine.add_strategy(Probe("B"))
+        engine.run()
+    finally:
+        engine.dispose()
+    return fills
+
+
+def _check_two_takers_are_each_filled_from_the_whole_touch() -> tuple[bool, str]:
+    """Why a book's ledger shares the touch among its takers: the venue does not."""
+    fills = _probe_two_takers_on_one_touch()
+    return fills == [("A", 80.0, 10.01), ("B", 80.0, 10.01)], (
+        f"two strategies each buying 80 at market on a quote of 9.99/10.01 showing 100 a "
+        f"side were filled {fills}: each from the whole touch, the second taking none of what "
+        "the first was filled"
+    )
+
+
+def _check_handlers_at_one_priority_run_in_subscription_order() -> tuple[bool, str]:
+    """Why a book collects an instant's entries before it hands out room: the order the
+    engine serves its strategies in is the order they subscribed."""
+    heard, called = _probe_subscription_order()
+    holds = heard == ["B", "A"] and called == ["first", "second", "third"]
+    return holds, (
+        f"a print reached {heard} where A was added first and subscribed to prints only on "
+        "its first quote and B, added second, subscribed at its start; a bus called "
+        f"{called} for handlers subscribed second and third at priority zero and first at "
+        "priority one. Handlers of one priority run in subscription order, higher first"
     )
 
 
@@ -5415,6 +5583,16 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "under the NETTING OMS the simulated venue holds a reduce-only close to the first "
         "open position in the instrument sorted by id, whichever strategy's it is",
         _check_a_reduce_only_close_is_held_to_the_name_s_first_position,
+    ),
+    (
+        "a topic's handlers at one priority are called in the order they subscribed, higher "
+        "priorities first, whatever order their strategies were added in",
+        _check_handlers_at_one_priority_run_in_subscription_order,
+    ),
+    (
+        "two market orders sent into one name at one instant on a level-one venue are each "
+        "filled from the whole touch, neither sharing what the other took",
+        _check_two_takers_are_each_filled_from_the_whole_touch,
     ),
     (
         "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "

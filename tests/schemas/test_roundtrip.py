@@ -19,6 +19,7 @@ from kanso.schemas import (
     Hypothesis,
     InstrumentsFile,
     ModelsFile,
+    NetPerTrade,
     Portfolio,
     Power,
     RunRecord,
@@ -67,6 +68,17 @@ def test_plan_round_trips(value: CertificationPlan) -> None:
 @given(gen.certificates())
 def test_certificate_round_trips(value: Certificate) -> None:
     assert parse_yaml(Certificate, dump_yaml(value)) == value
+
+
+@given(gen.net_per_trades())
+def test_net_per_trade_round_trips(value: NetPerTrade) -> None:
+    """A certificate's net per trade reads back whole, its t the value over its error and
+    stated only where the error is above zero, which a single session never has."""
+    assert NetPerTrade.model_validate(value.model_dump(mode="json")) == value
+    assert (value.net_t is None) == (not value.net_se_session)
+    assert value.sessions_with_trades >= 2 or value.net_se_session is None
+    if value.net_t is not None and value.net_se_session is not None:
+        assert value.net_t * value.net_se_session == pytest.approx(value.net_per_trade_bp)
 
 
 @given(gen.powers())

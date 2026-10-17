@@ -154,6 +154,7 @@ def _run(ws: Workspace, hyp_id: str, sha: str | None) -> Report:
         *_gate_lines(made),
         field("objective", _objective(made)),
         *_power_line(made),
+        *_net_line(made),
         field("pins", _pins(made)),
         field("written", path),
         field("source", source),
@@ -181,6 +182,7 @@ def _show(ws: Workspace, hyp_id: str) -> Report:
         *_gate_lines(found),
         field("objective", _objective(found)),
         *_power_line(found),
+        *_net_line(found),
         field("pins", _pins(found)),
         field("written", path),
     )
@@ -219,6 +221,26 @@ def _objective(made: Certificate) -> str:
 def _power_line(made: Certificate) -> list[str]:
     """The power a certificate states, when it states one."""
     return [] if made.power is None else [field("power", _power(made.power))]
+
+
+def _net_line(made: Certificate) -> list[str]:
+    """The certification window's net per trade, when the certificate records one."""
+    net = made.net_per_trade
+    if net is None:
+        return []
+    if net.net_se_session is None:
+        error = "no session error"
+    else:
+        error = f"± {net.net_se_session:.4g} by session"
+        if net.net_t is not None:
+            error += f" (t {net.net_t:.3g})"
+    return [
+        field(
+            "per trade",
+            f"net {net.net_per_trade_bp:.4g} bp {error} · {net.trades} trade(s) on "
+            f"{net.sessions_with_trades} session(s)",
+        )
+    ]
 
 
 def _power(stated: Power) -> str:

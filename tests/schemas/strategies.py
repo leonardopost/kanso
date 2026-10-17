@@ -39,6 +39,7 @@ from kanso.schemas import (
     Limits,
     ModelsFile,
     ModelSpec,
+    NetPerTrade,
     ObjectiveParams,
     ObjectiveRef,
     ObjectiveResult,
@@ -414,6 +415,23 @@ def powers(draw: st.DrawFn) -> Power:
 
 
 @st.composite
+def net_per_trades(draw: st.DrawFn) -> NetPerTrade:
+    """A window's net per trade: one session with no error, or several with one, its t
+    the value over the error when the error is above zero."""
+    trades = draw(st.integers(1, 5000))
+    sessions = draw(st.integers(1, trades))
+    value = draw(FINITE)
+    se = None if sessions < 2 else draw(NON_NEGATIVE)
+    return NetPerTrade(
+        net_per_trade_bp=value,
+        net_se_session=se,
+        net_t=value / se if se else None,
+        sessions_with_trades=sessions,
+        trades=trades,
+    )
+
+
+@st.composite
 def certificates(draw: st.DrawFn) -> Certificate:
     ids = draw(st.lists(CATALOGUE_IDS, min_size=1, max_size=5, unique=True))
     gates = []
@@ -448,6 +466,7 @@ def certificates(draw: st.DrawFn) -> Certificate:
         verdict="pass" if all(g.passed for g in evaluated) else "fail",
         created_at=draw(TIMESTAMPS),
         power=draw(st.none() | powers()),
+        net_per_trade=draw(st.none() | net_per_trades()),
     )
 
 
