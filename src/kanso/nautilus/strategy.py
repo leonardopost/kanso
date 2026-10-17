@@ -74,8 +74,10 @@ trade the same name each exit what they hold and nothing of the other's.
 and returns `None`, the sleeve tells the ledger of every marker it handles, and once every
 member has handled the one that closes the instant the ledger calls `submit_entry` again for
 each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
-sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). Every other order
-the sleeve sends is checked at `submit_order`, and each order of a list in turn at
+sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). The order that
+placement builds is the one order the sleeve sends unchecked, and only once. Every other is
+checked at `submit_order` — one the sleeve sends from a handler the engine calls while the
+book's order is being submitted among them — and each order of a list in turn at
 `submit_order_list`: it is an exit only if it is on the closing side of the sleeve's own
 position and closes no more than the position holds with the sleeve's own orders still working
 on that side and the list's earlier orders on it — a one-cancels-other pair among them counted
@@ -754,7 +756,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
         self._book_ledger: Any = None
         """The book this sleeve is a member of, when a runner put it in one
-        (`kanso.nautilus.book.join`); `None` for a sleeve run alone."""
+        (`kanso.nautilus.book.BookLedger`); `None` for a sleeve run alone."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1802,7 +1804,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         A book hands each entry of an instant its share of one room in its own order, and it
         can only do that for an entry it sizes: kanso does not rebuild an order it did not
         build, so in a book an entry built by hand is refused, as a sizing rule refuses one.
-        An order the book is placing for this sleeve, through its sizing, is not asked.
+        The order the book's placement of an entry built, through this sleeve's sizing, is
+        not asked, and only once (`BookLedger.placing`): the engine runs the sleeve's own
+        handlers — `on_order_submitted` among them — inside that order's submission, and an
+        order sent from one of them is asked like any other.
 
         Any other order is an exit only if it closes no more than this sleeve's own position
         holds once every order of its still working on that side, and every order before it
@@ -1814,10 +1819,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         they would open a position no room was handed for.
         """
         ledger = self._book_ledger
-        if ledger is None or ledger.placing(self) or self._hedging:
+        if ledger is None or self._hedging:
             return
         for index, order in enumerate(orders):
-            if self._closes_within(order, orders[:index]):
+            if ledger.placing(self, order) or self._closes_within(order, orders[:index]):
                 continue
             self._refuse(
                 BOOK_ENTRY,
@@ -2101,7 +2106,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if quantity is None:
                 return None
             order = self._order(instrument, resolved_side, quantity, price)
-            return self._booked(self._submitted(order))
+            return self._booked(order)
         finally:
             self._entry_answers = None
 
@@ -2111,11 +2116,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self._book_ledger is not None:
             self._book_ledger.cut(self, instrument, side, 0.0, 0.0, None)
 
-    def _booked(self, order: object | None) -> object | None:
-        """The entry a book placed, told to the book once it reached the venue."""
-        if order is not None and self._book_ledger is not None:
-            self._book_ledger.placed(self, order)
-        return order
+    def _booked(self, order: object) -> object | None:
+        """Submit an entry this sleeve sized. In a book it is the one order the book lets
+        through unasked (`BookLedger.placing`), and the book is told of it once it reached
+        the venue."""
+        ledger = self._book_ledger
+        if ledger is not None:
+            ledger.sending(order)
+        submitted = self._submitted(order)
+        if submitted is not None and ledger is not None:
+            ledger.placed(self, submitted)
+        return submitted
 
     def submit_exit(
         self,
@@ -2290,7 +2301,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             order = self._order(instrument, side, quantity, None)
             self._sizing_call = True
             try:
-                return self._booked(self._submitted(order))
+                return self._booked(order)
             finally:
                 self._sizing_call = False
         finally:

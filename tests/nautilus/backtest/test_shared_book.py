@@ -1097,6 +1097,64 @@ def test_a_stop_and_a_take_profit_linked_one_cancels_other_are_one_exit(shape: f
     assert placed(made.runs[b], DEMO) == 500.0
 
 
+NESTED = b"""
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Asks for one entry on its first bar and, as the engine reports the order the book
+    placed for it submitted, buys a million shares by hand from that handler.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.asked = False
+        self.sent = False
+
+    def on_bar(self, bar):
+        if not self.asked:
+            self.asked = True
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", ENTRY)
+
+    def on_order_submitted(self, event):
+        if not self.sent:
+            self.sent = True
+            self.submit_order(
+                self.order_factory.market(
+                    event.instrument_id, OrderSide.BUY, Quantity.from_int(1_000_000)
+                )
+            )
+"""
+
+
+@pytest.mark.parametrize("sizing", ["own-rule", "sizing-rule"])
+def test_an_order_sent_while_the_book_s_placement_is_submitted_is_checked(sizing: str) -> None:
+    """The engine runs the member's `on_order_submitted` inside the submission of the order
+    the book placed for it, and only that order is let through unasked: a buy of a million
+    shares sent by hand from the handler is refused as an entry built by hand, naming the
+    member once. Measured on the round before this test: it was let through with the book's
+    order, and on a capital of 100,000 the member bought 1,001,000 shares under its own rule
+    and 1,000,997 under a sizing rule."""
+    if sizing == "own-rule":
+        run = request(hyp((DEMO,)), NESTED.replace(b"ENTRY", b"qty=1000.0"))
+    else:
+        run = replace(sized((DEMO,), 10_000.0), strategy_source=NESTED.replace(b", ENTRY", b""))
+    with pytest.raises(SizingError) as raised:
+        execute_book(block(), [member("a", run, 5.0)], [instrument()], [daily("DEMO")])
+
+    assert raised.value.refusal.rule == BOOK_ENTRY
+    assert raised.value.refusal.asked == "BUY"
+    assert raised.value.refusal.why.startswith("book member a: ")
+    assert raised.value.refusal.why.count("book member a") == 1
+
+
 def test_an_entry_opposite_to_a_rest_from_an_earlier_instant_or_a_later_holding_is_refused() -> (
     None
 ):

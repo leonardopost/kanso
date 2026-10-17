@@ -26,31 +26,34 @@ book's order:
 3. then the instrument id.
 
 Exits are not collected: they go to the venue in the handler, before any entry of the
-instant is placed, and one in flight counts as gone. Every order a member sends but the
-entries the book places for it is checked, each order of a list in turn: it is an exit only
-if it is on the closing side of the member's own position and closes no more than the
-position holds with the member's own orders still working on that side and the list's
-earlier orders on it, a one-cancels-other pair among them counted once, at the larger of the
-two. Anything else is an entry built by hand, and refused (`book_entry`), naming the member.
-So a stop and a take-profit each for the whole position, sent apart or listed unlinked, are an
-exit and an entry, and linked one-cancels-other they are one exit; a one-updates-other pair is
-two orders, since the venue fills both of one sent marketable (`kanso.nautilus.facts`).
-Resting orders the venue fills at the instant are open before the entries are placed.
+instant is placed, and one in flight counts as gone. Every order a member sends is checked,
+each order of a list in turn, but one: the order the book's placement of an entry built, let
+through once (`BookLedger.placing`), so an order the member sends from a handler the engine
+runs inside that order's submission — `on_order_submitted` — is checked like any other. An
+order is an exit only if it is on the closing side of the member's own position and closes
+no more than the position holds with the member's own orders still working on that side and
+the list's earlier orders on it, a one-cancels-other pair among them counted once, at the
+larger of the two. Anything else is an entry built by hand, and refused (`book_entry`),
+naming the member. So a stop and a take-profit each for the whole position, sent apart or
+listed unlinked, are an exit and an entry, and linked one-cancels-other they are one exit; a
+one-updates-other pair is two orders, since the venue fills both of one sent marketable
+(`kanso.nautilus.facts`). Resting orders the venue fills at the instant are open before the
+entries are placed.
 
 **Each entry is placed in that order, then cut.** It is sized by its member's own rule at
 that moment — its own room under its own limits, as a sleeve alone is — and then cut to the
 smallest of:
 
-* the book's room: `min(capital, balance) × L` less the book's gross — every member's open
-  positions marked at the latest quote's mid, or at their own cost where no quote has been
-  seen, its resting orders at their limits for what they would add — a member's on one side
-  of a name together, so two that between them would take its position past flat add what
-  is past it, and a one-cancels-other pair once, as the one of it that leaves the most — and
-  its market orders in flight at the price they were sized at — left over
-  the entry's own round trip, `1 + 2 ×` its cost rate (`KansoStrategy._reserve`). The balance
-  is the capital plus every member's realised net profit; `L` is the block's regular-hours
-  leverage, and outside 09:30–16:00 New York time, on every venue, no entry is placed while
-  the leverage there is not set (`outside_rth_unset`);
+* the book's room: `min(capital, balance) × L` less the book's gross, over the entry's own
+  round trip, `1 + 2 ×` its cost rate (`KansoStrategy._reserve`). The gross is the sum over
+  every member of three things: its open positions, marked at the latest quote's mid, or at
+  their own cost where no quote has been seen; its market orders in flight, at the price they
+  were sized at; and its resting orders, at their limits, for what they would add — a
+  member's on one side of a name taken together, so two that between them would take its
+  position past flat add what is past it, and a one-cancels-other pair once, as the one of it
+  that leaves the most. The balance is the capital plus every member's realised net profit;
+  `L` is the block's regular-hours leverage, and outside 09:30–16:00 New York time, on every
+  venue, no entry is placed while the leverage there is not set (`outside_rth_unset`);
 * the cap on the name, `max_name_c` of the capital, less what the book already holds, rests
   and has in flight in it;
 * for a taker — a market entry, or a limit marketable at the latest quote — what is left of
@@ -259,6 +262,8 @@ class _Placing:
     """The entry the book is placing now, and what its cut found."""
 
     pending: _Pending
+    order: Any = None
+    """The order the placement built, until it is checked (`BookLedger.placing`)."""
     asked: float | None = None
     reference: float = 0.0
     touch: tuple[str, Any] | None = None
@@ -345,9 +350,20 @@ class BookLedger:
             return True
         return False
 
-    def placing(self, member: Any) -> bool:
-        """Whether the book is placing an entry of this member now."""
-        return self._placing is not None and self._placing.pending.member is member
+    def sending(self, order: Any) -> None:
+        """Note the order the placement under way built, for `placing` to let through."""
+        cast("_Placing", self._placing).order = order  # only a placement builds an entry here
+
+    def placing(self, member: Any, order: Any) -> bool:
+        """Whether an order is the one the book's placement of this member's entry built —
+        true once, as it is checked, so an order the member sends while it is being
+        submitted, from a handler the engine runs inside the submission, is not let through
+        with it."""
+        placing = self._placing
+        if placing is None or placing.pending.member is not member or placing.order is not order:
+            return False
+        placing.order = None
+        return True
 
     def member_of(self, strategy: Any) -> str:
         """The book's id of the member a strategy runs, for a refusal to name it."""
@@ -482,10 +498,10 @@ class BookLedger:
                 pending.instrument_id, pending.side, edge_bp=pending.edge_bp, **pending.kwargs
             )
         except SizingError as error:
-            refusal = error.refusal
-            raise SizingError(
-                replace(refusal, why=f"{self.member_of(member)}: {refusal.why}")
-            ) from error
+            refusal, named = error.refusal, self.member_of(member)
+            if refusal.why.startswith(named):
+                raise
+            raise SizingError(replace(refusal, why=f"{named}: {refusal.why}")) from error
         finally:
             member._data_time = held
             self._placing = None
