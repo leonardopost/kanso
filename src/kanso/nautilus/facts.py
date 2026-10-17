@@ -535,7 +535,10 @@ and of two sent marketable both fill. Measured, two sell limits of 100 linked an
 list: linked `OCO`, one filled 100 and the other was cancelled, marketable when sent or resting
 until one quote made both marketable, held by the venue or by the emulator, with no latency
 or one of 20 ms; linked `OUO` and marketable when sent, both filled 100 — and, measured on
-2026-10-17, so did two resting under a latency of 20 ms, and two the emulator held.
+2026-10-17, so did two resting under a latency of 20 ms, and two the emulator held. So a book
+counts a member's one-cancels-other siblings once, at the larger, toward the position they
+close and the room they would take, and a one-updates-other pair as two orders
+(`kanso.nautilus.strategy._one_cancels_other`).
 
 Positions
 ---------

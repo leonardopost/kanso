@@ -26,10 +26,16 @@ book's order:
 3. then the instrument id.
 
 Exits are not collected: they go to the venue in the handler, before any entry of the
-instant is placed, and one in flight counts as gone. An order a member builds by hand is an
-exit only if, with its own orders still working on that side, it closes no more than the
-position holds; anything else it builds is an entry, and refused (`book_entry`). Resting
-orders the venue fills at the instant are open before the entries are placed.
+instant is placed, and one in flight counts as gone. Every order a member sends but the
+entries the book places for it is checked, each order of a list in turn: it is an exit only
+if it is on the closing side of the member's own position and closes no more than the
+position holds with the member's own orders still working on that side and the list's
+earlier orders on it, a one-cancels-other pair among them counted once, at the larger of the
+two. Anything else is an entry built by hand, and refused (`book_entry`), naming the member.
+So a stop and a take-profit each for the whole position, sent apart or listed unlinked, are an
+exit and an entry, and linked one-cancels-other they are one exit; a one-updates-other pair is
+two orders, since the venue fills both of one sent marketable (`kanso.nautilus.facts`).
+Resting orders the venue fills at the instant are open before the entries are placed.
 
 **Each entry is placed in that order, then cut.** It is sized by its member's own rule at
 that moment — its own room under its own limits, as a sleeve alone is — and then cut to the
@@ -39,7 +45,8 @@ smallest of:
   positions marked at the latest quote's mid, or at their own cost where no quote has been
   seen, its resting orders at their limits for what they would add — a member's on one side
   of a name together, so two that between them would take its position past flat add what
-  is past it — and its market orders in flight at the price they were sized at — left over
+  is past it, and a one-cancels-other pair once, as the one of it that leaves the most — and
+  its market orders in flight at the price they were sized at — left over
   the entry's own round trip, `1 + 2 ×` its cost rate (`KansoStrategy._reserve`). The balance
   is the capital plus every member's realised net profit; `L` is the block's regular-hours
   leverage, and outside 09:30–16:00 New York time, on every venue, no entry is placed while
@@ -92,7 +99,7 @@ from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, splits
 from kanso.nautilus.backtest import RunRequest
 from kanso.nautilus.sizing import SizingError
-from kanso.nautilus.strategy import _id_of, _order_price
+from kanso.nautilus.strategy import _id_of, _one_cancels_other, _order_price
 from kanso.schemas import NetPerTrade, SharedBook, VenueModel
 
 __all__ = [
@@ -508,7 +515,9 @@ class BookLedger:
     def _exposure(self) -> _Exposure:
         """Every member's open positions at the mark, its market orders in flight at the price
         they were sized at, and its resting and in-flight limits at their prices for what they
-        would add, by name, with the sides each name is held, worked or in flight on."""
+        would add, by name, with the sides each name is held, worked or in flight on. A
+        member's one-cancels-other siblings on one side count once, as the one of them that
+        leaves the most, since no two of them fill (`kanso.nautilus.facts`)."""
         from nautilus_trader.model.enums import OrderSide, OrderType
 
         found = _Exposure()
@@ -555,7 +564,8 @@ class BookLedger:
             for (key, sign), orders in resting.items():
                 now = intended.get(key, 0.0)
                 total = 0.0
-                for order in orders:
+                for group in _one_cancels_other(orders):
+                    order = max(group, key=lambda sibling: sibling.leaves_qty.as_decimal())
                     before = max(0.0, sign * now + total)
                     total += float(order.leaves_qty)
                     grows = max(0.0, sign * now + total) - before
@@ -666,8 +676,8 @@ class BookRun:
     whole feed, so with one member they are that member's. `counts` and `sessions` are the
     ledger's refusals per member, and per New York session and member; `cuts` the entries it
     placed smaller than their members' rules asked; `gross` the book's gross after each
-    instant it placed entries at, and `at_room_limit` how many of those left it no room or had
-    the room bind an entry.
+    instant at which members asked for entries, whether or not any was placed, and
+    `at_room_limit` how many of those left it no room or had the room bind an entry.
     """
 
     members: tuple[str, ...]
@@ -685,17 +695,19 @@ class BookRun:
 
     @property
     def peak_gross(self) -> float | None:
-        """The most the book held, rested and had in flight after any instant it placed at."""
+        """The most the book held, rested and had in flight after any instant at which members
+        asked for entries."""
         return max(self.gross) if self.gross else None
 
     @property
     def mean_gross(self) -> float | None:
-        """The book's mean gross over the instants it placed entries at."""
+        """The book's mean gross over the instants at which members asked for entries."""
         return fsum(self.gross) / len(self.gross) if self.gross else None
 
     @property
     def room_limit_share(self) -> float | None:
-        """The share of the instants it placed entries at that left it at its room."""
+        """The share of the instants at which members asked for entries that left the book at
+        its room."""
         return self.at_room_limit / len(self.gross) if self.gross else None
 
 

@@ -74,10 +74,15 @@ trade the same name each exit what they hold and nothing of the other's.
 and returns `None`, the sleeve tells the ledger of every marker it handles, and once every
 member has handled the one that closes the instant the ledger calls `submit_entry` again for
 each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
-sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). An entry the sleeve
-builds by hand is refused there (`book_entry`), and so is an exit built by hand that, with the
-sleeve's own orders still working on its side, would take its position past flat; exits are
-the sleeve's as ever.
+sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). Every other order
+the sleeve sends is checked at `submit_order`, and each order of a list in turn at
+`submit_order_list`: it is an exit only if it is on the closing side of the sleeve's own
+position and closes no more than the position holds with the sleeve's own orders still working
+on that side and the list's earlier orders on it — a one-cancels-other pair among them counted
+once, at the larger of the two, since the venue never fills both (`kanso.nautilus.facts`).
+Anything else is an entry built by hand, and refused (`book_entry`). So a stop and a
+take-profit each for the whole position, sent apart or in a list unlinked, are an exit and an
+entry, and linked one-cancels-other they are one exit; exits are the sleeve's as ever.
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
@@ -151,6 +156,7 @@ from nautilus_trader.model.enums import (
     BarAggregation,
     BookAction,
     BookType,
+    ContingencyType,
     LiquiditySide,
     OrderSide,
     OrderStatus,
@@ -458,6 +464,47 @@ def _maker_per_share(charges: Mapping[str, Any]) -> float | None:
 def _leaves(orders: Sequence[Any]) -> Decimal:
     """What a set of orders can still fill between them."""
     return sum((order.leaves_qty.as_decimal() for order in orders), Decimal(0))
+
+
+def _one_cancels_other(orders: Sequence[Any]) -> list[list[Any]]:
+    """A set of orders in groups, each of orders every two of which are one-cancels-other
+    siblings — each `OCO`, and each naming the other — and every other order alone.
+
+    In nautilus_trader 1.231.0 a fill of an `OCO` order cancels, before anything further is
+    matched, every order it names that is not closed, whether the venue or the order
+    emulator holds it, so of one group no two fill and the group can fill no more than its
+    largest leaves. An `OUO` pair is not a group: the venue fills both of one sent marketable
+    (`kanso.nautilus.facts` measures both)."""
+    groups: list[list[Any]] = []
+    for order in orders:
+        for group in groups:
+            if all(_cancel_each_other(order, other) for other in group):
+                group.append(order)
+                break
+        else:
+            groups.append([order])
+    return groups
+
+
+def _cancel_each_other(one: Any, other: Any) -> bool:
+    return (
+        one.contingency_type == ContingencyType.OCO
+        and other.contingency_type == ContingencyType.OCO
+        and other.client_order_id in (one.linked_order_ids or ())
+        and one.client_order_id in (other.linked_order_ids or ())
+    )
+
+
+def _can_fill(orders: Sequence[Any]) -> Decimal:
+    """What a set of orders can still fill between them, a group of one-cancels-other
+    siblings (`_one_cancels_other`) at the most any one of it leaves."""
+    return sum(
+        (
+            max(order.leaves_qty.as_decimal() for order in group)
+            for group in _one_cancels_other(orders)
+        ),
+        Decimal(0),
+    )
 
 
 _SETTLED = frozenset((OrderStatus.ACCEPTED, OrderStatus.TRIGGERED, OrderStatus.PARTIALLY_FILLED))
@@ -1631,7 +1678,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         self._check_hand_built(order)
         kind = self.classify(order)
-        self._check_booked(order, kind)
+        self._check_booked((order,))
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
             self._check_funded((order,))
         ctx = self._context_for(order)
@@ -1650,13 +1697,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """As `submit_order`, classifying and filtering the list by its first order."""
+        """As `submit_order`, classifying and filtering the list by its first order; in a book
+        every order of it is checked, in turn (`_check_booked`)."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
-        self._check_booked(orders[0], kind)
+        self._check_booked(orders)
         if not (self.sized or self._built or self._sizing_call):
             self._check_funded(orders)
         ctx = self._context_for(orders[0])
@@ -1747,42 +1795,57 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 "submit_entry(instrument_id, side) or submit_exit(instrument_id)",
             )
 
-    def _check_booked(self, order: object, kind: str) -> None:
-        """Refuse an entry a book member placed by anything but `submit_entry`.
+    def _check_booked(self, orders: Sequence[Any]) -> None:
+        """Refuse an entry a book member placed by anything but `submit_entry`, checking each
+        order it sends — every order of a list, in turn.
 
         A book hands each entry of an instant its share of one room in its own order, and it
         can only do that for an entry it sizes: kanso does not rebuild an order it did not
         build, so in a book an entry built by hand is refused, as a sizing rule refuses one.
+        An order the book is placing for this sleeve, through its sizing, is not asked.
 
-        An order is an exit here only if it closes no more than the position holds once
-        every order of this sleeve's still working on its side has filled (`_closes_within`),
-        the rule `submit_exit` sizes by. `classify` reads the filled position alone, so two
-        sells built by hand in one handler, each the size of a long, would each read as an
-        exit and together open a short no room was handed for; in a book the second is an
-        entry, and is refused.
+        Any other order is an exit only if it closes no more than this sleeve's own position
+        holds once every order of its still working on that side, and every order before it
+        in its list on that side, has filled (`_closes_within`) — the rule `submit_exit`
+        sizes by, but for a one-cancels-other pair, which counts once (`_can_fill`). Anything
+        else is an entry, and refused. `classify` reads the filled position alone and a list
+        is classified by its first order, so two sells of a whole long, in one handler or in
+        one list, would each read as an exit, as would a list of a sell and a buy; together
+        they would open a position no room was handed for.
         """
         ledger = self._book_ledger
         if ledger is None or ledger.placing(self) or self._hedging:
             return
-        if kind != ENTRY and (self.sized or self._closes_within(order)):
-            return
-        self._refuse(
-            BOOK_ENTRY,
-            order.instrument_id.value,  # type: ignore[attr-defined]
-            order_side_to_str(order.side),  # type: ignore[attr-defined]
-            why=f"{ledger.member_of(self)}: in a book every entry is handed its room by the "
-            "book, and an order that with this sleeve's own working orders on its side would "
-            "take its position past flat is an entry; call submit_entry(instrument_id, side), "
-            "which the book allots at the instant's end, or submit_exit(instrument_id)",
-        )
+        for index, order in enumerate(orders):
+            if self._closes_within(order, orders[:index]):
+                continue
+            self._refuse(
+                BOOK_ENTRY,
+                order.instrument_id.value,
+                order_side_to_str(order.side),
+                why=f"{ledger.member_of(self)}: in a book every entry is handed its room by the "
+                "book, and an order that does not close this sleeve's own position, or that "
+                "with its working orders on that side and the orders before it in its list "
+                "would take the position past flat, is an entry; call "
+                "submit_entry(instrument_id, side), which the book allots at the instant's "
+                "end, or submit_exit(instrument_id)",
+            )
 
-    def _closes_within(self, order: Any) -> bool:
-        """Whether an order `classify` reads as an exit — on the closing side of this
-        sleeve's own position — closes no more than the position holds with every order of
-        this sleeve's still working on that side (`_working`)."""
+    def _closes_within(self, order: Any, earlier: Sequence[Any]) -> bool:
+        """Whether an order is on the closing side of this sleeve's own position and closes
+        no more than it holds with every order of this sleeve's still working on that side
+        (`_working`) and the orders before it in its list on that side, a one-cancels-other
+        pair among them counted once (`_can_fill`)."""
         net = self._own_position(order.instrument_id)
+        if net == 0 or (order.side == OrderSide.SELL) != (net > 0):
+            return False
+        listed = [
+            sent
+            for sent in earlier
+            if sent.instrument_id == order.instrument_id and sent.side == order.side
+        ]
         working = self._working(order.instrument_id.value, order.side, clips=True)
-        return bool(order.quantity.as_decimal() + _leaves(working) <= abs(net))
+        return bool(_can_fill([*working, *listed, order]) <= abs(net))
 
     def _hedge_order(self, leg: Hedge) -> object | None:
         instrument_id = InstrumentId.from_str(leg.instrument)

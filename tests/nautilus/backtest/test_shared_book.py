@@ -949,6 +949,154 @@ def test_an_exit_built_by_hand_closes_and_two_that_would_pass_flat_are_an_entry(
     assert "book member a" in raised.value.refusal.why
 
 
+LISTED = b"""
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import ContingencyType, OrderSide, TriggerType
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import LimitOrder, OrderList, StopMarketOrder
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    shape: float = 0.0
+    linked: float = 0.0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 1000 on its first bar and, on its third, sends orders built by hand, by
+    `shape`: one list of two market sells of 1000 (0); one list of a market sell of 1 and a
+    market buy of 5000 (1); a stop under the market and a take-profit far over it, each a
+    sell of 1000, as one list (2) or sent apart (3), linked as the `ContingencyType` whose
+    value `linked` is.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+
+    def on_bar(self, bar):
+        self.n += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self.n == 1:
+            self.submit_entry(instrument_id, "BUY", qty=1000.0)
+        elif self.n == 3:
+            shape = int(self.kanso_config.shape)
+            list_id = self.order_factory.generate_order_list_id()
+            if shape == 0:
+                orders = [self.market(instrument_id, OrderSide.SELL, 1000) for _ in range(2)]
+            elif shape == 1:
+                orders = [
+                    self.market(instrument_id, OrderSide.SELL, 1),
+                    self.market(instrument_id, OrderSide.BUY, 5000),
+                ]
+            else:
+                orders = self.bracketed(instrument_id, list_id if shape == 2 else None)
+            if shape == 3:
+                for order in orders:
+                    self.submit_order(order)
+            else:
+                self.submit_order_list(OrderList(list_id, orders))
+
+    def market(self, instrument_id, side, qty):
+        return self.order_factory.market(instrument_id, side, Quantity.from_int(qty))
+
+    def bracketed(self, instrument_id, list_id):
+        contingency = ContingencyType(int(self.kanso_config.linked))
+        ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
+        common = {
+            "trader_id": self.trader_id,
+            "strategy_id": self.id,
+            "instrument_id": instrument_id,
+            "order_side": OrderSide.SELL,
+            "quantity": Quantity.from_int(1000),
+            "ts_init": self.clock.timestamp_ns(),
+            "contingency_type": contingency,
+            "order_list_id": list_id,
+        }
+        linked = contingency != ContingencyType.NO_CONTINGENCY
+        return [
+            StopMarketOrder(
+                client_order_id=ids[0],
+                trigger_price=Price.from_str("5.00"),
+                trigger_type=TriggerType.DEFAULT,
+                init_id=UUID4(),
+                linked_order_ids=[ids[1]] if linked else None,
+                **common,
+            ),
+            LimitOrder(
+                client_order_id=ids[1],
+                price=Price.from_str("50.00"),
+                init_id=UUID4(),
+                linked_order_ids=[ids[0]] if linked else None,
+                **common,
+            ),
+        ]
+"""
+
+NO_CONTINGENCY, OCO, OUO = 0.0, 1.0, 3.0
+"""`ContingencyType`'s values in nautilus_trader 1.231.0."""
+
+
+def listed(**overrides: float) -> BookMember:
+    return member("a", request(hyp((DEMO,)), LISTED, **overrides), 5.0)
+
+
+@pytest.mark.parametrize(
+    ("shape", "linked", "asked"),
+    [
+        (0.0, NO_CONTINGENCY, "SELL"),
+        (1.0, NO_CONTINGENCY, "BUY"),
+        (2.0, NO_CONTINGENCY, "SELL"),
+        (2.0, OUO, "SELL"),
+        (3.0, NO_CONTINGENCY, "SELL"),
+    ],
+    ids=[
+        "a-list-of-two-whole-sells",
+        "a-list-of-an-exit-and-a-buy",
+        "a-list-of-a-stop-and-a-take-profit-unlinked",
+        "a-list-of-a-stop-and-a-take-profit-one-updates-other",
+        "a-stop-and-a-take-profit-sent-apart",
+    ],
+)
+def test_each_order_a_member_builds_is_checked_and_one_past_flat_is_an_entry(
+    shape: float, linked: float, asked: str
+) -> None:
+    """Against a long of 1000, each second order — the second whole sell of a list, the buy
+    of 5000 after a sell of 1, the take-profit beside a stop each for all of it, listed or
+    sent apart, unlinked or linked one-updates-other, which the venue can fill both of — would
+    take the position past flat or open one, and is refused as an entry built by hand, naming
+    the member, before it reaches the venue."""
+    with pytest.raises(SizingError) as raised:
+        execute_book(block(), [listed(shape=shape, linked=linked)], [instrument()], [daily("DEMO")])
+
+    assert raised.value.refusal.rule == BOOK_ENTRY
+    assert raised.value.refusal.asked == asked
+    assert "book member a" in raised.value.refusal.why
+
+
+@pytest.mark.parametrize("shape", [2.0, 3.0], ids=["listed", "sent-apart"])
+def test_a_stop_and_a_take_profit_linked_one_cancels_other_are_one_exit(shape: float) -> None:
+    """The venue never fills both of two orders linked one-cancels-other, so a stop and a
+    take-profit each for the whole long, listed or sent apart, are one exit, and the book
+    counts no short in them: `b`'s later buy of the name is placed, not refused as opposite."""
+    made = execute_book(
+        block(),
+        [
+            listed(shape=shape, linked=OCO),
+            member("b", request(hyp((DEMO,)), qty=500.0, skip=4.0), 1.0),
+        ],
+        [instrument()],
+        [daily("DEMO"), daily("DEMO")],
+    )
+
+    a, b = made.members.index("a"), made.members.index("b")
+    rested = [(side, qty, kind) for _, _, side, qty, kind, _ in made.intents[a] if side == "SELL"]
+    assert rested == [("SELL", 1000.0, "STOP_MARKET"), ("SELL", 1000.0, "LIMIT")]
+    assert made.counts["b"][OPPOSITE_REFUSED] == 0
+    assert placed(made.runs[b], DEMO) == 500.0
+
+
 def test_an_entry_opposite_to_a_rest_from_an_earlier_instant_or_a_later_holding_is_refused() -> (
     None
 ):
