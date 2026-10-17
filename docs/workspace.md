@@ -422,10 +422,13 @@ an exit or not, so a stop that would reverse the position, or both legs of a bra
 of which can fill, leave that much less to close. The stop-loss and take-profit of a bracket
 whose entry has filled nothing do not count: they can fill only after the entry and close
 what it opens, and neither the venue nor the order emulator has them open to cancel; once the
-entry has filled any of it they count in full. The child of an exit sent one-triggers-other —
-against a long, a sell that releases another sell once it fills — counts in full from the
-start, since the parent's fill releases it to close more; it stops counting once its parent,
-having filled nothing, can no longer fill, since the engine then cancels the child with it.
+entry has filled any of it they count in full. The child of an exit sent one-triggers-other
+in its own name — against a long, a sell that releases another sell once it fills — counts in
+full from the start, since the parent's fill releases it to close more; it stops counting once
+its parent, having filled nothing, can no longer fill, since the engine then cancels the child
+with it. A child whose parent is in another name counts once that parent has filled any of it:
+before then the venue holds it pending and an exit at market cannot cancel it, so counting it
+would hold the exit back for as long as the parent rests (`docs/backlog.md` row 206).
 An exit asked for from a handler the backtest engine runs inside another order's submission,
 such as `on_order_submitted`, counts that order as working, as a node, which hands the event
 over only once the submission has returned, always did.

@@ -1328,3 +1328,83 @@ def test_an_exit_asked_again_while_the_first_is_submitted_counts_the_first(
     source = ASKED_AGAIN.replace(b"EXIT)", exit + b")")
     run = _run(request_for, latency_ms, source, quotes=True)
     assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
+
+
+ACROSS_NAMES = (
+    HEAD
+    + b'''
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import ContingencyType, OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import LimitOrder, OrderList
+
+
+class Strategy(KansoStrategy):
+    """Buys 100 of each of its two names; on its fifth quote of the first sends one list: in
+    the second name a SIDE of 100 far from the market, one-triggers-other with a sale of the
+    first name's 100 far over it, which only the second name's fill would release; on its
+    thirtieth quote of the first asks for that name's exit at market."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = {}
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        key = instrument_id.value
+        self.seen[key] = self.seen.get(key, 0) + 1
+        if self.seen[key] == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        first, second = self.universe
+        if instrument_id != first:
+            return
+        if self.seen[key] == 5:
+            ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
+            list_id = self.order_factory.generate_order_list_id()
+            far = 0.5 if OrderSide.SIDE == OrderSide.BUY else 1.5
+            legs = (
+                (second, OrderSide.SIDE, self.last_price(second) * far, {
+                    "contingency_type": ContingencyType.OTO, "linked_order_ids": [ids[1]]
+                }),
+                (first, OrderSide.SELL, float(tick.bid_price) * 1.5, {"parent_order_id": ids[0]}),
+            )
+            orders = [
+                LimitOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=self.id,
+                    instrument_id=name,
+                    client_order_id=ids[index],
+                    order_side=side,
+                    quantity=Quantity.from_int(100),
+                    price=Price(round(price, 2), 2),
+                    init_id=UUID4(),
+                    ts_init=self.clock.timestamp_ns(),
+                    order_list_id=list_id,
+                    **links,
+                )
+                for index, (name, side, price, links) in enumerate(legs)
+            ]
+            self.submit_order_list(OrderList(list_id, orders))
+        elif self.seen[key] == 30:
+            self.submit_exit(first)
+'''
+)
+"""A sleeve whose child of one name waits on a parent in another."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("side", ["SELL", "BUY"])
+def test_an_exit_at_market_is_not_held_back_by_a_child_waiting_on_another_name(
+    request_for, side: str, latency_ms: float
+) -> None:
+    """A child whose parent is in another name and has filled nothing is left out of what an
+    exit counts, as on main: the venue holds it pending, an exit at market cannot cancel it,
+    and counted it would keep the exit from going out for as long as the parent rests. So the
+    exit at market of the first name sells its 100. Measured on the round before this test,
+    which counted every child whose parent was not on its other side of its own name: the
+    exit sold nothing, its 100 owed on every later point and never paid."""
+    source = ACROSS_NAMES.replace(b"SIDE", side.encode())
+    run = _run(request_for, latency_ms, source, quotes=True, names=(SYMBOL, OTHER))
+    first = [fill for fill in run.fills if fill.instrument_id == f"{SYMBOL}.{VENUE}"]
+    assert never_short(first) == (100.0, 100.0, 0.0), run.fills

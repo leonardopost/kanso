@@ -2158,7 +2158,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         of a bracket whose entry has filled nothing do not count, since they can fill only
         after it and close what it opens; once it has filled any of it they count in full.
         The child of an exit sent one-triggers-other counts in full from the start: its parent
-        is on the same side, and its fill releases the child to close more (`_not_yet_live`).
+        is on the same side of the same name, and its fill releases the child to close more.
+        A child whose parent is in another name counts once that parent has filled any of it
+        (`_not_yet_live`).
 
         An exit at market cancels this sleeve's own limit or stop orders resting at the
         venue on the closing side when they would leave it less than asked. With no latency
@@ -2766,12 +2768,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _not_yet_live(self, order: Any) -> bool:
         """Whether an order is a contingent child that leaves the position as it is until its
-        parent fills: its parent has filled nothing, and is on the other side of the same
-        name — a bracket's entry, whose stop-loss and take-profit close what it opens — or can
-        no longer fill (`_spent`). A child whose parent is on its own side, or in another
-        name, is not: the parent's fill releases it to add to that side, so it counts in full
-        like any order working there. An exit sent one-triggers-other — against a long, a
-        sell whose fill releases another sell — sells both.
+        parent fills: its parent has filled nothing, and is not on the child's own side of
+        the child's own name — a bracket's entry, whose stop-loss and take-profit close what it
+        opens, or an order in another name — or can no longer fill (`_spent`). A child whose
+        parent is on its own side of its own name is not: an exit sent one-triggers-other —
+        against a long, a sell whose fill releases another sell — sells both, so the child
+        counts in full like any order working there. A child whose parent is in another name
+        is left out until that parent fills: the venue holds it pending and an exit at market
+        cannot cancel it, so counted it would keep the exit of its own name from going out
+        for as long as the other name's parent rests (`docs/backlog.md` row 206 says what the
+        count leaves out).
 
         In nautilus_trader 1.231.0 the venue keeps a child `SUBMITTED` with no venue order id
         while its parent is accepted or triggered, and processes it on the parent's first
@@ -2789,8 +2795,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         parent = self.cache.order(order.parent_order_id)
         if parent is None or parent.filled_qty.as_decimal() != 0:
             return False
-        opens = parent.instrument_id == order.instrument_id and parent.side != order.side
-        return opens or self._spent(parent)
+        adds = parent.instrument_id == order.instrument_id and parent.side == order.side
+        return not adds or self._spent(parent)
 
     def _submitted(self, order: object) -> object | None:
         placed = len(self._intents)
