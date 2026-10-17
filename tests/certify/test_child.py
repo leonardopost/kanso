@@ -73,6 +73,9 @@ def test_a_stall_certifies_in_a_child_and_runs_none_of_it_in_the_lane(
     assert stall.verdict == "pass"
     made = certificate.latest(store, hyp_id)
     assert made is not None and made.verdict == "pass" and made.strategy_sha == sha
+    assert made.net_per_trade is not None, (
+        "the child's certificate carries the window's net per trade, struck where it ran"
+    )
     assert caps == [research_loop.mem_cap(ws, subject_run(store, hyp_id, sha))], (
         "a certification is held to what a card of its run may hold"
     )

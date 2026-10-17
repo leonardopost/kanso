@@ -1754,6 +1754,17 @@ leaves the last, from Saturday morning on, empty, and the week above is certifie
 each is certified at its mean per session; `docs/backlog.md` row 110 says what closing the
 difference would take.
 
+**A certificate also records its window's net per trade** (`net_per_trade`), struck from the
+certification run its gates judged and never from a second run of the window: the mean net
+profit per closed trade in basis points of the position each opened, costs applied once by
+the runner — the per-trade edge `edge_per_trade` reads, over the window as one fold — with
+its error clustered by session, so a session's clips that move together count once whatever
+the hypothesis's return period, `net_t`, the value over that error, and how many sessions
+and trades it was struck over. `cert run` and `cert show` print it on a `per trade` line
+after `power`, and a window that closed no trade records none. It is what a book ranks its
+members by (*Stages*); a certificate written before kanso recorded it carries none, which a
+book ranks after every member that does.
+
 Certifying the same bytes again under the same plan **and** the same engine is refused:
 
 ```

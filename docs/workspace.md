@@ -1976,7 +1976,10 @@ certificates/<hyp>/<sha7>.py
 
 The plan is what would count as proof for this hypothesis — the cert, paper and live gates
 with their parameters and a rationale each — pinned once, re-minted only by `cert plan
---replan`. A certificate is the verdict, its evidence and its pins. The `.py` beside it is
+--replan`. A certificate is the verdict, its evidence and its pins, the `power` it states and
+the `net_per_trade` of its window: `net_per_trade_bp`, `net_se_session`, `net_t`,
+`sessions_with_trades` and `trades`, struck from the certification run, or `null` for a
+window that closed no trade (`docs/concepts.md`, *Certification*). The `.py` beside it is
 the certified source, byte for byte, so a certified subject travels with the files even where
 `state.db` does not:
 

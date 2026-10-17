@@ -168,3 +168,38 @@ def test_a_certificate_without_a_pin_keeps_the_older_file_name() -> None:
     made = Certificate.model_validate({k: v for k, v in CERT.items() if k != "hypothesis_sha"})
     assert made.hypothesis_sha is None
     assert made.filename() == f"{SHA[:7]}-30-p2-e1.231.0.yaml"
+
+
+NET: dict[str, Any] = {
+    "net_per_trade_bp": 3.0,
+    "net_se_session": 1.5,
+    "net_t": 2.0,
+    "sessions_with_trades": 20,
+    "trades": 400,
+}
+
+
+def test_a_certificate_carries_its_window_s_net_per_trade() -> None:
+    made = Certificate.model_validate({**CERT, "net_per_trade": NET})
+
+    assert made.net_per_trade is not None
+    assert made.net_per_trade.net_t == 2.0
+    assert Certificate.model_validate(CERT).net_per_trade is None, "older certificates hold none"
+
+
+@pytest.mark.parametrize(
+    ("change", "said"),
+    [
+        ({"net_t": 2.5}, "not the value over its error"),
+        ({"net_t": None}, "not the value over its error"),
+        ({"net_se_session": 0.0}, "no error to divide by"),
+        ({"net_se_session": None}, "no error to divide by"),
+        ({"sessions_with_trades": 1}, "one session closed every trade"),
+        ({"sessions_with_trades": 401}, "cannot hold"),
+    ],
+)
+def test_a_net_per_trade_whose_numbers_disagree_is_refused(
+    change: dict[str, Any], said: str
+) -> None:
+    with pytest.raises(ValidationError, match=said):
+        Certificate.model_validate({**CERT, "net_per_trade": {**NET, **change}})

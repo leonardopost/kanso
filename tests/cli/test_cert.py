@@ -395,6 +395,20 @@ def test_show_reads_as_the_verdict_and_its_gates(runner: CliRunner, researched: 
     assert "power      resolves" in result.stdout
 
 
+def test_a_certificate_states_its_window_s_net_per_trade(
+    runner: CliRunner, researched: Path
+) -> None:
+    """`run` and `show` print the net per trade a book ranks by, and `--json` carries it."""
+    made = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))
+
+    net = made["net_per_trade"]
+    assert net is not None
+    assert net["trades"] >= net["sessions_with_trades"] >= 1
+    shown = at(runner, researched, "cert", "show", HYP_ID).stdout
+    assert f"per trade  net {net['net_per_trade_bp']:.4g} bp" in shown
+    assert f"{net['trades']} trade(s) on {net['sessions_with_trades']} session(s)" in shown
+
+
 def test_the_certificate_states_the_power_the_plan_stated(
     runner: CliRunner, researched: Path
 ) -> None:

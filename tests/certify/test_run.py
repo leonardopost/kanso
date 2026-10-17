@@ -28,6 +28,7 @@ from kanso.certify import certificate, run
 from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
 from kanso.criteria import library
+from kanso.criteria.digest import session_edge
 from kanso.criteria.gates.parity_replay import NO_PARITY
 from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.criteria.run import BPS, day_of, midnight_ns
@@ -52,6 +53,7 @@ from kanso.schemas import (
 )
 from kanso.state import StateStore
 from kanso.workspace import Workspace
+from tests.criteria.builders import build_run
 from tests.research.conftest import (
     CERTIFICATION,
     DOCUMENT,
@@ -402,6 +404,38 @@ def test_a_certificate_states_its_power_from_the_research_window_it_ran_again(
     assert (stated.research, stated.research_se) == pytest.approx((research, error))
     assert stated.standard_error == pytest.approx(error * (days[0] / days[1]) ** 0.5)
     assert stated.bar == pytest.approx(max(0.0, 0.5 * research))
+
+
+def test_a_certificate_records_its_window_s_net_per_trade_from_the_run_it_judged(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The net per trade a book ranks a member by is the certification run's own, struck
+    once and read back from the file: the run the gates judged, made again here only to
+    show the arithmetic is the session-clustered edge of that very run."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+
+    made = certify(ws, store, HYP_ID)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+    measured = run._measure(subject)
+    assert made.net_per_trade is not None, "the reverting sleeve closes trades there"
+    assert made.net_per_trade == run.net_per_trade(measured.certification)
+    value, se, sessions, trades = session_edge(measured.certification) or (0.0, None, 0, 0)
+    assert made.net_per_trade.net_per_trade_bp == value
+    assert (made.net_per_trade.sessions_with_trades, made.net_per_trade.trades) == (
+        sessions,
+        trades,
+    )
+    assert made.net_per_trade.net_se_session == se
+    assert load_yaml(Certificate, certificate.certificate_file(ws, made)).net_per_trade == (
+        made.net_per_trade
+    )
+
+
+def test_a_window_that_closed_no_trade_records_no_net_per_trade() -> None:
+    assert run.net_per_trade(build_run((0.0, 0.0))) is None
 
 
 def test_the_name_the_refusal_checks_is_the_certificate_own(
