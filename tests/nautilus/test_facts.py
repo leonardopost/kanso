@@ -123,6 +123,9 @@ BINDINGS = {
     "kanso's print_through venue fills a resting limit only from a later print strictly "
     "through its price, by that print's size or whole, never from a quote, and fills a "
     "taker at the last quote's touch, an IOC limit no further than the quote shows",
+    "under the NETTING OMS the cache keeps one position per (instrument, strategy), "
+    "named {instrument}-{strategy}, and the portfolio's net position is every "
+    "strategy's sum",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -237,3 +240,18 @@ def test_a_client_whose_quota_holds_no_request_fails_the_quota_claim(
 
     assert not holds
     assert "['RuntimeError']" in evidence
+
+
+def test_a_netting_position_is_one_strategy_s_and_the_net_position_the_account_s() -> None:
+    """What `KansoStrategy`'s own-position reader rests on, read in the first strategy's
+    handler before its sale and again at the end of the run."""
+    before, after = facts._probe_two_strategies_in_one_name()
+
+    assert before == (
+        {"AAPL.XNAS-Probe-A": 10.0, "AAPL.XNAS-Probe-B": 5.0},
+        (10.0, 5.0),
+        15.0,
+    ), "two positions, each named for its strategy, under the account's sum"
+    assert after == ({"AAPL.XNAS-Probe-B": 5.0}, (0.0, 5.0), 5.0), (
+        "A's sale closed A's position alone"
+    )

@@ -513,6 +513,27 @@ one still in flight without marking it, and — read in `trading/strategy.pyx` r
 measured — leaves one a node has not yet sent, so kanso hands it the orders only when none
 is still `INITIALIZED`, and cancels them one by one otherwise.
 
+Positions
+---------
+**Under the NETTING OMS a position is one strategy's in one instrument, not the account's.**
+The execution engine names a netting fill's position `{instrument_id}-{strategy_id}`
+(`ExecutionEngine._determine_netting_position_id`, `execution/engine.pyx`), so the cache
+keeps one open position per (instrument, strategy), and `Cache.positions_open(instrument_id=…,
+strategy_id=…)` hands back that one or none. `Portfolio.net_position(instrument_id)` is the
+sum of every open position in the instrument across every strategy on the account — a
+`Decimal`, as is each position's `signed_decimal_qty()` it adds up — so on a stage of two
+versions trading one name it is neither version's. Measured: two strategies on one NETTING
+account, one buying 10 and the other 5 of one name, hold two open positions named for
+their strategies, 10 and 5, under a net position of 15; the first selling 10 closes its own
+and leaves the second's 5 open, the net position 5. Both position changes are applied in
+the cache and the portfolio before the fill reaches the strategy (read in
+`ExecutionEngine._handle_order_fill`), so the two readers move at the same instant. So
+`KansoStrategy` reads its own position, the one `held` and `submit_exit` size against, from
+the cache by its own strategy id and never from the portfolio, and the node's flatten closes
+each strategy's positions with the engine's own `close_all_positions`, which reads them the
+same way. A broker nets every version's orders on the account into one position of its own;
+the split by strategy is the engine's bookkeeping beside it.
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -1528,6 +1549,102 @@ def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tu
         f"of 10 and {part} after a sale of 4. The close carries reduce_only by default, and "
         "the venue refuses a reduce-only order the position no longer has room for and "
         "trims one to the quantity still open, rather than open the other side"
+    )
+
+
+def _probe_two_strategies_in_one_name() -> tuple[object, ...]:
+    """Two strategies on one NETTING account: `A` buys 10 and `B` buys 5 on the first print,
+    and `A` sells 10 on the second. Returns, read in `A`'s handler before its sale and again
+    at the end, the open positions by id with their signed quantities, each strategy's own
+    position as the cache answers it by (instrument, strategy), and the net position."""
+    from decimal import Decimal
+
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import StrategyId, Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    ids = (StrategyId("Probe-A"), StrategyId("Probe-B"))
+
+    def read(cache: Any, portfolio: Any) -> tuple[object, ...]:
+        held = {str(p.id): float(p.signed_qty) for p in cache.positions_open()}
+        own = tuple(
+            float(
+                sum(
+                    (
+                        p.signed_decimal_qty()
+                        for p in cache.positions_open(instrument_id=equity.id, strategy_id=id_)
+                    ),
+                    Decimal(0),
+                )
+            )
+            for id_ in ids
+        )
+        return held, own, float(portfolio.net_position(equity.id))
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str, bought: int) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.bought = bought
+            self.seen = 0
+            self.before: tuple[object, ...] = ()
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.submit_order(
+                    self.order_factory.market(
+                        equity.id, OrderSide.BUY, Quantity.from_int(self.bought)
+                    )
+                )
+            elif self.seen == 2 and self.bought == 10:
+                self.before = read(self.cache, self.portfolio)
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.SELL, Quantity.from_int(10))
+                )
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0))
+        first = Probe("A", 10)
+        engine.add_strategy(first)
+        engine.add_strategy(Probe("B", 5))
+        engine.run()
+        return first.before, read(engine.cache, engine.portfolio)
+    finally:
+        engine.dispose()
+
+
+def _check_a_netting_position_is_one_strategy_s_in_one_instrument() -> tuple[bool, str]:
+    """`KansoStrategy`'s own-position reader: under NETTING the cache keeps one position per
+    (instrument, strategy), and the portfolio's net position is every strategy's sum."""
+    before, after = _probe_two_strategies_in_one_name()
+    holds = before == (
+        {"AAPL.XNAS-Probe-A": 10.0, "AAPL.XNAS-Probe-B": 5.0},
+        (10.0, 5.0),
+        15.0,
+    ) and after == ({"AAPL.XNAS-Probe-B": 5.0}, (0.0, 5.0), 5.0)
+    return holds, (
+        "two strategies on one NETTING account, A buying 10 and B 5 of one name, then A "
+        "selling 10: (open positions by id, each strategy's own by (instrument, strategy), "
+        f"net position) = {before} before the sale and {after} after it. A position is named "
+        "{instrument}-{strategy}, A's sale closes A's alone, and the net position is the "
+        "account's sum"
     )
 
 
@@ -5064,6 +5181,12 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "close_position sends a reduce-only order, which the simulated venue trims to what "
         "is left of the position and refuses once the position is already closed",
         _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position,
+    ),
+    (
+        "under the NETTING OMS the cache keeps one position per (instrument, strategy), "
+        "named {instrument}-{strategy}, and the portfolio's net position is every "
+        "strategy's sum",
+        _check_a_netting_position_is_one_strategy_s_in_one_instrument,
     ),
     (
         "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
