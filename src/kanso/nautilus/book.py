@@ -60,10 +60,13 @@ So an order the member builds itself and sends from a handler the engine runs in
 submission of kanso's own — `on_order_submitted` — is refused like any other: its
 `OrderInitialized` comes after the one let through. What no layer refuses is a route only
 the scan refuses, taken by a strategy it did not pass — measured in a book of one at no
-latency and at 20 ms, each went out (`docs/backlog.md` row 210) — and code that defeats the
-scan's blind spots, such as the engine's class held under the name `self`, whose orders the
-bus check still refuses (row 211). Resting orders the venue fills at the instant are open
-before the entries are placed.
+latency and at 20 ms, each went out (`docs/backlog.md` row 210) — or reached by a spelling
+the scan does not follow (row 211): the bus, reached by a name held in a string through
+`pickle` or the engine's `resolve_path`, which allowed modules hand out, passed the scan
+unsized — through `pickle`, sized as well — and sent a buy of a million in a book of one at no
+latency and at 20 ms; the engine's class held under the name `self` reaches only the
+engine's own methods, which the bus check still refuses. Resting orders the venue fills at
+the instant are open before the entries are placed.
 
 **Each entry is placed in that order, then cut.** It is sized by its member's own rule at
 that moment — its own room under its own limits, as a sleeve alone is — and then cut to the

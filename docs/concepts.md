@@ -787,7 +787,7 @@ already over. There are ten.
 
 | gate | what it refuses |
 |---|---|
-| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list — or reaches past it through what an allowed module holds — binds a name its base class owns, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand |
+| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, binds a name its base class owns, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
@@ -1224,15 +1224,14 @@ exactly as a cold one does.
 syntax-tree check run *before* the backtest, not after. Imports are matched by full dotted
 path against an allow-list of exact leaves; every path that reaches the data catalog is
 denied by name, as are the builtins and modules that would let a strategy open a file or
-read a wall clock. A path names a module, not what the module holds, so what an allowed
-import hands out is resolved to what it is whenever the gate runs: a module must be allowed
-under its own name wherever it is reached from — `typing` holds the `operator` module and
-`dataclasses` the `inspect` module, so `from typing import operator` is refused — and a class
-or a function must be defined in an allowed module, or in the engine or kanso, whose allowed
-leaves hand out their own internals by design (the engine's enums, kanso's `Decision`). A
-dotted read off an imported module is resolved step by step, so `import
-nautilus_trader.model`, which binds the package `nautilus_trader`, opens none of its other
-packages, and an imported module is read in place, never held whole under another name.
+read a wall clock. A path names a module, not what the module holds, and the path is all
+the gate reads: what an allowed module holds from elsewhere — `typing` holds the `operator`
+module — and what a dotted read off an imported module reaches are not resolved, and are among
+the spellings the gate does not follow, listed at the end of this section. The gate imports no
+module because a strategy names it, so what a module does as it is imported happens in the
+card's own child process, never in the process that runs the gate: `numpy.f2py.__main__`,
+which numpy's place on the allow-list lets a strategy import, runs f2py's command line and
+exits, and the card is recorded as a `crash`.
 
 ```
 $ kanso research card demo_filter --desc "read the catalog directly"
@@ -1357,12 +1356,23 @@ bus bought it, a modify sent there and an `OrderUpdated` applied to a resting ex
 a fill at a price no venue printed (`docs/backlog.md` rows 209 and 210).
 
 The gate refuses by spelling, and what it does not follow is a spelling (`docs/backlog.md`
-row 211): the engine's class held under the name `self` — the first parameter of a
-module-level function handed `Strategy` — whose `submit_order` is the engine's own; an
-imported module the file binds again under its own name, an alias of which is not followed;
-and what an allowed leaf of the engine or kanso takes from elsewhere in its own package. A
-strategy that gets past the gate that way meets only the run-time checks, which a sleeve run
-alone does not have (row 209) and a book has for the engine's own methods alone (*Stages*).
+row 211). The engine's class held under the name `self` — the first parameter of a
+module-level function handed `Strategy` — reaches the engine's own `submit_order`. A module an
+allowed leaf holds passes on its path: `from typing import operator` is the `operator` module,
+`from dataclasses import inspect` the `inspect` module and `from nautilus_trader.model.data
+import pickle` the `pickle` module. A dotted read off an imported module is not followed:
+`import nautilus_trader.model` binds the package `nautilus_trader`, through which
+`nautilus_trader.execution` reads a package the allow-list refuses, `from nautilus_trader
+import model` reaches `pickle` as `model.data.pickle`, and a module kept under another name
+is read there unfollowed. A class or a function an allowed leaf takes from a module that is
+not allowed passes with it: the engine's `resolve_path`, which `nautilus_trader.trading.config`
+holds and which imports whatever path it is handed as a string, and the builtin `open`, which
+numpy holds as `numpy.lib._datasource._open`. And numpy, allowed whole, opens a path or a URL
+with `numpy.lib.npyio.DataSource`, maps a file with `numpy.lib.format.open_memmap` and loads a
+shared library with `numpy.ctypeslib.load_library`, past the file functions the gate names.
+Each reaches what the gate refuses when it is spelt directly. A strategy that gets past the
+gate that way meets only the run-time checks, which a sleeve run alone does not have (row
+209) and a book has for the engine's own methods alone (*Stages*).
 
 ## Delivery
 
@@ -2114,11 +2124,15 @@ book's handler off the bus; an event applied to an order by hand; and kanso's pr
 which send whatever they are handed as the order kanso is sending, and which the book lets
 through as that. A strategy the gate did not pass is held to the run-time layers alone — in
 a book of one at no latency and at 20 ms each of those routes went out (`docs/backlog.md`
-row 210) — and so is one that defeats the gate's blind spots (row 211), whose orders through
-the engine's own methods the book still refuses. An exit at market that cancels the member's exit resting on its side takes
-that one out of the book's gross at once with no latency stated, since the cancel lands
-before anything further is matched. The session clock is New York's for every member,
-whatever its venue. A member is run at the book's capital and window; one with an attached
+row 210) — and so is one that reaches them by a spelling the gate does not follow (row 211):
+the book still refuses its orders through the engine's own methods, but a buy of a million
+sent on the bus, reached by a name held in a string through `pickle` or the engine's
+`resolve_path`, each handed out by an allowed module, passed the gate unsized, and through
+`pickle` sized as well, and bought a million more in a book of one and alone, at no latency
+and at 20 ms. An exit at market that cancels the member's exit resting on its side takes that
+one out of the book's gross at once with no latency stated, since the cancel lands before
+anything further is matched. The session clock is New York's for every member, whatever its
+venue. A member is run at the book's capital and window; one with an attached
 construct, a `book` policy or a level-two book is refused. No stage holds a book yet:
 `portfolio.yaml` names no shared block and a stage node runs no ledger, which is the next
 step (`docs/backlog.md`).

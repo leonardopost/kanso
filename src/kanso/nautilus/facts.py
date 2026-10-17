@@ -614,7 +614,8 @@ fill a strategy sends on the bus itself, to `ExecEngine.execute`, `RiskEngine.ex
 `ExecEngine.process`, goes past those methods, an event it applies to an order with
 `Order.apply` sends no command at all, and a subscriber it takes off the bus hears nothing:
 in a book each went out unrefused (`docs/backlog.md` row 210), and only the integrity scan
-refuses them, in a researched strategy (`kanso.criteria.integrity`).
+refuses them, in a researched strategy and by the names they are spelt with
+(`kanso.criteria.integrity`; what it does not follow is `docs/backlog.md` row 211).
 
 Risk configuration
 ------------------

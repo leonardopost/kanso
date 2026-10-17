@@ -32,8 +32,9 @@ helpers is still on the record. One that bypasses the overrides is not: the engi
 `submit_order` or `submit_order_list` called on its class, as `Strategy.submit_order(self,
 order)`, or through `super(KansoStrategy, self)`, records no intent and is asked nothing.
 `strategy_integrity` refuses a researched strategy that reaches a method this class
-overrides that way (`kanso.criteria.integrity`), and a book refuses the order itself before
-the engine routes it (below).
+overrides that way as it is spelt (`kanso.criteria.integrity`; what it does not follow is
+`docs/backlog.md` row 211), and a book refuses the order itself before the engine routes it
+(below).
 
 **It sizes.** The cost-aware helpers `submit_entry` and `submit_exit` choose a quantity
 from the capital and the risk limits injected from the hypothesis, leaving room for the
@@ -97,8 +98,10 @@ object at its check, and let through to the engine once, at its own `OrderInitia
 order the sleeve builds itself and sends from a handler the engine runs inside that
 submission — `on_order_submitted` — is refused like any other. What neither sees — a command
 or a fill sent on the bus, an event applied to an order, an order handed to `_submitted`
-itself — only `strategy_integrity` refuses, in a researched strategy
-(`kanso.criteria.integrity`).
+itself — only `strategy_integrity` refuses, in a researched strategy, by the names each is
+spelt with (`kanso.criteria.integrity`); reached by a spelling it does not follow, such as a
+name held in a string through a module an allowed import hands out, each is refused by
+nothing (`docs/backlog.md` row 211).
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only

@@ -418,8 +418,9 @@ returns, the engine's `close_position`, and the engine's own `submit_order`,
 bus, an event applied to an order by hand, an order handed to kanso's private `_submitted` —
 the book does not refuse (`docs/backlog.md` row 210); `strategy_integrity` refuses it before
 anything runs, in a researched strategy, sized or not, with kanso's own sends and a method
-kanso overrides reached past it. A sleeve run alone is held to none of it at run time
-(`docs/backlog.md` row 209).
+kanso overrides reached past it, by the names each is spelt with — the spellings it does not
+follow, what an allowed module holds from elsewhere among them, are open (`docs/backlog.md`
+row 211). A sleeve run alone is held to none of it at run time (`docs/backlog.md` row 209).
 **A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
 owed exit and the classification of an order as an entry or an exit read the position the
 engine keeps for the sleeve's own strategy in the name, not the account's net position, which
@@ -489,8 +490,9 @@ that names a size knob, builds an order by hand or reads `self.portfolio`, and �
 not — one that overrides a harness method or binds any other name its base class owns, calls
 the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness
 overrides past it, as `Strategy.submit_order(self, order)`, reaches the message bus
-(`msgbus`, `_msgbus`) or applies an event to an order by hand (`.apply`) (`docs/concepts.md`),
-with the line and what to write instead; what the scan cannot see — a second
+(`msgbus`, `_msgbus`) or applies an event to an order by hand (`.apply`), each as it is spelt
+(`docs/concepts.md`, *The embargo*, and `docs/backlog.md` row 211), with the line and what to
+write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
 the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
 instrument, the instant and the book held. `position_size` under the rule judges entry fills

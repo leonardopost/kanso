@@ -17,17 +17,12 @@ Rust bridge, and the bridge, the persistence layer and the backtest package each
 data catalog and therefore the certification window. `kanso.nautilus.strategy` is the only
 kanso module a strategy may see. Beyond those, numpy and a short standard-library set of
 pure computation. A star import binds names nobody declared, so it is refused whatever it
-comes from. A path names a module, not what the module holds, so what an allowed import
-hands out is resolved to what it is when the scan runs, and refused when that is out of
-reach: a module must be allowed under its own name wherever it is reached from — `typing`
-holds the `operator` module and `dataclasses` the `inspect` module, and `from typing import
-operator` is refused — and a class or a function must be defined in an allowed module, or in
-the engine or kanso, whose allowed leaves hand out their own internals by design (`OWN_HOMES`).
-A dotted read off an imported module is resolved step by step the same way, so `import
-nautilus_trader.model`, which binds the package `nautilus_trader`, opens none of its other
-packages: `nautilus_trader.execution` is refused. An imported module is read only in place;
-held whole — handed to a call, kept under another name — what is read off it could not be
-followed, so it is refused, unless the file binds the name again itself.
+comes from. A path names a module, not what the module holds, and the path is all this rule
+reads: what an allowed module holds from elsewhere, and what a dotted read off an imported
+module reaches, are not resolved (*What the scan does not see*, below). The scan imports no
+module because a strategy names it — its only import is kanso's own strategy base — so a
+module's import-time code runs in the card's child process, never in the process that gates
+it.
 
 **Identifiers** are refused wherever they appear — as a name, as an attribute or as an
 import alias — so that a denied capability cannot be reached by a second route. That
@@ -126,13 +121,31 @@ classes when the scan runs, never kept as a list. The instance read through anot
 handed to a module-level function, or kept as `me = self` — is refused as well, which is the
 price of seeing the rest.
 
-**What the scan does not see** is a spelling it does not follow: the engine's class held
-under the name `self` — the first parameter of a module-level function handed `Strategy` —
-whose `submit_order` is the engine's own, which in a book the book still refuses on the bus
-(`kanso.nautilus.book`) and a sleeve alone sends; an imported module the file binds again
-under its own name, so that held whole it is not refused and an alias of it is not followed;
-and what an allowed leaf of the engine or kanso takes from elsewhere in its own package, which
-is allowed by its package and not resolved further.
+**What the scan does not see** is a spelling it does not follow, and each of these reaches
+what the rules above refuse when it is spelt directly (`docs/backlog.md` row 211):
+
+* the engine's class held under the name `self` — the first parameter of a module-level
+  function handed `Strategy` — whose `submit_order` is the engine's own, which in a book the
+  book still refuses on the bus (`kanso.nautilus.book`) and a sleeve alone sends;
+* a module an allowed leaf holds, which its path passes: `from typing import operator` is the
+  `operator` module, `from dataclasses import inspect` the `inspect` module, `from
+  nautilus_trader.model.data import pickle` the `pickle` module, and `from
+  kanso.nautilus.strategy import actions` kanso's `actions`;
+* a dotted read off an imported module, which is not followed: `import nautilus_trader.model`
+  binds the package `nautilus_trader`, so `nautilus_trader.execution` and
+  `nautilus_trader.core.rust` read packages the allow-list refuses to import, which the
+  engine has imported by the time a strategy runs; `from nautilus_trader import model`
+  reaches `pickle` as `model.data.pickle`; and a module kept under another name is read there
+  unfollowed as well;
+* a class or a function an allowed leaf takes from a module that is not allowed: the engine's
+  `resolve_path`, which `nautilus_trader.trading.config` takes from
+  `nautilus_trader.common.config` and which imports whatever path it is handed as a string;
+  `itemgetter`, which `nautilus_trader.model.book` takes from `operator`; and
+  `numpy.lib._datasource._open`, which is the builtin `open`;
+* numpy, allowed whole, past its file functions (`DENIED_NUMPY_FILE`): the `open` of
+  `numpy.lib.npyio.DataSource` opens a path, or downloads a URL and opens that,
+  `numpy.lib.format.open_memmap` maps a file, and `numpy.ctypeslib.load_library` loads a
+  shared library.
 
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
@@ -143,17 +156,13 @@ researcher did not.
 from __future__ import annotations
 
 import ast
-import importlib
 import inspect
 import re
-import sys
-import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from functools import cache
 from hashlib import sha256
 from pathlib import Path
 from string import Formatter
-from types import ModuleType
 from typing import Final, NamedTuple
 
 ALLOWED_IMPORTS: Final = frozenset(
@@ -181,12 +190,6 @@ ALLOWED_IMPORTS: Final = frozenset(
     }
 )
 """Exact leaves. A path is allowed when it is one of these or lies under one."""
-
-OWN_HOMES: Final = frozenset({"nautilus_trader", "kanso"})
-"""The packages whose allowed leaves hand out what they define elsewhere by design — the
-engine's enums, which `nautilus_trader.model.enums` takes from its Rust bindings, and
-`Decision`, which `kanso.nautilus.strategy` takes from `kanso.nautilus.hooks` — so a class or
-a function an allowed leaf hands out is allowed wherever in them it is defined."""
 
 NAMED_DENIALS: Final = {
     "nautilus_trader.core.nautilus_pyo3": "the Rust bridge reaches the data catalog",
@@ -587,174 +590,6 @@ def _visit_import_from(node: ast.ImportFrom) -> Iterable[str]:
                     yield named
 
 
-_MISSING: Final = object()
-"""What a name resolves to when the module holds no such attribute and no such submodule."""
-
-WHY_REACHED: Final = "import what you use from an allowed module by its own path"
-
-
-def _module(path: str) -> ModuleType | None:
-    """The allowed module `path` names, imported when the scan runs; `None` where it does not
-    import, which the card's own import fails on when it runs, so nothing here is reached."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        try:
-            return importlib.import_module(path)
-        except Exception:  # whatever a module raises as it is imported, the card raises too
-            return None
-
-
-def _resolved(held: ModuleType, name: str) -> object:
-    """What `name` is on the module `held` when the scan runs — an attribute, or an allowed
-    submodule not yet imported — or `_MISSING`. Nothing that is not allowed is imported."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        try:
-            return getattr(held, name)
-        except Exception:  # a module's own `__getattr__` may raise anything
-            pass
-        path = f"{held.__name__}.{name}"
-        if not import_allowed(path):
-            return _MISSING
-        try:
-            return importlib.import_module(path)
-        except Exception:  # as `_module`
-            return _MISSING
-
-
-def _passage(path: str) -> bool:
-    """Whether `path` is a package an allowed leaf lies under but that is not itself allowed —
-    `nautilus_trader`, `nautilus_trader.core` — which a dotted read passes through to a leaf."""
-    return not import_allowed(path) and any(leaf.startswith(f"{path}.") for leaf in ALLOWED_IMPORTS)
-
-
-def _reached_problem(reached: object, spelled: str, line: int, *, passing: bool) -> str | None:
-    """Why what `spelled` resolves to is out of reach, or `None`.
-
-    A module must be allowed under its own name, wherever it was reached from — `typing`
-    holds the `operator` module, `dataclasses` the `inspect` module — or be a package on the
-    way to an allowed leaf while the read goes on past it (`passing`). A class or a function
-    must be defined in an allowed module or in `OWN_HOMES`; one whose home names no module the
-    interpreter holds is the engine's compiled own (its Rust functions name `core` and
-    `model`). Anything else — a number, a string — is data.
-    """
-    if isinstance(reached, ModuleType):
-        name = reached.__name__
-        if import_allowed(name) or (passing and _passage(name)):
-            return None
-        return (
-            f"line {line}: '{spelled}' is the module '{name}', which is not on the allow-list; "
-            f"{WHY_REACHED}"
-        )
-    if not (isinstance(reached, type) or callable(reached)):
-        return None
-    home = getattr(reached, "__module__", None)
-    if (
-        not isinstance(home, str)
-        or import_allowed(home)
-        or home.partition(".")[0] in OWN_HOMES
-        or home not in sys.modules
-    ):
-        return None
-    return (
-        f"line {line}: '{spelled}' is defined in '{home}', which is not on the allow-list; "
-        f"{WHY_REACHED}"
-    )
-
-
-def _walk(held: ModuleType, spelled: str, steps: list[str], line: int) -> str | None:
-    """Follow a dotted read off the module `held` step by step, as far as it reads modules,
-    and say why the first step out of reach is."""
-    for index, step in enumerate(steps):
-        spelled = f"{spelled}.{step}"
-        reached = _resolved(held, step)
-        if reached is _MISSING:
-            path = f"{held.__name__}.{step}"
-            if import_allowed(path) or _passage(path):
-                return None
-            return (
-                f"line {line}: '{spelled}' reads '{path}', which is not on the allow-list; "
-                f"{WHY_REACHED}"
-            )
-        problem = _reached_problem(reached, spelled, line, passing=index < len(steps) - 1)
-        if problem is not None or not isinstance(reached, ModuleType):
-            return problem
-        held = reached
-    return None
-
-
-def _reach_problems(tree: ast.Module) -> list[str]:
-    """What the allowed imports hand out, resolved to what it is when the scan runs.
-
-    A name `from <allowed> import name` binds, and every dotted read off a module an import
-    bound, are refused when they reach a module, a class or a function that is not allowed
-    (`_reached_problem`): an allowed leaf can hold a module that is not, and `import a.b`
-    binds the package `a`, whose other submodules are not allowed. A module an import bound
-    is refused as well wherever it is held other than at the head of a dotted read — handed
-    to a call, kept under another name — since what is read off it there is not followed;
-    a name the file binds again, as a parameter or an assignment, is not held to that.
-    """
-    found: list[str] = []
-    bound: dict[str, ModuleType] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                held = _module(alias.name) if import_allowed(alias.name) else None
-                if held is None:
-                    continue
-                if alias.asname is not None:
-                    bound[alias.asname] = held
-                else:
-                    package = alias.name.partition(".")[0]
-                    bound[package] = sys.modules[package]
-        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-            source = _module(node.module) if import_allowed(node.module) else None
-            if source is None:
-                continue
-            for alias in node.names:
-                reached = _MISSING if alias.name == "*" else _resolved(source, alias.name)
-                if reached is _MISSING:
-                    continue
-                spelled = f"{node.module}.{alias.name}"
-                problem = _reached_problem(reached, spelled, node.lineno, passing=False)
-                if problem is not None:
-                    found.append(problem)
-                elif isinstance(reached, ModuleType):
-                    bound[alias.asname or alias.name] = reached
-    if not bound:
-        return found
-    heads = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-    rebound = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)
-    } | {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, ast.Load)
-            and node.id in bound
-            and node.id not in rebound
-            and id(node) not in heads
-        ):
-            found.append(
-                f"line {node.lineno}: the module '{node.id}' is held whole, where what is read "
-                f"off it cannot be followed; read what you use off it in place, as "
-                f"{node.id}.name"
-            )
-        elif isinstance(node, ast.Attribute) and id(node) not in heads:
-            steps: list[str] = []
-            head: ast.expr = node
-            while isinstance(head, ast.Attribute):
-                steps.append(head.attr)
-                head = head.value
-            if isinstance(head, ast.Name) and head.id in bound:
-                problem = _walk(bound[head.id], head.id, steps[::-1], node.lineno)
-                if problem is not None:
-                    found.append(problem)
-    return found
-
-
 def scan(
     source: str,
     origin: str = STRATEGY,
@@ -777,7 +612,6 @@ def scan(
         *_sizing_problems(tree, sized=sized, construct=construct),
         *(clash.problem for clash in _clashes(tree)),
         *_receiver_problems(tree),
-        *_reach_problems(tree),
     ]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
