@@ -409,6 +409,36 @@ def test_a_certificate_states_its_window_s_net_per_trade(
     assert f"{net['trades']} trade(s) on {net['sessions_with_trades']} session(s)" in shown
 
 
+@pytest.mark.parametrize(
+    ("se", "t", "error"),
+    [
+        (None, None, "no session error"),
+        (0.0, None, "± 0 by session"),
+        (1.5, 2.0, "± 1.5 by session (t 2)"),
+    ],
+)
+def test_the_per_trade_line_says_what_error_the_net_was_struck_with(
+    se: float | None, t: float | None, error: str
+) -> None:
+    """A window whose trades closed on one session has no error by session to state."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from kanso.cli.cert import _net_line
+    from kanso.schemas import Certificate, NetPerTrade
+
+    net = NetPerTrade(
+        net_per_trade_bp=3.0,
+        net_se_session=se,
+        net_t=t,
+        sessions_with_trades=1 if se is None else 4,
+        trades=6,
+    )
+    (line,) = _net_line(cast("Certificate", SimpleNamespace(net_per_trade=net)))
+
+    assert line.endswith(f"net 3 bp {error} · 6 trade(s) on {net.sessions_with_trades} session(s)")
+
+
 def test_the_certificate_states_the_power_the_plan_stated(
     runner: CliRunner, researched: Path
 ) -> None:
