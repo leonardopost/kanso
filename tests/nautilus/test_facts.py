@@ -138,6 +138,9 @@ BINDINGS = {
     "priorities first, whatever order their strategies were added in",
     "two market orders sent into one name at one instant on a level-one venue are each "
     "filled from the whole touch, neither sharing what the other took",
+    "an order's OrderInitialized, every order's of a list, and a modify's "
+    "OrderPendingUpdate are published on the bus before the engine routes the command, "
+    "so a subscriber that raises sends nothing, at no latency and at 20 ms",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -297,3 +300,25 @@ def test_two_takers_on_one_touch_are_each_filled_from_all_of_it() -> None:
     """What the book's shared touch budget is for: the venue fills each market order from
     the whole touch, so two buys of 80 under an ask of 100 both fill at the ask."""
     assert facts._probe_two_takers_on_one_touch() == [("A", 80.0, 10.01), ("B", 80.0, 10.01)]
+
+
+@pytest.mark.parametrize("latency_ns", [0, 20_000_000])
+def test_an_order_and_a_modify_are_refused_on_the_bus_before_they_are_routed(
+    latency_ns: int,
+) -> None:
+    """What a book refuses an order a member sent past kanso by: a subscriber to every
+    strategy's order events that raises stops the engine's own `submit_order`, called on its
+    class past the probe's override, `submit_order_list` at its first order, `modify_order`,
+    and an order in the name of a strategy the engine does not run, before any is routed; the
+    rest of 10 at 10.50 the probe placed first is the only order the cache ever holds, and no
+    later quote fills it."""
+    refused, held = facts._probe_refused_on_the_bus(latency_ns)
+
+    assert refused == [
+        ("OrderInitialized", False),
+        ("OrderInitialized", False),
+        ("OrderPendingUpdate", True),
+        ("OrderInitialized", False),
+    ]
+    ((quantity, price, _, filled),) = held
+    assert (quantity, price, filled) == (10.0, 10.5, 0.0)

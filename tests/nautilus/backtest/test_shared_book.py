@@ -904,8 +904,8 @@ class Strategy(KansoStrategy):
     `submit_exit`, by `how`: a sale of the whole long by `submit_order` (0), the same sale as a
     list of one by `submit_order_list` (1), the exit it rested far over the market on its
     second bar moved down to the market by `modify_order` (2), or the long closed by the
-    engine's own `close_position` (3); or it asks, from `hedges`, for a buy of 5000 beside its
-    entry (4).\"\"\"
+    engine's own `close_position` (3), or by its `market_exit` (5); or it asks, from `hedges`,
+    for a buy of 5000 beside its entry (4).\"\"\"
 
     config_cls = Config
 
@@ -932,6 +932,8 @@ class Strategy(KansoStrategy):
             elif how == 3:
                 (position,) = self.cache.positions_open(strategy_id=self.id)
                 self.close_position(position)
+            elif how == 5:
+                self.market_exit()
 
     def hedges(self, ctx):
         if int(self.kanso_config.how) != 4:
@@ -946,9 +948,11 @@ BY_HAND_WAYS = {
     "modify_order": (2.0, "SELL", "modify_order"),
     "close_position": (3.0, "SELL", "submit_order"),
     "hedges": (4.0, "BUY", "hedges()"),
+    "market_exit": (5.0, "SELL", "submit_order"),
 }
 """Each way `BY_HAND` sends an order past the two sized calls: its `how`, the side of the
-order, and the call the refusal names — `close_position` sends its order by `submit_order`."""
+order, and the call the refusal names — `close_position` and `market_exit` send their order
+by `submit_order`."""
 
 
 @pytest.mark.parametrize("way", sorted(BY_HAND_WAYS))
@@ -972,6 +976,160 @@ def test_a_member_s_orders_go_out_only_through_submit_entry_and_submit_exit(way:
     assert "submit_entry" in refusal.why and "submit_exit" in refusal.why
     sold = fsum(f.qty for f in alone.fills if f.side == "SELL")
     assert (placed(alone, DEMO), sold) == ((6000.0, 0.0) if way == "hedges" else (1000.0, 1000.0))
+
+
+PAST_KANSO = b"""
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.identifiers import ClientOrderId, StrategyId
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import MarketOrder, OrderList
+from nautilus_trader.trading.strategy import Strategy as Engine
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    how: float = 0.0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 1000 on its first bar and, on its third, reaches the engine's own methods past
+    kanso's, by `how`: a buy of a million at market by `Strategy.submit_order` (0), the same
+    through `super(KansoStrategy, self)` (1), the same as a list by
+    `Strategy.submit_order_list` (2), the exit it rested far over the market on its second
+    bar moved to 5000 at 5.00 by `Strategy.modify_order` (3), its long closed by
+    `Strategy.close_all_positions` (4), a sale of 1000 by `Strategy.submit_order` from the
+    handler the engine runs inside the submission of its exit at market (5), or a buy of a
+    million in the name of a strategy no member runs (6).\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+        self.inside = False
+
+    def buy(self, instrument_id):
+        return self.order_factory.market(instrument_id, OrderSide.BUY, Quantity.from_int(10**6))
+
+    def on_bar(self, bar):
+        self.n += 1
+        instrument_id = bar.bar_type.instrument_id
+        how = int(self.kanso_config.how)
+        if self.n == 1:
+            self.submit_entry(instrument_id, "BUY", qty=1000.0)
+        elif self.n == 2 and how == 3:
+            self.rest = self.submit_exit(instrument_id, price=100.0)
+        elif self.n == 3:
+            if how == 0:
+                Engine.submit_order(self, self.buy(instrument_id))
+            elif how == 1:
+                super(KansoStrategy, self).submit_order(self.buy(instrument_id))
+            elif how == 2:
+                listed = self.order_factory.generate_order_list_id()
+                Engine.submit_order_list(self, OrderList(listed, [self.buy(instrument_id)]))
+            elif how == 3:
+                Engine.modify_order(
+                    self, self.rest, quantity=Quantity.from_int(5000), price=Price.from_str("5.00")
+                )
+            elif how == 4:
+                Engine.close_all_positions(self, instrument_id)
+            elif how == 5:
+                self.inside = True
+                self.submit_exit(instrument_id)
+            elif how == 6:
+                stranger = MarketOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=StrategyId("Nobody-001"),
+                    instrument_id=instrument_id,
+                    client_order_id=ClientOrderId("O-nobody-1"),
+                    order_side=OrderSide.BUY,
+                    quantity=Quantity.from_int(10**6),
+                    init_id=UUID4(),
+                    ts_init=bar.ts_init,
+                )
+                Engine.submit_order(self, stranger)
+
+    def on_order_submitted(self, event):
+        if self.inside:
+            self.inside = False
+            sale = Quantity.from_int(1000)
+            Engine.submit_order(
+                self, self.order_factory.market(event.instrument_id, OrderSide.SELL, sale)
+            )
+"""
+
+ENGINE_SEND = "the engine's own submit_order or submit_order_list, reached past KansoStrategy's, "
+PAST_KANSO_WAYS = {
+    "Strategy.submit_order": (0.0, "BUY", ENGINE_SEND, (1_001_000.0, 0.0)),
+    "super(KansoStrategy, self).submit_order": (1.0, "BUY", ENGINE_SEND, (1_001_000.0, 0.0)),
+    "Strategy.submit_order_list": (2.0, "BUY", ENGINE_SEND, (1_001_000.0, 0.0)),
+    "Strategy.modify_order": (
+        3.0,
+        "SELL",
+        "the engine's own modify_order, reached past KansoStrategy's, ",
+        (1000.0, 5000.0),
+    ),
+    "Strategy.close_all_positions": (4.0, "SELL", "submit_order ", (1000.0, 1000.0)),
+    "Strategy.submit_order inside an exit's submission": (
+        5.0,
+        "SELL",
+        ENGINE_SEND,
+        (1000.0, 2000.0),
+    ),
+}
+"""Each way `PAST_KANSO` reaches the engine past kanso's own methods: its `how`, the side of
+the order, how the refusal goes on after naming the member, and what the sleeve run alone
+bought and sold by it. `close_all_positions` sends by `submit_order`, which is kanso's."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("way", sorted(PAST_KANSO_WAYS))
+def test_a_member_reaching_the_engine_past_kanso_s_methods_is_refused(
+    way: str, latency_ms: float
+) -> None:
+    """The engine's own `submit_order`, `submit_order_list` and `modify_order`, called on its
+    class or through `super(KansoStrategy, self)`, never reach kanso's overrides; the engine
+    still hands the order's `OrderInitialized`, and the modify's `OrderPendingUpdate`, to the
+    bus before it routes either, and the book refuses there what kanso is not sending, at no
+    latency and at 20 ms. The same sleeve alone sends each, as it did before. Measured on the
+    round before this test, the book let all but `close_all_positions` out: a member bought
+    1,001,000 on 100,000, sold 5000 of a long of 1000 by a modify, and sold 2000 of 1000 from
+    `on_order_submitted`."""
+    how, side, did, alone = PAST_KANSO_WAYS[way]
+    document = hyp((DEMO,)).model_dump(mode="json")
+    document["costs"]["latency_ms"] = latency_ms
+    run = request(Hypothesis.model_validate(document), PAST_KANSO, how=how)
+
+    with pytest.raises(SizingError) as raised:
+        execute_book(block(), [member("a", run, 5.0)], [instrument()], [daily("DEMO")])
+
+    refusal = raised.value.refusal
+    assert (refusal.rule, refusal.asked) == (BOOK_ENTRY, side)
+    assert refusal.why.startswith(f"book member a: {did}")
+    assert "submit_entry(instrument_id, side) or submit_exit(instrument_id)" in refusal.why
+    if latency_ms == 0.0:
+        solo = execute(run, [instrument()], daily("DEMO")).run
+        sold = fsum(f.qty for f in solo.fills if f.side == "SELL")
+        assert (placed(solo, DEMO), sold) == alone
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_order_in_the_name_of_no_member_is_refused(latency_ms: float) -> None:
+    """An order a member builds in the name of a strategy no member runs goes to no member's
+    check and into no member's extraction, so the book refuses it as the engine hands it to
+    the bus. Measured on the round before this test, the book sent it and the venue filled it:
+    a buy of a million shares no number of the book's held."""
+    document = hyp((DEMO,)).model_dump(mode="json")
+    document["costs"]["latency_ms"] = latency_ms
+    run = request(Hypothesis.model_validate(document), PAST_KANSO, how=6.0)
+
+    with pytest.raises(SizingError) as raised:
+        execute_book(block(), [member("a", run, 5.0)], [instrument()], [daily("DEMO")])
+
+    refusal = raised.value.refusal
+    assert (refusal.rule, refusal.asked, refusal.instrument_id) == (BOOK_ENTRY, "BUY", DEMO)
+    assert refusal.why.startswith("an order in the name of Nobody-001, which is no member")
 
 
 OWN = b"""
@@ -1108,19 +1266,27 @@ class Strategy(KansoStrategy):
 """
 
 
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 @pytest.mark.parametrize("how", ["at-market", "at-a-price", "sizing-rule"])
-def test_an_exit_asked_again_as_the_first_is_submitted_counts_the_first(how: str) -> None:
+def test_an_exit_asked_again_as_the_first_is_submitted_counts_the_first(
+    how: str, latency_ms: float
+) -> None:
     """The engine runs a member's `on_order_submitted` inside the exit's own submission, and
     the exit asked again there finds the first working and sends nothing, so the member sells
-    what it holds and no more. Measured on the round before this test: the first was not yet
-    counted, the second was sized to the whole long and let through, and the member sold
-    twice what it held — 2000 of 1000 at market and at a price, 1994 of 997 under a sizing
-    rule."""
+    what it holds and no more, at no latency and at 20 ms; the second `submit_exit` is
+    kanso's own, and the book lets it be asked. Measured two rounds before this test: the
+    first was not yet counted, the second was sized to the whole long and let through, and
+    the member sold twice what it held — 2000 of 1000 at market and at a price, 1994 of 997
+    under a sizing rule."""
     if how == "sizing-rule":
         run = replace(sized((DEMO,), 10_000.0), strategy_source=AGAIN.replace(b", ENTRY", b""))
     else:
         source = AGAIN.replace(b"ENTRY", b"qty=1000.0")
         run = request(hyp((DEMO,)), source, priced=float(how == "at-a-price"))
+    document = run.hyp.model_dump(mode="json")
+    document["costs"]["latency_ms"] = latency_ms
+    subject = Hypothesis.model_validate(document)
+    run = replace(run, hyp=subject, venue_model=venue_model(subject))
 
     made = execute_book(block(), [member("a", run, 5.0)], [instrument()], [daily("DEMO")])
 

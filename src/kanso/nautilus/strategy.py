@@ -24,11 +24,16 @@ instant.
 
 **It records every order intent.** `(ts_event, instrument, side, qty, order_type, price?)`
 per submitted order, stamped with `data_time` rather than a wall clock, captured by
-overriding `submit_order` and `submit_order_list`. Every path that reaches the venue goes
-through one of the two — the cost-aware helpers below, an order the author built by hand,
-and the engine's own `close_position` / `close_all_positions`, which construct a market
-order and submit it through `submit_order`. An order that bypasses the helpers is still on
-the record.
+overriding `submit_order` and `submit_order_list`. Every call on the strategy that reaches
+the venue goes through one of the two — the cost-aware helpers below, an order the author
+built by hand, and the engine's own `close_position` / `close_all_positions`, which
+construct a market order and submit it through `submit_order`. An order that bypasses the
+helpers is still on the record. One that bypasses the overrides is not: the engine's own
+`submit_order` or `submit_order_list` called on its class, as `Strategy.submit_order(self,
+order)`, or through `super(KansoStrategy, self)`, records no intent and is asked nothing.
+`strategy_integrity` refuses a researched strategy that reaches a method this class
+overrides that way (`kanso.criteria.integrity`), and a book refuses the order itself before
+the engine routes it (below).
 
 **It sizes.** The cost-aware helpers `submit_entry` and `submit_exit` choose a quantity
 from the capital and the risk limits injected from the hypothesis, leaving room for the
@@ -38,11 +43,12 @@ limit, `max_notional_per_order` keyed by instrument, which is a per-order backst
 knows nothing of a position, a strategy or a book. An entry the author built is refused at
 `submit_order` when the book cannot fund it, and `cancel_order`, `cancel_orders` and
 `cancel_all_orders` are kanso's own so that an exit owed or a cancel held back is kept.
-`modify_order` is not: it is the engine's, and a modify that grows an entry's quantity, or
-moves a resting entry to a price at which it opens more, is held neither to the room nor to
-what the book funds — the room reads the order at its new size and price from its next read
-on. A sizing rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`);
-an unsized one may call it (`docs/backlog.md` row 123), except in a book, which refuses it.
+`modify_order` is not held to the room or to what the book funds. For a sleeve run alone
+kanso's `modify_order` hands the modify to the engine's own unchanged, so a modify that grows
+an entry's quantity, or moves a resting entry to a price at which it opens more, goes out as
+it is; the room reads the order at its new size and price from its next read on. A sizing
+rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`); an unsized
+sleeve alone may call it (`docs/backlog.md` row 123). In a book it is refused.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -76,11 +82,17 @@ member has handled the one that closes the instant the ledger calls `submit_entr
 each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
 sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). Its exits are its
 own, sized by `submit_exit` never past flat as ever. **A member sends orders only through
-`submit_entry` and `submit_exit`**, and may cancel: `submit_order`, `submit_order_list` and
-`modify_order` called by the sleeve, a leg an overridden `hedges()` returns and the engine's
-`close_position` are refused (`book_entry`), naming the member, whatever the order is. The
-order `_submitted` is sending for the two is let through as that very object, once, at its
-own check (`_check_booked`); an order the sleeve builds itself and sends from a handler the
+`submit_entry` and `submit_exit`**, and may cancel. Every other order it sends, and every
+modify, is refused (`book_entry`), naming the member, before the engine routes it, whatever
+the order is. The sleeve refuses at its own methods (`_check_booked`): `submit_order`,
+`submit_order_list` and `modify_order` called by it, a leg an overridden `hedges()` returns,
+and the engine's `close_position`, which sends through `submit_order`. The ledger refuses on
+the bus, as the engine hands it the order's `OrderInitialized` or the modify's
+`OrderPendingUpdate`, what never reaches the sleeve's methods: the engine's own, called on
+its class or through `super(KansoStrategy, self)` (`BookLedger.heard`, which asks
+`_check_booked_event`). The one order let through is the one `_submitted` is sending for the
+two: recognised as that very object at its check, and let through to the engine once, at its
+own `OrderInitialized`. An order the sleeve builds itself and sends from a handler the
 engine runs inside that submission — `on_order_submitted` — is refused like any other.
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
@@ -94,7 +106,11 @@ Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Ac
 are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`, `handle_trade_tick`,
 `handle_order_book_deltas`, `handle_data`, `submit_order`, `submit_order_list`,
 `modify_order`, `cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all
-take precedence when the engine calls them; `Trader` starts actors before strategies, so a
+take precedence when the engine calls them, and called on the engine's class they are the
+engine's own, past the subclass's; an order's `OrderInitialized`, every order's of a list,
+and a modify's `OrderPendingUpdate` are published on the bus before the engine routes the
+command, so a subscriber that raises sends nothing (`kanso.nautilus.facts` measures it at no
+latency and at 20 ms); `Trader` starts actors before strategies, so a
 modifier is registered before its host runs; `close_position` and `close_all_positions`
 route through `submit_order`; under the NETTING OMS the cache keeps one position per
 (instrument, strategy), which `cache.positions_open(instrument_id=…, strategy_id=…)`
@@ -164,7 +180,7 @@ from nautilus_trader.model.enums import (
     order_side_to_str,
     order_type_to_str,
 )
-from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.events import OrderFilled, OrderInitialized, OrderPendingUpdate
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
@@ -713,8 +729,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """The book this sleeve is a member of, when a runner put it in one
         (`kanso.nautilus.book.BookLedger`); `None` for a sleeve run alone."""
         self._sending: Any = None
-        """The order `_submitted` is sending, until its own check lets it through
-        (`_check_booked`)."""
+        """The order `_submitted` is sending, until the engine hands the bus its
+        `OrderInitialized` and a book lets it through, once (`_check_booked_event`)."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1766,34 +1782,78 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _check_booked(self, order: Any, call: str) -> None:
         """Refuse, in a book, an order this sleeve sends by anything but `submit_entry` and
-        `submit_exit`.
+        `submit_exit`, at the call of kanso's that it was sent by.
 
         A book hands each entry of an instant its share of one room in its own order, and an
         exit is the book's only through `submit_exit`, which sizes it never past flat. So a
         member's orders go out only through the two (`kanso.nautilus.book`): the one order let
-        through is the one `_submitted` is sending for them, recognised as that very object
-        and only once, at its own check. An order the member builds itself and sends from a
-        handler the engine runs inside that order's submission — `on_order_submitted` among
-        them — is refused like any other. kanso sends no list and modifies no order, so
-        `submit_order_list` and `modify_order` are refused whatever they hold, and so is a leg
-        an overridden `hedges()` returns. Cancelling is not refused: a cancel takes nothing
+        through is the one `_submitted` is sending for them, recognised as that very object,
+        and let through to the engine once, as the engine hands the bus its `OrderInitialized`
+        (`_check_booked_event`). kanso sends no list and modifies no order,
+        so `submit_order_list` and `modify_order` are refused whatever they hold, and so is a
+        leg an overridden `hedges()` returns. Cancelling is not refused: a cancel takes nothing
         past the room or past flat. A sleeve run alone is not asked.
         """
         ledger = self._book_ledger
         if ledger is None:
             return
         if call == "submit_order" and order is self._sending:
-            self._sending = None
             return
         if call == "submit_order" and self._hedging:
             call = "hedges()"
+        verb = "modifies an order" if call == "modify_order" else "sends an order"
+        self._refuse_booked(order.instrument_id, order.side, f"{call} {verb}")
+
+    def _check_booked_event(self, event: Any) -> None:
+        """Refuse, in a book, an order or a modify of this sleeve's that kanso is not sending,
+        before the engine routes it; the book asks it of every event of the sleeve's orders
+        (`BookLedger.heard`).
+
+        The engine's own methods can be reached past kanso's — called on the engine's class,
+        as `Strategy.submit_order(self, order)`, or through `super(KansoStrategy, self)` — and
+        then kanso's overrides never see the order. The engine still hands the bus the order's
+        `OrderInitialized` before it routes the order, for one order and for every order of a
+        list, and a modify's `OrderPendingUpdate` before it routes the modify, and the book
+        hears both there ahead of the sleeve's own handlers; a refusal raised then leaves the
+        order unsent and the order at the venue as it was (`kanso.nautilus.facts`, at no
+        latency and at 20 ms). So the one `OrderInitialized` let through is the one for the
+        order `_submitted` is sending, once, and every `OrderPendingUpdate` is refused, since
+        kanso modifies no order. An order the member builds itself and sends from a handler
+        the engine runs inside one's submission — `on_order_submitted` among them — is refused
+        like any other, since its own `OrderInitialized` comes after the one let through. The
+        engine sends a modify of an emulated order with no `OrderPendingUpdate`, and a book
+        holds no emulated order: kanso sends none, and a member's own is refused as it is
+        initialised.
+        """
+        if isinstance(event, OrderInitialized):
+            sending = self._sending
+            if sending is not None and event.client_order_id == sending.client_order_id:
+                self._sending = None
+                return
+            self._refuse_booked(
+                event.instrument_id,
+                event.side,
+                "the engine's own submit_order or submit_order_list, reached past "
+                "KansoStrategy's, sends an order",
+            )
+        if isinstance(event, OrderPendingUpdate):
+            order = self.cache.order(event.client_order_id)
+            self._refuse_booked(
+                event.instrument_id,
+                order.side,
+                "the engine's own modify_order, reached past KansoStrategy's, modifies an order",
+            )
+
+    def _refuse_booked(self, instrument_id: InstrumentId, side: OrderSide, did: str) -> NoReturn:
+        """The refusal of an order a book member sent or moved past `submit_entry` and
+        `submit_exit`, naming the member and what it did."""
         self._refuse(
             BOOK_ENTRY,
-            order.instrument_id.value,
-            order_side_to_str(order.side),
-            why=f"{ledger.member_of(self)}: {call} sends an order past the book, where a "
-            "member's orders go out only through submit_entry, which the book allots at the "
-            "instant's end, and submit_exit, which sizes the exit never past flat; call "
+            instrument_id.value,
+            order_side_to_str(side),
+            why=f"{self._book_ledger.member_of(self)}: {did} past the book, where a member's "
+            "orders go out only through submit_entry, which the book allots at the instant's "
+            "end, and submit_exit, which sizes the exit never past flat; call "
             "submit_entry(instrument_id, side) or submit_exit(instrument_id), and "
             "cancel_order to take an order back",
         )
@@ -1807,10 +1867,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """The engine's own `modify_order`, for a sleeve run alone: a modify is held neither to
-        the room nor to what the book funds (`docs/backlog.md` row 123). In a book it is
-        refused (`_check_booked`), since it would move an order the book or `submit_exit`
-        sized past what either left it."""
+        """Hand the engine's own `modify_order` the modify unchanged, for a sleeve run alone: it
+        is held neither to the room nor to what the book funds (`docs/backlog.md` row 123).
+        In a book it is refused (`_check_booked`), since it would move an order the book or
+        `submit_exit` sized past what either left it."""
         self._check_booked(order, "modify_order")
         super().modify_order(order, quantity, price, trigger_price, client_id, params)
 
@@ -2750,7 +2810,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _submitted(self, order: object) -> object | None:
         """Send an order kanso sized — an entry `submit_entry` sized, an exit `submit_exit`
         did — and hand it back, or `None` when nothing went out. It is the order kanso is
-        sending (`_sending`), the one a book lets through, once (`_check_booked`)."""
+        sending (`_sending`), the one a book lets through, once (`_check_booked`,
+        `_check_booked_event`); `strategy_integrity` denies it to a researched strategy,
+        since it sends whatever it is handed as kanso's own."""
         placed = len(self._intents)
         built, self._built = self._built, True
         self._sending = order

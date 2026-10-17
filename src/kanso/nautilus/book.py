@@ -29,14 +29,30 @@ book's order:
 the book's to place, as above. Its exits are not collected: `submit_exit` sizes each never
 past flat, counting the member's own orders still working on the closing side, and sends it in
 the handler, before any entry of the instant is placed, and one in flight counts as gone. A
-member may cancel its orders. Anything else it sends is refused (`book_entry`), naming the
-member, whatever the order is: `submit_order`, `submit_order_list`, `modify_order`, a leg an
-overridden `hedges()` returns, the engine's own `close_position`. The book hands room only to
-entries it sizes, and an order kanso did not size can take a position past flat or past the
-room. kanso's own orders are let through each as the very order kanso is sending, and once
-(`KansoStrategy._check_booked`), so an order the member builds itself and sends from a
-handler the engine runs inside one's submission — `on_order_submitted` — is refused like any
-other. Resting orders the venue fills at the instant are open before the entries are placed.
+member may cancel its orders. Every other order it sends, and every modify, is refused
+(`book_entry`), naming the member, before the engine routes it, whatever the order is and
+whichever handler sends it. The book hands room only to entries it sizes, and an order kanso
+did not size can take a position past flat or past the room. It is refused at two places:
+
+* at kanso's own methods (`KansoStrategy._check_booked`): `submit_order`,
+  `submit_order_list` and `modify_order` called by the member, a leg an overridden `hedges()`
+  returns, and the engine's `close_position`, `close_all_positions` and `market_exit`, which
+  send through `submit_order`;
+* on the bus (`BookLedger.heard`), for what never reaches kanso's methods: the engine's own
+  `submit_order`, `submit_order_list` and `modify_order`, called on its class or through
+  `super(KansoStrategy, self)`. The engine hands the bus an order's `OrderInitialized`, and a
+  modify's `OrderPendingUpdate`, before it routes either. The book hears every strategy's
+  order events there, ahead of the members' own handlers, and lets an `OrderInitialized`
+  through only for the order kanso is sending for that member, once. It refuses every
+  `OrderPendingUpdate`, since kanso modifies no order. It also refuses an order in the name
+  of a strategy that is no member, which no member's extraction would hold.
+
+So an order the member builds itself and sends from a handler the engine runs inside the
+submission of kanso's own — `on_order_submitted` — is refused like any other: its
+`OrderInitialized` comes after the one let through. kanso's private sends, which send what
+they are handed as kanso's own, are denied to a researched strategy by the integrity scan
+(`kanso.criteria.integrity`), as is reaching a method kanso overrides past it. Resting orders
+the venue fills at the instant are open before the entries are placed.
 
 **Each entry is placed in that order, then cut.** It is sized by its member's own rule at
 that moment — its own room under its own limits, as a sleeve alone is — and then cut to the
@@ -75,8 +91,11 @@ taking one touch in one instant would each be filled the whole of it; the budget
 stops that for the book's takers. A resting order is still credited as the venue credits it.
 
 Engine facts this module relies on (nautilus_trader 1.231.0, `kanso.nautilus.facts`): a
-topic's handlers at one priority run in subscription order; under the NETTING OMS the cache
-keeps one position per (instrument, strategy); `Cache.quote_tick` answers the latest quote
+topic's handlers at one priority run in subscription order, a higher priority first; an
+order's `OrderInitialized`, every order's of a list, and a modify's `OrderPendingUpdate` are
+published on `events.order.<strategy id>` before the engine routes the command, so a
+subscriber that raises sends nothing, at no latency and at 20 ms; under the NETTING OMS the
+cache keeps one position per (instrument, strategy); `Cache.quote_tick` answers the latest quote
 the data engine has handed on, the one every member's handlers read; the backtest engine's
 simulated exchange queues an order sent from a handler, its message queue on, and matches it
 when the engine settles the venue after the point (`SimulatedExchange.send` in
@@ -99,7 +118,7 @@ from kanso.criteria import CardRun
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, splits
 from kanso.nautilus.backtest import RunRequest
-from kanso.nautilus.sizing import SizingError
+from kanso.nautilus.sizing import BOOK_ENTRY, Refusal, SizingError
 from kanso.nautilus.strategy import _id_of, _order_price
 from kanso.schemas import NetPerTrade, SharedBook, VenueModel
 
@@ -283,6 +302,7 @@ class BookLedger:
         self.book = book
         self._members = tuple(strategy for _, strategy in members)
         self._ids = {strategy.id: member_id for member_id, strategy in members}
+        self._by_strategy = {strategy.id: strategy for _, strategy in members}
         self._rank = {strategy.id: index for index, (_, strategy) in enumerate(members)}
         self._pending: list[_Pending] = []
         self._seq = 0
@@ -349,6 +369,39 @@ class BookLedger:
     def member_of(self, strategy: Any) -> str:
         """The book's id of the member a strategy runs, for a refusal to name it."""
         return f"book member {self._ids[strategy.id]}"
+
+    def heard(self, event: Any) -> None:
+        """Hear an order event on the book's engine before the engine routes the order or the
+        modify it is about, and refuse what kanso did not send.
+
+        Subscribed to every strategy's order events (`events.order.*`) above the members' own
+        handlers, so it is asked first. An event of a member's order is the member's to check
+        (`KansoStrategy._check_booked_event`): its `OrderInitialized` passes only for the order
+        kanso is sending for it, and its `OrderPendingUpdate` never. An order initialised or
+        modified in the name of a strategy that is no member of the book — one a member built
+        with another strategy id — is refused: no member's extraction would hold its fills.
+        """
+        from nautilus_trader.model.enums import order_side_to_str
+        from nautilus_trader.model.events import OrderInitialized, OrderPendingUpdate
+
+        member = self._by_strategy.get(event.strategy_id)
+        if member is not None:
+            member._check_booked_event(event)
+            return
+        if isinstance(event, OrderInitialized | OrderPendingUpdate):
+            side = getattr(event, "side", None)
+            raise SizingError(
+                Refusal(
+                    rule=BOOK_ENTRY,
+                    ts_event=int(event.ts_init),
+                    instrument_id=event.instrument_id.value,
+                    asked="" if side is None else order_side_to_str(side),
+                    held={},
+                    why=f"an order in the name of {event.strategy_id}, which is no member of "
+                    "this book, was handed to the engine; a member's orders go out only "
+                    "through submit_entry and submit_exit, in its own name",
+                )
+            )
 
     def marked(self, member: Any, marker: Any) -> None:
         """Note that a member handled a marker; once every member has handled the one that
@@ -853,6 +906,7 @@ def execute_book(
         listed = {member.id: strategy for member, strategy in zip(order, strategies, strict=True)}
         for member in members:
             engine.add_strategy(listed[member.id])
+        engine.kernel.msgbus.subscribe(topic="events.order.*", handler=ledger.heard, priority=1)
         opens, closes = measured.delivered
         backtest._load_stream(engine, points)
         engine.run(start=opens, end=closes - 1, streaming=True)

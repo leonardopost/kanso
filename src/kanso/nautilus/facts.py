@@ -593,6 +593,24 @@ handed room first: every member's entries of an instant are collected and handed
 the book's own order once every member has handled the marker that closes the instant
 (`kanso.nautilus.book`).
 
+**An order is heard on the bus before it is routed, and so is a modify.** `Strategy
+.submit_order` publishes the order's `OrderInitialized` on `events.order.<the order's
+strategy id>` before it adds the order to the cache or routes the command to the emulator or
+the risk engine; `submit_order_list` publishes each order's before it routes the list; and
+`modify_order` publishes the `OrderPendingUpdate` it applies to an order not held locally
+before it routes the modify (`_create_modify_order`); `MessageBus.publish_c` calls each
+subscriber in turn and lets an exception out (`trading/strategy.pyx`,
+`common/component.pyx`). So a subscriber to `events.order.*` that raises leaves the order
+unsent and the order at the venue as it was, whichever way the engine's methods were reached:
+called on the engine's class, past a subclass's own override, too. Measured at no latency and
+at 20 ms: a strategy resting a sale of 10 at 10.50 on a market of 9.99/10.01, then sending a
+buy at market by `Strategy.submit_order(self, order)`, a list of two by
+`Strategy.submit_order_list`, a modify of its rest to 20 at 9.00, and a buy in the name of a
+strategy the engine does not run, each refused by such a subscriber and caught, kept its rest
+of 10 at 10.50 unfilled over three more minutes and held no other order; the list was refused
+at its first order. A book refuses that way every order a member did not send through kanso
+(`kanso.nautilus.book.BookLedger.heard`).
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -747,6 +765,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from itertools import count
 from typing import Any
@@ -1924,6 +1943,145 @@ def _check_handlers_at_one_priority_run_in_subscription_order() -> tuple[bool, s
         "its first quote and B, added second, subscribed at its start; a bus called "
         f"{called} for handlers subscribed second and third at priority zero and first at "
         "priority one. Handlers of one priority run in subscription order, higher first"
+    )
+
+
+def _probe_refused_on_the_bus(
+    latency_ns: int,
+) -> tuple[list[tuple[str, bool]], list[tuple[float, float, str, float]]]:
+    """A strategy rests a sale of 10 at 10.50 on its first quote of 9.99/10.01; on its second,
+    with a subscriber to `events.order.*` above its own handlers raising on every
+    `OrderInitialized` and `OrderPendingUpdate`, it sends by the engine's methods called on
+    the engine's class a buy of 10 at market, a list of two such buys, a modify of its rest to
+    20 at 9.00, and a buy of 10 in the name of a strategy the engine does not run, catching
+    each refusal; three more quotes follow. Returns each refused event's type with whether
+    the cache held its order then, and every order the cache holds at the end as
+    (quantity, price, status, filled)."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.events import OrderInitialized, OrderPendingUpdate
+    from nautilus_trader.model.identifiers import ClientOrderId, StrategyId, Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.model.orders import MarketOrder, OrderList
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    refused: list[tuple[str, bool]] = []
+
+    class RefusedError(Exception):
+        """What the subscriber raises."""
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.rest: Any = None
+            self.refusing = False
+
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+
+        def submit_order(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("the engine's own method was asked for")
+
+        def buy(self) -> Any:
+            return self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(10))
+
+        def on_quote_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.rest = self.order_factory.limit(
+                    equity.id, OrderSide.SELL, Quantity.from_int(10), Price(10.5, 2)
+                )
+                Strategy.submit_order(self, self.rest)
+            elif self.seen == 2:
+                listed = OrderList(
+                    self.order_factory.generate_order_list_id(), [self.buy(), self.buy()]
+                )
+                stranger = MarketOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=StrategyId("Nobody-001"),
+                    instrument_id=equity.id,
+                    client_order_id=ClientOrderId("O-nobody-1"),
+                    order_side=OrderSide.BUY,
+                    quantity=Quantity.from_int(10),
+                    init_id=UUID4(),
+                    ts_init=0,
+                )
+                sends: tuple[Callable[[], object], ...] = (
+                    lambda: Strategy.submit_order(self, self.buy()),
+                    lambda: Strategy.submit_order_list(self, listed),
+                    lambda: Strategy.modify_order(
+                        self, self.rest, quantity=Quantity.from_int(20), price=Price(9.0, 2)
+                    ),
+                    lambda: Strategy.submit_order(self, stranger),
+                )
+                self.refusing = True
+                for send in sends:
+                    with suppress(RefusedError):
+                        send()
+                self.refusing = False
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote", *(9.99, 10.01) * 4))
+        probe = Probe()
+        engine.add_strategy(probe)
+
+        def hear(event: Any) -> None:
+            if probe.refusing and isinstance(event, OrderInitialized | OrderPendingUpdate):
+                refused.append(
+                    (type(event).__name__, engine.cache.order_exists(event.client_order_id))
+                )
+                raise RefusedError
+
+        engine.kernel.msgbus.subscribe(topic="events.order.*", handler=hear, priority=1)
+        engine.run()
+        held = [
+            (
+                float(order.quantity),
+                float(order.price),
+                order_status_to_str(order.status),
+                float(order.filled_qty),
+            )
+            for order in engine.cache.orders()
+        ]
+        return refused, held
+    finally:
+        engine.dispose()
+
+
+def _check_an_order_and_a_modify_are_heard_on_the_bus_before_they_are_routed() -> tuple[bool, str]:
+    """What a book refuses an order a member sent past kanso by: the bus hears it first."""
+    seen = {latency: _probe_refused_on_the_bus(latency) for latency in (0, 20 * _MS)}
+    refused = [
+        ("OrderInitialized", False),
+        ("OrderInitialized", False),
+        ("OrderPendingUpdate", True),
+        ("OrderInitialized", False),
+    ]
+    holds = all(
+        found == refused and len(held) == 1 and held[0][:2] == (10.0, 10.5) and held[0][3] == 0.0
+        for found, held in seen.values()
+    )
+    return holds, (
+        f"refused on the bus, at no latency and at 20 ms: {seen}. Each event was heard before "
+        "the engine routed what it was about: the buys were never in the cache, the list "
+        "stopped at its first order, and the rest of 10 at 10.50 stayed unfilled at that size "
+        "over three more minutes"
     )
 
 
@@ -5588,6 +5746,12 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a topic's handlers at one priority are called in the order they subscribed, higher "
         "priorities first, whatever order their strategies were added in",
         _check_handlers_at_one_priority_run_in_subscription_order,
+    ),
+    (
+        "an order's OrderInitialized, every order's of a list, and a modify's "
+        "OrderPendingUpdate are published on the bus before the engine routes the command, "
+        "so a subscriber that raises sends nothing, at no latency and at 20 ms",
+        _check_an_order_and_a_modify_are_heard_on_the_bus_before_they_are_routed,
     ),
     (
         "two market orders sent into one name at one instant on a level-one venue are each "

@@ -404,14 +404,20 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
-`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
-a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
+`modify_order` is neither cut nor refused for a sleeve run alone: kanso hands the modify to
+the engine's own unchanged, and an entry grown or re-priced by it is held to no ceiling until
+kanso holds it to one (`docs/backlog.md` row 123).
 **In a book a member sends orders only through `submit_entry` and `submit_exit`.** It may
-cancel its orders; anything else it sends is refused as `book_entry`, naming the member,
-whatever the order is and whichever handler sends it, `on_order_submitted` included:
-`submit_order`, `submit_order_list` and `modify_order` called by the sleeve, a leg an
-overridden `hedges()` returns, the engine's `close_position` (`docs/concepts.md`, *Stages*).
-A sleeve run alone is not held to it.
+cancel its orders; every other order it sends, and every modify, is refused as `book_entry`,
+naming the member, before the engine routes it, whatever the order is and whichever handler
+sends it, `on_order_submitted` included: `submit_order`, `submit_order_list` and
+`modify_order` called by the sleeve, a leg an overridden `hedges()` returns, the engine's
+`close_position`, and the engine's own `submit_order`, `submit_order_list` and
+`modify_order` called past kanso's — on the engine's class, or through
+`super(KansoStrategy, self)` — which the book refuses as the engine hands it the order
+(`docs/concepts.md`, *Stages*). A sleeve run alone is not held to it at run time
+(`docs/backlog.md` row 209); `strategy_integrity` refuses a researched strategy that calls
+kanso's own sends or reaches a method kanso overrides past it, sized or not.
 **A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
 owed exit and the classification of an order as an entry or an exit read the position the
 engine keeps for the sleeve's own strategy in the name, not the account's net position, which

@@ -2064,19 +2064,29 @@ members asked for entries, whether or not any was placed, not over every instant
 window. **A member sends orders only through `submit_entry` and `submit_exit`.** Its entries
 are the book's to place, as above; its exits are its own, sized by `submit_exit` never past
 flat, counting its orders still working on that side (`docs/workspace.md`), and sent in the
-handler. It may cancel its orders. Anything else it sends is refused (`book_entry`), naming the
-member, whatever the order is — `submit_order`, `submit_order_list` and `modify_order` called
-by the member, a leg an overridden `hedges()` returns, the engine's `close_position` — since
-the book hands room only to entries it sizes, and an order kanso did not size can take a
-position past flat or past the room. kanso's own orders are let through each as the very
-order kanso is sending, and once, so an order a member builds itself and sends from a handler
-the engine runs inside one's submission (`on_order_submitted`) is refused like any other. An
-exit at market that cancels the member's exit resting on its side takes that one out of the
-book's gross at once with no latency stated, since the cancel lands before anything further
-is matched. The session clock is New York's for every member, whatever its venue. A member
-is run at the book's capital and window; one with an attached construct, a `book` policy or
-a level-two book is refused. No stage holds a book yet: `portfolio.yaml` names no shared
-block and a stage node runs no ledger, which is the next step (`docs/backlog.md`).
+handler. It may cancel its orders. Every other order it sends, and every modify, is refused
+(`book_entry`), naming the member, before the engine routes it, whatever the order is —
+since the book hands room only to entries it sizes, and an order kanso did not size can take
+a position past flat or past the room. kanso's own methods refuse `submit_order`,
+`submit_order_list` and `modify_order` called by the member, a leg an overridden `hedges()`
+returns, and the engine's `close_position`, `close_all_positions` and `market_exit`, which
+send through `submit_order`. What never reaches kanso's methods — the engine's own
+`submit_order`, `submit_order_list` and `modify_order` called on its class, as
+`Strategy.submit_order(self, order)`, or through `super(KansoStrategy, self)` — the book
+refuses on the bus: the engine hands it an order's `OrderInitialized`, and a modify's
+`OrderPendingUpdate`, before it routes either (`kanso doctor` checks it at no latency and at
+20 ms), and the book lets through only kanso's own order, each once, and no modify at all.
+It refuses an order in the name of a strategy that is no member as well. So an order a member
+builds itself and sends from a handler the engine runs inside the submission of kanso's own
+(`on_order_submitted`) is refused like any other. kanso's private sends, which send whatever
+they are handed as kanso's own, are denied to a researched strategy by `strategy_integrity`
+(*The embargo*). An exit at market that cancels the member's exit resting on its side takes
+that one out of the book's gross at once with no latency stated, since the cancel lands
+before anything further is matched. The session clock is New York's for every member,
+whatever its venue. A member is run at the book's capital and window; one with an attached
+construct, a `book` policy or a level-two book is refused. No stage holds a book yet:
+`portfolio.yaml` names no shared block and a stage node runs no ledger, which is the next
+step (`docs/backlog.md`).
 
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the
