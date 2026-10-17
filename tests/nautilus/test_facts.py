@@ -89,6 +89,8 @@ BINDINGS = {
     "instance of its own",
     "a catalog query not handed its files lists them through the catalog's own "
     "get_file_list_from_data_cls, once a query",
+    "a catalog query handed a file that has gone raises FileNotFoundError naming it, and "
+    "a query of bars whose listed directory holds no file raises RuntimeError",
     "an order's events grow only at its end, and its strategy is handed each one as the "
     "order's last when the order takes it",
     "a level-two venue refuses to run a name it holds data and no book data for, and "

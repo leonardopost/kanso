@@ -99,6 +99,13 @@ handing back the instance it made first, while `copy.copy` of it is an instance 
 So kanso reads a window through a copy whose listing answers from one glob a class, and no
 other reader in the process sees that listing (`kanso.nautilus.backtest._catalog`).
 
+**A query of a listed file that has gone raises.** `query(..., files=...)` handed a path
+whose file has gone raises `FileNotFoundError` naming it. A query of bars is not handed its
+files: it reads the directory of each listed file that meets its span, so it reads whatever
+that directory holds when it runs, and raises `RuntimeError` when the directory holds no
+file. So a window whose listing a replace has overtaken learns it at the read that fails,
+and lists the class again (`kanso.nautilus.backtest._read_listed`).
+
 Availability timestamps
 -----------------------
 Every `Data` carries two nanosecond timestamps, `ts_event` (the economic
@@ -3691,6 +3698,39 @@ def _check_a_query_lists_its_files_through_the_catalog_it_asks() -> tuple[bool, 
     )
 
 
+def _check_a_query_of_a_listed_file_gone_raises() -> tuple[bool, str]:
+    """Write one name's print and one bar, list each class, remove every file, and query the
+    print handed its listed file and the bar through a copy of the catalog answering the
+    listing taken before."""
+    import copy
+    from pathlib import Path
+
+    from nautilus_trader.model.data import Bar, TradeTick
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    bar: Any = _sample_bar()
+    with tempfile.TemporaryDirectory() as directory:
+        catalog: Any = copy.copy(ParquetDataCatalog(directory))
+        catalog.write_data([_sale("AAPL.XNAS", 7)])
+        catalog.write_data([bar])
+        prints = catalog.get_file_list_from_data_cls(TradeTick)
+        bars = catalog.get_file_list_from_data_cls(Bar)
+        catalog.get_file_list_from_data_cls = lambda data_cls: list(bars)
+        for path in (*prints, *bars):
+            Path(path).unlink()
+        gone = _raises(lambda: catalog.query(TradeTick, start=0, end=10_000, files=prints))
+        empty = _raises(
+            lambda: catalog.query(Bar, identifiers=[str(bar.bar_type)], start=0, end=10_000)
+        )
+    named = str(gone).startswith("FileNotFoundError: ") and prints[0] in str(gone)
+    holds = named and str(empty).startswith("RuntimeError: ")
+    return holds, (
+        f"a query handed a print's file that had gone raised {str(gone).split(':')[0]}"
+        f"{' naming it' if named else ''}, and a query of bars whose one listed file had "
+        f"gone raised {str(empty).split(':')[0]}"
+    )
+
+
 def _check_delete_with_no_identifier_removes_a_series_of_no_instrument() -> tuple[bool, str]:
     """Write a point of a custom type of no instrument, and two names' prints, ask the
     engine to remove each class over every instant without naming an identifier, and see
@@ -5078,6 +5118,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "a catalog query not handed its files lists them through the catalog's own "
         "get_file_list_from_data_cls, once a query",
         _check_a_query_lists_its_files_through_the_catalog_it_asks,
+    ),
+    (
+        "a catalog query handed a file that has gone raises FileNotFoundError naming it, and "
+        "a query of bars whose listed directory holds no file raises RuntimeError",
+        _check_a_query_of_a_listed_file_gone_raises,
     ),
     (
         "delete_data_range with no identifier removes the files of a series of no instrument",
