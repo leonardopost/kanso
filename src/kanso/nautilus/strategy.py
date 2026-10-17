@@ -42,7 +42,7 @@ knows nothing of a position, a strategy or a book. An entry the author built is 
 moves a resting entry to a price at which it opens more, is held neither to the room nor to
 what the book funds — the room reads the order at its new size and price from its next read
 on. A sizing rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`);
-an unsized one may call it (`docs/backlog.md` row 123).
+an unsized one may call it (`docs/backlog.md` row 123), except in a book, which refuses it.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -74,18 +74,14 @@ trade the same name each exit what they hold and nothing of the other's.
 and returns `None`, the sleeve tells the ledger of every marker it handles, and once every
 member has handled the one that closes the instant the ledger calls `submit_entry` again for
 each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
-sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). The order that
-placement builds is the one order the sleeve sends unchecked, and only once. Every other is
-checked at `submit_order` — one the sleeve sends from a handler the engine calls while the
-book's order is being submitted among them — and each order of a list in turn at
-`submit_order_list`: it is an exit only if it is on the closing side of the sleeve's own
-position and closes no more than the position holds with the sleeve's own orders still working
-on that side (`_working`, the child of an exit sent one-triggers-other among them) and the
-list's earlier orders on it — a one-cancels-other pair among them counted once, at the larger
-of the two, since the venue never fills both (`kanso.nautilus.facts`). Anything else is an
-entry built by hand, and refused (`book_entry`). So a stop and a take-profit each for the
-whole position, sent apart or in a list unlinked, are an exit and an entry, and linked
-one-cancels-other they are one exit; exits are the sleeve's as ever.
+sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). Its exits are its
+own, sized by `submit_exit` never past flat as ever. **A member sends orders only through
+`submit_entry` and `submit_exit`**, and may cancel: `submit_order`, `submit_order_list` and
+`modify_order` called by the sleeve, a leg an overridden `hedges()` returns and the engine's
+`close_position` are refused (`book_entry`), naming the member, whatever the order is. The
+order `_submitted` is sending for the two is let through as that very object, once, at its
+own check (`_check_booked`); an order the sleeve builds itself and sends from a handler the
+engine runs inside that submission — `on_order_submitted` — is refused like any other.
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
@@ -97,8 +93,8 @@ author is handed every change, as the venue is.
 Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor` methods
 are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`, `handle_trade_tick`,
 `handle_order_book_deltas`, `handle_data`, `submit_order`, `submit_order_list`,
-`cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all take
-precedence when the engine calls them; `Trader` starts actors before strategies, so a
+`modify_order`, `cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all
+take precedence when the engine calls them; `Trader` starts actors before strategies, so a
 modifier is registered before its host runs; `close_position` and `close_all_positions`
 route through `submit_order`; under the NETTING OMS the cache keeps one position per
 (instrument, strategy), which `cache.positions_open(instrument_id=…, strategy_id=…)`
@@ -159,7 +155,6 @@ from nautilus_trader.model.enums import (
     BarAggregation,
     BookAction,
     BookType,
-    ContingencyType,
     LiquiditySide,
     OrderSide,
     OrderStatus,
@@ -469,47 +464,6 @@ def _leaves(orders: Sequence[Any]) -> Decimal:
     return sum((order.leaves_qty.as_decimal() for order in orders), Decimal(0))
 
 
-def _one_cancels_other(orders: Sequence[Any]) -> list[list[Any]]:
-    """A set of orders in groups, each of orders every two of which are one-cancels-other
-    siblings — each `OCO`, and each naming the other — and every other order alone.
-
-    In nautilus_trader 1.231.0 a fill of an `OCO` order cancels, before anything further is
-    matched, every order it names that is not closed, whether the venue or the order
-    emulator holds it, so of one group no two fill and the group can fill no more than its
-    largest leaves. An `OUO` pair is not a group: the venue fills both of one sent marketable
-    (`kanso.nautilus.facts` measures both)."""
-    groups: list[list[Any]] = []
-    for order in orders:
-        for group in groups:
-            if all(_cancel_each_other(order, other) for other in group):
-                group.append(order)
-                break
-        else:
-            groups.append([order])
-    return groups
-
-
-def _cancel_each_other(one: Any, other: Any) -> bool:
-    return (
-        one.contingency_type == ContingencyType.OCO
-        and other.contingency_type == ContingencyType.OCO
-        and other.client_order_id in (one.linked_order_ids or ())
-        and one.client_order_id in (other.linked_order_ids or ())
-    )
-
-
-def _can_fill(orders: Sequence[Any]) -> Decimal:
-    """What a set of orders can still fill between them, a group of one-cancels-other
-    siblings (`_one_cancels_other`) at the most any one of it leaves."""
-    return sum(
-        (
-            max(order.leaves_qty.as_decimal() for order in group)
-            for group in _one_cancels_other(orders)
-        ),
-        Decimal(0),
-    )
-
-
 _SETTLED = frozenset((OrderStatus.ACCEPTED, OrderStatus.TRIGGERED, OrderStatus.PARTIALLY_FILLED))
 """The statuses of an order the venue holds open with nothing of the sleeve's to answer."""
 
@@ -758,6 +712,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._book_ledger: Any = None
         """The book this sleeve is a member of, when a runner put it in one
         (`kanso.nautilus.book.BookLedger`); `None` for a sleeve run alone."""
+        self._sending: Any = None
+        """The order `_submitted` is sending, until its own check lets it through
+        (`_check_booked`)."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1689,9 +1646,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         if self._warming():
             return
+        self._check_booked(order, "hedges()" if self._hedging else "submit_order")
         self._check_hand_built(order)
         kind = self.classify(order)
-        self._check_booked((order,))
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
             self._check_funded((order,))
         ctx = self._context_for(order)
@@ -1710,14 +1667,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """As `submit_order`, classifying and filtering the list by its first order; in a book
-        every order of it is checked, in turn (`_check_booked`)."""
+        """As `submit_order`, classifying and filtering the list by its first order. In a book
+        it is refused (`_check_booked`): kanso sends no list."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
+        self._check_booked(orders[0], "submit_order_list")
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
-        self._check_booked(orders)
         if not (self.sized or self._built or self._sizing_call):
             self._check_funded(orders)
         ctx = self._context_for(orders[0])
@@ -1807,60 +1764,53 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 "submit_entry(instrument_id, side) or submit_exit(instrument_id)",
             )
 
-    def _check_booked(self, orders: Sequence[Any]) -> None:
-        """Refuse an entry a book member placed by anything but `submit_entry`, checking each
-        order it sends — every order of a list, in turn.
+    def _check_booked(self, order: Any, call: str) -> None:
+        """Refuse, in a book, an order this sleeve sends by anything but `submit_entry` and
+        `submit_exit`.
 
-        A book hands each entry of an instant its share of one room in its own order, and it
-        can only do that for an entry it sizes: kanso does not rebuild an order it did not
-        build, so in a book an entry built by hand is refused, as a sizing rule refuses one.
-        The order the book's placement of an entry built, through this sleeve's sizing, is
-        not asked, and only once (`BookLedger.placing`): the engine runs the sleeve's own
-        handlers — `on_order_submitted` among them — inside that order's submission, and an
-        order sent from one of them is asked like any other.
-
-        Any other order is an exit only if it closes no more than this sleeve's own position
-        holds once every order of its still working on that side, and every order before it
-        in its list on that side, has filled (`_closes_within`) — the rule `submit_exit`
-        sizes by, but for a one-cancels-other pair, which counts once (`_can_fill`). Anything
-        else is an entry, and refused. `classify` reads the filled position alone and a list
-        is classified by its first order, so two sells of a whole long, in one handler or in
-        one list, would each read as an exit, as would a list of a sell and a buy; together
-        they would open a position no room was handed for.
+        A book hands each entry of an instant its share of one room in its own order, and an
+        exit is the book's only through `submit_exit`, which sizes it never past flat. So a
+        member's orders go out only through the two (`kanso.nautilus.book`): the one order let
+        through is the one `_submitted` is sending for them, recognised as that very object
+        and only once, at its own check. An order the member builds itself and sends from a
+        handler the engine runs inside that order's submission — `on_order_submitted` among
+        them — is refused like any other. kanso sends no list and modifies no order, so
+        `submit_order_list` and `modify_order` are refused whatever they hold, and so is a leg
+        an overridden `hedges()` returns. Cancelling is not refused: a cancel takes nothing
+        past the room or past flat. A sleeve run alone is not asked.
         """
         ledger = self._book_ledger
-        if ledger is None or self._hedging:
+        if ledger is None:
             return
-        for index, order in enumerate(orders):
-            if ledger.placing(self, order) or self._closes_within(order, orders[:index]):
-                continue
-            self._refuse(
-                BOOK_ENTRY,
-                order.instrument_id.value,
-                order_side_to_str(order.side),
-                why=f"{ledger.member_of(self)}: in a book every entry is handed its room by the "
-                "book, and an order that does not close this sleeve's own position, or that "
-                "with its working orders on that side and the orders before it in its list "
-                "would take the position past flat, is an entry; call "
-                "submit_entry(instrument_id, side), which the book allots at the instant's "
-                "end, or submit_exit(instrument_id)",
-            )
+        if call == "submit_order" and order is self._sending:
+            self._sending = None
+            return
+        self._refuse(
+            BOOK_ENTRY,
+            order.instrument_id.value,
+            order_side_to_str(order.side),
+            why=f"{ledger.member_of(self)}: {call} sends an order past the book, where a "
+            "member's orders go out only through submit_entry, which the book allots at the "
+            "instant's end, and submit_exit, which sizes the exit never past flat; call "
+            "submit_entry(instrument_id, side) or submit_exit(instrument_id), and "
+            "cancel_order to take an order back",
+        )
 
-    def _closes_within(self, order: Any, earlier: Sequence[Any]) -> bool:
-        """Whether an order is on the closing side of this sleeve's own position and closes
-        no more than it holds with every order of this sleeve's still working on that side
-        (`_working`) and the orders before it in its list on that side, a one-cancels-other
-        pair among them counted once (`_can_fill`)."""
-        net = self._own_position(order.instrument_id)
-        if net == 0 or (order.side == OrderSide.SELL) != (net > 0):
-            return False
-        listed = [
-            sent
-            for sent in earlier
-            if sent.instrument_id == order.instrument_id and sent.side == order.side
-        ]
-        working = self._working(order.instrument_id.value, order.side, clips=True)
-        return bool(_can_fill([*working, *listed, order]) <= abs(net))
+    def modify_order(
+        self,
+        order: Any,
+        quantity: Quantity | None = None,
+        price: Price | None = None,
+        trigger_price: Price | None = None,
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """The engine's own `modify_order`, for a sleeve run alone: a modify is held neither to
+        the room nor to what the book funds (`docs/backlog.md` row 123). In a book it is
+        refused (`_check_booked`), since it would move an order the book or `submit_exit`
+        sized past what either left it."""
+        self._check_booked(order, "modify_order")
+        super().modify_order(order, quantity, price, trigger_price, client_id, params)
 
     def _hedge_order(self, leg: Hedge) -> object | None:
         instrument_id = InstrumentId.from_str(leg.instrument)
@@ -2127,12 +2077,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._book_ledger.cut(self, instrument, side, 0.0, 0.0, None)
 
     def _booked(self, order: object) -> object | None:
-        """Submit an entry this sleeve sized. In a book it is the one order the book lets
-        through unasked (`BookLedger.placing`), and the book is told of it once it reached
+        """Submit an entry this sleeve sized, and in a book tell the book of it once it reached
         the venue."""
         ledger = self._book_ledger
-        if ledger is not None:
-            ledger.sending(order)
         submitted = self._submitted(order)
         if submitted is not None and ledger is not None:
             ledger.placed(self, submitted)
@@ -2799,12 +2746,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return not adds or self._spent(parent)
 
     def _submitted(self, order: object) -> object | None:
+        """Send an order kanso sized — an entry `submit_entry` sized, an exit `submit_exit`
+        did — and hand it back, or `None` when nothing went out. It is the order kanso is
+        sending (`_sending`), the one a book lets through, once (`_check_booked`)."""
         placed = len(self._intents)
         built, self._built = self._built, True
+        self._sending = order
         try:
             self.submit_order(order)
         finally:
             self._built = built
+            if self._sending is order:
+                self._sending = None
         return order if len(self._intents) > placed else None
 
     def _headroom(self, instrument_id: InstrumentId, reference: float) -> float:

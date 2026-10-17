@@ -886,20 +886,26 @@ def test_a_sleeve_run_alone_ignores_the_edge_it_states() -> None:
     assert pickle.dumps(with_edge.run) == pickle.dumps(without.run)
 
 
-HAND_EXITS = b"""
+BY_HAND = b"""
 from nautilus_trader.model.enums import OrderSide
-from nautilus_trader.model.objects import Quantity
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import OrderList
 
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 
 class Config(KansoConfig):
-    sells: float = 1.0
+    how: float = 0.0
 
 
 class Strategy(KansoStrategy):
-    \"\"\"Buys 1000 on its first bar and, on its third, sells it by hand: `sells` market
-    orders of 1000 each, in one handler.\"\"\"
+    \"\"\"Buys 1000 on its first bar and, on its third, sends an order past `submit_entry` and
+    `submit_exit`, by `how`: a sale of the whole long by `submit_order` (0), the same sale as a
+    list of one by `submit_order_list` (1), the exit it rested far over the market on its
+    second bar moved down to the market by `modify_order` (2), or the long closed by the
+    engine's own `close_position` (3); or it asks, from `hedges`, for a buy of 5000 beside its
+    entry (4).\"\"\"
 
     config_cls = Config
 
@@ -909,66 +915,81 @@ class Strategy(KansoStrategy):
     def on_bar(self, bar):
         self.n += 1
         instrument_id = bar.bar_type.instrument_id
+        how = int(self.kanso_config.how)
         if self.n == 1:
             self.submit_entry(instrument_id, "BUY", qty=1000.0)
+        elif self.n == 2 and how == 2:
+            self.rest = self.submit_exit(instrument_id, price=100.0)
         elif self.n == 3:
-            for _ in range(int(self.kanso_config.sells)):
-                self.submit_order(
-                    self.order_factory.market(
-                        instrument_id, OrderSide.SELL, Quantity.from_int(1000)
-                    )
-                )
+            sale = self.order_factory.market(instrument_id, OrderSide.SELL, Quantity.from_int(1000))
+            if how == 0:
+                self.submit_order(sale)
+            elif how == 1:
+                listed = self.order_factory.generate_order_list_id()
+                self.submit_order_list(OrderList(listed, [sale]))
+            elif how == 2:
+                self.modify_order(self.rest, price=Price.from_str("5.00"))
+            elif how == 3:
+                (position,) = self.cache.positions_open(strategy_id=self.id)
+                self.close_position(position)
+
+    def hedges(self, ctx):
+        if int(self.kanso_config.how) != 4:
+            return []
+        instrument_id = InstrumentId.from_str(ctx.instrument_id)
+        return [self.order_factory.market(instrument_id, OrderSide.BUY, Quantity.from_int(5000))]
 """
 
+BY_HAND_WAYS = {
+    "submit_order": (0.0, "SELL", "submit_order"),
+    "submit_order_list": (1.0, "SELL", "submit_order_list"),
+    "modify_order": (2.0, "SELL", "modify_order"),
+    "close_position": (3.0, "SELL", "submit_order"),
+    "hedges": (4.0, "BUY", "hedges()"),
+}
+"""Each way `BY_HAND` sends an order past the two sized calls: its `how`, the side of the
+order, and the call the refusal names — `close_position` sends its order by `submit_order`."""
 
-def test_an_exit_built_by_hand_closes_and_two_that_would_pass_flat_are_an_entry() -> None:
-    """One sell by hand of the whole long is an exit; a second in the same handler, with the
-    first still in flight, would open a short the book handed no room for, and is refused
-    as an entry built by hand, naming the member."""
-    one = execute_book(
-        block(),
-        [member("a", request(hyp((DEMO,)), HAND_EXITS), 1.0)],
-        [instrument()],
-        [daily("DEMO")],
-    )
+
+@pytest.mark.parametrize("way", sorted(BY_HAND_WAYS))
+def test_a_member_s_orders_go_out_only_through_submit_entry_and_submit_exit(way: str) -> None:
+    """In a book an order a member sends past `submit_entry` and `submit_exit` is refused as
+    `book_entry`, naming the member, whatever the order is, before it reaches the venue, and
+    the same sleeve run alone sends it as before. Measured on the round before this test, the
+    book let each of them out: a sale by hand of no more than the long, alone or as a list of
+    one, and `close_position`'s, passed its check as an exit; a modify and a leg `hedges()`
+    returned were not asked at all, the leg buying 5000 past the book."""
+    how, side, call = BY_HAND_WAYS[way]
+    run = request(hyp((DEMO,)), BY_HAND, how=how)
+
     with pytest.raises(SizingError) as raised:
-        execute_book(
-            block(),
-            [
-                member("a", request(hyp((DEMO,)), HAND_EXITS, sells=2.0), 5.0),
-                member("b", request(hyp((DEMO,)), qty=500.0, skip=4.0), 1.0),
-            ],
-            [instrument()],
-            [daily("DEMO"), daily("DEMO")],
-        )
+        execute_book(block(), [member("a", run, 5.0)], [instrument()], [daily("DEMO")])
+    alone = execute(run, [instrument()], daily("DEMO")).run
 
-    sold = fsum(f.qty for f in one.runs[0].fills if f.side == "SELL")
-    assert sold == placed(one.runs[0], DEMO) == 1000.0
-    assert raised.value.refusal.rule == BOOK_ENTRY
-    assert raised.value.refusal.asked == "SELL"
-    assert "book member a" in raised.value.refusal.why
+    refusal = raised.value.refusal
+    assert (refusal.rule, refusal.asked) == (BOOK_ENTRY, side)
+    assert refusal.why.startswith(f"book member a: {call} ")
+    assert "submit_entry" in refusal.why and "submit_exit" in refusal.why
+    sold = fsum(f.qty for f in alone.fills if f.side == "SELL")
+    assert (placed(alone, DEMO), sold) == ((6000.0, 0.0) if way == "hedges" else (1000.0, 1000.0))
 
 
-LISTED = b"""
-from nautilus_trader.core.uuid import UUID4
-from nautilus_trader.model.enums import ContingencyType, OrderSide, TriggerType
-from nautilus_trader.model.objects import Price, Quantity
-from nautilus_trader.model.orders import LimitOrder, OrderList, StopMarketOrder
+OWN = b"""
+from nautilus_trader.model.enums import OrderSide
 
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 
 class Config(KansoConfig):
-    shape: float = 0.0
-    linked: float = 0.0
+    pass
 
 
 class Strategy(KansoStrategy):
-    \"\"\"Buys 1000 on its first bar and, on its third, sends orders built by hand, by
-    `shape`: one list of two market sells of 1000 (0); one list of a market sell of 1 and a
-    market buy of 5000 (1); a stop under the market and a take-profit far over it, each a
-    sell of 1000, as one list (2) or sent apart (3), linked as the `ContingencyType` whose
-    value `linked` is.\"\"\"
+    \"\"\"Trades only through kanso's own calls, and cancels. Buys 1000 at market (bar 1); rests
+    a buy of 10 far under the market and an exit far over it (2); cancels the buy (3); sells
+    400 at market, which cancels the resting exit first (4); rests an exit of 300 far over the
+    market (6) and cancels every order in the name (7); sells 300 at a marketable limit (8);
+    and sells what is left at market (9).\"\"\"
 
     config_cls = Config
 
@@ -980,217 +1001,47 @@ class Strategy(KansoStrategy):
         instrument_id = bar.bar_type.instrument_id
         if self.n == 1:
             self.submit_entry(instrument_id, "BUY", qty=1000.0)
+        elif self.n == 2:
+            self.submit_entry(instrument_id, "BUY", qty=10.0, price=1.0)
+            self.submit_exit(instrument_id, price=100.0)
         elif self.n == 3:
-            shape = int(self.kanso_config.shape)
-            list_id = self.order_factory.generate_order_list_id()
-            if shape == 0:
-                orders = [self.market(instrument_id, OrderSide.SELL, 1000) for _ in range(2)]
-            elif shape == 1:
-                orders = [
-                    self.market(instrument_id, OrderSide.SELL, 1),
-                    self.market(instrument_id, OrderSide.BUY, 5000),
-                ]
-            else:
-                orders = self.bracketed(instrument_id, list_id if shape == 2 else None)
-            if shape == 3:
-                for order in orders:
-                    self.submit_order(order)
-            else:
-                self.submit_order_list(OrderList(list_id, orders))
-
-    def market(self, instrument_id, side, qty):
-        return self.order_factory.market(instrument_id, side, Quantity.from_int(qty))
-
-    def bracketed(self, instrument_id, list_id):
-        contingency = ContingencyType(int(self.kanso_config.linked))
-        ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
-        common = {
-            "trader_id": self.trader_id,
-            "strategy_id": self.id,
-            "instrument_id": instrument_id,
-            "order_side": OrderSide.SELL,
-            "quantity": Quantity.from_int(1000),
-            "ts_init": self.clock.timestamp_ns(),
-            "contingency_type": contingency,
-            "order_list_id": list_id,
-        }
-        linked = contingency != ContingencyType.NO_CONTINGENCY
-        return [
-            StopMarketOrder(
-                client_order_id=ids[0],
-                trigger_price=Price.from_str("5.00"),
-                trigger_type=TriggerType.DEFAULT,
-                init_id=UUID4(),
-                linked_order_ids=[ids[1]] if linked else None,
-                **common,
-            ),
-            LimitOrder(
-                client_order_id=ids[1],
-                price=Price.from_str("50.00"),
-                init_id=UUID4(),
-                linked_order_ids=[ids[0]] if linked else None,
-                **common,
-            ),
-        ]
-"""
-
-NO_CONTINGENCY, OCO, OUO = 0.0, 1.0, 3.0
-"""`ContingencyType`'s values in nautilus_trader 1.231.0."""
-
-
-def listed(**overrides: float) -> BookMember:
-    return member("a", request(hyp((DEMO,)), LISTED, **overrides), 5.0)
-
-
-@pytest.mark.parametrize(
-    ("shape", "linked", "asked"),
-    [
-        (0.0, NO_CONTINGENCY, "SELL"),
-        (1.0, NO_CONTINGENCY, "BUY"),
-        (2.0, NO_CONTINGENCY, "SELL"),
-        (2.0, OUO, "SELL"),
-        (3.0, NO_CONTINGENCY, "SELL"),
-    ],
-    ids=[
-        "a-list-of-two-whole-sells",
-        "a-list-of-an-exit-and-a-buy",
-        "a-list-of-a-stop-and-a-take-profit-unlinked",
-        "a-list-of-a-stop-and-a-take-profit-one-updates-other",
-        "a-stop-and-a-take-profit-sent-apart",
-    ],
-)
-def test_each_order_a_member_builds_is_checked_and_one_past_flat_is_an_entry(
-    shape: float, linked: float, asked: str
-) -> None:
-    """Against a long of 1000, each second order — the second whole sell of a list, the buy
-    of 5000 after a sell of 1, the take-profit beside a stop each for all of it, listed or
-    sent apart, unlinked or linked one-updates-other, which the venue can fill both of — would
-    take the position past flat or open one, and is refused as an entry built by hand, naming
-    the member, before it reaches the venue."""
-    with pytest.raises(SizingError) as raised:
-        execute_book(block(), [listed(shape=shape, linked=linked)], [instrument()], [daily("DEMO")])
-
-    assert raised.value.refusal.rule == BOOK_ENTRY
-    assert raised.value.refusal.asked == asked
-    assert "book member a" in raised.value.refusal.why
-
-
-@pytest.mark.parametrize("shape", [2.0, 3.0], ids=["listed", "sent-apart"])
-def test_a_stop_and_a_take_profit_linked_one_cancels_other_are_one_exit(shape: float) -> None:
-    """The venue never fills both of two orders linked one-cancels-other, so a stop and a
-    take-profit each for the whole long, listed or sent apart, are one exit, and the book
-    counts no short in them: `b`'s later buy of the name is placed, not refused as opposite."""
-    made = execute_book(
-        block(),
-        [
-            listed(shape=shape, linked=OCO),
-            member("b", request(hyp((DEMO,)), qty=500.0, skip=4.0), 1.0),
-        ],
-        [instrument()],
-        [daily("DEMO"), daily("DEMO")],
-    )
-
-    a, b = made.members.index("a"), made.members.index("b")
-    rested = [(side, qty, kind) for _, _, side, qty, kind, _ in made.intents[a] if side == "SELL"]
-    assert rested == [("SELL", 1000.0, "STOP_MARKET"), ("SELL", 1000.0, "LIMIT")]
-    assert made.counts["b"][OPPOSITE_REFUSED] == 0
-    assert placed(made.runs[b], DEMO) == 500.0
-
-
-TRIGGERED = b"""
-from nautilus_trader.core.uuid import UUID4
-from nautilus_trader.model.enums import ContingencyType, OrderSide
-from nautilus_trader.model.objects import Price, Quantity
-from nautilus_trader.model.orders import LimitOrder, OrderList
-
-from kanso.nautilus.strategy import KansoConfig, KansoStrategy
-
-
-class Config(KansoConfig):
-    by_hand: float = 0.0
-
-
-class Strategy(KansoStrategy):
-    \"\"\"Buys 1000 on its first bar; on its third sends one list of two sells of 500 linked
-    one-triggers-other, a limit at 12.50 and under it one at 12.00, which the first releases
-    once it fills; on its fourth asks to sell more: 500 by hand at market (`by_hand`), or
-    by `submit_exit` at 11.75.\"\"\"
-
-    config_cls = Config
-
-    def on_start(self):
-        self.n = 0
-
-    def on_bar(self, bar):
-        self.n += 1
-        instrument_id = bar.bar_type.instrument_id
-        if self.n == 1:
-            self.submit_entry(instrument_id, "BUY", qty=1000.0)
-        elif self.n == 3:
-            ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
-            list_id = self.order_factory.generate_order_list_id()
-            links = (
-                {"contingency_type": ContingencyType.OTO, "linked_order_ids": [ids[1]]},
-                {"parent_order_id": ids[0]},
-            )
-            orders = [
-                LimitOrder(
-                    trader_id=self.trader_id,
-                    strategy_id=self.id,
-                    instrument_id=instrument_id,
-                    client_order_id=ids[index],
-                    order_side=OrderSide.SELL,
-                    quantity=Quantity.from_int(500),
-                    price=Price.from_str(price),
-                    init_id=UUID4(),
-                    ts_init=self.clock.timestamp_ns(),
-                    order_list_id=list_id,
-                    **links[index],
-                )
-                for index, price in enumerate(("12.50", "12.00"))
-            ]
-            self.submit_order_list(OrderList(list_id, orders))
+            open_orders = self.cache.orders_open(strategy_id=self.id)
+            (resting,) = [order for order in open_orders if order.side == OrderSide.BUY]
+            self.cancel_order(resting)
         elif self.n == 4:
-            if self.kanso_config.by_hand:
-                self.submit_order(
-                    self.order_factory.market(instrument_id, OrderSide.SELL, Quantity.from_int(500))
-                )
-            else:
-                self.submit_exit(instrument_id, price=11.75)
+            self.submit_exit(instrument_id, qty=400.0)
+        elif self.n == 6:
+            self.submit_exit(instrument_id, qty=300.0, price=100.0)
+        elif self.n == 7:
+            self.cancel_all_orders(instrument_id)
+        elif self.n == 8:
+            self.submit_exit(instrument_id, qty=300.0, price=5.0)
+        elif self.n == 9:
+            self.submit_exit(instrument_id)
 """
 
 
-def test_the_child_of_an_exit_sent_one_triggers_other_counts_toward_what_it_closes() -> None:
-    """Against a long of 1000, a sell of 500 that releases another of 500 once it fills is
-    an exit of all of it, so a third sell of 500 by hand would take the position past flat
-    and is refused as an entry, naming the member, and `submit_exit` finds nothing left to
-    close and sends nothing. Measured on the round before this test: the check counted the
-    parent alone, let the third sell through, and the member sold 1500 of its 1000 — a short
-    of 500 the book handed no room for — by hand and by `submit_exit` alike."""
-    with pytest.raises(SizingError) as raised:
-        execute_book(
-            block(),
-            [member("a", request(hyp((DEMO,)), TRIGGERED, by_hand=1.0), 5.0)],
-            [instrument()],
-            [daily("DEMO")],
-        )
-    exited = execute_book(
-        block(),
-        [member("a", request(hyp((DEMO,)), TRIGGERED), 5.0)],
-        [instrument()],
-        [daily("DEMO")],
-    )
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_a_member_trades_and_cancels_through_kanso_s_own_calls_in_a_book(latency_ms: float) -> None:
+    """Everything kanso sends for a member goes out in a book: its entries at market and
+    resting, placed by the book; its exits at market and at a price, sized never past flat;
+    the cancel an exit at market sends for the exit resting on its side; and, under a latency,
+    with that cancel still in flight, the 400 the exit at market is owed, asked for again by
+    kanso on the next point. A member's own cancels go out as well, and it ends flat, never
+    having sold what it did not hold."""
+    document = hyp((DEMO,)).model_dump(mode="json")
+    document["costs"]["latency_ms"] = latency_ms
+    run = request(Hypothesis.model_validate(document), OWN)
 
-    assert raised.value.refusal.rule == BOOK_ENTRY
-    assert raised.value.refusal.asked == "SELL"
-    assert "book member a" in raised.value.refusal.why
-    fills = exited.runs[0].fills
-    assert [(fill.side, fill.qty) for fill in fills] == [
-        ("BUY", 1000.0),
-        ("SELL", 500.0),
-        ("SELL", 500.0),
-    ]
-    assert len(exited.intents[0]) == 3
+    made = execute_book(block(), [member("a", run, 5.0)], [instrument()], [daily("DEMO")])
+
+    sides = [(f.side, f.qty) for f in made.runs[0].fills]
+    assert sides == [("BUY", 1000.0), ("SELL", 400.0), ("SELL", 300.0), ("SELL", 300.0)]
+    (asked,) = [ts for ts, _, _, qty, _, _ in made.intents[0] if qty == 400.0]
+    sessions = [int(bar.ts_event) for bar in bars(RESEARCH)]
+    assert asked == sessions[3 if latency_ms == 0.0 else 4], "the fourth bar's, or the fifth's"
+    assert made.counts["a"][UNFILLED] == 1, "the resting buy it cancelled"
+    assert sum(made.counts["a"].values()) == 1
 
 
 AGAIN = b"""
@@ -1294,13 +1145,12 @@ class Strategy(KansoStrategy):
 
 
 @pytest.mark.parametrize("sizing", ["own-rule", "sizing-rule"])
-def test_an_order_sent_while_the_book_s_placement_is_submitted_is_checked(sizing: str) -> None:
+def test_an_order_sent_while_the_book_s_placement_is_submitted_is_refused(sizing: str) -> None:
     """The engine runs the member's `on_order_submitted` inside the submission of the order
-    the book placed for it, and only that order is let through unasked: a buy of a million
-    shares sent by hand from the handler is refused as an entry built by hand, naming the
-    member once. Measured on the round before this test: it was let through with the book's
-    order, and on a capital of 100,000 the member bought 1,001,000 shares under its own rule
-    and 1,000,997 under a sizing rule."""
+    the book placed for it, and only that order is let through: a buy of a million shares
+    sent by hand from the handler is refused, naming the member once. Measured two rounds
+    before this test: it was let through with the book's order, and on a capital of 100,000
+    the member bought 1,001,000 shares under its own rule and 1,000,997 under a sizing rule."""
     if sizing == "own-rule":
         run = request(hyp((DEMO,)), NESTED.replace(b"ENTRY", b"qty=1000.0"))
     else:
@@ -1341,53 +1191,6 @@ def test_an_entry_opposite_to_a_rest_from_an_earlier_instant_or_a_later_holding_
     for made in (resting, held):
         assert made.counts["b"][OPPOSITE_REFUSED] == 1
         assert made.runs[made.members.index("b")].fills == ()
-
-
-GROWN_REST = b"""
-from nautilus_trader.model.objects import Quantity
-
-from kanso.nautilus.strategy import KansoConfig, KansoStrategy
-
-
-class Config(KansoConfig):
-    pass
-
-
-class Strategy(KansoStrategy):
-    \"\"\"Buys 1000, rests its exit far over the market, then grows that rest to 2000.\"\"\"
-
-    config_cls = Config
-
-    def on_start(self):
-        self.n = 0
-
-    def on_bar(self, bar):
-        self.n += 1
-        instrument_id = bar.bar_type.instrument_id
-        if self.n == 1:
-            self.submit_entry(instrument_id, "BUY", qty=1000.0)
-        elif self.n == 2:
-            self.rest = self.submit_exit(instrument_id, price=100.0)
-        elif self.n == 3:
-            self.modify_order(self.rest, quantity=Quantity.from_int(2000))
-"""
-
-
-def test_a_resting_order_that_would_take_a_position_past_flat_works_the_other_side() -> None:
-    """`a`'s rest of 2000 against its long of 1000 would leave it short 1000 if it filled, so
-    the book counts that short as worked: `b`'s buy is opposite to it."""
-    made = execute_book(
-        block(),
-        [
-            member("a", request(hyp((DEMO,)), GROWN_REST), 5.0),
-            member("b", request(hyp((DEMO,)), qty=500.0, skip=4.0), 1.0),
-        ],
-        [instrument()],
-        [daily("DEMO"), daily("DEMO")],
-    )
-
-    assert made.counts["b"][OPPOSITE_REFUSED] == 1
-    assert made.runs[1].fills == ()
 
 
 SIZED_BLIND = b"""

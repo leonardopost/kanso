@@ -406,6 +406,12 @@ orders applied, so the same flip fits at leverage one either way: the exit in fl
 the room the entry takes, and the venue settles both at one price, the exit first.
 `modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
 a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
+**In a book a member sends orders only through `submit_entry` and `submit_exit`.** It may
+cancel its orders; anything else it sends is refused as `book_entry`, naming the member,
+whatever the order is and whichever handler sends it, `on_order_submitted` included:
+`submit_order`, `submit_order_list` and `modify_order` called by the sleeve, a leg an
+overridden `hedges()` returns, the engine's `close_position` (`docs/concepts.md`, *Stages*).
+A sleeve run alone is not held to it.
 **A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
 owed exit and the classification of an order as an entry or an exit read the position the
 engine keeps for the sleeve's own strategy in the name, not the account's net position, which

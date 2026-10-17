@@ -132,9 +132,6 @@ BINDINGS = {
     "priorities first, whatever order their strategies were added in",
     "two market orders sent into one name at one instant on a level-one venue are each "
     "filled from the whole touch, neither sharing what the other took",
-    "of two orders linked one-cancels-other only one fills, held by the venue or the "
-    "order emulator, under a latency or none, while two linked one-updates-other and sent "
-    "marketable both fill",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -294,18 +291,3 @@ def test_two_takers_on_one_touch_are_each_filled_from_all_of_it() -> None:
     """What the book's shared touch budget is for: the venue fills each market order from
     the whole touch, so two buys of 80 under an ask of 100 both fill at the ask."""
     assert facts._probe_two_takers_on_one_touch() == [("A", 80.0, 10.01), ("B", 80.0, 10.01)]
-
-
-def test_of_two_orders_linked_one_cancels_other_one_fills_and_of_one_updates_other_both() -> None:
-    """What a book's count of a member's contingent orders rests on: two sell limits of 100
-    linked one-cancels-other, resting until one quote makes both marketable, fill 100
-    between them under the emulator and a latency; linked one-updates-other and marketable
-    when sent, both fill."""
-    from nautilus_trader.model.enums import ContingencyType
-
-    held = facts._probe_contingent_pair(
-        ContingencyType.OCO, 10.50, emulated=True, latency_ns=20_000_000
-    )
-
-    assert held == [100.0, 0.0]
-    assert facts._probe_contingent_pair(ContingencyType.OUO, 9.00) == [100.0, 100.0]

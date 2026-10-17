@@ -13,8 +13,9 @@ failed `sizing` gate, and so reaches the proposer with its next twenty cards.
 One refusal holds without a sizing rule: `unfunded_order`, an entry a strategy built by hand
 that would take gross exposure past what the book can fund. kanso cuts the orders it builds to
 its room; it does not rebuild one it did not build, so that one is refused the same way. So,
-for the same reason, is any entry built by hand by a member of a book (`book_entry`): the
-book hands every entry its share of one room, and can only cut one it sizes.
+for the same reason, is any order a member of a book sends past `submit_entry` and
+`submit_exit` (`book_entry`): the book hands every entry its share of one room, and can only
+cut one it sizes.
 
 The quantity is `budget / ((1 + 2 x cost_rate) x (price + increment))`, floored onto the
 lot: the round trip the runner will charge and one price increment are reserved inside the
@@ -64,7 +65,8 @@ UNFUNDED_ORDER: Final = "unfunded_order"
 """An entry a strategy with no sizing rule built by hand, larger than the book can fund."""
 
 BOOK_ENTRY: Final = "book_entry"
-"""An entry of a book member that did not come through `submit_entry`, which the book allots."""
+"""An order of a book member that did not come through `submit_entry`, which the book allots,
+or `submit_exit`, which sizes it never past flat."""
 
 RULES: Final = (
     SIZE_ARGUMENT,
