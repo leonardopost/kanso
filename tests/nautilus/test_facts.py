@@ -126,6 +126,8 @@ BINDINGS = {
     "under the NETTING OMS the cache keeps one position per (instrument, strategy), "
     "named {instrument}-{strategy}, and the portfolio's net position is every "
     "strategy's sum",
+    "under the NETTING OMS the simulated venue holds a reduce-only close to the first "
+    "open position in the instrument sorted by id, whichever strategy's it is",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -254,4 +256,18 @@ def test_a_netting_position_is_one_strategy_s_and_the_net_position_the_account_s
     ), "two positions, each named for its strategy, under the account's sum"
     assert after == ({"AAPL.XNAS-Probe-B": 5.0}, (0.0, 5.0), 5.0), (
         "A's sale closed A's position alone"
+    )
+
+
+def test_a_reduce_only_close_is_held_to_the_first_position_in_the_name_by_id() -> None:
+    """What the node's flatten order rests on: the later-sorted strategy's close beside a
+    mate is cut to the mate's quantity, on either side, and closes sent in id order each
+    close their own."""
+    a, b = "AAPL.XNAS-Probe-A", "AAPL.XNAS-Probe-B"
+
+    assert facts._probe_a_reduce_only_close_beside_a_mate() == (
+        {a: 10.0, b: 490.0},
+        {},
+        {a: -5.0, b: 95.0},
+        {},
     )

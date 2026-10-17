@@ -529,10 +529,22 @@ and leaves the second's 5 open, the net position 5. Both position changes are ap
 the cache and the portfolio before the fill reaches the strategy (read in
 `ExecutionEngine._handle_order_fill`), so the two readers move at the same instant. So
 `KansoStrategy` reads its own position, the one `held` and `submit_exit` size against, from
-the cache by its own strategy id and never from the portfolio, and the node's flatten closes
-each strategy's positions with the engine's own `close_all_positions`, which reads them the
-same way. A broker nets every version's orders on the account into one position of its own;
-the split by strategy is the engine's bookkeeping beside it.
+the cache by its own strategy id and never from the portfolio. A broker nets every version's
+orders on the account into one position of its own; the split by strategy is the engine's
+bookkeeping beside it.
+
+**The simulated venue does not hold a reduce-only close to the sender's position.** Under
+NETTING its matching engine reads the position a fill bears on as the first open position in
+the instrument, across every strategy (`OrderMatchingEngine._get_position_id` in
+`backtest/engine.pyx` takes `cache.positions_open(instrument_id=…)[0]`, which the cache sorts
+by id), and caps a reduce-only fill at that position's quantity; the execution engine then
+books the fill to the sender's own position. Measured: beside `Probe-A` long 10, `Probe-B`
+closing its own long 500 with `close_position` sells 10 and stays long 490; beside `Probe-A`
+short 5, its close of a long 100 sells 5 and stays long 95; and each pair closed `Probe-A`
+first ends flat, since each fill is applied before the next close is matched. So the node's
+flatten, which sends `close_position`'s reduce-only order, closes a name's positions in the
+cache's order by id, each by the strategy that holds it (`kanso.nautilus.node._flatten`);
+`submit_exit` never sets the flag.
 
 Risk configuration
 ------------------
@@ -1645,6 +1657,88 @@ def _check_a_netting_position_is_one_strategy_s_in_one_instrument() -> tuple[boo
         f"net position) = {before} before the sale and {after} after it. A position is named "
         "{instrument}-{strategy}, A's sale closes A's alone, and the net position is the "
         "account's sum"
+    )
+
+
+def _probe_a_reduce_only_close_beside_a_mate() -> tuple[dict[str, float], ...]:
+    """Two strategies on one NETTING account in one name, `Probe-A` sorting first by id.
+
+    On the first print `A` buys 10 and `B` 500; on the second `B` closes its own position
+    with `close_position`; on the third each closes its own, `A` first. On the fourth `A`
+    sells 5 and `B` buys 100; on the fifth `B` closes its own; on the sixth each closes its
+    own, `A` first. Returns the open positions by id with their signed quantities, read at
+    the third, fourth, sixth and seventh prints, before anything is sent there."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    seen: list[dict[str, float]] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str, script: dict[int, tuple[str, int]]) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.script = script
+            self.ticks = 0
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.ticks += 1
+            if self.order_id_tag == "A" and self.ticks in (3, 4, 6, 7):
+                seen.append({str(p.id): float(p.signed_qty) for p in self.cache.positions_open()})
+            step = self.script.get(self.ticks)
+            if step is None:
+                return
+            action, qty = step
+            if action == "close":
+                for position in self.cache.positions_open(strategy_id=self.id):
+                    self.close_position(position)
+                return
+            side = OrderSide.BUY if action == "buy" else OrderSide.SELL
+            self.submit_order(self.order_factory.market(equity.id, side, Quantity.from_int(qty)))
+
+    close = ("close", 0)
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", *(10.0,) * 6))
+        engine.add_strategy(Probe("A", {1: ("buy", 10), 3: close, 4: ("sell", 5), 6: close}))
+        engine.add_strategy(
+            Probe("B", {1: ("buy", 500), 2: close, 3: close, 4: ("buy", 100), 5: close, 6: close})
+        )
+        engine.run()
+        return tuple(seen)
+    finally:
+        engine.dispose()
+
+
+def _check_a_reduce_only_close_is_held_to_the_name_s_first_position() -> tuple[bool, str]:
+    """The node flatten's order: under NETTING the venue trims a reduce-only close to the
+    first open position in the instrument by id, whoever's it is, and closes sent in that
+    order each find their own."""
+    seen = _probe_a_reduce_only_close_beside_a_mate()
+    a, b = "AAPL.XNAS-Probe-A", "AAPL.XNAS-Probe-B"
+    holds = seen == ({a: 10.0, b: 490.0}, {}, {a: -5.0, b: 95.0}, {})
+    return holds, (
+        "Probe-A and Probe-B on one NETTING account in one name: B's close_position of its "
+        "own long 500 beside A's long 10, then both closed A first, then B's close of its "
+        "own long 100 beside A's short 5, then both closed A first, read (open positions by "
+        f"id) = {seen}. The venue holds a reduce-only close to the first open position in "
+        "the instrument sorted by id — the mate's, on either side — and fills the strategy's "
+        "own with what that allows; closed in that order, each close finds its own first"
     )
 
 
@@ -5187,6 +5281,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "named {instrument}-{strategy}, and the portfolio's net position is every "
         "strategy's sum",
         _check_a_netting_position_is_one_strategy_s_in_one_instrument,
+    ),
+    (
+        "under the NETTING OMS the simulated venue holds a reduce-only close to the first "
+        "open position in the instrument sorted by id, whichever strategy's it is",
+        _check_a_reduce_only_close_is_held_to_the_name_s_first_position,
     ),
     (
         "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
