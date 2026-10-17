@@ -523,6 +523,20 @@ one still in flight without marking it, and — read in `trading/strategy.pyx` r
 measured — leaves one a node has not yet sent, so kanso hands it the orders only when none
 is still `INITIALIZED`, and cancels them one by one otherwise.
 
+**Of two orders linked one-cancels-other no more than one fills; of two linked
+one-updates-other both can.** On a fill of an `OCO` order the matching engine cancels every
+order it names that is not closed, in the same call and before it matches anything further
+(`OrderMatchingEngine.fill_order` in `backtest/engine.pyx`), and the order manager does the
+same for orders the emulator holds (`OrderManager.handle_order_filled` in
+`execution/manager.pyx`). A fill of an `OUO` order updates the other to what the filled one
+leaves, and cancels it once the filled one is closed — but only an other the venue holds
+open: `fill_order` asks `is_open`, so one the venue has not accepted yet is left as it is,
+and of two sent marketable both fill. Measured, two sell limits of 100 linked and sent as one
+list: linked `OCO`, one filled 100 and the other was cancelled, marketable when sent or resting
+until one quote made both marketable, held by the venue or by the emulator, with no latency
+or one of 20 ms; linked `OUO` and marketable when sent, both filled 100 — and, measured on
+2026-10-17, so did two resting under a latency of 20 ms, and two the emulator held.
+
 Positions
 ---------
 **Under the NETTING OMS a position is one strategy's in one instrument, not the account's.**
@@ -1894,6 +1908,102 @@ def _check_two_takers_are_each_filled_from_the_whole_touch() -> tuple[bool, str]
         f"two strategies each buying 80 at market on a quote of 9.99/10.01 showing 100 a "
         f"side were filled {fills}: each from the whole touch, the second taking none of what "
         "the first was filled"
+    )
+
+
+def _probe_contingent_pair(
+    contingency: Any, price: float, *, emulated: bool = False, latency_ns: int = 0
+) -> list[float]:
+    """What each of two sell limits of 100 at `price`, linked to each other as `contingency`
+    and sent as one list on a quote of 9.99/10.01, filled by the end of a quote of
+    10.60/10.62 after it, each showing 100 a side: at 9.00 both are marketable when sent, at
+    10.50 both rest until the second quote makes both marketable at once. `emulated` has the
+    order emulator hold them on the bid and ask; `latency_ns` is the venue's latency."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, TriggerType
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.model.orders import LimitOrder, OrderList
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    sent: list[Any] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+
+        def on_quote_tick(self, tick: object) -> None:
+            if sent:
+                return
+            ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
+            list_id = self.order_factory.generate_order_list_id()
+            sent.extend(
+                LimitOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=self.id,
+                    instrument_id=equity.id,
+                    client_order_id=ids[index],
+                    order_side=OrderSide.SELL,
+                    quantity=Quantity.from_int(100),
+                    price=Price(price, 2),
+                    init_id=UUID4(),
+                    ts_init=self.clock.timestamp_ns(),
+                    emulation_trigger=TriggerType.BID_ASK if emulated else TriggerType.NO_TRIGGER,
+                    contingency_type=contingency,
+                    order_list_id=list_id,
+                    linked_order_ids=[ids[1 - index]],
+                )
+                for index in range(2)
+            )
+            self.submit_order_list(OrderList(list_id, list(sent)))
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote", 10.60, 10.62))
+        engine.add_strategy(Probe())
+        engine.run()
+        return [float(engine.cache.order(order.client_order_id).filled_qty) for order in sent]
+    finally:
+        engine.dispose()
+
+
+def _check_one_of_two_orders_linked_one_cancels_other_fills() -> tuple[bool, str]:
+    """Why a book counts a member's one-cancels-other siblings once and a one-updates-other
+    pair as two orders."""
+    from nautilus_trader.model.enums import ContingencyType
+
+    oco = {
+        (price, held, latency_ms): _probe_contingent_pair(
+            ContingencyType.OCO,
+            price,
+            emulated=held == "emulator",
+            latency_ns=latency_ms * 1_000_000,
+        )
+        for price in (9.00, 10.50)
+        for held in ("venue", "emulator")
+        for latency_ms in (0, 20)
+    }
+    ouo = _probe_contingent_pair(ContingencyType.OUO, 9.00)
+    holds = all(filled == [100.0, 0.0] for filled in oco.values()) and ouo == [100.0, 100.0]
+    return holds, (
+        "two sell limits of 100 linked one-cancels-other and sent as one list filled "
+        f"{oco}, by their price, where they were held and the venue's latency in ms — at 9.00 "
+        "marketable when sent, at 10.50 resting until one quote made both marketable; two "
+        f"linked one-updates-other at 9.00 filled {ouo}"
     )
 
 
@@ -5464,6 +5574,12 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "two market orders sent into one name at one instant on a level-one venue are each "
         "filled from the whole touch, neither sharing what the other took",
         _check_two_takers_are_each_filled_from_the_whole_touch,
+    ),
+    (
+        "of two orders linked one-cancels-other only one fills, held by the venue or the "
+        "order emulator, under a latency or none, while two linked one-updates-other and sent "
+        "marketable both fill",
+        _check_one_of_two_orders_linked_one_cancels_other_fills,
     ),
     (
         "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
