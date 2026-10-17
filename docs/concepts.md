@@ -787,7 +787,7 @@ already over. There are ten.
 
 | gate | what it refuses |
 |---|---|
-| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, or binds a name its base class owns |
+| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, binds a name its base class owns, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
@@ -1224,7 +1224,14 @@ exactly as a cold one does.
 syntax-tree check run *before* the backtest, not after. Imports are matched by full dotted
 path against an allow-list of exact leaves; every path that reaches the data catalog is
 denied by name, as are the builtins and modules that would let a strategy open a file or
-read a wall clock.
+read a wall clock. A path names a module, not what the module holds, and the path is all
+the gate reads: what an allowed module holds from elsewhere — `typing` holds the `operator`
+module — and what a dotted read off an imported module reaches are not resolved, and are among
+the spellings the gate does not follow, listed at the end of this section. The gate imports no
+module because a strategy names it, so what a module does as it is imported happens in the
+card's own child process, never in the process that runs the gate: `numpy.f2py.__main__`,
+which numpy's place on the allow-list lets a strategy import, runs f2py's command line and
+exits, and the card is recorded as a `crash`.
 
 ```
 $ kanso research card demo_filter --desc "read the catalog directly"
@@ -1254,12 +1261,12 @@ window opens and a record of what the book made before this month, and a strateg
 the book the policy left from `balance` alone. The harness's own copy of a book a `depth`
 hypothesis holds, and the methods that show the author its view of it, are denied to every
 strategy for the same kind of reason: they are the book at every change, which the account
-does not see. Under `depth` the message bus, which carries the data engine's own topics and
-every change of the book among them, is denied under both the names the engine gives it,
-`msgbus` and `_msgbus`, and so are the three subscriptions that would hand the author a book
-of its own — `subscribe_order_book_deltas`, `subscribe_order_book_at_interval` and
+does not see. Under `depth` the three subscriptions that would hand the author a book of its
+own are denied — `subscribe_order_book_deltas`, `subscribe_order_book_at_interval` and
 `subscribe_order_book_depth`; the view reaches `on_order_book_deltas` and level one
-`on_quote_tick`, and the refusal says so. The same denials bind an attached construct, which
+`on_quote_tick`, and the refusal says so. The message bus, which carries the data engine's own
+topics and every change of the book among them, is denied to every strategy, `depth` or not
+(below). The same denials bind an attached construct, which
 is handed no view of the book at all: it reads the host's prices from the context it is
 asked with, and a construct the gate did not scan under `depth` that subscribes a book anyway
 is refused when it asks, which crashes the card with the call named.
@@ -1318,6 +1325,54 @@ The same refusal reaches an operator before any run: `kanso hyp validate` refuse
 `hypotheses/<id>/strategy.py` that binds one (exit 3), `research begin` refuses a baseline
 that does with the line named, and `kanso doctor`'s `base names` check lists every
 hypothesis whose file does.
+
+**The harness's sends are its own, and so are the methods it overrides.** A sleeve hands the
+engine an order through the base's `submit_order`, `submit_order_list` and `modify_order`,
+which record the intent, size, refuse an entry the book cannot fund and, in a book, refuse
+what kanso did not send. Two kinds of name reach past them, and the gate refuses both, sized
+or not. The base's private helpers that send an order as kanso's own — `_submitted`,
+`_booked`, `_close` and every private method of the base that calls one of the three on
+itself or on `super()`, or calls one that does — are refused when read off a strategy, with
+the mark a book recognises kanso's order by (`_sending`) and the book's ledger
+(`_book_ledger`); on a class of the file that is not the harness's, the names are the
+author's own. And a method the engine defines and the base overrides — `submit_order`,
+`modify_order`, `cancel_order`, the `handle_*` handlers and the rest — is refused when read
+off anything but `self`, the instance a method receives, or `super()` with no arguments: off
+the engine's class, as `Strategy.submit_order(self, order)`, or a two-argument
+`super(KansoStrategy, self)`, it is the engine's own method, which records no intent and is
+asked nothing. Both sets are read from the installed classes whenever the gate runs, never
+kept as a list. The instance handed to a module-level function and called there is refused
+as well, which is the price of seeing the rest.
+
+**The bus and an order's events are the engine's.** On the message bus, under both the names
+the engine gives it (`msgbus`, `_msgbus`), a strategy can send the execution engine a command
+— a `SubmitOrder`, a `ModifyOrder` — or a fill, past every method of its own and a book's
+check, and can take the book's handler off it; `apply` hands an order an event as if the
+engine had applied it. The gate refuses both to every strategy, sized or not, `depth` or
+not, and `apply` on any receiver, since which one is an order it cannot tell. Measured on
+2026-10-18 in a book of one and alone, on a capital of 100,000: a buy of a million sent on the
+bus bought it, a modify sent there and an `OrderUpdated` applied to a resting exit of 1,000 at
+100 each sold 5,000 at 5.00, and an `OrderFilled` sent to `ExecEngine.process` was recorded as
+a fill at a price no venue printed (`docs/backlog.md` rows 209 and 210).
+
+The gate refuses by spelling, and what it does not follow is a spelling (`docs/backlog.md`
+row 211). The engine's class held under the name `self` — the first parameter of a
+module-level function handed `Strategy` — reaches the engine's own `submit_order`. A module an
+allowed leaf holds passes on its path: `from typing import operator` is the `operator` module,
+`from dataclasses import inspect` the `inspect` module and `from nautilus_trader.model.data
+import pickle` the `pickle` module. A dotted read off an imported module is not followed:
+`import nautilus_trader.model` binds the package `nautilus_trader`, through which
+`nautilus_trader.execution` reads a package the allow-list refuses, `from nautilus_trader
+import model` reaches `pickle` as `model.data.pickle`, and a module kept under another name
+is read there unfollowed. A class or a function an allowed leaf takes from a module that is
+not allowed passes with it: the engine's `resolve_path`, which `nautilus_trader.trading.config`
+holds and which imports whatever path it is handed as a string, and the builtin `open`, which
+numpy holds as `numpy.lib._datasource._open`. And numpy, allowed whole, opens a path or a URL
+with `numpy.lib.npyio.DataSource`, maps a file with `numpy.lib.format.open_memmap` and loads a
+shared library with `numpy.ctypeslib.load_library`, past the file functions the gate names.
+Each reaches what the gate refuses when it is spelt directly. A strategy that gets past the
+gate that way meets only the run-time checks, which a sleeve run alone does not have (row
+209) and a book has for the engine's own methods alone (*Stages*).
 
 ## Delivery
 
@@ -1766,6 +1821,17 @@ leaves the last, from Saturday morning on, empty, and the week above is certifie
 each is certified at its mean per session; `docs/backlog.md` row 110 says what closing the
 difference would take.
 
+**A certificate also records its window's net per trade** (`net_per_trade`), struck from the
+certification run its gates judged and never from a second run of the window: the mean net
+profit per closed trade in basis points of the position each opened, costs applied once by
+the runner — the per-trade edge `edge_per_trade` reads, over the window as one fold — with
+its error clustered by session, so a session's clips that move together count once whatever
+the hypothesis's return period, `net_t`, the value over that error, and how many sessions
+and trades it was struck over. `cert run` and `cert show` print it on a `per trade` line
+after `power`, and a window that closed no trade records none. It is what a book ranks its
+members by (*Stages*); a certificate written before kanso recorded it carries none, which a
+book ranks after every member that does.
+
 Certifying the same bytes again under the same plan **and** the same engine is refused:
 
 ```
@@ -1995,7 +2061,80 @@ the simulated venue holds a close to the first open position in the name, whoeve
 closes a name's positions in that order, each by the version that holds it, so each close
 finds its own and both end the window flat. Nor do they compete for
 the market: each is filled against the whole touch as if it traded alone, and two that hold
-opposite sides of a name are each charged their own legs, where a broker would net them.
+opposite sides of a name are each charged their own legs, where a broker would net them. A
+book (below) is where versions share one capital, one room and one touch.
+
+**A book runs several versions on one capital, and hands its room out in its own order.**
+The runner can run a book (`kanso.nautilus.book.execute_book`, and `run_book` over a
+catalog): every member's generated sleeve in one engine, at the book's capital, each trading
+its own position and costed once in its own extraction, beside one ledger that decides how
+much of the book each entry takes. The block it runs under (`SharedBook`) states the capital,
+`leverage.rth` — four, the only value accepted — `max_name_c` if a name is capped, and the
+ranking the book uses, `rank_key: net_per_trade_bp` and `k_min`, both required: kanso does
+not pick the order of a book's members. Leverage before and after regular hours is not set
+yet, so a block that declares it is refused and every entry outside 09:30–16:00 New York time
+is refused; a block that names a daily target or a daily stop is refused too, since neither
+exists in this version. The engine serves its strategies in the order they subscribed and
+hands a point only to its own name's subscribers (`kanso doctor` checks the first), so neither
+decides who is served first: a member's `submit_entry` is collected and returns `None`, and
+once every member has handled the marker that closes the instant, the instant's entries are
+placed — by the `edge_bp` the entry states, the predicted move less the round trip's cost at
+the instant, highest first, an entry with none last; then by the member's rank, its
+certificate's net per trade (above zero, on at least `k_min` sessions, or after every member
+that is ranked), its `net_t`, the earlier `joined_at` and the strategy id; then by name. Each
+is sized by its own member's rule first and then cut to the smallest of the book's room —
+`min(capital, balance) × 4` less every member's open positions at the latest quote's mid or
+their own cost, its resting entries at their limits and its market orders in flight at the
+price they were sized at, over the entry's own round trip — the name's cap, and, for a taker,
+what is left of the size the latest quote displays on its side, one budget per name, side and
+instant: the venue fills two takers of one touch from all of it (`kanso doctor` checks it),
+and the book does not. The balance is the capital plus every member's realised net profit.
+An entry opposite to any member's position, working entry or entry in flight in the name is
+refused, as is one its own rule sized below a lot or one the cut left below a lot, counted
+by the cap that bound it; a smaller entry is placed and recorded with what was asked. Each
+refusal is counted once, per member and per New York session — `book_closed`,
+`outside_rth_unset`, `opposite_refused`, `below_c_min`, `name_cap`, `touch`, `room`,
+`no_size`, and `unfilled` for a resting entry that filled nothing — and the run reports the
+book's equity, its gross after each instant at which members asked for entries, and how many
+of those left it at its room: the peak, the mean and the share are over the instants at which
+members asked for entries, whether or not any was placed, not over every instant of the
+window. **A member sends orders only through `submit_entry` and `submit_exit`.** Its entries
+are the book's to place, as above; its exits are its own, sized by `submit_exit` never past
+flat, counting its orders still working on that side (`docs/workspace.md`), and sent in the
+handler. It may cancel its orders. Its other orders and modifies are refused, since the book
+hands room only to entries it sizes, and an order kanso did not size can take a position past
+flat or past the room — each by the layer that can see it. At run time, as `book_entry`,
+naming the member, before the engine routes the order: kanso's own methods refuse
+`submit_order`, `submit_order_list` and `modify_order` called by the member, a leg an
+overridden `hedges()` returns, and the engine's `close_position`, `close_all_positions` and
+`market_exit`, which send through `submit_order`; and what reaches the engine's own
+`submit_order`, `submit_order_list` and `modify_order` past kanso's — called on its class, as
+`Strategy.submit_order(self, order)`, or through `super(KansoStrategy, self)` — the book
+refuses on the bus: the engine hands it an order's `OrderInitialized`, and a modify's
+`OrderPendingUpdate`, before it routes either (`kanso doctor` checks it at no latency and at
+20 ms), and the book lets through only kanso's own order, each once, and no modify at all. It
+refuses an order in the name of a strategy that is no member as well, and names the member
+that was running when an order was sent, where it can tell, not the one the order is in the
+name of. So an order a
+member builds itself and sends from a handler the engine runs inside the submission of
+kanso's own (`on_order_submitted`) is refused like any other. Before anything runs,
+`strategy_integrity` refuses in a researched strategy what goes past both (*The embargo*):
+a command or a fill sent on the message bus, which the book does not hear, and taking the
+book's handler off the bus; an event applied to an order by hand; and kanso's private sends,
+which send whatever they are handed as the order kanso is sending, and which the book lets
+through as that. A strategy the gate did not pass is held to the run-time layers alone — in
+a book of one at no latency and at 20 ms each of those routes went out (`docs/backlog.md`
+row 210) — and so is one that reaches them by a spelling the gate does not follow (row 211):
+the book still refuses its orders through the engine's own methods, but a buy of a million
+sent on the bus, reached by a name held in a string through `pickle` or the engine's
+`resolve_path`, each handed out by an allowed module, passed the gate sized or not, and
+bought a million more in a book of one and alone, at no latency and at 20 ms. An exit at market that cancels the member's exit resting on its side takes that
+one out of the book's gross at once with no latency stated, since the cancel lands before
+anything further is matched. The session clock is New York's for every member, whatever its
+venue. A member is run at the book's capital and window; one with an attached
+construct, a `book` policy or a level-two book is refused. No stage holds a book yet:
+`portfolio.yaml` names no shared block and a stage node runs no ledger, which is the next
+step (`docs/backlog.md`).
 
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the

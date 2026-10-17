@@ -392,7 +392,10 @@ Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty
 `submit_entry(new, side)` in one handler. The budget is filled in whole lots of the
 instrument, and on a multiplied instrument — a future, an option — the price and the tick it
 is divided by are one contract's, `price x multiplier`, as is every notional the harness
-sizes, reserves or reads back on either path. Without the key, `submit_entry(id, side,
+sizes, reserves or reads back on either path. `submit_entry` also takes `edge_bp`, the move
+the entry predicts less its round trip's cost in basis points, which only a book reads — it
+orders an instant's entries by it (`docs/concepts.md`, *Stages*) — and a sleeve run alone
+ignores. Without the key, `submit_entry(id, side,
 notional=…)` or `qty=…` sizes to the smaller of what was asked and what the risk limits leave,
 floored onto the instrument's lot — a `qty` the limits leave whole is submitted whole, never
 its notional divided back by the price — read on the smaller
@@ -401,8 +404,23 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
-`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
-a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
+`modify_order` is neither cut nor refused for a sleeve run alone: kanso hands the modify to
+the engine's own unchanged, and an entry grown or re-priced by it is held to no ceiling until
+kanso holds it to one (`docs/backlog.md` row 123).
+**In a book a member sends orders only through `submit_entry` and `submit_exit`.** It may
+cancel its orders. At run time the book refuses each of these as `book_entry`, naming the
+member, before the engine routes it, whichever handler sends it, `on_order_submitted` included: `submit_order`,
+`submit_order_list` and `modify_order` called by the sleeve, a leg an overridden `hedges()`
+returns, the engine's `close_position`, and the engine's own `submit_order`,
+`submit_order_list` and `modify_order` called past kanso's — on the engine's class, or through
+`super(KansoStrategy, self)` — which the book hears as the engine hands the order to the bus
+(`docs/concepts.md`, *Stages*). What goes past both — a command or a fill sent on the message
+bus, an event applied to an order by hand, an order handed to kanso's private `_submitted` —
+the book does not refuse (`docs/backlog.md` row 210); `strategy_integrity` refuses it before
+anything runs, in a researched strategy, sized or not, with kanso's own sends and a method
+kanso overrides reached past it, by the names each is spelt with — the spellings it does not
+follow, what an allowed module holds from elsewhere among them, are open (`docs/backlog.md`
+row 211). A sleeve run alone is held to none of it at run time (`docs/backlog.md` row 209).
 **A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
 owed exit and the classification of an order as an entry or an exit read the position the
 engine keeps for the sleeve's own strategy in the name, not the account's net position, which
@@ -419,18 +437,28 @@ an exit or not, so a stop that would reverse the position, or both legs of a bra
 of which can fill, leave that much less to close. The stop-loss and take-profit of a bracket
 whose entry has filled nothing do not count: they can fill only after the entry and close
 what it opens, and neither the venue nor the order emulator has them open to cancel; once the
-entry has filled any of it they count in full. With no latency stated, an exit at market
-is never held back by a resting one: when the sleeve's own limit or stop orders resting at
-the venue on the closing side would leave it less than asked, it cancels them first, so a
-stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
-after the stop has closed. Under a latency the cancelled orders can still fill until their
-cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
-below); an order of the sleeve's still in flight to the venue, modified or not, is not
-cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
-paid once the venue holds that order open and the owed exit has cancelled it. An order the
-venue holds whose modify has not been answered yet, one sent in the same handler among them,
-counts too, and an exit at market does not cancel it at once: on a node a cancel sent in the
-handler that sent the modify would overtake it, where the backtest lands the modify first.
+entry has filled any of it they count in full. The child of an exit sent one-triggers-other
+in its own name — against a long, a sell that releases another sell once it fills — counts in
+full from the start, since the parent's fill releases it to close more; it stops counting once
+its parent, having filled nothing, can no longer fill, since the engine then cancels the child
+with it. A child whose parent is in another name counts once that parent has filled any of it:
+before then the venue holds it pending and an exit at market cannot cancel it, so counting it
+would hold the exit back for as long as the parent rests (`docs/backlog.md` row 206).
+An exit asked for from a handler the backtest engine runs inside another order's submission,
+such as `on_order_submitted`, counts that order as working, as a node, which hands the event
+over only once the submission has returned, always did.
+With no latency stated, an exit at market is never held back by a resting one: when the
+sleeve's own limit or stop orders resting at the venue on the closing side would leave it
+less than asked, it cancels them first, so a stop is not blocked by a take-profit, and a
+take-profit left above the market cannot fill after the stop has closed. Under a latency the
+cancelled orders can still fill until their cancels land, so the exit is cut to what they
+leave and the rest is owed (`costs.latency_ms`, below); an order of the sleeve's still in
+flight to the venue, modified or not, is not cancelled and counts, and what it cuts from an
+exit at market is owed at any latency, and paid once the venue holds that order open and the
+owed exit has cancelled it. An order the venue holds whose modify has not been answered yet,
+one sent in the same handler among them, counts too, and an exit at market does not cancel it
+at once: on a node a cancel sent in the handler that sent the modify would overtake it, where
+the backtest lands the modify first.
 With no latency stated it cancels it as the venue answers the modify; under a latency it
 cancels it on the next point, before the sleeve's handler for it, whether or not the venue
 has answered the modify by then, and the cancel still lands behind the modify, which was
@@ -459,8 +487,12 @@ so a resting order moved on every bar need not be re-posted to keep a card fast;
 does not save memory either, since the engine keeps every order's events for the run
 (`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
-not — one that overrides a harness method or binds any other name its base class owns
-(`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second
+not — one that overrides a harness method or binds any other name its base class owns, calls
+the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness
+overrides past it, as `Strategy.submit_order(self, order)`, reaches the message bus
+(`msgbus`, `_msgbus`) or applies an event to an order by hand (`.apply`), each as it is spelt
+(`docs/concepts.md`, *The embargo*, and `docs/backlog.md` row 211), with the line and what to
+write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
 the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
 instrument, the instant and the book held. `position_size` under the rule judges entry fills
@@ -704,8 +736,8 @@ point of the feed. Neither is delayed again: an order sent from either reaches t
 latency is the whole round trip, feed and order together. The quote is a signal and moves
 nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
 `spread: quotes` has no quote series to read. What else the strategy may not touch under the
-key — the message bus and the engine's own book subscriptions — is in `docs/concepts.md`,
-The embargo. An attached construct researched or composed under the key is handed no book
+key — the engine's own book subscriptions, beside the message bus, which no strategy may
+touch — is in `docs/concepts.md`, The embargo. An attached construct researched or composed under the key is handed no book
 at all, neither the view nor a subscription of its own — asking for one is refused, and
 the card crashes naming the call; it reads its host's prices from the context it is asked
 with. A strategy that reads level one alone sends and fills the same on any grid,
@@ -1976,7 +2008,10 @@ certificates/<hyp>/<sha7>.py
 
 The plan is what would count as proof for this hypothesis — the cert, paper and live gates
 with their parameters and a rationale each — pinned once, re-minted only by `cert plan
---replan`. A certificate is the verdict, its evidence and its pins. The `.py` beside it is
+--replan`. A certificate is the verdict, its evidence and its pins, the `power` it states and
+the `net_per_trade` of its window: `net_per_trade_bp`, `net_se_session`, `net_t`,
+`sessions_with_trades` and `trades`, struck from the certification run, or `null` for a
+window that closed no trade (`docs/concepts.md`, *Certification*). The `.py` beside it is
 the certified source, byte for byte, so a certified subject travels with the files even where
 `state.db` does not:
 

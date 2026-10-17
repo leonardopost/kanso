@@ -207,6 +207,56 @@ class Power(KansoModel):
         return self
 
 
+NET_T_TOLERANCE = 1e-9
+"""How far a recorded `net_t` may sit from its value over its error, relatively: floats
+written and read back are the same floats, so this only absorbs the division's rounding."""
+
+
+class NetPerTrade(KansoModel):
+    """The certification window's mean net per trade, struck from the certification run.
+
+    `net_per_trade_bp` is the mean net profit per closed trade in basis points of the
+    position each opened — the run's per-trade edge over the window as one fold, with costs
+    applied once by the runner, as `edge_per_trade` reads it. `net_se_session` is its error
+    clustered by session: each session's trades move one session's influence on the mean,
+    so a session's clips that move together count once. `net_t` is the value over that
+    error. `sessions_with_trades` counts the sessions a closed trade fell on, by the day it
+    closed, and `trades` the closed trades. The error and `net_t` are `None` when fewer than
+    two sessions closed a trade, where the influences cannot vary, and `net_t` is `None` too
+    when the error is zero.
+
+    It is what a book ranks a member by (`kanso.nautilus.book`): read off the certificate,
+    never computed again by running the certification window.
+    """
+
+    net_per_trade_bp: float
+    net_se_session: float | None = Field(default=None, ge=0)
+    net_t: float | None = None
+    sessions_with_trades: int = Field(ge=1)
+    trades: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _the_t_is_the_value_over_its_error(self) -> NetPerTrade:
+        if self.sessions_with_trades > self.trades:
+            raise ValueError(
+                f"sessions_with_trades: {self.sessions_with_trades} sessions cannot hold "
+                f"{self.trades} trades"
+            )
+        if self.sessions_with_trades < 2 and self.net_se_session is not None:
+            raise ValueError("net_se_session: one session closed every trade, so it has no error")
+        se = self.net_se_session
+        if se is None or se == 0.0:
+            if self.net_t is not None:
+                raise ValueError("net_t: there is no error to divide by")
+            return self
+        expected = self.net_per_trade_bp / se
+        if self.net_t is None or abs(self.net_t - expected) > NET_T_TOLERANCE * max(
+            1.0, abs(expected)
+        ):
+            raise ValueError(f"net_t: {self.net_t} is not the value over its error, {expected}")
+        return self
+
+
 class Certificate(Versioned):
     """The immutable record of one plan run against one strategy under one engine."""
 
@@ -231,6 +281,11 @@ class Certificate(Versioned):
     `None` on a certificate written before it was stated, struck on a snapshot nothing could
     be measured on, or measured on a research window whose error is zero — one trade, or one
     period — which has no dispersion to state it from."""
+    net_per_trade: NetPerTrade | None = None
+    """The certification window's mean net per trade and its session-clustered error,
+    struck from the run the gates judged; `None` on a certificate written before it was
+    recorded, on a snapshot nothing could be measured on, and on a window that closed no
+    trade."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]

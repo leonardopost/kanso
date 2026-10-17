@@ -24,11 +24,17 @@ instant.
 
 **It records every order intent.** `(ts_event, instrument, side, qty, order_type, price?)`
 per submitted order, stamped with `data_time` rather than a wall clock, captured by
-overriding `submit_order` and `submit_order_list`. Every path that reaches the venue goes
-through one of the two — the cost-aware helpers below, an order the author built by hand,
-and the engine's own `close_position` / `close_all_positions`, which construct a market
-order and submit it through `submit_order`. An order that bypasses the helpers is still on
-the record.
+overriding `submit_order` and `submit_order_list`. Every call on the strategy that reaches
+the venue goes through one of the two — the cost-aware helpers below, an order the author
+built by hand, and the engine's own `close_position` / `close_all_positions`, which
+construct a market order and submit it through `submit_order`. An order that bypasses the
+helpers is still on the record. One that bypasses the overrides is not: the engine's own
+`submit_order` or `submit_order_list` called on its class, as `Strategy.submit_order(self,
+order)`, or through `super(KansoStrategy, self)`, records no intent and is asked nothing.
+`strategy_integrity` refuses a researched strategy that reaches a method this class
+overrides that way as it is spelt (`kanso.criteria.integrity`; what it does not follow is
+`docs/backlog.md` row 211), and a book refuses the order itself before the engine routes it
+(below).
 
 **It sizes.** The cost-aware helpers `submit_entry` and `submit_exit` choose a quantity
 from the capital and the risk limits injected from the hypothesis, leaving room for the
@@ -38,11 +44,12 @@ limit, `max_notional_per_order` keyed by instrument, which is a per-order backst
 knows nothing of a position, a strategy or a book. An entry the author built is refused at
 `submit_order` when the book cannot fund it, and `cancel_order`, `cancel_orders` and
 `cancel_all_orders` are kanso's own so that an exit owed or a cancel held back is kept.
-`modify_order` is not: it is the engine's, and a modify that grows an entry's quantity, or
-moves a resting entry to a price at which it opens more, is held neither to the room nor to
-what the book funds — the room reads the order at its new size and price from its next read
-on. A sizing rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`);
-an unsized one may call it (`docs/backlog.md` row 123).
+`modify_order` is not held to the room or to what the book funds. For a sleeve run alone
+kanso's `modify_order` hands the modify to the engine's own unchanged, so a modify that grows
+an entry's quantity, or moves a resting entry to a price at which it opens more, goes out as
+it is; the room reads the order at its new size and price from its next read on. A sizing
+rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`); an unsized
+sleeve alone may call it (`docs/backlog.md` row 123). In a book it is refused.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -69,6 +76,33 @@ classifies and exits by — `held`, `submit_exit`, an owed exit, `ctx.book` — 
 positions the cache keeps for this strategy in the name, so two versions on one stage that
 trade the same name each exit what they hold and nothing of the other's.
 
+**In a book its entries are the book's to place.** A runner that puts a sleeve in a book
+(`kanso.nautilus.book`) attaches the book's ledger to it: `submit_entry` collects the entry
+and returns `None`, the sleeve tells the ledger of every marker it handles, and once every
+member has handled the one that closes the instant the ledger calls `submit_entry` again for
+each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
+sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). Its exits are its
+own, sized by `submit_exit` never past flat as ever. **A member sends orders only through
+`submit_entry` and `submit_exit`**, and may cancel. Its other orders and modifies are refused
+(`book_entry`), naming the member, before the engine routes them, where a layer can see
+them. The sleeve refuses at its own methods (`_check_booked`): `submit_order`,
+`submit_order_list` and `modify_order` called by it, a leg an overridden `hedges()` returns,
+and the engine's `close_position`, which sends through `submit_order`. The ledger refuses on
+the bus, as the engine hands it the order's `OrderInitialized` or the modify's
+`OrderPendingUpdate`, what reaches the engine's own methods past the sleeve's: called on its
+class or through `super(KansoStrategy, self)` (`BookLedger.heard`, which asks
+`_check_booked_event` with the member that was running, `BookLedger.running`, which the
+sleeve marks while it handles an instant's points, an order event and `on_start`). The one
+order let through is the one `_submitted` is sending for the two: recognised as that very
+object at its check, and let through to the engine once, at its own `OrderInitialized`. An
+order the sleeve builds itself and sends from a handler the engine runs inside that
+submission — `on_order_submitted` — is refused like any other. What neither sees — a command
+or a fill sent on the bus, an event applied to an order, an order handed to `_submitted`
+itself — only `strategy_integrity` refuses, in a researched strategy, by the names each is
+spelt with (`kanso.criteria.integrity`); reached by a spelling it does not follow, such as a
+name held in a string through a module an allowed import hands out, each is refused by
+nothing (`docs/backlog.md` row 211).
+
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
 the top levels as they stood on a grid, at the first point after each grid instant, and
@@ -79,8 +113,12 @@ author is handed every change, as the venue is.
 Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor` methods
 are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`, `handle_trade_tick`,
 `handle_order_book_deltas`, `handle_data`, `submit_order`, `submit_order_list`,
-`cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all take
-precedence when the engine calls them; `Trader` starts actors before strategies, so a
+`modify_order`, `cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all
+take precedence when the engine calls them, and called on the engine's class they are the
+engine's own, past the subclass's; an order's `OrderInitialized`, every order's of a list,
+and a modify's `OrderPendingUpdate` are published on the bus before the engine routes the
+command, so a subscriber that raises sends nothing (`kanso.nautilus.facts` measures it at no
+latency and at 20 ms); `Trader` starts actors before strategies, so a
 modifier is registered before its host runs; `close_position` and `close_all_positions`
 route through `submit_order`; under the NETTING OMS the cache keeps one position per
 (instrument, strategy), which `cache.positions_open(instrument_id=…, strategy_id=…)`
@@ -150,7 +188,7 @@ from nautilus_trader.model.enums import (
     order_side_to_str,
     order_type_to_str,
 )
-from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.events import OrderFilled, OrderInitialized, OrderPendingUpdate
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
@@ -188,6 +226,7 @@ from kanso.nautilus.hooks import (
     register_modifier,
 )
 from kanso.nautilus.sizing import (
+    BOOK_ENTRY,
     BUDGET_BELOW_LOT,
     CLIP_DIRECTION,
     CLIP_WITHOUT_BUDGET,
@@ -694,6 +733,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._depth_shown: dict[str, tuple[dict[Price, Quantity], dict[Price, Quantity]]] = {}
         self._depth_seen_ns = -1
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
+        self._book_ledger: Any = None
+        """The book this sleeve is a member of, when a runner put it in one
+        (`kanso.nautilus.book.BookLedger`); `None` for a sleeve run alone."""
+        self._sending: Any = None
+        """The order `_submitted` is sending, until the engine hands the bus its
+        `OrderInitialized` and a book lets it through, once (`_check_booked_event`)."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1067,7 +1112,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             for order in self.cache.orders(strategy_id=self.id)
         )
         self.msgbus.subscribe(topic=actions.TOPIC, handler=self._on_restated)
-        super()._start()
+        ledger = self._book_ledger
+        if ledger is not None:
+            ledger.running.append(self)
+        try:
+            super()._start()
+        finally:
+            if ledger is not None:
+                ledger.running.pop()
 
     def subscribe_universe(self) -> None:
         """Subscribe every instrument of the universe to every data requirement.
@@ -1371,10 +1423,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):
-            if self._pending:
-                self._flush_one()
-            if not self._pending:
-                self._consult_due()
+            ledger = self._book_ledger
+            if ledger is not None:
+                ledger.running.append(self)
+            try:
+                if self._pending:
+                    self._flush_one()
+                if not self._pending:
+                    self._consult_due()
+                if ledger is not None:
+                    ledger.marked(self, data)
+            finally:
+                if ledger is not None:
+                    ledger.running.pop()
             return
         ts_init = getattr(data, "ts_init", None)
         if isinstance(ts_init, int):
@@ -1610,9 +1671,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         Nothing at all while the strategy is warming: the order is neither checked nor
         recorded, so an author sees `None` from the helpers exactly as under a refused
         filter, and the two code paths hold identical intent lists.
+
+        The order is kept as this sleeve's (`_track`) before the engine is handed it, so a
+        handler the engine runs inside the call sizes on it as working and in flight. In
+        nautilus_trader 1.231.0 the backtest engine's execution client reports an order
+        submitted inside the call that hands it over (`BacktestExecClient.submit_order` in
+        `backtest/execution_client.pyx`), so `on_order_submitted` runs inside this one, where a
+        node's live risk engine queues the command and the event comes once the call has
+        returned. Kept after the call, an exit asked again from `on_order_submitted` did not
+        count the first: a sleeve that asked so for the exit at market of its long of 1000 sold
+        2000. Both paths now size it alike.
         """
         if self._warming():
             return
+        self._check_booked(order, "submit_order")
         self._check_hand_built(order)
         kind = self.classify(order)
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
@@ -1621,8 +1693,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
         self._intents.append(self._intent(order))
-        super().submit_order(order, position_id, client_id, params)
         self._track(order)
+        super().submit_order(order, position_id, client_id, params)
         if kind == ENTRY and not self._hedging:
             self._place_hedges(ctx)
 
@@ -1633,10 +1705,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         client_id: object = None,
         params: dict[str, object] | None = None,
     ) -> None:
-        """As `submit_order`, classifying and filtering the list by its first order."""
+        """As `submit_order`, classifying and filtering the list by its first order. In a book
+        it is refused (`_check_booked`): kanso sends no list."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
+        self._check_booked(orders[0], "submit_order_list")
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
         if not (self.sized or self._built or self._sizing_call):
@@ -1646,9 +1720,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         for order in orders:
             self._intents.append(self._intent(order))
-        super().submit_order_list(order_list, position_id, client_id, params)
-        for order in orders:
             self._track(order)
+        super().submit_order_list(order_list, position_id, client_id, params)
         if kind == ENTRY and not self._hedging:
             self._place_hedges(ctx)
 
@@ -1728,6 +1801,118 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 why="under a sizing rule every order is the harness's; call "
                 "submit_entry(instrument_id, side) or submit_exit(instrument_id)",
             )
+
+    def _check_booked(self, order: Any, call: str) -> None:
+        """Refuse, in a book, an order this sleeve sends by anything but `submit_entry` and
+        `submit_exit`, at the call of kanso's that it was sent by.
+
+        A book hands each entry of an instant its share of one room in its own order, and an
+        exit is the book's only through `submit_exit`, which sizes it never past flat. So at
+        kanso's methods a member's orders go out only through the two (`kanso.nautilus.book`
+        says what reaches the venue past them): the one order let through is the one
+        `_submitted` is sending for them, recognised as that very object,
+        and let through to the engine once, as the engine hands the bus its `OrderInitialized`
+        (`_check_booked_event`). kanso sends no list and modifies no order,
+        so `submit_order_list` and `modify_order` are refused whatever they hold, and so is a
+        leg an overridden `hedges()` returns. Cancelling is not refused: a cancel takes nothing
+        past the room or past flat. A sleeve run alone is not asked.
+        """
+        ledger = self._book_ledger
+        if ledger is None:
+            return
+        if call == "submit_order" and order is self._sending:
+            return
+        if call == "submit_order" and self._hedging:
+            call = "hedges()"
+        verb = "modifies an order" if call == "modify_order" else "sends an order"
+        self._refuse_booked(order.instrument_id, order.side, f"{call} {verb}")
+
+    def _check_booked_event(self, event: Any, sender: Any = None) -> None:
+        """Refuse, in a book, an order or a modify of this sleeve's that kanso is not sending,
+        before the engine routes it; the book asks it of every event of the sleeve's orders
+        (`BookLedger.heard`), with the member it was sent while (`sender`, the member whose
+        handler the engine was running, or `None` where the book cannot tell).
+
+        The engine's own methods can be reached past kanso's — called on the engine's class,
+        as `Strategy.submit_order(self, order)`, or through `super(KansoStrategy, self)` — and
+        then kanso's overrides never see the order. The engine still hands the bus the order's
+        `OrderInitialized` before it routes the order, for one order and for every order of a
+        list, and a modify's `OrderPendingUpdate` before it routes the modify, and the book
+        hears both there ahead of the sleeve's own handlers; a refusal raised then leaves the
+        order unsent and the order at the venue as it was (`kanso.nautilus.facts`, at no
+        latency and at 20 ms). So the one `OrderInitialized` let through is the one for the
+        order `_submitted` is sending, once, and not while another member runs; every
+        `OrderPendingUpdate` is refused, since kanso modifies no order. An order the member
+        builds itself and sends from a handler the engine runs inside one's submission —
+        `on_order_submitted` among them — is refused like any other, since its own
+        `OrderInitialized` comes after the one let through. The engine sends a modify of an
+        emulated order with no `OrderPendingUpdate`, and a book holds no emulated order: kanso
+        sends none, and a member's own is refused as it is initialised.
+
+        An order or a modify in this sleeve's name sent while another member ran is refused
+        as that member's, naming both; one sent where the book cannot tell which member ran
+        is refused as this sleeve's, saying only that it is in its name.
+        """
+        if sender is None:
+            by, named = self, " in its name where the book cannot tell which member ran,"
+        elif sender is self:
+            by, named = self, ""
+        else:
+            owner = self._book_ledger.member_of(self)
+            by, named = sender, f" in the name of {owner} while this member runs,"
+        if isinstance(event, OrderInitialized):
+            sending = self._sending
+            if (
+                by is self
+                and sending is not None
+                and event.client_order_id == sending.client_order_id
+            ):
+                self._sending = None
+                return
+            by._refuse_booked(
+                event.instrument_id,
+                event.side,
+                "the engine's own submit_order or submit_order_list, reached past "
+                f"KansoStrategy's, sends an order{named}",
+            )
+        if isinstance(event, OrderPendingUpdate):
+            order = self.cache.order(event.client_order_id)
+            by._refuse_booked(
+                event.instrument_id,
+                order.side,
+                "the engine's own modify_order, reached past KansoStrategy's, modifies an "
+                f"order{named}",
+            )
+
+    def _refuse_booked(self, instrument_id: InstrumentId, side: OrderSide, did: str) -> NoReturn:
+        """The refusal of an order a book member sent or moved past `submit_entry` and
+        `submit_exit`, naming the member and what it did."""
+        self._refuse(
+            BOOK_ENTRY,
+            instrument_id.value,
+            order_side_to_str(side),
+            why=f"{self._book_ledger.member_of(self)}: {did} past the book, where a member's "
+            "orders go out only through submit_entry, which the book allots at the instant's "
+            "end, and submit_exit, which sizes the exit never past flat; call "
+            "submit_entry(instrument_id, side) or submit_exit(instrument_id), and "
+            "cancel_order to take an order back",
+        )
+
+    def modify_order(
+        self,
+        order: Any,
+        quantity: Quantity | None = None,
+        price: Price | None = None,
+        trigger_price: Price | None = None,
+        client_id: object = None,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        """Hand the engine's own `modify_order` the modify unchanged, for a sleeve run alone: it
+        is held neither to the room nor to what the book funds (`docs/backlog.md` row 123).
+        In a book it is refused (`_check_booked`), since it would move an order the book or
+        `submit_exit` sized past what either left it."""
+        self._check_booked(order, "modify_order")
+        super().modify_order(order, quantity, price, trigger_price, client_id, params)
 
     def _hedge_order(self, leg: Hedge) -> object | None:
         instrument_id = InstrumentId.from_str(leg.instrument)
@@ -1914,6 +2099,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         notional: float | None = None,
         qty: float | None = None,
         price: float | None = None,
+        edge_bp: float | None = None,
     ) -> object | None:
         """Open or grow a position, sized to the risk limits and the cost model.
 
@@ -1928,6 +2114,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit first. Attached overlays then scale it. Returns the submitted order, or `None`
         when nothing was submitted — no room, no price to size against, or an attached
         filter refused the entry.
+
+        **In a book the entry is the book's to place** (`kanso.nautilus.book`). It is
+        collected, returning `None`, and placed when the instant ends, after every member's
+        entries of that instant are in: in the book's order — `edge_bp` first, the predicted
+        move in basis points less the round trip's cost at the instant, highest first and an
+        entry without one last — sized as above at that moment, then cut to what the book has
+        left: its room, its cap on the name, and the size displayed at the touch the instant's
+        takers share. One cut below a whole lot is refused and counted. `edge_bp` is read by a
+        book alone; a sleeve run by itself ignores it. An entry asked again in the same name
+        and side while the first is still collected is the same entry, and is dropped.
         """
         resolved_id = self._instrument_id(instrument_id)
         resolved_side = self._side(side)
@@ -1937,13 +2133,26 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 f"instrument: {resolved_id} is not in the cache; "
                 "it is not part of this run's resolved universe"
             )
+        ledger = self._book_ledger
+        if ledger is not None and not ledger.claim(self):
+            if not self._warming():
+                ledger.defer(
+                    self,
+                    resolved_id,
+                    resolved_side,
+                    edge_bp,
+                    {"notional": notional, "qty": qty, "price": price},
+                )
+            return None
         if self.sized:
             return self._sized_entry(instrument, resolved_id, resolved_side, notional, qty, price)
         reference = price if price is not None else self._price_now(resolved_id.value)
         if reference is None or reference <= 0:
+            self._sized_nothing(instrument, resolved_side)
             return None
         room = self._headroom(resolved_id, reference)
         if room <= 0:
+            self._sized_nothing(instrument, resolved_side)
             return None
         unit = reference * float(instrument.multiplier)  # one contract's notional
         raw = _entry_units(qty, notional, room, unit)
@@ -1952,13 +2161,31 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
         self._entry_answers = self._ask_overlays(ctx)
         try:
-            quantity = self._quantise(instrument, self.size(ctx, raw))
+            units = self.size(ctx, raw)
+            if ledger is not None:
+                units = ledger.cut(self, instrument, resolved_side, units, reference, price)
+            quantity = self._quantise(instrument, units)
             if quantity is None:
                 return None
             order = self._order(instrument, resolved_side, quantity, price)
-            return self._submitted(order)
+            return self._booked(order)
         finally:
             self._entry_answers = None
+
+    def _sized_nothing(self, instrument: object, side: OrderSide) -> None:
+        """An entry this sleeve's own limits leave nothing for — no price to size it against,
+        or no room — which a book counts as sized below its minimum."""
+        if self._book_ledger is not None:
+            self._book_ledger.cut(self, instrument, side, 0.0, 0.0, None)
+
+    def _booked(self, order: object) -> object | None:
+        """Submit an entry this sleeve sized, and in a book tell the book of it once it reached
+        the venue."""
+        ledger = self._book_ledger
+        submitted = self._submitted(order)
+        if submitted is not None and ledger is not None:
+            ledger.placed(self, submitted)
+        return submitted
 
     def submit_exit(
         self,
@@ -1978,7 +2205,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit or not: a stop that would reverse the position, or both legs of a bracket only
         one of which can fill, leave that much less to close. The stop-loss and take-profit
         of a bracket whose entry has filled nothing do not count, since they can fill only
-        after it and close what it opens; once it has filled any of it they count in full
+        after it and close what it opens; once it has filled any of it they count in full.
+        The child of an exit sent one-triggers-other counts in full from the start: its parent
+        is on the same side of the same name, and its fill releases the child to close more.
+        A child whose parent is in another name counts once that parent has filled any of it
         (`_not_yet_live`).
 
         An exit at market cancels this sleeve's own limit or stop orders resting at the
@@ -2093,6 +2323,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         reference = self._last_print.get(key)
         if reference is None or reference <= 0:
+            self._sized_nothing(instrument, side)
             return None
         multiplier = float(instrument.multiplier)  # type: ignore[attr-defined]
         increment = float(instrument.price_increment)  # type: ignore[attr-defined]
@@ -2122,10 +2353,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     asked,
                     why=f"a budget of {self.budget:g} at {reference:g} floors to no whole lot",
                 )
+            ledger = self._book_ledger
+            if ledger is not None:
+                cut = ledger.cut(self, instrument, side, float(quantity), reference, None)
+                if cut < float(quantity):
+                    quantity = self._quantise(instrument, cut)
+                    if quantity is None:
+                        return None
             order = self._order(instrument, side, quantity, None)
             self._sizing_call = True
             try:
-                return self._submitted(order)
+                return self._booked(order)
             finally:
                 self._sizing_call = False
         finally:
@@ -2440,19 +2678,30 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`kanso.nautilus.replay_client`); under a latency it is stamped with the same
         instant as the order and lands right behind it (`SimulatedVenue._send`). Measured on
         both paths by the replay tests.
+
+        In a book the sleeve is the member running while its handlers run
+        (`BookLedger.running`), so an order heard on the bus is named for the member it was sent
+        while.
         """
-        self._arrived(event)
-        super().handle_event(event)
-        client_order_id = getattr(event, "client_order_id", None)
-        held = self._unsent.get(client_order_id)
-        if held is not None and self._current(held[0]).status != OrderStatus.INITIALIZED:
-            order, client_id, params = held
-            current = self._current(order)
-            del self._unsent[current.client_order_id]
-            if not current.is_closed:
-                super().cancel_order(current, client_id, params)
-        if client_order_id in self._awaiting:
-            self._answered(client_order_id)
+        ledger = self._book_ledger
+        if ledger is not None:
+            ledger.running.append(self)
+        try:
+            self._arrived(event)
+            super().handle_event(event)
+            client_order_id = getattr(event, "client_order_id", None)
+            held = self._unsent.get(client_order_id)
+            if held is not None and self._current(held[0]).status != OrderStatus.INITIALIZED:
+                order, client_id, params = held
+                current = self._current(order)
+                del self._unsent[current.client_order_id]
+                if not current.is_closed:
+                    super().cancel_order(current, client_id, params)
+            if client_order_id in self._awaiting:
+                self._answered(client_order_id)
+        finally:
+            if ledger is not None:
+                ledger.running.pop()
 
     def _answered(self, client_order_id: object) -> None:
         """With no latency stated, move an exit at market owed behind an order on along as
@@ -2549,20 +2798,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         `clips` counts the attached overlays' clips as well, for a reading of the whole net
         position rather than the sleeve's own share of it.
         """
-        instant = self._instant()
         working = []
         for entry in self._ledger.values():
             order = self._current(entry.order)
             if (
-                order.is_closed
-                or self.cache.is_order_pending_cancel_local(order.client_order_id)
-                or order.side != side
+                order.side != side
                 or order.instrument_id.value != key
-                or (
-                    instant
-                    and order.is_pending_cancel
-                    and self._cancels.get(order.client_order_id, False)
-                )
+                or self._spent(order)
                 or (not clips and self._is_clip(entry.order))
                 or self._not_yet_live(order)
             ):
@@ -2570,27 +2812,67 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             working.append(order)
         return working
 
+    def _spent(self, order: Any) -> bool:
+        """Whether an order of this sleeve's can no longer fill: the venue has closed it, the
+        order emulator has taken it out on its cancel, or, with no latency stated, the venue
+        held it open when its cancel was sent (`_working` states each)."""
+        return bool(
+            order.is_closed
+            or self.cache.is_order_pending_cancel_local(order.client_order_id)
+            or (
+                self._instant()
+                and order.is_pending_cancel
+                and self._cancels.get(order.client_order_id, False)
+            )
+        )
+
     def _not_yet_live(self, order: Any) -> bool:
-        """Whether an order is a contingent child, such as a bracket's stop-loss or
-        take-profit, whose parent has filled nothing: it can fill only once the parent has,
-        and then closes what the parent opened, so until then it leaves the position as it
-        is. In nautilus_trader 1.231.0 the venue keeps such a child `SUBMITTED` with no venue
-        order id, and the order emulator keeps it `INITIALIZED`, until the parent fills, so
-        neither an exit at market nor anything else has a child to cancel. Measured on both
-        paths by the exit and replay tests, a bracket held by the venue and one held by the
-        emulator."""
+        """Whether an order is a contingent child that leaves the position as it is until its
+        parent fills: its parent has filled nothing, and is not on the child's own side of
+        the child's own name — a bracket's entry, whose stop-loss and take-profit close what it
+        opens, or an order in another name — or can no longer fill (`_spent`). A child whose
+        parent is on its own side of its own name is not: an exit sent one-triggers-other —
+        against a long, a sell whose fill releases another sell — sells both, so the child
+        counts in full like any order working there. A child whose parent is in another name
+        is left out until that parent fills: the venue holds it pending and an exit at market
+        cannot cancel it, so counted it would keep the exit of its own name from going out
+        for as long as the other name's parent rests (`docs/backlog.md` row 206 says what the
+        count leaves out).
+
+        In nautilus_trader 1.231.0 the venue keeps a child `SUBMITTED` with no venue order id
+        while its parent is accepted or triggered, and processes it on the parent's first
+        fill (`OrderMatchingEngine.process_order` and `fill_order` in `backtest/engine.pyx`);
+        the order emulator keeps it `INITIALIZED` until the parent fills (`OrderManager
+        .handle_order_filled` in `execution/manager.pyx`). So neither an exit at market nor
+        anything else has such a child to cancel, and one whose parent can no longer fill
+        never fills: a parent cancelled with nothing filled takes its child with it
+        (`OrderMatchingEngine.cancel_order`, and `OrderManager.handle_contingencies` for the
+        emulator's). Measured on both paths by the exit and replay tests, a bracket held by
+        the venue and one held by the emulator, and on the backtest engine by the exit tests
+        for an exit sent one-triggers-other."""
         if order.parent_order_id is None:
             return False
         parent = self.cache.order(order.parent_order_id)
-        return parent is not None and parent.filled_qty.as_decimal() == 0
+        if parent is None or parent.filled_qty.as_decimal() != 0:
+            return False
+        adds = parent.instrument_id == order.instrument_id and parent.side == order.side
+        return not adds or self._spent(parent)
 
     def _submitted(self, order: object) -> object | None:
+        """Send an order kanso sized — an entry `submit_entry` sized, an exit `submit_exit`
+        did — and hand it back, or `None` when nothing went out. It is the order kanso is
+        sending (`_sending`), the one a book lets through, once (`_check_booked`,
+        `_check_booked_event`); `strategy_integrity` denies it to a researched strategy,
+        since it sends whatever it is handed as kanso's own."""
         placed = len(self._intents)
         built, self._built = self._built, True
+        self._sending = order
         try:
             self.submit_order(order)
         finally:
             self._built = built
+            if self._sending is order:
+                self._sending = None
         return order if len(self._intents) > placed else None
 
     def _headroom(self, instrument_id: InstrumentId, reference: float) -> float:

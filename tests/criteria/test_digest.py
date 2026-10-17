@@ -12,7 +12,7 @@ from statistics import mean, stdev
 
 import pytest
 
-from kanso.criteria.digest import digest, edge_per_trade
+from kanso.criteria.digest import digest, edge_per_trade, session_edge
 from kanso.criteria.objectives import net_edge_bps
 from kanso.criteria.quantities import edge_bps, edge_series
 from kanso.criteria.run import Fill
@@ -128,3 +128,49 @@ def test_a_trade_closed_after_the_last_period_end_counts_in_the_last_period() ->
 
     assert edge_per_trade(run)[2] == 2
     assert edge_per_trade(shifted)[2] == 1
+
+
+def test_the_session_edge_is_the_per_trade_edge_with_its_error_read_session_by_session() -> None:
+    """Daily periods of one trade each: a session is a period, so the session-clustered
+    error is the period-linearised one the digest states, and the mean is the same."""
+    value, se, sessions, trades = session_edge(RUN) or (None, None, 0, 0)
+
+    edge, period_se, periods = edge_per_trade(RUN)
+    assert value == edge, "one mean, struck one way"
+    assert se == pytest.approx(period_se)
+    assert (sessions, trades) == (periods, 4)
+
+
+def test_a_session_s_clips_are_one_session_whatever_the_period() -> None:
+    """Twenty clips over four sessions at an hourly period: the period-by-period error
+    reads the clips of one session as several periods, the session's reads them as one."""
+    edges = (12.0, -8.0, 9.0, -5.0)
+    clips = tuple(
+        trade(START + timedelta(days=day), edge + wobble)
+        for day, edge in enumerate(edges)
+        for wobble in (-0.2, -0.1, 0.0, 0.1, 0.2)
+    )
+    run = build_run((1.0, 1.0, 1.0, 1.0), trades=clips)
+
+    found = session_edge(run)
+
+    assert found is not None
+    value, se, sessions, trades = found
+    assert (sessions, trades) == (4, 20)
+    assert value == pytest.approx(mean(edges))
+    assert se is not None and se > stdev(edge_series(run)) / len(clips) ** 0.5
+
+
+def test_trades_that_all_closed_on_one_session_have_no_session_error() -> None:
+    clips = tuple(trade(START, edge) for edge in (200.0, -150.0, 80.0))
+
+    assert session_edge(build_run((1.0,) * 5, trades=clips)) == (
+        pytest.approx(130.0 / 3),
+        None,
+        1,
+        3,
+    )
+
+
+def test_a_run_that_closed_no_trade_has_no_session_edge() -> None:
+    assert session_edge(build_run((0.0, 0.0))) is None

@@ -90,6 +90,7 @@ from kanso.certify.power import power, window_params
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
+from kanso.criteria.digest import session_edge
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
 from kanso.data.manifest import Manifest, catalog_path, manifests
@@ -114,6 +115,7 @@ from kanso.schemas import (
     EvaluatedGate,
     GateResult,
     Hypothesis,
+    NetPerTrade,
     ObjectiveResult,
     PlannedGate,
     Power,
@@ -298,7 +300,7 @@ def certify(
     )
     if registration.status != CANDIDATE:
         set_status(store, hyp_id, CANDIDATE)
-    evaluated, objective, stated = _judge(ws, store, plan, subject)
+    evaluated, objective, stated, struck = _judge(ws, store, plan, subject)
     made = Certificate(
         hyp_id=hyp_id,
         strategy_sha=subject.strategy_sha,
@@ -315,6 +317,7 @@ def certify(
         verdict=_verdict(evaluated),
         created_at=datetime.now(tz=UTC),
         power=stated,
+        net_per_trade=struck,
     )
     certificate.write(ws, store, made, subject.source)
     _apply(ws, store, made)
@@ -828,11 +831,12 @@ def _judge(
     store: StateStore,
     plan: CertificationPlan,
     subject: Subject,
-) -> tuple[list[EvaluatedGate], ObjectiveResult, Power | None]:
-    """Evaluate the plan's certification gates, measure the objective they judged, and
-    state what the certification window could resolve from the research window's own
-    dispersion — the same statement `cert plan` makes from the card, here from the research
-    window run again."""
+) -> tuple[list[EvaluatedGate], ObjectiveResult, Power | None, NetPerTrade | None]:
+    """Evaluate the plan's certification gates, measure the objective they judged, state
+    what the certification window could resolve from the research window's own dispersion —
+    the same statement `cert plan` makes from the card, here from the research window run
+    again — and strike the certification window's net per trade from the run the gates
+    judged (`net_per_trade`)."""
     planned = plan.stage_gates(CERT_STAGE)
     if not planned:  # pragma: no cover - the planner refuses a plan that reaches no stage
         raise PreconditionError(
@@ -846,6 +850,7 @@ def _judge(
         return (
             [_blocked(gate, snapshot, blocked) for gate in planned],
             ObjectiveResult(id=objective.id, value=0.0, se=0.0),
+            None,
             None,
         )
     measured = _measure(subject)
@@ -908,6 +913,28 @@ def _judge(
         [verdicts[gate.id] for gate in planned],
         ObjectiveResult(id=objective.id, value=value, se=se),
         stated,
+        net_per_trade(measured.certification),
+    )
+
+
+def net_per_trade(run: CardRun) -> NetPerTrade | None:
+    """The certification window's mean net per trade, from the run certification made of it.
+
+    Struck here, once, from the run every gate judged — never by running the window again —
+    so a book that ranks its members by it (`kanso.nautilus.book`) reads the number the
+    certificate was judged on (`kanso.criteria.digest.session_edge`). `None` for a window
+    that closed no trade.
+    """
+    edge = session_edge(run)
+    if edge is None:
+        return None
+    value, se, sessions, trades = edge
+    return NetPerTrade(
+        net_per_trade_bp=value,
+        net_se_session=se,
+        net_t=None if not se else value / se,
+        sessions_with_trades=sessions,
+        trades=trades,
     )
 
 

@@ -45,12 +45,12 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from collections.abc import Sequence
-from math import fsum
+from math import fsum, sqrt
 from statistics import median
 from typing import Final
 
 from kanso.criteria.objectives import net_edge_bps
-from kanso.criteria.quantities import mean
+from kanso.criteria.quantities import edge_bps, mean, variances_of_means
 from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, day_of
 from kanso.schemas import CardDigest
 
@@ -83,6 +83,42 @@ def edge_per_trade(run: CardRun) -> tuple[float, float | None, int]:
         {min(bisect_left(ends, t.closed_ns), last) for t in whole.trades if t.notional > 0}
     )
     return edge, (se if periods >= MIN_PERIODS else None), periods
+
+
+def session_edge(run: CardRun) -> tuple[float, float | None, int, int] | None:
+    """The run's mean net edge per closed trade in basis points of the position opened, its
+    error clustered by session, how many sessions closed a trade and how many trades closed;
+    `None` for a run that closed none.
+
+    The mean is `edge_per_trade`'s. The error is the linearised one `objectives._influence`
+    reads period by period, read here session by session: each session `s` of the run — a
+    UTC day it struck a period end in or closed a trade on — has the influence `u_s = (E_s −
+    R·M_s) / M̄`, `E_s` the edges of the trades closing that day, `M_s` their count, `M̄` the
+    trades per session and `R` the mean, and the error is that of the mean of the `u_s` over
+    the sessions (`quantities.variances_of_means`). So a session's clips that move together
+    count as one session's worth whatever the run's period, which is what a ranking across
+    hypotheses of different periods needs. It is `None` below two sessions with a trade,
+    where the influences are zero by construction.
+    """
+    traded = [t for t in run.trades if t.notional > 0]
+    if not traded:
+        return None
+    edge = edge_bps(run)
+    days = sorted({day_of(ts) for ts in run.period_ends_ns} | {day_of(t.closed_ns) for t in traded})
+    at = {day: index for index, day in enumerate(days)}
+    totals = [0.0] * len(days)
+    counts = [0] * len(days)
+    for trade in traded:
+        index = at[day_of(trade.closed_ns)]
+        totals[index] += trade.pnl_net / trade.notional * BPS
+        counts[index] += 1
+    sessions = sum(1 for n in counts if n)
+    if sessions < MIN_PERIODS:
+        return edge, None, sessions, len(traded)
+    per_session = len(traded) / len(days)
+    influences = [(e - edge * m) / per_session for e, m in zip(totals, counts, strict=True)]
+    (variance,) = variances_of_means(influences, [len(influences)])
+    return edge, sqrt(variance), sessions, len(traded)
 
 
 def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:

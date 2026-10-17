@@ -25,7 +25,10 @@ child opens the workspace, its catalog and its store as the lane does, under the
 environment. It certifies exactly as `kanso cert run` does — `kanso.certify.run.certify`,
 the one function — writes the certificate and every event itself, and reports the
 certificate, or the refusal, to the lane, which raises that refusal as the same kind of
-error with the same remedy. A fault that is not a refusal comes back as one naming what
+error with the same remedy. The certificate it reports carries the certification window's
+net per trade, struck from the run its gates judged (`kanso.certify.run.net_per_trade`) —
+the number a book ranks its members by, which nothing ever recomputes by running the window
+again. A fault that is not a refusal comes back as one naming what
 raised, so a lane records it and goes on rather than dying of it. No wall time is imposed:
 how many engine runs a certification makes is its plan's choice — the gates, and the
 parameters a perturbation moves — so no multiple of a card's budget bounds it.
