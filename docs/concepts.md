@@ -1973,6 +1973,14 @@ indicators and orders are what a run of it alone would produce. A version under 
 policy is seeded on a restart with the cushion and the last settled end of its newest
 measured window on that stage, and its first carry runs from the instant it resumes.
 
+**Two versions on one stage that trade one name each trade their own position.** They share
+one account, and what a version reads, sizes and exits by — `self.held(id)`, `submit_exit`,
+whether an order is an entry or an exit — is the position the engine keeps for its own
+strategy in the name, never the account's net position, which adds both up. So each realises
+the fills it realises alone and ends its window as it would alone. Nor do they compete for
+the market: each is filled against the whole touch as if it traded alone, and two that hold
+opposite sides of a name are each charged their own legs, where a broker would net them.
+
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the
 points that version's realised window is measured on, from the version's request with the

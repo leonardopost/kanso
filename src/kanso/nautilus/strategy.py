@@ -61,8 +61,13 @@ An overlay is consulted once more per cohort of its own grain, through `on_data`
 every handler of that cohort and never while a market order of the sleeve is unfilled, so
 a clipper can add and take off legs while the host is already holding and does not wait
 for the next host buy. Every attached overlay is asked once per host entry. Each order
-is classified as an entry or an exit by its effect on the net position: an order that
-shrinks the absolute net position is an exit, anything else is an entry.
+is classified as an entry or an exit by its effect on the sleeve's own net position: an
+order that shrinks it in absolute terms is an exit, anything else is an entry.
+
+**A sleeve's position is its own, never its account's.** Every reader the harness sizes,
+classifies and exits by — `held`, `submit_exit`, an owed exit, `ctx.book` — sums the
+positions the cache keeps for this strategy in the name, so two versions on one stage that
+trade the same name each exit what they hold and nothing of the other's.
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
@@ -71,37 +76,39 @@ level one on every instant the top moved, from a copy of the book the harness ke
 by the engine's level-two rules (`kanso.nautilus.facts` checks them). Without the key the
 author is handed every change, as the venue is.
 
-Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor`
-methods are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`,
-`handle_trade_tick`, `handle_order_book_deltas`, `handle_data`, `submit_order`,
-`submit_order_list`, `cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and
-`_stop` all take precedence when the engine calls them; `Trader` starts actors before
-strategies, so a modifier is registered before its host runs; `close_position` and
-`close_all_positions` route through `submit_order`; `portfolio.net_position(instrument_id)`
-returns a signed `Decimal`; an order whose cancel was sent is not `is_closed` and can
-still fill until the cancel lands — under a latency model after the next point is matched,
-with none before it (`kanso.nautilus.facts` measures both on the backtest engine, and the
-replay tests hold the node to the same fills); `cancel_all_orders` marks every order open at
-the venue `PENDING_CANCEL` at once and cancels one in flight to it as well
-(`kanso.nautilus.facts` measures it on the backtest engine), and skips one still
+Engine facts this module relies on (nautilus_trader 1.231.0): `Strategy` and `Actor` methods
+are `cpdef`, so a Python subclass's `handle_bar`, `handle_quote_tick`, `handle_trade_tick`,
+`handle_order_book_deltas`, `handle_data`, `submit_order`, `submit_order_list`,
+`cancel_order`, `cancel_orders`, `cancel_all_orders`, `_start` and `_stop` all take
+precedence when the engine calls them; `Trader` starts actors before strategies, so a
+modifier is registered before its host runs; `close_position` and `close_all_positions`
+route through `submit_order`; under the NETTING OMS the cache keeps one position per
+(instrument, strategy), which `cache.positions_open(instrument_id=…, strategy_id=…)`
+answers, and `portfolio.net_position(instrument_id)` is the signed `Decimal` sum of every
+strategy's on the account, so the sleeve's own position is read from the first and never
+from the second (`kanso.nautilus.facts` measures it); an order whose cancel was sent is not
+`is_closed` and can still fill until the cancel lands — under a latency model after the next
+point is matched, with none before it (`kanso.nautilus.facts` measures both on the backtest
+engine, and the replay tests hold the node to the same fills); `cancel_all_orders` marks
+every order open at the venue `PENDING_CANCEL` at once and cancels one in flight to it as
+well (`kanso.nautilus.facts` measures it on the backtest engine), and skips one still
 `INITIALIZED` (read in `trading/strategy.pyx`), which on the backtest engine an order handed
-to `submit_order` never is when the call returns; a cancel sent for an
-order a node has not yet handed to the venue reaches the venue before the order, where it is
-lost and the order rests (read in `live/risk_engine.py`, `execution/manager.pyx` and
-`trading/strategy.pyx`), which is why kanso holds such a cancel back until the node has
-handed the order over (`KansoStrategy._hold_cancel`); `Strategy.cancel_orders` sends a
-`BatchCancelOrders` and refuses one whose orders are in more than one instrument, or that
-holds an emulated order after its first, after marking the orders before it
-`PENDING_CANCEL` (read in `trading/strategy.pyx`); the order emulator takes an emulated
-order out and marks it pending cancel locally before `cancel_order` returns (read in
-`execution/emulator.pyx`, measured on both paths by the exit and replay tests);
-`Order.events` hands back a new list of every event the order holds, where `event_count`
-and `last_event` read its length and its last element without one, and an order's events
-grow only at its end, each handed to the strategy's `handle_event` once the order has taken
-it (`kanso.nautilus.facts` measures it on the backtest engine);
-`StrategyConfig` and `ActorConfig` are frozen msgspec structs
-whose subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls`
-here is kanso's own attribute, honoured by kanso's loader alone.
+to `submit_order` never is when the call returns; a cancel sent for an order a node has not
+yet handed to the venue reaches the venue before the order, where it is lost and the order
+rests (read in `live/risk_engine.py`, `execution/manager.pyx` and `trading/strategy.pyx`),
+which is why kanso holds such a cancel back until the node has handed the order over
+(`KansoStrategy._hold_cancel`); `Strategy.cancel_orders` sends a `BatchCancelOrders` and
+refuses one whose orders are in more than one instrument, or that holds an emulated order
+after its first, after marking the orders before it `PENDING_CANCEL` (read in
+`trading/strategy.pyx`); the order emulator takes an emulated order out and marks it pending
+cancel locally before `cancel_order` returns (read in `execution/emulator.pyx`, measured on
+both paths by the exit and replay tests); `Order.events` hands back a new list of every
+event the order holds, where `event_count` and `last_event` read its length and its last
+element without one, and an order's events grow only at its end, each handed to the
+strategy's `handle_event` once the order has taken it (`kanso.nautilus.facts` measures it on
+the backtest engine); `StrategyConfig` and `ActorConfig` are frozen msgspec structs whose
+subclasses inherit the freeze, and the engine defines no `config_cls` — `config_cls` here is
+kanso's own attribute, honoured by kanso's loader alone.
 """
 
 from __future__ import annotations
@@ -382,8 +389,8 @@ def _resolution_of_bar(bar: Bar) -> str:
 def _id_of(key: str) -> InstrumentId:
     """The instrument id a name parses to, parsed once and kept.
 
-    Every point asks the portfolio what is held in its name, and an `InstrumentId` hashes by
-    formatting its name the first time it is hashed (`model/identifiers.pyx` of
+    Every point asks the cache what this sleeve holds in its name, and an `InstrumentId`
+    hashes by formatting its name the first time it is hashed (`model/identifiers.pyx` of
     nautilus_trader 1.231.0): one object a name keeps that hash, where one parsed a point
     formatted the name again for every lookup. An id is a value, so which object asks
     changes no answer.
@@ -833,9 +840,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """This sleeve's own signed position in an instrument, its market orders in flight
         applied.
 
-        The reader a strategy sizes and flips by, on both paths: the venue's net position
-        less what the attached overlays hold as clips in the same name, plus what the
-        sleeve's own market orders not yet filled will add. An exit at market submitted in
+        The reader a strategy sizes and flips by, on both paths: this sleeve's own position
+        — never the account's, which a stage-mate in the same name shares — less what the
+        attached overlays hold as clips in the same name, plus what the sleeve's own market
+        orders not yet filled will add. An exit at market submitted in
         this handler already reads as gone, which is what lets the entry that follows it
         size to the room the exit frees. A limit or stop order is not applied, whether it
         rests at the venue or is still in flight to it: a sleeve whose exit rests at the ask
@@ -1645,14 +1653,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._place_hedges(ctx)
 
     def classify(self, order: object) -> str:
-        """`entry` or `exit`, by the order's effect on the net position.
+        """`entry` or `exit`, by the order's effect on this sleeve's own net position.
 
         An order that shrinks the absolute net position is an exit; one that opens a
-        position, grows it, or flips past flat into a larger opposite one is an entry.
+        position, grows it, or flips past flat into a larger opposite one is an entry. The
+        position is the sleeve's own (`_own_position`), so a stage-mate's holding in the
+        same name decides nothing.
         """
         key = order.instrument_id.value  # type: ignore[attr-defined]
         if not self.sized:
-            net = float(self.portfolio.net_position(order.instrument_id))  # type: ignore[attr-defined]
+            net = float(self._own_position(order.instrument_id))  # type: ignore[attr-defined]
         elif self._is_clip(order):
             net = self._clips_filled(key)
         else:
@@ -1825,9 +1835,28 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             0.0,
         )
 
+    def _own_position(self, instrument_id: InstrumentId) -> Decimal:
+        """This sleeve's signed position in an instrument, filled, clips included: its own
+        and never the account's.
+
+        Under the NETTING OMS the cache keeps one position per (instrument, strategy)
+        (`kanso.nautilus.facts`), where `portfolio.net_position` is every strategy's on the
+        account added up, so on a stage of two versions in one name it would be neither's.
+        The sum is the portfolio's own arithmetic, `signed_decimal_qty()` from `Decimal(0)`,
+        so a sleeve alone on its account reads exactly what the portfolio would answer.
+        """
+        return sum(
+            (
+                position.signed_decimal_qty()
+                for position in self.cache.positions_open(
+                    instrument_id=instrument_id, strategy_id=self.id
+                )
+            ),
+            Decimal(0),
+        )
+
     def _own_filled(self, key: str) -> float:
-        net = float(self.portfolio.net_position(_id_of(key)))
-        return net - self._clips_filled(key)
+        return float(self._own_position(_id_of(key))) - self._clips_filled(key)
 
     def _own_intended(self, key: str) -> float:
         return self._own_filled(key) + sum(
@@ -2004,7 +2033,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         if self.sized:
             return self._sized_exit(instrument, resolved_id, qty, price)
-        net = Decimal(self.portfolio.net_position(resolved_id))
+        net = self._own_position(resolved_id)
         return self._close(instrument, resolved_id, net, qty, price, clips=True)
 
     def _sized_entry(
@@ -2242,11 +2271,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         for (key, side), (qty, price, ruled) in list(self._owed.items()):
             if only is not None and (key, side) != only:
                 continue
-            net = (
-                self._own_filled(key)
-                if self.sized
-                else float(self.portfolio.net_position(_id_of(key)))
-            )
+            net = self._own_filled(key) if self.sized else float(self._own_position(_id_of(key)))
             if net == 0 or (OrderSide.SELL if net > 0 else OrderSide.BUY) != side:
                 del self._owed[(key, side)]
                 continue
@@ -3194,7 +3219,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 for instrument_id in self.universe
             }
         return {
-            instrument_id.value: float(self.portfolio.net_position(instrument_id))
+            instrument_id.value: float(self._own_position(instrument_id))
             for instrument_id in self.universe
         }
 
