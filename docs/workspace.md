@@ -414,8 +414,8 @@ sends it, `on_order_submitted` included: `submit_order`, `submit_order_list` and
 `modify_order` called by the sleeve, a leg an overridden `hedges()` returns, the engine's
 `close_position`, and the engine's own `submit_order`, `submit_order_list` and
 `modify_order` called past kanso's — on the engine's class, or through
-`super(KansoStrategy, self)` — which the book refuses as the engine hands it the order
-(`docs/concepts.md`, *Stages*). A sleeve run alone is not held to it at run time
+`super(KansoStrategy, self)` — which the book refuses as the engine hands the order to the
+bus (`docs/concepts.md`, *Stages*). A sleeve run alone is not held to it at run time
 (`docs/backlog.md` row 209); `strategy_integrity` refuses a researched strategy that calls
 kanso's own sends or reaches a method kanso overrides past it, sized or not.
 **A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
