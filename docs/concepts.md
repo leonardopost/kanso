@@ -472,24 +472,28 @@ window on its standard input while it runs: it reads the catalog in steps of an 
 hypothesis requires prints, quotes or a book and of a day otherwise, cuts each read
 into chunks of at most 250,000 points — always between instants, so every point of an
 instant is in one chunk — and reads the next chunk only once the last is wholly written. A
-read is one step, or that step and as many after it as the files it reads hold at most
-250,000 points over, counted off their footers before anything is read: the engine writes a
-file in row groups of 5,000 points, each stating its first and last instant, so a step whose
-groups hold more is read alone and a sparse window is read in as few reads as its points
-need, each of them one chunk. Reads are lengthened so only for a feed marked however its
-instants fall — every window of prints, quotes or a book, and any of several names (Delivery,
-below). One name's bars and custom points are marked chunk by chunk, so a read of
-several days would mark days a day's read left unmarked; that window is read a day at a time
-wherever its files hold a point, as it always was, and only the days no file meets are read
-together. On a workspace holding fifteen names' quotes and prints at whole minutes of the
-regular session, filed a month a file, January 2022 took 696 hourly reads and 207.5 s and
-now takes two reads and 0.8 s, handing on the same points and markers byte for byte; three
-years take 76 reads and 23.5 s, where they took 26,256 reads and 70 to 110 minutes. Three
-hours of one name's prints at 360,000 an hour are still read an hour at a time. The child
-runs a chunk before it reads the next, so the child holds the chunk it is running and the
-parent the read that chunk was cut from — an hour of a dense feed, a day of bars, or no more
-than a chunk of a sparse window — until every chunk of it is written; nothing of the window
-is ever on disk.
+read is one step, or that step and as many after it as hold at most 250,000 points together,
+counted before any point is read: the engine writes a file in row groups of 5,000 points,
+each stating its first and last instant, and a group reaching past one step has its instants
+read, and nothing else of it, and is counted step by step. So a step holding more is read
+alone and a window is read in as few reads as its points need, each of them one chunk.
+Reads are lengthened so only for a feed marked however its instants fall — every window of
+prints, quotes or a book, and any of several names (Delivery, below). One name's bars and
+custom points are marked chunk by chunk, so a read of several days would mark days a day's
+read left unmarked; that window is read a day at a time wherever it holds a point, as it
+always was, and only the days holding none are read together. On a workspace holding
+fifteen names' quotes and prints at whole minutes of the regular session, filed a month a
+file, January 2022 took 696 hourly reads and 207.5 s and takes two reads and 0.8 s, handing
+on the same points and markers byte for byte; three years take 76 reads and 23.5 s, where
+they took 26,256 reads and 70 to 110 minutes. Eighty-two names' daily bars filed a file a
+name, whose groups each reach across years, were read a day at a time when a group was
+counted whole on every day it met — 6,554 reads of 82 catalog queries over a 17-year window
+and its warmup, about 9 s a read — and are two reads and 31.7 s, the same bars and markers
+byte for byte. Three hours of one name's prints at 360,000 an hour are still read an hour at
+a time. The child runs a chunk before it reads the next, so the child holds the chunk it is
+running and the parent the read that chunk was cut from — an hour of a dense feed, a day of
+bars, or no more than a chunk of a sparse window — until every chunk of it is written;
+nothing of the window is ever on disk.
 Where a window is cut changes nothing. Prints, quotes and book changes are read in the order
 the catalog's files hold them, because the catalog's own sorted query leaves the points of one
 instant in an order that depends on the span asked for: on a day of OKX BTC-USDT-SWAP prints,

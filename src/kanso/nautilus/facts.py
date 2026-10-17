@@ -85,9 +85,10 @@ instrument's points of the class over the span and leaves the series' files wher
 **A file's footer counts each row group and states its `ts_init` range.** `write_data`
 writes a file in row groups of `max_rows_per_group` rows, 5,000 unless the catalog is opened
 with another, and the footer of each states its rows and the least and greatest `ts_init`
-among them. So the points a span holds are at most the rows of the groups whose range meets
-it, read off the footers without reading a point, and a card's window is read in as few
-spans as that count allows (`kanso.nautilus.backtest._reads`).
+among them. So a group whose range lies within one step of a window's reads is counted off
+its footer without reading a point; a group reaching further has its `ts_init` column read,
+and nothing else of it, and is counted step by step; and a card's window is read in as few
+spans as that count allows (`kanso.nautilus.backtest._row_groups`, `_reads`).
 
 Availability timestamps
 -----------------------

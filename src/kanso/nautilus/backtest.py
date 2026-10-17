@@ -246,10 +246,10 @@ OUTPUT_FILE: Final = "stderr.txt"
 
 READ_TICK_NS: Final = 3_600 * NS_PER_SECOND
 """The step a window of prints, quotes or a book is read from the catalog in; any other
-window's step is a day. A read is one step, or that step and as many after it as the files
-it reads hold at most `READ_POINTS` points over (`_reads`; one name's bars and custom points
-excepted, `_chunked`), so a dense feed is read a step at a time and a sparse one in as few
-reads as its points need. Measured on one perpetual swap's
+window's step is a day. A read is one step, or that step and as many after it as hold at
+most `READ_POINTS` points (`_reads`; one name's bars and custom points excepted,
+`_chunked`), so a dense feed is read a step at a time and a sparse one in as few reads as
+its points need. Measured on one perpetual swap's
 level-two book and prints: an hour's read costs at most 2.6 times per point what a
 twelve-hour read does, about three seconds over a whole day of BTC."""
 
@@ -261,15 +261,21 @@ caps of 10,000, 50,000, 200,000 and none gave the identical card, at about 10 ms
 per extra chunk."""
 
 READ_POINTS: Final = CHUNK_POINTS
-"""The most points a read longer than its step may hold, counted off the footers of the
-files it reads before it is made (`_reads`). One chunk's worth, so a read lengthened past its
+"""The most points a read longer than its step may hold, counted off the files it reads
+before it is made (`_row_groups`, `_reads`). One chunk's worth, so a read lengthened past its
 step is a single chunk, and the parent holds no more of a sparse window at once than the
 child holds of a chunk. Measured on 2026-10-10 on a workspace holding fifteen names' quotes
 and prints at whole minutes of the regular session, filed a month a file: over January 2022,
 696 hourly reads, 160 of them holding anything, took 207.5 s, and two reads took 0.8 s to
 hand on the same 235,229 points and their markers byte for byte; over 2022-01-03..2024-12-31,
 76 reads took 23.5 s, where 26,256 hourly reads had taken 70 to 110 minutes. Three hours of
-one name's prints at 360,000 an hour were still read an hour at a time."""
+one name's prints at 360,000 an hour were still read an hour at a time.
+
+Measured on 2026-10-17 on 82 names' daily bars, a file a name in row groups reaching across
+twenty years, over a card's window of 2006-08-22..2024-07-31: counted a whole group to every
+day it met, each of the 6,554 days held 410,000 rows and was read alone, 537,428 queries
+of which 61 days' took 546 s; counted by step it is two reads of 82 queries, handing on the
+370,230 bars and markers the window read whole hands on, byte for byte, in 31.7 s."""
 
 FEED_BYTES: Final = 64 * 1024
 """The most the parent writes to a card's standard input in one step of its watch."""
@@ -2378,8 +2384,8 @@ def _chunked(
     points — is marked chunk by chunk, where some instant of the chunk holds two points of a
     kind, so a read of several days would mark the instants of days a day's read left
     unmarked, and under a latency move where a command lands. Such a window is read a step
-    at a time wherever a row group meets the step, in exactly the chunks it always was, and
-    only the stretches no row group meets are read together.
+    at a time wherever the step holds a point, in exactly the chunks it always was, and only
+    the stretches holding none are read together.
     """
     from kanso.nautilus.cross_section import TICK_KINDS, coincident
 
@@ -2389,7 +2395,7 @@ def _chunked(
     loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
     first = midnight_ns(day_of(opens))
     edge = first + (opens - first) // step * step
-    counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1))
+    counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1), edge, step)
     for start, end in _reads(counted, edge, step, (opens, closes), cap):
         groups, counts = _window_points(request, catalog, held, scope, start, end)
         for grain, count in counts.items():
@@ -2409,12 +2415,12 @@ def _reads(
     """The reads `[start, end]` of `span`, `[opens, closes)`, in steps of `step` from `edge`.
 
     Each read begins at a step's edge and holds that step and every step after it for as
-    long as the row groups that meet them — `counted`, each a first and a last `ts_init` and
-    the rows between — hold at most `cap` rows together. A point is a row of a group whose
-    range holds its instant, so a read longer than one step holds at most `cap` points
-    however the points lie inside their groups; a step whose groups alone hold more is read
-    alone, as every step was before; and a run of steps no group meets is never read a step
-    at a time. Where the reads fall changes nothing a card is handed (`_cut`,
+    long as the spans of rows that meet them — `counted` (`_row_groups`), each a first and a
+    last `ts_init` and the rows between — hold at most `cap` rows together. A point is a row
+    of a span that holds its instant, so a read longer than one step holds at most `cap`
+    points however the points lie inside their spans; a step whose spans alone hold more is
+    read alone, as every step was before; and a run of steps no span meets is never read a
+    step at a time. Where the reads fall changes nothing a card is handed (`_cut`,
     `_in_file_order`).
 
     The rows of the groups that meet steps `a` to `b` are those of the groups begun by step
@@ -2465,31 +2471,52 @@ def _files_read(
     return list(files)
 
 
-def _row_groups(files: Iterable[str]) -> list[tuple[int, int, int]]:
-    """The first and last `ts_init` of every row group of `files`, and its rows, read off
-    each file's footer and not its data.
+def _row_groups(files: Iterable[str], edge: int, step: int) -> list[tuple[int, int, int]]:
+    """The rows of `files` as a first and a last `ts_init` and the rows between, each within
+    one step of `step` from `edge` wherever the files say where their rows lie.
 
-    The engine names no count of a file's rows, so this reads the footers with `pyarrow`, as
+    The engine names no count of a file's rows, so this reads the files with `pyarrow`, as
     `kanso.data.catalog` does. On nautilus_trader 1.231.0 `write_data` writes a file in row
     groups of 5,000 rows, each stating the least and greatest `ts_init` it holds
-    (`kanso.nautilus.facts`), so the rows of the groups that meet a span overstate what it
-    holds by no more than the part of a group at each of its ends, for each series. A group
-    that states no range is counted at every instant.
+    (`kanso.nautilus.facts`). A group whose range lies within one step is that range and its
+    rows, read off the footer. A group whose range spans more has its `ts_init` column read,
+    that column alone, and is counted step by step, every step it holds rows in as that
+    step's first and last instant and the rows it holds there; so a span of whole steps is
+    counted at exactly the rows it holds, however far the groups that meet it reach. A
+    group that states no range is counted at every instant. Measured on 2026-10-17, a card
+    window of 82 names' daily bars, 164 groups each reaching across years, was counted by
+    step in 0.2-0.4 s, and one of three funds' five-second bars over a year, 5.1 million
+    rows, in 0.3 s, where the footers alone took 0.01 s; neither held 5 MB more.
     """
+    import numpy
     import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
     counted: list[tuple[int, int, int]] = []
+    stepped: dict[int, int] = {}
     for path in files:
-        footer = pq.read_metadata(path)
-        names = footer.schema.names
-        column = names.index("ts_init") if "ts_init" in names else None
-        for index in range(footer.num_row_groups):
-            group = footer.row_group(index)
-            stated = None if column is None else group.column(column).statistics
-            if stated is not None and stated.has_min_max:
-                counted.append((int(stated.min), int(stated.max), group.num_rows))
-            else:
-                counted.append((0, 2**64 - 1, group.num_rows))
+        with pq.ParquetFile(path) as handle:
+            footer = handle.metadata
+            names = footer.schema.names
+            column = names.index("ts_init") if "ts_init" in names else None
+            for index in range(footer.num_row_groups):
+                group = footer.row_group(index)
+                stated = None if column is None else group.column(column).statistics
+                if stated is None or not stated.has_min_max:
+                    counted.append((0, 2**64 - 1, group.num_rows))
+                    continue
+                first, last = int(stated.min), int(stated.max)
+                if (first - edge) // step == (last - edge) // step:
+                    counted.append((first, last, group.num_rows))
+                    continue
+                read = handle.read_row_group(index, columns=["ts_init"], use_threads=False)
+                instants = read.column(0).to_numpy().astype(numpy.int64)
+                held, rows = numpy.unique((instants - edge) // step, return_counts=True)
+                for number, count in zip(held.tolist(), rows.tolist(), strict=True):
+                    stepped[number] = stepped.get(number, 0) + count
+    counted.extend(
+        (edge + number * step, edge + (number + 1) * step - 1, rows)
+        for number, rows in stepped.items()
+    )
     return counted
 
 

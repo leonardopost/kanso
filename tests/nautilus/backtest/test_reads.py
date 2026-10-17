@@ -3,14 +3,17 @@ stream they deliver the stream an hour or a day at a time delivered."""
 
 from __future__ import annotations
 
+import pickle
+from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from datetime import date, timedelta
 from itertools import pairwise
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from nautilus_trader.model.data import QuoteTick, TradeTick
 from nautilus_trader.model.enums import AggressorSide
@@ -21,7 +24,7 @@ from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 from kanso.criteria.run import midnight_ns
 from kanso.data.types.funding import Funding
 from kanso.nautilus import backtest as runner
-from kanso.nautilus.cross_section import coincident
+from kanso.nautilus.cross_section import coincident, without_markers
 from kanso.schemas import Hypothesis
 
 from .conftest import (
@@ -85,9 +88,12 @@ def test_a_window_no_file_meets_is_one_read() -> None:
     assert list(runner._reads([], 0, 10, (3, 95), 0)) == [(3, 94)]
 
 
-def test_row_groups_are_read_off_the_footers(tmp_path: Path) -> None:
-    """The engine's file states each group's rows and `ts_init` range; a file stating no
-    range, or holding no `ts_init`, is counted at every instant."""
+def test_row_groups_are_read_off_the_footers_and_a_group_past_its_step_off_its_column(
+    tmp_path: Path,
+) -> None:
+    """The engine's file states each group's rows and `ts_init` range: a group within one
+    step is counted so, and a group spanning more at the rows it holds in each step; a file
+    stating no range, or holding no `ts_init`, is counted at every instant."""
     import pyarrow as pa  # type: ignore[import-untyped]
     import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
@@ -98,14 +104,55 @@ def test_row_groups_are_read_off_the_footers(tmp_path: Path) -> None:
     bare, other = tmp_path / "bare.parquet", tmp_path / "other.parquet"
     pq.write_table(pa.table({"ts_init": [5, 9, 7]}), bare, write_statistics=False)
     pq.write_table(pa.table({"stamp": [1, 2]}), other)
+    files = [engine, str(bare), str(other)]
+    step = 2_600 * SECOND_NS
+    by_step = Counter(ts // step for ts in stamps[5_000:])
 
-    assert runner._row_groups([engine, str(bare), str(other)]) == [
+    assert runner._row_groups(files, 0, 10_000 * SECOND_NS) == [
         (stamps[0], stamps[4_999], 5_000),
         (stamps[5_000], stamps[9_999], 5_000),
         (stamps[10_000], stamps[12_000], 2_001),
         (0, 2**64 - 1, 3),
         (0, 2**64 - 1, 2),
     ]
+    assert sorted(runner._row_groups(files, 0, step)) == sorted(
+        [
+            (stamps[0], stamps[4_999], 5_000),
+            (0, 2**64 - 1, 3),
+            (0, 2**64 - 1, 2),
+            *((at * step, (at + 1) * step - 1, rows) for at, rows in by_step.items()),
+        ]
+    )
+    assert len(by_step) == 3
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    st.lists(st.integers(0, 400), min_size=1, max_size=120),
+    st.integers(1, 30),
+    st.integers(1, 50),
+    st.integers(-60, 60),
+)
+def test_rows_are_counted_at_exactly_the_rows_each_step_holds(
+    offsets: list[int], group: int, step: int, edge: int
+) -> None:
+    """However the rows lie and however long their groups are, each counted span lies within
+    one step, and the rows counted in a step are the rows the step holds."""
+    import pyarrow as pa  # type: ignore[import-untyped]
+    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
+    stamps = sorted(1_000 + offset for offset in offsets)
+    with TemporaryDirectory() as directory:
+        path = f"{directory}/rows.parquet"
+        table = pa.table({"ts_init": pa.array(stamps, pa.uint64())})
+        pq.write_table(table, path, row_group_size=group)
+        counted = runner._row_groups([path], edge, step)
+
+    assert all((first - edge) // step == (last - edge) // step for first, last, _ in counted)
+    held: Counter[int] = Counter()
+    for first, _, rows in counted:
+        held[(first - edge) // step] += rows
+    assert +held == Counter((ts - edge) // step for ts in stamps)
 
 
 # --- the stream, read the old way and the new ----------------------------------------------
@@ -193,11 +240,11 @@ def _by_step(
 
 
 def _streamed(
-    request: runner.RunRequest, store: Path, reads: Reads | None
+    request: runner.RunRequest, store: Path, reads: Reads | None, cap: int = CAP
 ) -> tuple[list[str], list[tuple[int, int, int]]]:
     """The ordered stream a card is handed, every point and marker, each chunk ordered and
     marked by the hypothesis's rule as `checked_chunks` does it, and each read's span and
-    points, read with `reads` or with the runner's own."""
+    points, read with `reads` or with the runner's own and lengthened up to `cap`."""
     made: list[tuple[int, int, int]] = []
     inner = runner._window_points
 
@@ -208,7 +255,7 @@ def _streamed(
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(runner, "_window_points", recording)
-        patch.setattr(runner, "READ_POINTS", CAP)
+        patch.setattr(runner, "READ_POINTS", cap)
         if reads is not None:
             patch.setattr(runner, "_reads", reads)
         _, chunks = runner.window_chunks(request, store)
@@ -225,8 +272,9 @@ def test_a_sparse_tick_window_is_streamed_as_by_the_hour_in_a_handful_of_reads(
     tmp_path: Path, request_for
 ) -> None:
     """Read by the hour, the nine sessions take 264 reads, 63 of them holding anything; read
-    as its files allow, the same points in the same order take two, a week's file each, and
-    neither past the cap."""
+    as its rows allow, the same points in the same order take two, neither past the cap: the
+    first holds six sessions and the first two hours of the seventh, where one hour more
+    would pass it."""
     universe = (f"{SYMBOL}.XNAS", f"{QUIET}.XNAS")
     request = request_for(DAYS, hypothesis_=_ticks(universe, ["quote", "trade"]))
     store = _sparse(tmp_path / "sparse")
@@ -237,7 +285,8 @@ def test_a_sparse_tick_window_is_streamed_as_by_the_hour_in_a_handful_of_reads(
     assert planned == hourly
     assert sum(points for *_, points in before) == 2 * 9 * 394
     assert len(before) == 264 and sum(1 for *_, points in before if points) == 63
-    assert [points for *_, points in after] == [2 * 4 * 394, 2 * 5 * 394]
+    assert [points for *_, points in after] == [2 * (6 * 394 + 32 + 60), 2 * (3 * 394 - 92)]
+    assert after[0][2] <= CAP < after[0][2] + 2 * 60
 
 
 def test_a_dense_tick_window_is_streamed_as_by_the_hour_and_its_full_hours_read_alone(
@@ -275,6 +324,60 @@ def test_two_names_daily_bars_are_streamed_as_by_the_day_in_one_read(
 
     assert planned == daily and daily
     assert len(before) == 31 and len(after) == 1
+
+
+MANY = tuple(f"N{index:02d}" for index in range(12))
+"""Names enough that one row group each, reaching past the window, holds more than a read
+past its step may: the shape of a universe of stocks filed a file a name."""
+
+
+def _ordered_bytes(request: runner.RunRequest, store: Path) -> list[bytes]:
+    """Every catalog point a card's child is handed, pickled as the parent pickles it, in
+    the order the engine delivers them."""
+    _, chunks = runner.window_chunks(request, store)
+    return [
+        pickle.dumps(point, protocol=pickle.HIGHEST_PROTOCOL)
+        for chunk in chunks
+        for point in without_markers(runner._ordered(chunk))
+    ]
+
+
+def test_many_names_whose_groups_reach_past_the_window_are_read_as_their_rows_allow(
+    tmp_path: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Twelve names' daily bars over 2023-2024, a file a name of one group of 731 rows: the
+    groups meeting any day of January hold 8,772 rows, more than the cap, so counted whole
+    every day was read alone, 31 reads of twelve queries each. Counted by day the month
+    holds 372 and is one read of a query a name; and under a cap of 100 it is four reads,
+    none past the cap. Each hands on the stream a day at a time handed on, byte for byte."""
+    universe = tuple(f"{name}.XNAS" for name in MANY)
+    request = request_for(hypothesis_=hypothesis(universe=universe))
+    years = (date(2023, 1, 1), date(2024, 12, 31))
+    points = [bar for name in MANY for bar in bars(years, name)]
+    store = catalog(tmp_path / "many", points, [instrument(name) for name in MANY])
+    queries: list[int] = []
+    inner = runner.market_points
+
+    def counting(*args: Any) -> tuple[object, ...]:
+        queries.append(1)
+        return inner(*args)
+
+    monkeypatch.setattr(runner, "market_points", counting)
+
+    daily, before = _streamed(request, store, _by_step)
+    asked_daily = len(queries)
+    planned, after = _streamed(request, store, None)
+    asked_planned = len(queries) - asked_daily
+    capped, under = _streamed(request, store, None, cap=100)
+    with monkeypatch.context() as patch:
+        patch.setattr(runner, "_reads", _by_step)
+        by_day = _ordered_bytes(request, store)
+
+    assert planned == daily and capped == daily and daily
+    assert _ordered_bytes(request, store) == by_day and len(by_day) == 31 * 12
+    assert len(before) == 31 and asked_daily == 31 * 12
+    assert len(after) == 1 and asked_planned == 12
+    assert [points for *_, points in under] == [96, 96, 96, 84]
 
 
 def test_one_name_is_read_a_day_at_a_time_where_it_holds_data_as_its_chunks_mark_it(
