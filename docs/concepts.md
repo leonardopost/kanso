@@ -787,7 +787,7 @@ already over. There are ten.
 
 | gate | what it refuses |
 |---|---|
-| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, or binds a name its base class owns |
+| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, binds a name its base class owns, calls the harness's own sends, or reaches a method the base overrides past it |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
@@ -1318,6 +1318,24 @@ The same refusal reaches an operator before any run: `kanso hyp validate` refuse
 `hypotheses/<id>/strategy.py` that binds one (exit 3), `research begin` refuses a baseline
 that does with the line named, and `kanso doctor`'s `base names` check lists every
 hypothesis whose file does.
+
+**The harness's sends are its own, and so are the methods it overrides.** A sleeve hands the
+engine an order through the base's `submit_order`, `submit_order_list` and `modify_order`,
+which record the intent, size, refuse an entry the book cannot fund and, in a book, refuse
+what kanso did not send. Two kinds of name reach past them, and the gate refuses both, sized
+or not. The base's private helpers that send an order as kanso's own — `_submitted`,
+`_booked`, `_close` and every private method of the base that calls one of the three on
+itself or on `super()`, or calls one that does — are refused when read off a strategy, with
+the mark a book recognises kanso's order by (`_sending`) and the book's ledger
+(`_book_ledger`); on a class of the file that is not the harness's, the names are the
+author's own. And a method the engine defines and the base overrides — `submit_order`,
+`modify_order`, `cancel_order`, the `handle_*` handlers and the rest — is refused when read
+off anything but `self`, the instance a method receives, or `super()` with no arguments: off
+the engine's class, as `Strategy.submit_order(self, order)`, or a two-argument
+`super(KansoStrategy, self)`, it is the engine's own method, which records no intent and is
+asked nothing. Both sets are read from the installed classes whenever the gate runs, never
+kept as a list. The instance handed to a module-level function and called there is refused
+as well, which is the price of seeing the rest.
 
 ## Delivery
 

@@ -88,6 +88,26 @@ runs, never kept as a list: everything `dir` shows of it, the engine's names ben
 included, and every attribute kanso's own classes set on `self`. What it leaves to its
 author is `AUTHORED`, the dunders and the engine's `on_*` handlers.
 
+**The harness's sends are its own.** A sleeve hands the engine an order through the base's
+`submit_order`, `submit_order_list` and `modify_order`, which record the intent, ask the
+limits, size and refuse, and which a book reads to refuse what kanso did not send
+(`kanso.nautilus.book`). Two kinds of read reach past them, and both are refused, sized or
+not. The base's private helpers that send an order as the harness's own — `_submitted`,
+`_booked`, `_close` and every private method of kanso's classes that calls `submit_order`,
+`submit_order_list` or `modify_order` on the instance or on `super()`, or calls one that does
+(`sends`) — and the mark and the ledger a book recognises kanso's order by (`_sending`,
+`_book_ledger`) are refused when read off anything but the instance of a method of a class
+the base does not hold, where the name is that class's own: called by a strategy, such a
+helper sends whatever it is handed as an order kanso sized. A method the engine defines and
+the base overrides — `submit_order`, `modify_order`, `cancel_order`, the `handle_*` handlers
+and the rest (`overridden`) — is refused when read off anything but `self`, the instance a
+method receives, or `super()` with no arguments: off the engine's class
+(`Strategy.submit_order(self, order)`) or a two-argument `super(KansoStrategy, self)` it is
+the engine's own method, which skips the base's. Both sets are read from the installed
+classes when the scan runs, never kept as a list. The instance read through another name —
+handed to a module-level function, or kept as `me = self` — is refused as well, which is the
+price of seeing the rest; the engine's class held under the name `self` is not seen.
+
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
 — dot-files and `__pycache__` — are ignored, because the interpreter writes them and the
@@ -420,6 +440,21 @@ the construct a modifier is, and a modifier's two hooks. The dunders and the eng
 `on_*` handlers are the author's too, because the harness hooks the engine through
 `handle_*` and names of its own."""
 
+SEND_MARKS: Final = frozenset({"_sending", "_book_ledger"})
+"""What a book lets kanso's own order through by: the mark on the order kanso is sending, and
+the book's ledger; denied beside the base's private sends (`sends`)."""
+
+ENGINE_SENDS: Final = frozenset({"submit_order", "submit_order_list", "modify_order"})
+"""The engine's methods that hand it an order or move one; a private method of kanso's that
+calls one on the instance or on `super()` is a send (`sends`)."""
+
+WHY_SEND: Final = (
+    "it is the harness's own send, which hands the engine whatever it is given as an order "
+    "kanso sized, past the limits, the room and a book's check; call "
+    "submit_entry(instrument_id, side) or submit_exit(instrument_id), and give a name of "
+    "your own another spelling"
+)
+
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
 
@@ -503,6 +538,7 @@ def scan(
     problems: list[str] = [
         *_sizing_problems(tree, sized=sized, construct=construct),
         *(clash.problem for clash in _clashes(tree)),
+        *_receiver_problems(tree),
     ]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -665,6 +701,151 @@ def _names_helper(func: ast.expr) -> str | None:
     return None
 
 
+def _bases() -> tuple[type, ...]:
+    """The harness bases a researched file's classes reach, imported when first asked for."""
+    from kanso.nautilus.strategy import KansoModifier, KansoStrategy
+
+    return (KansoStrategy, KansoModifier)
+
+
+def _kanso_classes(base: type) -> list[type]:
+    return [klass for klass in base.__mro__ if klass.__module__.partition(".")[0] == "kanso"]
+
+
+@cache
+def sends(base: type) -> frozenset[str]:
+    """Every private method of kanso's classes in `base`'s MRO that hands the engine an order:
+    one whose body calls an `ENGINE_SENDS` method on `self` or on `super()`, or calls another
+    such private method there; read from the installed classes' source. A public method —
+    `submit_entry`, `submit_exit` and the engine's own — is not one: it asks what it is meant
+    to ask before it sends.
+    """
+    calls: dict[str, set[str]] = {}
+    for klass in _kanso_classes(base):
+        for node in ast.parse(inspect.getsource(klass)).body[0].body:  # type: ignore[attr-defined]
+            if (
+                isinstance(node, ast.FunctionDef)
+                and node.name.startswith("_")
+                and not node.name.startswith("__")
+            ):
+                calls.setdefault(node.name, set()).update(_calls_on_self(node))
+    found = {name for name, called in calls.items() if called & ENGINE_SENDS}
+    while more := {name for name, called in calls.items() if called & found} - found:
+        found |= more
+    return frozenset(found)
+
+
+def _calls_on_self(node: ast.FunctionDef) -> Iterator[str]:
+    """The methods a function calls on `self` or on `super()`."""
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and (_is_name(child.func.value, "self") or _is_bare_super(child.func.value))
+        ):
+            yield child.func.attr
+
+
+@cache
+def overridden(base: type) -> frozenset[str]:
+    """Every method the engine defines that a kanso class in `base`'s MRO defines again, read
+    from the installed classes, less what the base leaves its author (`AUTHORED`, the
+    dunders and the `on_*` handlers)."""
+    engine = [klass for klass in base.__mro__ if klass.__module__.partition(".")[0] != "kanso"]
+    return frozenset(
+        name
+        for klass in _kanso_classes(base)
+        for name in vars(klass)
+        if any(name in vars(beneath) for beneath in engine)
+        and name not in AUTHORED
+        and not name.startswith("on_")
+        and not (name.startswith("__") and name.endswith("__"))
+    )
+
+
+def _is_name(node: ast.expr, name: str | None) -> bool:
+    return name is not None and isinstance(node, ast.Name) and node.id == name
+
+
+def _is_bare_super(node: ast.expr) -> bool:
+    """Whether `node` is `super()` with no arguments, which resolves past the class the
+    method is written in and so reaches the harness base's own methods."""
+    return (
+        isinstance(node, ast.Call)
+        and _is_name(node.func, "super")
+        and not node.args
+        and not node.keywords
+    )
+
+
+def _receiver_problems(tree: ast.Module) -> list[str]:
+    """Every read of the harness's own sends, and of a method it overrides, off a receiver
+    that can reach past the harness base.
+
+    A send (`sends`, `SEND_MARKS`) is refused when read off anything but the instance of a
+    method of a class that is not held to the base that owns it, where the name is that
+    class's own; a binding of one is the clash rule's (`_clashes`). An overridden method
+    (`overridden`) is refused when read off anything but `self`, the instance a method
+    receives, or `super()` with no arguments.
+    """
+    holding: dict[int, set[type]] = {}
+    for node, base in _harness_classes(tree):
+        holding.setdefault(id(node), set()).add(base)
+    sent = {base: sends(base) | SEND_MARKS for base in _bases()}
+    names = frozenset().union(*(overridden(base) for base in _bases()))
+    found: list[str] = []
+
+    def visit(
+        node: ast.AST, scope: tuple[str | None, frozenset[type]], held: set[type] | None
+    ) -> None:
+        """`scope` is the instance in reach and the bases its class is held to; `held` the
+        bases of the class whose body `node` is directly in, `None` outside one."""
+        instance, owners = scope
+        if isinstance(node, ast.ClassDef):
+            held = holding.get(id(node), set())
+            for child in ast.iter_child_nodes(node):
+                visit(child, (None, frozenset()), held)
+            return
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            positional = [*node.args.posonlyargs, *node.args.args]
+            if held is not None and positional and not _static(node) and not _classwide(node):
+                scope = (positional[0].arg, frozenset(held))
+            for child in ast.iter_child_nodes(node):
+                visit(child, scope, None)
+            return
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            own = _is_name(node.value, instance) or _is_name(node.value, "self")
+            if node.attr in names and not (own or _is_bare_super(node.value)):
+                found.append(
+                    f"line {node.lineno}: '{node.attr}' is read off "
+                    f"'{ast.unparse(node.value)}', where it can be the engine's own "
+                    f"{node.attr} past the one the harness base defines, which skips what the "
+                    f"harness does there; call self.{node.attr}(...), or "
+                    f"super().{node.attr}(...) with no arguments"
+                )
+            mine = _is_name(node.value, instance)
+            for base, held_names in sent.items():
+                if node.attr in held_names and not (mine and base not in owners):
+                    found.append(
+                        f"line {node.lineno}: attribute '.{node.attr}' is denied, because "
+                        f"{WHY_SEND}"
+                    )
+                    break
+        for child in ast.iter_child_nodes(node):
+            visit(child, scope, held)
+
+    visit(tree, (None, frozenset()), None)
+    return found
+
+
+def _classwide(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the method is a `classmethod`, whose first parameter is the class."""
+    return any(
+        isinstance(decorator, ast.Name) and decorator.id == "classmethod"
+        for decorator in node.decorator_list
+    )
+
+
 class Clash(NamedTuple):
     """One binding of a name a harness base owns, where it is and how it was made."""
 
@@ -748,9 +929,7 @@ def _harness_classes(tree: ast.Module) -> list[tuple[ast.ClassDef, type]]:
     alias or as a module's attribute — or by naming a class of the file that reaches one;
     every class of the file in that line, a mixin included, is held to the same base.
     """
-    from kanso.nautilus.strategy import KansoModifier, KansoStrategy
-
-    harness = {base.__name__: base for base in (KansoStrategy, KansoModifier)}
+    harness = {base.__name__: base for base in _bases()}
     aliases = {
         alias.asname: alias.name
         for node in ast.walk(tree)

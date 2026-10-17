@@ -478,8 +478,10 @@ so a resting order moved on every bar need not be re-posted to keep a card fast;
 does not save memory either, since the engine keeps every order's events for the run
 (`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
-not — one that overrides a harness method or binds any other name its base class owns
-(`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second
+not — one that overrides a harness method or binds any other name its base class owns, calls
+the harness's own sends (`_submitted`, `_close` and the rest) or reaches a method the harness
+overrides past it, as `Strategy.submit_order(self, order)` (`docs/concepts.md`), with the
+line and what to write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
 the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
 instrument, the instant and the book held. `position_size` under the rule judges entry fills

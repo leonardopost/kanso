@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from nautilus_trader.trading.strategy import Strategy
 
 from kanso.criteria.integrity import (
     AUTHORED,
@@ -21,12 +23,15 @@ from kanso.criteria.integrity import (
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
     DENIED_UNDER_DEPTH,
+    SEND_MARKS,
     check,
     clashes,
     import_allowed,
+    overridden,
     owned,
     scan,
     scope,
+    sends,
 )
 from kanso.nautilus.strategy import KansoModifier, KansoStrategy
 from kanso.workspace import PACKAGE_ROOT
@@ -858,3 +863,140 @@ def test_the_program_template_names_what_the_rule_refuses_and_what_it_leaves() -
     assert set(examples) <= owned(KansoStrategy)
     assert "`self._close_col`, not `self._close`" in bullet
     assert "_close_col" not in owned(KansoStrategy)
+
+
+# --- the harness's own sends, and the methods it overrides --------------------------
+
+
+def test_the_harness_s_own_sends_are_read_from_the_installed_class() -> None:
+    """Nobody lists them: every private method of the base that hands the engine an order
+    itself is one, every private method that calls one is one, and no public verb is."""
+    sent = sends(KansoStrategy)
+    direct = {
+        name
+        for name, value in vars(KansoStrategy).items()
+        if name.startswith("_")
+        and not name.startswith("__")
+        and inspect.isfunction(value)
+        and re.search(
+            r"(self|super\(\))\.(submit_order|submit_order_list|modify_order)\(",
+            inspect.getsource(value),
+        )
+    }
+
+    assert direct and direct <= sent
+    assert {"_submitted", "_booked", "_close", "_sized_entry", "_sized_exit"} <= sent
+    assert {"_place_hedges", "_submit_leg", "_submit_own"} <= sent
+    assert sent <= owned(KansoStrategy)
+    assert not sent & {"submit_entry", "submit_exit", "submit_order", "_pay_owed"}
+    assert sends(KansoModifier) == frozenset()
+
+
+@pytest.mark.parametrize("name", sorted(sends(KansoStrategy) | SEND_MARKS))
+def test_a_sleeve_reaching_the_harness_s_own_send_is_refused_sized_or_not(name: str) -> None:
+    """Called by a strategy, a send hands the engine whatever it is given as an order kanso
+    sized, which a book lets through as kanso's own; the mark and the ledger are what the
+    book recognises kanso's order by."""
+    source = f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        x = self.{name}\n"
+
+    for sized in (False, True):
+        (problem,) = (p for p in scan(source, sized=sized) if f"'.{name}'" in p)
+        assert problem.startswith(f"line 4: attribute '.{name}' is denied, because it is the ")
+        assert "submit_entry(instrument_id, side) or submit_exit(instrument_id)" in problem
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        KansoStrategy._submitted(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        me = self\n        me._close(bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        super()._booked(bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        go(self, bar)\n"
+        "def go(strategy, order):\n    strategy._submitted(order)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        (lambda: self._submitted(bar))()\n",
+    ],
+    ids=["the base's class", "a second name", "super()", "a module function", "a lambda"],
+)
+def test_the_harness_s_own_send_is_refused_off_any_receiver_but_a_class_of_its_own(
+    source: str,
+) -> None:
+    (problem,) = scan(source)
+
+    assert "is denied, because it is the harness's own send" in problem
+
+
+def test_a_class_that_is_not_the_harness_s_reads_its_own_names() -> None:
+    """A name kanso sends by is the author's own on a class the base does not hold, a
+    modifier included, whose base sends nothing."""
+    source = (
+        "class Leg:\n"
+        "    def __init__(self):\n"
+        "        self._close = 0.0\n"
+        "    def price(self):\n"
+        "        return self._close + self._submitted\n"
+        f"{MODIFIER_HEAD}"
+        "    def on_start(self):\n"
+        "        self._close = 1.0\n"
+        "    def evaluate(self, ctx):\n"
+        "        return self._close\n"
+    )
+
+    assert scan(source) == []
+
+
+def test_the_methods_the_harness_overrides_are_read_from_the_installed_class() -> None:
+    names = overridden(KansoStrategy)
+
+    assert {"submit_order", "submit_order_list", "modify_order", "cancel_order"} <= names
+    assert {"cancel_orders", "cancel_all_orders", "handle_event", "handle_bar"} <= names
+    assert names == {
+        name for name in vars(KansoStrategy) if hasattr(Strategy, name) and name[:2] != "__"
+    }
+    assert {"subscribe_order_book_deltas", "_stop"} <= overridden(KansoModifier)
+    assert not (overridden(KansoModifier) | names) & AUTHORED
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from nautilus_trader.trading.strategy import Strategy as Engine\n"
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        Engine.submit_order(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n"
+        "        super(KansoStrategy, self).submit_order(bar)\n",
+        "import nautilus_trader.trading.strategy as engine\n"
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n"
+        "        engine.Strategy.submit_order_list(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n"
+        "        type(self).mro()[2].modify_order(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        go(self, bar)\n"
+        "def go(strategy, order):\n    strategy.cancel_order(order)\n",
+        f"{SLEEVE_HEAD}    @classmethod\n    def send(cls, me, order):\n"
+        "        cls.submit_order(me, order)\n",
+    ],
+    ids=[
+        "the engine's class",
+        "a two-argument super",
+        "the engine's module",
+        "the class's lineage",
+        "a module function",
+        "a classmethod",
+    ],
+)
+def test_a_method_the_harness_overrides_reached_past_it_is_refused(source: str) -> None:
+    """Read off anything but the instance or `super()`, `submit_order` can be the engine's
+    own, which records no intent, sizes nothing and, in a book, is past the book's check."""
+    (problem,) = scan(source)
+
+    assert re.match(r"line \d+: '\w+' is read off '.+', where it can be the engine's own", problem)
+    assert "call self." in problem
+
+
+def test_a_method_the_harness_overrides_is_read_off_the_instance_or_super() -> None:
+    source = (
+        f"{SLEEVE_HEAD}    def on_bar(this, bar):\n"
+        "        this.submit_order(bar)\n"
+        "        super().submit_order(bar)\n"
+        "        (lambda: this.cancel_order(bar))()\n"
+    )
+
+    assert scan(source) == []
