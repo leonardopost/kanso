@@ -485,9 +485,10 @@ does not save memory either, since the engine keeps every order's events for the
 (`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns, calls
-the harness's own sends (`_submitted`, `_close` and the rest) or reaches a method the harness
-overrides past it, as `Strategy.submit_order(self, order)` (`docs/concepts.md`), with the
-line and what to write instead; what the scan cannot see — a second
+the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness
+overrides past it, as `Strategy.submit_order(self, order)`, reaches the message bus
+(`msgbus`, `_msgbus`) or applies an event to an order by hand (`.apply`) (`docs/concepts.md`),
+with the line and what to write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
 the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
 instrument, the instant and the book held. `position_size` under the rule judges entry fills
@@ -731,8 +732,8 @@ point of the feed. Neither is delayed again: an order sent from either reaches t
 latency is the whole round trip, feed and order together. The quote is a signal and moves
 nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
 `spread: quotes` has no quote series to read. What else the strategy may not touch under the
-key — the message bus and the engine's own book subscriptions — is in `docs/concepts.md`,
-The embargo. An attached construct researched or composed under the key is handed no book
+key — the engine's own book subscriptions, beside the message bus, which no strategy may
+touch — is in `docs/concepts.md`, The embargo. An attached construct researched or composed under the key is handed no book
 at all, neither the view nor a subscription of its own — asking for one is refused, and
 the card crashes naming the call; it reads its host's prices from the context it is asked
 with. A strategy that reads level one alone sends and fills the same on any grid,

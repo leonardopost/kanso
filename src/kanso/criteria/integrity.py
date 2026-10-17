@@ -17,7 +17,17 @@ Rust bridge, and the bridge, the persistence layer and the backtest package each
 data catalog and therefore the certification window. `kanso.nautilus.strategy` is the only
 kanso module a strategy may see. Beyond those, numpy and a short standard-library set of
 pure computation. A star import binds names nobody declared, so it is refused whatever it
-comes from.
+comes from. A path names a module, not what the module holds, so what an allowed import
+hands out is resolved to what it is when the scan runs, and refused when that is out of
+reach: a module must be allowed under its own name wherever it is reached from — `typing`
+holds the `operator` module and `dataclasses` the `inspect` module, and `from typing import
+operator` is refused — and a class or a function must be defined in an allowed module, or in
+the engine or kanso, whose allowed leaves hand out their own internals by design (`OWN_HOMES`).
+A dotted read off an imported module is resolved step by step the same way, so `import
+nautilus_trader.model`, which binds the package `nautilus_trader`, opens none of its other
+packages: `nautilus_trader.execution` is refused. An imported module is read only in place;
+held whole — handed to a call, kept under another name — what is read off it could not be
+followed, so it is refused, unless the file binds the name again itself.
 
 **Identifiers** are refused wherever they appear — as a name, as an attribute or as an
 import alias — so that a denied capability cannot be reached by a second route. That
@@ -69,11 +79,19 @@ model and a refusal it cannot act on is a loop.
 **Under `depth`**, a fifth set. The harness keeps every change of the book for the venue
 and hands the author the book on the hypothesis's grid and level one on every change, so
 the harness's own copy and the methods that show it are denied to every strategy, and under
-`depth` so are the message bus under both the names the engine gives it, which carries every
-change on the data engine's topics, and the three subscriptions that would hand the author
-a book of its own: every change, snapshots on an interval, and the ten-level depth an
-account on a sampled channel is not served. The last three bind an attached construct too,
-which is an engine actor the harness hands no view.
+`depth` so are the three subscriptions that would hand the author a book of its own: every
+change, snapshots on an interval, and the ten-level depth an account on a sampled channel is
+not served. They bind an attached construct too, which is an engine actor the harness hands
+no view.
+
+**The bus and the events are the engine's**, sized or not, with `depth` or without. On the
+message bus, under both the names the engine gives it (`msgbus`, `_msgbus`), a strategy can
+send the execution engine a command — an order, a modify — or a fill, past its own methods
+and a book's check, and take a book's handler off; its data engine topics carry every change
+of a book as well. `apply` hands an order or a position an event as if the engine had applied
+it, and an order moved that way at the venue sends no modify; which receiver is an order the
+scan cannot tell, so the word is denied on any. What these routes do is measured where the
+sets are declared (`DENIED_BUS`, `DENIED_EVENTS`).
 
 **The base's names** belong to the base. A class whose instances are a `KansoStrategy` or a
 `KansoModifier` — it names one among its bases, through an alias, a module or a class of the
@@ -106,7 +124,15 @@ method receives, or `super()` with no arguments: off the engine's class
 the engine's own method, which skips the base's. Both sets are read from the installed
 classes when the scan runs, never kept as a list. The instance read through another name —
 handed to a module-level function, or kept as `me = self` — is refused as well, which is the
-price of seeing the rest; the engine's class held under the name `self` is not seen.
+price of seeing the rest.
+
+**What the scan does not see** is a spelling it does not follow: the engine's class held
+under the name `self` — the first parameter of a module-level function handed `Strategy` —
+whose `submit_order` is the engine's own, which in a book the book still refuses on the bus
+(`kanso.nautilus.book`) and a sleeve alone sends; an imported module the file binds again
+under its own name, so that held whole it is not refused and an alias of it is not followed;
+and what an allowed leaf of the engine or kanso takes from elsewhere in its own package, which
+is allowed by its package and not resolved further.
 
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
@@ -117,13 +143,17 @@ researcher did not.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import re
+import sys
+import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from functools import cache
 from hashlib import sha256
 from pathlib import Path
 from string import Formatter
+from types import ModuleType
 from typing import Final, NamedTuple
 
 ALLOWED_IMPORTS: Final = frozenset(
@@ -151,6 +181,12 @@ ALLOWED_IMPORTS: Final = frozenset(
     }
 )
 """Exact leaves. A path is allowed when it is one of these or lies under one."""
+
+OWN_HOMES: Final = frozenset({"nautilus_trader", "kanso"})
+"""The packages whose allowed leaves hand out what they define elsewhere by design — the
+engine's enums, which `nautilus_trader.model.enums` takes from its Rust bindings, and
+`Decision`, which `kanso.nautilus.strategy` takes from `kanso.nautilus.hooks` — so a class or
+a function an allowed leaf hands out is allowed wherever in them it is defined."""
 
 NAMED_DENIALS: Final = {
     "nautilus_trader.core.nautilus_pyo3": "the Rust bridge reaches the data catalog",
@@ -337,6 +373,39 @@ DENIED_DEPTH: Final = frozenset(
 """The harness's own copy of a book a `depth` hypothesis holds, at every change, and the
 methods that show the author its view of it."""
 
+DENIED_BUS: Final = frozenset({"msgbus", "_msgbus"})
+"""The engine's message bus, under both the names every `Strategy` and `Actor` holds it by
+(nautilus_trader 1.231.0). Measured through the backtest runner in a book at no latency and
+at 20 ms, and alone at no latency: a `SubmitOrder` or a `ModifyOrder` sent on it to
+`ExecEngine.execute` or `RiskEngine.execute` reached the venue past the strategy's own
+methods, and a book did not refuse it; an `OrderFilled` sent to `ExecEngine.process` was
+recorded as a fill at a price no venue printed; and unsubscribing the bus's `events.order.*`
+handlers took the book's check away. Its data engine topics carry every change of a book as
+well."""
+
+DENIED_EVENTS: Final = frozenset({"apply"})
+"""`Order.apply` and `Position.apply`, which take an event — an `OrderUpdated`, an
+`OrderFilled` — as if the engine had applied it. Measured on nautilus_trader 1.231.0
+through the backtest runner, in a book at no latency and at 20 ms and alone at no latency:
+an `OrderUpdated` to 5,000 at 5.00 that a strategy applied to its own resting sale of 1,000
+at 100 sold 5,000 at 5.00, with no modify sent. Every event a strategy's order takes is the
+engine's to apply, and which receiver is an order the scan cannot tell, so the word is denied
+on any receiver."""
+
+WHY_BUS: Final = (
+    "it is the engine's message bus, which hands the execution engine a command or a fill "
+    "past the strategy's own methods and a book's check; place orders through "
+    "submit_entry(instrument_id, side) and submit_exit(instrument_id), and read data in the "
+    "on_* handlers"
+)
+
+WHY_EVENTS: Final = (
+    "it applies an event to an order or a position — a fill, a modify — as if the engine had, "
+    "past the venue and kanso's own methods; the engine applies every event itself, so send "
+    "orders through submit_entry(instrument_id, side) and submit_exit(instrument_id), and "
+    "take one back with cancel_order"
+)
+
 WHY_DEPTH: Final = (
     "the account sees a book's depth only on the grid `depth.every_ms` sets and level one on "
     "every change, which the harness hands to on_order_book_deltas and on_quote_tick; read "
@@ -367,6 +436,8 @@ WHY: Final = {
         "what the book set aside; read the book the policy left from `balance`",
     ),
     **dict.fromkeys(DENIED_DEPTH, f"it is the harness's book at every change, and {WHY_DEPTH}"),
+    **dict.fromkeys(DENIED_BUS, WHY_BUS),
+    **dict.fromkeys(DENIED_EVENTS, WHY_EVENTS),
 }
 """Why each denial that carries a reason exists, said in the refusal so a proposer can act on it."""
 
@@ -382,6 +453,8 @@ DENIED_ATTRIBUTES: Final = (
     | DENIED_HISTORY
     | DENIED_BOOK
     | DENIED_DEPTH
+    | DENIED_BUS
+    | DENIED_EVENTS
 )
 
 SIZE_HELPERS: Final = frozenset({"submit_entry", "submit_exit"})
@@ -411,20 +484,17 @@ WHY_UNDER_SIZING: Final = "because the harness sizes every order to the budget"
 
 DENIED_UNDER_DEPTH: Final = frozenset(
     {
-        "msgbus",
-        "_msgbus",
         "subscribe_order_book_deltas",
         "subscribe_order_book_at_interval",
         "subscribe_order_book_depth",
     }
 )
-"""What reaches a book at every change, or as snapshots the account is not served, around
-the view the harness hands; denied only when the hypothesis declares `depth`. The bus
-carries the data engine's own topics, every change of the book among them, and every
-`Strategy` and `Actor` holds it twice, as `msgbus` and as `_msgbus` (nautilus_trader
-1.231.0). The harness subscribes a sleeve's book itself, so `subscribe_order_book_deltas`
-is a second subscription only an attached construct, which the harness does not gate,
-would be handed every change through."""
+"""The subscriptions that hand a book at every change, or as snapshots the account is not
+served, around the view the harness hands; denied only when the hypothesis declares
+`depth`. The bus, which carries every change on the data engine's topics, is denied to
+every strategy (`DENIED_BUS`). The harness subscribes a sleeve's book itself, so
+`subscribe_order_book_deltas` is a second subscription only an attached construct, which
+the harness does not gate, would be handed every change through."""
 
 OVERLAY_CONSTRUCT: Final = "overlay"
 SIZED_OVERLAY_NAMES: Final = frozenset({"Hedge"})
@@ -517,6 +587,174 @@ def _visit_import_from(node: ast.ImportFrom) -> Iterable[str]:
                     yield named
 
 
+_MISSING: Final = object()
+"""What a name resolves to when the module holds no such attribute and no such submodule."""
+
+WHY_REACHED: Final = "import what you use from an allowed module by its own path"
+
+
+def _module(path: str) -> ModuleType | None:
+    """The allowed module `path` names, imported when the scan runs; `None` where it does not
+    import, which the card's own import fails on when it runs, so nothing here is reached."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            return importlib.import_module(path)
+        except Exception:  # whatever a module raises as it is imported, the card raises too
+            return None
+
+
+def _resolved(held: ModuleType, name: str) -> object:
+    """What `name` is on the module `held` when the scan runs — an attribute, or an allowed
+    submodule not yet imported — or `_MISSING`. Nothing that is not allowed is imported."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            return getattr(held, name)
+        except Exception:  # a module's own `__getattr__` may raise anything
+            pass
+        path = f"{held.__name__}.{name}"
+        if not import_allowed(path):
+            return _MISSING
+        try:
+            return importlib.import_module(path)
+        except Exception:  # as `_module`
+            return _MISSING
+
+
+def _passage(path: str) -> bool:
+    """Whether `path` is a package an allowed leaf lies under but that is not itself allowed —
+    `nautilus_trader`, `nautilus_trader.core` — which a dotted read passes through to a leaf."""
+    return not import_allowed(path) and any(leaf.startswith(f"{path}.") for leaf in ALLOWED_IMPORTS)
+
+
+def _reached_problem(reached: object, spelled: str, line: int, *, passing: bool) -> str | None:
+    """Why what `spelled` resolves to is out of reach, or `None`.
+
+    A module must be allowed under its own name, wherever it was reached from — `typing`
+    holds the `operator` module, `dataclasses` the `inspect` module — or be a package on the
+    way to an allowed leaf while the read goes on past it (`passing`). A class or a function
+    must be defined in an allowed module or in `OWN_HOMES`; one whose home names no module the
+    interpreter holds is the engine's compiled own (its Rust functions name `core` and
+    `model`). Anything else — a number, a string — is data.
+    """
+    if isinstance(reached, ModuleType):
+        name = reached.__name__
+        if import_allowed(name) or (passing and _passage(name)):
+            return None
+        return (
+            f"line {line}: '{spelled}' is the module '{name}', which is not on the allow-list; "
+            f"{WHY_REACHED}"
+        )
+    if not (isinstance(reached, type) or callable(reached)):
+        return None
+    home = getattr(reached, "__module__", None)
+    if (
+        not isinstance(home, str)
+        or import_allowed(home)
+        or home.partition(".")[0] in OWN_HOMES
+        or home not in sys.modules
+    ):
+        return None
+    return (
+        f"line {line}: '{spelled}' is defined in '{home}', which is not on the allow-list; "
+        f"{WHY_REACHED}"
+    )
+
+
+def _walk(held: ModuleType, spelled: str, steps: list[str], line: int) -> str | None:
+    """Follow a dotted read off the module `held` step by step, as far as it reads modules,
+    and say why the first step out of reach is."""
+    for index, step in enumerate(steps):
+        spelled = f"{spelled}.{step}"
+        reached = _resolved(held, step)
+        if reached is _MISSING:
+            path = f"{held.__name__}.{step}"
+            if import_allowed(path) or _passage(path):
+                return None
+            return (
+                f"line {line}: '{spelled}' reads '{path}', which is not on the allow-list; "
+                f"{WHY_REACHED}"
+            )
+        problem = _reached_problem(reached, spelled, line, passing=index < len(steps) - 1)
+        if problem is not None or not isinstance(reached, ModuleType):
+            return problem
+        held = reached
+    return None
+
+
+def _reach_problems(tree: ast.Module) -> list[str]:
+    """What the allowed imports hand out, resolved to what it is when the scan runs.
+
+    A name `from <allowed> import name` binds, and every dotted read off a module an import
+    bound, are refused when they reach a module, a class or a function that is not allowed
+    (`_reached_problem`): an allowed leaf can hold a module that is not, and `import a.b`
+    binds the package `a`, whose other submodules are not allowed. A module an import bound
+    is refused as well wherever it is held other than at the head of a dotted read — handed
+    to a call, kept under another name — since what is read off it there is not followed;
+    a name the file binds again, as a parameter or an assignment, is not held to that.
+    """
+    found: list[str] = []
+    bound: dict[str, ModuleType] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                held = _module(alias.name) if import_allowed(alias.name) else None
+                if held is None:
+                    continue
+                if alias.asname is not None:
+                    bound[alias.asname] = held
+                else:
+                    package = alias.name.partition(".")[0]
+                    bound[package] = sys.modules[package]
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            source = _module(node.module) if import_allowed(node.module) else None
+            if source is None:
+                continue
+            for alias in node.names:
+                reached = _MISSING if alias.name == "*" else _resolved(source, alias.name)
+                if reached is _MISSING:
+                    continue
+                spelled = f"{node.module}.{alias.name}"
+                problem = _reached_problem(reached, spelled, node.lineno, passing=False)
+                if problem is not None:
+                    found.append(problem)
+                elif isinstance(reached, ModuleType):
+                    bound[alias.asname or alias.name] = reached
+    if not bound:
+        return found
+    heads = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    rebound = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)
+    } | {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in bound
+            and node.id not in rebound
+            and id(node) not in heads
+        ):
+            found.append(
+                f"line {node.lineno}: the module '{node.id}' is held whole, where what is read "
+                f"off it cannot be followed; read what you use off it in place, as "
+                f"{node.id}.name"
+            )
+        elif isinstance(node, ast.Attribute) and id(node) not in heads:
+            steps: list[str] = []
+            head: ast.expr = node
+            while isinstance(head, ast.Attribute):
+                steps.append(head.attr)
+                head = head.value
+            if isinstance(head, ast.Name) and head.id in bound:
+                problem = _walk(bound[head.id], head.id, steps[::-1], node.lineno)
+                if problem is not None:
+                    found.append(problem)
+    return found
+
+
 def scan(
     source: str,
     origin: str = STRATEGY,
@@ -539,6 +777,7 @@ def scan(
         *_sizing_problems(tree, sized=sized, construct=construct),
         *(clash.problem for clash in _clashes(tree)),
         *_receiver_problems(tree),
+        *_reach_problems(tree),
     ]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

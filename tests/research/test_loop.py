@@ -204,7 +204,9 @@ def test_a_baseline_that_reaches_outside_the_lane_is_never_executed(
     assert records.active(store, hyp_id) is None
 
 
-BUS_RIDER = b'''
+BOOK_RIDER = b'''
+from nautilus_trader.model.identifiers import InstrumentId
+
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 
@@ -213,16 +215,53 @@ class Config(KansoConfig):
 
 
 class Strategy(KansoStrategy):
-    """Listens to every change of the book on the bus, past the view `depth` hands it."""
+    """Asks for the book's ten levels of its own, past the view `depth` hands it."""
 
     config_cls = Config
 
     def on_start(self) -> None:
-        self._msgbus.subscribe(topic="data.book.deltas.*", handler=self.on_order_book_deltas)
+        for name in self.kanso_config.universe:
+            self.subscribe_order_book_depth(InstrumentId.from_str(name))
 '''
 
 
-def test_a_baseline_that_reaches_the_bus_under_depth_is_never_executed(
+BUS_SENDER = b'''
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.events import OrderFilled
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Hands the execution engine a fill of its own making, past the venue."""
+
+    config_cls = Config
+
+    def on_bar(self, bar) -> None:
+        exit = self.submit_exit(bar.bar_type.instrument_id, price=float(bar.close) * 2)
+        if exit is not None:
+            self._msgbus.send(endpoint="ExecEngine.process", msg=OrderFilled)
+'''
+
+
+def test_a_baseline_that_reaches_the_bus_is_never_executed(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The bus hands the execution engine a command or a fill past the strategy's own
+    methods, so a baseline that names it is refused before anything runs, whatever its
+    hypothesis declares."""
+    hyp_id = classify(ws, store, document(), BUS_SENDER)
+
+    with pytest.raises(PreconditionError, match="'._msgbus' is denied, because it is the engine"):
+        loop.begin(ws, store, hyp_id)
+    assert records.active(store, hyp_id) is None
+
+
+def test_a_baseline_that_subscribes_a_book_under_depth_is_never_executed(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The run's own integrity check is the one `depth` widens: under it the baseline is
@@ -236,9 +275,11 @@ def test_a_baseline_that_reaches_the_bus_under_depth_is_never_executed(
         lambda ws_, universe, _, *rest: covering(ws_, universe, ["bar"], *rest),
     )
     shown = document(data_requirements=["bar", "book"], depth={"every_ms": 100, "levels": 3})
-    hyp_id = classify(ws, store, shown, BUS_RIDER)
+    hyp_id = classify(ws, store, shown, BOOK_RIDER)
 
-    with pytest.raises(PreconditionError, match="'._msgbus' is denied under depth"):
+    with pytest.raises(
+        PreconditionError, match="'.subscribe_order_book_depth' is denied under depth"
+    ):
         loop.begin(ws, store, hyp_id)
     assert records.active(store, hyp_id) is None
 

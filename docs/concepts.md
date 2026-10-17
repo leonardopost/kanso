@@ -787,7 +787,7 @@ already over. There are ten.
 
 | gate | what it refuses |
 |---|---|
-| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, binds a name its base class owns, calls the harness's own sends, or reaches a method the base overrides past it |
+| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list — or reaches past it through what an allowed module holds — binds a name its base class owns, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
@@ -1224,7 +1224,15 @@ exactly as a cold one does.
 syntax-tree check run *before* the backtest, not after. Imports are matched by full dotted
 path against an allow-list of exact leaves; every path that reaches the data catalog is
 denied by name, as are the builtins and modules that would let a strategy open a file or
-read a wall clock.
+read a wall clock. A path names a module, not what the module holds, so what an allowed
+import hands out is resolved to what it is whenever the gate runs: a module must be allowed
+under its own name wherever it is reached from — `typing` holds the `operator` module and
+`dataclasses` the `inspect` module, so `from typing import operator` is refused — and a class
+or a function must be defined in an allowed module, or in the engine or kanso, whose allowed
+leaves hand out their own internals by design (the engine's enums, kanso's `Decision`). A
+dotted read off an imported module is resolved step by step, so `import
+nautilus_trader.model`, which binds the package `nautilus_trader`, opens none of its other
+packages, and an imported module is read in place, never held whole under another name.
 
 ```
 $ kanso research card demo_filter --desc "read the catalog directly"
@@ -1254,12 +1262,12 @@ window opens and a record of what the book made before this month, and a strateg
 the book the policy left from `balance` alone. The harness's own copy of a book a `depth`
 hypothesis holds, and the methods that show the author its view of it, are denied to every
 strategy for the same kind of reason: they are the book at every change, which the account
-does not see. Under `depth` the message bus, which carries the data engine's own topics and
-every change of the book among them, is denied under both the names the engine gives it,
-`msgbus` and `_msgbus`, and so are the three subscriptions that would hand the author a book
-of its own — `subscribe_order_book_deltas`, `subscribe_order_book_at_interval` and
+does not see. Under `depth` the three subscriptions that would hand the author a book of its
+own are denied — `subscribe_order_book_deltas`, `subscribe_order_book_at_interval` and
 `subscribe_order_book_depth`; the view reaches `on_order_book_deltas` and level one
-`on_quote_tick`, and the refusal says so. The same denials bind an attached construct, which
+`on_quote_tick`, and the refusal says so. The message bus, which carries the data engine's own
+topics and every change of the book among them, is denied to every strategy, `depth` or not
+(below). The same denials bind an attached construct, which
 is handed no view of the book at all: it reads the host's prices from the context it is
 asked with, and a construct the gate did not scan under `depth` that subscribes a book anyway
 is refused when it asks, which crashes the card with the call named.
@@ -1336,6 +1344,25 @@ the engine's class, as `Strategy.submit_order(self, order)`, or a two-argument
 asked nothing. Both sets are read from the installed classes whenever the gate runs, never
 kept as a list. The instance handed to a module-level function and called there is refused
 as well, which is the price of seeing the rest.
+
+**The bus and an order's events are the engine's.** On the message bus, under both the names
+the engine gives it (`msgbus`, `_msgbus`), a strategy can send the execution engine a command
+— a `SubmitOrder`, a `ModifyOrder` — or a fill, past every method of its own and a book's
+check, and can take the book's handler off it; `apply` hands an order an event as if the
+engine had applied it. The gate refuses both to every strategy, sized or not, `depth` or
+not, and `apply` on any receiver, since which one is an order it cannot tell. Measured on
+2026-10-18 in a book of one and alone, on a capital of 100,000: a buy of a million sent on the
+bus bought it, a modify sent there and an `OrderUpdated` applied to a resting exit of 1,000 at
+100 each sold 5,000 at 5.00, and an `OrderFilled` sent to `ExecEngine.process` was recorded as
+a fill at a price no venue printed (`docs/backlog.md` rows 209 and 210).
+
+The gate refuses by spelling, and what it does not follow is a spelling (`docs/backlog.md`
+row 211): the engine's class held under the name `self` — the first parameter of a
+module-level function handed `Strategy` — whose `submit_order` is the engine's own; an
+imported module the file binds again under its own name, an alias of which is not followed;
+and what an allowed leaf of the engine or kanso takes from elsewhere in its own package. A
+strategy that gets past the gate that way meets only the run-time checks, which a sleeve run
+alone does not have (row 209) and a book has for the engine's own methods alone (*Stages*).
 
 ## Delivery
 
