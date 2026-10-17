@@ -75,7 +75,9 @@ and returns `None`, the sleeve tells the ledger of every marker it handles, and 
 member has handled the one that closes the instant the ledger calls `submit_entry` again for
 each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
 sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). An entry the sleeve
-builds by hand is refused there (`book_entry`), and exits are the sleeve's as ever.
+builds by hand is refused there (`book_entry`), and so is an exit built by hand that, with the
+sleeve's own orders still working on its side, would take its position past flat; exits are
+the sleeve's as ever.
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
@@ -1629,8 +1631,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         self._check_hand_built(order)
         kind = self.classify(order)
-        if kind == ENTRY:
-            self._check_booked(order)
+        self._check_booked(order, kind)
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
             self._check_funded((order,))
         ctx = self._context_for(order)
@@ -1655,8 +1656,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
-        if kind == ENTRY:
-            self._check_booked(orders[0])
+        self._check_booked(orders[0], kind)
         if not (self.sized or self._built or self._sizing_call):
             self._check_funded(orders)
         ctx = self._context_for(orders[0])
@@ -1747,23 +1747,42 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 "submit_entry(instrument_id, side) or submit_exit(instrument_id)",
             )
 
-    def _check_booked(self, order: object) -> None:
+    def _check_booked(self, order: object, kind: str) -> None:
         """Refuse an entry a book member placed by anything but `submit_entry`.
 
         A book hands each entry of an instant its share of one room in its own order, and it
         can only do that for an entry it sizes: kanso does not rebuild an order it did not
         build, so in a book an entry built by hand is refused, as a sizing rule refuses one.
+
+        An order is an exit here only if it closes no more than the position holds once
+        every order of this sleeve's still working on its side has filled (`_closes_within`),
+        the rule `submit_exit` sizes by. `classify` reads the filled position alone, so two
+        sells built by hand in one handler, each the size of a long, would each read as an
+        exit and together open a short no room was handed for; in a book the second is an
+        entry, and is refused.
         """
         ledger = self._book_ledger
         if ledger is None or ledger.placing(self) or self._hedging:
+            return
+        if kind != ENTRY and (self.sized or self._closes_within(order)):
             return
         self._refuse(
             BOOK_ENTRY,
             order.instrument_id.value,  # type: ignore[attr-defined]
             order_side_to_str(order.side),  # type: ignore[attr-defined]
-            why="in a book every entry is handed its room by the book; call "
-            "submit_entry(instrument_id, side), which the book allots at the instant's end",
+            why=f"{ledger.member_of(self)}: in a book every entry is handed its room by the "
+            "book, and an order that with this sleeve's own working orders on its side would "
+            "take its position past flat is an entry; call submit_entry(instrument_id, side), "
+            "which the book allots at the instant's end, or submit_exit(instrument_id)",
         )
+
+    def _closes_within(self, order: Any) -> bool:
+        """Whether an order `classify` reads as an exit — on the closing side of this
+        sleeve's own position — closes no more than the position holds with every order of
+        this sleeve's still working on that side (`_working`)."""
+        net = self._own_position(order.instrument_id)
+        working = self._working(order.instrument_id.value, order.side, clips=True)
+        return bool(order.quantity.as_decimal() + _leaves(working) <= abs(net))
 
     def _hedge_order(self, leg: Hedge) -> object | None:
         instrument_id = InstrumentId.from_str(leg.instrument)
@@ -2168,6 +2187,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         reference = self._last_print.get(key)
         if reference is None or reference <= 0:
+            self._sized_nothing(instrument, side)
             return None
         multiplier = float(instrument.multiplier)  # type: ignore[attr-defined]
         increment = float(instrument.price_increment)  # type: ignore[attr-defined]

@@ -480,20 +480,17 @@ def test_takers_of_one_name_at_one_instant_share_the_size_its_touch_displays() -
     instant with is the one read, because entries are placed when the instant closes."""
     subject = hyp((DEMO,), data_requirements=("bar", "quote"))
     feed = (tuple(bars(RESEARCH)), quoted("DEMO", 100))
+    a = member("a", request(subject, qty=80.0), 5.0)
+    b = member("b", request(subject, qty=80.0), 1.0)
 
-    made = execute_book(
-        block(),
-        [
-            member("a", request(subject, qty=80.0), 5.0),
-            member("b", request(subject, qty=80.0), 1.0),
-        ],
-        [instrument()],
-        [feed, feed],
-    )
+    made = execute_book(block(), [a, b], [instrument()], [feed, feed])
+    listed_last = execute_book(block(), [b, a], [instrument()], [feed, feed])
 
     (cut,) = made.cuts
     assert (cut.member, cut.asked, cut.placed, cut.by) == ("b", 80.0, 20.0, TOUCH)
     assert placed(made.runs[0], DEMO) == 80.0 and placed(made.runs[1], DEMO) == 20.0
+    assert listed_last.cuts == made.cuts, "the engine serves `b` first; the book places `a`"
+    assert pickle.dumps(listed_last.runs) == pickle.dumps(made.runs)
 
 
 def test_a_third_taker_finds_the_touch_spent_and_is_counted() -> None:
@@ -887,3 +884,230 @@ def test_a_sleeve_run_alone_ignores_the_edge_it_states() -> None:
     without = execute(request(hyp((DEMO,)), notional=1_000.0), [instrument()], daily("DEMO"))
 
     assert pickle.dumps(with_edge.run) == pickle.dumps(without.run)
+
+
+HAND_EXITS = b"""
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    sells: float = 1.0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 1000 on its first bar and, on its third, sells it by hand: `sells` market
+    orders of 1000 each, in one handler.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+
+    def on_bar(self, bar):
+        self.n += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self.n == 1:
+            self.submit_entry(instrument_id, "BUY", qty=1000.0)
+        elif self.n == 3:
+            for _ in range(int(self.kanso_config.sells)):
+                self.submit_order(
+                    self.order_factory.market(
+                        instrument_id, OrderSide.SELL, Quantity.from_int(1000)
+                    )
+                )
+"""
+
+
+def test_an_exit_built_by_hand_closes_and_two_that_would_pass_flat_are_an_entry() -> None:
+    """One sell by hand of the whole long is an exit; a second in the same handler, with the
+    first still in flight, would open a short the book handed no room for, and is refused
+    as an entry built by hand, naming the member."""
+    one = execute_book(
+        block(),
+        [member("a", request(hyp((DEMO,)), HAND_EXITS), 1.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+    with pytest.raises(SizingError) as raised:
+        execute_book(
+            block(),
+            [
+                member("a", request(hyp((DEMO,)), HAND_EXITS, sells=2.0), 5.0),
+                member("b", request(hyp((DEMO,)), qty=500.0, skip=4.0), 1.0),
+            ],
+            [instrument()],
+            [daily("DEMO"), daily("DEMO")],
+        )
+
+    sold = fsum(f.qty for f in one.runs[0].fills if f.side == "SELL")
+    assert sold == placed(one.runs[0], DEMO) == 1000.0
+    assert raised.value.refusal.rule == BOOK_ENTRY
+    assert raised.value.refusal.asked == "SELL"
+    assert "book member a" in raised.value.refusal.why
+
+
+def test_an_entry_opposite_to_a_rest_from_an_earlier_instant_or_a_later_holding_is_refused() -> (
+    None
+):
+    """`b` sells DEMO on a later session than `a` rested a buy under the market, or than
+    `a`, ranked below it, bought: each is a side the book works or holds."""
+    resting = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), qty=10.0, limit=1.0), 1.0),
+            member("b", request(hyp((DEMO,)), notional=10_000.0, sell=1.0, skip=3.0), 5.0),
+        ],
+        [instrument()],
+        [daily("DEMO"), daily("DEMO")],
+    )
+    held = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=10_000.0), 1.0),
+            member("b", request(hyp((DEMO,)), notional=10_000.0, sell=1.0, skip=4.0), 5.0),
+        ],
+        [instrument()],
+        [daily("DEMO"), daily("DEMO")],
+    )
+
+    for made in (resting, held):
+        assert made.counts["b"][OPPOSITE_REFUSED] == 1
+        assert made.runs[made.members.index("b")].fills == ()
+
+
+GROWN_REST = b"""
+from nautilus_trader.model.objects import Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 1000, rests its exit far over the market, then grows that rest to 2000.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+
+    def on_bar(self, bar):
+        self.n += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self.n == 1:
+            self.submit_entry(instrument_id, "BUY", qty=1000.0)
+        elif self.n == 2:
+            self.rest = self.submit_exit(instrument_id, price=100.0)
+        elif self.n == 3:
+            self.modify_order(self.rest, quantity=Quantity.from_int(2000))
+"""
+
+
+def test_a_resting_order_that_would_take_a_position_past_flat_works_the_other_side() -> None:
+    """`a`'s rest of 2000 against its long of 1000 would leave it short 1000 if it filled, so
+    the book counts that short as worked: `b`'s buy is opposite to it."""
+    made = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), GROWN_REST), 5.0),
+            member("b", request(hyp((DEMO,)), qty=500.0, skip=4.0), 1.0),
+        ],
+        [instrument()],
+        [daily("DEMO"), daily("DEMO")],
+    )
+
+    assert made.counts["b"][OPPOSITE_REFUSED] == 1
+    assert made.runs[1].fills == ()
+
+
+SIZED_BLIND = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Asks, on its first bar, for every name of its universe it has seen no price of.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.asked = False
+
+    def on_bar(self, bar):
+        if not self.asked:
+            self.asked = True
+            for instrument_id in self.universe:
+                if instrument_id != bar.bar_type.instrument_id:
+                    self.submit_entry(instrument_id, "BUY")
+"""
+
+
+def test_a_sized_entry_with_no_price_to_size_it_is_below_its_minimum() -> None:
+    sized_blind = replace(sized((DEMO, OTHR), 300_000.0), strategy_source=SIZED_BLIND)
+
+    made = execute_book(block(), [member("a", sized_blind, 1.0)], INSTRUMENTS, [daily("DEMO")])
+
+    assert made.counts["a"][BELOW_C_MIN] == 1
+    assert made.runs[0].fills == ()
+
+
+RESTER = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Rests a buy under the market and cancels it, rests another it leaves, then buys
+    twice at a limit over the market, which fills.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+
+    def on_bar(self, bar):
+        self.n += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self.n in (1, 3):
+            self.submit_entry(instrument_id, "BUY", qty=10.0, price=1.0)
+        elif self.n == 2:
+            self.cancel_all_orders(instrument_id)
+        elif self.n in (4, 5):
+            self.submit_entry(instrument_id, "BUY", qty=10.0, price=1000.0)
+"""
+
+
+def test_a_rest_the_venue_closed_unfilled_is_counted_in_its_own_session_and_a_filled_not() -> None:
+    """The rest cancelled on the second session is counted unfilled in the first's, the one
+    left working at the window's end in the third's, and the two that filled not at all."""
+    made = execute_book(
+        block(), [member("a", request(hyp((DEMO,)), RESTER), 1.0)], [instrument()], [daily("DEMO")]
+    )
+
+    assert placed(made.runs[0], DEMO) == 20.0
+    assert made.counts["a"][UNFILLED] == 2
+    days = sorted(day for day, by in made.sessions.items() if by["a"][UNFILLED])
+    assert len(days) == 2 and days[0] < days[1]
+
+
+def test_a_refusal_raised_while_the_book_places_an_entry_names_its_member() -> None:
+    """The book places `a`'s entry from the handler of whichever member closed the instant,
+    so its sizing rule's refusal says whose entry it was."""
+    with pytest.raises(SizingError) as raised:
+        execute_book(
+            block(), [member("a", sized((DEMO,), 1.0), 1.0)], [instrument()], [daily("DEMO")]
+        )
+
+    assert raised.value.refusal.rule == "budget_below_lot"
+    assert raised.value.refusal.why.startswith("book member a: ")

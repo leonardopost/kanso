@@ -2029,8 +2029,13 @@ refusal is counted once, per member and per New York session — `book_closed`,
 `outside_rth_unset`, `opposite_refused`, `below_c_min`, `name_cap`, `touch`, `room`,
 `no_size`, and `unfilled` for a resting entry that filled nothing — and the run reports the
 book's equity, its gross after each instant it placed at, and how many of those left it at
-its room. An entry built by hand in a book is refused (`book_entry`), as a sizing rule
-refuses one. A member is run at the book's capital and window; one with an attached
+its room: the peak, the mean and the share are over the instants the book placed entries
+at, not over every instant of the window. An entry built by hand in a book is refused
+(`book_entry`), as a sizing rule refuses one, and so is an exit built by hand that, with the
+member's own orders still working on its side, would take its position past flat — two
+sells of a whole long in one handler are an exit and an entry. An order the member modifies
+is not handed to the book again (`docs/backlog.md`). The session clock is New York's for
+every member, whatever its venue. A member is run at the book's capital and window; one with an attached
 construct, a `book` policy or a level-two book is refused. No stage holds a book yet:
 `portfolio.yaml` names no shared block and a stage node runs no ledger, which is the next
 step (`docs/backlog.md`).

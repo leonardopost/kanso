@@ -26,8 +26,10 @@ book's order:
 3. then the instrument id.
 
 Exits are not collected: they go to the venue in the handler, before any entry of the
-instant is placed, and one in flight counts as gone. Resting orders the venue fills at the
-instant are open before the entries are placed.
+instant is placed, and one in flight counts as gone. An order a member builds by hand is an
+exit only if, with its own orders still working on that side, it closes no more than the
+position holds; anything else it builds is an entry, and refused (`book_entry`). Resting
+orders the venue fills at the instant are open before the entries are placed.
 
 **Each entry is placed in that order, then cut.** It is sized by its member's own rule at
 that moment — its own room under its own limits, as a sleeve alone is — and then cut to the
@@ -35,11 +37,13 @@ smallest of:
 
 * the book's room: `min(capital, balance) × L` less the book's gross — every member's open
   positions marked at the latest quote's mid, or at their own cost where no quote has been
-  seen, its resting entries at their limits for what they would add, and its market orders
-  in flight at the price they were sized at — left over the entry's own round trip, `1 + 2 ×`
-  its cost rate (`KansoStrategy._reserve`). The balance is the capital plus every member's
-  realised net profit; `L` is the block's regular-hours leverage, and outside 09:30–16:00 New
-  York time no entry is placed while the leverage there is not set (`outside_rth_unset`);
+  seen, its resting orders at their limits for what they would add — a member's on one side
+  of a name together, so two that between them would take its position past flat add what
+  is past it — and its market orders in flight at the price they were sized at — left over
+  the entry's own round trip, `1 + 2 ×` its cost rate (`KansoStrategy._reserve`). The balance
+  is the capital plus every member's realised net profit; `L` is the block's regular-hours
+  leverage, and outside 09:30–16:00 New York time, on every venue, no entry is placed while
+  the leverage there is not set (`outside_rth_unset`);
 * the cap on the name, `max_name_c` of the capital, less what the book already holds, rests
   and has in flight in it;
 * for a taker — a market entry, or a limit marketable at the latest quote — what is left of
@@ -87,6 +91,7 @@ from kanso.criteria import CardRun
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, splits
 from kanso.nautilus.backtest import RunRequest
+from kanso.nautilus.sizing import SizingError
 from kanso.nautilus.strategy import _id_of, _order_price
 from kanso.schemas import NetPerTrade, SharedBook, VenueModel
 
@@ -337,6 +342,10 @@ class BookLedger:
         """Whether the book is placing an entry of this member now."""
         return self._placing is not None and self._placing.pending.member is member
 
+    def member_of(self, strategy: Any) -> str:
+        """The book's id of the member a strategy runs, for a refusal to name it."""
+        return f"book member {self._ids[strategy.id]}"
+
     def marked(self, member: Any, marker: Any) -> None:
         """Note that a member handled a marker; once every member has handled the one that
         closes the instant, place the instant's entries."""
@@ -433,6 +442,7 @@ class BookLedger:
         self._session, self._ts = session, ts_ns
         self._drawn = {}
         self._room_bound = False
+        self._prune()
         while self._pending:
             batch = sorted(self._pending, key=_Pending.order)
             self._pending = []
@@ -464,6 +474,11 @@ class BookLedger:
             member.submit_entry(
                 pending.instrument_id, pending.side, edge_bp=pending.edge_bp, **pending.kwargs
             )
+        except SizingError as error:
+            refusal = error.refusal
+            raise SizingError(
+                replace(refusal, why=f"{self.member_of(member)}: {refusal.why}")
+            ) from error
         finally:
             member._data_time = held
             self._placing = None
@@ -530,20 +545,25 @@ class BookLedger:
                 else:
                     worth = abs(held) * mark + (abs(now) - abs(held)) * sized_at
                 _add(found, key, worth * member._multiplier_of(key))
+            resting: dict[tuple[str, int], list[Any]] = {}
             for entry in member._ledger.values():
                 order = member._current(entry.order)
                 if order.is_closed or order.order_type == OrderType.MARKET:
                     continue
-                key = order.instrument_id.value
+                sign = 1 if order.side == OrderSide.BUY else -1
+                resting.setdefault((order.instrument_id.value, sign), []).append(order)
+            for (key, sign), orders in resting.items():
                 now = intended.get(key, 0.0)
-                leaves = float(order.leaves_qty)
-                signed = leaves if order.side == OrderSide.BUY else -leaves
-                grows = abs(now + signed) - abs(now)
-                if grows <= 0.0:
-                    continue
-                found.sides.setdefault(key, set()).add(1 if signed > 0 else -1)
-                price = _order_price(order) or member._price_now(key) or 0.0
-                _add(found, key, grows * price * member._multiplier_of(key))
+                total = 0.0
+                for order in orders:
+                    before = max(0.0, sign * now + total)
+                    total += float(order.leaves_qty)
+                    grows = max(0.0, sign * now + total) - before
+                    if grows <= 0.0:
+                        continue
+                    found.sides.setdefault(key, set()).add(sign)
+                    price = _order_price(order) or member._price_now(key) or 0.0
+                    _add(found, key, grows * price * member._multiplier_of(key))
         found.gross = fsum(found.names.values())
         return found
 
@@ -575,12 +595,40 @@ class BookLedger:
             by = self.sessions.setdefault(day, {})
             by.setdefault(member_id, dict.fromkeys(COUNTERS, 0))[counter] += 1
 
+    def _prune(self) -> None:
+        """Let go of the orders the book placed that the venue has closed: a market order's
+        price is no longer in flight, and a resting entry that filled anything is not
+        unfilled, while one closed with nothing filled is counted now, in its own session."""
+        cache = self._members[0].cache
+        self._sized = {
+            client_order_id: price
+            for client_order_id, price in self._sized.items()
+            if not _closed(cache.order(client_order_id))
+        }
+        kept = []
+        for rested in self._rested:
+            _, member, client_order_id, session = rested
+            order = cache.order(client_order_id)
+            if order is not None and float(order.filled_qty) > 0.0:
+                continue
+            if _closed(order):
+                self._count(member, UNFILLED, session)
+                continue
+            kept.append(rested)
+        self._rested = kept
+
     def finish(self) -> None:
         """Count every resting entry the book placed that filled nothing by the window's end."""
         for _, member, client_order_id, session in self._rested:
             order = member.cache.order(client_order_id)
             if order is not None and float(order.filled_qty) == 0.0:
                 self._count(member, UNFILLED, session)
+        self._rested = []
+
+
+def _closed(order: Any) -> bool:
+    """Whether the venue has closed an order the cache holds."""
+    return order is not None and bool(order.is_closed)
 
 
 def _add(found: _Exposure, key: str, worth: float) -> None:
@@ -699,6 +747,12 @@ def _refuse_members(book: SharedBook, members: Sequence[BookMember]) -> None:
             )
 
 
+def _seed_of(members: Sequence[BookMember]) -> str:
+    """What seeds a book's random sources: its members' snapshots, each once, in order —
+    the member's own for a book of one, and the same whatever the members' ranks."""
+    return "+".join(sorted({member.request.snapshot_id for member in members}))
+
+
 def execute_book(
     book: SharedBook,
     members: Sequence[BookMember],
@@ -719,6 +773,13 @@ def execute_book(
     The venues are the members', agreed as a stage's are (`kanso.nautilus.node.agree`), each
     opened at the book's capital and at the largest leverage the block declares, so the
     ledger's room binds before the venue's margin.
+
+    The members' sleeves are added to the engine in the order `members` is given, not the
+    book's, so the order the engine serves them in is the caller's and decides nothing: the
+    tests list a book's members both ways round and find the same runs. The random sources
+    are seeded from every member's snapshot (`_seed_of`) and the book's marks are struck on
+    the member delivered from the earliest instant, the lowest id at a tie, so neither moves
+    when the members' ranks do.
 
     The whole window is held in this process, as a stage node holds its own.
     """
@@ -750,14 +811,14 @@ def execute_book(
             if group and len(group) > len(seen.get(_group_key(group), ())):
                 seen[_group_key(group)] = group
     points = closed(ordered(tuple(seen[key] for key in sorted(seen)), coincident=True))
-    deepest = min(order, key=lambda member: member.request.delivered[0])
+    deepest = min(order, key=lambda member: (member.request.delivered[0], member.id))
     measured = replace(
         deepest.request, capital=book.capital, cushion=0.0, settled_ns=None, resumes_ns=None
     )
     union = backtest.Marks(measured, models[deepest.id])
     union.take(points)
     union.check()
-    backtest._seed_globals(order[0].request.snapshot_id)
+    backtest._seed_globals(_seed_of(members))
     engine = backtest.engine_for()
     try:
         for venue, (model, _, held_book) in sorted(agreed.items()):
@@ -781,8 +842,9 @@ def execute_book(
             book,
             [(member.id, strategy) for member, strategy in zip(order, strategies, strict=True)],
         )
-        for strategy in strategies:
-            engine.add_strategy(strategy)
+        listed = {member.id: strategy for member, strategy in zip(order, strategies, strict=True)}
+        for member in members:
+            engine.add_strategy(listed[member.id])
         opens, closes = measured.delivered
         backtest._load_stream(engine, points)
         engine.run(start=opens, end=closes - 1, streaming=True)
