@@ -546,6 +546,26 @@ flatten, which sends `close_position`'s reduce-only order, closes a name's posit
 cache's order by id, each by the strategy that holds it (`kanso.nautilus.node._flatten`);
 `submit_exit` never sets the flag.
 
+Dispatch
+--------
+**A topic's handlers at one priority are called in the order they subscribed, not in the
+order their components were registered.** `MessageBus.subscribe` keeps its subscriptions in a
+dict in the order they were made and hands a topic's matches over as `sorted(subs,
+reverse=True)`, and `Subscription.__lt__` compares `priority` alone (`common/component.pyx`),
+so a stable sort leaves handlers of one priority in subscription order; a priority may not be
+below zero, where every strategy's own subscriptions sit. A strategy subscribes its data when
+it starts, and the trader starts strategies in the order they were added, so the two orders
+agree until one subscribes later than its start. Measured: of two strategies on one name,
+the one added first subscribing to prints only on its first quote and the one added second
+subscribing at its start, a print reaches the second first; on a bare bus two handlers at
+priority zero subscribed in turn are called in that order, after one at priority one. And a
+point reaches only its own instrument's subscribers, so points of two names at one instant
+reach them in the stream's order (`sort_data` keeps it, above). Neither order is a rule a
+book can rank its members by, so kanso's book does not let either decide which entry is
+handed room first: every member's entries of an instant are collected and handed room in
+the book's own order once every member has handled the marker that closes the instant
+(`kanso.nautilus.book`).
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -1739,6 +1759,83 @@ def _check_a_reduce_only_close_is_held_to_the_name_s_first_position() -> tuple[b
         f"id) = {seen}. The venue holds a reduce-only close to the first open position in "
         "the instrument sorted by id — the mate's, on either side — and fills the strategy's "
         "own with what that allows; closed in that order, each close finds its own first"
+    )
+
+
+def _probe_subscription_order() -> tuple[list[str], list[str]]:
+    """Who hears a print first, and in which order a bare bus calls three handlers.
+
+    Two strategies on one name: `A`, added first, subscribes to quotes at its start and to
+    prints only on its first quote; `B`, added second, subscribes to prints at its start. A
+    quote at minute one, a print at minute two. Returns the tags in the order the print
+    reached them, and the order a bus calls handlers subscribed `second` and `third` at
+    priority zero and then `first` at priority one."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType
+    from nautilus_trader.model.identifiers import TraderId, Venue
+    from nautilus_trader.model.objects import Money
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    heard: list[str] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str, *, late: bool) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.late = late
+
+        def on_start(self) -> None:
+            if self.late:
+                self.subscribe_quote_ticks(equity.id)
+            else:
+                self.subscribe_trade_ticks(equity.id)
+
+        def on_quote_tick(self, tick: object) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            heard.append(self.order_id_tag)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote")[:1])
+        engine.add_data(_limit_points("trade", 10.0)[1:])
+        engine.add_strategy(Probe("A", late=True))
+        engine.add_strategy(Probe("B", late=False))
+        engine.run()
+    finally:
+        engine.dispose()
+    bus = MessageBus(trader_id=TraderId("KANSO-001"), clock=TestClock())
+    called: list[str] = []
+    for name, priority in (("second", 0), ("third", 0), ("first", 1)):
+        bus.subscribe(
+            topic="kanso.order", handler=lambda _, n=name: called.append(n), priority=priority
+        )
+    bus.publish(topic="kanso.order", msg="point")
+    return heard, called
+
+
+def _check_handlers_at_one_priority_run_in_subscription_order() -> tuple[bool, str]:
+    """Why a book collects an instant's entries before it hands out room: the order the
+    engine serves its strategies in is the order they subscribed."""
+    heard, called = _probe_subscription_order()
+    holds = heard == ["B", "A"] and called == ["first", "second", "third"]
+    return holds, (
+        f"a print reached {heard} where A was added first and subscribed to prints only on "
+        "its first quote and B, added second, subscribed at its start; a bus called "
+        f"{called} for handlers subscribed second and third at priority zero and first at "
+        "priority one. Handlers of one priority run in subscription order, higher first"
     )
 
 
@@ -5286,6 +5383,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "under the NETTING OMS the simulated venue holds a reduce-only close to the first "
         "open position in the instrument sorted by id, whichever strategy's it is",
         _check_a_reduce_only_close_is_held_to_the_name_s_first_position,
+    ),
+    (
+        "a topic's handlers at one priority are called in the order they subscribed, higher "
+        "priorities first, whatever order their strategies were added in",
+        _check_handlers_at_one_priority_run_in_subscription_order,
     ),
     (
         "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
