@@ -30,8 +30,9 @@ instant is placed, and one in flight counts as gone. Every order a member sends 
 each order of a list in turn, but one: the order the book's placement of an entry built, let
 through once (`BookLedger.placing`), so an order the member sends from a handler the engine
 runs inside that order's submission — `on_order_submitted` — is checked like any other. An
-order is an exit only if it is on the closing side of the member's own position and closes
-no more than the position holds with the member's own orders still working on that side and
+order is an exit only if it is on the closing side of the member's own position and closes no
+more than the position holds with the member's own orders still working on that side — the
+child of an exit sent one-triggers-other among them, which the parent's fill releases — and
 the list's earlier orders on it, a one-cancels-other pair among them counted once, at the
 larger of the two. Anything else is an entry built by hand, and refused (`book_entry`),
 naming the member. So a stop and a take-profit each for the whole position, sent apart or

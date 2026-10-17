@@ -80,11 +80,12 @@ checked at `submit_order` — one the sleeve sends from a handler the engine cal
 book's order is being submitted among them — and each order of a list in turn at
 `submit_order_list`: it is an exit only if it is on the closing side of the sleeve's own
 position and closes no more than the position holds with the sleeve's own orders still working
-on that side and the list's earlier orders on it — a one-cancels-other pair among them counted
-once, at the larger of the two, since the venue never fills both (`kanso.nautilus.facts`).
-Anything else is an entry built by hand, and refused (`book_entry`). So a stop and a
-take-profit each for the whole position, sent apart or in a list unlinked, are an exit and an
-entry, and linked one-cancels-other they are one exit; exits are the sleeve's as ever.
+on that side (`_working`, the child of an exit sent one-triggers-other among them) and the
+list's earlier orders on it — a one-cancels-other pair among them counted once, at the larger
+of the two, since the venue never fills both (`kanso.nautilus.facts`). Anything else is an
+entry built by hand, and refused (`book_entry`). So a stop and a take-profit each for the
+whole position, sent apart or in a list unlinked, are an exit and an entry, and linked
+one-cancels-other they are one exit; exits are the sleeve's as ever.
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
@@ -2146,8 +2147,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit or not: a stop that would reverse the position, or both legs of a bracket only
         one of which can fill, leave that much less to close. The stop-loss and take-profit
         of a bracket whose entry has filled nothing do not count, since they can fill only
-        after it and close what it opens; once it has filled any of it they count in full
-        (`_not_yet_live`).
+        after it and close what it opens; once it has filled any of it they count in full.
+        The child of an exit sent one-triggers-other counts in full from the start: its parent
+        is on the same side, and its fill releases the child to close more (`_not_yet_live`).
 
         An exit at market cancels this sleeve's own limit or stop orders resting at the
         venue on the closing side when they would leave it less than asked. With no latency
@@ -2725,20 +2727,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         `clips` counts the attached overlays' clips as well, for a reading of the whole net
         position rather than the sleeve's own share of it.
         """
-        instant = self._instant()
         working = []
         for entry in self._ledger.values():
             order = self._current(entry.order)
             if (
-                order.is_closed
-                or self.cache.is_order_pending_cancel_local(order.client_order_id)
-                or order.side != side
+                order.side != side
                 or order.instrument_id.value != key
-                or (
-                    instant
-                    and order.is_pending_cancel
-                    and self._cancels.get(order.client_order_id, False)
-                )
+                or self._spent(order)
                 or (not clips and self._is_clip(entry.order))
                 or self._not_yet_live(order)
             ):
@@ -2746,19 +2741,47 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             working.append(order)
         return working
 
+    def _spent(self, order: Any) -> bool:
+        """Whether an order of this sleeve's can no longer fill: the venue has closed it, the
+        order emulator has taken it out on its cancel, or, with no latency stated, the venue
+        held it open when its cancel was sent (`_working` states each)."""
+        return bool(
+            order.is_closed
+            or self.cache.is_order_pending_cancel_local(order.client_order_id)
+            or (
+                self._instant()
+                and order.is_pending_cancel
+                and self._cancels.get(order.client_order_id, False)
+            )
+        )
+
     def _not_yet_live(self, order: Any) -> bool:
-        """Whether an order is a contingent child, such as a bracket's stop-loss or
-        take-profit, whose parent has filled nothing: it can fill only once the parent has,
-        and then closes what the parent opened, so until then it leaves the position as it
-        is. In nautilus_trader 1.231.0 the venue keeps such a child `SUBMITTED` with no venue
-        order id, and the order emulator keeps it `INITIALIZED`, until the parent fills, so
-        neither an exit at market nor anything else has a child to cancel. Measured on both
-        paths by the exit and replay tests, a bracket held by the venue and one held by the
-        emulator."""
+        """Whether an order is a contingent child that leaves the position as it is until its
+        parent fills: its parent has filled nothing, and is on the other side of the same
+        name — a bracket's entry, whose stop-loss and take-profit close what it opens — or can
+        no longer fill (`_spent`). A child whose parent is on its own side, or in another
+        name, is not: the parent's fill releases it to add to that side, so it counts in full
+        like any order working there. An exit sent one-triggers-other — against a long, a
+        sell whose fill releases another sell — sells both.
+
+        In nautilus_trader 1.231.0 the venue keeps a child `SUBMITTED` with no venue order id
+        while its parent is accepted or triggered, and processes it on the parent's first
+        fill (`OrderMatchingEngine.process_order` and `fill_order` in `backtest/engine.pyx`);
+        the order emulator keeps it `INITIALIZED` until the parent fills (`OrderManager
+        .handle_order_filled` in `execution/manager.pyx`). So neither an exit at market nor
+        anything else has such a child to cancel, and one whose parent can no longer fill
+        never fills: a parent cancelled with nothing filled takes its child with it
+        (`OrderMatchingEngine.cancel_order`, and `OrderManager.handle_contingencies` for the
+        emulator's). Measured on both paths by the exit and replay tests, a bracket held by
+        the venue and one held by the emulator, and on the backtest engine by the exit tests
+        for an exit sent one-triggers-other."""
         if order.parent_order_id is None:
             return False
         parent = self.cache.order(order.parent_order_id)
-        return parent is not None and parent.filled_qty.as_decimal() == 0
+        if parent is None or parent.filled_qty.as_decimal() != 0:
+            return False
+        opens = parent.instrument_id == order.instrument_id and parent.side != order.side
+        return opens or self._spent(parent)
 
     def _submitted(self, order: object) -> object | None:
         placed = len(self._intents)

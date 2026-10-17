@@ -422,18 +422,22 @@ an exit or not, so a stop that would reverse the position, or both legs of a bra
 of which can fill, leave that much less to close. The stop-loss and take-profit of a bracket
 whose entry has filled nothing do not count: they can fill only after the entry and close
 what it opens, and neither the venue nor the order emulator has them open to cancel; once the
-entry has filled any of it they count in full. With no latency stated, an exit at market
-is never held back by a resting one: when the sleeve's own limit or stop orders resting at
-the venue on the closing side would leave it less than asked, it cancels them first, so a
-stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
-after the stop has closed. Under a latency the cancelled orders can still fill until their
-cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
-below); an order of the sleeve's still in flight to the venue, modified or not, is not
-cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
-paid once the venue holds that order open and the owed exit has cancelled it. An order the
-venue holds whose modify has not been answered yet, one sent in the same handler among them,
-counts too, and an exit at market does not cancel it at once: on a node a cancel sent in the
-handler that sent the modify would overtake it, where the backtest lands the modify first.
+entry has filled any of it they count in full. The child of an exit sent one-triggers-other —
+against a long, a sell that releases another sell once it fills — counts in full from the
+start, since the parent's fill releases it to close more; it stops counting once its parent,
+having filled nothing, can no longer fill, since the engine then cancels the child with it.
+With no latency stated, an exit at market is never held back by a resting one: when the
+sleeve's own limit or stop orders resting at the venue on the closing side would leave it
+less than asked, it cancels them first, so a stop is not blocked by a take-profit, and a
+take-profit left above the market cannot fill after the stop has closed. Under a latency the
+cancelled orders can still fill until their cancels land, so the exit is cut to what they
+leave and the rest is owed (`costs.latency_ms`, below); an order of the sleeve's still in
+flight to the venue, modified or not, is not cancelled and counts, and what it cuts from an
+exit at market is owed at any latency, and paid once the venue holds that order open and the
+owed exit has cancelled it. An order the venue holds whose modify has not been answered yet,
+one sent in the same handler among them, counts too, and an exit at market does not cancel it
+at once: on a node a cancel sent in the handler that sent the modify would overtake it, where
+the backtest lands the modify first.
 With no latency stated it cancels it as the venue answers the modify; under a latency it
 cancels it on the next point, before the sleeve's handler for it, whether or not the venue
 has answered the modify by then, and the cancel still lands behind the modify, which was

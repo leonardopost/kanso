@@ -2038,17 +2038,20 @@ member sends from a handler the engine runs while that one is being submitted
 (`on_order_submitted`) is held to it like any other. An order is an exit only if it closes no
 more of the member's own position than the position holds, with the member's own orders still
 working on its side and the list's earlier orders on that side, a one-cancels-other pair
-among them counted once, at the larger of the two; anything else is an entry. So two sells of
-a whole long, in one handler or in one list, are an exit and an entry, as is a list of a sell
-and a buy; a stop and a take-profit each for the whole position, sent apart or listed
-unlinked, are an exit and an entry, and the second is refused. Linked one-cancels-other they
-are one exit, since the venue never fills both (`kanso doctor` checks it); a
-one-updates-other pair is two orders, since the venue fills both of one sent marketable. An
-order the member modifies is not handed to the book again (`docs/backlog.md`). The session
-clock is New York's for every member, whatever its venue. A member is run at the book's
-capital and window; one with an attached construct, a `book` policy or a level-two book is
-refused. No stage holds a book yet: `portfolio.yaml` names no shared block and a stage node
-runs no ledger, which is the next step (`docs/backlog.md`).
+among them counted once, at the larger of the two; anything else is an entry. The child of an
+exit sent one-triggers-other is working from the start, since its parent's fill releases it
+to close more, where a bracket's stop-loss and take-profit wait for the entry whose fill they
+close (`docs/workspace.md`). So two sells of a whole long, in one handler or in one list, are
+an exit and an entry, as is a list of a sell and a buy; a sell of half a long that releases
+another of the other half leaves nothing more to close; a stop and a take-profit each for the
+whole position, sent apart or listed unlinked, are an exit and an entry, and the second is
+refused. Linked one-cancels-other they are one exit, since the venue never fills both
+(`kanso doctor` checks it); a one-updates-other pair is two orders, since the venue fills
+both of one sent marketable. An order the member modifies is not handed to the book again
+(`docs/backlog.md`). The session clock is New York's for every member, whatever its venue. A
+member is run at the book's capital and window; one with an attached construct, a `book`
+policy or a level-two book is refused. No stage holds a book yet: `portfolio.yaml` names no
+shared block and a stage node runs no ledger, which is the next step (`docs/backlog.md`).
 
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the

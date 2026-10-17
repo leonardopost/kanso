@@ -1097,6 +1097,102 @@ def test_a_stop_and_a_take_profit_linked_one_cancels_other_are_one_exit(shape: f
     assert placed(made.runs[b], DEMO) == 500.0
 
 
+TRIGGERED = b"""
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import ContingencyType, OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import LimitOrder, OrderList
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    by_hand: float = 0.0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 1000 on its first bar; on its third sends one list of two sells of 500 linked
+    one-triggers-other, a limit at 12.50 and under it one at 12.00, which the first releases
+    once it fills; on its fourth asks to sell more: 500 by hand at market (`by_hand`), or
+    by `submit_exit` at 11.75.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+
+    def on_bar(self, bar):
+        self.n += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self.n == 1:
+            self.submit_entry(instrument_id, "BUY", qty=1000.0)
+        elif self.n == 3:
+            ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
+            list_id = self.order_factory.generate_order_list_id()
+            links = (
+                {"contingency_type": ContingencyType.OTO, "linked_order_ids": [ids[1]]},
+                {"parent_order_id": ids[0]},
+            )
+            orders = [
+                LimitOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=self.id,
+                    instrument_id=instrument_id,
+                    client_order_id=ids[index],
+                    order_side=OrderSide.SELL,
+                    quantity=Quantity.from_int(500),
+                    price=Price.from_str(price),
+                    init_id=UUID4(),
+                    ts_init=self.clock.timestamp_ns(),
+                    order_list_id=list_id,
+                    **links[index],
+                )
+                for index, price in enumerate(("12.50", "12.00"))
+            ]
+            self.submit_order_list(OrderList(list_id, orders))
+        elif self.n == 4:
+            if self.kanso_config.by_hand:
+                self.submit_order(
+                    self.order_factory.market(instrument_id, OrderSide.SELL, Quantity.from_int(500))
+                )
+            else:
+                self.submit_exit(instrument_id, price=11.75)
+"""
+
+
+def test_the_child_of_an_exit_sent_one_triggers_other_counts_toward_what_it_closes() -> None:
+    """Against a long of 1000, a sell of 500 that releases another of 500 once it fills is
+    an exit of all of it, so a third sell of 500 by hand would take the position past flat
+    and is refused as an entry, naming the member, and `submit_exit` finds nothing left to
+    close and sends nothing. Measured on the round before this test: the check counted the
+    parent alone, let the third sell through, and the member sold 1500 of its 1000 — a short
+    of 500 the book handed no room for — by hand and by `submit_exit` alike."""
+    with pytest.raises(SizingError) as raised:
+        execute_book(
+            block(),
+            [member("a", request(hyp((DEMO,)), TRIGGERED, by_hand=1.0), 5.0)],
+            [instrument()],
+            [daily("DEMO")],
+        )
+    exited = execute_book(
+        block(),
+        [member("a", request(hyp((DEMO,)), TRIGGERED), 5.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+
+    assert raised.value.refusal.rule == BOOK_ENTRY
+    assert raised.value.refusal.asked == "SELL"
+    assert "book member a" in raised.value.refusal.why
+    fills = exited.runs[0].fills
+    assert [(fill.side, fill.qty) for fill in fills] == [
+        ("BUY", 1000.0),
+        ("SELL", 500.0),
+        ("SELL", 500.0),
+    ]
+    assert len(exited.intents[0]) == 3
+
+
 NESTED = b"""
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
