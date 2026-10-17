@@ -215,6 +215,7 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+per trade  net 10.16 bp ± 1.319 by session (t 7.7) · 425 trade(s) on 105 session(s)
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 
 $ kanso portfolio show
