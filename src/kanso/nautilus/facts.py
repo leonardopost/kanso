@@ -85,9 +85,26 @@ instrument's points of the class over the span and leaves the series' files wher
 **A file's footer counts each row group and states its `ts_init` range.** `write_data`
 writes a file in row groups of `max_rows_per_group` rows, 5,000 unless the catalog is opened
 with another, and the footer of each states its rows and the least and greatest `ts_init`
-among them. So the points a span holds are at most the rows of the groups whose range meets
-it, read off the footers without reading a point, and a card's window is read in as few
-spans as that count allows (`kanso.nautilus.backtest._reads`).
+among them. So a group whose range lies within one step of a window's reads is counted off
+its footer without reading a point; a group reaching further has its `ts_init` column read,
+and nothing else of it, and is counted step by step; and a card's window is read in as few
+spans as that count allows (`kanso.nautilus.backtest._row_groups`, `_reads`).
+
+**A query not handed its files lists them through the catalog it is asked of.** `query`
+without `files` — every query of bars, and of a custom type — asks the catalog's own
+`get_file_list_from_data_cls` for every file of the class, a glob of the class's whole
+directory, once a query, and then keeps the series and span asked for. And
+`ParquetDataCatalog(path)` is one instance per path for the whole process, the constructor
+handing back the instance it made first, while `copy.copy` of it is an instance of its own.
+So kanso reads a window through a copy whose listing answers from one glob a class, and no
+other reader in the process sees that listing (`kanso.nautilus.backtest._catalog`).
+
+**A query of a listed file that has gone raises.** `query(..., files=...)` handed a path
+whose file has gone raises `FileNotFoundError` naming it. A query of bars is not handed its
+files: it reads the directory of each listed file that meets its span, so it reads whatever
+that directory holds when it runs, and raises `RuntimeError` when the directory holds no
+file. So a window whose listing a replace has overtaken learns it at the read that fails,
+and lists the class again (`kanso.nautilus.backtest._read_listed`).
 
 Availability timestamps
 -----------------------
@@ -3617,6 +3634,103 @@ def _check_a_footer_counts_each_row_group_and_states_its_ts_init_range() -> tupl
     )
 
 
+def _check_a_catalog_is_one_instance_per_path() -> tuple[bool, str]:
+    """Open a directory's catalog twice and another directory's once, and copy the first."""
+    import copy
+
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+        one, again, other = (ParquetDataCatalog(path) for path in (first, first, second))
+        copied = copy.copy(one)
+        same = one is again and one is not other
+        private = copied is not one and copied.path == one.path and copied.fs is one.fs
+    return same and private, (
+        f"ParquetDataCatalog of one path twice {'is' if one is again else 'is not'} one "
+        f"instance, of another path {'is not' if one is not other else 'is'} it, and a copy "
+        f"{'is its own instance of the same path' if private else 'is not'}"
+    )
+
+
+def _check_a_query_lists_its_files_through_the_catalog_it_asks() -> tuple[bool, str]:
+    """Write two names' bars and a point of a custom type of no instrument, put a counting
+    `get_file_list_from_data_cls` on a copy of the catalog, and query each series through
+    the copy without its files: which classes the copy was asked to list, and what each
+    query returned."""
+    import copy
+
+    from nautilus_trader.model.data import Bar
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    bar: Any = _sample_bar()
+    other: Any = Bar(
+        type(bar.bar_type).from_str("MSFT.XNAS-1-DAY-LAST-EXTERNAL"),
+        bar.open,
+        bar.high,
+        bar.low,
+        bar.close,
+        bar.volume,
+        ts_event=bar.ts_event,
+        ts_init=bar.ts_init,
+    )
+    wide = _define_custom_type({"value": float})()
+    with tempfile.TemporaryDirectory() as directory:
+        catalog: Any = copy.copy(ParquetDataCatalog(directory))
+        catalog.write_data([bar, other])
+        catalog.write_data([wide(value=1.0, ts_event=7, ts_init=7)])
+        lister = catalog.get_file_list_from_data_cls
+        asked: list[str] = []
+
+        def listing(data_cls: type) -> list[str]:
+            asked.append(data_cls.__name__)
+            files: list[str] = lister(data_cls)
+            return files
+
+        catalog.get_file_list_from_data_cls = listing
+        bars = catalog.query(Bar, identifiers=[str(bar.bar_type)], start=0, end=10_000)
+        custom = catalog.query(wide, start=0, end=10)
+    expected = ["Bar", wide.__name__]
+    holds = asked == expected and [str(b.bar_type) for b in bars] == [str(bar.bar_type)]
+    holds = holds and len(custom) == 1
+    return holds, (
+        f"query without files asked the catalog's own listing for {asked}, and returned "
+        f"{len(bars)} bar(s) of one name's two and {len(custom)} custom point(s)"
+    )
+
+
+def _check_a_query_of_a_listed_file_gone_raises() -> tuple[bool, str]:
+    """Write one name's print and one bar, list each class, remove every file, and query the
+    print handed its listed file and the bar through a copy of the catalog answering the
+    listing taken before."""
+    import copy
+    from pathlib import Path
+
+    from nautilus_trader.model.data import Bar, TradeTick
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    bar: Any = _sample_bar()
+    with tempfile.TemporaryDirectory() as directory:
+        catalog: Any = copy.copy(ParquetDataCatalog(directory))
+        catalog.write_data([_sale("AAPL.XNAS", 7)])
+        catalog.write_data([bar])
+        prints = catalog.get_file_list_from_data_cls(TradeTick)
+        bars = catalog.get_file_list_from_data_cls(Bar)
+        catalog.get_file_list_from_data_cls = lambda data_cls: list(bars)
+        for path in (*prints, *bars):
+            Path(path).unlink()
+        gone = _raises(lambda: catalog.query(TradeTick, start=0, end=10_000, files=prints))
+        empty = _raises(
+            lambda: catalog.query(Bar, identifiers=[str(bar.bar_type)], start=0, end=10_000)
+        )
+    named = str(gone).startswith("FileNotFoundError: ") and prints[0] in str(gone)
+    holds = named and str(empty).startswith("RuntimeError: ")
+    return holds, (
+        f"a query handed a print's file that had gone raised {str(gone).split(':')[0]}"
+        f"{' naming it' if named else ''}, and a query of bars whose one listed file had "
+        f"gone raised {str(empty).split(':')[0]}"
+    )
+
+
 def _check_delete_with_no_identifier_removes_a_series_of_no_instrument() -> tuple[bool, str]:
     """Write a point of a custom type of no instrument, and two names' prints, ask the
     engine to remove each class over every instant without naming an identifier, and see
@@ -4994,6 +5108,21 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "write_data writes a file in row groups of 5,000 rows, each footer stating its rows "
         "and its least and greatest ts_init",
         _check_a_footer_counts_each_row_group_and_states_its_ts_init_range,
+    ),
+    (
+        "ParquetDataCatalog is one instance per path in a process, and a copy of it is an "
+        "instance of its own",
+        _check_a_catalog_is_one_instance_per_path,
+    ),
+    (
+        "a catalog query not handed its files lists them through the catalog's own "
+        "get_file_list_from_data_cls, once a query",
+        _check_a_query_lists_its_files_through_the_catalog_it_asks,
+    ),
+    (
+        "a catalog query handed a file that has gone raises FileNotFoundError naming it, and "
+        "a query of bars whose listed directory holds no file raises RuntimeError",
+        _check_a_query_of_a_listed_file_gone_raises,
     ),
     (
         "delete_data_range with no identifier removes the files of a series of no instrument",
