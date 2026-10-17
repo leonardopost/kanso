@@ -1646,7 +1646,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         if self._warming():
             return
-        self._check_booked(order, "hedges()" if self._hedging else "submit_order")
+        self._check_booked(order, "submit_order")
         self._check_hand_built(order)
         kind = self.classify(order)
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
@@ -1785,6 +1785,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if call == "submit_order" and order is self._sending:
             self._sending = None
             return
+        if call == "submit_order" and self._hedging:
+            call = "hedges()"
         self._refuse(
             BOOK_ENTRY,
             order.instrument_id.value,
