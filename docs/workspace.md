@@ -408,16 +408,18 @@ the room the entry takes, and the venue settles both at one price, the exit firs
 the engine's own unchanged, and an entry grown or re-priced by it is held to no ceiling until
 kanso holds it to one (`docs/backlog.md` row 123).
 **In a book a member sends orders only through `submit_entry` and `submit_exit`.** It may
-cancel its orders; every other order it sends, and every modify, is refused as `book_entry`,
-naming the member, before the engine routes it, whatever the order is and whichever handler
-sends it, `on_order_submitted` included: `submit_order`, `submit_order_list` and
-`modify_order` called by the sleeve, a leg an overridden `hedges()` returns, the engine's
-`close_position`, and the engine's own `submit_order`, `submit_order_list` and
-`modify_order` called past kanso's — on the engine's class, or through
-`super(KansoStrategy, self)` — which the book refuses as the engine hands the order to the
-bus (`docs/concepts.md`, *Stages*). A sleeve run alone is not held to it at run time
-(`docs/backlog.md` row 209); `strategy_integrity` refuses a researched strategy that calls
-kanso's own sends or reaches a method kanso overrides past it, sized or not.
+cancel its orders. At run time the book refuses each of these as `book_entry`, naming the
+member, before the engine routes it, whichever handler sends it, `on_order_submitted` included: `submit_order`,
+`submit_order_list` and `modify_order` called by the sleeve, a leg an overridden `hedges()`
+returns, the engine's `close_position`, and the engine's own `submit_order`,
+`submit_order_list` and `modify_order` called past kanso's — on the engine's class, or through
+`super(KansoStrategy, self)` — which the book hears as the engine hands the order to the bus
+(`docs/concepts.md`, *Stages*). What goes past both — a command or a fill sent on the message
+bus, an event applied to an order by hand, an order handed to kanso's private `_submitted` —
+the book does not refuse (`docs/backlog.md` row 210); `strategy_integrity` refuses it before
+anything runs, in a researched strategy, sized or not, with kanso's own sends and a method
+kanso overrides reached past it. A sleeve run alone is held to none of it at run time
+(`docs/backlog.md` row 209).
 **A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
 owed exit and the classification of an order as an entry or an exit read the position the
 engine keeps for the sleeve's own strategy in the name, not the account's net position, which

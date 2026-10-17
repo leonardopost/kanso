@@ -29,30 +29,41 @@ book's order:
 the book's to place, as above. Its exits are not collected: `submit_exit` sizes each never
 past flat, counting the member's own orders still working on the closing side, and sends it in
 the handler, before any entry of the instant is placed, and one in flight counts as gone. A
-member may cancel its orders. Every other order it sends, and every modify, is refused
-(`book_entry`), naming the member, before the engine routes it, whatever the order is and
-whichever handler sends it. The book hands room only to entries it sizes, and an order kanso
-did not size can take a position past flat or past the room. It is refused at two places:
+member may cancel its orders. The book hands room only to entries it sizes, and an order kanso
+did not size can take a position past flat or past the room, so the other routes to the venue
+are refused, each by the layer that can see it — the first two at run time, as `book_entry`,
+naming the member, before the engine routes the order, and the third before anything runs:
 
-* at kanso's own methods (`KansoStrategy._check_booked`): `submit_order`,
+* kanso's own methods (`KansoStrategy._check_booked`) refuse `submit_order`,
   `submit_order_list` and `modify_order` called by the member, a leg an overridden `hedges()`
   returns, and the engine's `close_position`, `close_all_positions` and `market_exit`, which
   send through `submit_order`;
-* on the bus (`BookLedger.heard`), for what never reaches kanso's methods: the engine's own
-  `submit_order`, `submit_order_list` and `modify_order`, called on its class or through
+* the bus check (`BookLedger.heard`) refuses what reaches the engine's own `submit_order`,
+  `submit_order_list` and `modify_order` past kanso's — called on its class or through
   `super(KansoStrategy, self)`. The engine hands the bus an order's `OrderInitialized`, and a
   modify's `OrderPendingUpdate`, before it routes either. The book hears every strategy's
   order events there, ahead of the members' own handlers, and lets an `OrderInitialized`
-  through only for the order kanso is sending for that member, once. It refuses every
-  `OrderPendingUpdate`, since kanso modifies no order. It also refuses an order in the name
-  of a strategy that is no member, which no member's extraction would hold.
+  through only for the order kanso is sending for that member, once, and not while another
+  member runs. It refuses every `OrderPendingUpdate`, since kanso modifies no order, and an
+  order in the name of a strategy that is no member, which no member's extraction would hold.
+  The event names the strategy the order is in the name of, so the refusal names the member
+  that was running when it was sent (`BookLedger.running`), where the book can tell;
+* the integrity scan (`kanso.criteria.integrity`) refuses, in a researched strategy, what
+  goes past both: the message bus, on which a command — a `SubmitOrder`, a `ModifyOrder` — or
+  a fill reaches the execution engine with nothing the book hears, and on which the book's
+  handler can be taken off; `apply`, by which an event moves an order with no modify sent;
+  kanso's private sends, `_submitted` among them, which send whatever they are handed as the
+  very order kanso is sending, and which the book lets through as that; and a method kanso
+  overrides, read past it.
 
 So an order the member builds itself and sends from a handler the engine runs inside the
 submission of kanso's own — `on_order_submitted` — is refused like any other: its
-`OrderInitialized` comes after the one let through. kanso's private sends, which send what
-they are handed as kanso's own, are denied to a researched strategy by the integrity scan
-(`kanso.criteria.integrity`), as is reaching a method kanso overrides past it. Resting orders
-the venue fills at the instant are open before the entries are placed.
+`OrderInitialized` comes after the one let through. What no layer refuses is a route only
+the scan refuses, taken by a strategy it did not pass — measured in a book of one at no
+latency and at 20 ms, each went out (`docs/backlog.md` row 210) — and code that defeats the
+scan's blind spots, such as the engine's class held under the name `self`, whose orders the
+bus check still refuses (row 211). Resting orders the venue fills at the instant are open
+before the entries are placed.
 
 **Each entry is placed in that order, then cut.** It is sized by its member's own rule at
 that moment — its own room under its own limits, as a sleeve alone is — and then cut to the
@@ -322,6 +333,12 @@ class BookLedger:
         self.cuts: list[Cut] = []
         self.gross: list[float] = []
         self.at_room_limit = 0
+        self.running: list[Any] = []
+        """The members whose handlers the engine is running now, the innermost last: each
+        member marks itself while it handles an instant's points, an order event and
+        `on_start` (`KansoStrategy.handle_data`, `handle_event` and `_start`), and the ledger
+        marks the member whose entry it is placing. An order heard on the bus is named for the
+        innermost (`heard`)."""
         for _, strategy in members:
             strategy._book_ledger = self
 
@@ -380,16 +397,21 @@ class BookLedger:
         kanso is sending for it, and its `OrderPendingUpdate` never. An order initialised or
         modified in the name of a strategy that is no member of the book — one a member built
         with another strategy id — is refused: no member's extraction would hold its fills.
+        The event names the strategy the order is in the name of, not the one that sent it, so
+        each refusal names the member that was running when it was sent (`running`), where
+        one was.
         """
         from nautilus_trader.model.enums import order_side_to_str
         from nautilus_trader.model.events import OrderInitialized, OrderPendingUpdate
 
+        sender = self.running[-1] if self.running else None
         member = self._by_strategy.get(event.strategy_id)
         if member is not None:
-            member._check_booked_event(event)
+            member._check_booked_event(event, sender)
             return
         if isinstance(event, OrderInitialized | OrderPendingUpdate):
             side = getattr(event, "side", None)
+            by = "" if sender is None else f"{self.member_of(sender)}: "
             raise SizingError(
                 Refusal(
                     rule=BOOK_ENTRY,
@@ -397,9 +419,11 @@ class BookLedger:
                     instrument_id=event.instrument_id.value,
                     asked="" if side is None else order_side_to_str(side),
                     held={},
-                    why=f"an order in the name of {event.strategy_id}, which is no member of "
-                    "this book, was handed to the engine; a member's orders go out only "
-                    "through submit_entry and submit_exit, in its own name",
+                    why=f"{by}an order in the name of {event.strategy_id}, which is no member "
+                    "of this book, was handed to the engine"
+                    + ("" if sender is None else " while this member ran")
+                    + "; a member's orders go out only through submit_entry and submit_exit, "
+                    "in its own name",
                 )
             )
 
@@ -527,6 +551,7 @@ class BookLedger:
         self._claim = member
         held = member._data_time
         member._data_time = pending.data_time
+        self.running.append(member)
         try:
             member.submit_entry(
                 pending.instrument_id, pending.side, edge_bp=pending.edge_bp, **pending.kwargs
@@ -537,6 +562,7 @@ class BookLedger:
                 raise
             raise SizingError(replace(refusal, why=f"{named}: {refusal.why}")) from error
         finally:
+            self.running.pop()
             member._data_time = held
             self._placing = None
             self._claim = None

@@ -608,8 +608,13 @@ buy at market by `Strategy.submit_order(self, order)`, a list of two by
 `Strategy.submit_order_list`, a modify of its rest to 20 at 9.00, and a buy in the name of a
 strategy the engine does not run, each refused by such a subscriber and caught, kept its rest
 of 10 at 10.50 unfilled over three more minutes and held no other order; the list was refused
-at its first order. A book refuses that way every order a member did not send through kanso
-(`kanso.nautilus.book.BookLedger.heard`).
+at its first order. A book refuses that way every order and modify a member hands the
+engine's own methods past kanso's (`kanso.nautilus.book.BookLedger.heard`). A command or a
+fill a strategy sends on the bus itself, to `ExecEngine.execute`, `RiskEngine.execute` or
+`ExecEngine.process`, goes past those methods, an event it applies to an order with
+`Order.apply` sends no command at all, and a subscriber it takes off the bus hears nothing:
+in a book each went out unrefused (`docs/backlog.md` row 210), and only the integrity scan
+refuses them, in a researched strategy (`kanso.criteria.integrity`).
 
 Risk configuration
 ------------------

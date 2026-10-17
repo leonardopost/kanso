@@ -82,18 +82,23 @@ member has handled the one that closes the instant the ledger calls `submit_entr
 each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
 sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). Its exits are its
 own, sized by `submit_exit` never past flat as ever. **A member sends orders only through
-`submit_entry` and `submit_exit`**, and may cancel. Every other order it sends, and every
-modify, is refused (`book_entry`), naming the member, before the engine routes it, whatever
-the order is. The sleeve refuses at its own methods (`_check_booked`): `submit_order`,
+`submit_entry` and `submit_exit`**, and may cancel. Its other orders and modifies are refused
+(`book_entry`), naming the member, before the engine routes them, where a layer can see
+them. The sleeve refuses at its own methods (`_check_booked`): `submit_order`,
 `submit_order_list` and `modify_order` called by it, a leg an overridden `hedges()` returns,
 and the engine's `close_position`, which sends through `submit_order`. The ledger refuses on
 the bus, as the engine hands it the order's `OrderInitialized` or the modify's
-`OrderPendingUpdate`, what never reaches the sleeve's methods: the engine's own, called on
-its class or through `super(KansoStrategy, self)` (`BookLedger.heard`, which asks
-`_check_booked_event`). The one order let through is the one `_submitted` is sending for the
-two: recognised as that very object at its check, and let through to the engine once, at its
-own `OrderInitialized`. An order the sleeve builds itself and sends from a handler the
-engine runs inside that submission — `on_order_submitted` — is refused like any other.
+`OrderPendingUpdate`, what reaches the engine's own methods past the sleeve's: called on its
+class or through `super(KansoStrategy, self)` (`BookLedger.heard`, which asks
+`_check_booked_event` with the member that was running, `BookLedger.running`, which the
+sleeve marks while it handles an instant's points, an order event and `on_start`). The one
+order let through is the one `_submitted` is sending for the two: recognised as that very
+object at its check, and let through to the engine once, at its own `OrderInitialized`. An
+order the sleeve builds itself and sends from a handler the engine runs inside that
+submission — `on_order_submitted` — is refused like any other. What neither sees — a command
+or a fill sent on the bus, an event applied to an order, an order handed to `_submitted`
+itself — only `strategy_integrity` refuses, in a researched strategy
+(`kanso.criteria.integrity`).
 
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
@@ -1104,7 +1109,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             for order in self.cache.orders(strategy_id=self.id)
         )
         self.msgbus.subscribe(topic=actions.TOPIC, handler=self._on_restated)
-        super()._start()
+        ledger = self._book_ledger
+        if ledger is not None:
+            ledger.running.append(self)
+        try:
+            super()._start()
+        finally:
+            if ledger is not None:
+                ledger.running.pop()
 
     def subscribe_universe(self) -> None:
         """Subscribe every instrument of the universe to every data requirement.
@@ -1408,12 +1420,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):
-            if self._pending:
-                self._flush_one()
-            if not self._pending:
-                self._consult_due()
-            if self._book_ledger is not None:
-                self._book_ledger.marked(self, data)
+            ledger = self._book_ledger
+            if ledger is not None:
+                ledger.running.append(self)
+            try:
+                if self._pending:
+                    self._flush_one()
+                if not self._pending:
+                    self._consult_due()
+                if ledger is not None:
+                    ledger.marked(self, data)
+            finally:
+                if ledger is not None:
+                    ledger.running.pop()
             return
         ts_init = getattr(data, "ts_init", None)
         if isinstance(ts_init, int):
@@ -1785,9 +1804,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         `submit_exit`, at the call of kanso's that it was sent by.
 
         A book hands each entry of an instant its share of one room in its own order, and an
-        exit is the book's only through `submit_exit`, which sizes it never past flat. So a
-        member's orders go out only through the two (`kanso.nautilus.book`): the one order let
-        through is the one `_submitted` is sending for them, recognised as that very object,
+        exit is the book's only through `submit_exit`, which sizes it never past flat. So at
+        kanso's methods a member's orders go out only through the two (`kanso.nautilus.book`
+        says what reaches the venue past them): the one order let through is the one
+        `_submitted` is sending for them, recognised as that very object,
         and let through to the engine once, as the engine hands the bus its `OrderInitialized`
         (`_check_booked_event`). kanso sends no list and modifies no order,
         so `submit_order_list` and `modify_order` are refused whatever they hold, and so is a
@@ -1804,10 +1824,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         verb = "modifies an order" if call == "modify_order" else "sends an order"
         self._refuse_booked(order.instrument_id, order.side, f"{call} {verb}")
 
-    def _check_booked_event(self, event: Any) -> None:
+    def _check_booked_event(self, event: Any, sender: Any = None) -> None:
         """Refuse, in a book, an order or a modify of this sleeve's that kanso is not sending,
         before the engine routes it; the book asks it of every event of the sleeve's orders
-        (`BookLedger.heard`).
+        (`BookLedger.heard`), with the member it was sent while (`sender`, the member whose
+        handler the engine was running, or `None` where the book cannot tell).
 
         The engine's own methods can be reached past kanso's — called on the engine's class,
         as `Strategy.submit_order(self, order)`, or through `super(KansoStrategy, self)` — and
@@ -1817,31 +1838,47 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         hears both there ahead of the sleeve's own handlers; a refusal raised then leaves the
         order unsent and the order at the venue as it was (`kanso.nautilus.facts`, at no
         latency and at 20 ms). So the one `OrderInitialized` let through is the one for the
-        order `_submitted` is sending, once, and every `OrderPendingUpdate` is refused, since
-        kanso modifies no order. An order the member builds itself and sends from a handler
-        the engine runs inside one's submission — `on_order_submitted` among them — is refused
-        like any other, since its own `OrderInitialized` comes after the one let through. The
-        engine sends a modify of an emulated order with no `OrderPendingUpdate`, and a book
-        holds no emulated order: kanso sends none, and a member's own is refused as it is
-        initialised.
+        order `_submitted` is sending, once, and not while another member runs; every
+        `OrderPendingUpdate` is refused, since kanso modifies no order. An order the member
+        builds itself and sends from a handler the engine runs inside one's submission —
+        `on_order_submitted` among them — is refused like any other, since its own
+        `OrderInitialized` comes after the one let through. The engine sends a modify of an
+        emulated order with no `OrderPendingUpdate`, and a book holds no emulated order: kanso
+        sends none, and a member's own is refused as it is initialised.
+
+        An order or a modify in this sleeve's name sent while another member ran is refused
+        as that member's, naming both; one sent where the book cannot tell which member ran
+        is refused as this sleeve's, saying only that it is in its name.
         """
+        if sender is None:
+            by, named = self, " in its name where the book cannot tell which member ran,"
+        elif sender is self:
+            by, named = self, ""
+        else:
+            owner = self._book_ledger.member_of(self)
+            by, named = sender, f" in the name of {owner} while this member runs,"
         if isinstance(event, OrderInitialized):
             sending = self._sending
-            if sending is not None and event.client_order_id == sending.client_order_id:
+            if (
+                by is self
+                and sending is not None
+                and event.client_order_id == sending.client_order_id
+            ):
                 self._sending = None
                 return
-            self._refuse_booked(
+            by._refuse_booked(
                 event.instrument_id,
                 event.side,
                 "the engine's own submit_order or submit_order_list, reached past "
-                "KansoStrategy's, sends an order",
+                f"KansoStrategy's, sends an order{named}",
             )
         if isinstance(event, OrderPendingUpdate):
             order = self.cache.order(event.client_order_id)
-            self._refuse_booked(
+            by._refuse_booked(
                 event.instrument_id,
                 order.side,
-                "the engine's own modify_order, reached past KansoStrategy's, modifies an order",
+                "the engine's own modify_order, reached past KansoStrategy's, modifies an "
+                f"order{named}",
             )
 
     def _refuse_booked(self, instrument_id: InstrumentId, side: OrderSide, did: str) -> NoReturn:
@@ -2638,19 +2675,30 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`kanso.nautilus.replay_client`); under a latency it is stamped with the same
         instant as the order and lands right behind it (`SimulatedVenue._send`). Measured on
         both paths by the replay tests.
+
+        In a book the sleeve is the member running while its handlers run
+        (`BookLedger.running`), so an order heard on the bus is named for the member it was sent
+        while.
         """
-        self._arrived(event)
-        super().handle_event(event)
-        client_order_id = getattr(event, "client_order_id", None)
-        held = self._unsent.get(client_order_id)
-        if held is not None and self._current(held[0]).status != OrderStatus.INITIALIZED:
-            order, client_id, params = held
-            current = self._current(order)
-            del self._unsent[current.client_order_id]
-            if not current.is_closed:
-                super().cancel_order(current, client_id, params)
-        if client_order_id in self._awaiting:
-            self._answered(client_order_id)
+        ledger = self._book_ledger
+        if ledger is not None:
+            ledger.running.append(self)
+        try:
+            self._arrived(event)
+            super().handle_event(event)
+            client_order_id = getattr(event, "client_order_id", None)
+            held = self._unsent.get(client_order_id)
+            if held is not None and self._current(held[0]).status != OrderStatus.INITIALIZED:
+                order, client_id, params = held
+                current = self._current(order)
+                del self._unsent[current.client_order_id]
+                if not current.is_closed:
+                    super().cancel_order(current, client_id, params)
+            if client_order_id in self._awaiting:
+                self._answered(client_order_id)
+        finally:
+            if ledger is not None:
+                ledger.running.pop()
 
     def _answered(self, client_order_id: object) -> None:
         """With no latency stated, move an exit at market owed behind an order on along as

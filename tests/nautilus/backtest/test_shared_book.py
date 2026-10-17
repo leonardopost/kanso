@@ -1129,7 +1129,78 @@ def test_an_order_in_the_name_of_no_member_is_refused(latency_ms: float) -> None
 
     refusal = raised.value.refusal
     assert (refusal.rule, refusal.asked, refusal.instrument_id) == (BOOK_ENTRY, "BUY", DEMO)
-    assert refusal.why.startswith("an order in the name of Nobody-001, which is no member")
+    assert refusal.why.startswith(
+        "book member a: an order in the name of Nobody-001, which is no member of this book, "
+        "was handed to the engine while this member ran"
+    )
+
+
+IN_ANOTHER_NAME = b"""
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.identifiers import ClientOrderId
+from nautilus_trader.model.objects import Quantity
+from nautilus_trader.model.orders import MarketOrder
+from nautilus_trader.trading.strategy import Strategy as Engine
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"On its third bar, buys a million at market in the name of the book's other member, by
+    the engine's own `submit_order` past kanso's.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+
+    def on_bar(self, bar):
+        self.n += 1
+        if self.n == 3:
+            (other,) = [held for held in self.cache.strategy_ids() if held != self.id]
+            order = MarketOrder(
+                trader_id=self.trader_id,
+                strategy_id=other,
+                instrument_id=bar.bar_type.instrument_id,
+                client_order_id=ClientOrderId("O-other-1"),
+                order_side=OrderSide.BUY,
+                quantity=Quantity.from_int(10**6),
+                init_id=UUID4(),
+                ts_init=bar.ts_init,
+            )
+            Engine.submit_order(self, order)
+"""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_an_order_one_member_sends_in_another_s_name_is_refused_naming_the_sender(
+    latency_ms: float,
+) -> None:
+    """The event the book hears names the strategy the order is in the name of, not the one
+    that sent it; the book names the member whose handler was running. On the round before
+    this test the refusal named member b, which sent nothing."""
+    document = hyp((DEMO,)).model_dump(mode="json")
+    document["costs"]["latency_ms"] = latency_ms
+    subject = Hypothesis.model_validate(document)
+    members = [
+        member("a", request(subject, IN_ANOTHER_NAME), 5.0),
+        member("b", request(subject, TAKER, qty=10.0), 1.0),
+    ]
+
+    with pytest.raises(SizingError) as raised:
+        execute_book(block(), members, [instrument()], [daily("DEMO"), daily("DEMO")])
+
+    refusal = raised.value.refusal
+    assert (refusal.rule, refusal.asked, refusal.instrument_id) == (BOOK_ENTRY, "BUY", DEMO)
+    assert refusal.why.startswith(
+        f"book member a: {ENGINE_SEND}sends an order in the name of book member b while this "
+        "member runs, past the book"
+    )
 
 
 OWN = b"""
