@@ -2127,9 +2127,8 @@ a book of one at no latency and at 20 ms each of those routes went out (`docs/ba
 row 210) — and so is one that reaches them by a spelling the gate does not follow (row 211):
 the book still refuses its orders through the engine's own methods, but a buy of a million
 sent on the bus, reached by a name held in a string through `pickle` or the engine's
-`resolve_path`, each handed out by an allowed module, passed the gate unsized, and through
-`pickle` sized as well, and bought a million more in a book of one and alone, at no latency
-and at 20 ms. An exit at market that cancels the member's exit resting on its side takes that
+`resolve_path`, each handed out by an allowed module, passed the gate sized or not, and
+bought a million more in a book of one and alone, at no latency and at 20 ms. An exit at market that cancels the member's exit resting on its side takes that
 one out of the book's gross at once with no latency stated, since the cancel lands before
 anything further is matched. The session clock is New York's for every member, whatever its
 venue. A member is run at the book's capital and window; one with an attached
