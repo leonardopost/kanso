@@ -46,11 +46,12 @@ smallest of:
   round trip, `1 + 2 ×` its cost rate (`KansoStrategy._reserve`). The gross is the sum over
   every member of three things: its open positions, marked at the latest quote's mid, or at
   their own cost where no quote has been seen; its market orders in flight, at the price they
-  were sized at; and its resting orders, at their limits, for what they would add — a
-  member's on one side of a name taken together, so an exit resting on the closing side adds
-  nothing. The balance is the capital plus every member's realised net profit; `L` is the
-  block's regular-hours leverage, and outside 09:30–16:00 New York time, on every venue, no
-  entry is placed while the leverage there is not set (`outside_rth_unset`);
+  were sized at; and its resting orders that can still fill, at their limits, for what they
+  would add — a member's on one side of a name taken together, so an exit resting on the
+  closing side adds nothing. The balance is the capital plus every member's realised net
+  profit; `L` is the block's regular-hours leverage, and outside 09:30–16:00 New York time,
+  on every venue, no entry is placed while the leverage there is not set
+  (`outside_rth_unset`);
 * the cap on the name, `max_name_c` of the capital, less what the book already holds, rests
   and has in flight in it;
 * for a taker — a market entry, or a limit marketable at the latest quote — what is left of
@@ -511,7 +512,9 @@ class BookLedger:
     def _exposure(self) -> _Exposure:
         """Every member's open positions at the mark, its market orders in flight at the price
         they were sized at, and its resting and in-flight limits at their prices for what they
-        would add, by name, with the sides each name is held, worked or in flight on."""
+        would add, by name, with the sides each name is held, worked or in flight on. An order
+        that can no longer fill — closed, or with no latency stated cancelled while the venue
+        held it (`KansoStrategy._spent`) — adds nothing, as `submit_exit` counts it."""
         from nautilus_trader.model.enums import OrderSide, OrderType
 
         found = _Exposure()
@@ -551,7 +554,7 @@ class BookLedger:
             resting: dict[tuple[str, int], list[Any]] = {}
             for entry in member._ledger.values():
                 order = member._current(entry.order)
-                if order.is_closed or order.order_type == OrderType.MARKET:
+                if order.order_type == OrderType.MARKET or member._spent(order):
                     continue
                 sign = 1 if order.side == OrderSide.BUY else -1
                 resting.setdefault((order.instrument_id.value, sign), []).append(order)

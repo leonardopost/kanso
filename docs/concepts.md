@@ -2040,11 +2040,13 @@ by the member, a leg an overridden `hedges()` returns, the engine's `close_posit
 the book hands room only to entries it sizes, and an order kanso did not size can take a
 position past flat or past the room. kanso's own orders are let through each as the very
 order kanso is sending, and once, so an order a member builds itself and sends from a handler
-the engine runs inside one's submission (`on_order_submitted`) is refused like any other.
-The session clock is New York's for every member, whatever its venue. A member is run at the
-book's capital and window; one with an attached construct, a `book` policy or a level-two
-book is refused. No stage holds a book yet: `portfolio.yaml` names no shared block and a
-stage node runs no ledger, which is the next step (`docs/backlog.md`).
+the engine runs inside one's submission (`on_order_submitted`) is refused like any other. An
+exit at market that cancels the member's exit resting on its side takes that one out of the
+book's gross at once with no latency stated, since the cancel lands before anything further
+is matched. The session clock is New York's for every member, whatever its venue. A member
+is run at the book's capital and window; one with an attached construct, a `book` policy or
+a level-two book is refused. No stage holds a book yet: `portfolio.yaml` names no shared
+block and a stage node runs no ledger, which is the next step (`docs/backlog.md`).
 
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the

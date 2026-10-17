@@ -1044,6 +1044,29 @@ def test_a_member_trades_and_cancels_through_kanso_s_own_calls_in_a_book(latency
     assert sum(made.counts["a"].values()) == 1
 
 
+def test_an_exit_at_market_takes_the_exit_resting_on_its_side_out_of_the_book_at_once() -> None:
+    """`a` rests an exit of its long far over the market and, on the session `b` buys the
+    name, sends its exit at market, which cancels the resting one. With no latency stated the
+    cancel lands before anything further is matched, so the rest can no longer fill and holds
+    nothing: `b`'s buy is placed. Measured on the round before this test: the ledger counted
+    the rest until the venue closed it, so beside the sale in flight it read as a short of
+    1000, and `b`'s buy was refused as opposite to it."""
+    made = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), qty=1000.0, rest_exit=100.0, exit_on=3.0), 5.0),
+            member("b", request(hyp((DEMO,)), qty=500.0, skip=2.0), 1.0),
+        ],
+        [instrument()],
+        [daily("DEMO"), daily("DEMO")],
+    )
+
+    a, b = made.runs[made.members.index("a")], made.runs[made.members.index("b")]
+    assert [(f.side, f.qty) for f in a.fills] == [("BUY", 1000.0), ("SELL", 1000.0)]
+    assert made.counts["b"][OPPOSITE_REFUSED] == 0
+    assert placed(b, DEMO) == 500.0
+
+
 AGAIN = b"""
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
