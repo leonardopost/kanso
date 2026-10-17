@@ -308,11 +308,12 @@ def test_an_order_and_a_modify_are_refused_on_the_bus_before_they_are_routed(
 ) -> None:
     """What a book refuses an order a member sent past kanso by: a subscriber to every
     strategy's order events that raises stops the engine's own `submit_order`, called on its
-    class past the probe's override, `submit_order_list` at its first order, `modify_order`,
+    class past the probe's override, which never sees it, `submit_order_list` at its first
+    order, `modify_order`,
     and an order in the name of a strategy the engine does not run, before any is routed; the
     rest of 10 at 10.50 the probe placed first is the only order the cache ever holds, and no
     later quote fills it."""
-    refused, held = facts._probe_refused_on_the_bus(latency_ns)
+    refused, held, overridden = facts._probe_refused_on_the_bus(latency_ns)
 
     assert refused == [
         ("OrderInitialized", False),
@@ -322,3 +323,4 @@ def test_an_order_and_a_modify_are_refused_on_the_bus_before_they_are_routed(
     ]
     ((quantity, price, _, filled),) = held
     assert (quantity, price, filled) == (10.0, 10.5, 0.0)
+    assert overridden == 1, "the rest, sent by the probe's own submit_order; none of the rest"

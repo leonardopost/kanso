@@ -1948,15 +1948,16 @@ def _check_handlers_at_one_priority_run_in_subscription_order() -> tuple[bool, s
 
 def _probe_refused_on_the_bus(
     latency_ns: int,
-) -> tuple[list[tuple[str, bool]], list[tuple[float, float, str, float]]]:
-    """A strategy rests a sale of 10 at 10.50 on its first quote of 9.99/10.01; on its second,
-    with a subscriber to `events.order.*` above its own handlers raising on every
+) -> tuple[list[tuple[str, bool]], list[tuple[float, float, str, float]], int]:
+    """A strategy whose own `submit_order` counts its calls and hands the order to the
+    engine's rests a sale of 10 at 10.50 by it on its first quote of 9.99/10.01; on its
+    second, with a subscriber to `events.order.*` above its own handlers raising on every
     `OrderInitialized` and `OrderPendingUpdate`, it sends by the engine's methods called on
     the engine's class a buy of 10 at market, a list of two such buys, a modify of its rest to
     20 at 9.00, and a buy of 10 in the name of a strategy the engine does not run, catching
     each refusal; three more quotes follow. Returns each refused event's type with whether
-    the cache held its order then, and every order the cache holds at the end as
-    (quantity, price, status, filled)."""
+    the cache held its order then, every order the cache holds at the end as (quantity,
+    price, status, filled), and how many calls its own `submit_order` saw."""
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.models import LatencyModel
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
@@ -1981,12 +1982,14 @@ def _probe_refused_on_the_bus(
             self.seen = 0
             self.rest: Any = None
             self.refusing = False
+            self.overridden = 0
 
         def on_start(self) -> None:
             self.subscribe_quote_ticks(equity.id)
 
-        def submit_order(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError("the engine's own method was asked for")
+        def submit_order(self, order: Any, *args: Any, **kwargs: Any) -> None:
+            self.overridden += 1
+            Strategy.submit_order(self, order, *args, **kwargs)
 
         def buy(self) -> Any:
             return self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(10))
@@ -1997,7 +2000,7 @@ def _probe_refused_on_the_bus(
                 self.rest = self.order_factory.limit(
                     equity.id, OrderSide.SELL, Quantity.from_int(10), Price(10.5, 2)
                 )
-                Strategy.submit_order(self, self.rest)
+                self.submit_order(self.rest)
             elif self.seen == 2:
                 listed = OrderList(
                     self.order_factory.generate_order_list_id(), [self.buy(), self.buy()]
@@ -2059,7 +2062,7 @@ def _probe_refused_on_the_bus(
             )
             for order in engine.cache.orders()
         ]
-        return refused, held
+        return refused, held, probe.overridden
     finally:
         engine.dispose()
 
@@ -2074,11 +2077,17 @@ def _check_an_order_and_a_modify_are_heard_on_the_bus_before_they_are_routed() -
         ("OrderInitialized", False),
     ]
     holds = all(
-        found == refused and len(held) == 1 and held[0][:2] == (10.0, 10.5) and held[0][3] == 0.0
-        for found, held in seen.values()
+        found == refused
+        and len(held) == 1
+        and held[0][:2] == (10.0, 10.5)
+        and held[0][3] == 0.0
+        and overridden == 1
+        for found, held, overridden in seen.values()
     )
     return holds, (
-        f"refused on the bus, at no latency and at 20 ms: {seen}. Each event was heard before "
+        f"refused on the bus, at no latency and at 20 ms: {seen}. The strategy's own "
+        "submit_order saw only the rest it was called for, not the orders sent by the "
+        "engine's class. Each event was heard before "
         "the engine routed what it was about: the buys were never in the cache, the list "
         "stopped at its first order, and the rest of 10 at 10.50 stayed unfilled at that size "
         "over three more minutes"
