@@ -255,6 +255,47 @@ def test_under_a_sizing_rule_each_sleeve_exits_its_whole_budget_and_no_more() ->
     assert ran.open_at_end == {}
 
 
+def test_the_book_a_filter_is_handed_holds_this_sleeve_s_position_not_the_account_s() -> None:
+    """An unsized sleeve entering again beside a mate holding more in the name is handed
+    a `ctx.book` of its own position: the account's would add the mate's 500."""
+    ran = run_two(
+        Plan("BUY", 10, enter=2, leave=12, again=6),
+        Plan("BUY", 500, enter=3, leave=14),
+    )
+
+    assert ran.first.books == [{"DEMO.XNAS": 0.0}, {"DEMO.XNAS": 10.0}]
+    assert ran.second.books == [{"DEMO.XNAS": 0.0}]
+    assert [(i.side, i.qty) for i in ran.first.intents] == [
+        ("BUY", 10.0),
+        ("BUY", 10.0),
+        ("SELL", 20.0),
+    ]
+    assert ran.open_at_end == {}
+
+
+def test_an_owed_exit_is_paid_against_this_sleeve_s_position_beside_a_larger_opposite_mate() -> (
+    None
+):
+    """An unsized sleeve long 100 rests a limit exit, then asks for its exit at market.
+    Under a latency the limit's cancel is in flight, so the market exit is owed and paid
+    once the cancel lands, on the side of the sleeve's own long. Beside a mate short 400 the
+    account is net short: paid against it, the owed sale was on the wrong side, was dropped,
+    and the sleeve held its 100 to the end."""
+    ran = run_two(
+        Plan("BUY", 100, enter=2, leave=8, rest=5),
+        Plan("SELL", 400, enter=3, leave=14),
+        latency_ms=20.0,
+    )
+
+    assert ran.first.exit is None, "owed behind the limit's cancel, not sent"
+    assert [(i.side, i.qty, i.price) for i in ran.first.intents] == [
+        ("BUY", 100.0, None),
+        ("SELL", 100.0, 20.0),
+        ("SELL", 100.0, None),
+    ]
+    assert ran.open_at_end == {}
+
+
 @pytest.mark.parametrize("order", [(0, 1), (1, 0)], ids=["first-first", "second-first"])
 @pytest.mark.parametrize(
     ("first", "second"),
