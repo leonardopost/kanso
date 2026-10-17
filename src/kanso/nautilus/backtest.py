@@ -1044,6 +1044,70 @@ def _modifier(
 # --- the engine --------------------------------------------------------------
 
 
+def engine_for() -> Any:
+    """The backtest engine every run is built in: no logging, no analysis, and an order rate
+    no replay or backtest reaches (`SUBMIT_RATE`)."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
+
+    return BacktestEngine(
+        config=BacktestEngineConfig(
+            logging=LoggingConfig(bypass_logging=True),
+            risk_engine=RiskEngineConfig(
+                max_order_submit_rate=SUBMIT_RATE,
+                max_order_modify_rate=SUBMIT_RATE,
+            ),
+            run_analysis=False,
+        )
+    )
+
+
+def add_venue(engine: Any, venue: Any) -> None:
+    """Add one venue configuration (`kanso.nautilus.venue.venue_config`) to a backtest engine,
+    with the simulation modules every kanso venue loads."""
+    from nautilus_trader.backtest.node import (
+        get_account_type,
+        get_base_currency,
+        get_book_type,
+        get_fill_model,
+        get_latency_model,
+        get_oms_type,
+        get_starting_balances,
+    )
+    from nautilus_trader.model.identifiers import Venue
+
+    from kanso.nautilus.actions import modules
+
+    engine.add_venue(
+        venue=Venue(venue.name),
+        oms_type=get_oms_type(venue),
+        account_type=get_account_type(venue),
+        base_currency=get_base_currency(venue),
+        starting_balances=get_starting_balances(venue),
+        # Through a string, so a leverage is the decimal it was written as rather than the
+        # binary float that happens to be nearest to it.
+        default_leverage=Decimal(str(venue.default_leverage)),
+        bar_execution=venue.bar_execution,
+        # A level-two book with queue position when the hypothesis holds one; see
+        # `kanso.nautilus.venue`.
+        book_type=get_book_type(venue),
+        trade_execution=venue.trade_execution,
+        queue_position=venue.queue_position,
+        # Whether a resting limit the market only touched fills: the venue model's
+        # `limit_fill`, built from the configuration the node's venue is built from — kanso's
+        # own fill model under the print rules (`kanso.nautilus.tape`).
+        fill_model=get_fill_model(venue),
+        # How long the venue takes to see an order: the venue model's `latency_ms`, none when
+        # it states none.
+        latency_model=get_latency_model(venue),
+        # The venue applies a corporate action one call before it matches the point that
+        # carried the market past it, applies every quote and print the sleeve is handed, and,
+        # under `print_through`, lands what is due by a print before it; see
+        # `kanso.nautilus.actions`, `availability` and `tape`.
+        modules=modules(venue.name),
+    )
+
+
 def execute(
     request: RunRequest,
     instruments: Sequence[object],
@@ -1094,66 +1158,16 @@ def execute_chunked(
     after the data it holds is exhausted without finalising; `clear_data` drops the stream
     and keeps the instruments; `end` finalises once every chunk has run.
     """
-    from nautilus_trader.backtest.engine import BacktestEngine
-    from nautilus_trader.backtest.node import (
-        get_account_type,
-        get_base_currency,
-        get_book_type,
-        get_fill_model,
-        get_latency_model,
-        get_oms_type,
-        get_starting_balances,
-    )
-    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
-    from nautilus_trader.model.identifiers import Venue
-
-    from kanso.nautilus.actions import modules
     from kanso.nautilus.cross_section import BOOK, coincident, is_marker, warm
 
     model = VenueModel.model_validate(dict(request.venue_model))
     marks = Marks(request, model)
     _seed_globals(request.snapshot_id)
     started = time.perf_counter()
-    engine = BacktestEngine(
-        config=BacktestEngineConfig(
-            logging=LoggingConfig(bypass_logging=True),
-            risk_engine=RiskEngineConfig(
-                max_order_submit_rate=SUBMIT_RATE,
-                max_order_modify_rate=SUBMIT_RATE,
-            ),
-            run_analysis=False,
-        )
-    )
+    engine = engine_for()
     try:
         for venue in venue_configs(request.hyp, request.venue_model, request.capital):
-            engine.add_venue(
-                venue=Venue(venue.name),
-                oms_type=get_oms_type(venue),
-                account_type=get_account_type(venue),
-                base_currency=get_base_currency(venue),
-                starting_balances=get_starting_balances(venue),
-                # Through a string, so a leverage is the decimal it was written as rather
-                # than the binary float that happens to be nearest to it.
-                default_leverage=Decimal(str(venue.default_leverage)),
-                bar_execution=venue.bar_execution,
-                # A level-two book with queue position when the hypothesis holds one; see
-                # `kanso.nautilus.venue`.
-                book_type=get_book_type(venue),
-                trade_execution=venue.trade_execution,
-                queue_position=venue.queue_position,
-                # Whether a resting limit the market only touched fills: the venue model's
-                # `limit_fill`, built from the configuration the node's venue is built from —
-                # kanso's own fill model under the print rules (`kanso.nautilus.tape`).
-                fill_model=get_fill_model(venue),
-                # How long the venue takes to see an order: the venue model's `latency_ms`,
-                # none when it states none.
-                latency_model=get_latency_model(venue),
-                # The venue applies a corporate action one call before it matches the point
-                # that carried the market past it, applies every quote and print the sleeve is
-                # handed, and, under `print_through`, lands what is due by a print before it;
-                # see `kanso.nautilus.actions`, `availability` and `tape`.
-                modules=modules(venue.name),
-            )
+            add_venue(engine, venue)
         for instrument in instruments:
             engine.add_instrument(instrument)
         cls, config = _sleeve(request)

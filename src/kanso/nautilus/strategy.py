@@ -69,6 +69,14 @@ classifies and exits by — `held`, `submit_exit`, an owed exit, `ctx.book` — 
 positions the cache keeps for this strategy in the name, so two versions on one stage that
 trade the same name each exit what they hold and nothing of the other's.
 
+**In a book its entries are the book's to place.** A runner that puts a sleeve in a book
+(`kanso.nautilus.book`) attaches the book's ledger to it: `submit_entry` collects the entry
+and returns `None`, the sleeve tells the ledger of every marker it handles, and once every
+member has handled the one that closes the instant the ledger calls `submit_entry` again for
+each entry, in the book's order, with `data_time` the entry's own; the entry is sized by the
+sleeve's own rule, then cut to what the ledger leaves (`BookLedger.cut`). An entry the sleeve
+builds by hand is refused there (`book_entry`), and exits are the sleeve's as ever.
+
 **It shows a `depth` sleeve the book its account would see.** Under the hypothesis's `depth`
 every change of a level-two book still reaches both venues, but the author is handed only
 the top levels as they stood on a grid, at the first point after each grid instant, and
@@ -188,6 +196,7 @@ from kanso.nautilus.hooks import (
     register_modifier,
 )
 from kanso.nautilus.sizing import (
+    BOOK_ENTRY,
     BUDGET_BELOW_LOT,
     CLIP_DIRECTION,
     CLIP_WITHOUT_BUDGET,
@@ -694,6 +703,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._depth_shown: dict[str, tuple[dict[Price, Quantity], dict[Price, Quantity]]] = {}
         self._depth_seen_ns = -1
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
+        self._book_ledger: Any = None
+        """The book this sleeve is a member of, when a runner put it in one
+        (`kanso.nautilus.book.join`); `None` for a sleeve run alone."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1375,6 +1387,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 self._flush_one()
             if not self._pending:
                 self._consult_due()
+            if self._book_ledger is not None:
+                self._book_ledger.marked(self, data)
             return
         ts_init = getattr(data, "ts_init", None)
         if isinstance(ts_init, int):
@@ -1615,6 +1629,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         self._check_hand_built(order)
         kind = self.classify(order)
+        if kind == ENTRY:
+            self._check_booked(order)
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
             self._check_funded((order,))
         ctx = self._context_for(order)
@@ -1639,6 +1655,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
+        if kind == ENTRY:
+            self._check_booked(orders[0])
         if not (self.sized or self._built or self._sizing_call):
             self._check_funded(orders)
         ctx = self._context_for(orders[0])
@@ -1728,6 +1746,24 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 why="under a sizing rule every order is the harness's; call "
                 "submit_entry(instrument_id, side) or submit_exit(instrument_id)",
             )
+
+    def _check_booked(self, order: object) -> None:
+        """Refuse an entry a book member placed by anything but `submit_entry`.
+
+        A book hands each entry of an instant its share of one room in its own order, and it
+        can only do that for an entry it sizes: kanso does not rebuild an order it did not
+        build, so in a book an entry built by hand is refused, as a sizing rule refuses one.
+        """
+        ledger = self._book_ledger
+        if ledger is None or ledger.placing(self) or self._hedging:
+            return
+        self._refuse(
+            BOOK_ENTRY,
+            order.instrument_id.value,  # type: ignore[attr-defined]
+            order_side_to_str(order.side),  # type: ignore[attr-defined]
+            why="in a book every entry is handed its room by the book; call "
+            "submit_entry(instrument_id, side), which the book allots at the instant's end",
+        )
 
     def _hedge_order(self, leg: Hedge) -> object | None:
         instrument_id = InstrumentId.from_str(leg.instrument)
@@ -1914,6 +1950,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         notional: float | None = None,
         qty: float | None = None,
         price: float | None = None,
+        edge_bp: float | None = None,
     ) -> object | None:
         """Open or grow a position, sized to the risk limits and the cost model.
 
@@ -1928,6 +1965,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         exit first. Attached overlays then scale it. Returns the submitted order, or `None`
         when nothing was submitted — no room, no price to size against, or an attached
         filter refused the entry.
+
+        **In a book the entry is the book's to place** (`kanso.nautilus.book`). It is
+        collected, returning `None`, and placed when the instant ends, after every member's
+        entries of that instant are in: in the book's order — `edge_bp` first, the predicted
+        move in basis points less the round trip's cost at the instant, highest first and an
+        entry without one last — sized as above at that moment, then cut to what the book has
+        left: its room, its cap on the name, and the size displayed at the touch the instant's
+        takers share. One cut below a whole lot is refused and counted. `edge_bp` is read by a
+        book alone; a sleeve run by itself ignores it. An entry asked again in the same name
+        and side while the first is still collected is the same entry, and is dropped.
         """
         resolved_id = self._instrument_id(instrument_id)
         resolved_side = self._side(side)
@@ -1937,13 +1984,26 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 f"instrument: {resolved_id} is not in the cache; "
                 "it is not part of this run's resolved universe"
             )
+        ledger = self._book_ledger
+        if ledger is not None and not ledger.claim(self):
+            if not self._warming():
+                ledger.defer(
+                    self,
+                    resolved_id,
+                    resolved_side,
+                    edge_bp,
+                    {"notional": notional, "qty": qty, "price": price},
+                )
+            return None
         if self.sized:
             return self._sized_entry(instrument, resolved_id, resolved_side, notional, qty, price)
         reference = price if price is not None else self._price_now(resolved_id.value)
         if reference is None or reference <= 0:
+            self._sized_nothing(instrument, resolved_side)
             return None
         room = self._headroom(resolved_id, reference)
         if room <= 0:
+            self._sized_nothing(instrument, resolved_side)
             return None
         unit = reference * float(instrument.multiplier)  # one contract's notional
         raw = _entry_units(qty, notional, room, unit)
@@ -1952,13 +2012,28 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
         self._entry_answers = self._ask_overlays(ctx)
         try:
-            quantity = self._quantise(instrument, self.size(ctx, raw))
+            units = self.size(ctx, raw)
+            if ledger is not None:
+                units = ledger.cut(self, instrument, resolved_side, units, reference, price)
+            quantity = self._quantise(instrument, units)
             if quantity is None:
                 return None
             order = self._order(instrument, resolved_side, quantity, price)
-            return self._submitted(order)
+            return self._booked(self._submitted(order))
         finally:
             self._entry_answers = None
+
+    def _sized_nothing(self, instrument: object, side: OrderSide) -> None:
+        """An entry this sleeve's own limits leave nothing for — no price to size it against,
+        or no room — which a book counts as sized below its minimum."""
+        if self._book_ledger is not None:
+            self._book_ledger.cut(self, instrument, side, 0.0, 0.0, None)
+
+    def _booked(self, order: object | None) -> object | None:
+        """The entry a book placed, told to the book once it reached the venue."""
+        if order is not None and self._book_ledger is not None:
+            self._book_ledger.placed(self, order)
+        return order
 
     def submit_exit(
         self,
@@ -2122,10 +2197,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     asked,
                     why=f"a budget of {self.budget:g} at {reference:g} floors to no whole lot",
                 )
+            ledger = self._book_ledger
+            if ledger is not None:
+                cut = ledger.cut(self, instrument, side, float(quantity), reference, None)
+                if cut < float(quantity):
+                    quantity = self._quantise(instrument, cut)
+                    if quantity is None:
+                        return None
             order = self._order(instrument, side, quantity, None)
             self._sizing_call = True
             try:
-                return self._submitted(order)
+                return self._booked(self._submitted(order))
             finally:
                 self._sizing_call = False
         finally:

@@ -392,7 +392,10 @@ Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty
 `submit_entry(new, side)` in one handler. The budget is filled in whole lots of the
 instrument, and on a multiplied instrument — a future, an option — the price and the tick it
 is divided by are one contract's, `price x multiplier`, as is every notional the harness
-sizes, reserves or reads back on either path. Without the key, `submit_entry(id, side,
+sizes, reserves or reads back on either path. `submit_entry` also takes `edge_bp`, the move
+the entry predicts less its round trip's cost in basis points, which only a book reads — it
+orders an instant's entries by it (`docs/concepts.md`, *Stages*) — and a sleeve run alone
+ignores. Without the key, `submit_entry(id, side,
 notional=…)` or `qty=…` sizes to the smaller of what was asked and what the risk limits leave,
 floored onto the instrument's lot — a `qty` the limits leave whole is submitted whole, never
 its notional divided back by the price — read on the smaller

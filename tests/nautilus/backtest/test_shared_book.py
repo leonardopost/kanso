@@ -1,0 +1,889 @@
+"""A book: several sleeves on one account, handed room from one capital in the book's order.
+
+Every test runs the real engine over the synthetic daily bars of `conftest`, published at
+16:00:01 UTC — 11:00 in New York in January, inside regular hours — so each member's entries
+of a session are made at one instant and the ledger places them when it closes.
+"""
+
+from __future__ import annotations
+
+import pickle
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
+from math import fsum
+from pathlib import Path
+from typing import Any
+
+import pytest
+from nautilus_trader.model.data import QuoteTick
+from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
+from nautilus_trader.model.objects import Quantity
+
+from kanso.errors import PreconditionError, ValidationError
+from kanso.nautilus import book as shared
+from kanso.nautilus.backtest import RunRequest, execute
+from kanso.nautilus.book import (
+    BELOW_C_MIN,
+    NAME_CAP,
+    OPPOSITE_REFUSED,
+    OUTSIDE_RTH_UNSET,
+    ROOM,
+    TOUCH,
+    UNFILLED,
+    BookMember,
+    execute_book,
+    ranked,
+    run_book,
+    segment_of,
+)
+from kanso.nautilus.sizing import BOOK_ENTRY, SizingError
+from kanso.schemas import Hypothesis, NetPerTrade, SharedBook
+
+from .conftest import (
+    CAPITAL,
+    RESEARCH,
+    SECOND_NS,
+    SLEEVE,
+    SNAPSHOT,
+    bars,
+    catalog,
+    hypothesis,
+    instrument,
+    quotes,
+    venue_model,
+)
+
+DEMO = "DEMO.XNAS"
+OTHR = "OTHR.XNAS"
+JOINED = datetime(2026, 10, 1, tzinfo=UTC)
+
+TAKER = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    notional: float = 0.0
+    qty: float = 0.0
+    edge: float = -1.0
+    sell: float = 0.0
+    limit: float = 0.0
+    once: float = 1.0
+    skip: float = 0.0
+    twice: float = 0.0
+    exit_on: float = 0.0
+    rest_exit: float = 0.0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Enters each name it is handed a bar of with what its parameters say: once, after
+    `skip` bars of the name, or on every bar; `twice` asks twice in the handler; `exit_on`
+    sends the name's exit at market on that bar of it, and `rest_exit` rests one at that
+    price on the bar after it entered.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.done = set()
+        self.seen = {}
+
+    def on_bar(self, bar):
+        instrument_id = bar.bar_type.instrument_id
+        key = str(instrument_id)
+        cfg = self.kanso_config
+        self.seen[key] = self.seen.get(key, 0) + 1
+        if cfg.exit_on and self.seen[key] == cfg.exit_on:
+            self.submit_exit(instrument_id)
+        if cfg.rest_exit and key in self.done and self.seen[key] == cfg.skip + 2:
+            self.submit_exit(instrument_id, price=cfg.rest_exit)
+        if self.seen[key] <= cfg.skip or (cfg.once and key in self.done):
+            return
+        self.done.add(key)
+        for _ in range(2 if cfg.twice else 1):
+            self.submit_entry(
+                instrument_id,
+                "SELL" if cfg.sell else "BUY",
+                notional=cfg.notional or None,
+                qty=cfg.qty or None,
+                price=cfg.limit or None,
+                edge_bp=None if cfg.edge < 0 else cfg.edge,
+            )
+"""
+
+BLIND = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Asks for every name of its universe on its first bar, priced or not.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.asked = False
+
+    def on_bar(self, bar):
+        if not self.asked:
+            self.asked = True
+            for instrument_id in self.universe:
+                self.submit_entry(instrument_id, "BUY", notional=1_000.0)
+"""
+
+HAND_BUILT = b"""
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_bar(self, bar):
+        self.submit_order(
+            self.order_factory.market(
+                bar.bar_type.instrument_id, OrderSide.BUY, Quantity.from_int(1)
+            )
+        )
+"""
+
+
+def hyp(universe: tuple[str, ...], **extra: Any) -> Hypothesis:
+    """`conftest.hypothesis` at four times leverage with the whole of it on one name."""
+    document = hypothesis(universe=universe, max_leverage=4.0, **extra).model_dump(mode="json")
+    document["risk_limits"]["max_position_pct"] = 400.0
+    return Hypothesis.model_validate(document)
+
+
+def request(
+    subject: Hypothesis, source: bytes = TAKER, *, capital: float = CAPITAL, **overrides: float
+) -> RunRequest:
+    return RunRequest(
+        hyp=subject,
+        strategy_source=source,
+        window=RESEARCH,
+        snapshot_id=SNAPSHOT,
+        venue_model=venue_model(subject),
+        capital=capital,
+        overrides=overrides,
+    )
+
+
+def net(value: float, sessions: int = 20, t: float | None = 2.0) -> NetPerTrade:
+    return NetPerTrade(
+        net_per_trade_bp=value,
+        net_se_session=None if t is None else value / t,
+        net_t=t,
+        sessions_with_trades=sessions,
+        trades=sessions * 2,
+    )
+
+
+def member(
+    member_id: str,
+    run: RunRequest,
+    value: float | None = None,
+    joined: datetime = JOINED,
+) -> BookMember:
+    return BookMember(
+        id=member_id,
+        version=1,
+        joined_at=joined,
+        request=run,
+        net=None if value is None else net(value),
+    )
+
+
+def block(**extra: Any) -> SharedBook:
+    return SharedBook.model_validate(
+        {
+            "capital": CAPITAL,
+            "leverage": {"rth": 4},
+            "rank_key": "net_per_trade_bp",
+            "k_min": 15,
+            **extra,
+        }
+    )
+
+
+def daily(symbol: str) -> tuple[tuple[object, ...], ...]:
+    return (tuple(bars(RESEARCH, symbol=symbol)),)
+
+
+INSTRUMENTS = (instrument("DEMO"), instrument("OTHR"))
+
+
+def placed(run: Any, instrument_id: str) -> float:
+    """What a member's first fill in a name bought, in shares."""
+    return fsum(f.qty for f in run.fills if f.instrument_id == instrument_id and f.side == "BUY")
+
+
+# --- one member, two members, the book's curve ----------------------------------------
+
+
+def test_a_book_of_one_member_is_that_member_run_alone() -> None:
+    """Byte for byte: the same fills, costs, trades and equity, and the book's curve is the
+    member's own."""
+    alone = request(hypothesis(), SLEEVE)
+
+    solo = execute(alone, [instrument()], daily("DEMO"))
+    booked = execute_book(block(), [member("demo", alone, 3.0)], [instrument()], [daily("DEMO")])
+
+    (run,) = booked.runs
+    assert pickle.dumps(run) == pickle.dumps(solo.run)
+    assert booked.intents == (solo.intents,)
+    assert booked.equity == solo.run.equity and booked.period_ends_ns == solo.run.period_ends_ns
+    assert all(not any(counts.values()) for counts in booked.counts.values())
+
+
+def test_two_members_on_disjoint_names_with_room_to_spare_each_run_as_alone() -> None:
+    """Each member's run is its run alone, its costs charged once, and the book's equity is
+    the capital plus what each made."""
+    first = request(hyp((DEMO,)), SLEEVE)
+    second = request(hyp((OTHR,)), SLEEVE)
+
+    booked = execute_book(
+        block(),
+        [member("a", first, 2.0), member("b", second, 1.0)],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR")],
+    )
+
+    solos = [
+        execute(first, INSTRUMENTS, daily("DEMO")).run,
+        execute(second, INSTRUMENTS, daily("OTHR")).run,
+    ]
+    assert [pickle.dumps(run) for run in booked.runs] == [pickle.dumps(run) for run in solos]
+    assert fsum(f.cost for run in booked.runs for f in run.fills) == fsum(
+        f.cost for run in solos for f in run.fills
+    )
+    assert booked.equity[-1] == pytest.approx(
+        CAPITAL + fsum(run.equity[-1] - CAPITAL for run in solos)
+    )
+    assert booked.cuts == ()
+
+
+def test_the_book_is_the_same_twice() -> None:
+    def once() -> bytes:
+        made = execute_book(
+            block(),
+            [
+                member("a", request(hyp((DEMO,)), notional=300_000.0), 2.0),
+                member("b", request(hyp((OTHR,)), notional=300_000.0), 1.0),
+            ],
+            INSTRUMENTS,
+            [daily("DEMO"), daily("OTHR")],
+        )
+        return pickle.dumps((made.runs, made.equity, made.cuts, made.counts, made.gross))
+
+    assert once() == once()
+
+
+# --- the order: edge, then rank, never the stream ---------------------------------------
+
+
+def contended(a_value: float | None, b_value: float | None, **b: float) -> Any:
+    """Two members each asking for 300,000 of the 400,000 the book has, at one instant: `a`
+    on DEMO, whose bar the stream hands over first, and `b` on OTHR."""
+    return execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=300_000.0), a_value),
+            member("b", request(hyp((OTHR,)), notional=300_000.0, **b), b_value),
+        ],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR")],
+    )
+
+
+def test_the_higher_ranked_member_takes_the_room_whatever_order_the_stream_serves_them() -> None:
+    """`a`'s point arrives first; `b` ranks first by its certificate's net per trade, so it
+    is placed whole and `a` is cut to what the room leaves — and the other way round when the
+    ranks are swapped."""
+    b_first = contended(1.0, 5.0)
+    a_first = contended(5.0, 1.0)
+
+    (cut,) = b_first.cuts
+    assert (cut.member, cut.instrument_id, cut.by) == ("a", DEMO, ROOM)
+    assert b_first.members == ("b", "a")
+    (cut,) = a_first.cuts
+    assert (cut.member, cut.instrument_id, cut.by) == ("b", OTHR, ROOM)
+    assert placed(b_first.runs[0], OTHR) == placed(a_first.runs[0], DEMO) == 300_000.0 / 10.0
+
+
+RESERVE = 1 + 2 * (1.0 + 2.0 + 4.0) / 10_000
+"""What a notional is left over for its own round trip under `conftest`'s costs."""
+
+
+def test_the_room_left_is_what_the_cut_member_is_placed() -> None:
+    """The second entry takes what is left of `4 × capital` with the first in flight at the
+    price it was sized at — nothing has filled, so the balance is the capital — over its own
+    round trip: nothing is skipped whole."""
+    made = contended(5.0, 1.0)
+
+    (a, b) = made.runs
+    assert placed(a, DEMO) == 30_000.0
+    left = 4 * CAPITAL - 30_000.0 * 10.0
+    assert placed(b, OTHR) == int(left / RESERVE / 10.0)
+    (cut,) = made.cuts
+    assert cut.placed == placed(b, OTHR) < cut.asked
+    assert made.at_room_limit >= 1 and (made.room_limit_share or 0.0) > 0.0
+    assert made.peak_gross is not None and made.peak_gross <= 4 * CAPITAL
+
+
+def test_an_entry_s_edge_comes_before_its_member_s_rank() -> None:
+    """`b` ranks second but states the larger edge, so it is placed first; `a`, with none,
+    ranks after every entry that states one."""
+    made = contended(5.0, 1.0, edge=12.0)
+
+    (cut,) = made.cuts
+    assert cut.member == "a"
+
+
+def test_the_members_order_is_the_book_s_whatever_order_they_are_named_in() -> None:
+    one = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=300_000.0), 5.0),
+            member("b", request(hyp((OTHR,)), notional=300_000.0), 1.0),
+        ],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR")],
+    )
+    other = execute_book(
+        block(),
+        [
+            member("b", request(hyp((OTHR,)), notional=300_000.0), 1.0),
+            member("a", request(hyp((DEMO,)), notional=300_000.0), 5.0),
+        ],
+        INSTRUMENTS,
+        [daily("OTHR"), daily("DEMO")],
+    )
+
+    assert one.members == other.members == ("a", "b")
+    assert pickle.dumps(one.runs) == pickle.dumps(other.runs)
+
+
+def test_ranked_orders_by_net_then_t_then_joining_then_id_and_unranked_last() -> None:
+    run = request(hyp((DEMO,)))
+    early = JOINED - timedelta(days=1)
+    members = [
+        member("unranked_low_sessions", run),
+        replace(member("thin", run), net=net(9.0, sessions=14)),
+        replace(member("negative", run), net=net(-1.0, t=-2.0)),
+        member("b_tied", run, 3.0),
+        member("a_tied", run, 3.0),
+        member("early_tied", run, 3.0, joined=early),
+        replace(member("higher_t", run), net=net(3.0, t=5.0)),
+        member("best", run, 7.0),
+        replace(member("no_t", run), net=net(3.0, t=None)),
+    ]
+
+    order = [m.id for m in ranked(members, block())]
+
+    assert order == [
+        "best",
+        "higher_t",
+        "early_tied",
+        "a_tied",
+        "b_tied",
+        "no_t",
+        "negative",
+        "thin",
+        "unranked_low_sessions",
+    ]
+
+
+# --- the caps ------------------------------------------------------------------------
+
+
+def test_a_name_cap_cuts_the_book_s_holding_in_one_name() -> None:
+    made = execute_book(
+        block(max_name_c=0.5),
+        [member("a", request(hyp((DEMO,)), notional=80_000.0), 1.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+
+    (cut,) = made.cuts
+    assert (cut.by, cut.asked, cut.placed) == (NAME_CAP, 8_000.0, 5_000.0)
+    assert placed(made.runs[0], DEMO) == 0.5 * CAPITAL / 10.0
+
+
+def test_a_cut_below_a_lot_is_refused_and_counted_by_the_cap_that_bound_it() -> None:
+    """`a` takes 300,000 of the 400,000; `b` is cut to the room over its round trip; `c` to
+    the sliver that round trip left; `d` finds less than a share and is refused by the room.
+    A name cap below one share refuses by the cap."""
+    made = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=300_000.0), 9.0),
+            member("b", request(hyp((OTHR,)), notional=300_000.0), 7.0),
+            member("c", request(hyp((OTHR,)), notional=300_000.0), 5.0),
+            member("d", request(hyp((OTHR,)), notional=300_000.0), 3.0),
+        ],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR"), daily("OTHR"), daily("OTHR")],
+    )
+
+    assert [cut.member for cut in made.cuts] == ["b", "c"]
+    assert made.counts["d"][ROOM] == 1
+    assert placed(made.runs[3], OTHR) == 0.0
+    assert made.sessions[date(2024, 1, 1)]["d"][ROOM] == 1
+    capped = execute_book(
+        block(max_name_c=0.00005),
+        [member("a", request(hyp((DEMO,)), notional=1_000.0), 1.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+    assert capped.counts["a"][NAME_CAP] == 1 and capped.runs[0].fills == ()
+
+
+def test_an_entry_its_own_rule_sizes_below_a_lot_is_counted_below_its_minimum() -> None:
+    made = execute_book(
+        block(),
+        [member("a", request(hyp((DEMO,)), notional=5.0), 1.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+
+    assert made.counts["a"][BELOW_C_MIN] == 1
+    assert made.runs[0].fills == ()
+
+
+def quoted(symbol: str, ask_size: int) -> tuple[QuoteTick, ...]:
+    """`conftest.quotes` with the ask displaying `ask_size`."""
+    return tuple(
+        QuoteTick(
+            InstrumentId(Symbol(symbol), Venue("XNAS")),
+            q.bid_price,
+            q.ask_price,
+            q.bid_size,
+            Quantity.from_int(ask_size),
+            q.ts_event,
+            q.ts_init,
+        )
+        for q in quotes(RESEARCH, symbol=symbol)
+    )
+
+
+def test_takers_of_one_name_at_one_instant_share_the_size_its_touch_displays() -> None:
+    """Two members buying 80 each where the ask shows 100: the first is placed whole, the
+    second cut to 20 — the touch, not the room, binds — and the quote the bar shares its
+    instant with is the one read, because entries are placed when the instant closes."""
+    subject = hyp((DEMO,), data_requirements=("bar", "quote"))
+    feed = (tuple(bars(RESEARCH)), quoted("DEMO", 100))
+
+    made = execute_book(
+        block(),
+        [
+            member("a", request(subject, qty=80.0), 5.0),
+            member("b", request(subject, qty=80.0), 1.0),
+        ],
+        [instrument()],
+        [feed, feed],
+    )
+
+    (cut,) = made.cuts
+    assert (cut.member, cut.asked, cut.placed, cut.by) == ("b", 80.0, 20.0, TOUCH)
+    assert placed(made.runs[0], DEMO) == 80.0 and placed(made.runs[1], DEMO) == 20.0
+
+
+def test_a_third_taker_finds_the_touch_spent_and_is_counted() -> None:
+    subject = hyp((DEMO,), data_requirements=("bar", "quote"))
+    feed = (tuple(bars(RESEARCH)), quoted("DEMO", 100))
+
+    made = execute_book(
+        block(),
+        [
+            member("a", request(subject, qty=60.0), 5.0),
+            member("b", request(subject, qty=60.0), 3.0),
+            member("c", request(subject, qty=60.0), 1.0),
+        ],
+        [instrument()],
+        [feed, feed, feed],
+    )
+
+    assert made.counts["c"][TOUCH] == 1
+    assert placed(made.runs[2], DEMO) == 0.0
+
+
+def test_an_entry_opposite_to_a_side_the_book_holds_is_refused() -> None:
+    """`a` buys DEMO; `b` asks to sell it short at the same instant and is refused before it
+    is sized, however it ranks against `a` by edge."""
+    made = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=10_000.0), 5.0),
+            member("b", request(hyp((DEMO,)), notional=10_000.0, sell=1.0, edge=-1.0), 1.0),
+        ],
+        [instrument()],
+        [daily("DEMO"), daily("DEMO")],
+    )
+
+    assert made.counts["b"][OPPOSITE_REFUSED] == 1
+    assert made.runs[1].fills == ()
+
+
+def test_an_entry_opposite_to_a_resting_entry_is_refused_and_an_unfilled_rest_is_counted() -> None:
+    """`a` rests a buy far under the market, which never fills; `b`'s sell of the name is
+    opposite to that working entry."""
+    made = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), qty=10.0, limit=1.0), 5.0),
+            member("b", request(hyp((DEMO,)), notional=10_000.0, sell=1.0), 1.0),
+        ],
+        [instrument()],
+        [daily("DEMO"), daily("DEMO")],
+    )
+
+    assert made.counts["b"][OPPOSITE_REFUSED] == 1
+    assert made.counts["a"][UNFILLED] == 1
+
+
+def test_an_entry_outside_regular_hours_is_refused_while_their_leverage_is_unset() -> None:
+    late = tuple(
+        replace_ts(point, -14 * 3600 * SECOND_NS) for point in bars(RESEARCH)
+    )  # 02:00 UTC: 21:00 in New York the evening before
+    made = execute_book(
+        block(),
+        [member("a", request(hyp((DEMO,)), notional=10_000.0), 1.0)],
+        [instrument()],
+        [(late,)],
+    )
+
+    assert made.counts["a"][OUTSIDE_RTH_UNSET] == 1
+    assert made.runs[0].fills == ()
+
+
+def replace_ts(bar: Any, shift: int) -> Any:
+    from nautilus_trader.model.data import Bar
+
+    return Bar(
+        bar.bar_type,
+        bar.open,
+        bar.high,
+        bar.low,
+        bar.close,
+        bar.volume,
+        ts_event=bar.ts_event + shift,
+        ts_init=bar.ts_init + shift,
+    )
+
+
+def test_segments_are_new_york_s_clock_across_daylight_saving() -> None:
+    def at(day: date, hour: int, minute: int = 0) -> int:
+        return int(datetime(day.year, day.month, day.day, hour, minute, tzinfo=UTC).timestamp()) * (
+            SECOND_NS
+        )
+
+    winter, summer = date(2024, 1, 2), date(2024, 7, 2)
+    assert segment_of(at(winter, 14, 29)) == ("pre", winter)
+    assert segment_of(at(winter, 14, 30)) == ("rth", winter)
+    assert segment_of(at(winter, 21, 0)) == ("post", winter)
+    assert segment_of(at(summer, 13, 30)) == ("rth", summer)
+    assert segment_of(at(summer, 20, 0)) == ("post", summer)
+    assert segment_of(at(summer, 23, 30)) == ("post", summer)
+    assert segment_of(at(summer, 0, 30)) == ("overnight", date(2024, 7, 1))
+    assert segment_of(at(summer, 3, 0)) == ("overnight", date(2024, 7, 1))
+
+
+# --- what a book refuses --------------------------------------------------------------
+
+
+def test_an_entry_built_by_hand_in_a_book_is_refused() -> None:
+    with pytest.raises(SizingError) as raised:
+        execute_book(
+            block(),
+            [member("a", request(hyp((DEMO,)), HAND_BUILT), 1.0)],
+            [instrument()],
+            [daily("DEMO")],
+        )
+
+    assert raised.value.refusal.rule == BOOK_ENTRY
+
+
+def test_an_edge_that_is_not_a_number_is_refused() -> None:
+    with pytest.raises(ValidationError, match="edge_bp"):
+        execute_book(
+            block(),
+            [member("a", request(hyp((DEMO,)), notional=1_000.0, edge=float("inf")), 1.0)],
+            [instrument()],
+            [daily("DEMO")],
+        )
+
+
+@pytest.mark.parametrize(
+    ("members", "said"),
+    [
+        ([], "no member"),
+        ([member("a", request(hyp((DEMO,)))), member("a", request(hyp((DEMO,))))], "twice"),
+        ([member("a", request(hyp((DEMO,)), capital=50_000.0))], "book's capital"),
+        (
+            [
+                member("a", request(hyp((DEMO,)))),
+                member(
+                    "b",
+                    replace(request(hyp((OTHR,))), window=(date(2024, 2, 6), date(2024, 2, 29))),
+                ),
+            ],
+            "one window",
+        ),
+    ],
+)
+def test_what_a_book_cannot_hold_is_refused_before_anything_runs(
+    members: list[BookMember], said: str
+) -> None:
+    with pytest.raises(PreconditionError, match=said):
+        execute_book(block(), members, INSTRUMENTS, [daily("DEMO")] * len(members))
+
+
+def test_a_member_with_an_attached_construct_or_a_level_two_book_is_refused() -> None:
+    with_filter = replace(request(hyp((DEMO,))), modifiers=(("filter", b"", {}),))
+    with pytest.raises(PreconditionError, match="attached construct"):
+        execute_book(block(), [member("a", with_filter)], [instrument()], [daily("DEMO")])
+    depth = hyp((DEMO,), data_requirements=("book", "trade"), resolution="tick")
+    with pytest.raises(PreconditionError, match="level-two book"):
+        execute_book(block(), [member("a", request(depth))], [instrument()], [daily("DEMO")])
+
+
+def test_a_member_under_a_book_policy_is_refused() -> None:
+    document = hyp((DEMO,)).model_dump(mode="json")
+    document["book"] = {"financing_rate_bps": 500.0}
+    with pytest.raises(PreconditionError, match="a `book` policy"):
+        execute_book(
+            block(),
+            [member("a", request(Hypothesis.model_validate(document)))],
+            [instrument()],
+            [daily("DEMO")],
+        )
+
+
+def test_a_member_s_groups_are_its_own() -> None:
+    with pytest.raises(ValidationError, match="each member is handed its own"):
+        execute_book(block(), [member("a", request(hyp((DEMO,))))], [instrument()], [])
+
+
+def test_a_window_the_hypothesis_does_not_declare_is_refused() -> None:
+    odd = replace(request(hyp((DEMO,))), window=(date(2024, 1, 2), date(2024, 1, 30)))
+    with pytest.raises(PreconditionError, match="is not a window"):
+        execute_book(block(), [member("a", odd)], [instrument()], [daily("DEMO")])
+
+
+def test_a_book_reads_each_member_s_window_from_the_catalog(tmp_path: Path) -> None:
+    store = catalog(
+        tmp_path / "catalog", [*bars(RESEARCH, "DEMO"), *bars(RESEARCH, "OTHR")], INSTRUMENTS
+    )
+    members = [
+        member("a", request(hyp((DEMO,)), SLEEVE), 2.0),
+        member("b", request(hyp((OTHR,)), SLEEVE), 1.0),
+    ]
+
+    read = run_book(block(), members, store)
+
+    handed = execute_book(block(), members, INSTRUMENTS, [daily("DEMO"), daily("OTHR")])
+    assert pickle.dumps(read.runs) == pickle.dumps(handed.runs)
+
+
+def test_the_closing_marker_is_the_last_of_each_instant() -> None:
+    from kanso.nautilus.cross_section import CLOSES, FLUSH, closed, is_marker, ordered
+
+    points = closed(ordered([bars(RESEARCH, "DEMO"), bars(RESEARCH, "OTHR")], coincident=True))
+
+    markers = [p for p in points if is_marker(p)]
+    assert len(markers) == 2 * len(bars(RESEARCH))
+    assert [m.data.n for m in markers[:2]] == [FLUSH, CLOSES]
+    assert closed(()) == ()
+    assert shared.COUNTERS[0] == ROOM
+
+
+# --- what the room reads once the book holds something ---------------------------------
+
+
+def test_a_later_instant_s_room_is_struck_on_the_realised_balance_and_what_is_held() -> None:
+    """`a` bought on the first session; on the second `b` asks for 300,000. Its room is four
+    times the capital less `a`'s costs — `a` has realised nothing else — less what `a` holds at
+    its own cost, since no quote has been seen to mark it at."""
+    made = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=300_000.0), 5.0),
+            member("b", request(hyp((OTHR,)), notional=300_000.0, skip=1.0), 1.0),
+        ],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR")],
+    )
+
+    a, b = made.runs
+    bought = [f for f in a.fills if f.side == "BUY"]
+    left = 4 * (CAPITAL - fsum(f.cost for f in bought)) - fsum(f.qty * f.px for f in bought)
+    assert placed(b, OTHR) == int(left / RESERVE / 10.5)
+    (cut,) = made.cuts
+    assert (cut.member, cut.by) == ("b", ROOM)
+    assert made.mean_gross is not None and made.mean_gross <= 4 * CAPITAL
+
+
+def test_an_exit_in_flight_counts_as_gone_and_a_resting_exit_holds_nothing_back() -> None:
+    """`a` holds both names and sends their exits at market on the session `b` enters DEMO:
+    DEMO's lands before the instant closes, OTHR's — handled on the marker that closes it — is
+    still in flight when `b` is placed, and what both free is free, so `b` is placed whole. A
+    resting exit adds nothing to the book either."""
+    both = (tuple(bars(RESEARCH, "DEMO")), tuple(bars(RESEARCH, "OTHR")))
+    exiting = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO, OTHR)), notional=150_000.0, exit_on=2.0), 5.0),
+            member("b", request(hyp((DEMO,)), notional=390_000.0, skip=1.0), 1.0),
+        ],
+        INSTRUMENTS,
+        [both, daily("DEMO")],
+    )
+    resting = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=300_000.0, rest_exit=50.0), 5.0),
+            member("b", request(hyp((OTHR,)), notional=300_000.0, skip=2.0), 1.0),
+        ],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR")],
+    )
+
+    assert exiting.cuts == ()
+    assert placed(exiting.runs[1], DEMO) == int(390_000.0 / 10.5)
+    a, b = resting.runs
+    bought = [f for f in a.fills if f.side == "BUY"]
+    left = 4 * (CAPITAL - fsum(f.cost for f in bought)) - fsum(f.qty * f.px for f in bought)
+    assert placed(b, OTHR) == int(left / RESERVE / 11.0)
+    assert resting.counts["a"][UNFILLED] == 0, "a resting exit is not an entry the book placed"
+
+
+def test_an_add_in_flight_is_counted_at_its_price_beside_what_is_held() -> None:
+    """`a` adds to its holding every session; on the second `b` is cut to what `a`'s holding
+    and its add in flight leave."""
+    made = execute_book(
+        block(),
+        [
+            member("a", request(hyp((DEMO,)), notional=100_000.0, once=0.0), 5.0),
+            member("b", request(hyp((OTHR,)), notional=300_000.0, skip=1.0), 1.0),
+        ],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR")],
+    )
+
+    a = made.runs[0]
+    first, second = sorted({f.ts_ns for f in a.fills})[:2]
+    held = fsum(f.qty * f.px for f in a.fills if f.ts_ns == first)
+    cost = fsum(f.cost for f in a.fills if f.ts_ns == first)
+    adding = fsum(f.qty for f in a.fills if f.ts_ns == second)
+    left = 4 * (CAPITAL - cost) - held - adding * 10.5
+    assert placed(made.runs[1], OTHR) == int(left / RESERVE / 10.5)
+
+
+def test_an_entry_its_own_room_leaves_nothing_for_or_with_no_price_is_below_its_minimum() -> None:
+    """`a` takes its whole allowance on the first session and asks again on the second, when
+    the price has risen past it; `blind` asks for a name it has seen no price of."""
+    full = execute_book(
+        block(),
+        [member("a", request(hyp((DEMO,)), notional=399_000.0, once=0.0), 1.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+    blind = execute_book(
+        block(),
+        [member("blind", request(hyp((DEMO, OTHR)), BLIND), 1.0)],
+        INSTRUMENTS,
+        [daily("DEMO")],
+    )
+
+    assert full.counts["a"][BELOW_C_MIN] >= 1
+    assert blind.counts["blind"][BELOW_C_MIN] == 1
+    assert placed(blind.runs[0], DEMO) > 0
+
+
+def test_an_entry_asked_twice_at_one_instant_is_one_entry() -> None:
+    made = execute_book(
+        block(),
+        [member("a", request(hyp((DEMO,)), notional=10_000.0, twice=1.0), 1.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+
+    assert placed(made.runs[0], DEMO) == 1_000.0
+
+
+def test_a_resting_entry_draws_no_touch_and_one_that_never_fills_is_counted() -> None:
+    subject = hyp((DEMO,), data_requirements=("bar", "quote"))
+    feed = (tuple(bars(RESEARCH)), quoted("DEMO", 100))
+
+    made = execute_book(
+        block(), [member("a", request(subject, qty=150.0, limit=1.0), 1.0)], [instrument()], [feed]
+    )
+
+    assert made.cuts == ()
+    assert made.counts["a"][UNFILLED] == 1
+    assert made.counts["a"][TOUCH] == 0
+
+
+def test_a_book_that_placed_nothing_has_no_gross() -> None:
+    from .conftest import FLAT_SLEEVE
+
+    made = execute_book(
+        block(), [member("a", request(hyp((DEMO,)), FLAT_SLEEVE))], [instrument()], [daily("DEMO")]
+    )
+
+    assert (made.peak_gross, made.mean_gross, made.gross) == (None, None, ())
+    assert made.room_limit_share is None
+
+
+def test_a_warmed_member_trades_from_its_window_s_open_as_alone() -> None:
+    prefix = (date(2023, 12, 29), date(2023, 12, 31))
+    warmed = replace(request(hypothesis(), SLEEVE), prefix=prefix)
+    feed = (tuple(bars((prefix[0], RESEARCH[1]))),)
+
+    solo = execute(warmed, [instrument()], feed)
+    booked = execute_book(block(), [member("a", warmed, 1.0)], [instrument()], [feed])
+
+    assert pickle.dumps(booked.runs[0]) == pickle.dumps(solo.run)
+
+
+def sized(universe: tuple[str, ...], budget: float) -> RunRequest:
+    document = hyp(universe).model_dump(mode="json")
+    document["sizing"] = {"mode": "full_book", "budget": budget}
+    return replace(request(Hypothesis.model_validate(document)), sleeve_budget=budget, overrides={})
+
+
+def test_a_sized_member_s_whole_budget_is_cut_to_the_room_like_any_entry() -> None:
+    made = execute_book(
+        block(),
+        [member("a", sized((DEMO,), 300_000.0), 5.0), member("b", sized((OTHR,), 300_000.0), 1.0)],
+        INSTRUMENTS,
+        [daily("DEMO"), daily("OTHR")],
+    )
+    capped = execute_book(
+        block(max_name_c=0.00005),
+        [member("a", sized((DEMO,), 300_000.0), 1.0)],
+        [instrument()],
+        [daily("DEMO")],
+    )
+
+    (cut,) = made.cuts
+    assert (cut.member, cut.by) == ("b", ROOM)
+    assert 0 < placed(made.runs[1], OTHR) < placed(made.runs[0], DEMO)
+    assert capped.counts["a"][NAME_CAP] >= 1
+    assert capped.runs[0].fills == ()
+
+
+def test_a_sleeve_run_alone_ignores_the_edge_it_states() -> None:
+    stated = request(hyp((DEMO,)), notional=1_000.0, edge=9.0)
+    with_edge = execute(stated, [instrument()], daily("DEMO"))
+    without = execute(request(hyp((DEMO,)), notional=1_000.0), [instrument()], daily("DEMO"))
+
+    assert pickle.dumps(with_edge.run) == pickle.dumps(without.run)

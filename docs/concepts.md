@@ -1994,7 +1994,46 @@ the simulated venue holds a close to the first open position in the name, whoeve
 closes a name's positions in that order, each by the version that holds it, so each close
 finds its own and both end the window flat. Nor do they compete for
 the market: each is filled against the whole touch as if it traded alone, and two that hold
-opposite sides of a name are each charged their own legs, where a broker would net them.
+opposite sides of a name are each charged their own legs, where a broker would net them. A
+book (below) is where versions share one capital, one room and one touch.
+
+**A book runs several versions on one capital, and hands its room out in its own order.**
+The runner can run a book (`kanso.nautilus.book.execute_book`, and `run_book` over a
+catalog): every member's generated sleeve in one engine, at the book's capital, each trading
+its own position and costed once in its own extraction, beside one ledger that decides how
+much of the book each entry takes. The block it runs under (`SharedBook`) states the capital,
+`leverage.rth` — four, the only value accepted — `max_name_c` if a name is capped, and the
+ranking the book uses, `rank_key: net_per_trade_bp` and `k_min`, both required: kanso does
+not pick the order of a book's members. Leverage before and after regular hours is not set
+yet, so a block that declares it is refused and every entry outside 09:30–16:00 New York time
+is refused; a block that names a daily target or a daily stop is refused too, since neither
+exists in this version. The engine serves its strategies in the order they subscribed and
+hands a point only to its own name's subscribers (`kanso doctor` checks the first), so neither
+decides who is served first: a member's `submit_entry` is collected and returns `None`, and
+once every member has handled the marker that closes the instant, the instant's entries are
+placed — by the `edge_bp` the entry states, the predicted move less the round trip's cost at
+the instant, highest first, an entry with none last; then by the member's rank, its
+certificate's net per trade (above zero, on at least `k_min` sessions, or after every member
+that is ranked), its `net_t`, the earlier `joined_at` and the strategy id; then by name. Each
+is sized by its own member's rule first and then cut to the smallest of the book's room —
+`min(capital, balance) × 4` less every member's open positions at the latest quote's mid or
+their own cost, its resting entries at their limits and its market orders in flight at the
+price they were sized at, over the entry's own round trip — the name's cap, and, for a taker,
+what is left of the size the latest quote displays on its side, one budget per name, side and
+instant: the venue fills two takers of one touch from all of it (`kanso doctor` checks it),
+and the book does not. The balance is the capital plus every member's realised net profit.
+An entry opposite to any member's position, working entry or entry in flight in the name is
+refused, as is one its own rule sized below a lot or one the cut left below a lot, counted
+by the cap that bound it; a smaller entry is placed and recorded with what was asked. Each
+refusal is counted once, per member and per New York session — `book_closed`,
+`outside_rth_unset`, `opposite_refused`, `below_c_min`, `name_cap`, `touch`, `room`,
+`no_size`, and `unfilled` for a resting entry that filled nothing — and the run reports the
+book's equity, its gross after each instant it placed at, and how many of those left it at
+its room. An entry built by hand in a book is refused (`book_entry`), as a sizing rule
+refuses one. A member is run at the book's capital and window; one with an attached
+construct, a `book` policy or a level-two book is refused. No stage holds a book yet:
+`portfolio.yaml` names no shared block and a stage node runs no ledger, which is the next
+step (`docs/backlog.md`).
 
 A version whose sleeve declares a `benchmark` has the hold of its first leg run beside the
 stage rather than inside it: once the node stops, the backtest runner runs the hold over the
