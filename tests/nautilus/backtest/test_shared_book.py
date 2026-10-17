@@ -1193,6 +1193,69 @@ def test_the_child_of_an_exit_sent_one_triggers_other_counts_toward_what_it_clos
     assert len(exited.intents[0]) == 3
 
 
+AGAIN = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    priced: float = 0.0
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Enters on its first bar; on its third asks for its exit, at market or, with
+    `priced`, at a marketable limit, and asks for it again, the same, as the engine reports
+    the first submitted.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.n = 0
+        self.again = False
+
+    def on_bar(self, bar):
+        self.n += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self.n == 1:
+            self.submit_entry(instrument_id, "BUY", ENTRY)
+        elif self.n == 3:
+            self.again = True
+            self.leave(instrument_id)
+
+    def on_order_submitted(self, event):
+        if self.again:
+            self.again = False
+            self.leave(event.instrument_id)
+
+    def leave(self, instrument_id):
+        if self.kanso_config.priced:
+            self.submit_exit(instrument_id, price=5.0)
+        else:
+            self.submit_exit(instrument_id)
+"""
+
+
+@pytest.mark.parametrize("how", ["at-market", "at-a-price", "sizing-rule"])
+def test_an_exit_asked_again_as_the_first_is_submitted_counts_the_first(how: str) -> None:
+    """The engine runs a member's `on_order_submitted` inside the exit's own submission, and
+    the exit asked again there finds the first working and sends nothing, so the member sells
+    what it holds and no more. Measured on the round before this test: the first was not yet
+    counted, the second was sized to the whole long and let through, and the member sold
+    twice what it held — 2000 of 1000 at market and at a price, 1994 of 997 under a sizing
+    rule."""
+    if how == "sizing-rule":
+        run = replace(sized((DEMO,), 10_000.0), strategy_source=AGAIN.replace(b", ENTRY", b""))
+    else:
+        source = AGAIN.replace(b"ENTRY", b"qty=1000.0")
+        run = request(hyp((DEMO,)), source, priced=float(how == "at-a-price"))
+
+    made = execute_book(block(), [member("a", run, 5.0)], [instrument()], [daily("DEMO")])
+
+    fills = made.runs[0].fills
+    bought = placed(made.runs[0], DEMO)
+    assert bought > 0 and fsum(f.qty for f in fills if f.side == "SELL") == bought
+    assert len(made.intents[0]) == 2
+
+
 NESTED = b"""
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity

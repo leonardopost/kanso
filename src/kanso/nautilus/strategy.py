@@ -1676,6 +1676,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         Nothing at all while the strategy is warming: the order is neither checked nor
         recorded, so an author sees `None` from the helpers exactly as under a refused
         filter, and the two code paths hold identical intent lists.
+
+        The order is kept as this sleeve's (`_track`) before the engine is handed it, so a
+        handler the engine runs inside the call sizes on it as working and in flight. In
+        nautilus_trader 1.231.0 the backtest engine's execution client reports an order
+        submitted inside the call that hands it over (`BacktestExecClient.submit_order` in
+        `backtest/execution_client.pyx`), so `on_order_submitted` runs inside this one, where a
+        node's live risk engine queues the command and the event comes once the call has
+        returned. Kept after the call, an exit asked again from `on_order_submitted` did not
+        count the first: a sleeve that asked so for the exit at market of its long of 1000 sold
+        2000. Both paths now size it alike.
         """
         if self._warming():
             return
@@ -1688,8 +1698,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
         self._intents.append(self._intent(order))
-        super().submit_order(order, position_id, client_id, params)
         self._track(order)
+        super().submit_order(order, position_id, client_id, params)
         if kind == ENTRY and not self._hedging:
             self._place_hedges(ctx)
 
@@ -1715,9 +1725,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         for order in orders:
             self._intents.append(self._intent(order))
-        super().submit_order_list(order_list, position_id, client_id, params)
-        for order in orders:
             self._track(order)
+        super().submit_order_list(order_list, position_id, client_id, params)
         if kind == ENTRY and not self._hedging:
             self._place_hedges(ctx)
 

@@ -426,6 +426,9 @@ entry has filled any of it they count in full. The child of an exit sent one-tri
 against a long, a sell that releases another sell once it fills — counts in full from the
 start, since the parent's fill releases it to close more; it stops counting once its parent,
 having filled nothing, can no longer fill, since the engine then cancels the child with it.
+An exit asked for from a handler the backtest engine runs inside another order's submission,
+such as `on_order_submitted`, counts that order as working, as a node, which hands the event
+over only once the submission has returned, always did.
 With no latency stated, an exit at market is never held back by a resting one: when the
 sleeve's own limit or stop orders resting at the venue on the closing side would leave it
 less than asked, it cancels them first, so a stop is not blocked by a take-profit, and a

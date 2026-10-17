@@ -1278,3 +1278,53 @@ def test_an_order_is_not_cancelled_for_an_exit_at_market_taken_back_before_its_a
     resting where the sleeve put it, stops waiting on it, and nothing is sold."""
     run = _run(request_for, 0.0, TAKEN_BACK_AT_A_PRICE, quotes=True)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0)]
+
+
+ASKED_AGAIN = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys 100 once; on its thirtieth quote asks for its exit, EXIT, and asks for it again,
+    the same, as the engine reports the first submitted."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.again = False
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 30:
+            self.bid = float(tick.bid_price)
+            self.again = True
+            self.submit_exit(instrument_id, EXIT)
+
+    def on_order_submitted(self, event):
+        if self.again:
+            self.again = False
+            self.submit_exit(event.instrument_id, EXIT)
+'''
+)
+"""A sleeve that asks for its exit again from the handler the engine runs inside the first
+exit's submission."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("exit", [b"", b"price=round(self.bid * 0.5, 2)"], ids=["market", "priced"])
+def test_an_exit_asked_again_while_the_first_is_submitted_counts_the_first(
+    request_for, exit: bytes, latency_ms: float
+) -> None:
+    """The backtest engine runs the sleeve's `on_order_submitted` inside the first exit's
+    submission, and the exit asked for again there counts the first as working, so the
+    sleeve sells its 100 and no more. Measured on the round before this test, and on main:
+    the first exit was kept as working only once its submission returned, the second was
+    sized to the whole position, and the sleeve sold 200 of its 100, at market and at a
+    marketable limit, at 0 and at 20 ms."""
+    source = ASKED_AGAIN.replace(b"EXIT)", exit + b")")
+    run = _run(request_for, latency_ms, source, quotes=True)
+    assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
