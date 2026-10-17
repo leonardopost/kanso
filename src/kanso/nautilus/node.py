@@ -60,8 +60,11 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 * `LiveRiskEngineConfig.max_order_submit_rate` throttles against the engine's clock, which in
   a node is wall time. A replayed stage compresses months of decisions into seconds, so the
   rate is lifted and the same strategy is throttled the same amount — none — on both paths.
-* `Strategy.close_all_positions` and `cancel_all_orders` take an instrument id and submit
-  through the strategy's own `submit_order`, which kanso classifies as an exit. With no
+* `Strategy.cancel_all_orders` takes an instrument id and `close_position` a position, and
+  the close goes through the strategy's own `submit_order`, which kanso classifies as an
+  exit. Each position is closed by the strategy that holds it, a name's in the cache's order
+  by id, because the simulated venue holds a reduce-only close to the name's first open
+  position whoever's it is (`_flatten`). With no
   stated latency the simulated exchange runs with its message queue off and zero latency,
   so the closing order is matched against the last point's book in the same call rather
   than on a point that never comes. Under a venue model that states `costs.latency_ms` the
@@ -838,11 +841,29 @@ async def _closed(
 
 
 def _flatten(strategies: Sequence[Any]) -> None:
-    """Cancel every open order and close every open position, on every strategy."""
+    """Cancel every open order on every strategy, then close every open position, each by the
+    strategy that holds it, a name's positions in the cache's order by id.
+
+    The close is `close_position`'s reduce-only order, and under NETTING the simulated venue
+    holds a reduce-only fill to the first open position in the instrument by id, whichever
+    strategy's it is (`kanso.nautilus.facts`): a version whose close reached the venue while
+    a stage-mate's position in the name sorted ahead of its own would close only as much as
+    the mate holds. Sent in the cache's own order, each close lands, and its fill is applied,
+    before the next is matched — with no latency at once, under one in the order they were
+    sent — so each finds its own position first, whatever order the strategies come in.
+    """
+    owners = {strategy.id: strategy for strategy in strategies}
+    names: set[Any] = set()
     for strategy in strategies:
         for instrument_id in strategy.universe:
             strategy.cancel_all_orders(instrument_id)
-            strategy.close_all_positions(instrument_id)
+            names.add(instrument_id)
+    for instrument_id in sorted(names, key=str):
+        # A name is listed only from a strategy, and every strategy reads the kernel's cache.
+        for position in strategies[0].cache.positions_open(instrument_id=instrument_id):
+            owner = owners.get(position.strategy_id)
+            if owner is not None and instrument_id in owner.universe:
+                owner.close_position(position)
 
 
 def _books(

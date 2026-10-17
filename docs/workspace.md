@@ -403,6 +403,13 @@ orders applied, so the same flip fits at leverage one either way: the exit in fl
 the room the entry takes, and the venue settles both at one price, the exit first.
 `modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
 a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
+**A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
+owed exit and the classification of an order as an entry or an exit read the position the
+engine keeps for the sleeve's own strategy in the name, not the account's net position, which
+adds up every version's on the stage; so two versions that trade one name each size and close
+only what they hold, and a sleeve alone on its account reads what the account holds;
+`kanso doctor` checks, among its engine facts, that the engine keeps one position per
+instrument and strategy.
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —
