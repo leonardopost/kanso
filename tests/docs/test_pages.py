@@ -1082,3 +1082,14 @@ def test_no_page_says_nothing_kanso_loads_reaches_the_level_one_fill() -> None:
         text = prose(path.read_text(encoding="utf-8"))
         for claim in claims:
             assert claim not in text, f"{path}: {claim}"
+
+
+def test_the_concepts_page_says_a_window_reads_through_a_file_replaced_while_it_streams() -> None:
+    """A window lists the catalog once, so a replace landing while it streamed removed a file
+    the window had listed, and its parent raised FileNotFoundError where a read listing the
+    catalog itself read what took the file's place. The page states what a window does."""
+    card = prose(page("concepts.md"))
+    assert "each window lists the catalog's files once, rather than once a query" in card
+    assert "is found gone by the read that wants it, which lists that type's files again" in card
+    assert "is refused (exit 2), naming the series" in card
+    assert "is read by a later read only once one of that type has listed afresh" in card

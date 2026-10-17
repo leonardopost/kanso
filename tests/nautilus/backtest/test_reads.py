@@ -23,6 +23,7 @@ from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
 from kanso.criteria.run import midnight_ns
 from kanso.data.types.funding import Funding
+from kanso.errors import PreconditionError
 from kanso.nautilus import backtest as runner
 from kanso.nautilus.cross_section import coincident, without_markers
 from kanso.schemas import Hypothesis
@@ -413,6 +414,172 @@ def test_a_window_lists_each_class_once_and_the_next_window_lists_again(
     assert first == {universe[0]} and globbed == 1
     assert names() == set(universe) and listed.count("Bar") == 2
     assert "get_file_list_from_data_cls" not in vars(ParquetDataCatalog(str(root)))
+
+
+WEEK_TWO = midnight_ns(date(2024, 1, 8))
+"""The first instant of the week of quotes `_sparse` files last, a file a name."""
+
+
+def _rewrite(root: Path, symbol: str, before: int) -> None:
+    """What a `kanso data load --replace` of `symbol`'s last file of quotes does to the store:
+    the file goes, and one holding its quotes stamped before `before` takes its place, named
+    for the interval it holds."""
+    store = ParquetDataCatalog(str(root))
+    last = sorted((root / "data" / "quote_tick" / f"{symbol}.XNAS").glob("*.parquet"))[-1]
+    held = store.query(QuoteTick, files=[str(last)])
+    last.unlink()
+    store.write_data([quote for quote in held if quote.ts_init < before])
+
+
+def _stream_meanwhile(
+    request: runner.RunRequest, store: Path, at: int, change: Callable[[], object]
+) -> list[str]:
+    """The ordered stream a card is handed, every point and marker, read a step at a time,
+    with `change` made to the store just before the first read from `at` on: a load landing
+    while the window streams."""
+    inner = runner._window_points
+    pending = [change]
+
+    def reading(*args: Any) -> Any:
+        if pending and args[-2] >= at:
+            pending.pop()()
+        return inner(*args)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(runner, "_window_points", reading)
+        patch.setattr(runner, "_reads", _by_step)
+        _, chunks = runner.window_chunks(request, store)
+        marked = coincident(request.hyp)
+        return [
+            f"{type(point).__name__} {point!r}"
+            for chunk in chunks
+            for point in runner._ordered(chunk, coincident=marked)
+        ]
+
+
+def _listing_every_query(path: Path) -> Any:
+    """The catalog a window read before it listed once: the engine's own, which lists a
+    class's files at every query."""
+    return ParquetDataCatalog(str(path))
+
+
+def test_a_quote_file_replaced_while_a_window_streams_is_read_as_a_query_listing_itself_reads_it(
+    tmp_path: Path, request_for
+) -> None:
+    """A replace of one name's last week of quotes, less its last session, lands once the
+    first week is read: the file the window listed has gone, so the read of the second week
+    lists the quotes again and reads the file that took its place. The stream is the one a
+    reader listing the catalog at every query hands on, without the session the replace
+    dropped and with nothing raised."""
+    universe = (f"{SYMBOL}.XNAS", f"{QUIET}.XNAS")
+    request = request_for(DAYS, hypothesis_=_ticks(universe, ["quote"]))
+    last = midnight_ns(DAYS[1])
+    opens = last + (14 * 3_600 + 30 * 60) * SECOND_NS
+
+    unchanged = _stream_meanwhile(request, _sparse(tmp_path / "unchanged"), WEEK_TWO, list)
+    once = _sparse(tmp_path / "once")
+    read = _stream_meanwhile(request, once, WEEK_TWO, lambda: _rewrite(once, SYMBOL, last))
+    every = _sparse(tmp_path / "every")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(runner, "_catalog", _listing_every_query)
+        expected = _stream_meanwhile(
+            request, every, WEEK_TWO, lambda: _rewrite(every, SYMBOL, last)
+        )
+
+    def quotes(stream: list[str]) -> Counter[str]:
+        return Counter(line for line in stream if line.startswith("QuoteTick"))
+
+    assert read == expected
+    assert quotes(unchanged) - quotes(read) == Counter(
+        f"QuoteTick {_quote(SYMBOL, opens + minute * 60 * SECOND_NS)!r}" for minute in range(390)
+    )
+    assert not quotes(read) - quotes(unchanged)
+
+
+def test_a_quote_file_replaced_again_once_its_read_lists_afresh_is_refused_naming_the_series(
+    tmp_path: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second replace lands between the read's fresh listing and its query, so the query
+    made again misses again: the read is refused naming the series, with a remedy, rather
+    than raising the engine's FileNotFoundError."""
+    universe = (f"{SYMBOL}.XNAS", f"{QUIET}.XNAS")
+    request = request_for(DAYS, hypothesis_=_ticks(universe, ["quote"]))
+    root = _sparse(tmp_path / "twice")
+    lister = ParquetDataCatalog.get_file_list_from_data_cls
+    listings: list[list[str]] = []
+
+    def racing(self: ParquetDataCatalog, data_cls: type) -> list[str]:
+        files: list[str] = lister(self, data_cls)
+        if data_cls is QuoteTick:
+            listings.append(files)
+            if len(listings) == 2:
+                _rewrite(root, SYMBOL, midnight_ns(DAYS[1] - timedelta(days=1)))
+        return files
+
+    monkeypatch.setattr(ParquetDataCatalog, "get_file_list_from_data_cls", racing)
+
+    with pytest.raises(PreconditionError) as refused:
+        _stream_meanwhile(
+            request, root, WEEK_TWO, lambda: _rewrite(root, SYMBOL, midnight_ns(DAYS[1]))
+        )
+
+    assert len(listings) == 2 and listings[0] != listings[1]
+    assert f"QuoteTick of {SYMBOL}.XNAS lost a file the window listed" in refused.value.message
+    assert "lost one again once listed afresh" in refused.value.message
+    assert refused.value.remedy is not None and "kanso data load" in refused.value.remedy
+    assert isinstance(refused.value.__cause__, FileNotFoundError)
+
+
+def test_a_query_error_that_misses_no_listed_file_is_raised_as_it_came(tmp_path: Path) -> None:
+    """An engine error while every file the read was listed is still there is no miss: it is
+    raised as it came and the query is not made again. And after a miss — a
+    FileNotFoundError naming a listed file, there again by the time it is looked for, as
+    when a replace rewrites a file under its own name — an error of the query made again
+    that misses nothing is raised as it came too."""
+    catalog = runner._catalog(_sparse(tmp_path / "held"))
+    named = [f"{SYMBOL}.XNAS"]
+    span = (midnight_ns(DAYS[0]), midnight_ns(DAYS[1]))
+    listed = catalog.filter_files(
+        QuoteTick, catalog.get_file_list_from_data_cls(QuoteTick), named, *span
+    )
+    answers: list[Exception] = [RuntimeError("an engine fault")]
+
+    def answering() -> tuple[object, ...]:
+        raise answers.pop(0)
+
+    with pytest.raises(RuntimeError, match="an engine fault"):
+        runner._read_listed(catalog, QuoteTick, named, span, answering)
+    answers += [FileNotFoundError(listed[-1]), RuntimeError("an engine fault")]
+    with pytest.raises(RuntimeError, match="an engine fault"):
+        runner._read_listed(catalog, QuoteTick, named, span, answering)
+
+    assert not answers and len(listed) == 2
+
+
+def test_a_bar_file_gone_while_a_window_streams_is_read_on_as_a_query_listing_itself_reads(
+    tmp_path: Path, request_for
+) -> None:
+    """A replace of one name's only file of bars has removed it and not yet written what
+    takes its place when the read of the 10th is made. The engine reads the directory of the
+    file the window listed, finds it empty and raises; so the read lists the bars again and
+    reads what the series holds, nothing, as a reader listing the catalog at every query
+    does, and the window reads on."""
+    request = request_for()
+    gone = midnight_ns(date(2024, 1, 10))
+
+    def removed(root: Path) -> None:
+        for path in (root / "data" / "bar").rglob("*.parquet"):
+            path.unlink()
+
+    once = catalog(tmp_path / "once", bars(RESEARCH), [instrument()])
+    read = _stream_meanwhile(request, once, gone, lambda: removed(once))
+    every = catalog(tmp_path / "every", bars(RESEARCH), [instrument()])
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(runner, "_catalog", _listing_every_query)
+        expected = _stream_meanwhile(request, every, gone, lambda: removed(every))
+
+    assert read == expected
+    assert sum(line.startswith("Bar") for line in read) == 9
 
 
 def test_one_name_is_read_a_day_at_a_time_where_it_holds_data_as_its_chunks_mark_it(

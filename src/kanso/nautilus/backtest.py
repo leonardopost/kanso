@@ -682,9 +682,21 @@ def _catalog(catalog_path: Path) -> Any:
     directory once for every name in every read: measured on 2026-10-17 on a workspace
     holding 2,935 files of bars in 1,795 directories, the glob was about 90 ms of a 100 ms
     query of one name's day. The listing is held on a copy of the engine's instance, so it
-    goes with the window and nothing else in the process reads it. Every read of a window
-    takes its files from the listing its reads were planned on (`_files_read`), so what is
-    read is what was counted, and each query is otherwise the engine's own.
+    goes with the window and nothing else in the process reads it.
+
+    What a read takes from the listing differs by type. A read of quotes, prints, book
+    changes or custom points is handed the listed files that meet its span, so it reads the
+    files its reads were planned on (`_files_read`). A read of bars is not: the engine
+    registers the directory of each listed file that meets the span and reads whatever that
+    directory holds when the query runs, so the listing decides only which series'
+    directories a bar read takes. Each query is otherwise the engine's own.
+
+    A listed file that has gone by the time a query reads it — a `kanso data load --replace`
+    or `--supersedes` of the series landing while the window streams — is a miss: the class
+    is listed again for the window and the query made again (`_read_listed`), so it reads
+    the files that replaced it, as a query listing the class itself reads them. A file
+    written where no listed file of the series meets a read misses nothing, and is read
+    only once a later miss of its class lists it, or by the next window.
     """
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
@@ -698,7 +710,67 @@ def _catalog(catalog_path: Path) -> Any:
         return list(listed[data_cls])
 
     catalog.get_file_list_from_data_cls = listing
+    catalog.kanso_listed = listed
     return catalog
+
+
+def _read_listed(
+    catalog: Any,
+    data_cls: type,
+    identifiers: list[str] | None,
+    span: tuple[int, int],
+    read: Callable[[], tuple[object, ...]],
+) -> tuple[object, ...]:
+    """`read()`, one query of `data_cls` over `span`, made once more on a fresh listing of
+    the class when it misses a file the listing named.
+
+    A miss is a query raising `FileNotFoundError` naming a file the listing gives it — the
+    listed files `filter_files` keeps for its identifiers and span, as the engine and
+    `_in_file_order` keep them — or raising it or `RuntimeError` once one of those files is
+    gone: on nautilus_trader 1.231.0 a query handed a file that has gone raises
+    `FileNotFoundError` naming it, and a query of bars whose listed directory holds no file
+    raises `RuntimeError` (`kanso.nautilus.facts`). The class is then listed again, which
+    the window's later reads take too, and the query made again over what the series holds
+    now. A miss again is refused, naming the series; any other error is raised as it came.
+    A catalog `_catalog` did not open lists the class afresh at every query, so a query of
+    one can miss only a file that went while it read, and nothing is made again.
+    """
+    try:
+        return read()
+    except (FileNotFoundError, RuntimeError) as exc:
+        if not _missed(exc, catalog, data_cls, identifiers, span):
+            raise
+    getattr(catalog, "kanso_listed", {}).pop(data_cls, None)
+    _refuse_if_unwanted()
+    try:
+        return read()
+    except (FileNotFoundError, RuntimeError) as exc:
+        if not _missed(exc, catalog, data_cls, identifiers, span):
+            raise
+        series = data_cls.__name__ + ("" if identifiers is None else f" of {identifiers[0]}")
+        days = "..".join(str(day) for day in sorted({day_of(span[0]), day_of(span[1])}))
+        raise PreconditionError(
+            f"data: {series} lost a file the window listed while {days} was read, and lost "
+            f"one again once listed afresh: {exc}",
+            remedy="let the `kanso data load` rewriting the series finish, then run again; "
+            "`kanso data show` lists what it holds",
+        ) from exc
+
+
+def _missed(
+    exc: Exception,
+    catalog: Any,
+    data_cls: type,
+    identifiers: list[str] | None,
+    span: tuple[int, int],
+) -> bool:
+    """Whether `exc`, raised by a query of `data_cls` over `span`, is a miss (`_read_listed`)."""
+    listed = catalog.get_file_list_from_data_cls(data_cls)
+    said = str(exc) if isinstance(exc, FileNotFoundError) else ""
+    return any(
+        path in said or not os.path.isfile(path)
+        for path in catalog.filter_files(data_cls, listed, identifiers, *span)
+    )
 
 
 def _held(catalog: Any, hyp: Hypothesis) -> dict[str, Any]:
@@ -842,9 +914,13 @@ def market_points(
 
     _refuse_if_unwanted()
     data_cls, identifier = _filed_as(requirement, instrument, resolution)
-    if requirement == BAR:
-        return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
-    return _in_file_order(catalog, data_cls, identifier, start, end)
+
+    def read() -> tuple[object, ...]:
+        if requirement == BAR:
+            return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
+        return _in_file_order(catalog, data_cls, identifier, start, end)
+
+    return _read_listed(catalog, data_cls, [identifier], (start, end), read)
 
 
 def _filed_as(requirement: str, instrument: Any, resolution: str) -> tuple[type, str]:
@@ -946,7 +1022,11 @@ def _custom_points(
     """
     _refuse_if_unwanted()
     admissible = {*universe, None}
-    found = catalog.query(data_cls, identifiers=None, start=start, end=end)
+
+    def read() -> tuple[object, ...]:
+        return tuple(catalog.query(data_cls, identifiers=None, start=start, end=end))
+
+    found = _read_listed(catalog, data_cls, None, (start, end), read)
     return tuple(point for point in found if _instrument_of(point) in admissible)
 
 
