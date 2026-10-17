@@ -85,6 +85,10 @@ BINDINGS = {
     "filter_files names its files whose interval meets a span, ends included or open",
     "write_data writes a file in row groups of 5,000 rows, each footer stating its rows "
     "and its least and greatest ts_init",
+    "ParquetDataCatalog is one instance per path in a process, and a copy of it is an "
+    "instance of its own",
+    "a catalog query not handed its files lists them through the catalog's own "
+    "get_file_list_from_data_cls, once a query",
     "an order's events grow only at its end, and its strategy is handed each one as the "
     "order's last when the order takes it",
     "a level-two venue refuses to run a name it holds data and no book data for, and "

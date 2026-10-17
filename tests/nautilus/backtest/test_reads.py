@@ -380,6 +380,41 @@ def test_many_names_whose_groups_reach_past_the_window_are_read_as_their_rows_al
     assert [points for *_, points in under] == [96, 96, 96, 84]
 
 
+def test_a_window_lists_each_class_once_and_the_next_window_lists_again(
+    tmp_path: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window read in a query a name a day globs the bars' directory once, not once a
+    query; the listing is the window's own, so a name whose bars land after one window is
+    read by the next, and the engine's instance of the catalog keeps its own listing."""
+    universe = (f"{SYMBOL}.XNAS", f"{QUIET}.XNAS")
+    request = request_for(hypothesis_=hypothesis(universe=universe))
+    root = catalog(tmp_path / "late", bars(RESEARCH), [instrument(), instrument(QUIET)])
+    listed: list[str] = []
+    lister = ParquetDataCatalog.get_file_list_from_data_cls
+
+    def counting(self: ParquetDataCatalog, data_cls: type) -> list[str]:
+        listed.append(data_cls.__name__)
+        files: list[str] = lister(self, data_cls)
+        return files
+
+    monkeypatch.setattr(ParquetDataCatalog, "get_file_list_from_data_cls", counting)
+    monkeypatch.setattr(runner, "_reads", _by_step)
+
+    def names() -> set[str]:
+        _, chunks = runner.window_chunks(request, root)
+        return {
+            str(bar.bar_type.instrument_id) for chunk in chunks for group in chunk for bar in group
+        }
+
+    first = names()
+    globbed = listed.count("Bar")
+    ParquetDataCatalog(str(root)).write_data(bars(RESEARCH, QUIET))
+
+    assert first == {universe[0]} and globbed == 1
+    assert names() == set(universe) and listed.count("Bar") == 2
+    assert "get_file_list_from_data_cls" not in vars(ParquetDataCatalog(str(root)))
+
+
 def test_one_name_is_read_a_day_at_a_time_where_it_holds_data_as_its_chunks_mark_it(
     tmp_path: Path, request_for
 ) -> None:

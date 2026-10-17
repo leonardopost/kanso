@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import bisect
 import contextlib
+import copy
 import gc
 import hashlib
 import os
@@ -275,7 +276,8 @@ Measured on 2026-10-17 on 82 names' daily bars, a file a name in row groups reac
 twenty years, over a card's window of 2006-08-22..2024-07-31: counted a whole group to every
 day it met, each of the 6,554 days held 410,000 rows and was read alone, 537,428 queries
 of which 61 days' took 546 s; counted by step it is two reads of 82 queries, handing on the
-370,230 bars and markers the window read whole hands on, byte for byte, in 31.7 s."""
+370,230 bars and markers the window read whole hands on, byte for byte, in 10.3 s with the
+catalog listed once a window (`_catalog`)."""
 
 FEED_BYTES: Final = 64 * 1024
 """The most the parent writes to a card's standard input in one step of its watch."""
@@ -642,12 +644,10 @@ def warmup_prefix(
     at the instant after its clock, inside a window that opens on the clock's day, and
     what it warms on is what it replayed before.
     """
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
     if hyp.warmup is None:
         return None
     wanted = hyp.warmup.sessions
-    catalog = ParquetDataCatalog(str(catalog_path))
+    catalog = _catalog(catalog_path)
     held = _held(catalog, hyp)
     grain = (tuple(grains) or (hyp.resolution,))[0]
     end = midnight_ns(window[0]) - 1 if until_ns is None else until_ns
@@ -668,6 +668,37 @@ def warmup_prefix(
         remedy=f"load {', '.join(hyp.universe)} at {grain} back to at least {day_of(start)} "
         "with `kanso data load`, then `kanso data snapshot`; or lower warmup.sessions",
     )
+
+
+def _catalog(catalog_path: Path) -> Any:
+    """A catalog of `catalog_path` of the caller's own, listing each class's files once for as
+    long as it is held: what one window's reads, or a warmup's lookback, open it for.
+
+    On nautilus_trader 1.231.0 a query not handed its files — every query of bars, and of a
+    custom type — lists them through the catalog's own `get_file_list_from_data_cls`, a glob
+    of the class's whole directory, before it keeps the series asked for; and
+    `ParquetDataCatalog(path)` is one instance per path for the whole process
+    (`kanso.nautilus.facts`). So a window of many names read in many reads globbed that
+    directory once for every name in every read: measured on 2026-10-17 on a workspace
+    holding 2,935 files of bars in 1,795 directories, the glob was about 90 ms of a 100 ms
+    query of one name's day. The listing is held on a copy of the engine's instance, so it
+    goes with the window and nothing else in the process reads it. Every read of a window
+    takes its files from the listing its reads were planned on (`_files_read`), so what is
+    read is what was counted, and each query is otherwise the engine's own.
+    """
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    catalog: Any = copy.copy(ParquetDataCatalog(str(catalog_path)))
+    lister = catalog.get_file_list_from_data_cls
+    listed: dict[type, list[str]] = {}
+
+    def listing(data_cls: type) -> list[str]:
+        if data_cls not in listed:
+            listed[data_cls] = lister(data_cls)
+        return list(listed[data_cls])
+
+    catalog.get_file_list_from_data_cls = listing
+    return catalog
 
 
 def _held(catalog: Any, hyp: Hypothesis) -> dict[str, Any]:
@@ -717,10 +748,8 @@ def window_data(
     call. The upper bound is the window's, prefix or not. A card child is handed the same
     points a chunk at a time (`_payload`), through the same reader.
     """
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
     hyp = request.hyp
-    catalog = ParquetDataCatalog(str(catalog_path))
+    catalog = _catalog(catalog_path)
     held = _held(catalog, hyp)
     opens, closes = request.delivered
     scope = _scope_days(catalog, hyp, opens, closes - 1)
@@ -2349,13 +2378,11 @@ def _opened(
 ) -> tuple[Any, dict[str, Any], tuple[Any, ...], Scope | None]:
     """The catalog, the universe's definitions in universe order, and the session scope,
     with the refusals that come before a window's points are read made."""
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
     from kanso.data.types import CorporateAction
     from kanso.data.types.corporate_action import TYPE_ID
 
     hyp = request.hyp
-    catalog = ParquetDataCatalog(str(catalog_path))
+    catalog = _catalog(catalog_path)
     held = _held(catalog, hyp)
     instruments = tuple(held[name] for name in sorted(hyp.universe))
     opens, closes = request.delivered

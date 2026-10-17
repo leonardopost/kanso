@@ -488,12 +488,13 @@ on the same points and markers byte for byte; three years take 76 reads and 23.5
 they took 26,256 reads and 70 to 110 minutes. Eighty-two names' daily bars filed a file a
 name, whose groups each reach across years, were read a day at a time when a group was
 counted whole on every day it met — 6,554 reads of 82 catalog queries over a 17-year window
-and its warmup, about 9 s a read — and are two reads and 31.7 s, the same bars and markers
-byte for byte. Three hours of one name's prints at 360,000 an hour are still read an hour at
-a time. The child runs a chunk before it reads the next, so the child holds the chunk it is
-running and the parent the read that chunk was cut from — an hour of a dense feed, a day of
-bars, or no more than a chunk of a sparse window — until every chunk of it is written;
-nothing of the window is ever on disk.
+and its warmup, about 9 s a read — and are two reads and 10.3 s, the same bars and markers
+byte for byte; each window lists the catalog's files once, rather than once a query. Three
+hours of one name's prints at 360,000 an hour are still read an hour at a time. The child
+runs a chunk before it reads the next, so the child holds the chunk it is running and the
+parent the read that chunk was cut from — an hour of a dense feed, a day of bars, or no more
+than a chunk of a sparse window — until every chunk of it is written; nothing of the window
+is ever on disk.
 Where a window is cut changes nothing. Prints, quotes and book changes are read in the order
 the catalog's files hold them, because the catalog's own sorted query leaves the points of one
 instant in an order that depends on the span asked for: on a day of OKX BTC-USDT-SWAP prints,
