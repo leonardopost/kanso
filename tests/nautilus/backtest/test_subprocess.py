@@ -15,10 +15,12 @@ from kanso.nautilus.backtest import (
     child_env,
     run,
     run_subprocess,
+    run_subprocesses,
 )
 from tests.processes import ends, running
 
 from .conftest import (
+    CERTIFICATION,
     RAISING_SLEEVE,
     REFUSING_SLEEVE,
     SLOW_SLEEVE,
@@ -236,6 +238,143 @@ def test_a_card_that_outgrows_its_memory_is_killed(
 
     assert result.crashed is True
     assert result.reason == "memory"
+
+
+def test_several_children_read_one_window_and_a_memory_kill_spares_the_rest(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One read feeds every slot. A child killed for its own memory does not take the others."""
+    monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
+    alone = run_subprocess(request_for(), store, lane)
+    together = run_subprocesses(
+        [
+            request_for(),
+            request_for(source=SLOW_SLEEVE, mem_cap_gb=1e-6),
+            request_for(),
+        ],
+        store,
+        lane,
+    )
+
+    assert [item.crashed for item in together] == [False, True, False]
+    assert together[1].reason == "memory"
+    assert together[0].run.trades == alone.run.trades == together[2].run.trades
+    assert not (lane / ".card").exists()
+
+
+def test_an_empty_batch_runs_nothing() -> None:
+    assert run_subprocesses([], Path("."), Path(".")) == []
+
+
+def test_a_batch_refuses_a_window_that_is_not_research(
+    lane: Path, request_for, store: Path
+) -> None:
+    from kanso.errors import PreconditionError
+
+    with pytest.raises(PreconditionError, match="research data only"):
+        run_subprocesses([request_for(CERTIFICATION)], store, lane)
+
+
+def test_a_batch_whose_window_holds_nothing_kills_the_children_it_started(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import bars, catalog, instrument
+
+    prefix = (date(2023, 12, 1), date(2023, 12, 31))
+    held = catalog(tmp_path / "december", bars(prefix), [instrument()])
+    started = _children(monkeypatch)
+    with pytest.raises(PreconditionError, match="holds nothing"):
+        run_subprocesses([request_for(prefix=prefix), request_for(prefix=prefix)], held, lane)
+
+    assert len(started) == 2
+    assert all(child.returncode is not None and _gone(child.pid) for child in started)
+    assert not (lane / runner.CARD_ROOM).exists()
+
+
+def test_a_batch_interrupted_kills_every_child(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    poll = runner._poll_slot
+
+    def stop(slot: object, request: object) -> None:
+        runner.interrupt()
+        poll(slot, request)
+
+    monkeypatch.setattr(runner, "_poll_slot", stop)
+    try:
+        with pytest.raises(PreconditionError, match="interrupted"):
+            run_subprocesses([request_for(), request_for()], store, lane)
+    finally:
+        runner.resume()
+
+
+def test_a_pipe_that_is_not_ready_is_written_on_the_next_pass(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import select
+
+    from kanso.nautilus import backtest as runner
+
+    real = select.poll
+
+    class Once:
+        def __init__(self) -> None:
+            self._poll = real()
+            self._held = False
+
+        def register(self, fd: int, event: int) -> None:
+            self._poll.register(fd, event)
+
+        def poll(self, timeout: float) -> list[tuple[int, int]]:
+            if not self._held:
+                self._held = True
+                return []
+            return self._poll.poll(timeout)
+
+    monkeypatch.setattr(runner.select, "poll", Once)
+    results = run_subprocesses([request_for()], store, lane)
+    assert results[0].crashed is False
+
+
+def test_a_closed_pipe_ends_that_slot_s_write(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    write = os.write
+
+    def closed(fd: int, data: object) -> int:
+        raise BrokenPipeError
+
+    monkeypatch.setattr(os, "write", closed)
+    try:
+        results = run_subprocesses([request_for()], store, lane)
+    finally:
+        monkeypatch.setattr(os, "write", write)
+
+    assert results[0].crashed is True
+
+
+def test_a_batch_kills_one_child_for_its_clock_and_finishes_the_other(
+    store: Path, lane: Path, request_for
+) -> None:
+    together = run_subprocesses(
+        [request_for(), request_for(source=SLOW_SLEEVE, budget_s=0.05)],
+        store,
+        lane,
+    )
+
+    assert together[0].crashed is False
+    assert together[1].crashed is True
+    assert together[1].reason == "budget"
 
 
 def test_the_peak_of_the_reaped_child_is_reported(store: Path, lane: Path, request_for) -> None:

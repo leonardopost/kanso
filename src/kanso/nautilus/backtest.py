@@ -179,6 +179,7 @@ __all__ = [
     "main",
     "run",
     "run_subprocess",
+    "run_subprocesses",
     "stage_of",
     "touched_names",
     "tunable",
@@ -2475,6 +2476,249 @@ def run_subprocess(
         return _supervised(request, room, workdir, payload)
     finally:
         shutil.rmtree(room, ignore_errors=True)
+
+
+def run_subprocesses(
+    requests: Sequence[RunRequest],
+    catalog_path: Path,
+    workdir: Path,
+    extensions: Sequence[tuple[str, str]] = (),
+) -> list[RunResult]:
+    """Run several cards of one window in children of their own, from one read of it.
+
+    Each request is one slot: its own strategy bytes, its own budget and its own memory
+    cap, and its own `<workdir>/.card/<slot>/`. The catalog is read once. The points are
+    written to every child that is still running, and a child killed for its own memory
+    or its own clock is a crash of that slot alone. An empty list runs nothing. A window
+    that is not the research window is refused before any child exists, as one card is.
+    """
+    if not requests:
+        return []
+    stage = stage_of(requests[0].hyp, requests[0].window)
+    if stage != RESEARCH:
+        raise PreconditionError(
+            f"window: {requests[0].window[0]}..{requests[0].window[1]} is the {stage} window of "
+            f"{requests[0].hyp.id}; a card runs on research data only, because the embargo keeps "
+            "the window that judges a strategy out of the loop that writes it",
+            remedy=f"run the research window {requests[0].hyp.windows.research.start}.."
+            f"{requests[0].hyp.windows.research.end}",
+        )
+    _refuse_if_interrupted()
+    root = workdir / CARD_ROOM
+    shutil.rmtree(root, ignore_errors=True)
+    rooms = []
+    for index in range(len(requests)):
+        room = root / str(index)
+        room.mkdir(parents=True)
+        rooms.append(room)
+    try:
+        instruments, chunks = window_chunks(requests[0], catalog_path)
+        gc.collect()
+        return _fan(
+            requests, instruments, _marked_chunks(requests[0], chunks), extensions, rooms, workdir
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _marked_chunks(
+    request: RunRequest, chunks: Iterator[tuple[tuple[object, ...], ...]]
+) -> Iterator[tuple[tuple[object, ...], ...]]:
+    """The chunks of `request`, refused when none of them falls inside the measured window."""
+    measured, _ = request.bounds
+    inside = False
+    for chunk in chunks:
+        inside = inside or any(
+            int(point.ts_init) >= measured  # type: ignore[attr-defined]
+            for point in chain.from_iterable(chunk)
+        )
+        yield chunk
+    if not inside:
+        raise PreconditionError(
+            f"data: the catalog holds nothing for {request.hyp.id} over "
+            f"{request.window[0]}..{request.window[1]}",
+            remedy="run `kanso data load` for the window, then take a snapshot",
+        )
+
+
+class _Slot:
+    """One child of a fanned card, and how far it has read the stream the others share."""
+
+    def __init__(self, child: Any, pipe: Any, room: Path, errors: Any, started: float) -> None:
+        fd = pipe.fileno()
+        os.set_blocking(fd, False)
+        self.child = child
+        self.pipe = pipe
+        self.fd = fd
+        self.room = room
+        self.errors = errors
+        self.started = started
+        self.ready = select.poll()
+        self.ready.register(fd, select.POLLOUT)
+        self.queue: list[bytes] = []
+        self.pending = memoryview(b"")
+        self.chunk_index = 0
+        self.sent_end = False
+        self.alive = True
+        self.breach: str | None = None
+        self.peak = 0.0
+        self.wall = 0.0
+        self.checked = started
+        self.asked = started
+
+    def close(self) -> None:
+        with contextlib.suppress(OSError):
+            self.pipe.close()
+
+
+def _fan(
+    requests: Sequence[RunRequest],
+    instruments: tuple[Any, ...],
+    chunks: Iterator[tuple[tuple[object, ...], ...]],
+    extensions: Sequence[tuple[str, str]],
+    rooms: Sequence[Path],
+    workdir: Path,
+) -> list[RunResult]:
+    """Start one child per request and write one window to all of them."""
+    ext = _pickled({"extensions": [list(source) for source in extensions]})
+    slots: list[_Slot] = []
+    for request, room in zip(requests, rooms, strict=True):
+        errors = (room / OUTPUT_FILE).open("wb")
+        started = time.monotonic()
+        child = subprocess.Popen(
+            [sys.executable, "-c", _BOOTSTRAP, str(room / RESULT_FILE), str(os.getpid())],
+            cwd=str(workdir),
+            env=child_env(),
+            stdin=subprocess.PIPE,
+            stdout=errors,
+            stderr=errors,
+            start_new_session=True,
+            pass_fds=tuple(_HANDED),
+        )
+        slot = _Slot(child, child.stdin, room, errors, started)
+        slot.queue = [ext, _pickled({"request": request.plain(), "instruments": instruments})]
+        slots.append(slot)
+    shared: list[bytes] = []
+    catalog_done = False
+    end = _pickled(END)
+    try:
+        while any(slot.alive for slot in slots):
+            if _INTERRUPT.is_set():
+                _stop_slots(slots, INTERRUPTED)
+                raise _interrupted()
+            for slot in slots:
+                if slot.alive:
+                    _poll_slot(slot, requests[slots.index(slot)])
+            if all(_idle(slot, len(shared)) for slot in slots if slot.alive):
+                if not catalog_done:
+                    try:
+                        shared.append(_pickled({"groups": next(chunks)}))
+                    except StopIteration:
+                        catalog_done = True
+                else:
+                    for slot in slots:
+                        if slot.alive and not slot.sent_end and _idle(slot, len(shared)):
+                            slot.queue.append(end)
+                            slot.sent_end = True
+            progressed = False
+            for slot in slots:
+                if not slot.alive or slot.sent_end and not slot.queue and not slot.pending:
+                    continue
+                if slot.chunk_index < len(shared) and not slot.queue and not slot.pending:
+                    slot.queue.append(shared[slot.chunk_index])
+                    slot.chunk_index += 1
+                if _write_slot(slot):
+                    progressed = True
+            if not progressed:
+                time.sleep(POLL_S)
+                _refuse_if_unwanted()
+    except BaseException:
+        _stop_slots(slots, None)
+        raise
+    return [_slot_result(slot, request) for slot, request in zip(slots, requests, strict=True)]
+
+
+def _idle(slot: _Slot, n_shared: int) -> bool:
+    """Whether `slot` has written every chunk read so far and has nothing left to send."""
+    return (
+        slot.chunk_index == n_shared
+        and not slot.queue
+        and not slot.pending
+        and not slot.sent_end
+        or (slot.sent_end and not slot.queue and not slot.pending)
+    )
+
+
+def _poll_slot(slot: _Slot, request: RunRequest) -> None:
+    """Reap `slot` if it has exited, or kill it when its own clock or memory is past."""
+    pid, status, usage = os.wait4(slot.child.pid, os.WNOHANG)
+    if pid != 0:
+        slot.child.returncode = os.waitstatus_to_exitcode(status)
+        slot.peak = usage.ru_maxrss * _MAXRSS_BYTES / GIB
+        slot.wall = time.monotonic() - slot.started
+        slot.alive = False
+        slot.close()
+        return
+    now = time.monotonic()
+    breach: str | None = None
+    if request.budget_s is not None and now - slot.started > request.budget_s:
+        breach = BUDGET
+    elif request.mem_cap_gb is not None and now - slot.checked >= MEMORY_POLL_S:
+        slot.checked = now
+        if _resident_gb(slot.child.pid) > request.mem_cap_gb:
+            breach = MEMORY
+    if breach is not None:
+        slot.breach = breach
+        slot.peak = _killed(slot.child)
+        slot.wall = time.monotonic() - slot.started
+        slot.alive = False
+        slot.close()
+        return
+    if now - slot.asked >= WANTED_POLL_S:
+        slot.asked = now
+        _refuse_if_unwanted()
+
+
+def _write_slot(slot: _Slot) -> bool:
+    """Write what `slot`'s pipe will take. A pipe the child has closed ends the write."""
+    if not slot.pending:
+        if not slot.queue:
+            return False
+        slot.pending = memoryview(slot.queue.pop(0))
+    if not slot.ready.poll(0):
+        return False
+    try:
+        written = os.write(slot.fd, slot.pending[:FEED_BYTES])
+    except BrokenPipeError:
+        slot.close()
+        return False
+    except BlockingIOError:  # pragma: no cover - poll said the pipe would take some
+        return False
+    slot.pending = slot.pending[written:]
+    return written > 0
+
+
+def _stop_slots(slots: Sequence[_Slot], breach: str | None) -> None:
+    """Kill every child still running. `breach` is recorded when one was not already set."""
+    for slot in slots:
+        if not slot.alive:
+            continue
+        if breach is not None:
+            slot.breach = breach
+        slot.peak = _killed(slot.child)
+        slot.wall = time.monotonic() - slot.started
+        slot.alive = False
+        slot.close()
+
+
+def _slot_result(slot: _Slot, request: RunRequest) -> RunResult:
+    """What one slot's child left, read after every sibling has been reaped."""
+    slot.errors.close()
+    tail = _tail((slot.room / OUTPUT_FILE).read_text(encoding="utf-8", errors="replace"))
+    wall = slot.wall or time.monotonic() - slot.started
+    if slot.breach is not None:
+        return _crashed(request, wall, slot.peak, slot.breach, tail)
+    return _reported(request, slot.room / RESULT_FILE, wall, slot.peak, tail)
 
 
 def window_chunks(

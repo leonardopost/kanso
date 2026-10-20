@@ -335,7 +335,15 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "constant is blanked, the answer is rejected and a ladder that runs out on such "
         "answers is a miss. Change what the strategy reads, holds, filters on, exits on or "
         "how it sizes. After the structural phase the search is local again, and a keep "
-        "starts the count over."
+        "starts the count over.\n\n"
+        "When `cards_per_turn` is above one, this turn asks for that many changes at once. "
+        "Return an object whose `proposals` list holds up to that many entries, each a "
+        "`desc`, a `diff` and `tags` against the same file you were given — not against "
+        "each other. A diff that does not apply, changes nothing or repeats bytes already "
+        "carded is dropped for its slot; return as many distinct diffs as you can. One "
+        "call is one turn: the phase and the stall count the turn, and every card the "
+        "turn runs is a trial. A turn that repairs a crash is one diff, as above, whatever "
+        "`cards_per_turn` says."
     ),
     "align_check": (
         "You check that a strategy still tests the hypothesis it was written for.\n\n"
@@ -414,6 +422,32 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
 """The fixed half of each task class's system turn."""
 
 
+def propose_schema(cards: int) -> dict[str, object]:
+    """The `propose` answer for one turn of `cards` slots.
+
+    One card keeps the object the task has always returned. More than one card asks for
+    a `proposals` list of that same object, at most `cards` long and at least one: a
+    turn that cannot offer a single diff is a wrong answer, and a turn that offers fewer
+    than it was asked for runs what it offered.
+    """
+    single = ANSWER_SCHEMAS["propose"]
+    if cards <= 1:
+        return single
+    return {
+        "type": "object",
+        "properties": {
+            "proposals": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": cards,
+                "items": single,
+            }
+        },
+        "required": ["proposals"],
+        "additionalProperties": False,
+    }
+
+
 def canonical(value: object) -> str:
     """`value` as JSON that is the same bytes for the same content, every time.
 
@@ -431,7 +465,7 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
     order and from sorted keys, so it is identical across every call of this class for
     this subject. The user turn is the dynamic facts alone.
     """
-    schema = ANSWER_SCHEMAS[task]
+    schema = inputs.answer_schema or ANSWER_SCHEMAS[task]
     system = "\n\n".join(
         (
             INSTRUCTIONS[task],

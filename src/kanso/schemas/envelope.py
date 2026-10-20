@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from kanso.schemas.base import KansoModel, NonEmpty, Versioned
 
@@ -41,7 +41,16 @@ class Plan(KansoModel):
     reserved_mem_gb: float = Field(ge=0)
     cores_per_lane: int = Field(ge=1)
     mem_per_lane_gb: float = Field(gt=0)
+    cards_per_turn: int = Field(default=1, ge=1)
+    mem_per_card_gb: float = Field(default=0, ge=0)
     lanes: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _fill_card_share(self) -> Plan:
+        """A plan written before `mem_per_card_gb` names the lane's whole share for its one card."""
+        if self.mem_per_card_gb <= 0:
+            self.mem_per_card_gb = round(self.mem_per_lane_gb / self.cards_per_turn, 2)
+        return self
 
 
 class Envelope(Versioned):

@@ -1066,6 +1066,51 @@ def test_a_declared_lane_memory_is_what_a_card_of_that_lane_may_hold(
     write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
 
     assert loop.mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak})) == cap
+    assert (
+        loop.mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak}), slots=4) == cap / 4
+    )
+
+
+def test_a_batch_records_a_refusal_and_a_turn_with_nothing_to_run(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.nautilus.backtest import RunResult
+    from kanso.nautilus.sizing import Refusal
+
+    run = loop.begin(ws, store, registered)
+    good = (ws.root / run.dir / "strategy.py").read_bytes()
+    bad = (
+        b"from kanso.nautilus.strategy import KansoStrategy\n"
+        b"class Strategy(KansoStrategy):\n"
+        b"    def on_bar(self, bar):\n"
+        b"        self.cache\n"
+    )
+
+    def fake(
+        requests: object, catalog_path: object, workdir: object, extensions: object = ()
+    ) -> list[RunResult]:
+        request = requests[0]  # type: ignore[index]
+        return [
+            RunResult(
+                run=backtest._empty(request),
+                wall_s=0.1,
+                peak_mem_gb=0.1,
+                intents=(),
+                refused=Refusal("one_position", 0, "DEMO.XNAS", "SELL", {}, "refused"),
+            )
+        ]
+
+    monkeypatch.setattr(loop.backtest, "run_subprocesses", fake)
+    made = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [("peek", bad, ["refactor"]), ("refuse", good, ["refactor"])],
+        slots=2,
+    )
+    assert [card.status for card in made] == ["discard", "discard"]
+    only = loop.run_batch(ws, store, registered, [("peek", bad, ["refactor"])], slots=1)
+    assert only[0].status == "discard"
 
 
 def test_one_card_is_costed_with_one_venue_model() -> None:

@@ -705,7 +705,17 @@ repeat, where structure is the syntax tree of `strategy.py` with every constant 
 Then local again, round until a keep or a stall. The rule is in the proposer's instruction
 and the phase is a fact of every call, because a refusal the proposer was never told about
 is a wasted ladder. Both lengths, like `stall_k` and `redundant_pct`, are framework search
-rules: they bound the search and choose nothing within it.
+rules: they bound the search and choose nothing within it. A miss is one turn. With
+`[research] cards_per_turn` above one — the default is one, and eight is the most — a turn
+asks for that many diffs in one call and runs the ones that apply, together, from one read
+of the window. Each card is a trial, so `n_trials` and the margin `edge_per_trade` holds
+the turn to both grow by every card of it, and `align_every` still counts cards. The stall
+and the phase count the turn: no keep in it is one miss. Every card is judged against the
+best the turn started from, and the keep is the highest metric that clears that floor; a
+tie keeps the earlier slot. Two slots that produce the same bytes are one card. A crash is
+repaired on the next turn alone, as one diff, and the turn after that is a batch again
+unless the repair crashed too. One model call is one spend entry. The lane's memory is
+divided by `cards_per_turn`, and a child killed for its share is a crash of that slot.
 
 A crash is the one card whose idea was never judged, so the turn after it is a **repair**.
 The proposer is given the traceback and the change that produced it, as a diff over the

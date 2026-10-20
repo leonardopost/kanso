@@ -93,6 +93,7 @@ from kanso.criteria import catalogue
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE
 from kanso.models import CallInputs, route
+from kanso.models.tasks import propose_schema
 from kanso.research import align, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
@@ -294,6 +295,77 @@ def run(
             reason = STOPPED
             break
         source = align.lane_strategy(store, active, directory)
+        if settings.cards_per_turn > 1 and _repair(store, active, source) is None:
+            try:
+                batch = _propose_batch(ws, store, active, source, previous, lane, misses)
+            except NothingNewError as exc:
+                store.event(
+                    REPEATED,
+                    hyp_id,
+                    {"run_id": active.run_id, "lane": lane, "because": exc.remedy},
+                )
+                proposed += 1
+                missed += 1
+                misses += 1
+                if misses >= settings.stall_k:
+                    reason = STALLED
+                    break
+                continue
+            if stop():
+                reason = STOPPED
+                break
+            research_loop.ongoing(store, active)
+            made_batch = research_loop.run_batch(
+                ws,
+                store,
+                hyp_id,
+                [(desc, candidate, tags) for desc, _patch, candidate, tags in batch],
+                lane=lane,
+                slots=settings.cards_per_turn,
+            )
+            proposed += 1
+            waiting += len(made_batch)
+            kept = any(card.status == "keep" for card in made_batch)
+            for card in made_batch:
+                if card.status == "keep":
+                    tally["keep"] += 1
+                elif card.status == "crash":
+                    tally["crash"] += 1
+                elif card.status == "redundant":
+                    redundant += 1
+                else:
+                    tally["discard"] += 1
+            winner = next((card for card in made_batch if card.status == "keep"), None)
+            previous = batch[-1][1]
+            if winner is not None:
+                for _desc, patch, candidate, _tags in batch:
+                    if store.put_blob(candidate) == winner.strategy_sha:
+                        previous = patch
+                        break
+            store.event(
+                "batched",
+                hyp_id,
+                {
+                    "run_id": active.run_id,
+                    "max_seq": _max_seq(store, active.run_id),
+                    "n": len(made_batch),
+                    "crash_sha": next(
+                        (card.strategy_sha for card in made_batch if card.status == "crash"),
+                        None,
+                    ),
+                },
+            )
+            misses = 0 if kept else misses + 1
+            if waiting >= settings.align_every and not stop():
+                aligned, _ = align.check(ws, store, hyp_id, lane)
+                checks += 1
+                drifts += 0 if aligned else 1
+                waiting = 0
+            if misses >= settings.stall_k:
+                reason = STALLED
+                break
+            active = research_loop.ongoing(store, active)
+            continue
         try:
             desc, patch, candidate, tags = _propose(
                 ws, store, active, source, previous, lane, misses
@@ -437,6 +509,134 @@ def _propose(
     return str(answer.data["desc"]), str(answer.data["diff"]), applied["source"], tags
 
 
+def _propose_batch(
+    ws: Workspace,
+    store: StateStore,
+    active: RunRecord,
+    source: bytes,
+    previous: str,
+    lane: str,
+    misses: int,
+) -> list[tuple[str, str, bytes, list[Tag]]]:
+    """Ask for up to `cards_per_turn` changes, and return the ones that are new.
+
+    A slot that does not apply, changes nothing, repeats carded bytes or repeats another
+    slot of this answer is dropped. A list with nothing left is a wrong answer and takes
+    the ladder; one that ran out on repeats is a miss, as one diff is.
+    """
+    collected: list[tuple[str, str, bytes, list[Tag]]] = []
+    repeat: dict[str, str] = {}
+    current = phase(ws.config.research, misses)
+    skeleton = _skeleton(source) if current == STRUCTURAL else None
+    width = ws.config.research.cards_per_turn
+
+    def judge(data: Mapping[str, object]) -> list[str]:
+        proposals = cast(list[Mapping[str, object]], data["proposals"])
+        valid: list[tuple[str, str, bytes, list[Tag]]] = []
+        complaints: list[str] = []
+        seen: set[bytes] = set()
+        for item in proposals:
+            if any(character in str(item.get("desc", "")) for character in "\t\r\n"):
+                complaints.append(_ONE_LINE)
+                continue
+            try:
+                candidate = diffs.apply(source, str(item.get("diff", "")))
+            except ValidationError as exc:
+                complaints.append(exc.message)
+                continue
+            if candidate == source:
+                complaints.append(_UNCHANGED)
+                continue
+            if skeleton is not None and _skeleton(candidate) == skeleton:
+                said = _NO_STRUCTURE.format(misses=misses)
+                repeat.setdefault("complaint", said)
+                complaints.append(said)
+                continue
+            seen_card = _carded(store, active, candidate)
+            if seen_card is not None:
+                said = _ALREADY_CARDED.format(
+                    sha7=str(seen_card["strategy_sha"])[:7],
+                    status=str(seen_card["status"]),
+                    metric=float(seen_card["metric"]),
+                )
+                repeat.setdefault("complaint", said)
+                complaints.append(said)
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            tags = cast(list[Tag], [str(tag) for tag in cast(list[object], item["tags"])])
+            valid.append((str(item["desc"]), str(item["diff"]), candidate, tags))
+        if not valid:
+            return complaints or ["no proposal in the list was a new change"]
+        collected[:] = valid
+        return []
+
+    inputs = CallInputs(
+        subject=active.hyp_id,
+        stable=_stable(store, active),
+        dynamic=_dynamic(ws, store, active, source, previous, misses),
+        check=judge,
+        answer_schema=propose_schema(width),
+    )
+    try:
+        route(ws, store, TASK, inputs, lane=lane)
+    except PreconditionError as exc:
+        said = repeat.get("complaint")
+        if said is not None and not collected:
+            raise NothingNewError(exc.message, remedy=said) from exc
+        raise
+    return collected
+
+
+def _max_seq(store: StateStore, run_id: str) -> int:
+    row = store.connection.execute(
+        "SELECT COALESCE(MAX(seq), 0) FROM cards WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    return int(row[0])
+
+
+def _batched_repair(
+    store: StateStore, active: RunRecord, source: bytes
+) -> dict[str, object] | None:
+    """The crash in the latest batch, when nothing has been carded since it.
+
+    A batch records every slot, so the newest card need not be the one that crashed.
+    The next turn repairs that slot alone, as one diff, and a turn after it is a batch
+    again unless that repair crashed too — which the single-card repair then owns.
+    """
+    found = [
+        event
+        for event in store.events(kind="batched", subject=active.hyp_id)
+        if event.detail.get("run_id") == active.run_id
+    ]
+    if not found:
+        return None
+    detail = found[-1].detail
+    sha = detail.get("crash_sha")
+    if not isinstance(sha, str):
+        return None
+    later = store.connection.execute(
+        "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > ?",
+        (active.run_id, cast(int, detail["max_seq"])),
+    ).fetchone()
+    if int(later[0]) != 0:
+        return None
+    row = store.connection.execute(
+        "SELECT description, status FROM cards WHERE run_id = ? AND strategy_sha = ?"
+        " ORDER BY seq DESC LIMIT 1",
+        (active.run_id, sha),
+    ).fetchone()
+    if row is None or str(row["status"]) != "crash":
+        return None
+    return {
+        "attempt": 1,
+        "of": REPAIRS,
+        "desc": str(row["description"]),
+        "diff": diffs.unified(source, store.get_blob(sha)),
+    }
+
+
 def _stable(store: StateStore, active: RunRecord) -> dict[str, object]:
     """The facts that do not move for the life of a run, from the blobs it pinned."""
     hyp = _pinned(store, active)
@@ -478,6 +678,7 @@ def _dynamic(
             "structural_cards": ws.config.research.structural_cards,
         },
         "last_diff": previous,
+        "cards_per_turn": ws.config.research.cards_per_turn,
     }
     if recent and recent[-1]["crash_tail"]:
         facts["crash_tail"] = _tail(str(recent[-1]["crash_tail"]), CRASH_TAIL_LINES)
@@ -528,7 +729,7 @@ def _repair(store: StateStore, active: RunRecord, source: bytes) -> dict[str, ob
         (active.run_id,),
     ).fetchone()
     if newest is None or str(newest["status"]) != "crash":
-        return None
+        return _batched_repair(store, active, source)
     streak = store.connection.execute(
         "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
         " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status != 'crash'), 0)",
@@ -839,18 +1040,41 @@ def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:
     from the event log, because that one leaves no card at all; counting the `redundant`
     event as well would advance the stall twice for one turn.
     """
-    cards = store.connection.execute(
-        "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
-        " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status = 'keep'), 0)",
-        (active.run_id, active.run_id),
+    last_keep = store.connection.execute(
+        "SELECT COALESCE(MAX(seq), 0) FROM cards WHERE run_id = ? AND status = 'keep'",
+        (active.run_id,),
     ).fetchone()
+    floor = int(last_keep[0])
+    rows = store.connection.execute(
+        "SELECT seq FROM cards WHERE run_id = ? AND seq > ? ORDER BY seq",
+        (active.run_id, floor),
+    ).fetchall()
+    covered: set[int] = set()
+    turns = 0
+    for event in store.events(kind="batched", subject=active.hyp_id):
+        if event.detail.get("run_id") != active.run_id:
+            continue
+        end = cast(int, event.detail["max_seq"])
+        width = cast(int, event.detail.get("n", 1))
+        start = end - width + 1
+        if end <= floor:
+            continue
+        kept = store.connection.execute(
+            "SELECT 1 FROM cards WHERE run_id = ? AND seq BETWEEN ? AND ? AND status = 'keep'",
+            (active.run_id, start, end),
+        ).fetchone()
+        batch_tail = [int(row[0]) for row in rows if start <= int(row[0]) <= end]
+        if not kept:
+            turns += 1
+        covered.update(batch_tail)
+    turns += sum(1 for row in rows if int(row[0]) not in covered)
     misses = store.connection.execute(
         "SELECT COUNT(*) FROM events WHERE kind = ? AND subject = ?"
         " AND json_extract(detail, '$.run_id') = ? AND ts > COALESCE("
         " (SELECT MAX(created_at) FROM cards WHERE run_id = ? AND status = 'keep'), '')",
         (REPEATED, active.hyp_id, active.run_id, active.run_id),
     ).fetchone()
-    return int(cards[0]) + int(misses[0])
+    return turns + int(misses[0])
 
 
 def _last_diff(store: StateStore, active: RunRecord) -> str:

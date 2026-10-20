@@ -1180,3 +1180,245 @@ def test_a_failed_edge_per_trade_withholds_the_session_score(
     assert "-4.1" not in shown or "net_bps_per_trade" in shown
     assert '"metric": -1.0' not in shown and '"metric": -1' not in shown
     assert "is withheld" in recorded.of("propose")[-1].system
+
+
+def _batch(ws: Workspace, proposals: list[dict[str, Any]]) -> Workspace:
+    workspace = tuned(ws, cards_per_turn=3)
+    scripted(workspace, propose=[{"proposals": proposals}])
+    return workspace
+
+
+def test_a_batch_keeps_the_best_slot_and_counts_every_card(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """One call, three cards, one turn: the keep is the best against the pre-turn best."""
+    ws = _batch(ws, [proposal("revert"), proposal("boom"), proposal("weak")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.proposed == 1
+    assert (outcome.keeps, outcome.crashes, outcome.discards) == (1, 1, 1)
+    assert outcome.missed == 0
+    assert records.n_trials(store, prepared_hyp) == 4
+    assert statuses(store, prepared_hyp) == ["keep", "keep", "crash", "discard"]
+    assert spend(store, lane="op").calls == 1
+    assert records.active(store, prepared_hyp) is not None
+
+
+def test_a_batch_with_no_keep_is_one_miss_and_three_trials(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = _batch(ws, [proposal("aaa"), proposal("bbb"), proposal("ccc")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.proposed == 1
+    assert outcome.keeps == 0
+    assert outcome.discards + outcome.redundant == 3
+    assert records.n_trials(store, prepared_hyp) == 4
+    assert driver._trailing_non_keeps(store, records.require_active(store, prepared_hyp)) == 1
+
+
+def test_two_slots_with_the_same_bytes_are_one_card(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = _batch(
+        ws,
+        [proposal("revert", tagged=False), proposal("revert", tagged=False), proposal("weak")],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.proposed == 1
+    assert (outcome.keeps, outcome.discards) == (1, 1)
+    assert records.n_trials(store, prepared_hyp) == 3
+
+
+def test_a_crashed_slot_is_repaired_alone_on_the_next_turn(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=3)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("revert"), proposal("boom"), proposal("weak")]},
+            proposal("flat"),
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.proposed == 3
+    assert outcome.crashes == 1
+    assert records.n_trials(store, prepared_hyp) == 6
+    assert statuses(store, prepared_hyp).count("crash") == 1
+    assert spend(store, lane="op").calls == 3
+
+
+def test_a_batch_with_two_keeps_keeps_the_higher_and_one_miss_stalls(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=3, stall_k=1)
+    scripted(ws, propose=[{"proposals": [proposal("aaa"), proposal("bbb"), proposal("ccc")]}])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.ended is True
+    assert outcome.reason == "stalled"
+    assert outcome.proposed == 1
+
+
+def test_a_batch_discards_a_slot_the_static_gate_refuses_and_keeps_another(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = _batch(
+        ws,
+        [
+            {"desc": "peek at the cache", "diff": DENIED, "tags": ["refactor"]},
+            proposal("revert", tagged=False),
+            proposal("revert"),
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.keeps == 1
+    assert outcome.discards >= 1
+    assert records.n_trials(store, prepared_hyp) == 4
+
+
+def test_a_batch_drops_slots_that_do_not_apply_and_a_repeat_is_a_miss(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=3, stall_k=5)
+    scripted(
+        ws,
+        propose=[
+            {
+                "proposals": [
+                    {"desc": "bad\nline", "diff": NOWHERE, "tags": ["refactor"]},
+                    {"desc": "untouched", "diff": NOOP, "tags": ["refactor"]},
+                    proposal("weak", tagged=False),
+                ]
+            },
+            {"proposals": [proposal("weak", tagged=False)]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert outcome.missed == 1
+    assert outcome.discards == 1
+
+
+def test_a_structural_batch_drops_a_change_that_moves_no_structure(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2, local_cards=1, structural_cards=5, stall_k=5)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("aaa")]},
+            {"proposals": [PARAMETER, proposal("revert")]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert outcome.keeps == 1
+    assert outcome.discards == 1
+
+
+def test_a_stop_during_a_batch_drops_the_answer(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(ws, propose=[{"proposals": [proposal("revert")]}])
+    calls = {"n": 0}
+
+    def stop() -> bool:
+        calls["n"] += 1
+        return calls["n"] >= 2
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2, stop=stop)
+
+    assert outcome.reason == "stopped"
+    assert outcome.proposed == 0
+
+
+def test_a_batch_checks_alignment_when_the_cadence_falls_due(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2, align_every=1)
+    scripted(ws, propose=[{"proposals": [proposal("aaa")]}], align_check=[ALIGNED])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.checks == 1
+
+
+def test_a_batch_without_a_crash_does_not_owe_a_repair(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(ws, propose=[{"proposals": [proposal("aaa")]}, {"proposals": [proposal("bbb")]}])
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+    active = records.require_active(store, prepared_hyp)
+    assert driver._batched_repair(store, active, b"") is None
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": "other", "max_seq": 1, "n": 1, "crash_sha": active.base_sha},
+    )
+    assert driver._trailing_non_keeps(store, active) >= 0
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": active.run_id, "max_seq": 1, "n": 1, "crash_sha": active.base_sha},
+    )
+    assert driver._batched_repair(store, active, b"x = 1\n") is None
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": active.run_id, "max_seq": 0, "n": 1, "crash_sha": None},
+    )
+    assert driver._trailing_non_keeps(store, active) >= 0
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": active.run_id, "max_seq": 10**9, "n": 1, "crash_sha": "not-a-card"},
+    )
+    assert driver._batched_repair(store, active, b"x = 1\n") is None
+
+
+def test_a_batch_miss_at_the_stall_ends_the_run(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2, stall_k=2)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("weak", tagged=False)]},
+            {"proposals": [proposal("weak", tagged=False)]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.reason == "stalled"
+    assert outcome.missed == 1
+
+
+def test_a_batch_that_never_applies_fails_the_step(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[{"proposals": [{"desc": "never fits", "diff": NOWHERE, "tags": ["refactor"]}]}],
+    )
+
+    with pytest.raises(PreconditionError, match="in 3 attempts"):
+        driver.run(ws, store, prepared_hyp, cards=1)

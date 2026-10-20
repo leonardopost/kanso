@@ -142,6 +142,8 @@ def test_the_written_file_is_generated_yaml_with_the_documented_keys(
         "reserved_mem_gb",
         "cores_per_lane",
         "mem_per_lane_gb",
+        "cards_per_turn",
+        "mem_per_card_gb",
         "lanes",
     ]
 

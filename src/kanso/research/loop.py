@@ -645,12 +645,16 @@ def _no_hold(setup: Setup, why: str, remedy: str | None = None) -> PreconditionE
     )
 
 
-def mem_cap(ws: Workspace, run: RunRecord) -> float:
+def mem_cap(ws: Workspace, run: RunRecord, *, slots: int = 1) -> float:
     """What a card of this run may hold resident: the lane's share, never below the floor.
 
-    A stall's certification of one of the run's cards is held to the same figure, since it
-    runs in the same lane (`kanso.certify.child`). The floor is three times what the
-    baseline actually needed, so a run whose own
+    `slots` is how many cards of this turn run at once. The share is divided across them,
+    so a batch of three is killed at a third of what one card of the lane would be. A
+    child that crosses its own third is a crash of that slot; its siblings are not.
+
+    A stall's certification is one child and keeps the undivided lane share: the lane is
+    not also running the turn's other cards (`kanso.certify.child`). The floor is three
+    times what the baseline actually needed, so a run whose own
     starting point is heavier than the lane plan expected still gets cards rather than a
     string of kills. The lane's share is `[env] mem_per_lane_gb` where one is declared,
     which is the only way this threshold falls under the plan's own 4 GB floor
@@ -658,7 +662,8 @@ def mem_cap(ws: Workspace, run: RunRecord) -> float:
     """
     floor = HEADROOM * run.baseline_peak_mem_gb
     envelope = read_envelope(ws)
-    return floor if envelope is None else max(envelope.plan.mem_per_lane_gb, floor)
+    share = floor if envelope is None else max(envelope.plan.mem_per_lane_gb, floor)
+    return share / max(1, slots)
 
 
 # --- judging one card --------------------------------------------------------
@@ -1009,6 +1014,8 @@ def _same_book(
     metric: float,
     floor: float,
     like: records.Match,
+    *,
+    refuse: bool = True,
 ) -> None:
     """Name the book this card matched in an event, and refuse the caller when it repeats it.
 
@@ -1043,7 +1050,7 @@ def _same_book(
             "desc": desc,
         },
     )
-    if not like.agreed:
+    if not like.agreed or not refuse:
         return
     raise RedundantError(
         f"{strategy_sha[:7]} held the same book as {like.like[:7]} on {like.matched} of "
@@ -1428,6 +1435,255 @@ def card(
         tags=tags,
         benchmark_run=benchmark_run,
     )
+
+
+def run_batch(
+    ws: Workspace,
+    store: StateStore,
+    hyp_id: str,
+    proposals: Sequence[tuple[str, bytes, Sequence[Tag]]],
+    lane: str = lanes.DEFAULT_LANE,
+    slots: int = 1,
+) -> list[Card]:
+    """Evaluate every proposal of one turn against the best the turn started from.
+
+    The backtests that integrity lets through run together, from one read of the window,
+    each under `slots`' share of the lane's memory. Gates and the keep rule see that
+    pre-turn best and a trial count that already includes every proposal of the turn.
+    The highest metric that clears the floor is the one keep; a tie keeps the earlier
+    slot. Every proposal is recorded, in slot order, and a redundant one does not refuse
+    the rest of the turn.
+    """
+    run = records.require_active(store, hyp_id, lanes.check_lane(lane))
+    setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
+    directory = ws.root / run.dir
+    frozen = run
+    margin = records.candidates(store, hyp_id) + len(proposals)
+    cap = mem_cap(ws, run, slots=slots)
+    prepared: list[tuple[str, bytes, Sequence[Tag], str, GateResult]] = []
+    running: list[tuple[int, backtest.RunRequest]] = []
+    for desc, source, tags in proposals:
+        digest_sha = store.put_blob(source)
+        lanes.write_atomic(directory / STRATEGY_FILE, source)
+        integrity = _integrity(setup, frozen, digest_sha, directory)
+        prepared.append((desc, source, tags, digest_sha, integrity))
+        if integrity.passed:
+            running.append(
+                (
+                    len(prepared) - 1,
+                    _request(
+                        setup,
+                        source,
+                        frozen.snapshot_id,
+                        budget_s=frozen.card_budget_s,
+                        mem_cap_gb=cap,
+                    ),
+                )
+            )
+    results: dict[int, backtest.RunResult] = {}
+    if running:
+        still = partial(ongoing, store, frozen)
+        with backtest.wanted(still):
+            host_run = _host_run(
+                setup,
+                snapshot_id=frozen.snapshot_id,
+                budget_s=frozen.card_budget_s,
+                directory=directory,
+                cache=_HOST_RUNS.setdefault(frozen.run_id, {}),
+            )
+            benchmark_run = _benchmark_run(
+                setup,
+                snapshot_id=frozen.snapshot_id,
+                directory=directory,
+                cache=_HOST_RUNS.setdefault(frozen.run_id, {}),
+            )
+            ran = backtest.run_subprocesses(
+                [request for _index, request in running],
+                setup.catalog,
+                directory,
+                setup.extensions,
+            )
+        still()
+        for (index, _request_made), result in zip(running, ran, strict=True):
+            results[index] = result
+    else:
+        host_run = None
+        benchmark_run = None
+    # desc, status, metric, se, trades, wall, peak, gates, crash, source, sha, tags, like
+    decided: list[tuple[Any, ...]] = []
+    for index, (desc, source, tags, digest_sha, integrity) in enumerate(prepared):
+        if not integrity.passed:
+            decided.append(
+                (
+                    desc,
+                    "discard",
+                    0.0,
+                    0.0,
+                    0,
+                    0.0,
+                    0.0,
+                    [integrity],
+                    None,
+                    source,
+                    digest_sha,
+                    tags,
+                    None,
+                )
+            )
+            continue
+        result = results[index]
+        if result.refused is not None:
+            decided.append(
+                (
+                    desc,
+                    "discard",
+                    0.0,
+                    0.0,
+                    0,
+                    result.wall_s,
+                    result.peak_mem_gb,
+                    [integrity, verdict(sizing.GATE, False, result.refused.payload())],
+                    None,
+                    source,
+                    digest_sha,
+                    tags,
+                    None,
+                )
+            )
+            continue
+        if result.crashed:
+            decided.append(
+                (
+                    desc,
+                    "crash",
+                    0.0,
+                    0.0,
+                    len(result.run.trades),
+                    result.wall_s,
+                    result.peak_mem_gb,
+                    [integrity],
+                    result.traceback_tail or result.reason,
+                    source,
+                    digest_sha,
+                    tags,
+                    None,
+                )
+            )
+            continue
+        constraints = _constraints(
+            setup,
+            frozen,
+            result.run,
+            host_run=host_run,
+            strategy_sha=digest_sha,
+            directory=directory,
+            benchmark_run=benchmark_run,
+            trials=margin,
+        )
+        metric, se = _measure(setup, result.run, host_run, benchmark_run)
+        passed = all(gate.passed for gate in constraints)
+        kept = passed and _keeps(setup, store, frozen, source, metric, se)
+        held = records.signature(result.run)
+        floor = _noise_floor(setup, se)
+        like = (
+            None
+            if kept
+            else records.matched_book(
+                store,
+                frozen,
+                held,
+                ws.config.research.redundant_pct,
+                metric,
+                floor,
+                setup.measured_under,
+            )
+        )
+        records.record_signature(store, frozen, digest_sha, held, metric, setup.measured_under)
+        status = "keep" if kept else REDUNDANT if like is not None and like.agreed else "discard"
+        decided.append(
+            (
+                desc,
+                status,
+                metric,
+                se,
+                len(result.run.trades),
+                result.wall_s,
+                result.peak_mem_gb,
+                [integrity, *constraints],
+                None,
+                source,
+                digest_sha,
+                tags,
+                like,
+            )
+        )
+    best_at: int | None = None
+    for index, item in enumerate(decided):
+        if item[1] == "keep" and (best_at is None or item[2] > decided[best_at][2]):
+            best_at = index
+    if best_at is not None:
+        for index, item in enumerate(decided):
+            if item[1] == "keep" and index != best_at:
+                decided[index] = (item[0], "discard", *item[2:])
+    made: list[Card] = []
+    current = frozen
+    for item in decided:
+        (
+            desc,
+            status,
+            metric,
+            se,
+            n_trades,
+            wall_s,
+            peak,
+            gates_out,
+            crash_tail,
+            source,
+            digest_sha,
+            tags,
+            like,
+        ) = item
+        made.append(
+            _record(
+                ws,
+                store,
+                setup,
+                current,
+                strategy_sha=digest_sha,
+                source=source,
+                desc=desc,
+                status=status,
+                metric=metric,
+                se=se,
+                n_trades=n_trades,
+                wall_s=wall_s,
+                peak_mem_gb=peak,
+                n_trials=records.n_trials(store, hyp_id) + 1,
+                gate_results=gates_out,
+                crash_tail=crash_tail,
+                directory=directory,
+                tags=tags,
+            )
+        )
+        if status == "keep":
+            current = records.set_best(store, current, digest_sha, metric)
+        if like is not None:
+            _same_book(
+                store,
+                current,
+                digest_sha,
+                desc,
+                metric,
+                _noise_floor(setup, se),
+                like,
+                refuse=False,
+            )
+    kept_bytes = decided[best_at][9] if best_at is not None else None
+    if kept_bytes is not None:
+        lanes.write_atomic(directory / STRATEGY_FILE, kept_bytes)
+    else:
+        lanes.restore(store, directory, {STRATEGY_FILE: frozen.best_sha or frozen.base_sha})
+    return made
 
 
 def _lane_source(store: StateStore, run: RunRecord, directory: Path) -> bytes:
