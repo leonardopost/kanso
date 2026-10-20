@@ -11,7 +11,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from kanso.models import ANSWER_SCHEMAS, INSTRUCTIONS, CallInputs, build, canonical, validate
-from kanso.models.tasks import PARAM_PAIRS, collapse
+from kanso.models.tasks import PARAM_PAIRS, collapse, propose_schema
 from kanso.schemas.models import ROUTING_DEFAULTS, TASK_CLASSES, Route, TaskClass
 from kanso.workspace import TEMPLATES
 
@@ -280,6 +280,18 @@ def test_the_shipped_demo_script_answers_every_class_it_lists() -> None:
     for task, answers in script.items():
         for index, answer in enumerate(answers):
             assert validate(answer, ANSWER_SCHEMAS[task]) == [], f"{task}[{index}]"
+
+
+def test_a_batch_propose_schema_is_a_list_and_one_card_is_the_object() -> None:
+    assert propose_schema(1) is ANSWER_SCHEMAS["propose"]
+    schema = propose_schema(3)
+    assert schema["properties"]["proposals"]["maxItems"] == 3
+    answer = {
+        "proposals": [
+            {"desc": "one", "diff": "--- a\n", "tags": ["refactor"]},
+        ]
+    }
+    assert validate(answer, schema) == []
 
 
 @given(st.dictionaries(st.text(max_size=8), st.integers(), max_size=6))

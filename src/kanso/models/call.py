@@ -107,6 +107,7 @@ class CallInputs:
     stable: Mapping[str, object] = field(default_factory=dict)
     dynamic: Mapping[str, object] = field(default_factory=dict)
     check: Callable[[Mapping[str, object]], Sequence[str]] | None = None
+    answer_schema: Mapping[str, object] | None = None
 
 
 class Client(Protocol):

@@ -55,6 +55,7 @@ class ResearchConfig(BaseModel):
     folds: int = Field(default=4, ge=2)
     max_lines_per_keep: int = Field(default=40, gt=0)
     baseline_budget_s: int = Field(default=1800, gt=0)
+    cards_per_turn: int = Field(default=1, ge=1, le=8)
 
 
 class CertifyConfig(BaseModel):

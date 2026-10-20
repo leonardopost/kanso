@@ -94,6 +94,13 @@ def test_the_written_memory_per_lane_reproduces_the_lane_count() -> None:
     assert plan.lanes == max(1, min(31, math.floor(60 / plan.mem_per_lane_gb)))
 
 
+def test_cards_per_turn_divides_the_lane_share() -> None:
+    plan = plan_for(detected(8, 16), mem_per_lane_gb=2.5, cards_per_turn=4)
+    assert plan.cards_per_turn == 4
+    assert plan.mem_per_lane_gb == 2.5
+    assert plan.mem_per_card_gb == 0.62
+
+
 def test_a_declared_memory_per_lane_replaces_the_derived_figure() -> None:
     """Measured: a 4.3 GB overlay peak charges every lane 6.45 GB, and a 16 GB machine
     then plans one lane while the hypothesis actually researching peaks at 0.25 GB."""

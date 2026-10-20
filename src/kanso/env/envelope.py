@@ -87,6 +87,7 @@ def plan_for(
     cores_per_lane: int | None = None,
     mem_per_lane_gb: float | None = None,
     baseline_peak_mem_gb: float | None = None,
+    cards_per_turn: int = 1,
 ) -> Plan:
     """Derive the lane plan. Pure: the same inputs always give the same plan.
 
@@ -114,6 +115,8 @@ def plan_for(
     if mem_per_lane_gb is not None:
         per_lane_mem = max(MIN_DECLARED_MEM_PER_LANE_GB, mem_per_lane_gb)
     per_lane_mem = round(per_lane_mem, 2)
+    per_turn = max(1, cards_per_turn)
+    per_card = round(per_lane_mem / per_turn, 2)
     by_cores = (detected.cores_total - cores) // per_lane_cores
     by_memory = math.floor((detected.mem_gb - memory) / per_lane_mem)
     return Plan(
@@ -122,8 +125,17 @@ def plan_for(
         reserved_mem_gb=memory,
         cores_per_lane=per_lane_cores,
         mem_per_lane_gb=per_lane_mem,
+        cards_per_turn=per_turn,
+        mem_per_card_gb=per_card,
         lanes=max(1, min(by_cores, by_memory)),
     )
+
+
+def _cards_per_turn(ws: Workspace | None) -> int:
+    """How many cards a turn runs, or one when the workspace does not say."""
+    config = None if ws is None else getattr(ws, "config", None)
+    research = None if config is None else getattr(config, "research", None)
+    return 1 if research is None else research.cards_per_turn
 
 
 def detect(ws: Workspace | None = None) -> Envelope:
@@ -162,6 +174,7 @@ def detect(ws: Workspace | None = None) -> Envelope:
             cores_per_lane=cores_per_lane,
             mem_per_lane_gb=mem_per_lane_gb,
             baseline_peak_mem_gb=max_baseline_peak_mem_gb(_path(ws, "state.db")),
+            cards_per_turn=_cards_per_turn(ws),
         ),
         detected_at=_now(),
     )
