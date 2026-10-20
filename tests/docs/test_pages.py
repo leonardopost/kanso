@@ -842,7 +842,7 @@ def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_i
         "An unperturbed objective at or below zero therefore fails the gate before any "
         "parameter is moved" in concepts
     )
-    assert "The plateau is judged after every other cert gate" in concepts
+    assert "The plateau and the latency stress are judged after every other cert gate" in concepts
     assert "A window gate that judged nothing spares nothing." in concepts
     assert "`bootstrap` judges both of the numbers it records" in concepts
     assert "a band that lies at or below zero says the population of trades carries no edge" in (

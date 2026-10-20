@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
@@ -101,6 +102,7 @@ __all__ = [
     "active",
     "best_of",
     "candidates",
+    "family",
     "cards_of",
     "close",
     "insert",
@@ -320,17 +322,65 @@ def best_of(store: StateStore, hyp_id: str) -> tuple[str | None, float | None]:
     return sha, metric
 
 
+def family(store: StateStore, hyp_id: str) -> tuple[str, ...]:
+    """The hypothesis and every hypothesis it derives from, transitively, nearest first.
+
+    Read off each registered file's `derived_from`, as the store holds it under the
+    hypothesis's newest registration. A parent the workspace has not registered counts
+    nothing — it has no cards to count — and is left out; a cycle is walked once. A
+    hypothesis that derives from none is a family of one, so every count below is what it
+    always was for it. The trials a search is priced by are the family's, because the
+    cards that chose a draft are cards the selection could have kept: an `explore` draft
+    was chosen by scores measured on its parent's research, and a sibling an operator
+    wrote after a searched hypothesis's lanes ran hundreds of cards was chosen the same
+    way, so a new file does not start the search at one trial.
+    """
+    found: list[str] = []
+    queue = [hyp_id]
+    while queue:
+        current = queue.pop(0)
+        if current in found:
+            continue
+        row = store.connection.execute(
+            "SELECT hypothesis_sha FROM hypotheses WHERE hyp_id = ?", (current,)
+        ).fetchone()
+        if row is None:
+            continue
+        found.append(current)
+        parents = _derived_from(store, row["hypothesis_sha"])
+        queue.extend(parent for parent in parents if parent not in found)
+    return tuple(found) or (hyp_id,)
+
+
+def _derived_from(store: StateStore, sha: object) -> tuple[str, ...]:
+    """The `derived_from` a registered hypothesis file names, read as a plain mapping so a
+    file pinned under an older schema is still read; nothing for a file that names none."""
+    if sha is None or not store.has_blob(str(sha)):
+        return ()
+    found = yaml.safe_load(store.get_blob(str(sha)).decode("utf-8"))
+    parents = found.get("derived_from") if isinstance(found, dict) else None
+    if not isinstance(parents, list):
+        return ()
+    return tuple(str(parent) for parent in parents)
+
+
+def _placeholders(ids: Sequence[str]) -> str:
+    return ", ".join("?" for _ in ids)
+
+
 def n_trials(store: StateStore, hyp_id: str) -> int:
-    """Every card of every run of this hypothesis, baselines and crashes included."""
+    """Every card of every run of this hypothesis and of every hypothesis it derives from,
+    baselines and crashes included."""
+    ids = family(store, hyp_id)
     row = store.connection.execute(
-        "SELECT COUNT(*) FROM cards WHERE hyp_id = ?", (hyp_id,)
+        f"SELECT COUNT(*) FROM cards WHERE hyp_id IN ({_placeholders(ids)})", ids
     ).fetchone()
     return int(row[0])
 
 
 def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[float]:
-    """The metric of every card of this hypothesis that ran to a result, traded, and was
-    scored under `objective_id`.
+    """The metric of every card of this hypothesis, and of every hypothesis it derives from,
+    that ran to a result, traded, and was scored under `objective_id`.
 
     The multiple-comparisons set: one entry per candidate the selection could have kept,
     so its count and its spread describe the same search. A crash produced no metric to
@@ -356,11 +406,13 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
     (`docs/backlog.md` row 59) -- an answer would be one stated rule with its own test,
     never a set quietly narrowed until a bar is passed.
     """
+    ids = family(store, hyp_id)
     rows = store.connection.execute(
         "SELECT cards.metric, runs.hypothesis_sha FROM cards JOIN runs USING (run_id)"
-        " WHERE cards.hyp_id = ? AND cards.status != 'crash' AND cards.n_trades > 0"
+        f" WHERE cards.hyp_id IN ({_placeholders(ids)})"
+        " AND cards.status != 'crash' AND cards.n_trades > 0"
         " ORDER BY cards.card_id",
-        (hyp_id,),
+        ids,
     ).fetchall()
     scored: dict[str, str | None] = {}
     for row in rows:
@@ -373,7 +425,8 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
 
 
 def candidates(store: StateStore, hyp_id: str) -> int:
-    """How many cards of this hypothesis ran to a result and traded, under any objective.
+    """How many cards of this hypothesis, and of every hypothesis it derives from, ran to a
+    result and traded, under any objective.
 
     The cards `trial_metrics` reads, before it narrows them to one objective: that set holds
     a spread, which must be in one objective's units, while this is a count of draws of a
@@ -381,9 +434,11 @@ def candidates(store: StateStore, hyp_id: str) -> int:
     `edge_per_trade` holds a card to. A re-pin to another objective continues the search
     for a card whose trades pay, so the cards before it still count.
     """
+    ids = family(store, hyp_id)
     row = store.connection.execute(
-        "SELECT COUNT(*) FROM cards WHERE hyp_id = ? AND status != 'crash' AND n_trades > 0",
-        (hyp_id,),
+        f"SELECT COUNT(*) FROM cards WHERE hyp_id IN ({_placeholders(ids)})"
+        " AND status != 'crash' AND n_trades > 0",
+        ids,
     ).fetchone()
     return int(row[0])
 

@@ -376,6 +376,21 @@ Before this existed, an instruction like that could only be prose in `program.md
 nothing enforces: `risk_limits` are three ceilings, and a strategy holding a tenth of what you
 asked for satisfies every one of them.
 
+**`derived_from` names the hypotheses whose research chose this one.** A draft `kanso hyp
+explore` writes names its parent, and a variation you write yourself after a hypothesis's
+lanes have run hundreds of cards names that hypothesis. The cards that chose a draft are
+cards the selection could have kept, so the search a certificate prices — the `n_trials` it
+is stamped with, the trials `deflated_*` deflate by and the ones `edge_per_trade` widens its
+margin for — counts every card of the hypothesis and of every hypothesis it derives from,
+transitively (`docs/concepts.md`, Card). A file that names none counts its own, as every file
+did before the key existed; one that names a hypothesis the workspace has not registered is
+refused (exit 3), since a parent with no cards in the store would price the search by more
+than it was while counting nothing. Classification neither reads nor writes it.
+
+```yaml
+derived_from: [sox_main]     # this idea was chosen by sox_main's research, so its 412 cards are trials here too
+```
+
 **`sizing` is yours too, and it is not a gate.** A gate judges after a backtest has been
 paid for; this moves the size of every order to the harness, so a proposal that sizes wrong
 cannot be run at all:

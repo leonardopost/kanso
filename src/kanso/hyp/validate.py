@@ -171,8 +171,38 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_book(hyp, models)
     _check_print_through(hyp, models)
     _check_classification(ws, hyp)
+    _check_derived_from(ws, hyp)
     _check_screened(ws, hyp)
     return hyp
+
+
+def _check_derived_from(ws: Workspace, hyp: Hypothesis) -> None:
+    """Every hypothesis this one derives from is registered in this workspace.
+
+    The trials a search is priced by are the family's (`kanso.research.records.family`),
+    and a parent the store does not know has no cards to count: naming one would read as a
+    search priced by more than it was, while counting nothing for it. A workspace whose
+    store does not exist yet has registered nothing, so a draft that names a parent there
+    is refused until the parent is registered.
+    """
+    if not hyp.derived_from:
+        return
+    from kanso.state import StateStore
+
+    path = ws.path(STATE_DB)
+    registered: set[str] = set()
+    if path.is_file():
+        with StateStore(path) as store:
+            registered = {
+                str(row[0]) for row in store.connection.execute("SELECT hyp_id FROM hypotheses")
+            }
+    missing = [parent for parent in hyp.derived_from if parent not in registered]
+    if missing:
+        raise ValidationError(
+            f"derived_from: {', '.join(missing)} is not a registered hypothesis of this "
+            "workspace, so its cards cannot count toward this one's trials",
+            remedy="register the parent with `kanso hyp add` first, or drop it from derived_from",
+        )
 
 
 def _check_screened(ws: Workspace, hyp: Hypothesis) -> None:

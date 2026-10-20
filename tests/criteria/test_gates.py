@@ -22,6 +22,7 @@ from kanso.criteria.gates import (
     deflated_sharpe,
     embargoed_window,
     expected_maximum,
+    intraday_drawdown,
     leg_edge,
     maintenance_margin,
     max_drawdown,
@@ -564,6 +565,105 @@ def test_max_drawdown_reads_the_hypothesis_own_limit() -> None:
 def test_max_drawdown_passes_inside_the_limit() -> None:
     run = build_run((100.0, -50.0, 50.0), capital=1_000.0)
     assert max_drawdown.evaluate(context(run)).passed
+
+
+# --- intraday_drawdown ------------------------------------------------------------
+
+
+def _round_trip(
+    day: date, qty: float, buy_px: float, sell_px: float, hours: tuple[int, int]
+) -> tuple[Fill, Fill]:
+    """A buy and a sell of `qty` inside one session, a share each, at the stated hours."""
+    return (
+        Fill(at(day, hours[0]), "DEMO", "BUY", qty, buy_px, 0.0),
+        Fill(at(day, hours[1]), "DEMO", "SELL", qty, sell_px, 0.0),
+    )
+
+
+def test_intraday_drawdown_sees_a_fall_the_period_ends_never_show() -> None:
+    """Buy 100 at 100, sell at 94 at noon — a 6% fall on a 10,000 book — then buy at 94 and
+    sell at 100 before the close: the day ends where it began, so `max_drawdown` reads 0%
+    and the fill path reads the 6% the book took."""
+    fills = _round_trip(DAYS[0], 100.0, 100.0, 94.0, (10, 12)) + _round_trip(
+        DAYS[0], 100.0, 94.0, 100.0, (13, 15)
+    )
+    run = build_run((0.0,), fills=fills, capital=10_000.0)
+    tight = make_hyp(risk_limits={"max_position_pct": 20, "max_drawdown_pct": 5, "max_leverage": 1})
+
+    period_end = max_drawdown.evaluate(context(run, hyp=tight))
+    intraday = intraday_drawdown.evaluate(context(run, hyp=tight))
+
+    assert period_end.passed and period_end.evidence["max_drawdown_pct"] == 0.0
+    assert not intraday.passed
+    assert intraday.evidence["max_drawdown_pct"] == pytest.approx(6.0)
+    assert intraday.evidence["period_end_pct"] == 0.0
+    assert intraday.evidence["trough_ns"] == at(DAYS[0], 12)
+    assert intraday.evidence["limit_pct"] == 5.0
+    assert intraday.evidence["fills"] == 4
+
+
+def test_intraday_drawdown_marks_an_open_position_at_its_last_fill_and_meets_the_period_end() -> (
+    None
+):
+    """Bought at 100 and still held: between fills the position is marked at 100, so no fall
+    is read until the period end, where the runner struck the equity at the day's mark —
+    9,500 — and the path re-anchors to it: a 5% fall read at the end, exactly as
+    `max_drawdown` reads it, and the two agree."""
+    fills = (Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 100.0, 0.0),)
+    run = build_run((-500.0,), fills=fills, capital=10_000.0)
+
+    intraday = intraday_drawdown.evaluate(context(run))
+
+    assert intraday.passed
+    assert intraday.evidence["max_drawdown_pct"] == pytest.approx(5.0)
+    assert intraday.evidence["period_end_pct"] == pytest.approx(5.0)
+    assert intraday.evidence["trough_ns"] == run.period_ends_ns[0]
+
+
+def test_intraday_drawdown_is_never_shallower_than_the_period_end_reading() -> None:
+    """A path through fills and ends holds every end the period-end path holds."""
+    fills = _round_trip(DAYS[0], 100.0, 100.0, 98.0, (10, 12))
+    run = build_run((-200.0, -300.0, 100.0), fills=fills, capital=10_000.0)
+
+    intraday = intraday_drawdown.evaluate(context(run))
+
+    assert intraday.evidence["max_drawdown_pct"] >= intraday.evidence["period_end_pct"]
+    assert intraday.evidence["period_end_pct"] == pytest.approx(5.0)
+
+
+def test_intraday_drawdown_re_anchors_at_each_period_end_a_fill_passes() -> None:
+    """A fill on the third day: the two period ends before it are folded into the path first
+    — the peak and the trough they hold, and the re-anchor to the equity struck at each — so a
+    fall across the ends and a fall inside the day are read on one path."""
+    fills = _round_trip(DAYS[2], 100.0, 100.0, 97.0, (10, 12))
+    run = build_run((300.0, -600.0, -300.0), fills=fills, capital=10_000.0)
+
+    result = intraday_drawdown.evaluate(context(run))
+
+    # the peak is 10,300 after day one; the day-three round trip loses 300 on a book the
+    # runner struck at 9,700 at that day's end: the trough is 9,700 − 300 = 9,400 at noon
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(9.0)
+    assert result.evidence["trough_ns"] == at(DAYS[2], 12)
+    assert result.evidence["period_end_pct"] == pytest.approx(9.0)
+
+
+def test_intraday_drawdown_with_no_fills_is_the_period_end_path() -> None:
+    run = build_run((100.0, -200.0, 50.0), capital=1_000.0)
+    result = intraday_drawdown.evaluate(context(run))
+    assert not result.passed
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(20.0)
+    assert result.evidence["trough_ns"] == run.period_ends_ns[1]
+
+
+def test_a_fill_s_cost_is_in_the_path() -> None:
+    """A round trip at one price loses its costs and nothing else: the path falls by them."""
+    fills = (
+        Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 100.0, 50.0),
+        Fill(at(DAYS[0], 12), "DEMO", "SELL", 100.0, 100.0, 50.0),
+    )
+    run = build_run((-100.0,), fills=fills, capital=10_000.0)
+    result = intraday_drawdown.evaluate(context(run))
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(1.0)
 
 
 # --- maintenance_margin -----------------------------------------------------------
@@ -1302,6 +1402,73 @@ def test_bootstrap_of_a_benchmark_objective_is_a_band_of_differences_from_the_ho
 def test_bootstrap_without_its_context_judges_nothing(overrides: Any) -> None:
     result = bootstrap.evaluate(context(trading_run(1.0, 1.0, 1.0, 1.0), **overrides))
     assert result.passed and result.skipped is not None
+
+
+def _clips(day: date, values: tuple[float, ...]) -> tuple[Trade, ...]:
+    """Several trades closed inside one session, a minute apart, each on 10,000 notional."""
+    made = []
+    for index, pnl in enumerate(values):
+        opened = at(day, 10) + index * 60 * NS_PER_SECOND
+        made.append(
+            Trade(
+                opened_ns=opened,
+                closed_ns=opened + 30 * NS_PER_SECOND,
+                instrument_id="DEMO",
+                qty=100.0,
+                avg_open=100.0,
+                avg_close=100.0 + pnl / 100.0,
+                pnl_net=pnl,
+                cost=0.0,
+                fills=(fill(day, px=100.0),),
+            )
+        )
+    return tuple(made)
+
+
+def test_bootstrap_draws_a_trade_statistic_by_session_so_clips_share_their_session_s_luck() -> None:
+    """Twenty clips of +5 bp on one session and twenty of −5 bp on the next: drawn trade by
+    trade the forty would band tightly around zero, as forty independent draws; drawn by
+    session the band runs from the all-losing pair to the all-winning one, which is what two
+    sessions' evidence is worth."""
+    run = build_run(
+        (0.0, 0.0),
+        trades=_clips(DAYS[0], (5.0,) * 20) + _clips(DAYS[1], (-5.0,) * 20),
+        capital=1_000_000.0,
+    )
+    result = bootstrap.evaluate(context(run, params={"n": 2_000}, strategy_sha="d" * 64))
+    low, high = result.evidence["objective_ci90"]
+    assert low == pytest.approx(-5.0)
+    assert high == pytest.approx(5.0)
+    assert result.evidence["resampled"] == "sessions"
+    assert result.evidence["drawn_from"] == 2
+    assert low < 0 < high, "two sessions of opposite sign are evidence of neither direction"
+
+
+def test_bootstrap_s_drawdown_keeps_the_trough_inside_a_session() -> None:
+    """A session that falls 300 before it recovers to +50 is drawn whole: the path through
+    it still visits the trough, so the drawdown is the session's own 30% of the capital and
+    not the 0% its total would say."""
+    run = build_run(
+        (0.0, 0.0),
+        trades=_clips(DAYS[0], (100.0, -300.0, 250.0)) + _clips(DAYS[1], (10.0, 10.0)),
+        capital=1_000.0,
+    )
+    result = bootstrap.evaluate(context(run, params={"n": 500}, strategy_sha="e" * 64))
+    assert result.evidence["mdd_p95"] >= 30.0
+
+
+def test_sessions_of_folds_each_session_s_trades_into_its_sums_and_its_path() -> None:
+    from kanso.criteria.gates import _sessions_of
+
+    folded = _sessions_of(_clips(DAYS[1], (10.0, 10.0)) + _clips(DAYS[0], (100.0, -300.0, 250.0)))
+    assert folded.count.tolist() == [3.0, 2.0], "sessions in the order they closed"
+    assert folded.total.tolist() == [50.0, 20.0]
+    assert folded.crest.tolist() == [100.0, 20.0]
+    assert folded.trough.tolist() == [-200.0, 0.0]
+    assert folded.inner.tolist() == [300.0, 0.0]
+    assert folded.pnl_sum.tolist() == [50.0, 20.0]
+    assert folded.pnl_sumsq.tolist() == [100.0**2 + 300.0**2 + 250.0**2, 200.0]
+    assert folded.edge_sum.tolist() == pytest.approx([50.0, 20.0])
 
 
 # --- book_correlation -------------------------------------------------------------

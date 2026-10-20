@@ -119,7 +119,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 34
+    assert len(items) == 36
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -312,6 +312,24 @@ def test_a_gate_planned_at_the_wrong_stage_is_refused() -> None:
 def test_a_parameter_outside_its_range_is_refused() -> None:
     with pytest.raises(ValidationError, match=r"gates.bootstrap.n: .* outside the range"):
         validate_plan(replacing("bootstrap", params={"n": 5}), make_hyp(), FOLDS)
+
+
+@pytest.mark.parametrize(
+    ("gate", "name"),
+    [("deflated_edge", "min_probability"), ("deflated_contribution", "min_probability")],
+)
+def test_a_deflation_threshold_under_nine_tenths_is_outside_the_toolbox(
+    gate: str, name: str
+) -> None:
+    """At 0.5 the three deflation gates pass a zero-edge best about half the time, so the
+    floor of their ranges is 0.9: a pinned plan that chose less is refused where it is read,
+    with `--replan` as the way out, and a planner that chooses less is sent back."""
+    item = catalogue()[gate]
+    assert item.ranges[name][0] == 0.9
+    (problem,) = check_params(item, {name: 0.5}, make_hyp(), FOLDS)
+    assert "outside the range [0.9, 0.999]" in problem
+    assert check_params(item, {name: 0.9}, make_hyp(), FOLDS) == []
+    assert catalogue()["deflated_sharpe"].ranges["min_dsr"][0] == 0.9
 
 
 def test_an_unknown_gate_is_refused() -> None:
