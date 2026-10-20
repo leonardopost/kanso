@@ -17,7 +17,10 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   slippage_bps: 1.0              # override them for this hypothesis — the way to test an idea against costs worse than
 #   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
-                                   # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
+                                   # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from.
+                                   # The half-spread is charged on a name the venue fills from bars or prints; a name
+                                   # asked for quote or book and no bar fills at the touch, whose price carries the
+                                   # spread, and is charged none — a wider market there is slippage_bps or slippage_ticks
 #   slippage_ticks: 1              # a taker's fill pays this many of the instrument's ticks a share, never past its limit;
                                    # a maker's fill never pays it. Zero unless stated
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a

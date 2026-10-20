@@ -13,11 +13,20 @@ deducted per fill in this extraction — or, for a fill the venue reports as a m
 venue model that states a maker schedule, `maker_bps` of its notional and `maker_per_share` on
 each share alone — a per-share commission on every share of a fill that pays commission, and
 on a taker's fill `slippage_ticks` of the instrument's increment on each share, no further
-than the order's limit (`kanso.nautilus.costs.fill_cost`, `tick_slip`). One
+than the order's limit (`kanso.nautilus.costs.fill_cost`, `tick_slip`). **The spread is
+charged where the price does not already carry it.** A fill in an instrument the venue books
+from quotes or a level-two book is struck at the touch — a taker buys the ask and sells the
+bid, a maker fills at its own price — so the spread is in the price and the extraction charges
+no half-spread on it (`touched_names`, `Fill.touched`); a fill in an instrument fed bars or
+prints alone is struck at a close or a last print and pays the model's half-spread, quoted or
+fixed. Measured before this rule on a quote of 9.99/10.01 with every other charge zero: a
+market buy filled at 10.01 and a market sell at 9.99, each charged 10 bp on top, so a flat
+round trip whose cost was one spread was booked at two. One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
-maker's, the instrument's increment and the order's limit. A perpetual's funding is booked
+maker's, whether it was struck at the touch, the instrument's increment and the order's
+limit. A perpetual's funding is booked
 here too, once, at each settlement, on what was held then (`_equity`) — never by the venue —
 and the runner configures the sleeve to book the same amount into the balance it sizes from
 (`books_funding`).
@@ -144,7 +153,7 @@ from kanso.nautilus.costs import (
     reset,
     tick_slip,
 )
-from kanso.nautilus.cross_section import is_marker
+from kanso.nautilus.cross_section import BAR, BOOK, QUOTE, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
@@ -171,6 +180,7 @@ __all__ = [
     "run",
     "run_subprocess",
     "stage_of",
+    "touched_names",
     "tunable",
     "wanted",
     "warmup_prefix",
@@ -1273,7 +1283,7 @@ def execute_chunked(
     after the data it holds is exhausted without finalising; `clear_data` drops the stream
     and keeps the instruments; `end` finalises once every chunk has run.
     """
-    from kanso.nautilus.cross_section import BOOK, coincident, is_marker, warm
+    from kanso.nautilus.cross_section import coincident, warm
 
     model = VenueModel.model_validate(dict(request.venue_model))
     marks = Marks(request, model)
@@ -1349,7 +1359,7 @@ def checked_chunks(
     last day without its book. A consumer that stops early — a node that halted — is not
     asked about the days it never reached.
     """
-    from kanso.nautilus.cross_section import BOOK, coincident
+    from kanso.nautilus.cross_section import coincident
 
     marked = coincident(request.hyp)
     book = BOOK in request.hyp.data_requirements
@@ -1924,6 +1934,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
     cache = engine.cache
     multipliers = multipliers_of(cache.instruments())
     increments = increments_of(cache.instruments())
+    touched = touched_names(request.hyp)
     positions = _positions(cache)
     events, owners = _fill_events(positions)
     marks.price(events)
@@ -1935,6 +1946,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
             model,
             increments.get(str(event.instrument_id), 0.0),
             limit_at(cache.order(event.client_order_id), event.trade_id),
+            touched=str(event.instrument_id) in touched,
         )
         for event in events
     )
@@ -2024,6 +2036,24 @@ def _fill_events(positions: Sequence[Any]) -> tuple[tuple[Any, ...], tuple[int, 
     return tuple(event for event, _ in owned), tuple(index for _, index in owned)
 
 
+def touched_names(hyp: Hypothesis) -> frozenset[str]:
+    """The instruments the venue books from quotes or a level-two book, whose fills are
+    struck at the touch and carry the spread in their price: every name the hypothesis asks
+    for `quote` or `book` and not for `bar` (`data_by_instrument` narrowing
+    `data_requirements`). A name fed bars beside its quotes is left out: the engine walks each
+    bar through the book as prints and settles the venue after every point, so an order in
+    flight at a bar's instant fills at the bar's close — measured on a daily bar and a quote
+    at one instant, a market buy filled at the close of 10.00 against a quote of 9.99/10.01 —
+    and the price carries no spread. The harness reads the same rule off its configuration
+    (`KansoStrategy._touched`), so the balance a sleeve sizes against charges a fill what the
+    extraction charges it."""
+    return frozenset(
+        name
+        for name in hyp.universe
+        if {QUOTE, BOOK} & set(hyp.required_of(name)) and BAR not in hyp.required_of(name)
+    )
+
+
 def _fill(
     event: Any,
     multipliers: Mapping[str, float],
@@ -2031,6 +2061,8 @@ def _fill(
     model: VenueModel,
     tick: float = 0.0,
     limit: float | None = None,
+    *,
+    touched: bool = False,
 ) -> Fill:
     """One execution, with the cost this venue model charges it, applied once.
 
@@ -2039,8 +2071,10 @@ def _fill(
     every other fill pays commission, slippage and half the spread, the per-share commission
     on each share when the model states one, and `slippage_ticks` of the instrument's
     increment `tick` on each share, no further than the order's `limit`; a sale pays the
-    sell-side fees the model states on top, maker or taker (`costs.fill_cost`). The increment
-    and the limit are recorded on the fill, so a model re-applied to it charges the same.
+    sell-side fees the model states on top, maker or taker (`costs.fill_cost`). A fill
+    struck at the touch (`touched`) pays no half-spread, since its price carries the spread.
+    The increment, the limit and whether it was touched are recorded on the fill, so a model
+    re-applied to it charges the same.
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -2057,7 +2091,7 @@ def _fill(
         qty,
         costs.commission_bps,
         costs.slippage_bps,
-        half,
+        0.0 if touched else half,
         costs.maker_bps,
         costs.commission_per_share,
         maker=maker,
@@ -2079,6 +2113,7 @@ def _fill(
         multiplier=multiplier,
         tick=tick,
         limit=limit,
+        touched=touched,
     )
 
 

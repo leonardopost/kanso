@@ -1625,6 +1625,30 @@ each recorded fill keeps the increment and that limit, so this charge too is str
 the record.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
+**The spread is charged where the price does not already carry it.** A fill in a name the
+venue books from quotes or a level-two book — one the hypothesis asks for `quote` or `book`
+and not for `bar`, by `data_requirements` or its own `data_by_instrument` list — is struck at
+the touch: a taker buys the ask and sells the bid, a maker fills at its own price. Its price
+carries the spread, so the extraction charges it no half-spread, under `spread: quotes` and
+`fixed_bps` alike, and the fill is recorded as `touched` so a cost model re-applied to it
+charges none either. A fill in a name fed bars — alone, or beside its quotes, since the
+engine walks every bar through the book as prints and settles the venue after each point, so
+an order in flight at a bar's instant fills at the bar's close (measured: 10.00 against a
+quote of 9.99/10.01 at the same instant) — or prints alone is struck at a close or a last
+print and pays the model's half-spread as before. Under `touch` and `through` a taker on a
+quoted name whose next point is a print rather than a quote fills at the print's price, one
+side of the market or the other, and is charged none either way; on a consolidated tape
+quotes outnumber prints severalfold, and on a grid of quotes a print is rare, so the residual
+is small and runs both ways (`docs/backlog.md`). Measured before this rule on a quote of 9.99/10.01 with every
+other charge zero, under `touch` and `print_through`, sent on a quote and on a print: a
+market buy filled at 10.01 and a market sell at 9.99, each charged 10 bp on top, so a flat
+round trip whose cost was one spread was booked at two, and a quoted lane's taker edge read
+one spread a round trip below what its fills earned. A screen's hurdle already charged a
+quoted follower no spread, so a screened cell and its drafted lane now agree on quoted legs
+as they did on bars. A wider market on a quoted name is stated as `slippage_bps` or
+`slippage_ticks`, which a taker's fill pays whatever the price carried; `cost_scenario`'s
+`fixed_bps` is charged where the runner charges a spread and nowhere else.
+
 for the combined run and the host-alone run alike, so the difference between them is the
 overlay. Every grain loaded reaches the venue whether or not the sleeve subscribes it, and
 the exchange matches against the finest bar type it has seen for an instrument. So inside

@@ -2,7 +2,13 @@
 
 Commission — in basis points and, where the model states it, per share — slippage and half
 the spread are charged on every fill, once, by the runner's extraction
-(`kanso.nautilus.backtest`); the simulated venue charges nothing. A fill that
+(`kanso.nautilus.backtest`); the simulated venue charges nothing. The half-spread is charged
+where the price does not already carry it: a fill in an instrument the venue books from
+quotes or a level-two book, with no bars beside them, is struck at the touch — a taker bought
+the ask or sold the bid, a maker earned the spread at its own price — so the caller hands
+`fill_cost` a half-spread of zero for it (`backtest.touched_names`, `KansoStrategy._touched`),
+and a fill in an instrument fed bars, alone or beside its quotes, or prints alone, struck at a
+close or a last print, pays the model's half-spread, quoted or fixed. A fill that
 rested on the book — one the venue reports as a maker's — pays the venue model's maker
 schedule instead of all three, and instead of the per-share commission, when the model states
 one: `maker_bps` of its notional and `maker_per_share` on each share, either of which alone

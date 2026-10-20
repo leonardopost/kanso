@@ -429,6 +429,7 @@ def _encode_fill(fill: Fill) -> dict[str, Any]:
         "multiplier": fill.multiplier,
         "tick": fill.tick,
         "limit": fill.limit,
+        "touched": fill.touched,
     }
 
 
@@ -438,7 +439,9 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
     kept reads as a multiplier of one, a share's; a run struck on a multiplied instrument
     before the multiplier was kept is re-run before a cost model is re-applied to it. One
     recorded before the increment and the limit were kept reads as an increment of zero and
-    no limit, which no `slippage_ticks` charges."""
+    no limit, which no `slippage_ticks` charges. One recorded before fills said whether the
+    venue struck them at the touch reads as not touched, which is how it was charged: a
+    model re-applied to it charges the half-spread it paid."""
     return Fill(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
@@ -450,6 +453,7 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
         multiplier=float(payload.get("multiplier", 1.0)),
         tick=float(payload.get("tick", 0.0)),
         limit=None if payload.get("limit") is None else float(payload["limit"]),
+        touched=bool(payload.get("touched", False)),
     )
 
 

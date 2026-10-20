@@ -91,6 +91,14 @@ class Fill:
     to the record charges it as the runner did. A fill recorded before they were kept reads as
     an increment of zero, which no `slippage_ticks` charges; such a run is re-run before a
     model that states one is re-applied to it.
+
+    `touched` is whether the venue struck the fill against a quote or a level-two book — the
+    instrument carries `quote` or `book` among the types the hypothesis asks it for — so its
+    price is the touch and already carries the spread: a taker bought the ask or sold the bid,
+    a maker earned it. Such a fill is charged no half-spread, by the runner and by a model
+    re-applied to the record alike; a fill on an instrument fed bars or prints alone is struck
+    at a close or a last print and pays the model's half-spread. A fill recorded before the
+    field was kept reads as not touched, which is how it was charged.
     """
 
     ts_ns: int
@@ -103,6 +111,7 @@ class Fill:
     multiplier: float = 1.0
     tick: float = 0.0
     limit: float | None = None
+    touched: bool = False
 
     @property
     def notional(self) -> float:

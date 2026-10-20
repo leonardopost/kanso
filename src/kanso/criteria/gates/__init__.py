@@ -1333,7 +1333,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             fill.qty,
             scenario.get("commission_bps") or 0.0,
             scenario.get("slippage_bps") or 0.0,
-            half_spread,
+            0.0 if fill.touched else half_spread,
             maker_bps,
             scenario.get("commission_per_share") or 0.0,
             maker=fill.maker,
@@ -1355,6 +1355,10 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
     equity: list[float] = []
     for value, charge in zip(run.equity, added, strict=True):
         running += charge
+    `fixed_bps` is charged where the runner charges a spread — on a fill not struck at the
+    touch — and a fill the venue struck against a quote or a book, whose price carries the
+    spread, pays none of it under any scenario; a wider market on such a name is stated as
+    `slippage_bps`, which every taker's fill pays on its notional.
         equity.append(value - running)
     trades = []
     for trade in run.trades:
