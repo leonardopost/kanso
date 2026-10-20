@@ -602,7 +602,10 @@ change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*
 `parameter_only` or `refactor` for a change that moves no structure. The vocabulary is the
 package's rather than the model's because the tags are read back as a **coverage** table,
 keyed by them, that every proposal is shown: for each tag, how many cards under the run's
-pins carry it, the best metric among them and its status, and the newest. The recent
+pins carry it, the best metric among them and its status, and the newest. A card
+that failed `edge_per_trade` does not compete for that best: its session contribution
+moves toward zero as losing trades are dropped, and the recent-card summary withholds
+the contribution and shows the per-trade edge and its error instead. The recent
 cards say what was tried last; the coverage says what has been tried at all, in a size
 bounded by the vocabulary rather than by the hypothesis. A card made by hand carries no
 tags, and reaches the table under none.
@@ -740,8 +743,9 @@ calls the `explore` task class with what the hypothesis's research learned: its 
 tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of
 the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
 judged on the ladder: an id nothing holds, a file that parses with that id and no
-classification, a strategy the static alignment checks accept against it and whose bytes
-the workspace has never stored, and windows that neither research past the end of the
+classification, naming the parent in `derived_from` so the parent's cards are the
+candidate's trials too, a strategy the static alignment checks accept against it and whose
+bytes the workspace has never stored, and windows that neither research past the end of the
 parent's research window nor certify before the start of its certification window. Nor may
 the candidate certify inside its own embargo counted from the last day the *parent*
 researched — the latest research end of any pin the parent's runs held — rather than from
@@ -760,13 +764,17 @@ rewrites: a workspace initialised on 0.8.0 to 0.13.x states `explore_after_stall
 keeps never until you set it, and one initialised before 0.8.0, whose file has no key,
 explores at the default.
 
-`n_trials` counts every card of every run of the hypothesis, baselines and crashes included.
+`n_trials` counts every card of every run of the hypothesis, baselines and crashes included
+— and of every hypothesis it derives from (`derived_from` in `hypothesis.yaml`), since the
+cards that chose a draft are part of the search that found its result: an `explore` draft
+names its parent, and a sibling an operator writes after a searched hypothesis names it.
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.
 
 The deflation gates price the result by that search, and they count a narrower set: a
 **trial** is a card that ran to a result, traded, and was scored under the objective being
-deflated — the one the hypothesis file each card's run pinned names. A crash produced no
+deflated — the one the hypothesis file each card's run pinned names — of the hypothesis or
+of any it derives from. A crash produced no
 metric to compare and a card that placed no order did not trade the hypothesis, so neither is
 a candidate the selection could have kept; a card scored under another objective is a number
 in other units, and a spread taken across a per-trade edge and a contribution is the spread
@@ -783,13 +791,14 @@ certificate's `n_trials`.
 
 Card-stage gates, and they are the only judgement that reaches a strategy while it is being
 researched: everything else in the toolbox runs at certification or later, when the search is
-already over. There are ten.
+already over. There are eleven.
 
 | gate | what it refuses |
 |---|---|
 | `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, binds a name its base class owns, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
-| `max_drawdown` | a run that fell further than the hypothesis permits |
+| `max_drawdown` | a run that fell further than the hypothesis permits, read at the period ends |
+| `intraday_drawdown` | a run that fell further than the hypothesis permits between the period ends: the same limit read on the path through every fill — cash after each fill, every open position at the price it last traded at — re-anchored at each period end to the equity the runner struck there, so a book flat at its ends is judged on the fall it took inside them. Carries no parameter; its evidence carries the period-end reading beside it and the instant of the trough |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
@@ -866,7 +875,14 @@ fills to is the same product. A bar's volume counts the instrument's own unit �
 share, contracts for a perpetual or a future — so `capacity_vs_adv` reads each day's volume as
 `volume x close x multiplier` of the resolved definition the window was run with, and the
 busiest day's fill notional is held to a share of an average struck in the same unit: contracts
-against contracts, never contracts against the coins inside them.
+against contracts, never contracts against the coins inside them. Under the print rules,
+where the window carries no bars and the trade series is the tape the venue fills from, a
+name's day's volume is summed from its prints instead, each at its own price, so a tick
+hypothesis is judged rather than skipped; under `touch` and `through` a trade series may be
+a few prints a session loaded as a signal, and read as volume those would refuse every fill
+against a thousandth of the market, so there the gate reads bars alone and skips a name
+without them. Where a name carries bars beside its prints, the bars are read and the prints
+are not, since a day's bars already hold its prints' volume.
 
 **A perpetual is a linear contract settled in the account's currency.** A crypto perpetual
 swap (`instrument_class: swap`, `docs/workspace.md`) is to kanso a contract whose notional is
@@ -980,7 +996,9 @@ is delegated to the venue. A sized sleeve gets no special case: a full-book entr
 borrows pays the carry and can breach the floor (row 76).
 
 The policy has edges, each recorded in `docs/backlog.md` row 86. `maintenance_margin` reads
-end-of-period holdings, so a position opened and closed inside one period is never judged.
+end-of-period holdings, so a position opened and closed inside one period is never judged,
+and so does `max_drawdown`; `intraday_drawdown` is the gate that reads the fall between
+the ends, on the path through every fill.
 The harness settles a period on a point delivered to the sleeve itself, so a grouped series
 the sleeve never subscribes to that holds a period's only point moves the runner's period end
 and not the harness's, and `balance` lags one period until the sleeve is handed a point.
@@ -1607,6 +1625,30 @@ level-two rules — an add or an update sets the level, a delete of a price not 
 nothing, a clear empties both sides — which `kanso doctor` checks, and a property test holds
 its top levels and its best equal to the engine's `OrderBook` after any sequence of changes.
 
+**The spread is charged where the price does not already carry it.** A fill in a name the
+venue books from quotes or a level-two book — one the hypothesis asks for `quote` or `book`
+and not for `bar`, by `data_requirements` or its own `data_by_instrument` list — is struck at
+the touch: a taker buys the ask and sells the bid, a maker fills at its own price. Its price
+carries the spread, so the extraction charges it no half-spread, under `spread: quotes` and
+`fixed_bps` alike, and the fill is recorded as `touched` so a cost model re-applied to it
+charges none either. A fill in a name fed bars — alone, or beside its quotes, since the
+engine walks every bar through the book as prints and settles the venue after each point, so
+an order in flight at a bar's instant fills at the bar's close (measured: 10.00 against a
+quote of 9.99/10.01 at the same instant) — or prints alone is struck at a close or a last
+print and pays the model's half-spread as before. Under `touch` and `through` a taker on a
+quoted name whose next point is a print rather than a quote fills at the print's price, one
+side of the market or the other, and is charged none either way; on a consolidated tape
+quotes outnumber prints severalfold, and on a grid of quotes a print is rare, so the residual
+is small and runs both ways (`docs/backlog.md`). Measured before this rule on a quote of 9.99/10.01 with every
+other charge zero, under `touch` and `print_through`, sent on a quote and on a print: a
+market buy filled at 10.01 and a market sell at 9.99, each charged 10 bp on top, so a flat
+round trip whose cost was one spread was booked at two, and a quoted lane's taker edge read
+one spread a round trip below what its fills earned. A screen's hurdle already charged a
+quoted follower no spread, so a screened cell and its drafted lane now agree on quoted legs
+as they did on bars. A wider market on a quoted name is stated as `slippage_bps` or
+`slippage_ticks`, which a taker's fill pays whatever the price carried; `cost_scenario`'s
+`fixed_bps` is charged where the runner charges a spread and nowhere else.
+
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
 the spread, once, in the runner's extraction — unless the venue model states a maker's
 schedule, `maker_bps` of the notional and `maker_per_share` on each share, and the venue
@@ -1725,8 +1767,12 @@ includes it with its threshold set: the subject a certificate judges is then the
 search, and nothing else in a plan prices that. A deflation gate named without its threshold
 would skip, and a skip passes, so a bare one is refused like a missing one. The planner is
 told so in the invariants and sent back when it forgets; how high the gate's bar sits is
-still its answer. A plan pinned before the second card, or by a kanso that did not hold it
-to this, is refused where it is read — by `cert plan` and by `cert run` — with the way out:
+still its answer, from a range whose floor is 0.9 — at 0.5, where the three ranges used to
+start, a best with no edge passed `deflated_edge` and `deflated_contribution` 45 to 56
+percent of the time at 2, 50 and 500 trials, so a plan could satisfy the rule and price
+almost nothing. A plan pinned before the second card, under a threshold below the floor, or
+by a kanso that did not hold it to this, is refused where it is read — by `cert plan` and by
+`cert run` — with the way out:
 
 ```
 $ kanso cert run demo_mr
@@ -1791,7 +1837,7 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
            pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
-           pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979], statistic=edge_bps
+           pass  bootstrap             drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
            pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
@@ -1850,6 +1896,22 @@ certification hold beside the certification run and the research hold beside the
 run. `param_plateau` moves the subject's parameters and re-runs the subject alone: the hold
 it is differenced against stays the one it was measured against.
 
+`latency_stress` asks whether the result survives a slower route than it was measured on.
+A venue model states one `latency_ms`, and every fill a run has was decided under it — an
+order lands that long after the point that sent it, against the book as it then stands —
+so the number is a property of that latency, and a cost re-applied to recorded fills cannot
+ask the question: a slower route changes *which* fills a run has. The gate runs the subject
+again over the certification window at `mult_a` and `mult_b` times the stated latency, the
+strategy as it was and only the venue model's `latency_ms` replaced, and holds each run to
+`keep_fraction` of the unstressed objective. Measured on the demo's daily saw-tooth, where
+an order sent on a bar fills at that bar's close with no latency and a bar later under 20
+ms: the two-close reverter that buys the trough exactly at zero latency earned 2,487 over
+the certification window and lost 13 under 20 ms, and a one-close rule early by a bar did
+the reverse — a route a bar long moves a daily rule by a whole step. A hypothesis that
+states no latency has no route to slow and the gate skips, saying so; like the plateau, it
+fails an unstressed objective at or below zero before any run is made, is judged after
+every cheap verdict, and is spared when `embargoed_window` has refused the subject.
+
 `param_plateau` is defined around an edge and nowhere else. Its floor is a fraction of the
 unperturbed objective, and a fraction of a loss lies above the loss: at −10 and a
 `keep_fraction` of a half the floor is −5, so a perturbation that changed nothing would read
@@ -1858,9 +1920,9 @@ unperturbed objective at or below zero therefore fails the gate before any param
 moved, with the `reason` in its evidence and `n_backtests` at zero. It fails rather than
 skips because its context is whole and it is the subject that lacks the property: a plateau
 around a loss is a robust loss, not evidence of robustness, and a skip is a pass. The runner
-spares the same backtests once `embargoed_window` has failed. The plateau is judged after
-every other cert gate, and when the window gate judged the subject and refused it, the
-plateau is recorded as skipped with the reason and no perturbation is run — the gates are
+spares the same backtests once `embargoed_window` has failed. The plateau and the latency
+stress are judged after every other cert gate, and when the window gate judged the subject and refused it, each
+is recorded as skipped with the reason and no perturbation is run — the gates are
 evidence for a pass, and a certificate whose window failed cannot pass — while the
 certificate lists its gates in the plan's order as before. A window gate that judged nothing
 spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
@@ -1872,10 +1934,18 @@ does not make that a pass. What it
 resamples is what the objective is a mean of, and its evidence names the statistic: a
 contribution resamples the window's return periods, so its band (`contribution_bps`) is in
 basis points of the capital per period, the unit of its value; every other objective
-resamples the closed trades, as a mean edge per trade (`edge_bps`) or a Sharpe of their P&L
-annualised by the trades the window held per year (`trade_sharpe`, a statistic of the
+resamples the **sessions that closed the trades**, every trade of a drawn session together,
+and reads off the drawn trades a mean edge per trade (`edge_bps`) or a Sharpe of their P&L
+annualised by the trades the row holds per year (`trade_sharpe`, a statistic of the
 Sharpe's family rather than the objective's own Sharpe of period returns — `docs/backlog.md`
-row 178). Before 0.17 a contribution was banded by its per-trade edge in basis points of
+row 178). Sessions rather than trades for the reason the objective's own error is read
+period by period: forty clips of one session share that session's luck, and drawn one by
+one they read as forty independent draws — a band too narrow and a drawdown too shallow for
+a book that trades many times a day. Twenty clips of +5 bp on one session and twenty of −5
+on the next band at [−5, +5] drawn by session, where drawn by trade they banded tightly
+around zero; and the path inside a drawn session is the session's own, so a session that
+fell 300 before it recovered to +50 still shows its 300 in the drawdown. The evidence
+records what was drawn (`resampled`) and from how many units (`drawn_from`). Before 0.17 a contribution was banded by its per-trade edge in basis points of
 notional, beside a value in basis points of capital a day — off by the trades a day times
 their notional over the capital — so a version reproducing its certification could not
 pass paper; a certificate written then still carries that band, and composition does not

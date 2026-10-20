@@ -152,7 +152,7 @@ PLAN: dict[str, Any] = {
         {
             "id": "deflated_sharpe",
             "stage": "cert",
-            "params": pairs({"min_dsr": 0.5}),
+            "params": pairs({"min_dsr": 0.9}),
             "rationale": "required behind two trials: the search correction for a Sharpe",
         },
         {

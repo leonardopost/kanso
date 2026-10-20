@@ -397,6 +397,12 @@ def _judge(
             f"hypothesis_yaml: carries {', '.join(written)}; a candidate is written as a draft "
             "and classified by `kanso classify`, so leave all three out"
         )
+    if parent.id not in hyp.derived_from:
+        complaints.append(
+            f"hypothesis_yaml: derived_from does not name the parent {parent.id!r}; the "
+            "candidate was chosen by the parent's research, so it states `derived_from: "
+            f"[{parent.id}]` and its trials count the parent's"
+        )
     complaints.extend(_embargo(parent, seen, hyp))
     complaints.extend(f"strategy_py: {problem}" for problem in align.problems(hyp, strategy))
     return complaints

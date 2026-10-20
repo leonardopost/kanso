@@ -1,0 +1,8 @@
+id: intraday_drawdown
+kind: gate
+stage: card
+required: false
+meaningful_when: "When positions open and close inside a return period, which max_drawdown never sees: the equity after every fill and at every period end, against the hypothesis's own limit."
+params: {}
+ranges: {}
+impl: kanso.criteria.gates.intraday_drawdown

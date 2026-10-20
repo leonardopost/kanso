@@ -3114,7 +3114,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         states one, slippage and half the spread, and a taker's `slippage_ticks` of the
         increment, no further than the limit the order carried at the fill, or a maker's own
         schedule where the venue model states one, of its notional and per share, which a
-        rebate makes negative."""
+        rebate makes negative. A fill in a name the venue books from quotes or a level-two
+        book is struck at the touch, so its price carries the spread and no half-spread is
+        charged on it (`_touched`), exactly as the extraction charges it
+        (`kanso.nautilus.backtest.touched_names`)."""
         multiplier = self._multiplier_of(event.instrument_id)
         qty, px = float(event.last_qty), float(event.last_px)
         signed = qty if event.order_side == OrderSide.BUY else -qty
@@ -3129,12 +3132,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 limit_at(self.cache.order(event.client_order_id), event.trade_id),
                 sell=event.order_side == OrderSide.SELL,
             )
+        key = event.instrument_id.value
+        half = 0.0 if self._touched(key) else self._half_spread_at(key, int(event.ts_event))
         cost = fill_cost(
             qty * px * multiplier,
             qty,
             float(self._charges.get("commission_bps") or 0.0),
             float(self._charges.get("slippage_bps") or 0.0),
-            self._half_spread_at(event.instrument_id.value, int(event.ts_event)),
+            half,
             _maker_bps(self._charges),
             float(self._charges.get("commission_per_share") or 0.0),
             maker=maker,
@@ -3154,6 +3159,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         times, values = self._quoted.get(key, ([], []))
         index = bisect_right(times, ts_ns)
         return 0.0 if index == 0 else values[index - 1]
+
+    def _touched(self, key: str) -> bool:
+        """Whether the venue books `key` from quotes or a level-two book, so a fill in it is
+        struck at the touch and carries the spread in its price: the name is asked for `quote`
+        or `book` and not for `bar`, by its own list under `data_by_instrument` or by
+        `data_requirements` — the rule `kanso.nautilus.backtest.touched_names` applies, read
+        here off the configuration the runner injected."""
+        required = dict(self._cfg.data_by_instrument).get(key, self._cfg.data_requirements)
+        return (QUOTE in required or BOOK in required) and BAR not in required
 
     def _worth(self, position: Any) -> float:
         """One open position's market value at its last print, quoted in the shares held now.

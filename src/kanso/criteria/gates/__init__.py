@@ -57,6 +57,7 @@ from kanso.criteria.quantities import (
     correlation,
     drawdown_pct,
     edge_series,
+    fill_path_drawdown_pct,
     mean,
     periods_per_year,
     stdev,
@@ -600,6 +601,41 @@ class _MaxDrawdown:
             self.id,
             observed <= limit,
             {"max_drawdown_pct": observed, "limit_pct": limit},
+        )
+
+
+class _IntradayDrawdown:
+    """Peak-to-trough equity inside the hypothesis's own limit, read after every fill as
+    well as at every period end.
+
+    `max_drawdown` samples the equity where the runner strikes it, at the return periods'
+    ends, so a position opened and closed inside one period is never seen falling: a book
+    that trades many times a day and is flat at the close reads as flat at every sample, and
+    a card that fell six percent at noon and recovered by the close passes a five percent
+    limit. This gate reads the same limit on the path through every fill — cash after each
+    fill, plus every open position at the price it last traded at, re-anchored at each
+    period end to the equity the runner struck there (`fill_path_drawdown_pct`) — so the fall
+    it reports is never shallower than `max_drawdown`'s, and is the one a book that is flat
+    at its period ends actually took. Carries no parameter: the limit is the hypothesis's, as
+    it is for `max_drawdown`, and which of the two a lane is held to is the classifier's or
+    the operator's choice.
+    """
+
+    id: ClassVar[str] = "intraday_drawdown"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        limit = ctx.hyp.risk_limits.max_drawdown_pct
+        observed, trough_at = fill_path_drawdown_pct(ctx.run)
+        return verdict(
+            self.id,
+            observed <= limit,
+            {
+                "max_drawdown_pct": observed,
+                "period_end_pct": drawdown_pct(ctx.run),
+                "trough_ns": trough_at,
+                "limit_pct": limit,
+                "fills": len(ctx.run.fills),
+            },
         )
 
 
@@ -1319,6 +1355,10 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
     states neither `maker_bps` nor `maker_per_share` charges a maker's fill what any fill pays.
     `slippage_ticks` is charged on each fill's recorded increment and capped by its recorded
     limit, as the runner charged it; a fill recorded before either was kept pays none of it.
+    `fixed_bps` is charged where the runner charges a spread — on a fill not struck at the
+    touch — and a fill the venue struck against a quote or a book, whose price carries the
+    spread, pays none of it under any scenario; a wider market on such a name is stated as
+    `slippage_bps`, which every taker's fill pays on its notional.
     """
     from kanso.nautilus.costs import fill_cost, tick_slip
 
@@ -1333,7 +1373,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             fill.qty,
             scenario.get("commission_bps") or 0.0,
             scenario.get("slippage_bps") or 0.0,
-            half_spread,
+            0.0 if fill.touched else half_spread,
             maker_bps,
             scenario.get("commission_per_share") or 0.0,
             maker=fill.maker,
@@ -1530,9 +1570,16 @@ class _Bootstrap:
     what the objective is a mean of. A contribution — the mean return per period in basis
     points of the capital — resamples the window's **return periods**, so its band is in
     basis points of the capital per period, the unit its value and a paper stage's
-    realised contribution are in; every other objective resamples the **closed trades**,
-    and its statistic is a Sharpe of their P&L or their mean edge per trade. The evidence
-    names which (`statistic`). The gate judges both of the numbers it records. The path
+    realised contribution are in; every other objective resamples the **sessions that
+    closed its trades**, every trade of a drawn session together, and its statistic is a
+    Sharpe of the drawn trades' P&L or their mean edge per trade. Sessions rather than
+    trades because the clips of one session share that session's luck — the objective's own
+    error is read period by period for the same reason — and forty clips drawn one by one
+    would read as forty independent draws, a band too narrow and a drawdown too shallow for
+    a book that trades many times a day; drawn by session the band is as wide as the
+    sessions' spread says, and the path inside each drawn session is the session's own, so
+    the drawdown keeps every intraday trough. The evidence names which (`statistic`), and
+    how many units were drawn from. The gate judges both of the numbers it records. The path
     gives the drawdown distribution, whose ninety-fifth percentile is held to the
     hypothesis's limit; the same draw gives the statistic, whose ninety-percent band must
     reach above zero — a band that lies at or below zero says the population carries no
@@ -1565,7 +1612,7 @@ class _Bootstrap:
         elif len(ctx.run.trades) < 2:
             return skipped(self.id, "fewer than two closed trades, so there is nothing to resample")
         limit = ctx.hyp.risk_limits.max_drawdown_pct
-        low, high, worst = self._resample(ctx, objective, statistic, replications)
+        low, high, worst, drawn = self._resample(ctx, objective, statistic, replications)
         return verdict(
             self.id,
             worst <= limit and high > 0,
@@ -1576,58 +1623,159 @@ class _Bootstrap:
                 "mdd_p95": worst,
                 "limit_pct": limit,
                 "n": replications,
+                "resampled": "periods" if statistic == CONTRIBUTION_BAND else "sessions",
+                "drawn_from": drawn,
             },
         )
 
     @staticmethod
     def _resample(
         ctx: GateContext, objective: Objective, statistic: str, replications: int
-    ) -> tuple[float, float, float]:
-        trades = ctx.run.trades
+    ) -> tuple[float, float, float, int]:
+        """The band's two ends, the drawdown's ninety-fifth percentile, and how many units
+        the draws were taken from: return periods for a contribution, sessions otherwise."""
         capital = ctx.run.capital
-        moves = (
-            np.array(ctx.run.returns, dtype=float)
-            if statistic == CONTRIBUTION_BAND
-            else np.array([t.pnl_net for t in trades], dtype=float)
-        )
-        edge = np.array(
-            [t.pnl_net / t.notional * BPS if t.notional > 0 else 0.0 for t in trades],
-            dtype=float,
-        )
-        per_year = len(trades) / years(ctx.run.window)
         rng = np.random.default_rng(
             int.from_bytes(sha256(ctx.strategy_sha.encode()).digest()[:8], "big")
         )
-        drawdowns: list[np.ndarray] = []
-        statistics: list[np.ndarray] = []
-        for start in range(0, replications, BLOCK):
-            width = min(BLOCK, replications - start)
-            draws = rng.integers(0, len(moves), size=(width, len(moves)))
-            sample = moves[draws]
-            path = capital + np.cumsum(sample, axis=1)
-            peak = np.maximum(np.maximum.accumulate(path, axis=1), capital)
-            drawdowns.append(((peak - path) / capital * 100.0).max(axis=1))
-            if statistic == CONTRIBUTION_BAND:
-                statistics.append(sample.mean(axis=1) / capital * BPS)
-            elif statistic == SHARPE_BAND:
-                statistics.append(_sharpe_of(sample, per_year))
-            else:
-                statistics.append(edge[draws].mean(axis=1))
-        spread = np.concatenate(statistics) - benchmark_level(
-            objective, ctx.research_folds, ctx.benchmark_run
-        )
+        if statistic == CONTRIBUTION_BAND:
+            moves = np.array(ctx.run.returns, dtype=float)
+            statistics, drawdowns = _resample_periods(moves, capital, replications, rng)
+            drawn = len(moves)
+        else:
+            sessions = _sessions_of(ctx.run.trades)
+            statistics, drawdowns = _resample_sessions(
+                sessions, statistic, capital, years(ctx.run.window), replications, rng
+            )
+            drawn = len(sessions.count)
+        spread = statistics - benchmark_level(objective, ctx.research_folds, ctx.benchmark_run)
         return (
             float(np.percentile(spread, 5)),
             float(np.percentile(spread, 95)),
-            float(np.percentile(np.concatenate(drawdowns), 95)),
+            float(np.percentile(drawdowns, 95)),
+            drawn,
         )
 
 
-def _sharpe_of(sample: np.ndarray, per_year: float) -> np.ndarray:
-    """Annualised Sharpe of each resampled row; a row that cannot vary scores zero."""
-    dispersion = sample.std(axis=1, ddof=1)
-    safe = np.where(dispersion > 0, dispersion, 1.0)
-    return np.where(dispersion > 0, sample.mean(axis=1) / safe * sqrt(per_year), 0.0)
+def _resample_periods(
+    moves: np.ndarray, capital: float, replications: int, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray]:
+    """A contribution's draws: the return periods with replacement, the path rebuilt from
+    the capital, the statistic each row's mean return in basis points of the capital."""
+    statistics: list[np.ndarray] = []
+    drawdowns: list[np.ndarray] = []
+    for start in range(0, replications, BLOCK):
+        width = min(BLOCK, replications - start)
+        sample = moves[rng.integers(0, len(moves), size=(width, len(moves)))]
+        path = capital + np.cumsum(sample, axis=1)
+        peak = np.maximum(np.maximum.accumulate(path, axis=1), capital)
+        drawdowns.append(((peak - path) / capital * 100.0).max(axis=1))
+        statistics.append(sample.mean(axis=1) / capital * BPS)
+    return np.concatenate(statistics), np.concatenate(drawdowns)
+
+
+@dataclass(frozen=True)
+class _Sessions:
+    """The closed trades of a run folded by the session that closed each — the UTC day of its
+    closing fill — into what a session draw needs: per session, how many trades it closed,
+    their edges in basis points of notional summed, their net P&L summed and squared and
+    summed, and the shape of its own path — the running P&L's highest and lowest point
+    inside the session against its start, and the deepest drawdown within it — so a path
+    through drawn sessions keeps every trough a session held."""
+
+    count: np.ndarray
+    edge_sum: np.ndarray
+    pnl_sum: np.ndarray
+    pnl_sumsq: np.ndarray
+    total: np.ndarray
+    crest: np.ndarray
+    trough: np.ndarray
+    inner: np.ndarray
+
+
+def _sessions_of(trades: Sequence[Trade]) -> _Sessions:
+    """Fold a run's closed trades by session, in the order the sessions closed."""
+    by_day: dict[date, list[Trade]] = {}
+    for trade in sorted(trades, key=lambda t: (t.closed_ns, t.opened_ns)):
+        by_day.setdefault(day_of(trade.closed_ns), []).append(trade)
+    count, edge_sum, pnl_sum, pnl_sumsq, total, crest, trough, inner = ([] for _ in range(8))
+    for day in sorted(by_day):
+        held = by_day[day]
+        pnl = np.array([t.pnl_net for t in held], dtype=float)
+        edges = np.array(
+            [t.pnl_net / t.notional * BPS if t.notional > 0 else 0.0 for t in held], dtype=float
+        )
+        path = np.cumsum(pnl)
+        running_peak = np.maximum(np.maximum.accumulate(path), 0.0)
+        count.append(len(held))
+        edge_sum.append(float(edges.sum()))
+        pnl_sum.append(float(pnl.sum()))
+        pnl_sumsq.append(float((pnl * pnl).sum()))
+        total.append(float(path[-1]))
+        crest.append(float(max(path.max(), 0.0)))
+        trough.append(float(min(path.min(), 0.0)))
+        inner.append(float((running_peak - path).max()))
+    return _Sessions(
+        *(
+            np.array(series, dtype=float)
+            for series in (count, edge_sum, pnl_sum, pnl_sumsq, total, crest, trough, inner)
+        )
+    )
+
+
+def _resample_sessions(
+    sessions: _Sessions,
+    statistic: str,
+    capital: float,
+    window_years: float,
+    replications: int,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """A trade statistic's draws: the sessions with replacement, every trade of a drawn
+    session together.
+
+    The statistic is read off the drawn trades through their sessions' sums — a mean edge is
+    the summed edges over the summed count, a Sharpe the mean and the dispersion of the
+    drawn P&L from the sums and the squared sums, annualised by the trades the row holds per
+    year of the window — and the drawdown is exact at the trade: the path through the drawn
+    sessions carries each one's own crest and trough at the level it starts from, so the
+    deepest fall is the larger of a fall from an earlier peak to a session's trough and the
+    deepest fall inside one session. A row that cannot vary — one trade, or trades that all
+    returned the same — scores a Sharpe of zero, as a trade-by-trade draw did.
+    """
+    n_sessions = len(sessions.count)
+    statistics: list[np.ndarray] = []
+    drawdowns: list[np.ndarray] = []
+    for start in range(0, replications, BLOCK):
+        width = min(BLOCK, replications - start)
+        draws = rng.integers(0, n_sessions, size=(width, n_sessions))
+        counts = sessions.count[draws].sum(axis=1)
+        if statistic == SHARPE_BAND:
+            total_pnl = sessions.pnl_sum[draws].sum(axis=1)
+            total_sq = sessions.pnl_sumsq[draws].sum(axis=1)
+            mean = total_pnl / counts
+            varies = counts > 1
+            variance = np.where(
+                varies, (total_sq - counts * mean * mean) / np.maximum(counts - 1, 1), 0.0
+            )
+            dispersion = np.sqrt(np.maximum(variance, 0.0))
+            safe = np.where(dispersion > 0, dispersion, 1.0)
+            per_year = counts / window_years
+            statistics.append(np.where(dispersion > 0, mean / safe * np.sqrt(per_year), 0.0))
+        else:
+            statistics.append(sessions.edge_sum[draws].sum(axis=1) / counts)
+        level = np.zeros(width)
+        peak = np.zeros(width)
+        deepest = np.zeros(width)
+        for position in range(n_sessions):
+            drawn = draws[:, position]
+            deepest = np.maximum(
+                deepest, np.maximum(peak - (level + sessions.trough[drawn]), sessions.inner[drawn])
+            )
+            peak = np.maximum(peak, level + sessions.crest[drawn])
+            level = level + sessions.total[drawn]
+        drawdowns.append(deepest / capital * 100.0)
+    return np.concatenate(statistics), np.concatenate(drawdowns)
 
 
 class _BookCorrelation:
@@ -1736,6 +1884,7 @@ max_hold: Final[Gate] = _MaxHold()
 position_size: Final[Gate] = _PositionSize()
 leg_edge: Final[Gate] = _LegEdge()
 max_drawdown: Final[Gate] = _MaxDrawdown()
+intraday_drawdown: Final[Gate] = _IntradayDrawdown()
 maintenance_margin: Final[Gate] = _MaintenanceMargin()
 embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()

@@ -54,6 +54,23 @@ def test_the_demo_hypothesis_is_admissible(ws: Workspace) -> None:
     assert accepted(ws, DOCUMENT).id == "demo_mr"
 
 
+def test_a_parent_the_workspace_has_not_registered_is_refused(ws: Workspace) -> None:
+    failure = refused(ws, document(derived_from=["demo_parent"]))
+
+    assert failure.message.startswith("derived_from: demo_parent is not a registered hypothesis")
+    assert "kanso hyp add" in (failure.remedy or "")
+
+
+def test_a_registered_parent_is_admissible(ws: Workspace) -> None:
+    from kanso.state import StateStore
+
+    with StateStore(ws.path("state.db")) as store:
+        store.migrate()
+        hyp.add(ws, store, write_hypothesis(ws, {**DOCUMENT, "id": "demo_parent"}))
+
+    assert accepted(ws, document(derived_from=["demo_parent"])).derived_from == ["demo_parent"]
+
+
 def test_a_classified_sleeve_is_admissible(ws: Workspace) -> None:
     parsed = accepted(ws, document(**SLEEVE_CLASSIFICATION))
 

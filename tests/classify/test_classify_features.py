@@ -324,6 +324,7 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
         "edge_per_trade",
         "max_hold",
         "max_drawdown",
+        "intraday_drawdown",
         "maintenance_margin",
         "position_size",
         "leg_edge",

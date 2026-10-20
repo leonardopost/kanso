@@ -188,6 +188,62 @@ def scored(store: StateStore, run: RunRecord, metric: float, n_trades: int = 5) 
     )
 
 
+def test_a_hypothesis_s_trials_count_the_cards_of_the_hypotheses_it_derives_from(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A draft chosen by a parent's research is priced by the parent's search as well as
+    its own: `family` walks `derived_from` transitively, a parent the store does not know
+    counts nothing, and a hypothesis that names none is a family of one."""
+    child = classify(ws, store, {**DOCUMENT, "id": "demo_child", "derived_from": [registered]})
+    grandchild = classify(
+        ws, store, {**DOCUMENT, "id": "demo_grandchild", "derived_from": ["demo_child"]}
+    )
+    parent_run = pinned_run(store, registered, 1, b"objective: {id: net_edge_bps}\n")
+    child_run = pinned_run(store, child, 2, b"objective: {id: net_edge_bps}\n")
+    for metric in (40.0, 55.0, 30.0):
+        scored(store, parent_run, metric)
+    scored(store, child_run, 60.0)
+    scored(store, child_run, 0.0, n_trades=0)
+
+    assert records.family(store, registered) == (registered,)
+    assert records.family(store, child) == (child, registered)
+    assert records.family(store, grandchild) == (grandchild, child, registered)
+    assert records.n_trials(store, registered) == 3
+    assert records.n_trials(store, child) == 5, "the parent's three and its own two"
+    assert records.n_trials(store, grandchild) == 5, "no cards of its own yet"
+    assert sorted(records.trial_metrics(store, child, "net_edge_bps")) == [30.0, 40.0, 55.0, 60.0]
+    assert records.candidates(store, grandchild) == 4
+    assert records.family(store, "nobody_here") == ("nobody_here",)
+
+
+def test_a_family_is_walked_once_whatever_the_files_name(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Two files that name each other — a parent re-registered to derive from its own child —
+    are one family of two, each counted once; a parent the store does not know, a pinned file
+    that names none and a file whose `derived_from` is not a list all count nothing."""
+    child = classify(ws, store, {**DOCUMENT, "id": "demo_child", "derived_from": [registered]})
+    classify(ws, store, {**DOCUMENT, "derived_from": [child]})
+
+    assert records.family(store, child) == (child, registered)
+    assert records.family(store, registered) == (registered, child)
+    # a diamond: two parents naming one grandparent, which is reached twice and counted once
+    left = classify(ws, store, {**DOCUMENT, "id": "demo_left", "derived_from": [child]})
+    right = classify(ws, store, {**DOCUMENT, "id": "demo_right", "derived_from": [child]})
+    both = classify(ws, store, {**DOCUMENT, "id": "demo_both", "derived_from": [left, right]})
+    assert records.family(store, both) == (both, left, right, child, registered)
+    # a registered file naming a parent the store does not know: written past validation
+    store.connection.execute(
+        "UPDATE hypotheses SET hypothesis_sha = ? WHERE hyp_id = ?",
+        (store.put_blob(b"derived_from: [demo_unregistered]\n"), child),
+    )
+    assert records.family(store, child) == (child,)
+    assert records._derived_from(store, None) == ()
+    assert records._derived_from(store, "0" * 64) == ()
+    assert records._derived_from(store, store.put_blob(b"id: x\n")) == ()
+    assert records._derived_from(store, store.put_blob(b"derived_from: demo_x\n")) == ()
+
+
 def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
     store: StateStore, registered: str
 ) -> None:

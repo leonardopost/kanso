@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 import yaml
-from nautilus_trader.model.data import Bar, BarType, QuoteTick
+from nautilus_trader.model.data import Bar, BarType, QuoteTick, TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 
@@ -97,7 +97,7 @@ CERT_GATES: list[dict[str, Any]] = [
 SEARCHED: dict[str, Any] = {
     "id": "deflated_sharpe",
     "stage": "cert",
-    "params": {"min_dsr": 0.5},
+    "params": {"min_dsr": 0.9},
     "rationale": "required behind two trials: the search correction for a Sharpe",
 }
 """The gate a plan for the demo's Sharpe carries once the search has two trials."""
@@ -1126,7 +1126,7 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
             {
                 "id": "deflated_sharpe",
                 "stage": "cert",
-                "params": {"min_dsr": 0.5},
+                "params": {"min_dsr": 0.9},
                 "rationale": "how wide the search was",
             },
         ],
@@ -1192,12 +1192,65 @@ def test_the_instrument_a_point_belongs_to_is_read_off_the_point() -> None:
     assert run._instrument_of(object()) == "", "a market-wide series belongs to no instrument"
 
 
-def test_only_bars_carry_the_volume_a_capacity_gate_reads() -> None:
+def test_a_quote_carries_no_volume_a_capacity_gate_reads() -> None:
     evidence = run._Evidence(0, ())
     evidence.take([(a_quote(),)])
 
     assert evidence.daily_volume == {}, "a quote is not a day's traded notional"
     assert evidence.lags == {(INSTRUMENT, "quote"): 0.0}, "but it was published, and when"
+
+
+def a_print_of(instrument: Any, size: int, price: str, hour: int = 15) -> TradeTick:
+    """One print of the instrument, `size` of its unit at `price`, on 2024-01-02."""
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+
+    ts = midnight_ns(date(2024, 1, 2)) + hour * 3_600 * 1_000_000_000
+    return TradeTick(
+        instrument.id,
+        Price.from_str(price),
+        Quantity.from_int(size),
+        AggressorSide.BUYER,
+        TradeId(f"T-{size}-{price}-{hour}"),
+        ts_event=ts,
+        ts_init=ts,
+    )
+
+
+def test_under_the_print_rules_a_day_s_volume_is_summed_from_its_prints() -> None:
+    """Under the print rules a window holds no bars and the trade series is the tape the
+    venue fills from, so the prints are the day's volume: each at its own price, summed over
+    the day, through the contract multiplier."""
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    evidence = run._Evidence(0, (share,), prints=True)
+
+    evidence.take([(a_print_of(share, 300, "10.00", 10), a_print_of(share, 100, "12.00", 11))])
+
+    assert evidence.daily_volume == {"OTHER.XNAS": [300 * 10.0 + 100 * 12.0]}
+
+
+def test_under_touch_and_through_prints_are_a_signal_and_no_volume() -> None:
+    """A trade series under `touch` or `through` may be a few prints a session loaded beside
+    a grid of quotes; read as the day's volume they would refuse every fill against a
+    thousandth of the market, so they are not read, and the gate skips as it did."""
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    evidence = run._Evidence(0, (share,))
+
+    evidence.take([(a_print_of(share, 300, "10.00", 10), a_print_of(share, 100, "12.00", 11))])
+
+    assert evidence.daily_volume == {}
+    assert evidence.lags == {("OTHER.XNAS", "trade"): 0.0}
+
+
+def test_a_name_with_bars_beside_its_prints_is_read_from_the_bars_alone() -> None:
+    """A day's bars already hold its prints' volume, so where both are carried the bars are
+    the volume and the prints are not counted a second time."""
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    evidence = run._Evidence(0, (share,), prints=True)
+
+    evidence.take([(a_bar_of(share, 1_000, "10.00"),), (a_print_of(share, 300, "10.00"),)])
+
+    assert evidence.daily_volume == {"OTHER.XNAS": [10_000.0]}
 
 
 def test_the_evidence_is_folded_a_chunk_at_a_time_and_each_chunk_handed_on_as_it_came() -> None:

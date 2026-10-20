@@ -17,7 +17,10 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   slippage_bps: 1.0              # override them for this hypothesis — the way to test an idea against costs worse than
 #   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
-                                   # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from
+                                   # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from.
+                                   # The half-spread is charged on a name the venue fills from bars or prints; a name
+                                   # asked for quote or book and no bar fills at the touch, whose price carries the
+                                   # spread, and is charged none — a wider market there is slippage_bps or slippage_ticks
 #   slippage_ticks: 1              # a taker's fill pays this many of the instrument's ticks a share, never past its limit;
                                    # a maker's fill never pays it. Zero unless stated
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
@@ -61,6 +64,10 @@ windows:                           # dates YYYY-MM-DD; certification.start ≥ r
 #                                  # first, every order dropped until the window opens,
 #                                  # so it trades from the open with its indicators full. `research begin` refuses
 #                                  # (exit 2) when the catalog holds fewer; the snapshot must cover them
+# derived_from: [parent_id]        # yours: the hypotheses whose research chose this one — the parent of a `kanso hyp explore`
+                                   # draft, or the searched hypothesis you wrote a variation of. Their cards count as this
+                                   # one's trials: n_trials, the deflation gates and edge_per_trade's margin read the family.
+                                   # Each must be registered (exit 3 otherwise); none counts this file's own cards alone
 # benchmark:                       # yours: classification never touches it. Scope: changing it, or the universe's order, clears `best`
 #   hold: first_leg                # the objective becomes wf_sharpe_vs_hold: the Sharpe over buying universe[0] on the
 #                                  # first print and never exiting, run by the same runner; a day or longer, sleeve or alpha only

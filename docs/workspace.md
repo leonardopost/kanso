@@ -376,6 +376,21 @@ Before this existed, an instruction like that could only be prose in `program.md
 nothing enforces: `risk_limits` are three ceilings, and a strategy holding a tenth of what you
 asked for satisfies every one of them.
 
+**`derived_from` names the hypotheses whose research chose this one.** A draft `kanso hyp
+explore` writes names its parent, and a variation you write yourself after a hypothesis's
+lanes have run hundreds of cards names that hypothesis. The cards that chose a draft are
+cards the selection could have kept, so the search a certificate prices — the `n_trials` it
+is stamped with, the trials `deflated_*` deflate by and the ones `edge_per_trade` widens its
+margin for — counts every card of the hypothesis and of every hypothesis it derives from,
+transitively (`docs/concepts.md`, Card). A file that names none counts its own, as every file
+did before the key existed; one that names a hypothesis the workspace has not registered is
+refused (exit 3), since a parent with no cards in the store would price the search by more
+than it was while counting nothing. Classification neither reads nor writes it.
+
+```yaml
+derived_from: [sox_main]     # this idea was chosen by sox_main's research, so its 412 cards are trials here too
+```
+
 **`sizing` is yours too, and it is not a gate.** A gate judges after a backtest has been
 paid for; this moves the size of every order to the harness, so a proposal that sizes wrong
 cannot be run at all:
@@ -764,7 +779,14 @@ set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
 `venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
-the block for exactly that reason. The block is scope: every metric is net of it, so a best selected under one schedule
+the block for exactly that reason. The spread is charged where the price does not already
+carry it: a fill in a name the venue books from quotes or a level-two book — one asked for
+`quote` or `book` and not for `bar` — is struck at the touch, so its price carries the spread
+and the runner charges it no half-spread under either `spread` value; a fill in a name fed
+bars, alone or beside its quotes, or prints alone pays the half-spread the model states
+(`docs/concepts.md`, Delivery). So `spread` and `fixed_bps` price the names the venue fills
+at a close or a last print, and on a quoted name a wider market is stated as `slippage_bps`
+or `slippage_ticks`. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
 `latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
@@ -832,7 +854,7 @@ priced per share charges it:
 costs:
   commission_bps: 0.0
   commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, on top of …
-  slippage_bps: 0.5                # … its slippage and the quoted half-spread
+  slippage_bps: 0.5                # … its slippage; the spread is in the price it took
   spread: quotes
   maker_per_share: 0.0040          # a fill that rested: $0.0040 a share and nothing else
 ```
@@ -867,7 +889,7 @@ costs:
   maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
   slippage_bps: 0.0
   spread: fixed_bps
-  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+  fixed_bps: 0.0                   # prices a bar-fed name; a quoted name's fill carries its spread
 ```
 
 A fill the venue reports as a taker's — a market order, or a limit that was marketable when it
@@ -1026,7 +1048,7 @@ costs:
   maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
   slippage_bps: 0.0
   spread: fixed_bps
-  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+  fixed_bps: 0.0                   # prices a bar-fed name; a quoted name's fill carries its spread
   sell_fee_bps: 0.206              # the transaction fee and the activity fee, on every sale
   sell_fee_per_share: 0.000195
   limit_fill: print_through        # a resting limit fills only on a later print through it

@@ -1128,3 +1128,55 @@ def test_the_outcome_is_json(ws: Workspace, store: StateStore, prepared_hyp: str
     assert payload["id"] == prepared_hyp
     assert payload["reason"] == "cards"
     assert payload["keeps"] == 1
+
+
+def test_gate_results_that_are_not_a_list_of_gates_read_as_none() -> None:
+    """A column that does not parse, or parses to something other than a list, holds no
+    gates; an entry of a list that is not a mapping is left out."""
+    assert driver._gates(None) == []
+    assert driver._gates("not json") == []
+    assert driver._gates(json.dumps({"id": "max_drawdown"})) == []
+    assert driver._gates(json.dumps([{"id": "max_drawdown", "pass": True}, 7])) == [
+        {"id": "max_drawdown", "pass": True}
+    ]
+
+
+def test_a_failed_edge_per_trade_withholds_the_session_score(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A higher session score from fewer losing trades is not a result the next proposal sees.
+
+    The contribution moves toward zero as losing trades are dropped. The card is shown by
+    its per-trade edge, and that card does not become its tag's best metric.
+    """
+    scripted(ws, propose=[proposal("revert", desc="fewer trades", tags=["filter_liquidity"])])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    gates = json.dumps(
+        [
+            {
+                "id": "edge_per_trade",
+                "pass": False,
+                "evidence": {"net_bps_per_trade": -4.1, "se": 0.2, "n_trades": 100},
+            }
+        ]
+    )
+    store.connection.execute(
+        "UPDATE cards SET metric = ?, metric_se = ?, gate_results = ? WHERE description = ?",
+        (-1.0, 0.4, gates, "fewer trades"),
+    )
+    active = records.require_active(store, prepared_hyp)
+    summary = driver._summary(
+        store.connection.execute(
+            "SELECT strategy_sha, status, metric, metric_se, description, n_trades, digest,"
+            " gate_results FROM cards WHERE description = ?",
+            ("fewer trades",),
+        ).fetchone()
+    )
+    assert "metric" not in summary
+    assert summary["failed_gates"][0]["id"] == "edge_per_trade"
+    assert driver.coverage(store, active)["filter_liquidity"]["best_metric"] is None
+    shown = json.dumps(driver._dynamic(ws, store, active, b"", "", 0)["recent_cards"])
+    assert "net_bps_per_trade" in shown
+    assert "-4.1" not in shown or "net_bps_per_trade" in shown
+    assert '"metric": -1.0' not in shown and '"metric": -1' not in shown
+    assert "is withheld" in recorded.of("propose")[-1].system

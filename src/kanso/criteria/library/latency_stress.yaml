@@ -1,0 +1,8 @@
+id: latency_stress
+kind: gate
+stage: cert
+required: false
+meaningful_when: "Informative where the venue model states a latency_ms; skipped without one. The subject is run again at two multiples of it, since a slower route changes which fills a run has."
+params: {mult_a: float, mult_b: float, keep_fraction: float}
+ranges: {mult_a: [1, 10], mult_b: [1, 10], keep_fraction: [0.0, 1.0]}
+impl: kanso.criteria.gates.latency_stress.gate

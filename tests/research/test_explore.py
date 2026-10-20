@@ -80,7 +80,8 @@ UNCLASSIFIED = {
 
 
 def candidate_yaml(**changes: Any) -> str:
-    """The candidate's `hypothesis.yaml`: the parent's idea, unclassified, under a new id."""
+    """The candidate's `hypothesis.yaml`: the parent's idea, unclassified, under a new id,
+    naming the parent it derives from."""
     return yaml.safe_dump(
         {
             **UNCLASSIFIED,
@@ -88,6 +89,7 @@ def candidate_yaml(**changes: Any) -> str:
             "title": "Demo: daily breakout on a synthetic saw-tooth",
             "thesis": "A close above the last two continues for a session.",
             "mechanism": "momentum",
+            "derived_from": [HYP_ID],
             **changes,
         },
         sort_keys=False,
@@ -422,6 +424,10 @@ def test_a_hypothesis_never_researched_has_nothing_to_explore_from(
         (
             {"hypothesis_yaml": candidate_yaml(constraints=DOCUMENT["constraints"])},
             "carries constraints; a candidate is written as a draft",
+        ),
+        (
+            {"hypothesis_yaml": candidate_yaml(derived_from=[])},
+            f"derived_from does not name the parent {HYP_ID!r}",
         ),
         (
             {

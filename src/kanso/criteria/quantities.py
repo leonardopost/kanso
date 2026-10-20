@@ -297,6 +297,60 @@ def drawdown_pct(run: CardRun) -> float:
     return worst / run.capital * 100.0
 
 
+def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
+    """Peak-to-trough equity read after every fill as well as at every period end, as a
+    percentage of starting capital, and the instant of the trough.
+
+    `drawdown_pct` samples the equity where the runner struck it, at the period ends, so a
+    position opened and closed inside one period is never seen falling: a book that trades
+    many times a day and is flat at the close reads as flat at every sample. This path adds
+    a point at each fill — cash after the fill and its cost, plus every open position at the
+    price it last traded at — and re-anchors at each period end to the equity the runner
+    struck there, so what the runner books at an end and a fill does not carry — a period's
+    mark, funding, a carry, a reset's transfer — enters the path where the runner booked it
+    and the path meets `run.equity` at every end. The peak is never under the capital, as it
+    is not for `drawdown_pct`. A run with no fills is the period-end path alone, so the two
+    agree there; on a reset book the period-end rule's month-by-month peak is not applied
+    between ends, where the book has not been reset, so the fall read here is never the
+    shallower of the two. The instant is `None` when nothing fell.
+    """
+    marks: dict[str, tuple[float, float, float]] = {}
+    cash = run.capital
+    offset = 0.0
+    peak = run.capital
+    worst = 0.0
+    trough_at: int | None = None
+    ends = list(zip(run.period_ends_ns, run.equity, strict=True))
+    fills = sorted(run.fills, key=lambda f: f.ts_ns)
+    index = 0
+
+    def equity_now() -> float:
+        return cash + fsum(qty * px * mult for qty, px, mult in marks.values()) + offset
+
+    for fill in fills:
+        while index < len(ends) and ends[index][0] < fill.ts_ns:
+            end_ns, struck = ends[index]
+            offset += struck - equity_now()
+            peak = max(peak, struck)
+            if peak - struck > worst:
+                worst, trough_at = peak - struck, end_ns
+            index += 1
+        signed = fill.qty if fill.side == "BUY" else -fill.qty
+        cash -= signed * fill.px * fill.multiplier + fill.cost
+        qty, _, _ = marks.get(fill.instrument_id, (0.0, fill.px, fill.multiplier))
+        marks[fill.instrument_id] = (qty + signed, fill.px, fill.multiplier)
+        value = equity_now()
+        peak = max(peak, value)
+        if peak - value > worst:
+            worst, trough_at = peak - value, fill.ts_ns
+    for end_ns, struck in ends[index:]:
+        offset += struck - equity_now()
+        peak = max(peak, struck)
+        if peak - struck > worst:
+            worst, trough_at = peak - struck, end_ns
+    return worst / run.capital * 100.0, trough_at
+
+
 def correlation(left: Sequence[float], right: Sequence[float]) -> float | None:
     """Pearson correlation of two paired samples; `None` when either cannot vary."""
     if len(left) < 2:

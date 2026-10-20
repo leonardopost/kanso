@@ -173,12 +173,19 @@ WINDOW: Final = "embargoed_window"
 """The required out-of-sample gate: once it has refused a subject, the verdict is a fail."""
 
 PLATEAU: Final = "param_plateau"
-"""The one cert gate that costs a backtest per perturbation, judged after all the others."""
+"""The cert gate that costs a backtest per perturbation, judged after all the others."""
+
+LATENCY: Final = "latency_stress"
+"""The cert gate that costs a backtest per latency multiple, judged with the plateau."""
+
+RERUNNING: Final = frozenset({PLATEAU, LATENCY})
+"""The cert gates that re-run the subject, judged after every cheap verdict is in hand and
+spared when the window gate has already refused the subject."""
 
 WINDOW_FAILED: Final = (
     "embargoed_window failed and a certificate whose window failed cannot pass, so the "
-    "perturbation backtests were not run: a plateau around a result the embargo refused is "
-    "not evidence"
+    "re-run backtests were not made: a plateau or a slower route around a result the embargo "
+    "refused is not evidence"
 )
 
 _HEX: Final = frozenset("0123456789abcdef")
@@ -506,6 +513,7 @@ def _request(
     *,
     host_only: bool = False,
     overrides: Mapping[str, float] | None = None,
+    costs: Mapping[str, float] | None = None,
 ) -> backtest.RunRequest:
     """The backtest one window asks for: the sleeve, or the host with this modifier on it.
 
@@ -513,9 +521,14 @@ def _request(
     construct the subject is the sleeve, so they replace fields of its configuration; for
     a relative one the subject is the attached modifier, so they replace the construct
     parameters it was attached with, and the host underneath it is left exactly as it was
-    certified.
+    certified. `costs` replaces keys of the venue model's cost block — `latency_ms`, for a
+    latency stress — and the venue, the harness and the extraction all read the replaced
+    model, as they read the certified one.
     """
     moved = dict(overrides or {})
+    venue_model = subject.venue_model.model_dump()
+    if costs:
+        venue_model["costs"] = {**venue_model["costs"], **costs}
     attached: Sequence[tuple[str, bytes, Mapping[str, Any]]] = ()
     if subject.host_source is None:
         strategy, own = subject.source, moved
@@ -538,7 +551,7 @@ def _request(
         strategy_source=strategy,
         window=window,
         snapshot_id=subject.snapshot_id,
-        venue_model=subject.venue_model.model_dump(),
+        venue_model=venue_model,
         capital=subject.capital,
         modifiers=attached,
         period=subject.period,
@@ -594,10 +607,16 @@ def _measure(subject: Subject) -> Measured:
     its memory share (`kanso.certify.child`), so the daemon lane that asked for it survives
     to research something else and is left holding none of what the windows cost.
     """
+    from kanso.nautilus.venue import PRINT_SIZE
+
     request = _request(subject, subject.certification)
     backtest.stage_of(subject.hyp, subject.certification)
     instruments, chunks = backtest.window_chunks(request, subject.catalog)
-    evidence = _Evidence(midnight_ns(subject.certification[0]), instruments)
+    evidence = _Evidence(
+        midnight_ns(subject.certification[0]),
+        instruments,
+        prints=subject.venue_model.costs.limit_fill in PRINT_SIZE,
+    )
     certification = _ran(
         subject,
         lambda: backtest.execute_chunked(request, instruments, map(evidence.take, chunks)),
@@ -712,18 +731,33 @@ class _Evidence:
     (`backtest.multipliers_of`). A share's multiplier is one; a contract of a thousand DOGE
     is a thousand times the capacity its contract count says, and one of a hundredth of a
     coin a hundredth of it.
+
+    Under the print rules the window carries no bars — they are refused beside quotes — and
+    the trade series is the tape the venue fills from, so a name's day's volume is summed from
+    its prints instead, each at its own price: `size x price x multiplier` over the day's
+    trades, and `capacity_vs_adv` judges a tick hypothesis rather than skipping it. Under
+    `touch` and `through` a trade series may be a few prints a session loaded as a signal —
+    an operator's session prints, four a day beside a grid of quotes — and summing those
+    would read a day's volume a thousandfold too small and refuse every fill against it, so
+    prints are read as volume only where the rule says they are the tape (`prints`). Where a
+    name carries bars as well, the bars are read and the prints are not, since a day's bars
+    already hold its prints' volume and summing both would count it twice.
     """
 
-    def __init__(self, opens_ns: int, instruments: Sequence[object]) -> None:
+    def __init__(
+        self, opens_ns: int, instruments: Sequence[object], *, prints: bool = False
+    ) -> None:
         self.opens_ns = opens_ns
+        self.prints = prints
         self.multipliers = backtest.multipliers_of(instruments)
         self.lags: dict[tuple[str, str], float] = {}
         """The smallest delay observed, per instrument and data type, in seconds."""
         self._volume: dict[str, dict[date, float]] = {}
+        self._printed: dict[str, dict[date, float]] = {}
 
     def take(self, groups: Sequence[Sequence[object]]) -> Sequence[Sequence[object]]:
         """Fold one chunk's points from the window's open on, and hand the chunk back."""
-        from nautilus_trader.model.data import Bar
+        from nautilus_trader.model.data import Bar, TradeTick
 
         for group in groups:
             for point in group:
@@ -740,12 +774,24 @@ class _Evidence:
                     days[day] = days.get(day, 0.0) + (
                         float(point.volume) * float(point.close) * self.multipliers.get(name, 1.0)
                     )
+                elif self.prints and isinstance(point, TradeTick):
+                    name = str(point.instrument_id)
+                    days = self._printed.setdefault(name, {})
+                    day = day_of(int(point.ts_event))
+                    days[day] = days.get(day, 0.0) + (
+                        float(point.size) * float(point.price) * self.multipliers.get(name, 1.0)
+                    )
         return groups
 
     @property
     def daily_volume(self) -> dict[str, list[float]]:
-        """Each instrument's daily traded notional over the window, oldest first."""
-        return {name: [days[day] for day in sorted(days)] for name, days in self._volume.items()}
+        """Each instrument's daily traded notional over the window, oldest first: from its
+        bars where the window held any, else from its prints."""
+        volumes = {name: [days[day] for day in sorted(days)] for name, days in self._volume.items()}
+        for name, days in self._printed.items():
+            if name not in volumes:
+                volumes[name] = [days[day] for day in sorted(days)]
+        return volumes
 
 
 def _dataset_facts(
@@ -876,6 +922,12 @@ def _judge(
         request = _request(subject, subject.certification, overrides=overrides)
         return _ran(subject, lambda: backtest.run(request, subject.catalog))
 
+    def rerun_costs(costs: Mapping[str, float]) -> CardRun:
+        """The subject over the certification window again under a venue model whose cost
+        keys are replaced, the strategy as it was."""
+        request = _request(subject, subject.certification, costs=costs)
+        return _ran(subject, lambda: backtest.run(request, subject.catalog))
+
     registry = gates()
     verdicts: dict[str, EvaluatedGate] = {}
     for gate in _perturbation_last(planned):
@@ -883,7 +935,7 @@ def _judge(
         if found is None:
             verdicts[gate.id] = _skipped(gate, UNIMPLEMENTED)
             continue
-        if gate.id == PLATEAU and _window_failed(verdicts):
+        if gate.id in RERUNNING and _window_failed(verdicts):
             verdicts[gate.id] = _skipped(gate, WINDOW_FAILED)
             continue
         context = GateContext(
@@ -906,6 +958,7 @@ def _judge(
             daily_volume=volume,
             tunable=parameters,
             rerun=rerun,
+            rerun_costs=rerun_costs,
             session=compared,
         )
         verdicts[gate.id] = _evaluated(gate, found.evaluate(context))
@@ -939,13 +992,13 @@ def net_per_trade(run: CardRun) -> NetPerTrade | None:
 
 
 def _perturbation_last(planned: Sequence[PlannedGate]) -> list[PlannedGate]:
-    """The plan's cert gates with the one that costs a backtest per parameter moved last.
+    """The plan's cert gates with the ones that cost a backtest per move last.
 
-    Every cheap verdict is then in hand before the expensive one is paid for, the window
-    gate's among them, which is the one that decides whether it is paid for at all. Only
+    Every cheap verdict is then in hand before the expensive ones are paid for, the window
+    gate's among them, which is the one that decides whether they are paid for at all. Only
     the judging is reordered: the certificate lists the gates in the plan's order.
     """
-    return sorted(planned, key=lambda gate: gate.id == PLATEAU)
+    return sorted(planned, key=lambda gate: gate.id in RERUNNING)
 
 
 def _window_failed(verdicts: Mapping[str, EvaluatedGate]) -> bool:
