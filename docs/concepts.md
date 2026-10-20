@@ -602,7 +602,10 @@ change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*
 `parameter_only` or `refactor` for a change that moves no structure. The vocabulary is the
 package's rather than the model's because the tags are read back as a **coverage** table,
 keyed by them, that every proposal is shown: for each tag, how many cards under the run's
-pins carry it, the best metric among them and its status, and the newest. The recent
+pins carry it, the best metric among them and its status, and the newest. A card
+that failed `edge_per_trade` does not compete for that best: its session contribution
+moves toward zero as losing trades are dropped, and the recent-card summary withholds
+the contribution and shows the per-trade edge and its error instead. The recent
 cards say what was tried last; the coverage says what has been tried at all, in a size
 bounded by the vocabulary rather than by the hypothesis. A card made by hand carries no
 tags, and reaches the table under none.

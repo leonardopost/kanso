@@ -585,20 +585,30 @@ def _summary(row: sqlite3.Row) -> dict[str, object]:
     less and could not see that it was. The numbers are rounded to four places, which is
     finer than any of them is known to, so the prompt carries the reading and not the bits.
     """
+    refused = _refused(row)
+    edge = _edge_evidence(refused)
     made: dict[str, object] = {
         "sha7": str(row["strategy_sha"])[:7],
         "status": str(row["status"]),
-        "metric": float(row["metric"]),
-        "metric_se": float(row["metric_se"] or 0.0),
         "n_trades": int(row["n_trades"]),
         "desc": str(row["description"]),
     }
+    if edge is None:
+        made["metric"] = float(row["metric"])
+        made["metric_se"] = float(row["metric_se"] or 0.0)
     if row["digest"] is not None:
-        made["digest"] = {
+        digest = {
             name: round(value, 4) if isinstance(value, float) else value
             for name, value in json.loads(str(row["digest"])).items()
         }
-    refused = _refused(row)
+        if edge is not None:
+            for name in (
+                "gross_bps_per_session",
+                "cost_bps_per_session",
+                "net_bps_per_session",
+            ):
+                digest.pop(name, None)
+        made["digest"] = digest
     if refused:
         made["failed_gates"] = refused
     return made
@@ -608,9 +618,37 @@ def _refused(row: sqlite3.Row) -> list[dict[str, object]]:
     """The gates this card failed, each with the evidence the gate recorded."""
     return [
         {"id": gate["id"], "evidence": gate.get("evidence", {})}
-        for gate in json.loads(str(row["gate_results"]))
+        for gate in _gates(row["gate_results"])
         if not gate.get("pass", True)
     ]
+
+
+def _gates(raw: object) -> list[dict[str, Any]]:
+    """The card's gate results, or nothing when the column does not hold a list."""
+    try:
+        parsed = json.loads(str(raw or "[]"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [gate for gate in parsed if isinstance(gate, dict)]
+
+
+def _edge_evidence(refused: list[dict[str, object]]) -> dict[str, Any] | None:
+    """The `edge_per_trade` evidence when that gate failed, else `None`."""
+    for gate in refused:
+        if gate.get("id") != "edge_per_trade":
+            continue
+        evidence = gate.get("evidence")
+        return evidence if isinstance(evidence, dict) else {}
+    return None
+
+
+def _failed_edge(raw: object) -> bool:
+    """Whether `raw` gate results include a failed `edge_per_trade`."""
+    return any(
+        gate.get("id") == "edge_per_trade" and not gate.get("pass", True) for gate in _gates(raw)
+    )
 
 
 def _objective(hyp: Hypothesis) -> dict[str, object]:
@@ -752,7 +790,8 @@ def coverage(store: StateStore, active: RunRecord) -> dict[str, dict[str, object
     leaves out.
     """
     rows = store.connection.execute(
-        "SELECT cards.strategy_sha, cards.status, cards.metric, cards.tags FROM cards"
+        "SELECT cards.strategy_sha, cards.status, cards.metric, cards.tags,"
+        " cards.gate_results FROM cards"
         f"{_PINNED} ORDER BY cards.card_id",
         _pins(active),
     ).fetchall()
@@ -765,16 +804,17 @@ def coverage(store: StateStore, active: RunRecord) -> dict[str, dict[str, object
             str(row["status"]),
             str(row["strategy_sha"])[:7],
         )
+        admissible = not _failed_edge(row["gate_results"])
         for tag in json.loads(str(row["tags"])):
             counts[tag] = counts.get(tag, 0) + 1
-            if tag not in best or metric > best[tag][0]:
+            if admissible and (tag not in best or metric > best[tag][0]):
                 best[tag] = (metric, status)
             newest[tag] = sha7
     return {
         tag: {
             "count": counts[tag],
-            "best_metric": best[tag][0],
-            "best_status": best[tag][1],
+            "best_metric": None if tag not in best else best[tag][0],
+            "best_status": None if tag not in best else best[tag][1],
             "newest": newest[tag],
         }
         for tag in sorted(counts)
