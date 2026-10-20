@@ -227,6 +227,11 @@ def test_a_family_is_walked_once_whatever_the_files_name(
 
     assert records.family(store, child) == (child, registered)
     assert records.family(store, registered) == (registered, child)
+    # a diamond: two parents naming one grandparent, which is reached twice and counted once
+    left = classify(ws, store, {**DOCUMENT, "id": "demo_left", "derived_from": [child]})
+    right = classify(ws, store, {**DOCUMENT, "id": "demo_right", "derived_from": [child]})
+    both = classify(ws, store, {**DOCUMENT, "id": "demo_both", "derived_from": [left, right]})
+    assert records.family(store, both) == (both, left, right, child, registered)
     # a registered file naming a parent the store does not know: written past validation
     store.connection.execute(
         "UPDATE hypotheses SET hypothesis_sha = ? WHERE hyp_id = ?",

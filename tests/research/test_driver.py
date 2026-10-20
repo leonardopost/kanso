@@ -1130,6 +1130,17 @@ def test_the_outcome_is_json(ws: Workspace, store: StateStore, prepared_hyp: str
     assert payload["keeps"] == 1
 
 
+def test_gate_results_that_are_not_a_list_of_gates_read_as_none() -> None:
+    """A column that does not parse, or parses to something other than a list, holds no
+    gates; an entry of a list that is not a mapping is left out."""
+    assert driver._gates(None) == []
+    assert driver._gates("not json") == []
+    assert driver._gates(json.dumps({"id": "max_drawdown"})) == []
+    assert driver._gates(json.dumps([{"id": "max_drawdown", "pass": True}, 7])) == [
+        {"id": "max_drawdown", "pass": True}
+    ]
+
+
 def test_a_failed_edge_per_trade_withholds_the_session_score(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
