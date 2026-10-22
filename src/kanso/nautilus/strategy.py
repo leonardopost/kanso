@@ -437,6 +437,30 @@ def _id_of(key: str) -> InstrumentId:
     return InstrumentId.from_str(key)
 
 
+@cache
+def _name_of(instrument_id: InstrumentId) -> str:
+    """The name an instrument id formats to, formatted once per id and kept.
+
+    `str` of an `InstrumentId` formats its name afresh on every call, where hashing one
+    formats it once and keeps the hash on the object (`model/identifiers.pyx` of
+    nautilus_trader 1.231.0), so the ids a sleeve keeps — its `universe` — find their names
+    here for a lookup. Asked of an `InstrumentId` alone: one compared with any other key
+    raises `TypeError` in the engine's `__eq__`, and its hash is its name's.
+    """
+    return str(instrument_id)
+
+
+def _same(kept: float | None, read: float, reader: str, key: str) -> float:
+    """`read`, once it is the bit-for-bit value a kept read of the same name holds, where one
+    is held (`KansoStrategy._checking`)."""
+    if kept is not None and kept.hex() != read.hex():
+        raise AssertionError(
+            f"{reader}({key!r}) kept {kept!r} where it reads {read!r} now: something it reads "
+            "changed and did not forget the reads kept (KansoStrategy._moved)"
+        )
+    return read
+
+
 def _signed(order: object, *, filled: bool) -> float:
     """An order's filled quantity, or what is left of it, signed by its side."""
     qty = float(order.filled_qty if filled else order.leaves_qty)  # type: ignore[attr-defined]
@@ -673,6 +697,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     config_cls: ClassVar[type[KansoConfig]] = KansoConfig
 
+    _checking: ClassVar[bool] = False
+    """Whether every position read kept is read again and compared (`_moved`)."""
+
     def __init__(self, config: KansoConfig | None = None) -> None:
         resolved = self.config_cls() if config is None else config
         if not isinstance(resolved, KansoConfig):
@@ -703,6 +730,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._overlay_due: tuple[InstrumentId, Bar | None, float | None] | None = None
         self._entry_answers: tuple[tuple[object, Decision], ...] | None = None
         self._clip_orders: dict[str, list[object]] = {}
+        self._filled_at: dict[str, float] = {}
+        self._intended_at: dict[str, float] = {}
         self._sizing_call = False
         self._built = False
         self._owed: dict[tuple[str, OrderSide], tuple[float | None, float | None, bool]] = {}
@@ -907,8 +936,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         reads the whole position until the exit fills. `submit_exit` is what counts the
         exits still working, so an exit sized from this reader never closes more than they
         leave.
+
+        A read is kept until anything it reads changes (`_moved`), so a sleeve may ask it of
+        every name on every point.
         """
-        return self._own_intended(str(instrument_id))
+        key = _name_of(instrument_id) if type(instrument_id) is InstrumentId else str(instrument_id)
+        return self._own_intended(key)
 
     @property
     def balance(self) -> float:
@@ -996,6 +1029,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         payment is in cash before this sleeve can act on that point. Only a split that has
         happened is ever held here: a schedule would name the certification window's too.
         """
+        self._moved()
         self._restated.setdefault(restated.instrument_id, []).append(restated.split)
         for event in restated.adjustments:
             if event.strategy_id == self.id and event.pnl_change is not None:
@@ -2009,6 +2043,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 )
             side = OrderSide.BUY if signed > 0 else OrderSide.SELL
         order: object = self.order_factory.market(instrument_id, side, quantity)
+        self._moved()
         self._clip_orders.setdefault(key, []).append(order)
         return order
 
@@ -2053,10 +2088,22 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
 
     def _own_filled(self, key: str) -> float:
-        return float(self._own_position(_id_of(key))) - self._clips_filled(key)
+        """This sleeve's own filled position in a name, its clips taken out; kept until it
+        could change (`_moved`)."""
+        kept = self._filled_at.get(key)
+        if kept is not None and not self._checking:
+            return kept
+        read = float(self._own_position(_id_of(key))) - self._clips_filled(key)
+        self._filled_at[key] = _same(kept, read, "_own_filled", key)
+        return read
 
     def _own_intended(self, key: str) -> float:
-        return self._own_filled(key) + sum(
+        """`_own_filled` with this sleeve's own market orders in flight applied (`held`);
+        kept until it could change (`_moved`)."""
+        kept = self._intended_at.get(key)
+        if kept is not None and not self._checking:
+            return kept
+        read = self._own_filled(key) + sum(
             (
                 _signed(order, filled=False)
                 for order in self._open_markets()
@@ -2064,6 +2111,44 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             ),
             0.0,
         )
+        self._intended_at[key] = _same(kept, read, "_own_intended", key)
+        return read
+
+    def _moved(self) -> None:
+        """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`).
+
+        A tick sleeve asks them of every name on every point — every tk_* seed walks its
+        universe asking `held` once its day is done — and measured on 2026-10-22 under a
+        profiler they were 40% to 52% of such a card. What they read changes only with one
+        of these, and each forgets the reads first:
+
+        * **an event of this sleeve's orders or positions**, as the engine hands it to
+          `handle_event`: every submission, acceptance, refusal, denial, modify, cancel,
+          expiry and fill, and every position opened, changed or closed. In
+          nautilus_trader 1.231.0 the execution engine applies an order event, and a fill to
+          the position it makes, before it publishes either on the strategy's own topics
+          (`ExecutionEngine._handle_event`, `execution/engine.pyx`), and a strategy
+          publishes the pending cancel or modify, or the denial, it applies itself
+          (`trading/strategy.pyx`); nothing of the sleeve's runs between the change and the
+          event. The bus's other subscribers to those topics — the portfolio, the risk
+          engine, the order emulator and an execution algorithm — run nothing of the
+          sleeve's, and a book's ledger asks a member only of an `OrderInitialized` or an
+          `OrderPendingUpdate`, whose changes — an order in the cache, a status — are none
+          these read; a researched strategy may not reach the bus or apply an event
+          (`kanso.criteria.integrity`). One change is applied and not published:
+          `cancel_all_orders` marks what it cancels `PENDING_CANCEL`, which moves no
+          quantity and leaves `is_closed` as it was (`Order.apply`,
+          `model/orders/base.pyx`);
+        * **an order this sleeve keeps** in flight (`_track`) or as a clip (`_clip_order`);
+        * **a split** the venue applied to the positions, which it announces once it has
+          adjusted them (`_on_restated`, `kanso.nautilus.actions`).
+
+        Nothing they read depends on the clock. With `_checking` set every kept read is
+        read again and compared, bit for bit, and a difference raises; the suite sets it
+        for every test (`tests/conftest.py`).
+        """
+        self._filled_at.clear()
+        self._intended_at.clear()
 
     def _holdings(self) -> dict[str, float]:
         """The sleeve's own intended position in every name it holds or has an order in."""
@@ -2694,7 +2779,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         In a book the sleeve is the member running while its handlers run
         (`BookLedger.running`), so an order heard on the bus is named for the member it was sent
         while.
+
+        Every event forgets the position reads kept, before anything else is done with it
+        (`_moved`).
         """
+        self._moved()
         ledger = self._book_ledger
         if ledger is not None:
             ledger.running.append(self)
@@ -3387,6 +3476,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _track(self, order: object) -> None:
         """Keep every order this sleeve sent for the balance to book its fills from, and a
         market order until the venue closes it."""
+        self._moved()
         self._ledger.setdefault(order.client_order_id, _Tracked(order))  # type: ignore[attr-defined]
         if order.order_type == OrderType.MARKET:  # type: ignore[attr-defined]
             self._sent.append(order)
