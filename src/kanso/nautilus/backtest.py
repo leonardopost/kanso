@@ -2104,7 +2104,8 @@ def _fills_since(cache: Any, read: dict[object, tuple[list[bytes], int]]) -> lis
     only the fills since its own opening; `position_snapshot_bytes` hands back the cache's
     own list of an id's pickled snapshots, which only `snapshot_position` adds to, at its
     end. A list that is not the one read before — a purge drops one, and kanso purges
-    nothing — is read whole again.
+    nothing — is read whole again. `kanso doctor` re-checks the last against the installed
+    engine (`kanso.nautilus.facts`).
     """
     found = [event for position in cache.positions() for event in position.events]
     for position_id in cache.position_snapshot_ids():

@@ -617,6 +617,27 @@ in a book each went out unrefused (`docs/backlog.md` row 210), and only the inte
 refuses them, in a researched strategy and by the names they are spelt with
 (`kanso.criteria.integrity`; what it does not follow is `docs/backlog.md` row 211).
 
+**Every change to a strategy's orders and positions reaches it as an event before any handler
+of its runs again.** `ExecutionEngine._handle_event` applies an order event to the order, and
+a fill to the position it makes, before it publishes the order event on `events.order.<the
+strategy's id>` and then the position events it held back on `events.position.<the
+strategy's id>` (`execution/engine.pyx`); a strategy publishes the pending modify and the
+pending cancel it applies itself; and `cancel_all_orders` alone applies one and publishes
+nothing — `OrderPendingCancel`, which changes a status and moves no quantity
+(`trading/strategy.pyx`). Measured at no latency and at 20 ms: a strategy that bought at
+market, rested three orders, moved one, cancelled one by itself and the rest with
+`cancel_all_orders`, flipped long to short, closed, reopened and closed again, one step a
+quote, found its orders (status, filled, left, closed) and positions (signed quantity,
+closed, events) in the cache on entry to each of its 19 quote handlers as they were when its
+last handler ended, whether an event's or a quote's. That is what lets `KansoStrategy` keep a
+sleeve's position reads from one event to the next (`KansoStrategy._forget_kept`), which a
+tick sleeve asks of every name on every point. And `Cache.position_snapshot_bytes` hands back
+the cache's own list of a position's pickled snapshots, which `snapshot_position` — at a
+NETTING flip, and at a reopen — appends to (`cache/cache.pyx`): read after every handler of
+that strategy, each list was the one read before, grown at its end. That is what lets the
+runner unpickle each snapshot once rather than every one after every chunk
+(`kanso.nautilus.backtest._fills_since`).
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -1551,6 +1572,252 @@ def _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight() -> tuple
         f"cancel_all_orders, read (resting, in flight, once cancelled; then both at the end) = "
         f"{seen}: the engine marks the resting order pending cancel at once, leaves the one "
         "in flight as it is, and cancels both"
+    )
+
+
+@dataclass(frozen=True)
+class _Announced:
+    """What `_probe_changes_reach_their_strategy` found."""
+
+    compared: int
+    """Quote handlers that read the strategy's orders and positions on entry."""
+    distinct: int
+    """How many different readings of them those handlers found."""
+    unannounced: tuple[str, ...]
+    """Each change found on entry to one that no event handed since its last handler."""
+    cancelled_moved: tuple[str, ...]
+    """What `cancel_all_orders` changed of an order besides its status."""
+    handed: tuple[str, ...]
+    """The events the strategy was handed, by name, in order."""
+    lists: tuple[str, ...]
+    """Each snapshot list read that was not the list read before it, grown at its end."""
+    snapshots: int
+    """The snapshots the cache holds at the end."""
+
+
+def _probe_changes_reach_their_strategy(latency_ns: int) -> _Announced:
+    """A strategy on a quoted name that buys 10 at market; rests a buy of 10 at 9.95, a sale of
+    5 at 10.08 and a buy of 3 at 9.90; moves the first to 9.97 and cancels the last; flips to
+    a short once the ask has reached 9.97; cancels the rest with `cancel_all_orders`; closes,
+    reopens with a buy of 5 and closes again — a step a quote. On entry to each quote handler
+    it reads every order of its own (status, filled, left, closed) and every position (signed
+    quantity, closed, events) from the cache, and compares them with what it read as its last
+    handler, an event's or a quote's, ended; and it reads each position's snapshot list."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import QuoteTick
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.step = 0
+            self.last: object = None
+            self.entries: list[tuple[int, object, object]] = []
+            self.rests: list[Any] = []
+            self.cancelled: list[tuple[object, object]] = []
+            self.handed: list[str] = []
+            self.read: dict[Any, tuple[list[bytes], list[bytes]]] = {}
+            self.lists: list[tuple[str, bool, int, int]] = []
+
+        def held(self) -> object:
+            orders = sorted(
+                self.cache.orders(strategy_id=self.id), key=lambda o: o.client_order_id.value
+            )
+            positions = sorted(self.cache.positions(strategy_id=self.id), key=lambda p: p.id.value)
+            return (
+                tuple(
+                    (o.client_order_id.value, order_status_to_str(o.status))
+                    + (float(o.filled_qty), float(o.leaves_qty), o.is_closed)
+                    for o in orders
+                ),
+                tuple((p.id.value, p.signed_qty, p.is_closed, p.event_count) for p in positions),
+            )
+
+        def ended(self) -> None:
+            self.last = self.held()
+            for position_id in self.cache.position_snapshot_ids():
+                frames = self.cache.position_snapshot_bytes(position_id)
+                was = self.read.get(position_id, (frames, []))
+                grown = frames is was[0] and frames[: len(was[1])] == was[1]
+                self.lists.append((position_id.value, grown, len(was[1]), len(frames)))
+                self.read[position_id] = (frames, list(frames))
+
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+            self.ended()
+
+        def handle_event(self, event: Any) -> None:
+            self.handed.append(type(event).__name__)
+            super().handle_event(event)
+            self.ended()
+
+        def on_quote_tick(self, tick: Any) -> None:
+            self.entries.append((self.step, self.last, self.held()))
+            self.act()
+            self.step += 1
+            self.ended()
+
+        def market(self, side: Any, quantity: float) -> None:
+            self.submit_order(
+                self.order_factory.market(equity.id, side, Quantity.from_int(int(quantity)))
+            )
+
+        def rest(self, side: Any, quantity: int, price: float) -> Any:
+            order = self.order_factory.limit(
+                equity.id, side, Quantity.from_int(quantity), Price(price, 2)
+            )
+            self.submit_order(order)
+            return order
+
+        def act(self) -> None:
+            net = sum(p.signed_qty for p in self.cache.positions_open(strategy_id=self.id))
+            if self.step == 0:
+                self.market(OrderSide.BUY, 10)
+            elif self.step == 2:
+                self.rests = [
+                    self.rest(OrderSide.BUY, 10, 9.95),
+                    self.rest(OrderSide.SELL, 5, 10.08),
+                    self.rest(OrderSide.BUY, 3, 9.90),
+                ]
+            elif self.step == 4:
+                self.modify_order(self.rests[0], price=Price(9.97, 2))
+                self.cancel_order(self.rests[2])
+            elif self.step == 8:
+                self.market(OrderSide.SELL, net + 20)
+            elif self.step == 10:
+                before = [(o.filled_qty, o.leaves_qty, o.is_closed) for o in self.rests]
+                self.cancel_all_orders(equity.id)
+                after = [(o.filled_qty, o.leaves_qty, o.is_closed) for o in self.rests]
+                self.cancelled.append((before, after))
+            elif self.step == 12:
+                self.market(OrderSide.BUY, -net)
+            elif self.step == 14:
+                self.market(OrderSide.BUY, 5)
+            elif self.step == 16:
+                self.market(OrderSide.SELL, net)
+
+    touches = [(9.99, 10.01)] * 5 + [(9.95, 9.97)] * 3 + [(9.99, 10.01)] * 11
+    points = [
+        QuoteTick(
+            equity.id,
+            Price(bid, 2),
+            Price(ask, 2),
+            Quantity.from_int(100),
+            Quantity.from_int(100),
+            (index + 1) * _MINUTE_NS,
+            (index + 1) * _MINUTE_NS,
+        )
+        for index, (bid, ask) in enumerate(touches)
+    ]
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        snapshots = sum(
+            len(engine.cache.position_snapshot_bytes(position_id))
+            for position_id in engine.cache.position_snapshot_ids()
+        )
+    finally:
+        engine.dispose()
+    return _Announced(
+        compared=len(probe.entries),
+        distinct=len({now for _, _, now in probe.entries}),
+        unannounced=tuple(
+            f"quote {step}: {last} then {now}" for step, last, now in probe.entries if now != last
+        ),
+        cancelled_moved=tuple(
+            f"{before} then {after}" for before, after in probe.cancelled if after != before
+        ),
+        handed=tuple(probe.handed),
+        lists=tuple(
+            f"{name}: {was} -> {now}" for name, grown, was, now in probe.lists if not grown
+        ),
+        snapshots=snapshots,
+    )
+
+
+_HANDED_KINDS = frozenset(
+    {
+        "OrderFilled",
+        "OrderUpdated",
+        "OrderPendingCancel",
+        "OrderCanceled",
+        "PositionOpened",
+        "PositionChanged",
+        "PositionClosed",
+    }
+)
+"""The events `_probe_changes_reach_their_strategy` must have been handed for its reads to
+have compared anything: fills, a modify, a cancel and every kind of position change."""
+
+
+def _check_every_change_reaches_its_strategy_before_its_next_handler() -> tuple[bool, str]:
+    """What `KansoStrategy._forget_kept` rests on to keep a sleeve's position reads between
+    events: whatever changes its orders or its positions is handed to it as an event before
+    any handler of its runs again, but the pending cancel `cancel_all_orders` marks, which
+    moves no quantity and closes nothing."""
+    seen: list[str] = []
+    holds = True
+    for latency_ns in (0, 20_000_000):
+        found = _probe_changes_reach_their_strategy(latency_ns)
+        kinds = set(found.handed)
+        holds = (
+            holds
+            and not found.unannounced
+            and not found.cancelled_moved
+            and kinds >= _HANDED_KINDS
+            and found.distinct > 5
+        )
+        seen.append(
+            f"{latency_ns // 1_000_000} ms: {found.compared} quote handlers read "
+            f"{found.distinct} different holdings, compared after "
+            f"{len(found.handed)} events ({', '.join(sorted(kinds))}); changes no event had "
+            f"handed {list(found.unannounced)}; cancel_all_orders moved "
+            f"{list(found.cancelled_moved) or 'no quantity and closed nothing'}"
+        )
+    return holds, (
+        "a strategy that bought at market, rested three orders, moved one, cancelled one by "
+        "itself and the rest with cancel_all_orders, flipped long to short, closed, reopened "
+        "and closed again, reading its orders and positions in the cache on entry to every "
+        "quote handler against what it read as its last handler ended — " + "; ".join(seen)
+    )
+
+
+def _check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end() -> tuple[bool, str]:
+    """What `kanso.nautilus.backtest._fills_since` rests on to read each position snapshot
+    once: `position_snapshot_bytes` hands back the cache's own list, and a snapshot is added
+    at its end."""
+    seen: list[str] = []
+    holds = True
+    for latency_ns in (0, 20_000_000):
+        found = _probe_changes_reach_their_strategy(latency_ns)
+        holds = holds and not found.lists and found.snapshots >= 2
+        seen.append(
+            f"{latency_ns // 1_000_000} ms: {found.snapshots} snapshots at the end; read as "
+            f"another list or changed before its end: {list(found.lists) or 'none'}"
+        )
+    return holds, (
+        "a NETTING position flipped from long to short, closed, reopened and closed again, "
+        "its snapshot lists read after every handler — " + "; ".join(seen)
     )
 
 
@@ -5777,6 +6044,17 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
         "flight as it is, and cancels both",
         _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight,
+    ),
+    (
+        "every change to a strategy's orders and positions in the cache is handed to it as "
+        "an event before any handler of its runs again, but the pending cancel "
+        "cancel_all_orders marks, which moves no quantity, at no latency and at 20 ms",
+        _check_every_change_reaches_its_strategy_before_its_next_handler,
+    ),
+    (
+        "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
+        "which a NETTING flip or reopen appends to and nothing else changes",
+        _check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end,
     ),
 )
 
