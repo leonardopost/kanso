@@ -307,6 +307,7 @@ class _Feed:
         self._opens = opens
         self._sink = sink
         self._handed = 0
+        self._snapshots_read: dict[object, tuple[list[bytes], int]] = {}
         self._current: Sequence[Any] = ()
         self.released = 0
 
@@ -344,7 +345,8 @@ class _Feed:
         self.released += len(measured(reached, self._opens))
         if self._sink is not None:
             self._sink(reached)
-        self._marks.price(backtest._fill_events(backtest._positions(self._kernel.cache))[0])
+        if self._marks.quotes:
+            self._marks.price(backtest._fills_since(self._kernel.cache, self._snapshots_read))
         self._marks.next_chunk()
         self._client.load(())
 

@@ -1310,6 +1310,7 @@ def execute_chunked(
         marked = coincident(request.hyp)
         book = BOOK in request.hyp.data_requirements
         ran = False
+        snapshots_read: dict[object, tuple[list[bytes], int]] = {}
         for points in checked_chunks(request, instruments, chunks, marks):
             strategy._hold_until_cross_section = marked or any(is_marker(p) for p in points)
             if ran and strategy._hold_until_cross_section:
@@ -1320,7 +1321,8 @@ def execute_chunked(
             del points
             engine.run(start=opens, end=closes - 1, streaming=True)
             ran = True
-            marks.price(_fill_events(_positions(engine.cache))[0])
+            if marks.quotes:
+                marks.price(_fills_since(engine.cache, snapshots_read))
             marks.next_chunk()
             engine.clear_data()
         if ran:
@@ -2035,6 +2037,38 @@ def _fill_events(positions: Sequence[Any]) -> tuple[tuple[Any, ...], tuple[int, 
         )
     )
     return tuple(event for event, _ in owned), tuple(index for _, index in owned)
+
+
+def _fills_since(cache: Any, read: dict[object, tuple[list[bytes], int]]) -> list[Any]:
+    """The fills `Marks.price` is handed after a chunk: every fill of the positions the cache
+    holds, and of each position snapshot taken since the last call; `read` is what the calls
+    before this one read of each snapshot list, and is brought up to date.
+
+    `Marks.price` charges a fill once, keyed by its event id, from the fill's own instant and
+    name, so the fills it has priced are passed over and the order it is handed them in moves
+    nothing. Handed every fill the run holds after every chunk (`_fill_events`), it prices
+    exactly what it prices handed these: a snapshot is immutable, and every fill of one read
+    here was handed over, and priced, when it was read. What differs is the cost. The cache
+    keeps its snapshots pickled and `position_snapshots` unpickles every one on every call, so
+    the scan grew with the fills times the chunks of a window; here each is unpickled once.
+
+    Engine facts this relies on (nautilus_trader 1.231.0, `cache/cache.pyx` and
+    `execution/engine.pyx`): a position closed and reopened under NETTING, or flipped, is
+    snapshotted and a new position object takes its id, so a position the cache holds holds
+    only the fills since its own opening; `position_snapshot_bytes` hands back the cache's
+    own list of an id's pickled snapshots, which only `snapshot_position` adds to, at its
+    end. A list that is not the one read before — a purge drops one, and kanso purges
+    nothing — is read whole again.
+    """
+    found = [event for position in cache.positions() for event in position.events]
+    for position_id in cache.position_snapshot_ids():
+        frames = cache.position_snapshot_bytes(position_id)
+        held = read.get(position_id)
+        start = held[1] if held is not None and held[0] is frames else 0
+        for frame in frames[start:]:
+            found.extend(pickle.loads(frame).events)
+        read[position_id] = (frames, len(frames))
+    return found
 
 
 def touched_names(hyp: Hypothesis) -> frozenset[str]:
