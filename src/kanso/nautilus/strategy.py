@@ -682,6 +682,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         super().__init__(resolved)
         self._cfg: KansoConfig = resolved
+        self._universe: tuple[InstrumentId, ...] | None = None
         self._data_time = 0
         self._intents: list[OrderIntent] = []
         self._last_bar: dict[str, Bar] = {}
@@ -749,8 +750,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     @property
     def universe(self) -> tuple[InstrumentId, ...]:
-        """The instruments this hypothesis trades, as the engine identifies them."""
-        return tuple(InstrumentId.from_str(value) for value in self._cfg.universe)
+        """The instruments this hypothesis trades, as the engine identifies them.
+
+        Parsed on the first read and kept. The names are the injected configuration's, a
+        frozen struct the sleeve is built with and never handed again, so they cannot change
+        under it; and an id is a value, so the same objects answer every read where each
+        read used to parse twenty names again — measured on 2026-10-22, a tick sleeve that
+        walked its universe on every point spent 7% of its card parsing them. A name that
+        does not parse is kept as nothing and raises on every read, as before.
+        """
+        held = self._universe
+        if held is None:
+            held = self._universe = tuple(_id_of(value) for value in self._cfg.universe)
+        return held
 
     @property
     def capital(self) -> float:
