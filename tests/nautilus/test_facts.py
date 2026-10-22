@@ -8,6 +8,8 @@ upgrade that closes one of those gaps, or opens a new one, fails here first.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import nautilus_trader
 import pytest
 
@@ -141,6 +143,11 @@ BINDINGS = {
     "an order's OrderInitialized, every order's of a list, and a modify's "
     "OrderPendingUpdate are published on the bus before the engine routes the command, "
     "so a subscriber that raises sends nothing, at no latency and at 20 ms",
+    "every change to a strategy's orders and positions in the cache is handed to it as "
+    "an event before any handler of its runs again, but the pending cancel "
+    "cancel_all_orders marks, which moves no quantity, at no latency and at 20 ms",
+    "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
+    "which a NETTING flip or reopen appends to and nothing else changes",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -324,3 +331,45 @@ def test_an_order_and_a_modify_are_refused_on_the_bus_before_they_are_routed(
     ((quantity, price, _, filled),) = held
     assert (quantity, price, filled) == (10.0, 10.5, 0.0)
     assert overridden == 1, "the rest, sent by the probe's own submit_order; none of the rest"
+
+
+@pytest.mark.parametrize("latency_ns", [0, 20_000_000])
+def test_every_change_reaches_its_strategy_before_its_next_handler(latency_ns: int) -> None:
+    """What a sleeve's kept position reads rest on (`KansoStrategy._forget_kept`) and what the
+    runner's reading of each position snapshot once rests on (`backtest._fills_since`): over
+    fills, a modify, two cancels, a flip, a close and a reopen, every quote handler finds the
+    strategy's orders and positions as its last handler left them, and each snapshot list is
+    the one read before, grown at its end."""
+    found = facts._probe_changes_reach_their_strategy(latency_ns)
+
+    assert found.unannounced == ()
+    assert found.cancelled_moved == ()
+    assert set(found.handed) >= facts._HANDED_KINDS
+    assert (found.compared, found.lists, found.snapshots) == (19, (), 2)
+    assert found.distinct > 5, "the holdings moved between handlers"
+
+
+def test_a_change_no_event_handed_or_a_list_read_anew_fails_its_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Either finding of the probe fails the claim that rests on it, and names what it found."""
+    clean = facts._probe_changes_reach_their_strategy(0)
+    monkeypatch.setattr(
+        facts,
+        "_probe_changes_reach_their_strategy",
+        lambda latency_ns: replace(clean, unannounced=("quote 3: before then after",)),
+    )
+    holds, evidence = facts._check_every_change_reaches_its_strategy_before_its_next_handler()
+    assert not holds
+    assert "quote 3: before then after" in evidence
+    assert facts._check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end()[0]
+
+    monkeypatch.setattr(
+        facts,
+        "_probe_changes_reach_their_strategy",
+        lambda latency_ns: replace(clean, lists=("P-1: 1 -> 1",)),
+    )
+    holds, evidence = facts._check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end()
+    assert not holds
+    assert "P-1: 1 -> 1" in evidence
+    assert facts._check_every_change_reaches_its_strategy_before_its_next_handler()[0]
