@@ -2,7 +2,7 @@
 always the read it stands for.
 
 `held`, `_own_filled` and `_own_intended` are kept by name and forgotten at every change of
-what they read (`KansoStrategy._moved`). The property here drives a real engine through
+what they read (`KansoStrategy._forget_kept`). The property here drives a real engine through
 random orders — entries at market and at a limit, exits, hand-built orders, modifies,
 cancels of one order and of a name, the engine's own close — with and without a latency,
 and with clips an overlay holds, and at every bar and every order and position event the
@@ -50,7 +50,7 @@ BARS = 24
 @pytest.fixture(autouse=True)
 def _kept_reads_answered(monkeypatch: pytest.MonkeyPatch) -> None:
     """Kept reads are answered as kept, as in a card."""
-    monkeypatch.setattr(KansoStrategy, "_checking", False)
+    monkeypatch.setattr(KansoStrategy, "_recheck_kept", False)
 
 
 def from_scratch(sleeve: KansoStrategy, key: str) -> tuple[float, float]:
@@ -316,16 +316,16 @@ def test_a_sized_host_s_kept_reads_take_its_overlay_s_clips_out(
 
 
 def test_a_kept_read_is_answered_until_something_it_reads_changes(backtest) -> None:
-    """A kept read is answered as kept — here one planted by hand — until `_moved`."""
+    """A kept read is answered as kept — here one planted by hand — until `_forget_kept`."""
     ran = backtest(Shuffles(config()))
     sleeve = ran.strategy
     assert sleeve.held(DEMO) == 0.0
 
-    sleeve._intended_at["DEMO.XNAS"] = 7.0
-    sleeve._filled_at["DEMO.XNAS"] = 5.0
+    sleeve._kept_intended["DEMO.XNAS"] = 7.0
+    sleeve._kept_filled["DEMO.XNAS"] = 5.0
 
     assert (sleeve.held(DEMO), sleeve._own_filled("DEMO.XNAS")) == (7.0, 5.0)
-    sleeve._moved()
+    sleeve._forget_kept()
     assert (sleeve.held(DEMO), sleeve._own_filled("DEMO.XNAS")) == (0.0, 0.0)
 
 
@@ -334,8 +334,8 @@ def test_under_checking_a_kept_read_unlike_the_fresh_one_raises(
 ) -> None:
     ran = backtest(Shuffles(config()))
     sleeve = ran.strategy
-    monkeypatch.setattr(KansoStrategy, "_checking", True)
-    sleeve._intended_at["DEMO.XNAS"] = 7.0
+    monkeypatch.setattr(KansoStrategy, "_recheck_kept", True)
+    sleeve._kept_intended["DEMO.XNAS"] = 7.0
 
     with pytest.raises(AssertionError, match=r"_own_intended\('DEMO.XNAS'\) kept 7.0"):
         sleeve.held(DEMO)

@@ -9,7 +9,7 @@ A Massive cursor walk pauses before it asks again for a page that did not answer
 waits on that pause; a test that asserts on it records it itself.
 
 A sleeve keeps its position reads until something they read changes
-(`KansoStrategy._moved`). Every test that runs a sleeve in this process reads each one again
+(`KansoStrategy._forget_kept`). Every test that runs a sleeve in this process reads each one again
 beside the kept one and fails on a difference, so a change that moves what they read without
 forgetting them fails whichever test reaches it; a test that measures the kept reads alone
 turns it off itself.
@@ -43,5 +43,5 @@ def _no_backoff_pause(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def _kept_reads_checked(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Every position read a sleeve keeps is read again and compared."""
-    monkeypatch.setattr(KansoStrategy, "_checking", True)
+    monkeypatch.setattr(KansoStrategy, "_recheck_kept", True)
     yield
