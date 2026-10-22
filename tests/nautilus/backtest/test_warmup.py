@@ -270,6 +270,53 @@ def test_the_days_counted_are_the_days_of_the_points_a_query_returns(
     assert counted == returned
 
 
+def test_a_quote_file_gone_after_the_lookback_listed_it_is_counted_as_the_catalog_holds_it_now(
+    tmp_path: Path,
+) -> None:
+    """A lookback's catalog keeps the listing it first read (`_catalog`). A quote file that has
+    gone by its next read is a miss, listed afresh and read again (`_read_listed`), as the
+    window's own query misses it: the days counted are those the catalog holds now, as a read
+    listing afresh returns them, and nothing is raised."""
+    import os
+
+    from nautilus_trader.model.data import QuoteTick
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    from kanso.nautilus.backtest import _catalog, _held, _primary_days, market_points
+
+    from .conftest import quotes
+
+    root = tmp_path / "catalog"
+    root.mkdir()
+    store = ParquetDataCatalog(str(root))
+    store.write_data([instrument()])
+    store.write_data(quotes((DECEMBER[0], date(2023, 12, 15))))
+    store.write_data(quotes((date(2023, 12, 16), DECEMBER[1])))
+    quoted = Hypothesis.model_validate(
+        {
+            **hypothesis().model_dump(by_alias=True, mode="json"),
+            "resolution": "quote",
+            "data_requirements": ["quote"],
+        }
+    )
+    span = (midnight_ns(DECEMBER[0]), midnight_ns(DECEMBER[1] + timedelta(days=1)) - 1)
+    lookback = _catalog(root)
+    held = _held(lookback, quoted)
+
+    before = _primary_days(lookback, quoted, held, "quote", *span)
+    listed = lookback.get_file_list_from_data_cls(QuoteTick)
+    os.remove(max(listed))
+    after = _primary_days(lookback, quoted, held, "quote", *span)
+    returned = {
+        day_of(int(point.ts_init))  # type: ignore[attr-defined]
+        for point in market_points(_catalog(root), "quote", held[INSTRUMENT], "quote", *span)
+    }
+
+    assert len(listed) == 2
+    assert before == {DECEMBER[0] + timedelta(days=offset) for offset in range(31)}
+    assert after == returned == {DECEMBER[0] + timedelta(days=offset) for offset in range(15)}
+
+
 # --- the request ---------------------------------------------------------------
 
 
