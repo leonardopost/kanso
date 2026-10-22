@@ -669,8 +669,7 @@ def warmup_prefix(
     for _ in range(LOOKBACK_DOUBLINGS):
         lookback *= 2
         start = max(0, end + 1 - lookback * NS_PER_DAY)
-        points = _primary_points(catalog, hyp, held, grain, start, end)
-        days = sorted({day_of(int(point.ts_init)) for point in points})  # type: ignore[attr-defined]
+        days = sorted(_primary_days(catalog, hyp, held, grain, start, end))
         if len(days) >= wanted:
             return days[-wanted], days[-1]
     raise PreconditionError(
@@ -797,26 +796,73 @@ def _held(catalog: Any, hyp: Hypothesis) -> dict[str, Any]:
     return held
 
 
-def _primary_points(
+def _primary_days(
     catalog: Any, hyp: Hypothesis, held: Mapping[str, Any], grain: str, start: int, end: int
-) -> tuple[object, ...]:
-    """The series a session is counted on: the sleeve's own grain of its first market type.
+) -> set[date]:
+    """The UTC days the series a session is counted on holds a point in, `start <= ts_init
+    <= end`: the sleeve's own grain of its first market type.
 
     Bars at the sleeve's grain when the hypothesis requires bars, else its quotes, else its
     trades — one of the three is always required, because a resolution is a bar size or
     one of the unaggregated grains and the schema requires the type it names. The names
     are taken together, so a day any of them printed is a session.
+
+    Bars are read as the window reads them (`market_points`), a bar an instant. Quotes and
+    prints are not: only their days are wanted, and a name's quotes over twice the sessions
+    asked for are tens of millions of objects — measured on 2026-10-22, the 20 names of a
+    tick hypothesis held 67.8 million quotes over ten days before the window, 736 bytes
+    each once read, and a parent asking five sessions of them passed 9 GB in 103 s. Their
+    days are read off the `ts_init` column of the very files `_in_file_order` would hand the
+    query (`_days_filed`), which the query filters on `ts_init`, inclusively at both ends,
+    and turns into one point a row, so the days are the days of the points it would return.
     """
     from kanso.nautilus.strategy import BAR, QUOTE, TRADE
 
     requirement = next(kind for kind in (BAR, QUOTE, TRADE) if kind in hyp.data_requirements)
-    resolution = grain if requirement == BAR else hyp.resolution
-    return tuple(
-        chain.from_iterable(
-            market_points(catalog, requirement, held[name], resolution, start, end)
-            for name in sorted(hyp.universe)
+    days: set[date] = set()
+    for name in sorted(hyp.universe):
+        if requirement == BAR:
+            points = market_points(catalog, requirement, held[name], grain, start, end)
+            days.update(day_of(int(point.ts_init)) for point in points)  # type: ignore[attr-defined]
+        else:
+            days.update(_days_filed(catalog, requirement, held[name], hyp.resolution, start, end))
+    return days
+
+
+def _days_filed(
+    catalog: Any, requirement: str, instrument: Any, resolution: str, start: int, end: int
+) -> tuple[date, ...]:
+    """The UTC days of one instrument's quotes or prints with `start <= ts_init <= end`, read
+    off the `ts_init` column of the files `_in_file_order` reads, one file at a time, through
+    the same `wanted` check and the same miss handling (`_read_listed`) as `market_points`.
+
+    The engine names no reader of one column, so this reads the files with `pyarrow`, as
+    `_row_groups` does. On nautilus_trader 1.231.0 a query handed files reads them as one
+    dataset, keeps the rows with `start <= ts_init <= end` and deserialises every row it
+    keeps into one point carrying that row's `ts_init`
+    (`ParquetDataCatalog._query_pyarrow` and `_handle_table_nautilus`); a file that is gone
+    raises `FileNotFoundError` naming it, from `pyarrow` as from the query.
+    """
+    import numpy
+    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
+    _refuse_if_unwanted()
+    data_cls, identifier = _filed_as(requirement, instrument, resolution)
+
+    def read() -> tuple[object, ...]:
+        files = catalog.filter_files(
+            data_cls, catalog.get_file_list_from_data_cls(data_cls), [identifier], start, end
         )
-    )
+        held: set[int] = set()
+        for path in sorted(files):
+            with pq.ParquetFile(path) as handle:
+                column = handle.read(columns=["ts_init"], use_threads=False).column(0)
+            instants = column.to_numpy().astype(numpy.int64)
+            inside = instants[(instants >= start) & (instants <= end)]
+            held.update(numpy.unique(inside // NS_PER_DAY).tolist())
+        return tuple(day_of(number * NS_PER_DAY) for number in sorted(held))
+
+    return _read_listed(catalog, data_cls, [identifier], (start, end), read)  # type: ignore[return-value]
 
 
 def window_data(
@@ -2923,7 +2969,7 @@ def _row_groups(files: Iterable[str], edge: int, step: int) -> list[tuple[int, i
     rows, in 0.3 s, where the footers alone took 0.01 s; neither held 5 MB more.
     """
     import numpy
-    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+    import pyarrow.parquet as pq  # type: ignore[import-untyped,unused-ignore]
 
     counted: list[tuple[int, int, int]] = []
     stepped: dict[int, int] = {}
