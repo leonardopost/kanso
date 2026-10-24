@@ -78,7 +78,11 @@ def test_a_construct_this_build_cannot_run_is_classified_and_says_so(
 ) -> None:
     certify(loaded)
     draft(runner, loaded)
-    seam = {**mocked.CLASSIFICATION, "construct": {"id": "allocation", "host": "portfolio"}}
+    seam = {
+        **mocked.CLASSIFICATION,
+        "construct": {"id": "allocation", "host": "portfolio"},
+        "objective": "marginal_net_edge_bps",
+    }
     mocked.scripted(loaded, classify=[seam, seam])
 
     result = at(runner, loaded, "classify", HYP_ID, "--json")
@@ -89,6 +93,59 @@ def test_a_construct_this_build_cannot_run_is_classified_and_says_so(
     assert answer["runnable"] is False
     human = at(runner, loaded, "classify", HYP_ID)
     assert "not runnable in this build" in human.stdout
+
+
+CONTRIBUTION: dict[str, Any] = {
+    "id": "wf_contribution_bps",
+    "params": {"min_delta": 0.5, "k_se": 1.0},
+}
+GUARD: list[dict[str, Any]] = [{"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}]
+
+
+def test_an_objective_the_file_states_is_kept_and_the_report_says_so(
+    runner: CliRunner, loaded: Path
+) -> None:
+    draft(runner, loaded, objective=CONTRIBUTION, required_constraints=GUARD)
+    mocked.scripted(loaded, classify=[mocked.CLASSIFICATION, mocked.CLASSIFICATION])
+
+    result = at(runner, loaded, "classify", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    answer = payload(result)
+    assert answer["objective"] == CONTRIBUTION
+    assert answer["stated_objective"] == {"id": "wf_contribution_bps", "kept": True, "reason": None}
+    assert document(loaded)["objective"] == CONTRIBUTION
+    human = at(runner, loaded, "classify", HYP_ID)
+    assert "wf_contribution_bps · min_delta 0.5 · k_se 1.0 · stated in the file, kept" in (
+        human.stdout
+    )
+    assert "replaced" not in human.stdout
+
+
+def test_an_objective_classify_replaces_is_named_with_the_reason(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The draft names a relative objective, and the model answers a sleeve, which is
+    measured on its own: the stated one cannot score it, so it is replaced, and said to be."""
+    stated = {"id": "marginal_wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    draft(runner, loaded, objective=stated)
+    mocked.scripted(loaded, classify=[mocked.CLASSIFICATION])
+
+    result = at(runner, loaded, "classify", HYP_ID)
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert (
+        "replaced   marginal_wf_contribution_bps: marginal_wf_contribution_bps is a relative "
+        "objective, and a sleeve is measured absolute"
+    ) in result.stdout
+    assert document(loaded)["objective"]["id"] == "net_edge_bps"
+
+
+def test_a_classification_with_nothing_stated_reports_none(runner: CliRunner, loaded: Path) -> None:
+    draft(runner, loaded)
+    mocked.scripted(loaded, classify=[mocked.CLASSIFICATION])
+
+    assert payload(at(runner, loaded, "classify", HYP_ID, "--json"))["stated_objective"] is None
 
 
 def test_an_answer_outside_the_catalogue_takes_the_ladder_and_then_refuses(

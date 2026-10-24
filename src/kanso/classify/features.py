@@ -12,13 +12,15 @@ certified sleeve exists and one that attaches to the book only where the book ho
 something, so which constructs can attach is computed rather than left to be inferred
 from the catalogue.
 
-**What can be measured.** The objective is not the model's choice: it follows from the
-hypothesis and the construct's objective mode through the toolbox's own applicability
-predicate. The table is therefore computed for both modes, and what is shown is the
-objective each mode selects and the ranges its keep-rule parameters may be chosen from.
-The card-stage gates are shown the same way, with every range resolved onto this
-hypothesis's own scale so a bound written against its horizon or its fold count arrives
-as a number. A bound that is unbounded arrives as `None`.
+**What can be measured.** Which objectives can measure this hypothesis follows from it and
+the construct's objective mode through the toolbox's own applicability predicate, and which
+of them it is scored on is the model's to name. The table is therefore computed for both
+modes, since the construct is chosen in the same answer, and what is shown is every
+objective each mode admits — what it measures, when it misleads, and the ranges its
+keep-rule parameters may be chosen from — with none of them marked as the answer. The
+card-stage gates are shown the same way, each with the objectives it is required for, with
+every range resolved onto this hypothesis's own scale so a bound written against its
+horizon or its fold count arrives as a number. A bound that is unbounded arrives as `None`.
 
 **Nothing a result would say.** No card metric, no certificate, no strategy source and
 nothing measured of a certified strategy is computed here, because a classification
@@ -55,6 +57,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.workspace import Workspace
 
 __all__ = [
+    "applicable_ids",
     "attachable",
     "card_gates",
     "certified",
@@ -125,6 +128,7 @@ def construct_catalogue(ws: Workspace) -> list[dict[str, Any]]:
             "id": item.id,
             "description": item.description,
             "needs_host": item.needs_host,
+            "objective_mode": item.objective_mode,
             "params": item.params or {},
             "runnable": item.runnable,
         }
@@ -133,25 +137,39 @@ def construct_catalogue(ws: Workspace) -> list[dict[str, Any]]:
 
 
 def objectives(hyp: Hypothesis, folds: int) -> dict[str, Any]:
-    """The applicability table, per objective mode: what applies and what wins."""
+    """The applicability table, per objective mode: every objective the mode admits here."""
     items = toolbox()
-    table: dict[str, Any] = {}
-    for mode in MODES:
-        applies = applicable_objectives(hyp, mode)
-        table[mode] = {
-            "selected": next((found for _, found in applies), None),
+    return {
+        mode: {
             "applicable": [
-                _measurable(items[found], hyp, folds, {"priority": priority})
-                for priority, found in applies
-            ],
+                _measurable(items[found], hyp, folds, {})
+                for _, found in applicable_objectives(hyp, mode)
+            ]
         }
-    return table
+        for mode in MODES
+    }
+
+
+def applicable_ids(table: dict[str, Any], mode: str | None = None) -> list[str]:
+    """The ids `objectives` admits in one mode, or in either when no mode is given."""
+    modes = MODES if mode is None else (mode,)
+    found = [entry["id"] for one in modes for entry in table[one]["applicable"]]
+    return sorted(set(found)) if mode is None else found
 
 
 def card_gates(hyp: Hypothesis, folds: int) -> list[dict[str, Any]]:
     """The gates a hypothesis may constrain every one of its cards with."""
     return [
-        _measurable(item, hyp, folds, {"required": bool(item.required)})
+        _measurable(
+            item,
+            hyp,
+            folds,
+            {
+                "required": bool(item.required),
+                "required_for": list(item.required_for or ()),
+                "together": bool(item.together),
+            },
+        )
         for item in toolbox().values()
         if item.kind == "gate" and item.stage == CARD_STAGE
     ]

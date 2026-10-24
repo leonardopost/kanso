@@ -33,24 +33,25 @@ two runs' linearisations period by period (trades of two runs pair nowhere else)
 whose periods differ are taken as independent and their variances summed, which can only
 overstate the error of two runs that share trades.
 
-Which objective a hypothesis gets is the one deterministic domain rule in the system: the
-`applies` predicate over the hypothesis's own attributes, with `min` inclusive and `max`
-exclusive, and the lowest priority winning among those that apply. The shipped set is
-total over mechanism, objective mode and horizon either side of a day, so classification
-always has an objective to write and never has to invent one; a hypothesis that declares
-a benchmark trades the absolute Sharpe for the Sharpe over that benchmark, and the
-`benchmark` clause keeps the two disjoint. At or above a day the
-statistic is a Sharpe of returns, below it the mean edge per trade, since a sub-daily
-holding period produces too few return periods for a Sharpe to mean anything and enough
-trades for a per-trade edge to.
+Which objectives can score a hypothesis is the `applies` predicate over its own attributes,
+with `min` inclusive and `max` exclusive: the set an objective is named from, by the
+classifying model or by the operator, and never a choice within it — `priority` orders the
+list and selects nothing. The shipped set admits at least one objective in each mode at
+every mechanism and horizon either side of a day, so classification always has one to name
+and never has to invent one; a hypothesis that declares a benchmark is offered the Sharpe
+over that benchmark in place of the absolute Sharpe, and the `benchmark` clause keeps the two
+apart. At or above a day the statistic of the horizon is a Sharpe of returns, below it the
+mean edge per trade, since a sub-daily holding period produces too few return periods for a
+Sharpe to mean anything and enough trades for a per-trade edge to.
 
-Two objectives are chosen by name and never by default. The contribution — the mean net
-return per return period in basis points of the capital — applies at every horizon at a
-priority below every default, so the grid's winner is unchanged wherever it is not named,
-and a hypothesis whose target is a return on capital states `objective.id:
-wf_contribution_bps` (or its marginal form) in its own file. It is the one objective that
-counts a period in cash as a zero: a Sharpe cannot say how much of the capital was put to
-work, and a per-trade edge rewards trading less.
+The contribution — the mean net return per return period in basis points of the capital —
+and its marginal form apply at every horizon. It is the unit a return target is stated in,
+and the one objective that counts a period in cash as a zero: a Sharpe cannot say how much
+of the capital was put to work, and a per-trade edge rewards trading less — two trades a day
+at ten basis points replace forty at 1.2 under it, five basis points a day of a quarter of
+the capital kept over twelve. The contribution has the opposite flaw once every trade loses,
+moving toward zero as losing trades are dropped, so `edge_per_trade` is declared
+`required_for` both forms and every hypothesis scored on one carries it.
 
 A resolution that names an unaggregated grain rather than a bar size is treated as the
 finest grain there is — zero length — so a predicate written in durations orders it below
@@ -518,7 +519,8 @@ def measures_a_hold_over(items: Sequence[CriteriaItem], hyp: Hypothesis) -> bool
 
 
 def applicable(items: Sequence[CriteriaItem], hyp: Hypothesis, mode: str) -> list[tuple[int, str]]:
-    """Every applicable objective as `(priority, id)`, best first; the lowest wins."""
+    """Every applicable objective as `(priority, id)`, in the order they are listed; the
+    priority orders the set and selects nothing in it."""
     return sorted(
         (item.priority, item.id)
         for item in items

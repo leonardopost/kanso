@@ -78,7 +78,10 @@ class GateContext:
       signature was, so the selection ranked its number and declined it;
     * `trials` is how many candidates the search behind `run` has drawn, `run` among them:
       on a card, the hypothesis's cards that ran to a result and traded under any
-      objective, and this one. It is 1 — no search — wherever no caller counts one;
+      objective, and this one; at certification, every such card. A deflation takes its
+      expected maximum over this many draws and their spread from `trial_metrics`, since
+      a count has no units to keep apart and a spread does. It is 1 — no search — wherever
+      no caller counts one;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
       pinned, which is what the scope rule is checked against;
     * `datasets` are the pinned snapshot's datasets with their observed and documented

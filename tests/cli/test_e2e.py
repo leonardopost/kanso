@@ -78,6 +78,7 @@ FILTER_DRAFT: dict[str, Any] = {
 
 FILTER_CLASSIFICATION: dict[str, Any] = {
     "construct": {"id": "filter", "host": HYP_ID, "params": pairs({"scope": "time"})},
+    "objective": "marginal_net_edge_bps",
     "objective_params": {"min_delta": 0.0, "k_se": 0.5},
     "constraints": [{"id": "strategy_integrity", "params": pairs()}],
     "rationale": "A conditioning rule on an existing sleeve's entries: a filter.",

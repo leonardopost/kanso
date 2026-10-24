@@ -23,6 +23,18 @@ the hypothesis's `best` and says which in the event log. Clearing the classifica
 as a change of construct: a draft has none, and the best was earned as something. It is the
 re-pin that clears, whichever command re-pins, so `classify` writing another construct
 clears on the same terms as an operator stating one.
+
+A best is also only as good as the card gates it was kept under, and a re-pin that adds one
+— a gate the held pin did not name, or one it named at other parameters — clears it too,
+with a `best_cleared` naming the gates. The best was never judged by them: measured on the
+demo workspace, a best was kept across a re-pin adding `edge_per_trade`, and the next run
+started from it and `research show` printed it, a strategy whose trades lose on average
+included, until a keep that passed the gate beat its number. Cleared, the next run starts
+from the workspace `strategy.py` — the best's bytes, which a keep writes there — and its
+baseline is judged under every gate the file now names, so the strategy is re-judged by the
+gate rather than inherited past it. A re-pin that only drops a gate keeps the best, which
+passed every gate it still names. The gates are not scope: a certificate earned under fewer
+of them still says what its window measured, so composition does not read them.
 """
 
 from __future__ import annotations
@@ -219,7 +231,8 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     sha = store.put_blob(source)
     scope = scope_of(hyp)
     before = {} if held is None else _scope_of(store, held, scope)
-    cleared = held is not None and held["best_sha"] is not None and before != scope
+    added = [] if held is None else gates_added(_pinned_hypothesis(store, held), hyp)
+    cleared = held is not None and held["best_sha"] is not None and (before != scope or bool(added))
     status: Status
     if hyp.construct is None:
         status = DRAFT
@@ -244,7 +257,17 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     )
     store.connection.execute(_UPSERT, values)
     if cleared:
-        store.event(BEST_CLEARED, hyp.id, {"reason": moved(before, scope), "scope": scope})
+        reasons = [moved(before, scope)] if before != scope else []
+        if added:
+            reasons.append(
+                f"card gates added: {', '.join(added)}; the best was kept without them, and the "
+                "next run's baseline judges it under them"
+            )
+        store.event(
+            BEST_CLEARED,
+            hyp.id,
+            {"reason": "; ".join(reasons), "scope": scope, "gates_added": added},
+        )
     store.event(
         REGISTERED if held is None else REPINNED,
         hyp.id,
@@ -530,14 +553,42 @@ def _scope_of(store: StateStore, held: sqlite3.Row, now: dict[str, Any]) -> dict
 
 def _pinned_scope(store: StateStore, held: sqlite3.Row) -> dict[str, Any] | None:
     """`scope_of` the file the row pinned, or `None` when the store cannot say what it was."""
+    pinned = _pinned_hypothesis(store, held)
+    return None if pinned is None else scope_of(pinned)
+
+
+def _pinned_hypothesis(store: StateStore, held: sqlite3.Row) -> Hypothesis | None:
+    """The file the row pinned, or `None` when the store cannot say what it was."""
     sha = _optional(held["hypothesis_sha"])
     if sha is None or not store.has_blob(sha):
         return None
     try:
-        pinned = parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
+        return parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
     except ValidationError:
         return None
-    return scope_of(pinned)
+
+
+def gates_added(before: Hypothesis | None, after: Hypothesis) -> list[str]:
+    """The card gates `after` judges a card by that `before` did not, each as `id {params}`.
+
+    A gate counts as added when `before` did not name it, or named it at other parameters:
+    a best kept under one threshold was not judged at another. Both lists count, the
+    operator's entry standing for a gate both name, as on every card. With no `before` to
+    read nothing is said to have been added, as a scope the store cannot read says nothing
+    moved.
+    """
+    if before is None:
+        return []
+    held = {_gate_key(ref.id, ref.params) for ref in before.card_gates}
+    return [
+        f"{ref.id} {json.dumps(ref.params, sort_keys=True)}" if ref.params else ref.id
+        for ref in after.card_gates
+        if _gate_key(ref.id, ref.params) not in held
+    ]
+
+
+def _gate_key(gate: str, params: dict[str, Any]) -> str:
+    return f"{gate} {json.dumps(params, sort_keys=True)}"
 
 
 def moved(before: dict[str, Any], after: dict[str, Any]) -> str:

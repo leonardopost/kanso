@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 from kanso.classify.features import (
+    applicable_ids,
     attachable,
     card_gates,
     certified,
@@ -312,7 +313,16 @@ def test_the_construct_catalogue_states_what_each_one_is_and_needs(ws: Workspace
     assert entries["alpha"]["runnable"] is False
     assert entries["filter"]["params"] == {"scope": ["time", "instrument"]}
     assert entries["sleeve"]["params"] == {}
-    assert set(entries["overlay"]) == {"id", "description", "needs_host", "params", "runnable"}
+    assert set(entries["overlay"]) == {
+        "id",
+        "description",
+        "needs_host",
+        "objective_mode",
+        "params",
+        "runnable",
+    }
+    assert entries["sleeve"]["objective_mode"] == "absolute"
+    assert entries["filter"]["objective_mode"] == "relative"
 
 
 def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace) -> None:
@@ -347,6 +357,13 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
     assert gates["leg_edge"]["params"] == {"leg": "instrument", "min_sharpe": "float"}
     assert gates["leg_edge"]["ranges"] == {"min_sharpe": {"min": -10.0, "max": 10.0}}
     assert gates["edge_per_trade"]["required"] is False
+    assert gates["edge_per_trade"]["required_for"] == [
+        "wf_contribution_bps",
+        "marginal_wf_contribution_bps",
+    ]
+    assert gates["edge_per_trade"]["together"] is True
+    assert gates["min_trades"]["required_for"] == []
+    assert gates["min_trades"]["together"] is False
     assert gates["edge_per_trade"]["params"] == {"min_bps": "float", "k_se": "float"}
     assert gates["edge_per_trade"]["ranges"] == {
         "min_bps": {"min": 0.0, "max": 50.0},
@@ -361,23 +378,33 @@ def test_an_unbounded_range_arrives_as_an_open_end(ws: Workspace) -> None:
     assert ranges["k_se"] == {"min": 0.5, "max": 3.0}
 
 
-def test_the_objective_table_names_what_wins_in_each_mode(ws: Workspace) -> None:
+def test_the_objective_table_lists_what_each_mode_admits_and_marks_none(ws: Workspace) -> None:
+    """The predicate bounds the set and the model names from it: no entry is the answer."""
     table = objectives(hypothesis(), ws.config.research.folds)
-    assert table["absolute"]["selected"] == "net_edge_bps"
-    assert table["relative"]["selected"] == "marginal_net_edge_bps"
-    assert [one["id"] for one in table["absolute"]["applicable"]] == [
-        "net_edge_bps",
-        "wf_contribution_bps",
+    assert applicable_ids(table, "absolute") == ["net_edge_bps", "wf_contribution_bps"]
+    assert applicable_ids(table, "relative") == [
+        "marginal_net_edge_bps",
+        "marginal_wf_contribution_bps",
     ]
-    assert table["absolute"]["applicable"][0]["priority"] == 10
+    assert applicable_ids(table) == sorted(
+        applicable_ids(table, "absolute") + applicable_ids(table, "relative")
+    )
+    for mode in ("absolute", "relative"):
+        assert set(table[mode]) == {"applicable"}
+        for entry in table[mode]["applicable"]:
+            assert set(entry) == {"id", "meaningful_when", "params", "ranges"}
+    assert "trading less" in table["absolute"]["applicable"][0]["meaningful_when"]
 
 
-def test_a_declared_benchmark_is_what_the_absolute_table_selects(ws: Workspace) -> None:
-    """The operator's declaration picks the objective the model is shown; it never chooses."""
+def test_a_declared_benchmark_is_what_the_absolute_table_admits(ws: Workspace) -> None:
+    """The operator's declaration decides which absolute Sharpe the model is shown."""
     held = hypothesis(horizon="1d", windows=windows_for("1d"), benchmark={"hold": "first_leg"})
     table = objectives(held, ws.config.research.folds)
-    assert table["absolute"]["selected"] == "wf_sharpe_vs_hold"
-    assert table["relative"]["selected"] == "marginal_wf_sharpe"
+    assert applicable_ids(table, "absolute") == ["wf_sharpe_vs_hold", "wf_contribution_bps"]
+    assert applicable_ids(table, "relative") == [
+        "marginal_wf_sharpe",
+        "marginal_wf_contribution_bps",
+    ]
 
 
 # --- the objective set is total ----------------------------------------------
@@ -396,25 +423,25 @@ MECHANISMS: tuple[Mechanism, ...] = (
 SUB_DAILY = ("1s", "1m", "30m", "23h")
 DAILY = ("1d", "2d", "1w", "4w")
 
-EXPECTED: Mapping[tuple[str, bool], str] = {
-    ("absolute", False): "net_edge_bps",
-    ("absolute", True): "wf_sharpe_net",
-    ("relative", False): "marginal_net_edge_bps",
-    ("relative", True): "marginal_wf_sharpe",
+EXPECTED: Mapping[tuple[str, bool], list[str]] = {
+    ("absolute", False): ["net_edge_bps", "wf_contribution_bps"],
+    ("absolute", True): ["wf_sharpe_net", "wf_contribution_bps"],
+    ("relative", False): ["marginal_net_edge_bps", "marginal_wf_contribution_bps"],
+    ("relative", True): ["marginal_wf_sharpe", "marginal_wf_contribution_bps"],
 }
-"""What each mode selects either side of a day. The keep rule has nothing else to use."""
+"""What each mode admits either side of a day: never empty, so a model always has one to
+name, and always the contribution beside the statistic of the horizon."""
 
 
 @pytest.mark.parametrize("mechanism", MECHANISMS)
 @pytest.mark.parametrize("horizon", SUB_DAILY + DAILY)
 @pytest.mark.parametrize("mode", ["absolute", "relative"])
-def test_every_mechanism_mode_and_horizon_selects_an_objective(
+def test_every_mechanism_mode_and_horizon_admits_an_objective(
     mechanism: str, horizon: str, mode: str
 ) -> None:
     hyp = hypothesis(mechanism=mechanism, horizon=horizon, windows=windows_for(horizon))
     table = objectives(hyp, 4)
-    assert table[mode]["selected"] == EXPECTED[(mode, horizon in DAILY)]
-    assert table[mode]["applicable"][0]["id"] == table[mode]["selected"]
+    assert applicable_ids(table, mode) == EXPECTED[(mode, horizon in DAILY)]
 
 
 def test_the_whole_feature_set_is_computed_in_one_call(ws: Workspace, store: StateStore) -> None:

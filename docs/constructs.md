@@ -293,11 +293,13 @@ remedy: certify and compose the host sleeve first, or name another host
 
 ## Objectives
 
-Which objective a construct is scored on is the one deterministic domain rule in kanso: it
-follows from the construct's `objective_mode` and the hypothesis's horizon, and no model
-chooses it. The five default objectives are total over that grid and over whether the
-hypothesis declares a `benchmark`; two more apply at every horizon and are chosen only by
-name.
+Which objectives can score a construct follows from its `objective_mode`, the hypothesis's
+horizon and whether it declares a `benchmark`: that predicate, each objective's `applies` in
+the toolbox, is the set an objective may be named from, and it chooses nothing within it.
+`kanso classify` asks the model to name one id from the set its construct's mode admits —
+the answer's `objective` is narrowed on the wire to the ids either mode admits, and the
+check holds it to the mode of the construct chosen — and an operator can name one in the
+file instead. Each mode admits two on either side of a day, and the set is never empty.
 
 | objective | mode | horizon | measures |
 |---|---|---|---|
@@ -306,33 +308,59 @@ name.
 | `marginal_net_edge_bps` | relative | under 1d | what the construct adds to its host's edge per trade, differenced fold by fold |
 | `marginal_wf_sharpe` | relative | 1d or more | the same difference, on the walk-forward Sharpe |
 | `wf_sharpe_vs_hold` | absolute, with a `benchmark` | 1d or more | the fold-wise Sharpe minus that of holding the universe's first leg, differenced fold by fold |
-| `wf_contribution_bps` | absolute, by name | any | fold-wise mean net return per return period, in basis points of the capital |
-| `marginal_wf_contribution_bps` | relative, by name | any | what the construct adds to its host's return per period on the capital, differenced fold by fold |
+| `wf_contribution_bps` | absolute | any | fold-wise mean net return per return period, in basis points of the capital; carries `edge_per_trade` |
+| `marginal_wf_contribution_bps` | relative | any | what the construct adds to its host's return per period on the capital, differenced fold by fold; carries `edge_per_trade` |
 
 A sub-daily holding period gives few return periods and many trades, so the edge per trade
 is the estimate with a sample behind it; a day or longer gives enough return periods for a
-Sharpe to mean something. Naming an objective the grid does not reach is refused at
-registration, with the applicable ones listed:
+Sharpe to mean something. The edge per trade rewards trading less, though: dropping half the
+trades at a better edge is a keep under it even when the book earns less a day, so a
+strategy making two trades a day at ten basis points replaces one making forty at 1.2 — five
+basis points a day of a quarter of the capital kept over twelve. It used to be what every
+hypothesis held under a day was scored on, because the toolbox took the lowest priority the
+predicate admitted; `priority` now orders the list the model reads and nothing more.
 
 The contribution is the return target itself: what the book earned per return period on the
 capital it was given, in the unit a P&L target is stated in, and the one objective that
 counts a period in cash as a zero — a Sharpe cannot say how much of the capital was put to
-work, and a per-trade edge rewards trading less. It sits below every default in priority, so
-it never displaces the grid's winner: a hypothesis whose target is a return on capital states
-`objective.id: wf_contribution_bps` (an attached construct, the marginal form) in its own
-file, with `min_delta` in basis points per period, and `kanso hyp add` accepts it at any
-horizon. The `deflated_sharpe` gate skips a run scored on it, as it does the per-trade edge,
-since no card computed a Sharpe to deflate; `deflated_contribution` is its multiple-testing
-control instead — the research contribution against the expected maximum of the search's
-trials, over the error of the per-period returns it is the mean of, passed at
+work. The classify instruction tells the model that a hypothesis whose target is stated as a
+return on capital is scored on it. It has a flaw of its own: it moves toward zero as losing
+trades are dropped, so once every trade loses a card that trades less at a worse loss per
+trade scores better. `edge_per_trade` refuses that card, and its library file declares it
+`required_for` both contributions: a hypothesis scored on one carries the gate, with
+`min_bps` and `k_se` both set, from the classifier's `constraints` or the operator's
+`required_constraints` — whether it runs is not a choice, how high its bar sits is. `kanso
+classify` sends an answer back without it, and `kanso hyp validate` and `kanso hyp add`
+refuse a file without it (exit 3):
+
+```
+$ kanso hyp validate hypotheses/demo_mr/hypothesis.yaml
+error: constraints: edge_per_trade is required of a hypothesis scored on wf_contribution_bps, which rewards trading less once every trade loses
+remedy: add `{id: edge_per_trade, params: {min_bps: <0.0..50.0>, k_se: <0.0..3.0>}}` to required_constraints or constraints, the values yours, then `kanso hyp validate` the file again
+```
+
+The `deflated_sharpe` gate skips a run scored on a contribution, as it does the per-trade
+edge, since no card computed a Sharpe to deflate; `deflated_contribution` is its
+multiple-testing control instead — the research contribution against the expected maximum
+of the search, over the error of the per-period returns it is the mean of, passed at
 `min_probability` — as `deflated_edge` is the per-trade edge's, and from the second card a
-plan carries whichever of the three its objective names (`docs/concepts.md`, Certification);
-the bootstrap, cost-stress, cost-scenario, walk-forward and plateau gates read it as they
-read any objective.
+plan carries whichever of the three its objective names (`docs/concepts.md`,
+Certification); the bootstrap, cost-stress, cost-scenario, walk-forward and plateau gates
+read it as they read any objective.
+
+**An objective the file already names is the operator's.** `kanso classify` keeps it, keep
+rule and all, whenever the construct chosen is measured in its mode and its parameters are
+inside the toolbox's ranges, shows it to the model as `objective_stated`, and says so on the
+`objective` line. Otherwise it writes the model's and reports the one it replaced on a
+`replaced` line with the reason — and as `stated_objective` under `--json`, and an
+`objective_replaced` event. That includes an objective a previous classification wrote: to
+have a model choose again, clear the key. Naming an objective the predicate does not admit
+is refused at registration, with the applicable ones listed:
 
 ```
 $ kanso hyp add hypotheses/demo_alloc/hypothesis.yaml
-error: objective.id: 'net_edge_bps' does not apply to this hypothesis; the applicable relative objectives are marginal_net_edge_bps
+error: objective.id: 'net_edge_bps' does not apply to this hypothesis; the applicable relative objectives are marginal_net_edge_bps, marginal_wf_contribution_bps
+remedy: name one of the applicable objectives, or clear construct, objective and constraints and run `kanso classify`
 ```
 
 The relative objectives are **differenced fold by fold**, not as a difference of two
