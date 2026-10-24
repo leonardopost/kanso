@@ -583,6 +583,7 @@ def _propose_batch(
         dynamic=_dynamic(ws, store, active, source, previous, misses),
         check=judge,
         answer_schema=propose_schema(width),
+        answers=width,
     )
     try:
         route(ws, store, TASK, inputs, lane=lane)

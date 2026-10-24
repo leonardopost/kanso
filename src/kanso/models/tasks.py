@@ -467,7 +467,8 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
 
     The system turn is the instruction, the answer schema and the stable facts, in that
     order and from sorted keys, so it is identical across every call of this class for
-    this subject. The user turn is the dynamic facts alone.
+    this subject. The user turn is the dynamic facts alone. The output cap is the route's
+    for each answer the call asks for (`CallInputs.answers`).
     """
     schema = inputs.answer_schema or ANSWER_SCHEMAS[task]
     system = "\n\n".join(
@@ -488,7 +489,7 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
         task_class=task,
         tier=route.tier,
         effort=route.effort,
-        max_output=route.max_output,
+        max_output=route.max_output * max(1, inputs.answers),
         system=system,
         user=user,
         schema=schema,

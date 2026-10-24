@@ -24,6 +24,7 @@ from kanso.models import INSTRUCTIONS, reset_mock, spend
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
 from kanso.schemas import CardDigest
+from kanso.schemas.models import ROUTING_DEFAULTS
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -1315,7 +1316,9 @@ def test_the_next_turn_is_shown_what_a_batch_s_cards_traded(
 
     driver.run(ws, store, prepared_hyp, cards=2)
 
-    shown = json.loads(recorded.of("propose")[1].user)["recent_cards"]
+    first, second = recorded.of("propose")
+    assert first.max_output == second.max_output == 2 * ROUTING_DEFAULTS["propose"].max_output
+    shown = json.loads(second.user)["recent_cards"]
     assert [card["status"] for card in shown] == ["keep", "keep", "discard"]
     assert all(isinstance(card.get("digest"), dict) for card in shown)
     assert all(card.digest is not None for card in records.cards_of(store, prepared_hyp))

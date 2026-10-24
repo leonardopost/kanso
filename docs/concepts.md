@@ -772,7 +772,9 @@ and the phase count the turn: no keep in it is one miss. Every card is judged ag
 best the turn started from, and the keep is the highest metric that clears that floor; a
 tie keeps the earlier slot. Two slots that produce the same bytes are one card. A crash is
 repaired on the next turn alone, as one diff, and the turn after that is a batch again
-unless the repair crashed too. One model call is one spend entry. The window is read once
+unless the repair crashed too. One model call is one spend entry, sent with
+`cards_per_turn` times the `propose` route's output cap, since the cap is what one diff may
+spend (`docs/workspace.md`, `models.yaml`). The window is read once
 and written to the children in lockstep — the next chunk is read once every child still
 running has been written the last — and the lane drops a chunk once every child has taken
 it, so it holds the newest chunk and none before, as it does for one card; on 0.18.0 it kept

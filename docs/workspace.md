@@ -1400,6 +1400,15 @@ name, and an override replaces the standard name rather than adding to it.
 `explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
 register as the router reads it and then makes one minimal call to every configured model.
 
+The cap is what one answer may spend, thinking included. A `propose` call for a turn of
+`[research] cards_per_turn` proposals asks for that many answers in one, and is sent with
+that many times the route's `max_output`: the shipped 4096 tokens is sized for one diff,
+and eight diffs of a strategy several hundred lines long and the thinking beside them do
+not fit in it. An answer cut off by its cap is not JSON, so it takes the ladder as a wrong
+answer and, three times cut off, fails the step. A model whose own output limit is under
+the multiplied cap refuses the call; a smaller `cards_per_turn` or `max_output` is the
+remedy.
+
 One call connects within fifteen seconds and then waits **seven minutes** for the answer,
 and neither client retries — the router's ladder is the only retry kanso has. A model you
 serve yourself, a `local` entry whose `base_url` is a process you wrote around a vendor's
