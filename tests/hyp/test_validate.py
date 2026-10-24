@@ -575,6 +575,7 @@ def tick(**changes: Any) -> dict[str, Any]:
         (tick(), "print_through"),
         (tick(resolution="quote"), "print_through"),
         (tick(data_requirements=["quote"]), "touch"),
+        (tick(data_requirements=["quote", "trade", "bar"]), "touch"),
         (
             tick(
                 data_requirements=["book", "trade"], costs={"spread": "fixed_bps", "fixed_bps": 2}
@@ -585,7 +586,16 @@ def tick(**changes: Any) -> dict[str, Any]:
         (tick(costs={"limit_fill": "touch"}), "touch"),
         (tick(costs={"limit_fill": "through"}), "through"),
     ],
-    ids=["tick", "quote", "no prints", "book", "bars", "touch stated", "through stated"],
+    ids=[
+        "tick",
+        "quote",
+        "no prints",
+        "bars beside quotes",
+        "book",
+        "bars",
+        "touch stated",
+        "through stated",
+    ],
 )
 def test_the_fill_rule_no_layer_states_follows_the_resolution(
     ws: Workspace, doc: dict[str, Any], rule: str
