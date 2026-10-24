@@ -93,12 +93,20 @@ seam that would make it runnable — late on purpose. `docs/constructs.md` is th
 
 ## Objective, and why a constraint is never one
 
-A run optimises **exactly one scalar**. Which one is not a free choice: it follows from the
-construct's objective mode and the hypothesis's horizon, by the one deterministic domain
-rule in the system. A sub-daily sleeve is scored on net edge per trade; a daily-or-longer
-sleeve on a walk-forward net Sharpe — or, when the operator declares a `benchmark`, on
-that Sharpe less the Sharpe of holding the universe's first leg over the same folds; an
-attached construct on the marginal version of whichever of the first two applies.
+A run optimises **exactly one scalar**, and which one is named from a set the hypothesis
+and its construct admit. The construct's objective mode and the hypothesis's horizon bound
+it: a sub-daily sleeve may be scored on net edge per trade or on its return per period on the
+capital; a daily-or-longer sleeve on a walk-forward net Sharpe — or, when the operator
+declares a `benchmark`, on that Sharpe less the Sharpe of holding the universe's first leg
+over the same folds — or on the same return on capital; an attached construct on the
+marginal version of either that applies. Within that set the classifying model names one,
+and an objective the operator wrote into the file stands when the construct admits it
+(`docs/constructs.md`, Objectives). The set used to choose for them — the per-trade edge for
+everything held under a day — and the per-trade edge rewards trading less: under it a
+strategy making two trades a day at ten basis points replaces one making forty at 1.2, five
+basis points a day of a quarter of the capital kept over twelve. A return target is scored on
+the contribution, which carries `edge_per_trade` wherever it is the objective (What a card
+must satisfy, below).
 
 `absolute` objectives score the construct alone. `relative` objectives score its **marginal
 effect on its host**: the host is run by itself once per run, and every card's number is the
@@ -915,9 +923,15 @@ narrow and `k_se` is the bar. That count is a sum of each card's chance, so it h
 alike the cards are (`docs/backlog.md` row 190 says what it leaves open). A real edge pays for
 that bar: simulated on forty clips a session that share a session's luck, as the thousandth
 card, an edge of +1.5 bp a clip passed 0.44 of the time over 60 sessions and 0.88 over 122,
-and +1.0 bp 0.10 and 0.38. It is chosen like any other card gate — by the classifier, inside
-its ranges, or by you under `required_constraints` — and never by default; the search moves
-only the floor under `k_se`.
+and +1.0 bp 0.10 and 0.38. On a hypothesis scored on a contribution it is not a choice: the
+toolbox declares it `required_for` both contributions, so `kanso classify` sends back an
+answer that leaves it out and `kanso hyp validate` refuses a file that does (exit 3), and it
+is carried with `min_bps` and `k_se` both set — by the classifier, inside its ranges, or by
+you under `required_constraints`. Anywhere else it is chosen like any other card gate. Its
+two parameters mean nothing apart, so naming it with one of them is refused wherever it is
+named, on a draft too; one used to skip, which passes, and a pin registered with half the
+rule before that refusal now fails every card it judges, saying which threshold it was not
+given. The values stay the agents', and the search moves only the floor under `k_se`.
 
 `position_size` is the only one that carries a floor on size: `min_trades` floors the trade
 count, `maintenance_margin` the book's margin and `leg_edge` a leg's Sharpe, none of them a
@@ -1126,7 +1140,9 @@ its place.
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.
 Both are evaluated, yours first, and a gate you require is not reprised by a model that names
-it too. See `docs/workspace.md`.
+it too. A gate the toolbox declares `required_for` the objective — `edge_per_trade` on a
+contribution — must be in one of them with every parameter set, and either list satisfies
+it. See `docs/workspace.md`.
 
 ## The keep rule
 

@@ -124,12 +124,13 @@ class IntBounds(KansoModel):
 
 
 class Applies(KansoModel):
-    """An objective's selection predicate. Every stated clause must hold.
+    """Which hypotheses an objective can measure. Every stated clause must hold.
 
-    `benchmark` is whether the hypothesis declares one: `true` applies only to a
+    It bounds the set a classifier may name an objective from, and selects nothing within
+    it. `benchmark` is whether the hypothesis declares one: `true` applies only to a
     hypothesis that has to beat a benchmark, `false` only to one that does not, and an
-    unstated clause to both. It is what keeps an objective measured against a hold from
-    displacing the absolute one it sits beside at the same horizon.
+    unstated clause to both. It is what keeps an objective measured against a hold and the
+    absolute Sharpe it sits beside at the same horizon from both being admissible.
     """
 
     mechanism: list[Mechanism] | None = None
@@ -150,6 +151,15 @@ class CriteriaItem(KansoModel):
     objective is claimed by exactly one gate, and a plan for a hypothesis whose `n_trials`
     has reached two includes that gate with its threshold set
     (`kanso.criteria.library.deflation_gate`).
+
+    `required_for` is a card gate's claim to guard these objectives against a flaw of their
+    own: a hypothesis scored on one of them carries the gate among its card gates, with
+    every parameter it declares set (`kanso.criteria.library.required_card_gates`). Whether
+    it is carried is not a decision; the values it is carried at are.
+
+    `together` says the gate's parameters mean nothing apart: wherever it is named, every
+    one it declares is set, since a gate given half its rule judges nothing and a gate that
+    judges nothing passes (`kanso.criteria.library.check_params`).
     """
 
     id: CatalogueId
@@ -157,6 +167,8 @@ class CriteriaItem(KansoModel):
     stage: GateStage | None = None
     required: bool | None = None
     deflates: list[CatalogueId] | None = None
+    required_for: list[CatalogueId] | None = None
+    together: bool | None = None
     applies: Applies | None = None
     priority: int | None = Field(default=None, ge=0)
     meaningful_when: str | None = Field(default=None, max_length=200)
@@ -182,6 +194,11 @@ class CriteriaItem(KansoModel):
             raise ValueError("priority: only objectives are prioritised")
         if self.meaningful_when is None:
             raise ValueError("meaningful_when: a gate tells the planner when it is informative")
+        if self.required_for is not None and self.stage != "card":
+            raise ValueError(
+                "required_for: only a card gate guards an objective, since a card is what "
+                "the objective scores"
+            )
 
     def _check_objective(self) -> None:
         if self.stage is not None:
@@ -190,10 +207,14 @@ class CriteriaItem(KansoModel):
             raise ValueError("required: only gates are structural invariants")
         if self.deflates is not None:
             raise ValueError("deflates: only a gate corrects for a search")
+        if self.required_for is not None:
+            raise ValueError("required_for: only a gate guards an objective")
+        if self.together is not None:
+            raise ValueError("together: only a gate's parameters are named together")
         if self.applies is None:
             raise ValueError("applies: an objective declares the hypotheses it applies to")
         if self.priority is None:
-            raise ValueError("priority: an objective declares one; the lowest applicable wins")
+            raise ValueError("priority: an objective declares the order it is listed in")
 
     def _check_ranges(self) -> None:
         unknown = sorted(set(self.ranges) - set(self.params))

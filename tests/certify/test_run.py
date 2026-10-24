@@ -335,6 +335,7 @@ A_WEEK = document(
         "forward": {"start": date(2024, 3, 1)},
     },
     objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    required_constraints=[{"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 0.0}}],
 )
 """The demo sleeve certified over one week, on its return on the capital."""
 

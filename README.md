@@ -34,7 +34,7 @@ needs you.
 | moment | who | what |
 |---|---|---|
 | setup | operator | provider keys in `.env`, the data adapters to use (or file exports), portfolio capital and limits |
-| a new idea | operator → agent | you state the thesis; the agent writes `hypothesis.yaml`; `kanso classify` decides the construct, the objective's parameters and the card-stage constraints |
+| a new idea | operator → agent | you state the thesis; the agent writes `hypothesis.yaml`; `kanso classify` decides the construct, the objective and its keep rule, and the card-stage constraints |
 | research | kanso | one run per lane, indefinitely; stall → certification → paper, all automatic |
 | `misaligned` | operator | research drifted from the thesis. kanso already rewound the lane and carried on — decide whether the drift deserves its own hypothesis |
 | `cert_failed` ×3 | operator | the idea keeps failing certification: retire it or rewrite the thesis |

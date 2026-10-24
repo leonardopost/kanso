@@ -79,6 +79,19 @@ def test_a_first_registration_is_a_draft(ws: Workspace, store: StateStore) -> No
     assert record(ws, store).status == "draft"
 
 
+def test_a_draft_stating_its_objective_alone_registers_as_a_draft(
+    ws: Workspace, store: StateStore
+) -> None:
+    stated = {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+
+    register(ws, store, document(objective=stated))
+
+    held = record(ws, store)
+    assert held.status == "draft"
+    assert held.construct is None
+    assert held.objective == "wf_contribution_bps"
+
+
 def test_registering_records_the_classification_ids(ws: Workspace, store: StateStore) -> None:
     register(ws, store, document(**SLEEVE_CLASSIFICATION))
 

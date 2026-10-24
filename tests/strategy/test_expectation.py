@@ -146,6 +146,7 @@ def test_a_contribution_is_expected_in_basis_points_of_the_share_it_runs_on(
     contributing = {
         **DOCUMENT,
         "objective": {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}},
+        "required_constraints": [{"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}],
     }
     a_certificate(
         ws,

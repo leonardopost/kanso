@@ -41,10 +41,17 @@ document is parsed. Everything else needs the workspace, and that is this module
   present exactly when the construct needs one and names a certified strategy, its
   parameters are ones that construct declares with values inside the sets it declares
   them over, its objective applies to this hypothesis and its parameters are inside the
-  toolbox's ranges, and every constraint is a card-stage gate whose parameters are inside
-  theirs. The construct's own parameters are checked by asking the construct, which is the
-  same call the runner makes when it builds the harness: a classification this command
-  calls admissible is one the first card of a run does not reject.
+  toolbox's ranges, every constraint is a card-stage gate whose parameters are inside
+  theirs, and every gate the toolbox declares `required_for` its objective is among the
+  card gates — the operator's `required_constraints` or the classifier's `constraints` —
+  with every parameter it declares set. The construct's own parameters are checked by
+  asking the construct, which is the same call the runner makes when it builds the
+  harness: a classification this command calls admissible is one the first card of a run
+  does not reject. A draft may state its objective alone, which `kanso classify` keeps when
+  the construct it chooses admits it, and it is then held to applying in some objective
+  mode, inside the toolbox's ranges;
+* a gate whose parameters mean nothing apart (`together`, as `edge_per_trade`'s
+  `min_bps` and `k_se`) is named with every one of them, in either list, on a draft too.
 
 A validation failure names the field and the reason, and where several are independent
 they are reported together rather than one per attempt.
@@ -77,7 +84,7 @@ from typing import TYPE_CHECKING, Any, Final
 from kanso import ext
 from kanso.classify.construct import PORTFOLIO
 from kanso.classify.construct import catalogue as construct_catalogue
-from kanso.criteria import applicable_objectives, check_params
+from kanso.criteria import applicable_objectives, check_params, required_card_gates
 from kanso.criteria import catalogue as criteria_catalogue
 from kanso.criteria.integrity import clashes
 from kanso.criteria.objectives import measures_a_hold_over, measures_benchmark
@@ -136,7 +143,11 @@ STRATEGIES: Final = "strategies"
 STRATEGY_FILE: Final = "strategy.yaml"
 
 CLASSIFICATION: Final = ("construct", "objective", "constraints")
-"""The three fields classification writes; they are written and validated together."""
+"""The three fields classification writes; they are written and validated together, but for
+an objective a draft states alone."""
+
+MODES: Final = ("absolute", "relative")
+"""The objective modes a construct is measured in; a draft has no construct to say which."""
 
 
 def read_source(path: Path) -> bytes:
@@ -586,12 +597,21 @@ def _capital(ws: Workspace, hyp: Hypothesis) -> tuple[float, str]:
 
 
 def _check_classification(ws: Workspace, hyp: Hypothesis) -> None:
-    """The three fields classification writes, when they are written."""
+    """The three fields classification writes, when they are written.
+
+    A draft may state its objective alone: it is the operator's naming of what the
+    hypothesis is scored on — a return target as a contribution — and `kanso classify`
+    keeps it when the construct it chooses is measured in its mode. Until then nothing says
+    which mode that is, so it is held to applying in one of them.
+    """
     written = (hyp.construct, hyp.objective, hyp.constraints)
     absent = [name for name, value in zip(CLASSIFICATION, written, strict=True) if value is None]
     if len(absent) == len(CLASSIFICATION):
         return
     construct, objective, constraints = written
+    if construct is None and constraints is None and objective is not None:
+        _check_stated(ws, hyp, objective)
+        return
     if construct is None or objective is None or constraints is None:
         raise ValidationError(
             "; ".join(
@@ -604,6 +624,71 @@ def _check_classification(ws: Workspace, hyp: Hypothesis) -> None:
     mode = _check_construct(ws, hyp, construct)
     _check_objective(ws, hyp, objective, mode)
     _check_constraints(ws, hyp, constraints)
+    _check_guarded(hyp, objective)
+
+
+def _check_stated(ws: Workspace, hyp: Hypothesis, ref: ObjectiveRef) -> None:
+    """An objective a draft states applies to it in some objective mode, at a keep rule
+    inside the toolbox's ranges."""
+    item = criteria_catalogue().get(ref.id)
+    if item is None or item.kind != "objective":
+        raise ValidationError(
+            f"objective.id: {ref.id!r} is not an objective in the toolbox",
+            remedy="name one the toolbox holds, or clear it and let `kanso classify` name one",
+        )
+    applicable = sorted({found for mode in MODES for _, found in applicable_objectives(hyp, mode)})
+    if ref.id not in applicable:
+        raise ValidationError(
+            f"objective.id: {ref.id!r} does not apply to this hypothesis in either objective "
+            f"mode; the applicable objectives are {', '.join(applicable)}",
+            remedy="name one of the applicable objectives, or clear it and let "
+            "`kanso classify` name one",
+        )
+    problems = check_params(item, ref.params.model_dump(), hyp, ws.config.research.folds)
+    if problems:
+        raise ValidationError("; ".join(f"objective.params.{problem}" for problem in problems))
+
+
+def _check_guarded(hyp: Hypothesis, objective: ObjectiveRef) -> None:
+    """Every card gate the objective requires is carried, with every parameter set.
+
+    The toolbox says which, in each gate's `required_for`: `edge_per_trade` guards the
+    contributions, because a contribution moves toward zero as losing trades are dropped and
+    a card that trades less at a worse loss per trade is kept under one. Whether it runs is
+    not a decision; the values it runs at are, and either list may carry it — the
+    operator's entry stands where both do.
+    """
+    gates = {ref.id: ref for ref in hyp.card_gates}
+    items = criteria_catalogue()
+    problems: list[str] = []
+    for gate in required_card_gates(objective.id):
+        declared = items[gate].params
+        found = gates.get(gate)
+        missing = (
+            list(declared) if found is None else [n for n in declared if n not in found.params]
+        )
+        if found is None:
+            problems.append(
+                f"constraints: {gate} is required of a hypothesis scored on {objective.id}, "
+                "which rewards trading less once every trade loses"
+            )
+        elif missing:
+            problems.append(
+                f"{gate}: {', '.join(missing)} is not set, and {gate} is required of a "
+                f"hypothesis scored on {objective.id} with every parameter set"
+            )
+    if problems:
+        gate = required_card_gates(objective.id)[0]
+        ranges = items[gate].ranges
+        params = ", ".join(
+            f"{name}: <{ranges[name][0]}..{ranges[name][1]}>" if name in ranges else f"{name}: …"
+            for name in items[gate].params
+        )
+        raise ValidationError(
+            "; ".join(problems),
+            remedy=f"add `{{id: {gate}, params: {{{params}}}}}` to required_constraints or "
+            "constraints, the values yours, then `kanso hyp validate` the file again",
+        )
 
 
 def _check_construct(ws: Workspace, hyp: Hypothesis, ref: ConstructRef) -> str:

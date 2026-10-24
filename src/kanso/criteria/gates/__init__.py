@@ -1084,17 +1084,36 @@ class _EdgePerTrade:
     loses: a contribution moves towards zero as the losing trades are dropped, and a card
     that halves its clips at a worse loss per clip scores better and is kept. As a card gate
     a failing card is not kept whatever it scored, so with it on a lane only a card whose
-    trades pay on average can become the best. A card that closed no trade has no edge — its
-    estimate is zero, in no period — and fails at any `min_bps`, which the range holds at
-    zero or above: a card that did not trade did not show that a trade pays.
+    trades pay on average can become the best — and the toolbox declares it `required_for`
+    both contributions, so every hypothesis scored on one carries it. A card that closed no
+    trade has no edge — its estimate is zero, in no period — and fails at any `min_bps`,
+    which the range holds at zero or above: a card that did not trade did not show that a
+    trade pays.
+
+    Its two parameters mean nothing apart (`together`), and a file naming one of them is
+    refused where it is registered. A pin registered before that was refused judges every
+    card it is asked to and fails it, naming the parameter it was not given: half a rule
+    used to skip, and a skip passes. Named with neither, it judges nothing and says so.
     """
 
     id: ClassVar[str] = "edge_per_trade"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
         floor, k_se = number(ctx, "min_bps"), number(ctx, "k_se")
-        if floor is None or k_se is None:
+        if floor is None and k_se is None:
             return skipped(self.id, "no min_bps and k_se were chosen, so no edge was required")
+        if floor is None or k_se is None:
+            chosen, missing = ("k_se", "min_bps") if floor is None else ("min_bps", "k_se")
+            return verdict(
+                self.id,
+                False,
+                {
+                    "refused": f"{chosen} was chosen and {missing} was not, and the two mean "
+                    "nothing apart",
+                    "min_bps": floor,
+                    "k_se": k_se,
+                },
+            )
         edge, se, periods = edge_per_trade_of(ctx.run)
         searched = search_margin(ctx.trials)
         normal = max(k_se, searched)

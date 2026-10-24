@@ -75,7 +75,7 @@ never edits the file.
 | `screens/<id>/specs/` | `screen run`, the loader specs its fetches were made with | no — a record of what was fetched |
 | `screens/<id>/<sha7>-s<snap7>-v<ver7>.yaml` | `screen run` | no — a rendering of the result `state.db` records |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
-| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
+| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; every `classify` answer names its `objective`, one of the ids the hypothesis admits; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
 | `AGENTS.md`, `CLAUDE.md` | `init`, if absent | **yes** |
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
@@ -364,6 +364,17 @@ once classified — the construct, the objective and the card-stage constraints.
 writes those last three and nothing else; you can equally write them yourself and run
 `kanso hyp add`, which needs no model at all. The file's own comments are its field reference.
 
+**An objective you write stays yours.** State `objective` alone — a return target as
+`wf_contribution_bps`, say — and `kanso hyp add` registers the file as a draft, holding the
+objective to applying in some objective mode; `kanso classify` then decides the construct
+and the constraints around it: it keeps your objective, keep rule and all, whenever the construct it chooses is
+measured in the objective's mode and the parameters are inside the toolbox's ranges, and
+says `stated in the file, kept`. Otherwise it writes the one the model named and prints a
+`replaced` line naming yours and why (`docs/constructs.md`, Objectives). An objective an
+earlier classification wrote is kept the same way; clear the key to have a model choose
+again. A file scored on a contribution carries `edge_per_trade` with `min_bps` and `k_se`
+both set, in either list, or `kanso hyp validate` refuses it (exit 3).
+
 **`required_constraints` is the one classification cannot touch.** It holds card-stage gates
 you require, in the same shape as `constraints`, and classification neither reads it as
 something to rewrite nor writes it: it owns three keys of the file and this is a fourth, so it
@@ -382,8 +393,8 @@ required_constraints:
   params: {leg: DEMO.SIM, min_sharpe: 0.0}
 - id: trading_hours          # every fill in regular hours, flat by each close; daylight saving moves it
   params: {session: "09:30-16:00", tz: America/New_York}
-- id: edge_per_trade         # no keep unless the mean trade nets an error above zero, more as the search widens
-  params: {min_bps: 0.0, k_se: 1.0}
+- id: edge_per_trade         # no keep unless the mean trade nets an error above zero, more as the search widens;
+  params: {min_bps: 0.0, k_se: 1.0}   # required on a contribution, and always with both thresholds
 ```
 
 Before this existed, an instruction like that could only be prose in `program.md`, which
@@ -671,7 +682,7 @@ The hold is not arithmetic on prices. It is a sleeve kanso ships
 (`src/kanso/templates/strategy_hold.py`) run by the same runner as the strategy — the same
 window, snapshot, venue model, costs, splits, capital, sizing budget, warmup and `book`
 policy, with every order in the warmup dropped like the strategy's — and never gated by `max_hold`, because it
-is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
+is a benchmark rather than a card. Classification is then offered `wf_sharpe_vs_hold` instead
 of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
 fold by fold, with the paired error of a difference of Sharpes on the same periods. The hold is run on every
 path that measures the objective — each card of a run (once per run, in a child of the lane

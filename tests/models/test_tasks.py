@@ -201,6 +201,7 @@ def classification(construct_params: Any, constraint_params: Any) -> dict[str, A
     """A classify answer carrying those two parameter values, whatever shape they are."""
     return {
         "construct": {"id": "sleeve", "params": construct_params},
+        "objective": "net_edge_bps",
         "objective_params": {"min_delta": 0.0, "k_se": 1.0},
         "constraints": [{"id": "min_trades", "params": constraint_params}],
         "rationale": "a sleeve",

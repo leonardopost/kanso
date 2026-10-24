@@ -2,7 +2,9 @@ id: edge_per_trade
 kind: gate
 stage: card
 required: false
-meaningful_when: "When each trade must pay, not the book trade less: mean net bp per trade, less max(k_se, n trials' expected max) errors as a t on the periods traded, must exceed min_bps; one period fails."
+required_for: [wf_contribution_bps, marginal_wf_contribution_bps]
+together: true
+meaningful_when: "When each trade must pay, not the book trade less; carried on every contribution: mean net bp per trade, less max(k_se, n trials' expected max) errors as a t, must exceed min_bps."
 params: {min_bps: float, k_se: float}
 ranges: {min_bps: [0.0, 50.0], k_se: [0.0, 3.0]}
 impl: kanso.criteria.gates.edge_per_trade
