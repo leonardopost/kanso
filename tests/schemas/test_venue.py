@@ -96,6 +96,20 @@ def test_the_limit_fill_rule_is_inherited_and_overridden_like_any_cost() -> None
         CostsOverride.model_validate({"limit_fill": "sometimes"})
 
 
+def test_the_rule_a_hypothesis_defaults_to_is_a_default_any_layer_overrides() -> None:
+    """A tick hypothesis over quotes and prints hands the print rule in as the default: it
+    leaves the costs' origin where the layers leave it, and a rule any layer states wins."""
+    defaulted = resolve_venue_model("XNAS", default_limit_fill="print_through")
+    declared = resolve_venue_model(
+        "XNAS",
+        declaration=VenueDeclaration(costs=CostsOverride(limit_fill="touch")),
+        default_limit_fill="print_through",
+    )
+
+    assert (defaulted.costs.limit_fill, defaulted.origins.costs) == ("print_through", "default")
+    assert (declared.costs.limit_fill, declared.origins.costs) == ("touch", "broker")
+
+
 def test_a_latency_is_zero_by_default_and_inherited_like_any_cost() -> None:
     """Zero when nobody states it; the broker, the venue entry and the hypothesis override it
     in that order; a negative or infinite one is refused."""

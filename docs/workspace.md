@@ -126,6 +126,8 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | take the spread from quotes with no `fixed_bps` over an instrument asked for neither `quote` nor `book` — a signal included | 3 · at `hyp validate`, naming `costs.spread` and the instrument: a fill there has no quote before it to read a spread from, and its price carries none |
+| research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
+| state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
 | hold a perpetual in a universe whose `data_requirements` does not list `funding` | 3 · at `hyp validate`, naming the instrument; a perpetual is known by its resolved definition, not its id |
@@ -970,8 +972,25 @@ venue fills a limit order resting on the book.
 
 ```yaml
 costs:
-  limit_fill: through              # touch (default) | through | print_through | print_through_whole
+  limit_fill: through              # touch | through | print_through | print_through_whole
 ```
+
+When no layer states it, a hypothesis that holds quotes and prints at tick resolution —
+`resolution` `tick`, `quote` or `trade`, requiring `quote` and `trade`, not `book`, and asking
+no instrument for `bar` beside `quote`, which is everything `print_through` needs (below) —
+resolves to `print_through`, and every other to `touch`: on bars there is no tape to fill a
+resting order from, and a level-two book keeps a queue of its own. On a tape `touch` credits a
+resting limit with no queue ahead of it, all that is left of it from any point beyond its
+price and the size a quote shows again at every quote that shows it, and the card's fill
+ratio, maker share and per-trade edge read those credits; the print rule credits it only from
+a print through it, by that print's size. A rule a layer states is the operator's and stands,
+`touch` included. At tick resolution on the top-of-book venue, a maker schedule —
+`maker_bps` or `maker_per_share`, from any layer — under `touch` or `through` is refused at
+`hyp validate`, `hyp add` and `research begin` (exit 3), naming the key: it would price as a
+maker's the fills those rules credit with no queue ahead of them. A venue under a print rule
+that states no maker schedule is admitted with a warning, since its resting fills are charged
+as any fill at their price — `slippage_bps` and half the spread — which the account does not
+charge a maker.
 
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
 price — a bar whose low is the limit, or a print at it. Under `through` the market has to go
@@ -1112,8 +1131,16 @@ takes to see an order.
 
 ```yaml
 costs:
-  latency_ms: 20                   # zero unless stated: no delay, no model
+  latency_ms: 20                   # zero unless stated: no delay, no model; refused at tick resolution
 ```
+
+At tick resolution a venue model may not leave it at zero: `hyp validate`, `hyp add` and
+`research begin` refuse it (exit 3), naming `costs.latency_ms`, because at zero the venue
+lands every order on the very point the strategy was handed when it sent it, before anything
+later on the tape, which no route to a venue does — the one artefact the record measured at
+zero, a re-post rule's +10.7 bp a session, vanished at any real delay. No latency is chosen
+for you: any above zero is admitted, and the right one is the round trip you measure on your
+route. On bars it stays optional, and `latency_stress` skips a model that states none.
 
 Every order command — an insert, an update, a cancel — reaches the venue's book that many
 milliseconds after the sleeve sent it, on both code paths alike, and the book carries on in

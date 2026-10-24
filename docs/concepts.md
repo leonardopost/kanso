@@ -1548,8 +1548,9 @@ at a tolerance of zero for book data too.
 **A limit that rests is filled by the venue's rule.** A limit order that was not marketable
 when it was placed waits on the book, and a later point that reaches its price fills it at
 that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`
-(`docs/workspace.md`): under `touch`, the default and the engine's own rule, a bar whose low
-is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
+(`docs/workspace.md`): under `touch`, the engine's own rule and the default for a hypothesis
+that does not hold quotes and prints at tick resolution — one that does resolves to
+`print_through` — a bar whose low is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
 a print past it. Under `print_through` only a print past it fills it, by that print's own size,
 and a taker fills on the quote rather than on a print (below). On a bar the venue walks the
 open, the high, the low and the close as prints in turn, so a bar that only touched the level
@@ -1991,7 +1992,9 @@ the certification window and lost 13 under 20 ms, and a one-close rule early by 
 the reverse — a route a bar long moves a daily rule by a whole step. A hypothesis that
 states no latency has no route to slow and the gate skips, saying so; like the plateau, it
 fails an unstressed objective at or below zero before any run is made, is judged after
-every cheap verdict, and is spared when `embargoed_window` has refused the subject.
+every cheap verdict, and is spared when `embargoed_window` has refused the subject. Only a
+hypothesis on bars can state none: one at tick resolution is refused a latency of zero
+(`docs/workspace.md`), so the gate judges every tick lane that names it.
 
 `param_plateau` is defined around an edge and nowhere else. Its floor is a fraction of the
 unperturbed objective, and a fraction of a loss lies above the loss: at −10 and a

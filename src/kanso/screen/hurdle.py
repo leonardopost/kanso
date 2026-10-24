@@ -44,6 +44,7 @@ from kanso.schemas.screen import CatchUp, LeadLag, Screen, followed
 from kanso.schemas.venue import (
     DEFAULT_ACCOUNT,
     DEFAULT_CURRENCY,
+    DEFAULT_LIMIT_FILL,
     VenueDeclaration,
     VenueModel,
     resolve_venue_model,
@@ -177,6 +178,7 @@ def hurdles(
     definitions: Mapping[str, Any],
 ) -> Hurdles:
     """The venue model of every leg the screen's responses trade, refused where unpriceable."""
+    from kanso.hyp.validate import default_limit_fill
     from kanso.portfolio.files import venue_overrides  # `kanso.portfolio` imports kanso.hyp
 
     legs = traded(screen)
@@ -204,6 +206,9 @@ def hurdles(
                 if hypothesis
                 else (screen.costs or {}).get(venue),
                 quotes_available=quoted[venue],
+                default_limit_fill=default_limit_fill(hypothesis)
+                if hypothesis
+                else DEFAULT_LIMIT_FILL,
             )
         except ValidationError as error:
             where = f"{hypothesis.id}'s costs" if hypothesis else f"costs.{venue} in the screen"

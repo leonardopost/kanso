@@ -230,7 +230,13 @@ def test_depth_levels_outside_one_to_four_hundred_are_refused(ws: Workspace, lev
 def test_depth_over_a_book_is_admissible(ws: Workspace) -> None:
     depth = {"every_ms": 100, "levels": 3}
     parsed = accepted(
-        ws, document(resolution="tick", data_requirements=["book", "trade"], depth=depth)
+        ws,
+        document(
+            resolution="tick",
+            data_requirements=["book", "trade"],
+            depth=depth,
+            costs={**DOCUMENT["costs"], "latency_ms": 20},
+        ),
     )
 
     assert parsed.depth is not None and parsed.depth.every_ms == 100
@@ -396,7 +402,13 @@ def test_a_policy_that_moves_money_is_admissible_on_a_margin_account(ws: Workspa
     assert parsed.book is not None and parsed.book.funded
 
 
-PRINT_COSTS = {"commission_bps": 0.5, "slippage_bps": 1.0, "spread": "fixed_bps", "fixed_bps": 2}
+PRINT_COSTS = {
+    "commission_bps": 0.5,
+    "slippage_bps": 1.0,
+    "spread": "fixed_bps",
+    "fixed_bps": 2,
+    "latency_ms": 20,
+}
 
 
 @pytest.mark.parametrize("rule", ["print_through", "print_through_whole"])
@@ -541,6 +553,153 @@ def test_a_print_rule_is_admissible_beside_a_bar_only_signal(ws: Workspace) -> N
     )
 
     assert parsed.costs is not None and parsed.costs.limit_fill == "print_through"
+
+
+# -- tick resolution: the fill rule, the latency and a maker schedule ---------------
+
+TICK_COSTS = {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes", "latency_ms": 20}
+
+
+def tick(**changes: Any) -> dict[str, Any]:
+    """A hypothesis over DEMO's quotes and prints at tick resolution, every cost but those
+    `changes` names stated; a route of 20 ms."""
+    costs = {**TICK_COSTS, **changes.pop("costs", {})}
+    return document(
+        **{"resolution": "tick", "data_requirements": ["quote", "trade"], **changes}, costs=costs
+    )
+
+
+@pytest.mark.parametrize(
+    ("doc", "rule"),
+    [
+        (tick(), "print_through"),
+        (tick(resolution="quote"), "print_through"),
+        (tick(data_requirements=["quote"]), "touch"),
+        (
+            tick(
+                data_requirements=["book", "trade"], costs={"spread": "fixed_bps", "fixed_bps": 2}
+            ),
+            "touch",
+        ),
+        (document(), "touch"),
+        (tick(costs={"limit_fill": "touch"}), "touch"),
+        (tick(costs={"limit_fill": "through"}), "through"),
+    ],
+    ids=["tick", "quote", "no prints", "book", "bars", "touch stated", "through stated"],
+)
+def test_the_fill_rule_no_layer_states_follows_the_resolution(
+    ws: Workspace, doc: dict[str, Any], rule: str
+) -> None:
+    """Quotes and prints at tick resolution resolve to the print rule; bars, a book and a tape
+    with no prints resolve to touch; a rule stated at a layer stands."""
+    (model,) = resolved(ws, doc).values()
+
+    assert model["costs"]["limit_fill"] == rule
+
+
+def test_the_print_rule_default_leaves_the_costs_origin_where_the_layers_leave_it(
+    ws: Workspace,
+) -> None:
+    (model,) = resolved(ws, tick()).values()
+
+    assert model["origins"]["costs"] == "hypothesis"
+
+
+@pytest.mark.parametrize("resolution", ["tick", "quote", "trade"])
+def test_a_latency_of_zero_at_tick_resolution_is_refused(ws: Workspace, resolution: str) -> None:
+    """At zero the venue lands an order on the point it was sent from. No latency is named:
+    the remedy asks for the measured one."""
+    costs = {key: value for key, value in TICK_COSTS.items() if key != "latency_ms"}
+    failure = refused(
+        ws, document(resolution=resolution, data_requirements=["quote", "trade"], costs=costs)
+    )
+
+    assert failure.message == (
+        f"costs.latency_ms: 0 on SIM at resolution {resolution} lands every order on the point "
+        "it was sent from, before anything later on the tape, which no route to a venue does"
+    )
+    assert failure.remedy == (
+        "state costs.latency_ms — the round trip measured on the account and route you trade "
+        "through — in the hypothesis costs or under venues.SIM.costs in portfolio.yaml"
+    )
+
+
+def test_a_latency_stated_for_the_venue_admits_a_tick_hypothesis(ws: Workspace) -> None:
+    write_portfolio(ws, {"SIM": {"costs": {"latency_ms": 5}}})
+    costs = {key: value for key, value in TICK_COSTS.items() if key != "latency_ms"}
+
+    parsed = accepted(ws, tick(costs=costs | {"latency_ms": None}))
+
+    assert parsed.resolution == "tick"
+
+
+def test_a_latency_of_zero_on_bars_is_admissible(ws: Workspace) -> None:
+    (model,) = resolved(ws, DOCUMENT).values()
+
+    assert model["costs"]["latency_ms"] == 0.0
+
+
+@pytest.mark.parametrize("rule", ["touch", "through"])
+@pytest.mark.parametrize(
+    ("schedule", "key"),
+    [({"maker_bps": 0.0}, "maker_bps"), ({"maker_per_share": 0.004}, "maker_per_share")],
+)
+def test_a_maker_schedule_under_a_queue_free_rule_at_tick_resolution_is_refused(
+    ws: Workspace, rule: str, schedule: dict[str, float], key: str
+) -> None:
+    """`touch` and `through` credit a resting limit with no queue ahead of it, so a maker's
+    schedule there would price fills the tape did not give."""
+    failure = refused(ws, tick(costs={"limit_fill": rule, **schedule}))
+
+    assert failure.message.startswith(
+        f"costs.{key}: a maker schedule on SIM under limit_fill: {rule} prices as a maker's"
+    )
+    assert failure.remedy is not None
+    assert failure.remedy.startswith("state limit_fill: print_through or print_through_whole")
+    assert "venues.SIM.costs" in failure.remedy
+
+
+def test_a_maker_schedule_stated_for_the_venue_is_refused_the_same_way(ws: Workspace) -> None:
+    write_portfolio(ws, {"SIM": {"costs": {"maker_bps": -0.2}}})
+
+    failure = refused(ws, tick(costs={"limit_fill": "through"}))
+
+    assert failure.message.startswith("costs.maker_bps: a maker schedule on SIM")
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        tick(costs={"maker_bps": 0.0}),
+        tick(costs={"maker_bps": 0.0, "limit_fill": "print_through_whole"}),
+        tick(
+            data_requirements=["book", "trade"],
+            costs={"spread": "fixed_bps", "fixed_bps": 2, "maker_bps": 0.0},
+        ),
+        document(costs={**DOCUMENT["costs"], "maker_bps": 0.0}),
+    ],
+    ids=["print rule by default", "print rule stated", "level-two book", "bars under touch"],
+)
+def test_a_maker_schedule_is_admissible_where_resting_fills_are_credited_from_the_tape(
+    ws: Workspace, doc: dict[str, Any]
+) -> None:
+    """The print rules credit a resting limit from a print through it, a level-two book keeps
+    a queue, and on bars there is no tape rule to choose instead."""
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert admitted.warnings == ()
+
+
+def test_a_print_rule_with_no_maker_schedule_is_admitted_with_a_warning(ws: Workspace) -> None:
+    admitted = hyp.admit(ws, write_hypothesis(ws, tick()))
+
+    assert admitted.warnings == (
+        "costs: no maker_bps or maker_per_share on SIM under limit_fill: print_through, so a "
+        "fill that rested on the book is charged as any fill at its price — slippage_bps and "
+        "half the spread on top of the commission; state the account's maker schedule, 0 for "
+        "none and negative for a rebate",
+    )
+    assert hyp.validate(ws, write_hypothesis(ws, tick())).id == admitted.hyp.id
 
 
 def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> None:

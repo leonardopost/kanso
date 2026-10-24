@@ -103,6 +103,7 @@ from kanso.hyp import (
     PROGRAM_FILE,
     STRATEGY_FILE,
     Registration,
+    check_tick_costs,
     host_resolution,
     host_sizing,
     hypothesis_dir,
@@ -1100,7 +1101,10 @@ def begin(
 
     Refuses a hypothesis that is not registered, is not classified, already has an active
     run, whose workspace `hypothesis.yaml` no longer equals its pin, or which no snapshot
-    covers. A baseline that will not run leaves no record and no lane directory.
+    covers, and one at tick resolution whose venue model, as the workspace resolves it now, a
+    validation would refuse (`kanso.hyp.validate.check_tick_costs`) — a file registered before
+    the rule, or a `portfolio.yaml` edited since. A baseline that will not run leaves no record
+    and no lane directory.
 
     One the operator takes out of `lane`'s hands (`research queue remove`) is refused with
     `TakenError` wherever the begin has got to: before anything is read, at the next
@@ -1141,6 +1145,7 @@ def begin(
     held = partial(_admitted, store, hyp_id, lane)
     with backtest.wanted(held):
         setup = _setup(ws, store, hyp)
+        check_tick_costs(hyp, {setup.venue_model.venue: setup.venue_model})
         prefixes = _warmup_spans(setup)
     snapshot = covering(
         ws,
