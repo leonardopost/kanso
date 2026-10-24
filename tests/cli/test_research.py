@@ -15,6 +15,7 @@ from nautilus_trader.model.instruments import Equity
 from typer.testing import CliRunner
 
 from kanso.cli import research as research_cli
+from kanso.criteria import criteria_version
 from kanso.criteria.gates import periods_margin
 from kanso.criteria.run import CardRun, midnight_ns
 from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
@@ -618,7 +619,9 @@ def test_show_measured_prints_what_the_card_was_scored_from(
     assert lines[0].startswith("card ") and lines[0].endswith(
         f"{sha7} · keep · fade the rolling mean"
     )
-    assert lines[1].startswith("measured ") and lines[1].endswith("net_edge_bps over 4 fold(s)")
+    assert lines[1].startswith("measured ") and lines[1].endswith(
+        f"net_edge_bps over 4 fold(s) · criteria {criteria_version()}"
+    )
     assert f"{kept['metric']:.6f} ± {kept['metric_se']:.6f}" in lines[2]
     assert f"{kept['n_trades']} trade(s)" in lines[2]
     periods = lines[4:]
@@ -631,7 +634,15 @@ def test_show_measured_prints_what_the_card_was_scored_from(
     document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
     assert document["sha"] == kept["strategy_sha"]
     assert document["card"]["measured_sha"] == kept["measured_sha"]
-    assert set(document["measurement"]) == {"objective", "folds", "run", "host", "benchmark"}
+    assert set(document["measurement"]) == {
+        "objective",
+        "folds",
+        "criteria_version",
+        "run",
+        "host",
+        "benchmark",
+    }
+    assert document["measurement"]["criteria_version"] == criteria_version()
     assert len(document["measurement"]["run"]["returns"]) == len(periods)
     # The payload is the codec's form, so kanso's own code scores it to the card's number.
     measured = records.read_measurement(document["measurement"])
@@ -661,6 +672,7 @@ def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differen
         2,
         run,
         host=run,
+        criteria_version="0.1.0+000000000000",
     )
     with StateStore(tmp_path / "state.db") as store:
         store.migrate()
@@ -680,9 +692,20 @@ def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differen
             created_at=datetime(2024, 1, 3, tzinfo=UTC),
             measured_sha=records.record_measurement(store, measured),
         )
-        shown = research_cli._measurement(store, HYP_ID, made.strategy_sha, made)
+        # A newer card of the same bytes that kept none is passed over and counted.
+        unmeasured = made.model_copy(update={"status": "redundant", "measured_sha": None})
+        shown = research_cli._measurement(
+            store, HYP_ID, made.strategy_sha, [made, unmeasured, unmeasured]
+        )
 
-    assert shown.lines[1].endswith("marginal_wf_sharpe over 2 fold(s) · against the host run")
+    assert shown.lines[0].endswith("· keep · baseline · 2 newer card(s) of these bytes kept none")
+    # Scored under another kanso, which the line says: this one's objective may compute
+    # another number from the same run.
+    assert shown.lines[1].endswith(
+        "marginal_wf_sharpe over 2 fold(s) · against the host run · criteria "
+        f"0.1.0+000000000000, not this kanso's {criteria_version()}"
+    )
+    assert shown.data["card"]["measured_sha"] == made.measured_sha
     assert shown.lines[3].split()[:4] == ["periods", "2", "of", "30m"]
     assert [line.split()[:2] for line in shown.lines[4:]] == [
         ["2024-01-02", "14:30:00"],
@@ -705,9 +728,50 @@ def test_show_measured_refuses_a_card_that_kept_no_measurement(
 
     assert result.exit_code == Exit.PRECONDITION
     refused = payload(result)
-    assert f"evaluated {sha7} kept no measurement" in refused["error"]
+    assert f"no card of {HYP_ID} that evaluated {sha7} kept a measurement" in refused["error"]
     assert refused["remedy"] == f"kanso research show {HYP_ID} --sha {sha7} --json"
     assert at(runner, registered, *refused["remedy"].split()[1:]).exit_code == Exit.OK
+
+
+def test_show_measured_reads_past_a_newer_card_of_the_bytes_that_kept_none(
+    runner: CliRunner, registered: Path
+) -> None:
+    """A card of the same bytes recorded by a kanso that kept no measurement — a lane not yet
+    restarted onto this one, say — does not hide what the keep before it kept: the newest
+    card that kept one is shown, and the card line says how many were passed over."""
+    begin(runner, registered)
+    edit(registered, REVERTING)
+    kept = card(runner, registered, "fade the rolling mean")
+    with StateStore(registered / "state.db") as store:
+        run = records.require_active(store, HYP_ID)
+        newest = records.cards_of(store, HYP_ID)[-1]
+        records.record_card(
+            store,
+            run,
+            newest.model_copy(
+                update={"status": "redundant", "desc": "an old lane's card", "measured_sha": None}
+            ),
+        )
+    sha7 = str(kept["strategy_sha"])[:7]
+
+    result = at(runner, registered, "research", "show", HYP_ID, "--measured")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert result.stdout.splitlines()[0].endswith(
+        f"{sha7} · keep · fade the rolling mean · 1 newer card(s) of these bytes kept none"
+    )
+    document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
+    assert (document["card"]["status"], document["card"]["measured_sha"]) == (
+        "keep",
+        kept["measured_sha"],
+    )
+    assert records.read_measurement(document["measurement"]).compute() == (
+        kept["metric"],
+        kept["metric_se"],
+    )
+    # The source is still shown with the newest card of the bytes, which kept none.
+    shown = payload(at(runner, registered, "research", "show", HYP_ID, "--json"))
+    assert (shown["card"]["desc"], shown["card"]["measured_sha"]) == ("an old lane's card", None)
 
 
 def test_show_measured_with_a_diff_is_refused_before_anything_is_read(

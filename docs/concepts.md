@@ -459,22 +459,39 @@ trade with the fills that made it, every fill with its cost — and that run use
 and dropped, so a question about how a number came to be, whether the first weeks of the
 window already said what the whole window did or whether one week carried it, could be
 asked of no card ever run. A card that ran to a result — a redundant card and a baseline
-included — keeps its **measurement**: the objective and its folds, the run, and the
-host-alone run or the benchmark run the objective read beside it, stored as one blob of
-canonical JSON compressed with zlib, its runs in the form a stage's realised windows are kept
-in, and named by the card's `measured_sha`. It is the arguments the card was scored with, so
-the objective on it returns the card's metric and error exactly
-(`kanso.research.records.Measurement`, whose `compute` is that call and whose `between` cuts
-the run, its host and its benchmark to any span of the window for a reading the loop never
-took). The same bytes measured twice under the same pins measure the same run, so the second
-card names the first one's blob. A crash, a card refused before or during its backtest and a
-card recorded before cards kept one have none. `research show --measured` prints it, here on
-the demo's keep (the 257 period lines between the first two and the last two are elided):
+included — keeps its **measurement**: the objective and its folds, the run, the host-alone
+run or the benchmark run the objective read beside it, and the criteria version of the kanso
+that scored it, stored as one blob of canonical JSON compressed with zlib, its runs in the
+form a stage's realised windows are kept in, and named by the card's `measured_sha`. It is
+the arguments the card was scored with, so under that criteria version the objective on it
+returns the card's metric and error exactly (`kanso.research.records.Measurement`, whose
+`compute` is that call and whose `between` cuts the run, its host and its benchmark to any
+span of the window for a reading the loop never took).
+
+Under another kanso, `compute` is that kanso's objective on the same run, and a release can
+compute an objective differently: 0.17.0 read a per-trade edge's error period by period,
+which moved the demo keep's error from 0.971889 to 1.065174 on the same trades. So the
+measurement names the version that scored it, and a reading set beside the card's own number
+is one arithmetic only where the two agree. The version is the one installed when the card
+ran, which after an upgrade is not its run's pin — a run is carded by whichever kanso is
+installed when its next card runs — and it is the package version and a digest of the
+criteria library's files, so a release moves it and an edit to an objective's code between two
+development builds of one version does not.
+
+The same bytes measured twice under the same pins and measured the same way — the same
+`[research] capital`, `folds` and `return_period`, venue model, host version, sleeve budget,
+grains and warmup (below) — by the same kanso measure the same run, so the second card names
+the first one's blob; move any of them and the second is a blob of its own. A crash, a card
+refused before or during its backtest and a card recorded before cards kept one have none.
+`research show --measured` prints the newest measurement a strategy's cards kept, passing
+over a newer card of the bytes that kept none and saying so, here on the demo's keep (the 257
+period lines between the first two and the last two are elided); an older card's, one a newer
+card of the same bytes replaced, is `kanso.research.records.measurement_of` on that card:
 
 ```
 $ kanso research show demo_mr --measured
 card       f729a53 · keep · fade a 2-sigma deviation from a 60-bar rolling mean
-measured   net_edge_bps over 4 fold(s)
+measured   net_edge_bps over 4 fold(s) · criteria 0.18.0+d0c850ba1d88
 metric     9.986730 ± 1.065174 · 1003 trade(s) · 2006 fill(s)
 periods    261 of 1d · capital 100000.00 USD · UTC
            2024-01-02        +55.81       100055.81
@@ -483,10 +500,10 @@ periods    261 of 1d · capital 100000.00 USD · UTC
            2024-12-31        +86.48       110063.18
 ```
 
-and `--json` carries the whole of it. That measurement is 981,029 bytes of JSON stored as
-77,765; a synthetic run the size of a tick lane's largest baseline — 98 daily periods, 6,000
-trades of two fills each and the 12,000 fills — is 5,704,639 bytes stored as 704,599, encoded
-and compressed in 0.16 to 0.23 s. Nothing deletes a measurement (`docs/workspace.md`,
+and `--json` carries the whole of it. That measurement is 981,070 bytes of JSON stored as
+77,803; a synthetic run the size of a tick lane's largest baseline — 98 daily periods, 6,000
+trades of two fills each and the 12,000 fills — is 5,704,680 bytes stored as 704,643, encoded
+and compressed in 0.18 to 0.25 s. Nothing deletes a measurement (`docs/workspace.md`,
 `state.db`).
 
 **A card runs in a child process with no path to any catalog.** The parent reads the

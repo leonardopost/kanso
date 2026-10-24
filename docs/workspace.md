@@ -284,7 +284,10 @@ the model spend ledger; the session and strategy-version indexes; and the queue.
 
 It is kanso's alone. There is no supported way to edit it and no need to: everything in it
 is reachable through a command, and every command that writes it does so through one code
-path.
+path. A card's measurement stops being reachable that way once a newer card of the same bytes
+has kept one too — a later run's baseline, measured under another `[research] capital`, say:
+`kanso research show ID --sha S --measured` prints the newer, and the older is read with
+`kanso.research.records.measurement_of` on its card.
 
 **A database behind the shipped schema is refused rather than migrated behind your back.**
 
@@ -324,8 +327,8 @@ pins come back is re-earned by the next run, one card at a time.
 
 Every card that ran also stores what it was measured from — its run, period by period and fill
 by fill, compressed (`docs/concepts.md`, Card) — and a card names it, so nothing deletes one
-and a prune leaves them all. One costs what its run holds: 77,765 bytes for the demo's keep,
-with 2,006 fills, and 704,599 for a synthetic run of 12,000, which is about 0.7 GB a thousand
+and a prune leaves them all. One costs what its run holds: 77,803 bytes for the demo's keep,
+with 2,006 fills, and 704,643 for a synthetic run of 12,000, which is about 0.7 GB a thousand
 cards of that size.
 
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty

@@ -6,7 +6,8 @@
 -- about how a card's number came to be — whether a prefix of its window already said what the
 -- whole window would, whether one week carried the result — could be asked of no card ever
 -- run. The column names the blob holding the card's measurement: its objective and folds,
--- the run it measured and the host and benchmark runs the objective read beside it, from
--- which the objective returns the card's metric and error exactly. A row written before this
--- migration holds NULL, which reads back as a card that kept none, which is what it was.
+-- the run it measured, the host and benchmark runs the objective read beside it, and the
+-- criteria version that scored it, under which the objective returns the card's metric and
+-- error exactly. A row written before this migration holds NULL, which reads back as a card
+-- that kept none, which is what it was.
 ALTER TABLE cards ADD COLUMN measured_sha TEXT REFERENCES blobs (sha);

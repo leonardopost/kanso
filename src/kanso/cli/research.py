@@ -22,8 +22,9 @@ A run that stalls with a keep nothing has certified certifies it before it retur
 `run` reports the certificate that stall produced and points at it.
 
 `show` prints what is in state: a card's stored `strategy.py`, the unified diff between
-two of them, or — under `--measured` — what the newest card of those bytes was scored from:
-its objective and folds, and the run it measured, period by period. A sha is written as any
+two of them, or — under `--measured` — what the newest card of those bytes that kept a
+measurement was scored from: its objective and folds, the criteria version that scored it,
+and the run it measured, period by period. A sha is written as any
 unique prefix of one that belongs to this hypothesis; a prefix matching none of its cards,
 or several, is a validation failure, because guessing which one was meant is how the wrong
 subject gets certified.
@@ -42,6 +43,7 @@ from kanso import research
 from kanso.certify import certificate
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
+from kanso.criteria import criteria_version
 from kanso.errors import PreconditionError, ValidationError
 from kanso.research import daemon, records
 from kanso.research.lanes import DEFAULT_LANE
@@ -484,18 +486,13 @@ def _show(
         known = _shas(opened, hyp_id)
         subject = _resolve(opened, hyp_id, sha, known)
         if diff is None:
-            # The newest card that evaluated these bytes, its digest included; a best a
-            # store holds no card of reads as none rather than refusing the source.
-            card = next(
-                (
-                    c
-                    for c in reversed(records.cards_of(opened, hyp_id))
-                    if c.strategy_sha == subject
-                ),
-                None,
-            )
+            # Every card that evaluated these bytes, newest last. The source is shown with the
+            # newest, its digest included, and a best a store holds no card of reads as none
+            # rather than refusing the source.
+            evaluated = [c for c in records.cards_of(opened, hyp_id) if c.strategy_sha == subject]
             if measured:
-                return _measurement(opened, hyp_id, subject, card)
+                return _measurement(opened, hyp_id, subject, evaluated)
+            card = evaluated[-1] if evaluated else None
             source = opened.get_blob(subject).decode("utf-8", errors="replace")
             data: dict[str, Any] = {
                 "id": hyp_id,
@@ -519,18 +516,29 @@ def _show(
     return Report(data=data, lines=tuple(rendered.splitlines()))
 
 
-def _measurement(opened: StateStore, hyp_id: str, subject: str, card: Card | None) -> Report:
-    """What the newest card of these bytes was scored from: the objective and its folds, the
-    trades, and the run's return and equity at each period end — a UTC date, and the time
-    beside it where two ends share one.
+def _measurement(
+    opened: StateStore, hyp_id: str, subject: str, evaluated: Sequence[Card]
+) -> Report:
+    """What the newest card of these bytes that kept a measurement was scored from: the
+    objective, its folds and the criteria version that scored it, the trades, and the run's
+    return and equity at each period end — a UTC date, and the time beside it where two ends
+    share one.
 
-    Refused when that card kept nothing, which is every card that did not run to a result
-    and every card recorded before cards kept one; its card says which.
+    `evaluated` is every card of the bytes, newest last. A newer card that kept none — a
+    crash, a card refused before or during its backtest, one recorded by a kanso that kept
+    none — does not hide what an older card kept: the `card` line counts the cards passed
+    over. Refused only when no card of the bytes kept one. A measurement a newer one of the
+    same bytes has replaced here — a later run's baseline measured another way, say — is read
+    with `records.measurement_of` on its card.
     """
+    passed = next(
+        (n for n, each in enumerate(reversed(evaluated)) if each.measured_sha is not None), None
+    )
+    card = None if passed is None else evaluated[-1 - passed]
     found = None if card is None else records.measurement_of(opened, card)
     if card is None or found is None:
         raise PreconditionError(
-            f"the newest card of {hyp_id} that evaluated {subject[:7]} kept no measurement: "
+            f"no card of {hyp_id} that evaluated {subject[:7]} kept a measurement: "
             "a card keeps one when its backtest ran to a result, and a crash, a card refused "
             "before or during its backtest and a card recorded before cards kept one have none",
             remedy=f"kanso research show {hyp_id} --sha {subject[:7]} --json",
@@ -550,12 +558,18 @@ def _measurement(opened: StateStore, hyp_id: str, subject: str, card: Card | Non
     instants = [datetime.fromtimestamp(ts // 1_000_000_000, tz=UTC) for ts in run.period_ends_ns]
     dated = len({instant.date() for instant in instants}) == len(instants)
     stamp = "%Y-%m-%d" if dated else "%Y-%m-%d %H:%M:%S"
+    newer = "" if passed == 0 else f" · {passed} newer card(s) of these bytes kept none"
+    installed = criteria_version()
+    scored = found.criteria_version
+    if scored != installed:
+        scored = f"{scored}, not this kanso's {installed}"
     lines = [
-        field("card", f"{card.sha7} · {card.status} · {card.desc}"),
+        field("card", f"{card.sha7} · {card.status} · {card.desc}{newer}"),
         field(
             "measured",
             f"{found.objective.id} over {found.folds} fold(s)"
-            + (f" · against the {' and the '.join(against)} run" if against else ""),
+            + (f" · against the {' and the '.join(against)} run" if against else "")
+            + f" · criteria {scored}",
         ),
         field(
             "metric",

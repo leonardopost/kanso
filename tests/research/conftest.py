@@ -28,6 +28,7 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.objects import Price, Quantity
 
+from kanso.criteria import criteria_version
 from kanso.criteria.run import midnight_ns
 from kanso.data import catalog, snapshot
 from kanso.data.instruments import resolve_universe
@@ -39,7 +40,7 @@ from kanso.models import Answer, Call
 from kanso.models import router as router_module
 from kanso.research import records
 from kanso.research.records import Measurement
-from kanso.schemas import Card, Detected, Envelope, ModelSpec, Plan
+from kanso.schemas import Card, Detected, Envelope, Hypothesis, ModelSpec, Plan, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace, find, init
 
@@ -454,11 +455,20 @@ def measured_as_scored(store: StateStore, card: Card) -> Measurement:
     """The card's stored measurement, asserted to score exactly what the card recorded.
 
     Equality, not closeness: the measurement is the arguments the loop scored the card with,
-    so the objective on them is the same arithmetic on the same floats.
+    so the objective on them is the same arithmetic on the same floats. An objective's
+    `compute` reads no parameter, so equality cannot catch a wrong keep rule beside the id:
+    the stored objective is compared whole with the one the card's run pinned, and the
+    criteria version with the kanso that just scored it.
     """
     found = records.measurement_of(store, card)
     assert found is not None, f"card {card.sha7} ({card.status}) kept no measurement"
     assert found.compute() == (card.metric, card.metric_se)
+    (pin,) = store.connection.execute(
+        "SELECT hypothesis_sha FROM runs WHERE run_id = ?", (card.run_id,)
+    ).fetchone()
+    pinned = parse_yaml(Hypothesis, store.get_blob(pin).decode("utf-8"), "hypothesis.yaml")
+    assert pinned.objective is not None and found.objective == pinned.objective
+    assert found.criteria_version == criteria_version()
     return found
 
 

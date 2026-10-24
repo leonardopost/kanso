@@ -23,10 +23,11 @@ got worse — and the proposer, the operator and `results.tsv` were each shown t
 nothing else.
 
 A card that ran also keeps what its metric was computed from: `measured_sha` names the blob
-holding its objective and folds, the run it measured and the host and benchmark runs the
-objective read beside it (`kanso.research.records.Measurement`). The number is one reading
-of that run, and the run is what any other reading needs — a prefix of the window, one week,
-one fold — so it is kept rather than reconstructed by running the bytes again.
+holding its objective and folds, the run it measured, the host and benchmark runs the
+objective read beside it and the criteria version that scored it
+(`kanso.research.records.Measurement`). The number is one reading of that run, and the run
+is what any other reading needs — a prefix of the window, one week, one fold — so it is kept
+rather than reconstructed by running the bytes again.
 """
 
 from __future__ import annotations
@@ -270,10 +271,10 @@ class Card(KansoModel):
     one refused before or during its backtest — and for one recorded before cards kept it."""
     measured_sha: Sha256 | None = None
     """The blob holding what the card's metric was computed from — its objective and folds,
-    its run, and the host and benchmark runs the objective read — from which the objective
-    returns `metric` and `metric_se` exactly; `None` for a card that never ran to a result —
-    a crash, one refused before or during its backtest — and for one recorded before cards
-    kept it."""
+    its run, the host and benchmark runs the objective read, and the criteria version that
+    scored it, under which the objective on them returns `metric` and `metric_se` exactly;
+    `None` for a card that never ran to a result — a crash, one refused before or during its
+    backtest — and for one recorded before cards kept it."""
 
     @property
     def sha7(self) -> str:

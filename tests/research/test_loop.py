@@ -120,8 +120,13 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
     assert baseline.n_trials == 1
     # The baseline ran, so it keeps what it was scored from: the pinned objective over the
     # run's folds, on the research window, with nothing beside it to difference against.
+    # The keep rule's two parameters are the pinned file's, which no number would show.
     measured = measured_as_scored(store, baseline)
-    assert (measured.objective.id, measured.folds) == ("wf_sharpe_net", ws.config.research.folds)
+    assert measured.objective.model_dump() == {
+        "id": "wf_sharpe_net",
+        "params": {"min_delta": 0.0, "k_se": 0.5},
+    }
+    assert measured.folds == ws.config.research.folds
     assert measured.run.window == RESEARCH
     assert (measured.host, measured.benchmark) == (None, None)
     assert run.best_sha == baseline.strategy_sha

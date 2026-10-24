@@ -77,17 +77,21 @@ measured on 2026-10-02 in a live workspace, 3,025 MB of books in a 3,399 MB `sta
 rest and `prune` deletes it, for `kanso state prune` to call with the daemon held off.
 
 A card that ran keeps its **measurement**: what its metric was computed from — the objective
-and folds, the run the card child measured, and the host and benchmark runs the objective
-read beside it — stored as one blob, canonical JSON compressed with zlib, whose sha is the
-card's `measured_sha`. A metric is one reading of a run; the run is what every other reading
-needs, and before cards kept it none survived the card that measured it. `Measurement`
-scores itself with the objective's own `compute`, which is the call the loop scored the card
-with, so what it returns is the card's `metric` and `metric_se` to the bit, and `between`
-restricts it to a span of its window for a reading the loop never took. The runs are encoded
-by the one codec every stored run goes through (`kanso.criteria.codec`); the same
-measurement is the same bytes, so a strategy judged twice under the same pins and the same
-reading is stored once. Nothing deletes a measurement, and a card refused before or during
-its backtest, a crash and a card recorded before cards kept one name none.
+and folds, the run the card child measured, the host and benchmark runs the objective read
+beside it, and the criteria version of the kanso that scored it — stored as one blob,
+canonical JSON compressed with zlib, whose sha is the card's `measured_sha`. A metric is one
+reading of a run; the run is what every other reading needs, and before cards kept it none
+survived the card that measured it. `Measurement` scores itself with the installed
+objective's own `compute`, which is the call the loop scored the card with, so under the
+criteria version it records what it returns is the card's `metric` and `metric_se` to the
+bit. Under another it is that kanso's arithmetic on the same run, which a release that
+changes how an objective or its error is computed moves, and the version it records is how a
+reader tells the two apart. `between` restricts it to a span of its window for a reading the
+loop never took. The runs are encoded by the one codec every stored run goes through
+(`kanso.criteria.codec`); the same measurement is the same bytes, so a strategy judged twice
+under the same pins and the same reading, by the same kanso, is stored once. Nothing deletes a
+measurement, and a card refused before or during its backtest, a crash and a card recorded
+before cards kept one name none.
 """
 
 from __future__ import annotations
@@ -96,7 +100,7 @@ import json
 import sqlite3
 import zlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import KW_ONLY, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -514,9 +518,19 @@ class Measurement:
     hypothesis names, with the keep rule's two parameters; the folds `[research] folds` cut
     the window into; the run the card child measured; and the host-alone run and the
     benchmark run the objective reads beside it, each `None` where the run had none — every
-    objective is handed both and reads the one its mode names. So `compute` is the card's
-    `metric` and `metric_se` exactly, and a reading the loop never took is the same
-    arithmetic on `between`.
+    objective is handed both and reads the one its mode names.
+
+    Beside them, `criteria_version` is what `criteria.library.criteria_version` was when
+    the card was scored: the kanso whose arithmetic the card's numbers are. It is not read
+    off the run, whose pin is the kanso the run began under, because a run is carded by
+    whichever kanso is installed when its next card runs. So under that criteria version
+    `compute` is the card's `metric` and `metric_se` exactly, and a reading the loop never
+    took is the same arithmetic on `between`. Under another, `compute` is the installed
+    objective on the same run — which a release that changed how an objective or its error is
+    computed makes another number — so a reading set beside the card's own is one arithmetic
+    only where the two versions agree. The version is the package version and a digest of
+    the criteria library's files, which a release moves and an edit to an objective's code
+    between two development builds of one version does not.
     """
 
     objective: ObjectiveRef
@@ -524,9 +538,11 @@ class Measurement:
     run: CardRun
     host: CardRun | None = None
     benchmark: CardRun | None = None
+    _: KW_ONLY
+    criteria_version: str
 
     def compute(self) -> tuple[float, float]:
-        """The objective over the folds: the metric and the error of that mean."""
+        """The installed objective over the folds: the metric and the error of that mean."""
         found = objectives()[self.objective.id]
         return found.compute(self.run, self.folds, self.host, self.benchmark)
 
@@ -550,6 +566,7 @@ class Measurement:
         return {
             "objective": self.objective.model_dump(mode="json"),
             "folds": self.folds,
+            "criteria_version": self.criteria_version,
             "run": encode_run(self.run),
             "host": None if self.host is None else encode_run(self.host),
             "benchmark": None if self.benchmark is None else encode_run(self.benchmark),
@@ -561,8 +578,8 @@ def encode_measurement(measured: Measurement) -> bytes:
     whitespace — compressed with zlib.
 
     One measurement is one byte string, so a strategy judged twice under the same pins and
-    the same reading, which measures the same run, is stored once: the second judging's
-    blob is the row the first one wrote.
+    the same reading by the same kanso, which measures the same run, is stored once: the
+    second judging's blob is the row the first one wrote.
     """
     text = json.dumps(measured.payload(), sort_keys=True, separators=(",", ":"))
     return zlib.compress(text.encode("utf-8"))
@@ -590,6 +607,7 @@ def read_measurement(payload: Mapping[str, Any]) -> Measurement:
         run=decode_run(payload["run"]),
         host=None if payload["host"] is None else decode_run(payload["host"]),
         benchmark=None if payload["benchmark"] is None else decode_run(payload["benchmark"]),
+        criteria_version=str(payload["criteria_version"]),
     )
 
 

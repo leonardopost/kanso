@@ -459,8 +459,8 @@ def card_runs(draw: st.DrawFn) -> CardRun:
 
 @st.composite
 def measurements(draw: st.DrawFn) -> Measurement:
-    """What a card was scored from: an objective, its folds, the run, and a host and a
-    benchmark run each present or not."""
+    """What a card was scored from: an objective, its folds, the run, a host and a benchmark
+    run each present or not, and the criteria version that scored it."""
     return Measurement(
         objective=ObjectiveRef(
             id=draw(CATALOGUE_IDS),
@@ -470,6 +470,7 @@ def measurements(draw: st.DrawFn) -> Measurement:
         run=draw(card_runs()),
         host=draw(st.none() | card_runs()),
         benchmark=draw(st.none() | card_runs()),
+        criteria_version=draw(VERSION_STRINGS),
     )
 
 

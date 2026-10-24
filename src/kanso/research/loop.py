@@ -772,7 +772,8 @@ def _measure(
     host_run: CardRun | None,
     benchmark_run: CardRun | None = None,
 ) -> records.Measurement:
-    """What a card is scored from: the objective, the folds and the runs it reads.
+    """What a card is scored from: the objective, the folds and the runs it reads, under the
+    criteria version of the kanso scoring it now.
 
     Its `compute` is the objective over the run's folds and the error of that mean, which is
     the card's metric; the card keeps it whole (`records.record_measurement`), so the number
@@ -784,7 +785,9 @@ def _measure(
             f"{setup.hyp.id} names no objective, so a card of it is scored on nothing",
             remedy=f"run `kanso classify {setup.hyp.id}`",
         )
-    return records.Measurement(ref, setup.folds, card_run, host_run, benchmark_run)
+    return records.Measurement(
+        ref, setup.folds, card_run, host_run, benchmark_run, criteria_version=criteria_version()
+    )
 
 
 def _grew_by(store: StateStore, run: RunRecord, source: bytes) -> int:

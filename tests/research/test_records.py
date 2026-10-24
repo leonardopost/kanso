@@ -12,10 +12,11 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 
+from kanso.criteria import objectives
 from kanso.criteria.run import CardRun, Held, Trade, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
-from kanso.schemas import Card, Costs, RunRecord, resolve_venue_model
+from kanso.schemas import Card, Costs, ObjectiveRef, RunRecord, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.schemas import strategies as gen
@@ -133,23 +134,46 @@ def test_a_measurement_is_stored_once_and_a_card_without_one_reads_as_none(
 
 
 def test_a_measurement_restricted_to_a_span_restricts_what_it_is_differenced_against(
-    ws: Workspace, store: StateStore, registered: str
+    ws: Workspace, store: StateStore
 ) -> None:
-    """A prefix of the window is a reading the loop never took: the same arithmetic on the
-    span, the host and the benchmark cut to it with the run, and the whole window is the
-    card's own number."""
-    loop.begin(ws, store, registered)
-    whole = measured_as_scored(store, records.cards_of(store, registered)[0])
-    opens, closes = whole.run.bounds
+    """A prefix of the window is a reading the loop never took: the objective's own
+    arithmetic on the span, the host and the benchmark cut to it with the run, and the whole
+    window is the card's own number."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    run = loop.begin(ws, store, hyp_id)
+    (ws.root / run.dir / "strategy.py").write_bytes(FLAT)
+    loop.card(ws, store, hyp_id, "trade nothing")
+    traded, flat = (measured_as_scored(store, card) for card in records.cards_of(store, hyp_id))
+    opens, closes = traded.run.bounds
     middle = opens + (closes - opens) // 2
-    half = whole.between(opens, middle)
-    beside = replace(whole, host=whole.run, benchmark=whole.run).between(opens, middle)
+    half = traded.between(opens, middle)
 
-    assert whole.between(opens, closes) == whole
-    assert half.run.window[0] == whole.run.window[0]
-    assert half.run.window[1] < whole.run.window[1]
-    assert half.run.period_ends_ns == whole.run.period_ends_ns[: len(half.run.period_ends_ns)]
-    assert beside.host == beside.benchmark == beside.run
+    assert traded.between(opens, closes) == traded
+    assert half.run.window[0] == traded.run.window[0]
+    assert half.run.window[1] < traded.run.window[1]
+    assert half.run.period_ends_ns == traded.run.period_ends_ns[: len(half.run.period_ends_ns)]
+    assert half.run == traded.run.between(opens, middle)
+    # The reading on the span is the objective's own arithmetic on the cut run, and it is a
+    # reading of the span: the traded book's first half is not its whole window.
+    spanned = objectives()[traded.objective.id].compute(half.run, traded.folds)
+    assert half.compute() == spanned != traded.compute()
+
+    # Differenced against a host and a benchmark, both are cut with the run, so fold `i` of
+    # the span pairs with fold `i` of the same span: the flat book less what the traded one
+    # earned over that span, fold by fold, which is the span's own reading negated.
+    relative = replace(
+        flat,
+        objective=ObjectiveRef(id="marginal_wf_sharpe", params=flat.objective.params),
+        host=traded.run,
+        benchmark=traded.run,
+    )
+    beside = relative.between(opens, middle)
+    assert beside.host == beside.benchmark == half.run
+    expected = objectives()["marginal_wf_sharpe"].compute(
+        flat.run.between(opens, middle), flat.folds, half.run, half.run
+    )
+    assert beside.compute() == expected
+    assert expected[0] == -spanned[0] != 0.0
 
 
 def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateStore) -> None:
