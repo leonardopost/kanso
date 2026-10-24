@@ -1061,7 +1061,7 @@ def test_the_memory_cap_is_the_lane_share_floored_at_the_baseline_s_need(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
     run = loop.begin(ws, store, registered)
-    assert loop.mem_cap(ws, run) == 8.0
+    assert loop.mem_cap(ws, run) == ENVELOPE.plan.mem_per_lane_gb
 
     heavy = run.model_copy(update={"baseline_peak_mem_gb": 100.0})
     assert loop.mem_cap(ws, heavy) == loop.HEADROOM * 100.0

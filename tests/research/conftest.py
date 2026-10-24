@@ -217,7 +217,7 @@ ENVELOPE = Envelope(
         cores_perf=4,
         cores_eff=4,
         cores_total=8,
-        mem_gb=32.0,
+        mem_gb=96.0,
         disk_free_gb=100.0,
         on_ac_power=True,
         python="3.12.0",
@@ -229,12 +229,18 @@ ENVELOPE = Envelope(
         reserved_cores=2,
         reserved_mem_gb=8.0,
         cores_per_lane=2,
-        mem_per_lane_gb=8.0,
+        mem_per_lane_gb=32.0,
         lanes=2,
     ),
     detected_at="2024-01-01T00:00:00+00:00",
 )
-"""A fixed envelope: the lane memory share is a setting, not a property of the host."""
+"""A fixed envelope: the lane memory share is a setting, not a property of the host.
+
+The share has to fund every width the suite runs at three times the run's measured
+baseline peak (`loop.mem_cap` refuses a width it cannot), and that peak is the host's: a
+demo baseline peaked at about 0.2 GB on macOS and at 0.96-0.99 GB on CI's Linux runners
+under coverage (2026-10-24), where an 8 GB share refused three cards a turn. 32 GB funds
+eight cards up to a 1.33 GB peak."""
 
 
 def document(**changes: Any) -> dict[str, Any]:
