@@ -422,6 +422,23 @@ def test_a_stall_on_a_best_that_proved_no_edge_is_not_certified(
     assert stalled.detail["best_metric"] == metric, "the event says what the best scored"
 
 
+def test_a_stall_on_a_best_whose_search_cannot_be_priced_is_not_certified(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Certification would refuse it, and the lane with it: the run goes on drawing cards."""
+    from tests.certify.test_run import searched_then_switched
+
+    hyp_id = DOCUMENT["id"]
+    searched_then_switched(ws, store, after=1)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.certifiable is False
+    assert stall.best_sha is not None
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+    assert ids(store) == [hyp_id]
+
+
 def test_a_stall_with_no_keep_only_requeues(ws: Workspace, store: StateStore) -> None:
     hyp_id = classify(ws, store, DOCUMENT)
     open_run(store, hyp_id)

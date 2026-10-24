@@ -340,8 +340,11 @@ def plan_complaints(
     and with every parameter it declares set — because the result a certificate judges is
     then the best of a search, nothing else in a plan prices one, and a deflation gate with
     no threshold skips, which passes. The threshold's value stays the planner's. The gate
-    itself prices the narrower set of `trial_metrics`, and skips while fewer than two of
-    the cards are trials of its objective: until then nothing was chosen over anything.
+    itself takes its expected maximum over every card that ran and traded and its spread
+    from the narrower set of `trial_metrics`; certification refuses a subject behind two
+    such cards with fewer than two of these (`kanso.certify.run.unpriced`), since that
+    spread cannot be read, and the gate skips only where fewer than two cards ran and
+    traded at all: then nothing was chosen over anything.
 
     A gate this version has no implementation for is not part of the toolbox a plan may
     draw on. It is neither offered to the planner, nor accepted from one, nor required of

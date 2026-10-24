@@ -846,21 +846,24 @@ names its parent, and a sibling an operator writes after a searched hypothesis n
 It is recorded on each card and on every certificate, because it is the size of the search
 that found the result, and no card may be dropped from a number that is part of a filename.
 
-The deflation gates price the result by that search, and they count a narrower set: a
-**trial** is a card that ran to a result, traded, and was scored under the objective being
-deflated — the one the hypothesis file each card's run pinned names — of the hypothesis or
-of any it derives from. A crash produced no
-metric to compare and a card that placed no order did not trade the hypothesis, so neither is
-a candidate the selection could have kept; a card scored under another objective is a number
-in other units, and a spread taken across a per-trade edge and a contribution is the spread
-of neither. Nothing else about the pins narrows the set — a re-pin under the same objective,
-a newer snapshot or a kanso upgrade is the same search going on. A redundant card is one — it ran, it traded, and the keep rule
+The deflation gates price the result by that search, from a narrower set: a **candidate**
+is a card that ran to a result and traded, of the hypothesis or of any it derives from, and a
+**trial** is a candidate scored under the objective being deflated — the one the hypothesis
+file each card's run pinned names. A crash produced no metric to compare and a card that
+placed no order did not trade the hypothesis, so neither is a candidate the selection could
+have kept. The expected maximum a deflation measures the result against is that of as many
+draws as there are candidates, under every objective, from the spread of the trials alone: a
+spread taken across a per-trade edge and a contribution is the spread of neither, but how
+many draws the selection was taken over has no units, and a strategy carried across a re-pin
+to another objective was chosen by the cards before it. Nothing else about the pins narrows
+either set — a re-pin under the same objective, a newer snapshot or a kanso upgrade is the
+same search going on. A redundant card is a trial — it ran, it traded, and the keep rule
 was asked before the signature, so it would have been kept had it beaten the best. That
 another candidate held the same book makes it a correlated trial rather than no trial, and
 how much less than one a correlated trial is worth is open on the same terms as the
-hill-climbing path it sits on (`docs/backlog.md` row 59). The gate's count and the spread
-it deflates by are the same set — it reports it as `trials`, which is at or below the
-certificate's `n_trials`.
+hill-climbing path it sits on (`docs/backlog.md` row 59). The gate reports the candidates as
+`trials`, at or below the certificate's `n_trials`, and the trials its spread was read from
+as `scored_trials`.
 
 ## What a card must satisfy
 
@@ -1863,11 +1866,30 @@ error: the plan pinned for demo_mr is not one this kanso can run: gates: deflate
 remedy: run `kanso cert plan demo_mr --replan` to plan again
 ```
 
-The requirement counts cards and the gate counts trials. `n_trials` is what a certificate is
-stamped with, a baseline and a crash among it; the gate prices the narrower set of trials
-defined above, and while fewer than two of the cards are trials of the objective it skips,
-which passes — nothing has yet been chosen over anything. A hypothesis re-pinned to another
-objective starts that set again (`docs/backlog.md` row 173).
+The requirement counts cards and the gate counts candidates and trials. `n_trials` is what a
+certificate is stamped with, a baseline and a crash among it; the gate takes its expected
+maximum over the candidates, under every objective, and its spread from the trials defined
+above. While fewer than two cards are candidates at all it skips, which passes — nothing has
+yet been chosen over anything. A subject behind two candidates or more with fewer than two
+trials of its objective is refused before anything runs (exit 2): that search has a spread
+nobody can read, and a deflation that cannot read it skips. It is where a re-pin to another
+objective used to lead — the strategy the earlier search selected, carried across in the
+workspace `strategy.py`, became the next run's baseline and its best, and was certified with
+its correction skipping while the certificate was stamped with hundreds of cards:
+
+```
+$ kanso cert run demo_mr
+error: demo_mr has 3 cards that ran and traded behind it and 1 of them scored under wf_contribution_bps, so deflated_contribution cannot read the spread of the search that selected this card: it prices the search from two cards in its units
+remedy: research it further with `kanso research begin demo_mr` until two cards are scored under wf_contribution_bps
+```
+
+From the second trial on, the carried strategy is deflated by the expected maximum of every
+candidate behind it, the cards of the earlier objective among them. A daemon stall on such a
+best does not certify it either, and the run goes on. The other route is `cert run --sha` of
+a card scored under the objective before the re-pin: the plan was made for the objective
+the hypothesis has now, and carries that one's correction, which skips on a number in other
+units. A subject scored under an objective whose correction the pinned plan does not carry
+with its threshold is refused (exit 2), naming the gate, once the search has two cards.
 
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
@@ -1921,7 +1943,7 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
-           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
@@ -2071,9 +2093,9 @@ subject travels with the files even where `state.db` does not.
 Four gates read what the others cannot. `deflated_contribution` is the multiple-testing
 control for a run scored on a contribution, and `deflated_edge` for one scored on a per-trade
 edge, where `deflated_sharpe` skips: the research estimate in basis points per period or per
-trade, against the expected maximum of the search's trials in the same units, over the
-estimate's own error — the one its card carried — reported as a probability and held to
-`min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
+trade, against the expected maximum of the search — as many draws as it had candidates, from
+the spread of its trials in the same units — over the estimate's own error, the one its card
+carried, reported as a probability and held to `min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
 deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
 seed that fired once — do not widen the search past any candidate the selection weighed; the
 spread it used is in the evidence as `trial_spread_bps`. `deflated_sharpe` deflates a Sharpe

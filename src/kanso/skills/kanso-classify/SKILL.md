@@ -20,3 +20,4 @@ metadata:
 - The catalogue is a library: `kanso ext show` lists constructs added by extensions. Certification, paper and live gates are not chosen here (skill `kanso-certify`).
 - Exit 2 without a configured model: there is no non-LLM fallback by design (`kanso models check`).
 - Exit 3 with "no applicable objective" is a framework bug (the objective set must be total) — report it, do not hand-pick.
+- Re-pinning a researched hypothesis to another objective restarts what it is scored on, not the search behind it: `kanso cert run` refuses (exit 2) to certify until two cards are scored under the new objective, and then deflates by every card behind it. Do not work around it with `--sha` of an older card — that is refused too.
