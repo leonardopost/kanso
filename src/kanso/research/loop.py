@@ -87,7 +87,7 @@ import json
 import math
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from functools import partial
 from hashlib import sha256
@@ -1522,6 +1522,28 @@ def card(
     )
 
 
+@dataclass(frozen=True)
+class _Decided:
+    """One slot of a turn as it was judged, before it is recorded: what `_record` takes,
+    and the book it matched, when it matched one, for the event that names it."""
+
+    desc: str
+    source: bytes
+    sha: str
+    tags: Sequence[Tag]
+    status: CardStatus
+    gates: list[GateResult]
+    metric: float = 0.0
+    se: float = 0.0
+    n_trades: int = 0
+    wall_s: float = 0.0
+    peak_mem_gb: float = 0.0
+    crash_tail: str | None = None
+    like: records.Match | None = None
+    measured_sha: str | None = None
+    digest: CardDigest | None = None
+
+
 def run_batch(
     ws: Workspace,
     store: StateStore,
@@ -1603,68 +1625,39 @@ def run_batch(
     else:
         host_run = None
         benchmark_run = None
-    # desc, status, metric, se, trades, wall, peak, gates, crash, source, sha, tags, like,
-    # and the sha of what the card was measured from
-    decided: list[tuple[Any, ...]] = []
+    decided: list[_Decided] = []
     for index, (desc, source, tags, digest_sha, integrity) in enumerate(prepared):
         if not integrity.passed:
-            decided.append(
-                (
-                    desc,
-                    "discard",
-                    0.0,
-                    0.0,
-                    0,
-                    0.0,
-                    0.0,
-                    [integrity],
-                    None,
-                    source,
-                    digest_sha,
-                    tags,
-                    None,
-                    None,
-                )
-            )
+            decided.append(_Decided(desc, source, digest_sha, tags, "discard", [integrity]))
             continue
         result = results[index]
         if result.refused is not None:
             decided.append(
-                (
+                _Decided(
                     desc,
-                    "discard",
-                    0.0,
-                    0.0,
-                    0,
-                    result.wall_s,
-                    result.peak_mem_gb,
-                    [integrity, verdict(sizing.GATE, False, result.refused.payload())],
-                    None,
                     source,
                     digest_sha,
                     tags,
-                    None,
-                    None,
+                    "discard",
+                    [integrity, verdict(sizing.GATE, False, result.refused.payload())],
+                    wall_s=result.wall_s,
+                    peak_mem_gb=result.peak_mem_gb,
                 )
             )
             continue
         if result.crashed:
             decided.append(
-                (
+                _Decided(
                     desc,
-                    "crash",
-                    0.0,
-                    0.0,
-                    len(result.run.trades),
-                    result.wall_s,
-                    result.peak_mem_gb,
-                    [integrity, *_killed(result, asked[index], slots)],
-                    result.traceback_tail or result.reason,
                     source,
                     digest_sha,
                     tags,
-                    None,
-                    None,
+                    "crash",
+                    [integrity, *_killed(result, asked[index], slots)],
+                    n_trades=len(result.run.trades),
+                    wall_s=result.wall_s,
+                    peak_mem_gb=result.peak_mem_gb,
+                    crash_tail=result.traceback_tail or result.reason,
                 )
             )
             continue
@@ -1699,89 +1692,76 @@ def run_batch(
             )
         )
         records.record_signature(store, frozen, digest_sha, held, metric, setup.measured_under)
-        status = "keep" if kept else REDUNDANT if like is not None and like.agreed else "discard"
+        status: CardStatus = (
+            "keep" if kept else REDUNDANT if like is not None and like.agreed else "discard"
+        )
         decided.append(
-            (
+            _Decided(
                 desc,
-                status,
-                metric,
-                se,
-                len(result.run.trades),
-                result.wall_s,
-                result.peak_mem_gb,
-                [integrity, *constraints],
-                None,
                 source,
                 digest_sha,
                 tags,
-                like,
-                measured_sha,
+                status,
+                [integrity, *constraints],
+                metric=metric,
+                se=se,
+                n_trades=len(result.run.trades),
+                wall_s=result.wall_s,
+                peak_mem_gb=result.peak_mem_gb,
+                like=like,
+                measured_sha=measured_sha,
+                digest=digest_of(result.run, result.intents),
             )
         )
     best_at: int | None = None
     for index, item in enumerate(decided):
-        if item[1] == "keep" and (best_at is None or item[2] > decided[best_at][2]):
+        if item.status == "keep" and (best_at is None or item.metric > decided[best_at].metric):
             best_at = index
     if best_at is not None:
         for index, item in enumerate(decided):
-            if item[1] == "keep" and index != best_at:
-                decided[index] = (item[0], "discard", *item[2:])
+            if item.status == "keep" and index != best_at:
+                decided[index] = replace(item, status="discard")
     made: list[Card] = []
     current = frozen
     for item in decided:
-        (
-            desc,
-            status,
-            metric,
-            se,
-            n_trades,
-            wall_s,
-            peak,
-            gates_out,
-            crash_tail,
-            source,
-            digest_sha,
-            tags,
-            like,
-            measured_sha,
-        ) = item
         made.append(
             _record(
                 ws,
                 store,
                 setup,
                 current,
-                strategy_sha=digest_sha,
-                source=source,
-                desc=desc,
-                status=status,
-                metric=metric,
-                se=se,
-                n_trades=n_trades,
-                wall_s=wall_s,
-                peak_mem_gb=peak,
+                strategy_sha=item.sha,
+                source=item.source,
+                desc=item.desc,
+                status=item.status,
+                metric=item.metric,
+                se=item.se,
+                n_trades=item.n_trades,
+                wall_s=item.wall_s,
+                peak_mem_gb=item.peak_mem_gb,
                 n_trials=records.n_trials(store, hyp_id) + 1,
-                gate_results=gates_out,
-                crash_tail=crash_tail,
+                gate_results=item.gates,
+                crash_tail=item.crash_tail,
                 directory=directory,
-                tags=tags,
-                measured_sha=measured_sha,
+                tags=item.tags,
+                digest=item.digest,
+                measured_sha=item.measured_sha,
             )
         )
-        if status == "keep":
-            current = records.set_best(store, current, digest_sha, metric)
-        if like is not None:
+        if item.status == "keep":
+            current = records.set_best(store, current, item.sha, item.metric)
+        if item.like is not None:
             _same_book(
                 store,
                 current,
-                digest_sha,
-                desc,
-                metric,
-                _noise_floor(setup, se),
-                like,
+                item.sha,
+                item.desc,
+                item.metric,
+                _noise_floor(setup, item.se),
+                item.like,
                 refuse=False,
             )
-    kept_bytes = decided[best_at][9] if best_at is not None else None
+    kept_bytes = decided[best_at].source if best_at is not None else None
     if kept_bytes is not None:
         lanes.write_atomic(directory / STRATEGY_FILE, kept_bytes)
     else:

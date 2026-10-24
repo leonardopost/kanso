@@ -446,8 +446,9 @@ its metric, rounded to four places; `research card` prints it as a `trades` line
 line and carries it under `--json` as `digest`; `research show --json` carries the newest card
 of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc`, appended so
 that a reader taking the first nine columns by position reads what it always read, an absent
-number an empty cell. A crash, a card refused before or during its backtest, and a card
-recorded before 0.17 carry none. In the sample above the keep closed 3.84 trades a session,
+number an empty cell. A card of a turn that ran several carries the digest one card of the
+same bytes carries; 0.18.0 and 0.19.0 recorded such cards with none. A crash, a card refused
+before or during its backtest, and a card recorded before 0.17 carry none. In the sample above the keep closed 3.84 trades a session,
 three in four of them winners, held for a median of 16 minutes and netting 10.08 ± 1.05 bp of
 the position — 15.08 gross less 5.00 of cost — and the discard after it traded more, 4.46 a
 session, for 5.38 net: its number fell because each trade earned less, not because it traded

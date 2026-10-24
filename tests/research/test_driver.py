@@ -1299,6 +1299,28 @@ def test_a_batch_keeps_the_best_slot_and_counts_every_card(
     assert records.active(store, prepared_hyp) is not None
 
 
+def test_the_next_turn_is_shown_what_a_batch_s_cards_traded(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Every card of a turn that ran reaches the next proposal with its digest, as one card
+    does, so a batch that scored better by trading less reads as that."""
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("revert"), proposal("weak")]},
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+
+    shown = json.loads(recorded.of("propose")[1].user)["recent_cards"]
+    assert [card["status"] for card in shown] == ["keep", "keep", "discard"]
+    assert all(isinstance(card.get("digest"), dict) for card in shown)
+    assert all(card.digest is not None for card in records.cards_of(store, prepared_hyp))
+
+
 def test_a_batch_with_no_keep_is_one_miss_and_three_trials(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:

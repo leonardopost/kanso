@@ -1220,6 +1220,32 @@ def test_a_turn_s_cards_each_run_on_the_card_budget_times_the_turn_s_width(
     }
 
 
+def test_a_batched_card_carries_the_digest_one_card_of_the_same_bytes_carries(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A card that ran carries what its trades did, however it was run. Measured before
+    this, on 0.18.0 and 0.19.0: `run_batch` recorded every card with no digest, so a
+    batched card's twelve digest cells in `results.tsv` were empty and the proposer was
+    shown none of its trades — on the path tick lanes were meant to search with."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, WEAK)
+    alone = loop.card(ws, store, registered, "weak, one card")
+
+    together = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [("weak, in a turn", WEAK, ["refactor"]), ("revert", REVERTING, ["refactor"])],
+        slots=2,
+    )
+
+    assert alone.digest is not None and alone.digest.fills > 0
+    assert together[0].digest == alone.digest
+    assert together[1].digest is not None
+    cells = together[0].row().split("\t")[9:]
+    assert cells == alone.row().split("\t")[9:] and any(cells)
+
+
 def test_a_card_killed_for_its_memory_says_so_and_one_that_raised_does_not(
     ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
