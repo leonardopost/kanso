@@ -105,7 +105,11 @@ def test_only_a_card_gate_guards_an_objective_and_only_a_gate_names_params_toget
     assert guarded.required_for == ["wf_contribution_bps"]
     assert guarded.together
     with pytest.raises(ValidationError, match="only a card gate guards an objective"):
-        CriteriaItem.model_validate({**GATE, "required_for": ["wf_contribution_bps"]})
+        CriteriaItem.model_validate(
+            {**GATE, "required_for": ["wf_contribution_bps"], "together": True}
+        )
+    with pytest.raises(ValidationError, match="declares its parameters together"):
+        CriteriaItem.model_validate({**card, "required_for": ["wf_contribution_bps"]})
     with pytest.raises(ValidationError, match="only a gate guards an objective"):
         CriteriaItem.model_validate({**OBJECTIVE, "required_for": ["wf_contribution_bps"]})
     with pytest.raises(ValidationError, match="only a gate's parameters are named together"):

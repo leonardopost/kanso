@@ -650,45 +650,35 @@ def _check_stated(ws: Workspace, hyp: Hypothesis, ref: ObjectiveRef) -> None:
 
 
 def _check_guarded(hyp: Hypothesis, objective: ObjectiveRef) -> None:
-    """Every card gate the objective requires is carried, with every parameter set.
+    """Every card gate the objective requires is carried.
 
     The toolbox says which, in each gate's `required_for`: `edge_per_trade` guards the
     contributions, because a contribution moves toward zero as losing trades are dropped and
     a card that trades less at a worse loss per trade is kept under one. Whether it runs is
-    not a decision; the values it runs at are, and either list may carry it — the
-    operator's entry stands where both do.
+    not a decision; the values it runs at are, and either list may carry it. A gate that is
+    `required_for` an objective declares `together`, so wherever it is named it was already
+    held to every parameter it declares.
     """
-    gates = {ref.id: ref for ref in hyp.card_gates}
+    named = {ref.id for ref in hyp.card_gates}
+    missing = [gate for gate in required_card_gates(objective.id) if gate not in named]
+    if not missing:
+        return
     items = criteria_catalogue()
-    problems: list[str] = []
-    for gate in required_card_gates(objective.id):
-        declared = items[gate].params
-        found = gates.get(gate)
-        missing = (
-            list(declared) if found is None else [n for n in declared if n not in found.params]
-        )
-        if found is None:
-            problems.append(
-                f"constraints: {gate} is required of a hypothesis scored on {objective.id}, "
-                "which rewards trading less once every trade loses"
-            )
-        elif missing:
-            problems.append(
-                f"{gate}: {', '.join(missing)} is not set, and {gate} is required of a "
-                f"hypothesis scored on {objective.id} with every parameter set"
-            )
-    if problems:
-        gate = required_card_gates(objective.id)[0]
-        ranges = items[gate].ranges
-        params = ", ".join(
-            f"{name}: <{ranges[name][0]}..{ranges[name][1]}>" if name in ranges else f"{name}: …"
-            for name in items[gate].params
-        )
-        raise ValidationError(
-            "; ".join(problems),
-            remedy=f"add `{{id: {gate}, params: {{{params}}}}}` to required_constraints or "
-            "constraints, the values yours, then `kanso hyp validate` the file again",
-        )
+    gate = missing[0]
+    ranges = items[gate].ranges
+    params = ", ".join(
+        f"{name}: <{ranges[name][0]}..{ranges[name][1]}>" if name in ranges else f"{name}: …"
+        for name in items[gate].params
+    )
+    raise ValidationError(
+        "; ".join(
+            f"constraints: {one} is required of a hypothesis scored on {objective.id}, which "
+            "rewards trading less once every trade loses"
+            for one in missing
+        ),
+        remedy=f"add `{{id: {gate}, params: {{{params}}}}}` to required_constraints or "
+        "constraints, the values yours, then `kanso hyp validate` the file again",
+    )
 
 
 def _check_construct(ws: Workspace, hyp: Hypothesis, ref: ConstructRef) -> str:

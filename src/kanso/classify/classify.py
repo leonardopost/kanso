@@ -376,17 +376,15 @@ def _read(
 def _objective_complaint(
     named: str, construct: str, mode: str, objectives: Mapping[str, Any]
 ) -> str:
-    """Why an answer's objective is not one its construct can be scored on."""
-    admitted = applicable_ids(dict(objectives), mode)
+    """Why an answer's objective is not one its construct can be scored on.
+
+    The wire holds the answer to the ids either mode admits, so one this mode does not
+    admit is the other mode's.
+    """
     other = next(one for one in MODES if one != mode)
-    if named in applicable_ids(dict(objectives), other):
-        return (
-            f"objective: {named} is {_a(other)} objective, and {_a(construct)} is measured "
-            f"{mode}; name one of {', '.join(admitted)}"
-        )
     return (
-        f"objective: {named!r} does not apply to this hypothesis as a {construct}; name one "
-        f"of {', '.join(admitted)}"
+        f"objective: {named} is {_a(other)} objective, and {_a(construct)} is measured "
+        f"{mode}; name one of {', '.join(applicable_ids(dict(objectives), mode))}"
     )
 
 
@@ -447,31 +445,19 @@ def _inadmissible(
 def _required_complaints(
     objective: str, constraints: Sequence[ConstraintRef], hyp: Hypothesis
 ) -> list[str]:
-    """The gates the objective written requires, each present with every parameter set.
+    """The gates the objective written requires, each among the card gates.
 
-    The operator's `required_constraints` count, and stand where both name a gate, as they do
-    on every card. A gate whose parameters mean nothing apart was already held to all of
-    them by `_constraint_complaints`, so only one that is not is held to them here.
+    The operator's `required_constraints` count, as they do on every card. A gate that is
+    `required_for` an objective declares `together`, so the one naming it was already held
+    to every parameter by `_constraint_complaints`, or by validation for the operator's.
     """
-    entries = {ref.id: ref for ref in (*constraints, *(hyp.required_constraints or ()))}
-    items = toolbox()
-    complaints: list[str] = []
-    for gate in required_card_gates(objective):
-        item = items[gate]
-        found = entries.get(gate)
-        if found is None:
-            complaints.append(
-                f"constraints: {gate} is required of a hypothesis scored on {objective}, with "
-                f"{', '.join(item.params)} set; the values are yours, inside their ranges"
-            )
-        elif not item.together:
-            complaints.extend(
-                f"constraints.{gate}.{name}: is not set, and {gate} is required of a "
-                f"hypothesis scored on {objective} with every parameter set"
-                for name in item.params
-                if name not in found.params
-            )
-    return complaints
+    named = {ref.id for ref in (*constraints, *(hyp.required_constraints or ()))}
+    return [
+        f"constraints: {gate} is required of a hypothesis scored on {objective}, with "
+        f"{', '.join(toolbox()[gate].params)} set; the values are yours, inside their ranges"
+        for gate in required_card_gates(objective)
+        if gate not in named
+    ]
 
 
 def _host_complaints(

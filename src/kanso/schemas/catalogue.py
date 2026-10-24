@@ -154,8 +154,9 @@ class CriteriaItem(KansoModel):
 
     `required_for` is a card gate's claim to guard these objectives against a flaw of their
     own: a hypothesis scored on one of them carries the gate among its card gates, with
-    every parameter it declares set (`kanso.criteria.library.required_card_gates`). Whether
-    it is carried is not a decision; the values it is carried at are.
+    every parameter it declares set (`kanso.criteria.library.required_card_gates`), so such
+    a gate declares `together` too. Whether it is carried is not a decision; the values it
+    is carried at are.
 
     `together` says the gate's parameters mean nothing apart: wherever it is named, every
     one it declares is set, since a gate given half its rule judges nothing and a gate that
@@ -198,6 +199,11 @@ class CriteriaItem(KansoModel):
             raise ValueError(
                 "required_for: only a card gate guards an objective, since a card is what "
                 "the objective scores"
+            )
+        if self.required_for is not None and not self.together:
+            raise ValueError(
+                "together: a gate required for an objective is carried with every parameter "
+                "set, so it declares its parameters together"
             )
 
     def _check_objective(self) -> None:
