@@ -11,7 +11,8 @@ One line per user-visible change, newest release first. The format is the one
 - **`edge_per_trade` is named with both `min_bps` and `k_se` or not at all.** One alone is refused wherever it is named, on a draft too (exit 3), and a pin registered with one alone fails every card it judges instead of skipping it.
 - **A deflation counts every card behind the subject.** `deflated_contribution`, `deflated_edge` and `deflated_sharpe` take their expected maximum over every card of the family that ran and traded, under any objective (`trials`), and their spread from the cards scored under the subject's (`scored_trials`), so a strategy carried across a re-pin to another objective is priced for the search that chose it. Unchanged for a hypothesis that never changed objective.
 - **`kanso cert run` refuses an unpriced search.** A subject behind two or more cards that ran and traded with fewer than two scored under its objective is refused (exit 2) before anything runs, and a daemon stall on one does not certify it; `--sha` of a card scored under an objective whose deflation gate the pinned plan does not carry is refused (exit 2), naming the gate.
-- Skills `kanso-classify`, `kanso-hypothesis` and `kanso-certify` say so; run `kanso skills sync`.
+- **A re-pin that adds a card gate clears `best`.** A gate the held pin did not name, or one at other parameters, clears it with a `best_cleared` naming it under `gates_added`; the next run's baseline judges the workspace `strategy.py` under it. Dropping a gate keeps the best.
+- Skills `kanso-classify`, `kanso-hypothesis`, `kanso-certify` and `kanso-research` say so; run `kanso skills sync`.
 
 ## v0.19.0 — 2026-10-24
 

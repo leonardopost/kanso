@@ -1147,6 +1147,16 @@ it too. A gate the toolbox declares `required_for` the objective — `edge_per_t
 contribution — must be in one of them with every parameter set, and either list satisfies
 it. See `docs/workspace.md`.
 
+**A gate added clears the best.** A best is only as good as the gates it was kept under, so a
+re-pin whose card gates name one the held pin did not — or name one at other parameters —
+clears it, with a `best_cleared` event whose `gates_added` names them. Measured on the demo
+workspace before it did, a best kept across a re-pin adding `edge_per_trade` was what the
+next run started from and what `kanso research show` printed, a strategy whose trades lose on
+average included, until a keep that passed the gate beat its number. Cleared, the next run
+starts from the workspace `strategy.py`, which holds the best's bytes, and its baseline is
+judged under every gate the file now names. A re-pin that only drops a gate keeps the best,
+which passed every gate it is still held to.
+
 ## The keep rule
 
 When a card's number is an improvement rather than an accident. Three clauses, and together

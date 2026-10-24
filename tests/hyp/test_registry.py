@@ -817,6 +817,107 @@ def test_a_row_pinned_before_the_objective_joined_the_scope_answers_from_its_col
     assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
 
 
+def test_a_card_gate_added_clears_the_best_and_names_it(ws: Workspace, store: StateStore) -> None:
+    """Row 187: a best kept without a gate was never judged by it. Kept across the re-pin
+    that added `edge_per_trade`, it was what the next run started from and what `research
+    show` printed, a strategy whose trades lose on average included."""
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    guard = {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}
+
+    register(ws, store, document(**SLEEVE_CLASSIFICATION, required_constraints=[guard]))
+
+    assert record(ws, store).best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert [event.detail["gates_added"] for event in cleared] == [
+        ['edge_per_trade {"k_se": 1.0, "min_bps": 0.0}']
+    ]
+    assert (
+        cleared[0]
+        .detail["reason"]
+        .startswith(
+            'card gates added: edge_per_trade {"k_se": 1.0, "min_bps": 0.0}; the best was kept '
+            "without them"
+        )
+    )
+
+
+def test_a_card_gate_moved_to_other_parameters_clears_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    stricter = {
+        **SLEEVE_CLASSIFICATION,
+        "constraints": [{"id": "strategy_integrity"}, {"id": "min_trades", "params": {"min": 60}}],
+    }
+
+    register(ws, store, document(**stricter))
+
+    assert record(ws, store).best_sha is None
+
+
+def test_a_card_gate_dropped_keeps_the_best(ws: Workspace, store: StateStore) -> None:
+    """The best passed every gate it is still held to."""
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    fewer = {**SLEEVE_CLASSIFICATION, "constraints": [{"id": "strategy_integrity"}]}
+
+    register(ws, store, document(**fewer))
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
+
+
+def test_a_gate_moved_between_the_two_lists_at_the_same_parameters_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    moved = {**SLEEVE_CLASSIFICATION, "constraints": [{"id": "strategy_integrity"}]}
+
+    register(
+        ws,
+        store,
+        document(**moved, required_constraints=[{"id": "min_trades", "params": {"min": 30}}]),
+    )
+
+    assert record(ws, store).best_sha == "c" * 64
+
+
+def test_a_gate_added_beside_a_change_of_scope_is_named_with_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    guard = {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}
+
+    register(
+        ws,
+        store,
+        document(**SLEEVE_CLASSIFICATION, resolution="5m", required_constraints=[guard]),
+    )
+
+    (cleared,) = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert cleared.detail["reason"].startswith(
+        "resolution changed from '1m' to '5m'; card gates added: edge_per_trade"
+    )
+
+
+def test_a_row_whose_pinned_file_is_gone_says_no_gate_was_added(
+    ws: Workspace, store: StateStore
+) -> None:
+    """As a scope the store cannot read says nothing moved."""
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    set_best(store)
+    store.connection.execute("UPDATE hypotheses SET hypothesis_sha = ?", ("d" * 64,))
+    guard = {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}
+
+    register(ws, store, document(**SLEEVE_CLASSIFICATION, required_constraints=[guard]))
+
+    assert record(ws, store).best_sha == "c" * 64
+
+
 def test_clearing_the_best_says_so_in_the_event_log(ws: Workspace, store: StateStore) -> None:
     register(ws, store)
     set_best(store)

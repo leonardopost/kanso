@@ -1280,8 +1280,11 @@ A re-pin keeps `best` while the file still asks the same question. A change to t
 narrows an instrument), `session_scope`, `construct.id`, `sizing`, `objective.id`,
 `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification
 counts, since a draft has no construct and the best was earned as one — and the event log
-records `best_cleared` naming the field that moved. `kanso classify` re-pins on the same
-terms, so classifying onto another construct clears it too. The windows are not scope:
+records `best_cleared` naming the field that moved. So does a re-pin whose card gates —
+`constraints` and `required_constraints` together — name one the held pin did not, or one at
+other parameters: the best was never judged by it, and the event's `gates_added` names it; a
+re-pin that only drops a gate keeps the best. `kanso classify` re-pins on the same terms, so
+classifying onto another construct, or with another gate, clears it too. The windows are not scope:
 moving the research window keeps `best`, and later cards are compared with a best measured
 over other days (`docs/backlog.md` row 149). The cards and their blobs stay in state, and
 `strategy.py` still holds the best-so-far bytes, so the next `research begin` starts from

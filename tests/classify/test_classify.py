@@ -558,11 +558,28 @@ def test_an_unchanged_construct_keeps_the_best(ws: Workspace, store: StateStore)
     run = records.insert(store, run_record())
     records.set_best(store, run, SHA, 1.5)
     records.close(store, run)
-    script(ws, classify=[answer()])
+    script(ws, classify=[answer(constraints=[{"id": "strategy_integrity", "params": pairs()}])])
 
     classify(ws, store, HYP_ID)
 
     assert records.best_of(store, HYP_ID) == (SHA, 1.5)
+
+
+def test_a_classification_adding_a_card_gate_clears_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The best was kept without `min_trades`, so nothing says it would pass it."""
+    register(ws, store, HYP_ID, STATED)
+    run = records.insert(store, run_record())
+    records.set_best(store, run, SHA, 1.5)
+    records.close(store, run)
+    script(ws, classify=[answer()])
+
+    classify(ws, store, HYP_ID)
+
+    assert records.best_of(store, HYP_ID) == (None, None)
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert cleared[0].detail["gates_added"] == ['min_trades {"min": 30}']
 
 
 # --- the stub ----------------------------------------------------------------
