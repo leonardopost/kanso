@@ -267,6 +267,47 @@ def test_quotes_complete_the_cost_model_without_a_width(ws: Workspace) -> None:
     assert accepted(ws, doc) is not None
 
 
+def test_a_quoted_spread_with_no_width_over_a_name_without_quotes_is_refused(
+    ws: Workspace,
+) -> None:
+    """A fill in a name read as bars alone is struck at a close, which carries no spread, and
+    has no quote before it to read one from: under `spread: quotes` with no width it would be
+    charged none. Named, with the width as the remedy."""
+    failure = refused(
+        ws,
+        document(
+            resolution="1m",
+            universe=["DEMO", "EURO"],
+            data_requirements=["bar", "quote"],
+            data_by_instrument={"DEMO": ["quote"], "EURO": ["bar"]},
+            costs={"commission_bps": 0.0, "slippage_bps": 1.0, "spread": "quotes"},
+        ),
+    )
+
+    assert failure.message.startswith("costs.spread: quotes on ")
+    assert failure.message.endswith(
+        "and EURO is asked for no quote or book, so a fill there would be charged no spread"
+    )
+    assert failure.remedy is not None and failure.remedy.startswith(
+        "state fixed_bps in the hypothesis costs"
+    )
+
+
+def test_a_stated_width_prices_a_name_without_quotes_under_a_quoted_spread(ws: Workspace) -> None:
+    parsed = accepted(
+        ws,
+        document(
+            resolution="1m",
+            universe=["DEMO", "EURO"],
+            data_requirements=["bar", "quote"],
+            data_by_instrument={"DEMO": ["quote"], "EURO": ["bar"]},
+            costs={"slippage_bps": 1.0, "spread": "quotes", "fixed_bps": 4.0},
+        ),
+    )
+
+    assert parsed.costs is not None and parsed.costs.fixed_bps == 4.0
+
+
 # -- the universe --------------------------------------------------------------
 
 

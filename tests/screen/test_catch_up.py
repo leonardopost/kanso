@@ -211,7 +211,8 @@ def test_a_quoted_follower_crosses_its_own_spread() -> None:
 
     expected = math.log((moved(50.0) - half) / (100.0 + half)) * 1e4
     assert found.gross == pytest.approx(expected)
-    assert found.hurdle == pytest.approx(2 * (1.0 + 0.5))
+    # the commission alone: struck at the touch, a fill pays neither spread nor slippage_bps
+    assert found.hurdle == pytest.approx(2 * 1.0)
 
 
 def test_a_position_the_session_cannot_close_is_unfilled_and_ends_the_session() -> None:

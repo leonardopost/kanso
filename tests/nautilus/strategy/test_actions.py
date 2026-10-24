@@ -430,7 +430,7 @@ def strategy_costs(run: object) -> float:
     """What the runner's cost arithmetic charged the one fill, as the harness booked it."""
     booked = run.strategy  # type: ignore[attr-defined]
     event = held(run).events[0]
-    return booked._paid(event) - float(event.last_qty) * float(event.last_px)
+    return float(booked._charge(event))
 
 
 # --- the order that must not survive the action -------------------------------

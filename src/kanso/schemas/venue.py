@@ -8,10 +8,12 @@ the cost model for that hypothesis alone. Where nothing is declared the shipped 
 apply: a margin account whose leverage is the hypothesis's `max_leverage`, USD, zero
 commission and one basis point of slippage, with the spread taken from quotes when quotes
 are available, and a resting limit order filled when the market reaches its price. The
-spread, quoted or fixed, is charged on a fill the venue struck at a close or a last print —
-a name fed bars or prints alone; a fill in a name the venue books from quotes or a level-two
-book is struck at the touch, whose price carries the spread, and is charged none
-(`kanso.nautilus.backtest.touched_names`). A
+spread, quoted or fixed, and the slippage in basis points are charged on a fill the venue
+struck at a print or a bar's close inside the quote, or in a name with no quote before it; a
+fill struck at the touch — a buy at or above the ask of its name's last quote, a sale at or
+below its bid, or any fill on a venue matching a level-two book — carries the spread in its
+price and is charged neither (`kanso.nautilus.costs.at_touch`). Under `spread: quotes` a
+stated `fixed_bps` is the width a fill with no quote before it pays. A
 currency code is any code the engine could register — a fiat code or a crypto code such as
 USDT — and whether it does register it is checked where an account is funded, not here.
 

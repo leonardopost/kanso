@@ -18,9 +18,11 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from.
-                                   # The half-spread is charged on a name the venue fills from bars or prints; a name
-                                   # asked for quote or book and no bar fills at the touch, whose price carries the
-                                   # spread, and is charged none — a wider market there is slippage_bps or slippage_ticks
+                                   # The half-spread and slippage_bps are charged on a fill struck at a print or a bar's
+                                   # close inside the quote; a fill at the touch of its name's last quote — a buy at the
+                                   # ask, a sale at the bid — carries the spread and is charged neither: a taker's price
+                                   # past the touch is slippage_ticks. Under `quotes`, fixed_bps prices a fill with no
+                                   # quote before it, and is required when an instrument is asked for no quote or book
 #   slippage_ticks: 1              # a taker's fill pays this many of the instrument's ticks a share, never past its limit;
                                    # a maker's fill never pays it. Zero unless stated
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a

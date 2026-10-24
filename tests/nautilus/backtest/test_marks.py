@@ -29,7 +29,6 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso.criteria.run import NS_PER_DAY, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.nautilus.backtest import Marks, RunRequest, folded
-from kanso.nautilus.costs import quote_half_spread
 from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
 from kanso.schemas import VenueModel
 
@@ -118,12 +117,16 @@ def test_every_point_folds_to_the_prices_it_carries(drawn: list, quoted: bool) -
     expected = folded(request, [plain for p in stream if (plain := _plain(p)) is not None])
 
     assert _state(marks) == _state(expected)
-    series: dict[str, list[tuple[int, float]]] = {}
+    # every quote is kept, under either spread: a fill's touch is read against it
+    series: dict[str, list[tuple[int, float, float]]] = {}
     for p in stream:
-        if quoted and isinstance(p, QuoteTick):
-            half = quote_half_spread(float(p.bid_price), float(p.ask_price))
-            series.setdefault(p.instrument_id.value, []).append((int(p.ts_init), half))
-    assert marks._series == series
+        if isinstance(p, QuoteTick):
+            quote = (int(p.ts_init), float(p.bid_price), float(p.ask_price))
+            series.setdefault(p.instrument_id.value, []).append(quote)
+    assert {
+        name: list(zip(*(list(column) for column in held), strict=True))
+        for name, held in marks._series.items()
+    } == series
 
 
 @pytest.mark.parametrize("kind", ["quote", "trade", "bar"])

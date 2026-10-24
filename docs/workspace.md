@@ -125,6 +125,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| take the spread from quotes with no `fixed_bps` over an instrument asked for neither `quote` nor `book` — a signal included | 3 · at `hyp validate`, naming `costs.spread` and the instrument: a fill there has no quote before it to read a spread from, and its price carries none |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
 | hold a perpetual in a universe whose `data_requirements` does not list `funding` | 3 · at `hyp validate`, naming the instrument; a perpetual is known by its resolved definition, not its id |
@@ -794,13 +795,22 @@ set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason. The spread is charged where the price does not already
-carry it: a fill in a name the venue books from quotes or a level-two book — one asked for
-`quote` or `book` and not for `bar` — is struck at the touch, so its price carries the spread
-and the runner charges it no half-spread under either `spread` value; a fill in a name fed
-bars, alone or beside its quotes, or prints alone pays the half-spread the model states
-(`docs/concepts.md`, Delivery). So `spread` and `fixed_bps` price the names the venue fills
-at a close or a last print, and on a quoted name a wider market is stated as `slippage_bps`
-or `slippage_ticks`. The block is scope: every metric is net of it, so a best selected under one schedule
+carry it, and whether it does is read off each fill, never off its name: a fill struck at the
+touch — a buy at or above the ask of its name's last quote at or before it, a sale at or below
+that quote's bid, or any fill on a venue that matches a level-two book — carries the spread
+and whatever its order walked past the touch, so the runner charges it neither the
+half-spread, under either `spread` value, nor `slippage_bps`; a fill struck at a print or a
+bar's close inside the quote, or in a name with no quote before it, pays both
+(`docs/concepts.md`, Delivery). So one name fed bars beside its quotes pays the half-spread
+on the fills its bars made and not on those its quotes made. `spread`, `fixed_bps` and
+`slippage_bps` price the fills the venue struck at a close or a print, and what a taker pays
+past the touch on a quoted name is stated as `slippage_ticks`. Under `spread: quotes`,
+`fixed_bps` is the width a fill with no quote before it pays, and a model that takes its
+spread from quotes and states no width is refused at `hyp validate` and `hyp add` (exit 3),
+naming `costs.spread`, when an instrument of its venue is asked for neither `quote` nor
+`book`: a fill there would be charged no spread at all, and the file cannot say whether the
+strategy trades a name it reads, so a signal is held to it too, though the width it states
+is never charged. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
 `latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
@@ -825,9 +835,11 @@ reached it (`docs/concepts.md`, Delivery) — pays exactly the model's maker sch
 the spread is what a resting order earns rather than pays. Negative is a net rebate, the way
 a per-share-priced account that pays for displayed liquidity can come out ahead on a fill
 that rested. Every other fill — a market order, a limit that was marketable when it arrived
-— is charged commission, slippage and half the spread exactly as before, and so is a maker's
-fill under a model that states neither `maker_bps` nor `maker_per_share` (below): leave the
-keys out and no number moves. It is
+— is charged commission, and slippage and half the spread where its price does not carry the
+spread (above), and so is a maker's fill under a model that states neither `maker_bps` nor
+`maker_per_share` (below): one filled at its own price inside the quote — on a print through
+it, say — pays the half-spread and `slippage_bps` it never paid in the market. Leave the keys
+out and no number moves. It is
 applied where every cost is, once, in the runner's extraction, and `self.balance` books the
 same rate. `cost_stress` multiplies a charge and divides a rebate, so a stress of one or more
 never lets a fill earn more. What a sleeve reserves when it sizes is the larger of the maker
@@ -867,8 +879,8 @@ priced per share charges it:
 ```yaml
 costs:
   commission_bps: 0.0
-  commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, on top of …
-  slippage_bps: 0.5                # … its slippage; the spread is in the price it took
+  commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, and …
+  slippage_bps: 0.5                # … this on a fill at a print or a close; one at the touch carries the spread
   spread: quotes
   maker_per_share: 0.0040          # a fill that rested: $0.0040 a share and nothing else
 ```

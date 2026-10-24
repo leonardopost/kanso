@@ -25,8 +25,10 @@ document is parsed. Everything else needs the workspace, and that is this module
   something behind would not be one, and the store is written by `kanso data instruments
   resolve` alone;
 * the venues those instruments trade on resolve to a complete cost model, and to one
-  account currency. A spread taken from quotes needs quotes; a fixed spread needs its
-  width; a universe spanning two account currencies would have a leg priced at a rate
+  account currency. A spread taken from quotes needs quotes, and a width (`fixed_bps`) for
+  any instrument of its venue asked for neither quote nor book, since a fill there has no
+  quote to read one from; a fixed spread needs its width; a universe spanning two account
+  currencies would have a leg priced at a rate
   nothing in the workspace records, so it is refused — and so, for the same reason, is an
   instrument that settles in a currency other than its venue's account currency;
 * a venue model whose `limit_fill` is `print_through` or `print_through_whole` fills a
@@ -170,6 +172,7 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_benchmark(hyp)
     _check_book(hyp, models)
     _check_print_through(hyp, models)
+    _check_spread(hyp, models, instruments)
     _check_classification(ws, hyp)
     _check_derived_from(ws, hyp)
     _check_screened(ws, hyp)
@@ -576,6 +579,42 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
             "left, drop bar from data_requirements and research at resolution: tick, since a "
             "bar size requires bar; or state limit_fill: touch or through",
         )
+
+
+def _check_spread(
+    hyp: Hypothesis, models: Mapping[str, VenueModel], instruments: Mapping[str, Any]
+) -> None:
+    """A model that reads a fill's half-spread from quotes and states no width, over an
+    instrument asked for neither quote nor book, would charge a fill there no spread at all:
+    struck at a print or a bar's close, its price carries none, and there is no quote before
+    it to read one from. A stated `fixed_bps` is the width such a fill pays. On a venue that
+    matches a level-two book every fill is struck at the book and pays no half-spread, so it
+    needs none. Whether the strategy trades the instrument cannot be known from the file, so
+    a signal read and never traded is held to it too: the width it states is never charged."""
+    if BOOK_TYPE in hyp.data_requirements:
+        return
+    unpriced = {
+        venue
+        for venue, model in models.items()
+        if model.costs.spread == "quotes" and model.costs.fixed_bps is None
+    }
+    named = [
+        name
+        for name in hyp.universe
+        if _venue_of(instruments[name]) in unpriced
+        and not {QUOTE_TYPE, BOOK_TYPE} & set(hyp.required_of(name))
+    ]
+    if not named:
+        return
+    venues = sorted({_venue_of(instruments[name]) for name in named})
+    raise ValidationError(
+        f"costs.spread: quotes on {', '.join(venues)} reads a fill's half-spread from the "
+        f"quote before it, and {', '.join(named)} {'is' if len(named) == 1 else 'are'} asked "
+        "for no quote or book, so a fill there would be charged no spread",
+        remedy="state fixed_bps in the hypothesis costs or under "
+        f"venues.{venues[0]}.costs in portfolio.yaml — a fill with no quote before it pays "
+        "half of it — or ask the instrument for quote under data_by_instrument",
+    )
 
 
 def _capital(ws: Workspace, hyp: Hypothesis) -> tuple[float, str]:
