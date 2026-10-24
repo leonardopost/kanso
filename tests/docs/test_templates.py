@@ -96,8 +96,12 @@ def test_the_program_names_every_status_a_card_can_carry_and_only_the_printed_on
     text = template("program.md")
     listed = re.search(r"`([a-z|]+) \u00b7 metric \u00b7 \u0394 \u00b7 reason`", text)
     assert listed is not None
-    assert set(listed.group(1).split("|")) == set(get_args(CardStatus)) - {"redundant"}
+    assert set(listed.group(1).split("|")) == set(get_args(CardStatus)) - {
+        "redundant",
+        "runner_up",
+    }
     assert "`redundant` (exit 2)" in text, "the status the command refuses rather than prints"
+    assert "`runner_up` is written only by a turn of several cards" in text, "nor this one"
 
 
 def test_the_program_tells_the_proposer_a_settlement_is_not_answered() -> None:

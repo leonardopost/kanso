@@ -1324,6 +1324,41 @@ def test_the_next_turn_is_shown_what_a_batch_s_cards_traded(
     assert all(card.digest is not None for card in records.cards_of(store, prepared_hyp))
 
 
+def test_a_turn_s_second_keep_is_a_runner_up_and_its_corner_does_not_read_as_searched(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A turn keeps one card. Another that beat the best the turn began from is a
+    `runner_up`, in the store, in the next proposal's recent cards and as its tag's best
+    status. Before this it was written `discard`, so the condition it tested read as a
+    corner searched and found wanting (assessment N-10-3)."""
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[
+            {
+                "proposals": [
+                    proposal("revert", tags=["signal_mean_reversion"]),
+                    proposal("revert", tagged=False, tags=["exit_target"]),
+                ]
+            },
+            {"proposals": [proposal("weak")]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    baseline, kept, runner_up = records.cards_of(store, prepared_hyp)[:3]
+    assert (kept.status, runner_up.status) == ("keep", "runner_up")
+    assert runner_up.metric > baseline.metric, "it beat the best its turn began from"
+    assert records.best_of(store, prepared_hyp)[0] == kept.strategy_sha
+    assert outcome.runner_ups == 1
+    assert outcome.payload()["runner_ups"] == 1
+    facts = json.loads(recorded.of("propose")[1].user)
+    assert [card["status"] for card in facts["recent_cards"]] == ["keep", "keep", "runner_up"]
+    assert facts["coverage"]["exit_target"]["best_status"] == "runner_up"
+    assert "`runner_up`" in recorded.of("propose")[1].system
+
+
 def test_a_batch_with_no_keep_is_one_miss_and_three_trials(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:

@@ -218,6 +218,7 @@ class Outcome:
     keeps: int
     discards: int
     crashes: int
+    runner_ups: int
     missed: int
     redundant: int
     checks: int
@@ -237,6 +238,7 @@ class Outcome:
             "keeps": self.keeps,
             "discards": self.discards,
             "crashes": self.crashes,
+            "runner_ups": self.runner_ups,
             "missed": self.missed,
             "redundant": self.redundant,
             "checks": self.checks,
@@ -287,7 +289,7 @@ def run(
     active = records.require_active(store, hyp_id, lane)
     settings = ws.config.research
     directory = ws.root / active.dir
-    tally = {"keep": 0, "discard": 0, "crash": 0}
+    tally = {"keep": 0, "discard": 0, "crash": 0, research_loop.RUNNER_UP: 0}
     proposed = missed = redundant = checks = drifts = 0
     misses = _trailing_non_keeps(store, active)
     waiting = align.since(store, active)
@@ -334,8 +336,8 @@ def run(
             for card in made_batch:
                 if card.status == "keep":
                     tally["keep"] += 1
-                elif card.status == "crash":
-                    tally["crash"] += 1
+                elif card.status in ("crash", research_loop.RUNNER_UP):
+                    tally[card.status] += 1
                 elif card.status == "redundant":
                     redundant += 1
                 else:
@@ -430,6 +432,7 @@ def run(
         keeps=tally["keep"],
         discards=tally["discard"],
         crashes=tally["crash"],
+        runner_ups=tally[research_loop.RUNNER_UP],
         missed=missed,
         redundant=redundant,
         checks=checks,

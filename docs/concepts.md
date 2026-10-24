@@ -770,7 +770,12 @@ of the window. Each card is a trial, so `n_trials` and the margin `edge_per_trad
 the turn to both grow by every card of it, and `align_every` still counts cards. The stall
 and the phase count the turn: no keep in it is one miss. Every card is judged against the
 best the turn started from, and the keep is the highest metric that clears that floor; a
-tie keeps the earlier slot. Two slots that produce the same bytes are one card. A crash is
+tie keeps the earlier slot. Every other card that cleared it is a `runner_up`: it beat the
+best it was judged by and lost only to a sibling it was never compared with, so it is shown
+to the proposer — in its recent cards and as its tag's best status — as that, never as a
+discard, which says the change did not beat the best; on 0.18.0 and 0.19.0 it was written
+`discard`. It is a trial like any card, never the best, and a turn with a keep in it is no
+miss. Two slots that produce the same bytes are one card. A crash is
 repaired on the next turn alone, as one diff, and the turn after that is a batch again
 unless the repair crashed too. One model call is one spend entry, sent with
 `cards_per_turn` times the `propose` route's output cap, since the cap is what one diff may

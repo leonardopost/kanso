@@ -154,6 +154,7 @@ __all__ = [
     "REDUNDANT",
     "RESEARCHABLE",
     "RESOURCES",
+    "RUNNER_UP",
     "SAME_BOOK",
     "RedundantError",
     "Setup",
@@ -173,6 +174,12 @@ MIN_CARD_BUDGET_S: Final = 60.0
 
 HEADROOM: Final = 3.0
 """What a card is allowed over what the baseline needed, in time and in memory alike."""
+
+RUNNER_UP: Final = "runner_up"
+"""The status of a card of a turn that ran several which cleared the keep floor against the
+best the turn began from while a sibling scored higher and was kept. Not a discard, which
+says the change did not beat the best: this one did, against the best it was judged by, and
+lost only to a card it was never compared with. Never a keep, since a turn keeps one."""
 
 RESOURCES: Final = "resources"
 """The verdict a card killed for its memory or its clock carries, failed, beside the
@@ -1564,8 +1571,8 @@ def run_batch(
     keep rule see that pre-turn best and a trial count that already includes every proposal
     of the turn.
     The highest metric that clears the floor is the one keep; a tie keeps the earlier
-    slot. Every proposal is recorded, in slot order, and a redundant one does not refuse
-    the rest of the turn.
+    slot, and every other slot that cleared it is a `RUNNER_UP`. Every proposal is
+    recorded, in slot order, and a redundant one does not refuse the rest of the turn.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
@@ -1720,7 +1727,7 @@ def run_batch(
     if best_at is not None:
         for index, item in enumerate(decided):
             if item.status == "keep" and index != best_at:
-                decided[index] = replace(item, status="discard")
+                decided[index] = replace(item, status=RUNNER_UP)
     made: list[Card] = []
     current = frozen
     for item in decided:

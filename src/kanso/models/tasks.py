@@ -329,8 +329,8 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "least, several where the change does several things. The `coverage` fact is the "
         "cards of this hypothesis under the run's pins read back by tag — how many, the "
         "best score and its status, the newest card — so a corner with many cards and no "
-        "keep is a corner already searched, and a corner with none is one the search has "
-        "not reached.\n\n"
+        "keep or `runner_up` is a corner already searched, and a corner with none is one "
+        "the search has not reached.\n\n"
         "The search has a phase, given as the `phase` fact with the misses since the last "
         "keep. In the `local` phase — the first `local_cards` misses — propose local "
         "changes: a parameter, a threshold, a window, a respelling of the same rule. In the "
@@ -346,8 +346,10 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "each other. A diff that does not apply, changes nothing or repeats bytes already "
         "carded is dropped for its slot; return as many distinct diffs as you can. One "
         "call is one turn: the phase and the stall count the turn, and every card the "
-        "turn runs is a trial. A turn that repairs a crash is one diff, as above, whatever "
-        "`cards_per_turn` says."
+        "turn runs is a trial. Every card of the turn is judged against the best the turn "
+        "began from and the highest that beats it is kept; another that beat it too is a "
+        "`runner_up` — it was an improvement on that best, and lost only to its sibling. A "
+        "turn that repairs a crash is one diff, as above, whatever `cards_per_turn` says."
     ),
     "align_check": (
         "You check that a strategy still tests the hypothesis it was written for.\n\n"
