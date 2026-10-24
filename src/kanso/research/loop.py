@@ -1566,8 +1566,8 @@ def run_batch(
     share cannot fund) and `slots` times the run's card budget: the children share the
     lane's cores, and the baseline the budget was struck from had them to itself. On 0.18.0
     every slot had one card's budget, so on a host whose lanes already fill its cores each
-    child of a turn of `w` had about a `w`-th of its baseline's core and ran about `w` times
-    its wall: four sat at the three-times kill line and eight were all killed. Gates and the
+    child of a turn of `w` had about a `w`-th of its baseline's core and would run about `w`
+    times its wall: four at the three-times kill line, eight all killed. Gates and the
     keep rule see that pre-turn best and a trial count that already includes every proposal
     of the turn.
     The highest metric that clears the floor is the one keep; a tie keeps the earlier
