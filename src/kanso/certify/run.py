@@ -57,6 +57,20 @@ running a backtest per parameter; the certificate lists its gates in the plan's 
 regardless. A window gate that judged nothing spares nothing: a skip is an absence of
 evidence, not a refusal, and the plateau then refuses a loss itself before moving anything.
 
+**A search is priced in full, or no certificate is written.** The deflation a plan must carry
+from the second card takes its expected maximum over every card of the hypothesis's family
+that ran and traded, under any objective, and its spread from the cards scored under the
+subject's own (`kanso.criteria.gates._searched`): a hypothesis re-pinned to another
+objective carries across the strategy the earlier search selected, and it is that search
+the certificate prices. Two cases are refused before anything runs, because each would
+otherwise be a certificate whose correction judged nothing and so passed. One is a subject
+behind two or more such cards with fewer than two scored in its objective's units — the
+carried strategy certified as the first card under its new objective — whose spread
+cannot be read (`unpriced`). The other is a subject scored under an objective whose
+correction the pinned plan does not carry, with its threshold, once the search has two
+cards: `cert run --sha` of a card from before the re-pin, whose plan was made for the
+objective the hypothesis has now.
+
 The verdict moves the hypothesis and never ends it: a pass certifies it, a fail returns it
 to research with the ids of its failing gates recorded where the proposer reads them, and
 every `n_fail`-th consecutive failure escalates. The ids alone, because a certification
@@ -90,7 +104,9 @@ from kanso.certify.power import power, window_params
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
+from kanso.criteria import catalogue as toolbox
 from kanso.criteria.digest import session_edge
+from kanso.criteria.library import SEARCH_TRIALS, deflation_gate, required_deflation
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
 from kanso.data.manifest import Manifest, catalog_path, manifests
@@ -144,6 +160,7 @@ __all__ = [
     "pinned_sha",
     "show",
     "subject_run",
+    "unpriced",
 ]
 
 CERT_STAGE: Final = "cert"
@@ -295,6 +312,14 @@ def certify(
     plan = plan_for(ws, store, hyp_id, lane=lane)
     engine = engine_version()
     n_trials = records.n_trials(store, hyp_id)
+    _refuse_uncorrected(plan, subject, n_trials, registration)
+    reason = unpriced(store, hyp_id, subject.objective_id, n_trials)
+    if reason is not None:
+        raise PreconditionError(
+            reason,
+            remedy=f"research it further with `kanso research begin {hyp_id}` until two cards "
+            f"are scored under {subject.objective_id}",
+        )
     certificate.refuse_repeat(
         ws,
         store,
@@ -335,6 +360,58 @@ def show(ws: Workspace, store: StateStore, hyp_id: str) -> Certificate | None:
     """This hypothesis's newest certificate, or `None` when it has none."""
     _registration(ws, store, hyp_id)
     return certificate.latest(store, hyp_id)
+
+
+def unpriced(store: StateStore, hyp_id: str, objective_id: str, n_trials: int) -> str | None:
+    """Why the search behind a card scored under `objective_id` cannot be priced, or `None`.
+
+    The search is priced from `SEARCH_TRIALS` cards on, by the deflation gate the toolbox
+    says `deflates` the objective: over every card of the family that ran and traded, with
+    the spread of those scored in the objective's units. A family with two such cards and
+    fewer than two of them in those units has a search behind it and no spread to price it
+    by, and a deflation that cannot read its spread skips, which passes — the route a
+    strategy carried across a re-pin to another objective took to an uncorrected
+    certificate as the first card scored under its new one (`docs/backlog.md` row 173).
+    """
+    gate = deflation_gate(objective_id)
+    if n_trials < SEARCH_TRIALS or gate is None:
+        return None
+    searched = records.candidates(store, hyp_id)
+    scored = len(records.trial_metrics(store, hyp_id, objective_id))
+    if searched < SEARCH_TRIALS or scored >= SEARCH_TRIALS:
+        return None
+    return (
+        f"{hyp_id} has {searched} cards that ran and traded behind it and {scored} of them "
+        f"scored under {objective_id}, so {gate} cannot read the spread of the search that "
+        f"selected this card: it prices the search from two cards in its units"
+    )
+
+
+def _refuse_uncorrected(
+    plan: CertificationPlan, subject: Subject, n_trials: int, registration: Registration
+) -> None:
+    """Refuse a subject whose objective's search correction the pinned plan does not carry.
+
+    A plan is made for the objective the hypothesis is registered under, and from the second
+    card it carries that objective's deflation gate with its threshold. A card scored under
+    another — one researched before a re-pin moved the objective, named by `--sha` — would
+    be certified with that gate skipping on an objective it does not deflate and its own
+    correction absent, so the search that selected it would go unpriced.
+    """
+    correction = required_deflation(subject.hyp, n_trials)
+    if correction is None:
+        return
+    planned = next((gate for gate in plan.gates if gate.id == correction), None)
+    declared = toolbox()[correction].params
+    if planned is not None and all(name in planned.params for name in declared):
+        return
+    raise PreconditionError(
+        f"{subject.strategy_sha[:7]} was scored under {subject.objective_id}, and the plan "
+        f"pinned for {subject.hyp.id} carries no {correction} with its threshold, the search "
+        "correction for it, so the search that selected it would go unpriced",
+        remedy=f"certify a card scored under {registration.objective}, as the best is: "
+        f"`kanso cert run {subject.hyp.id}`",
+    )
 
 
 # --- resolving the subject ----------------------------------------------------
@@ -912,6 +989,7 @@ def _judge(
     )
     stated = power(*researched, subject.research, subject.certification, window_params(plan))
     metrics = records.trial_metrics(store, subject.hyp.id, objective.id)
+    searched = records.candidates(store, subject.hyp.id)
     facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
     volume = measured.evidence.daily_volume
     parameters = _tunable(subject)
@@ -954,6 +1032,7 @@ def _judge(
             benchmark_run=measured.benchmark_certification,
             benchmark_research_run=measured.benchmark_research,
             trial_metrics=metrics,
+            trials=max(searched, 1),
             datasets=facts,
             daily_volume=volume,
             tunable=parameters,

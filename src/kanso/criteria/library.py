@@ -7,6 +7,14 @@ gates from it, the planner reads the whole toolbox from it, and both choose valu
 the declared ranges without the framework ever supplying a default. Adding a gate is
 adding a file and an implementation; nothing here enumerates them.
 
+Two structural facts are declared there too, and held here. A gate whose `together` is set
+is named with every parameter it declares or not at all, because half a rule judges
+nothing and a gate that judges nothing passes (`check_params`). A card gate whose
+`required_for` names an objective is carried by every hypothesis scored on it, with all
+its parameters set (`required_card_gates`): an objective struck on the book rewards
+trading less once every trade loses, and the gate that refuses that is part of what the
+objective means, not a choice about this hypothesis.
+
 A range bound may be written against the run's own scale rather than in absolute units —
 `1 * folds`, `100 * horizon` — so an item is written once and sized to each hypothesis.
 Resolving those expressions is what makes a plan checkable: `min_positive_folds` is
@@ -174,6 +182,16 @@ def deflation_gate(objective_id: str) -> str | None:
     )
 
 
+def required_card_gates(objective_id: str) -> tuple[str, ...]:
+    """The card gates every hypothesis scored on this objective carries, with every parameter
+    set, as the toolbox declares them in their `required_for` lists; in id order."""
+    return tuple(
+        item.id
+        for item in _catalogue().values()
+        if item.kind == "gate" and objective_id in (item.required_for or ())
+    )
+
+
 def required_deflation(hyp: Hypothesis, n_trials: int) -> str | None:
     """The deflation gate a plan for this hypothesis must include, or `None` when it need
     include none: before its second card, or with no objective to deflate."""
@@ -193,7 +211,10 @@ def gates() -> dict[str, Gate]:
 
 
 def applicable_objectives(hyp: Hypothesis, mode: str) -> list[tuple[int, str]]:
-    """Every objective this hypothesis admits as `(priority, id)`; the lowest wins."""
+    """Every objective this hypothesis admits as `(priority, id)`, in the order listed.
+
+    The set an objective is named from — by a classifier or by the operator — and never a
+    choice within it: the priority orders the list and selects nothing."""
     return applicable(list(_catalogue().values()), hyp, mode)
 
 
@@ -268,9 +289,18 @@ def check_params(
     then for its range. The universe check lives here rather than in one caller because
     the classifier's answer, the operator's own `required_constraints` and a certification
     plan all pass through this function, and a leg the hypothesis does not trade is wrong
-    from whichever of them it came.
+    from whichever of them it came. An item whose parameters mean nothing apart
+    (`together`) is held here to setting every one, for the same reason: `edge_per_trade`
+    given a `min_bps` and no `k_se` skipped every card it was asked to judge.
     """
     problems: list[str] = []
+    if item.together:
+        problems.extend(
+            f"{name}: is not set, and {item.id} judges nothing without every one of "
+            f"{', '.join(item.params)}; the values are yours, inside their ranges"
+            for name in item.params
+            if name not in params
+        )
     for name, value in params.items():
         kind = item.params.get(name)
         if kind is None:
@@ -310,8 +340,11 @@ def plan_complaints(
     and with every parameter it declares set — because the result a certificate judges is
     then the best of a search, nothing else in a plan prices one, and a deflation gate with
     no threshold skips, which passes. The threshold's value stays the planner's. The gate
-    itself prices the narrower set of `trial_metrics`, and skips while fewer than two of
-    the cards are trials of its objective: until then nothing was chosen over anything.
+    itself takes its expected maximum over every card that ran and traded and its spread
+    from the narrower set of `trial_metrics`; certification refuses a subject behind two
+    such cards with fewer than two of these (`kanso.certify.run.unpriced`), since that
+    spread cannot be read, and the gate skips only where fewer than two cards ran and
+    traded at all: then nothing was chosen over anything.
 
     A gate this version has no implementation for is not part of the toolbox a plan may
     draw on. It is neither offered to the planner, nor accepted from one, nor required of

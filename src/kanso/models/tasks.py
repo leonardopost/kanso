@@ -50,14 +50,22 @@ researched next.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 from kanso.models.call import Call, CallInputs
 from kanso.schemas import TAGS
 from kanso.schemas.models import Route, TaskClass
 
-__all__ = ["ANSWER_SCHEMAS", "INSTRUCTIONS", "PARAM_PAIRS", "build", "canonical", "collapse"]
+__all__ = [
+    "ANSWER_SCHEMAS",
+    "INSTRUCTIONS",
+    "PARAM_PAIRS",
+    "build",
+    "canonical",
+    "classify_schema",
+    "collapse",
+]
 
 PARAM_PAIRS: Final[dict[str, object]] = {
     "type": "array",
@@ -117,6 +125,7 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
                 "required": ["id"],
                 "additionalProperties": False,
             },
+            "objective": {"type": "string", "minLength": 1},
             "objective_params": {
                 "type": "object",
                 "properties": {
@@ -137,7 +146,7 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
             },
             "rationale": {"type": "string", "maxLength": 240},
         },
-        "required": ["construct", "objective_params", "constraints", "rationale"],
+        "required": ["construct", "objective", "objective_params", "constraints", "rationale"],
         "additionalProperties": False,
     },
     "propose": {
@@ -221,23 +230,37 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
 INSTRUCTIONS: Final[dict[TaskClass, str]] = {
     "classify": (
         "You classify a trading hypothesis for an automated research system.\n\n"
-        "Decide three things from the hypothesis and the catalogues below.\n"
+        "Decide four things from the hypothesis and the catalogues below.\n"
         "1. Which construct the hypothesis is, in portfolio-construction terms. Choose an "
         "id from the construct catalogue. A construct whose `needs_host` is not `none` "
         "modifies a deployed strategy rather than trading on its own, so name a `host` "
         "from the certified strategies; a construct that stands alone takes no host.\n"
-        "2. The keep rule's parameters. `min_delta` is the smallest improvement in the "
+        "2. The one objective every card is scored on: an id from `objectives`, under the "
+        "`objective_mode` of the construct you chose. Each entry says what it measures and "
+        "when it misleads. Read the target the hypothesis states: one stated as a return on "
+        "capital — basis points or percent a day, a month, a year — is scored on a "
+        "contribution, because a per-trade edge rewards trading less, and dropping half the "
+        "trades at a better edge is a keep under it even when the book earns less a day. "
+        "When `objective_stated` is given, the operator wrote that objective into the file: "
+        "it stands, with its keep rule, whenever your construct is measured in its mode, so "
+        "name it; otherwise name one that applies, and the operator is told it was "
+        "replaced.\n"
+        "3. The keep rule's parameters. `min_delta` is the smallest improvement in the "
         "objective worth keeping and `k_se` how many standard errors an improvement must "
         "clear, so both are noise floors: set them from how noisy this hypothesis's "
         "objective will be, not from ambition. `min_delta` is zero or more and `k_se` is "
         "above zero; the schema states no numeric range, so those two bounds are stated "
         "here.\n"
-        "3. The constraints every card of this hypothesis must satisfy. Choose ids from "
+        "4. The constraints every card of this hypothesis must satisfy. Choose ids from "
         "the card-stage gate catalogue and stay inside each parameter's stated range; a "
         "parameter typed `instrument` names one id of the hypothesis's universe, one typed "
         "`hours` is clock times on one day written `HH:MM-HH:MM`, and one typed `zone` is an "
         "IANA time-zone name such as `America/New_York`. "
-        "Include every gate the catalogue marks required. The hypothesis may already "
+        "Include every gate the catalogue marks required, and every gate whose "
+        "`required_for` lists the objective you named, with every one of its parameters "
+        "set: whether such a gate runs is not a choice, how high its bar sits is yours. A "
+        "gate marked `together` is named with all of its parameters or not at all, since "
+        "half its rule judges nothing. The hypothesis may already "
         "require gates of its own, listed under `required_constraints`: those are the "
         "operator's and stand whatever you answer, so do not repeat one to change its "
         "parameters — an entry naming a gate already required is dropped. Name a gate "
@@ -426,6 +449,22 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
     ),
 }
 """The fixed half of each task class's system turn."""
+
+
+def classify_schema(objectives: Sequence[str]) -> dict[str, object]:
+    """The `classify` answer for one hypothesis, its `objective` narrowed to these ids.
+
+    The ids are the objectives the toolbox admits for the hypothesis in either objective
+    mode — the construct, and so the mode, is chosen in the same answer — so the wire holds
+    the model to the admissible set and the check holds it to the mode. With none to name
+    the field stays a bare string, and the check refuses whatever is answered.
+    """
+    schema = ANSWER_SCHEMAS["classify"]
+    if not objectives:
+        return schema
+    properties = dict(cast("Mapping[str, object]", schema["properties"]))
+    properties["objective"] = {"type": "string", "enum": list(objectives)}
+    return {**schema, "properties": properties}
 
 
 def propose_schema(cards: int) -> dict[str, object]:

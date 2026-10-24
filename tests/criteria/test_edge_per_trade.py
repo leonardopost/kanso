@@ -260,8 +260,20 @@ def test_zero_edge_cards_pass_with_the_log_of_the_search_not_its_length(
         assert sum(each[:50]) > sum(each) / 2, "most of them early, while the search is narrow"
 
 
-@pytest.mark.parametrize("params", [{}, {"min_bps": 0.0}, {"k_se": 1.0}])
-def test_without_both_thresholds_it_judges_nothing(params: dict[str, float]) -> None:
-    result = judged(WINNING, **params)
+def test_without_either_threshold_it_judges_nothing() -> None:
+    result = judged(WINNING)
 
     assert result.passed and result.skipped is not None
+
+
+@pytest.mark.parametrize(
+    ("params", "missing"), [({"min_bps": 0.0}, "k_se"), ({"k_se": 1.0}, "min_bps")]
+)
+def test_half_a_rule_fails_rather_than_skipping(params: dict[str, float], missing: str) -> None:
+    """Row 189: one threshold and not the other used to skip, and a skip passes, so a lane
+    that named the gate with one of them kept cards whose trades lose. A file naming one is
+    refused at registration now; a pin from before that fails every card and says why."""
+    result = judged(WINNING, **params)
+
+    assert not result.passed and result.skipped is None
+    assert missing in str(result.evidence["refused"])

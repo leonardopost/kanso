@@ -105,6 +105,11 @@ or names it without its threshold, is refused — by the planner's own check, an
 the way out. Whether a search is corrected for is not a decision; how high the bar sits is,
 and stays the model's. `criteria/library.py` holds the rule and
 `tests/criteria/test_library.py` fails when an objective has no gate or a plan escapes it.
+The objective itself is the classifying model's to name, from the set the toolbox's
+`applies` admits; the predicate bounds the set and picks nothing in it. Another invariant is
+that a contribution, which rewards trading less once every trade loses, is scored only
+beside `edge_per_trade` with both its thresholds set: the gate's library file declares it
+`required_for` both contributions, and classification and `hyp validate` refuse it missing.
 
 **Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,
 `httpx`, `numpy`, and the standard library. `pyarrow`, `pandas` and `msgspec` are reachable
