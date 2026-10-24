@@ -503,8 +503,11 @@ periods    261 of 1d · capital 100000.00 USD · UTC
 and `--json` carries the whole of it. That measurement is 981,070 bytes of JSON stored as
 77,803; a synthetic run the size of a tick lane's largest baseline — 98 daily periods, 6,000
 trades of two fills each and the 12,000 fills — is 5,704,680 bytes stored as 704,643, encoded
-and compressed in 0.18 to 0.25 s. Nothing deletes a measurement (`docs/workspace.md`,
-`state.db`).
+and compressed in 0.18 to 0.25 s. A card scored against a host-alone run or a hold carries
+that run in its own blob, so each blob reads back whole from its one row and the host or the
+hold is stored again on every card of the run: the same synthetic run beside a host-alone run
+of its size is 11,410,530 bytes stored as 1,409,471, in 0.29 to 0.52 s, and beside a hold of
+one fill 707,664. Nothing deletes a measurement (`docs/workspace.md`, `state.db`).
 
 **A card runs in a child process with no path to any catalog.** The parent reads the
 research window — and the warmup sessions before it, when the hypothesis declares them —

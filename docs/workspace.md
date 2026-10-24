@@ -326,10 +326,14 @@ card, no best, no trial count and no certificate is touched by a prune: a book d
 pins come back is re-earned by the next run, one card at a time.
 
 Every card that ran also stores what it was measured from — its run, period by period and fill
-by fill, compressed (`docs/concepts.md`, Card) — and a card names it, so nothing deletes one
-and a prune leaves them all. One costs what its run holds: 77,803 bytes for the demo's keep,
-with 2,006 fills, and 704,643 for a synthetic run of 12,000, which is about 0.7 GB a thousand
-cards of that size.
+by fill, and under a relative or benchmark objective the host-alone run or the hold it was
+scored against, compressed (`docs/concepts.md`, Card) — and a card names it, so nothing
+deletes one and a prune leaves them all. One costs what its runs hold, and two cards share one
+only when the whole measurement is the same bytes, so the host-alone run or the hold is
+stored again in the blob of every card scored against it. Measured: 77,803 bytes for the demo's keep, an absolute objective's, with 2,006
+fills; 704,643 for a synthetic run of 12,000 fills alone, which is about 0.7 GB a thousand
+cards of that size; 1,409,471 for the same run beside a host-alone run of its size, about
+1.4 GB a thousand; and 707,664 beside a hold of one fill over the same 98 periods.
 
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`

@@ -7,6 +7,7 @@ keep rule moves `best` and a discard restores the lane, and the history survives
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from typer.testing import CliRunner
 from kanso.cli import research as research_cli
 from kanso.criteria import criteria_version
 from kanso.criteria.gates import periods_margin
-from kanso.criteria.run import CardRun, midnight_ns
+from kanso.criteria.run import CardRun, Fill, midnight_ns
 from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
 from kanso.errors import Exit
 from kanso.research import records
@@ -626,12 +627,22 @@ def test_show_measured_prints_what_the_card_was_scored_from(
     assert f"{kept['n_trades']} trade(s)" in lines[2]
     periods = lines[4:]
     assert lines[3].split()[:4] == ["periods", str(len(periods)), "of", "1d"]
-    # One line a period end: its UTC date, what the period returned, and the equity after.
-    day, change, equity = periods[0].split()
-    assert len(day) == len("2024-01-02") and day.startswith("2024-01")
-    assert change[0] in "+-" and float(equity) > 0
 
     document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
+    stored = document["measurement"]["run"]
+    assert lines[2].endswith(f"· {len(stored['fills'])} fill(s)") and stored["fills"]
+    assert lines[3].endswith(f"· capital {stored['capital']:.2f} {stored['currency']} · UTC")
+    # One line a period end: its UTC date, what that period returned, and the equity after it.
+    assert [line.split() for line in periods] == [
+        [
+            datetime.fromtimestamp(end // 1_000_000_000, tz=UTC).strftime("%Y-%m-%d"),
+            f"{change:+.2f}",
+            f"{equity:.2f}",
+        ]
+        for end, change, equity in zip(
+            stored["period_ends_ns"], stored["returns"], stored["equity"], strict=True
+        )
+    ]
     assert document["sha"] == kept["strategy_sha"]
     assert document["card"]["measured_sha"] == kept["measured_sha"]
     assert set(document["measurement"]) == {
@@ -662,7 +673,8 @@ def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differen
         returns=(12.5, -2.25),
         equity=(100_012.5, 100_010.25),
         trades=(),
-        fills=(),
+        # A position still open when the window closed: a fill no closed trade holds.
+        fills=(Fill(opened + 29 * half_hour - 60_000_000_000, "DEMO.SIM", "BUY", 10.0, 50.0, 0.1),),
         capital=100_000.0,
         currency="USD",
         venue_model={"venue": "XNAS"},
@@ -706,10 +718,13 @@ def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differen
         f"0.1.0+000000000000, not this kanso's {criteria_version()}"
     )
     assert shown.data["card"]["measured_sha"] == made.measured_sha
-    assert shown.lines[3].split()[:4] == ["periods", "2", "of", "30m"]
-    assert [line.split()[:2] for line in shown.lines[4:]] == [
-        ["2024-01-02", "14:30:00"],
-        ["2024-01-02", "15:00:00"],
+    assert shown.lines[2].endswith("· 0 trade(s) · 1 fill(s)")
+    assert shown.lines[3].startswith("periods ")
+    assert shown.lines[3].endswith(" 2 of 30m · capital 100000.00 USD · UTC")
+    # Each end beside its own period's return and the equity after it.
+    assert [line.split() for line in shown.lines[4:]] == [
+        ["2024-01-02", "14:30:00", "+12.50", "100012.50"],
+        ["2024-01-02", "15:00:00", "-2.25", "100010.25"],
     ]
     assert shown.data["measurement"]["host"] == shown.data["measurement"]["run"]
 
@@ -772,6 +787,54 @@ def test_show_measured_reads_past_a_newer_card_of_the_bytes_that_kept_none(
     # The source is still shown with the newest card of the bytes, which kept none.
     shown = payload(at(runner, registered, "research", "show", HYP_ID, "--json"))
     assert (shown["card"]["desc"], shown["card"]["measured_sha"]) == ("an old lane's card", None)
+
+
+def test_show_measured_shows_the_newest_of_two_cards_of_the_bytes_that_kept_one(
+    runner: CliRunner, registered: Path
+) -> None:
+    """The same bytes judged twice, each card keeping a measurement of its own — a later run's
+    baseline of the keep measured another way, say — show the newer card's, and the card line
+    counts nothing passed over."""
+    begin(runner, registered)
+    edit(registered, REVERTING)
+    kept = card(runner, registered, "fade the rolling mean")
+    with StateStore(registered / "state.db") as store:
+        run = records.require_active(store, HYP_ID)
+        newest = records.cards_of(store, HYP_ID)[-1]
+        first = records.measurement_of(store, newest)
+        assert first is not None
+        again = replace(first, folds=2)
+        metric, metric_se = again.compute()
+        again_sha = records.record_measurement(store, again)
+        records.record_card(
+            store,
+            run,
+            newest.model_copy(
+                update={
+                    "status": "redundant",
+                    "desc": "measured over two folds",
+                    "metric": metric,
+                    "metric_se": metric_se,
+                    "measured_sha": again_sha,
+                }
+            ),
+        )
+    sha7 = str(kept["strategy_sha"])[:7]
+    assert again_sha != kept["measured_sha"]
+
+    result = at(runner, registered, "research", "show", HYP_ID, "--measured")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    lines = result.stdout.splitlines()
+    assert lines[0].endswith(f"{sha7} · redundant · measured over two folds")
+    assert "net_edge_bps over 2 fold(s) · " in lines[1]
+    assert f"{metric:.6f} ± {metric_se:.6f}" in lines[2]
+    document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
+    assert (document["card"]["desc"], document["card"]["measured_sha"]) == (
+        "measured over two folds",
+        again_sha,
+    )
+    assert records.read_measurement(document["measurement"]) == again
 
 
 def test_show_measured_with_a_diff_is_refused_before_anything_is_read(
