@@ -39,6 +39,6 @@ routing:                            # task_class → {tier, effort, max_output};
                                     # Spend where a wrong answer is dearest, think nothing where a rule already decided.
   classify:     {tier: frontier, effort: high,   max_output: 1024}   # once per hypothesis; directs every run that follows
   certify_plan: {tier: frontier, effort: high,   max_output: 4096}   # once per hypothesis; decides what counts as proof
-  propose:      {tier: mid,      effort: medium, max_output: 4096}   # every card, so it dominates spend
+  propose:      {tier: mid,      effort: medium, max_output: 4096}   # every card, so it dominates spend; per proposal: a turn of `cards_per_turn` asks that many times it
   align_check:  {tier: cheap,    effort: none,   max_output: 256}    # a yes/no after the deterministic checks passed
   explore:      {tier: frontier, effort: high,   max_output: 16384}  # on request or after stalls; writes three whole files

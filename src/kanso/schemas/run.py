@@ -48,7 +48,7 @@ from kanso.schemas.base import (
 )
 from kanso.schemas.venue import VenueModel
 
-CardStatus = Literal["keep", "discard", "crash", "redundant"]
+CardStatus = Literal["keep", "discard", "crash", "redundant", "runner_up"]
 
 Tag = Literal[
     "signal_trend",
