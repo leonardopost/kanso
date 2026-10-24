@@ -270,11 +270,54 @@ def test_a_fanned_window_is_held_a_chunk_at_a_time_however_many_chunks_it_has(
     newest alone, as the one-card path does. Measured before this: the fan kept every chunk's
     pickle for the whole turn, about 88 bytes a quote and 78 a print, so the lane holding a
     twenty-name, sixty-session tick window held about 44 GB of it."""
+    alone = run_subprocess(request_for(), store, lane)
+    held = _held_chunks(monkeypatch)
+    together = run_subprocesses([request_for(), request_for(), request_for()], store, lane)
+
+    assert [item.crashed for item in together] == [False, False, False]
+    assert all(item.run.trades == alone.run.trades for item in together)
+    assert held["chunks"] >= 30, "a window of many chunks"
+    assert held["most"] <= 2, f"the parent held {held['most']} chunks at once"
+    assert held["most_bytes"] <= 2 * held["largest"]
+    assert held["alive"] == [], "nothing of the window outlives the turn"
+
+
+def test_a_fanned_tick_window_is_held_a_chunk_at_a_time_and_each_card_is_the_whole_one(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two names' book changes and prints cut seven points a chunk and fanned to two
+    children: each child's card is the card the whole window run in this process gives, and
+    the parent never holds more than the newest chunk."""
     from kanso.nautilus import backtest as runner
 
-    alive: list[int] = []
-    most = {"chunks": 0, "bytes": 0}
-    made = {"chunks": 0, "largest": 0}
+    from .conftest import INSTRUMENT, POSTER, QUIET, tick_hypothesis
+
+    held_store = _tick_store(tmp_path / "ticks", two=True)
+    universe = (INSTRUMENT, f"{QUIET}.XNAS")
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(20.0, universe))
+    whole = run(request, held_store)
+    assert whole.run.fills, "the window trades, so the comparison compares something"
+    monkeypatch.setattr(runner, "CHUNK_POINTS", 7)
+    held = _held_chunks(monkeypatch)
+
+    together = run_subprocesses([request, request], held_store, lane)
+
+    assert [item.crashed for item in together] == [False, False], together[0].traceback_tail
+    assert all(item.run == whole.run for item in together)
+    assert all(item.intents == whole.intents for item in together)
+    assert held["chunks"] >= 10, "a window of many chunks"
+    assert held["most"] <= 2, f"the parent held {held['most']} chunks at once"
+    assert held["alive"] == []
+
+
+def _held_chunks(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Count, from here on, the chunk pickles the card path makes and how many of them, and
+    how many of their bytes, are alive at once: each is made a `bytes` whose finaliser says
+    when the last reference to it went, which CPython's reference counting makes exact."""
+    from kanso.nautilus import backtest as runner
+
+    held: dict[str, Any] = {"chunks": 0, "largest": 0, "most": 0, "most_bytes": 0, "alive": []}
+    alive: list[int] = held["alive"]
 
     class Chunk(bytes):
         def __del__(self) -> None:
@@ -286,24 +329,15 @@ def test_a_fanned_window_is_held_a_chunk_at_a_time_however_many_chunks_it_has(
         data = pickled(record)
         if not (isinstance(record, dict) and "groups" in record):
             return data
-        made["chunks"] += 1
-        made["largest"] = max(made["largest"], len(data))
+        held["chunks"] += 1
+        held["largest"] = max(held["largest"], len(data))
         alive.append(len(data))
-        most["chunks"] = max(most["chunks"], len(alive))
-        most["bytes"] = max(most["bytes"], sum(alive))
+        held["most"] = max(held["most"], len(alive))
+        held["most_bytes"] = max(held["most_bytes"], sum(alive))
         return Chunk(data)
 
     monkeypatch.setattr(runner, "_pickled", counted)
-    alone = run_subprocess(request_for(), store, lane)
-    made["chunks"] = made["largest"] = most["chunks"] = most["bytes"] = 0
-    together = run_subprocesses([request_for(), request_for(), request_for()], store, lane)
-
-    assert [item.crashed for item in together] == [False, False, False]
-    assert all(item.run.trades == alone.run.trades for item in together)
-    assert made["chunks"] >= 30, "a window of many chunks"
-    assert most["chunks"] <= 2, f"the parent held {most['chunks']} chunks at once"
-    assert most["bytes"] <= 2 * made["largest"]
-    assert alive == [], "nothing of the window outlives the turn"
+    return held
 
 
 def test_an_empty_batch_runs_nothing() -> None:

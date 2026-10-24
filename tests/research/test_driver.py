@@ -1359,6 +1359,27 @@ def test_a_turn_s_second_keep_is_a_runner_up_and_its_corner_does_not_read_as_sea
     assert "`runner_up`" in recorded.of("propose")[1].system
 
 
+def test_a_wider_turn_is_shown_as_many_turns_of_cards(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """`context_cards` counts cards a turn's worth at a time: a proposer asked for two diffs a
+    turn is shown twice the cards, so it remembers as many turns as one asked for one. At
+    the default twenty a turn of eight was shown two and a half turns (assessment N-10-4)."""
+    ws = tuned(ws, cards_per_turn=2, context_cards=1)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("revert"), proposal("weak")]},
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+
+    shown = json.loads(recorded.of("propose")[1].user)["recent_cards"]
+    assert [card["desc"] for card in shown] == ["run in revert mode", "run in weak mode"]
+
+
 def test_a_batch_with_no_keep_is_one_miss_and_three_trials(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:

@@ -50,8 +50,10 @@ and the proposer was shown the word `memory` or `budget` as the end of its trace
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
-provider cache hits; the moving half is the current file, the last `context_cards` cards
-of the hypothesis under the run's pins — across runs, so a run that begins after a stall
+provider cache hits; the moving half is the current file, the last `context_cards` times
+`cards_per_turn` cards of the hypothesis under the run's pins — so a proposer asked for
+eight diffs a turn remembers as many turns as one asked for one, where twenty cards were
+two and a half turns of eight — across runs, so a run that begins after a stall
 is not shown a blank slate and made to re-walk the last run's discards — the previous
 diff, the tail of a crash if the last card crashed with the repair it owes, and the
 coverage table: every card
@@ -675,7 +677,8 @@ def _dynamic(
     cards, as the record of what was tried, and never as a traceback over a file it does
     not hold.
     """
-    recent = _recent(store, active, ws.config.research.context_cards)
+    settings = ws.config.research
+    recent = _recent(store, active, settings.context_cards * settings.cards_per_turn)
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),
         "recent_cards": [_summary(row) for row in recent],

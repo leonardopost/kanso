@@ -2324,6 +2324,14 @@ validated, which is why the durable override lives somewhere else: `[env] reserv
 `reserved_mem_gb`, `cores_per_lane` and `mem_per_lane_gb` in `kanso.toml` are read on every
 detection.
 
+`cores_per_lane` is what a lane running one card at a time costs. A lane whose turns run
+`[research] cards_per_turn` cards at once runs that many children together, so it is charged
+`cores_per_lane + cards_per_turn − 1` cores, which is the `cores/lane` figure `kanso env
+detect` prints, and the lanes are counted at that: on a host of 16 cores with one reserved,
+seven lanes at one card a turn and three at four (`(16 − 1) // (2 + 4 − 1)`). The plan read
+`cards_per_turn` before this only to divide a lane's memory, so it planned as many lanes at
+eight cards a turn as at one. Re-run `kanso env detect` after changing either key.
+
 `mem_per_lane_gb` **replaces** the derived memory per lane rather than raising its floor.
 The derivation charges every lane 1.5× the largest baseline peak any run in the workspace
 ever recorded, which is the right figure only while every hypothesis is as heavy as the
