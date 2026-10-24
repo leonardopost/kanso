@@ -112,10 +112,16 @@ def test_a_card_comes_back_as_it_was_written(
 
 @given(gen.measurements())
 def test_a_measurement_survives_the_bytes_its_blob_holds(measured: records.Measurement) -> None:
-    """Canonical JSON compressed, and back: the same measurement, and the same bytes again."""
-    data = records.encode_measurement(measured)
-    read = records.read_measurement(json.loads(zlib.decompress(data)))
+    """Canonical JSON compressed, and back: the same measurement, and the same bytes again.
 
+    The text is pinned as canonical — sorted keys, no whitespace — and not merely stable,
+    so a kanso that builds the payload in another key order stores the same measurement as
+    the same bytes, and identical measurements still share one blob."""
+    data = records.encode_measurement(measured)
+    text = zlib.decompress(data)
+    read = records.read_measurement(json.loads(text))
+
+    assert text == json.dumps(json.loads(text), sort_keys=True, separators=(",", ":")).encode()
     assert read == measured
     assert records.encode_measurement(read) == data
 

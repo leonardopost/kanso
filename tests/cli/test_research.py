@@ -663,7 +663,8 @@ def test_show_measured_prints_what_the_card_was_scored_from(
 def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differenced_against(
     tmp_path: Path,
 ) -> None:
-    """Two ends on one UTC date are told apart by their time, and a host is named."""
+    """Two ends on one UTC date are told apart by their time, and a host, a benchmark or
+    both are named as what the run was differenced against."""
     opened = midnight_ns(date(2024, 1, 2))
     half_hour = 1_800 * 1_000_000_000
     run = CardRun(
@@ -709,6 +710,20 @@ def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differen
         shown = research_cli._measurement(
             store, HYP_ID, made.strategy_sha, [made, unmeasured, unmeasured]
         )
+        # A benchmark is named as the benchmark, and a measurement holding both names both.
+        named: dict[str, str] = {}
+        for objective, host, benchmark in (
+            ("wf_sharpe_vs_hold", None, run),
+            ("marginal_wf_sharpe", run, run),
+        ):
+            ref = measured.objective.model_copy(update={"id": objective})
+            other = replace(measured, objective=ref, host=host, benchmark=benchmark)
+            kept = made.model_copy(
+                update={"measured_sha": records.record_measurement(store, other)}
+            )
+            named[objective] = research_cli._measurement(
+                store, HYP_ID, kept.strategy_sha, [kept]
+            ).lines[1]
 
     assert shown.lines[0].endswith("· keep · baseline · 2 newer card(s) of these bytes kept none")
     # Scored under another kanso, which the line says: this one's objective may compute
@@ -727,6 +742,14 @@ def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differen
         ["2024-01-02", "15:00:00", "-2.25", "100010.25"],
     ]
     assert shown.data["measurement"]["host"] == shown.data["measurement"]["run"]
+    assert named["wf_sharpe_vs_hold"].endswith(
+        "wf_sharpe_vs_hold over 2 fold(s) · against the benchmark run · criteria "
+        f"0.1.0+000000000000, not this kanso's {criteria_version()}"
+    )
+    assert named["marginal_wf_sharpe"].endswith(
+        "marginal_wf_sharpe over 2 fold(s) · against the host and the benchmark run · "
+        f"criteria 0.1.0+000000000000, not this kanso's {criteria_version()}"
+    )
 
 
 def test_show_measured_refuses_a_card_that_kept_no_measurement(

@@ -469,14 +469,15 @@ returns the card's metric and error exactly (`kanso.research.records.Measurement
 span of the window for a reading the loop never took).
 
 Under another kanso, `compute` is that kanso's objective on the same run, and a release can
-compute an objective differently: 0.17.0 read a per-trade edge's error period by period,
-which moved the demo keep's error from 0.971889 to 1.065174 on the same trades. So the
-measurement names the version that scored it, and a reading set beside the card's own number
-is one arithmetic only where the two agree. The version is the one installed when the card
-ran, which after an upgrade is not its run's pin — a run is carded by whichever kanso is
-installed when its next card runs — and it is the package version and a digest of the
-criteria library's files, so a release moves it and an edit to an objective's code between two
-development builds of one version does not.
+compute an objective differently: 0.17.0 made an objective's error the error of its mean,
+read off its own series — a per-trade edge's period by period — where 0.16.0 took the spread
+of the fold means, so on the same trades the demo keep's error is 1.065174 where 0.16.0 gave
+1.064759: close, and a different statistic. So the measurement names the version that scored
+it, and a reading set beside the card's own number is one arithmetic only where the two
+agree. The version is the one installed when the card ran, which after an upgrade is not its
+run's pin — a run is carded by whichever kanso is installed when its next card runs — and it
+is the package version and a digest of the criteria library's files, so a release moves it
+and an edit to an objective's code between two development builds of one version does not.
 
 The same bytes measured twice under the same pins and measured the same way — the same
 `[research] capital`, `folds` and `return_period`, venue model, host version, sleeve budget,
