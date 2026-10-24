@@ -116,6 +116,7 @@ DOC: dict[str, Any] = {
     "resolution": "tick",
     "horizon": "1d",
     "data_requirements": ["quote"],
+    "costs": {**DOCUMENT["costs"], "latency_ms": 1},
     "windows": {
         "research": {"start": RESEARCH[0], "end": RESEARCH[1]},
         "certification": {"start": CERTIFICATION[0], "end": CERTIFICATION[1]},

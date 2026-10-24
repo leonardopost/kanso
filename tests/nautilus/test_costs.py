@@ -19,6 +19,7 @@ from kanso.criteria.run import NS_PER_DAY, midnight_ns
 from kanso.nautilus.costs import (
     NS_PER_YEAR,
     BookPolicy,
+    at_touch,
     carry,
     fill_cost,
     fill_rate,
@@ -177,6 +178,61 @@ def test_a_maker_under_a_model_that_states_no_maker_rate_pays_what_any_fill_pays
     assert fill_rate(1.0, 2.0, 0.0002, None, maker=True) == fill_rate(
         1.0, 2.0, 0.0002, None, maker=False
     )
+
+
+def test_a_fill_struck_at_the_touch_pays_its_commission_and_neither_spread_nor_slippage() -> None:
+    """Its price carries the spread and whatever it walked past the touch: one bp of
+    commission is the whole rate, and the per-share commission and a taker's ticks are still
+    paid, since an account charges them per share whatever the price."""
+    assert fill_rate(1.0, 2.0, 0.0002, None, maker=False, touched=True) == pytest.approx(0.0001)
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0055, maker=False, touched=True
+    ) == pytest.approx(0.50 + 0.55)
+    assert fill_cost(
+        5_000.0, 100.0, 1.0, 2.0, 0.0002, None, 0.0, maker=False, slip=0.01, touched=True
+    ) == pytest.approx(0.50 + 1.00)
+
+
+def test_the_fills_the_rule_tells_apart_on_a_twenty_dollar_name_quoted_five_bp_wide() -> None:
+    """A hundred shares at $20 under no commission, one bp of slippage and a 5 bp quote: a
+    taker the quote made pays nothing on top of the spread in its price; a taker a print or a
+    bar made inside the quote, and a maker filled at its own price with no maker schedule,
+    pay 1 + 2.5 bp, $0.70; a maker under a schedule of zero pays nothing, touched or not."""
+    notional, qty, half = 2_000.0, 100.0, 0.00025
+    quote_made = fill_cost(notional, qty, 0.0, 1.0, half, None, 0.0, maker=False, touched=True)
+    print_made = fill_cost(notional, qty, 0.0, 1.0, half, None, 0.0, maker=False)
+    unscheduled = fill_cost(notional, qty, 0.0, 1.0, half, None, 0.0, maker=True)
+    scheduled = fill_cost(notional, qty, 0.0, 1.0, half, 0.0, 0.0, maker=True)
+    scheduled_at_touch = fill_cost(
+        notional, qty, 0.0, 1.0, half, 0.0, 0.0, maker=True, touched=True
+    )
+
+    assert quote_made == 0.0
+    assert print_made == pytest.approx(0.70)
+    assert unscheduled == pytest.approx(0.70)
+    assert scheduled == scheduled_at_touch == 0.0
+
+
+@pytest.mark.parametrize(
+    ("px", "sell", "touched"),
+    [
+        (10.01, False, True),  # a buy at the ask
+        (10.02, False, True),  # a buy that walked past it
+        (10.00, False, False),  # a buy inside the quote, at a print or a close
+        (9.99, True, True),  # a sale at the bid
+        (9.98, True, True),  # a sale that walked past it
+        (10.00, True, False),  # a sale inside the quote
+    ],
+)
+def test_a_fill_is_at_the_touch_when_its_price_is_at_or_past_the_far_side(
+    px: float, sell: bool, touched: bool
+) -> None:
+    assert at_touch(px, sell=sell, quote=(9.99, 10.01)) is touched
+
+
+def test_a_fill_with_no_quote_before_it_is_not_at_the_touch() -> None:
+    assert at_touch(10.01, sell=False, quote=None) is False
+    assert at_touch(9.99, sell=True, quote=None) is False
 
 
 def test_a_per_share_commission_is_paid_on_every_share_of_a_fill_that_pays_commission() -> None:

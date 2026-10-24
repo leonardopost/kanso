@@ -155,6 +155,29 @@ def test_the_baseline_discards_when_a_card_gate_fails(ws: Workspace, store: Stat
     assert run.best_sha is None
 
 
+def test_begin_refuses_a_tick_hypothesis_whose_venue_now_states_no_latency(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Registered while the venue stated a route, the hypothesis is held to the model the
+    workspace resolves when the run begins: with the route gone, it would land every order on
+    the point it was sent from, so nothing is pinned and no lane directory is made."""
+    from kanso.portfolio import files
+    from kanso.schemas import Portfolio
+
+    held = files.read(ws)
+    routed = held.model_dump(mode="json", by_alias=True, exclude_none=True)
+    routed["venues"] = {VENUE: {"costs": {"latency_ms": 5}}}
+    files.write(ws, Portfolio.model_validate(routed))
+    hyp_id = classify(ws, store, document(resolution="tick", data_requirements=["quote", "trade"]))
+    files.write(ws, held)
+
+    with pytest.raises(ValidationError, match=r"^costs\.latency_ms: 0 on XNAS at resolution tick"):
+        loop.begin(ws, store, hyp_id)
+
+    assert records.active(store, hyp_id) is None
+    assert not ws.path("runs", "op", hyp_id).exists()
+
+
 def test_a_baseline_that_raises_leaves_no_run_and_no_lane_directory(
     ws: Workspace, store: StateStore
 ) -> None:

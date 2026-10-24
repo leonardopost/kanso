@@ -7,11 +7,15 @@ per-venue entry in the portfolio overrides any field; a hypothesis's own `costs`
 the cost model for that hypothesis alone. Where nothing is declared the shipped defaults
 apply: a margin account whose leverage is the hypothesis's `max_leverage`, USD, zero
 commission and one basis point of slippage, with the spread taken from quotes when quotes
-are available, and a resting limit order filled when the market reaches its price. The
-spread, quoted or fixed, is charged on a fill the venue struck at a close or a last print —
-a name fed bars or prints alone; a fill in a name the venue books from quotes or a level-two
-book is struck at the touch, whose price carries the spread, and is charged none
-(`kanso.nautilus.backtest.touched_names`). A
+are available, and a resting limit order filled when the market reaches its price — or, for a
+hypothesis that holds quotes and prints at tick resolution, only on a later print through it
+(`TICK_LIMIT_FILL`), the caller saying which (`default_limit_fill`). The
+spread, quoted or fixed, and the slippage in basis points are charged on a fill the venue
+struck at a print or a bar's close inside the quote, or in a name with no quote before it; a
+fill struck at the touch — a buy at or above the ask of its name's last quote, a sale at or
+below its bid, or any fill on a venue matching a level-two book — carries the spread in its
+price and is charged neither (`kanso.nautilus.costs.at_touch`). Under `spread: quotes` a
+stated `fixed_bps` is the width a fill with no quote before it pays. A
 currency code is any code the engine could register — a fiat code or a crypto code such as
 USDT — and whether it does register it is checked where an account is funded, not here.
 
@@ -44,7 +48,8 @@ filled at its own price pays none of it and none pays past its limit. Zero unles
 The cost model carries two keys that are not charges. `latency_ms` is how long the venue
 takes to see an order — the delay between a sleeve's insert, update or cancel and the
 simulated book acting on it, zero unless stated, measured on the account and route the
-strategy will trade through. `limit_fill` is the matching rule the
+strategy will trade through; a hypothesis at tick resolution may not resolve it to zero
+(`kanso hyp validate`). `limit_fill` is the matching rule the
 simulated venue is built with: `touch` fills a resting limit the market only reached,
 `through` fills it only once the market trades beyond its price, and `print_through` fills it
 only on a print beyond its price, by that print's own size (`print_through_whole`, for all
@@ -85,8 +90,16 @@ DEFAULT_CURRENCY = "USD"
 DEFAULT_COMMISSION_BPS = 0.0
 DEFAULT_SLIPPAGE_BPS = 1.0
 DEFAULT_LIMIT_FILL: LimitFill = "touch"
-"""A resting limit fills when the market reaches its price: the engine's own default, and
-what every venue model resolved before the key existed was measured under."""
+"""A resting limit fills when the market reaches its price: the engine's own default, what
+every venue model resolved before the key existed was measured under, and the rule a
+hypothesis resolves to when no layer states one and it does not hold quotes and prints at tick
+resolution — on bars there is no tape to credit a resting order from."""
+TICK_LIMIT_FILL: LimitFill = "print_through"
+"""The rule a hypothesis that holds quotes and prints at tick resolution resolves to when no
+layer states one: a resting limit fills only on a later print through it, by that print's
+size, and a taker on the quote in force. On a tape `touch` credits a resting limit with no
+queue ahead of it, all that is left of it from any point beyond its price, and the size a
+quote shows again at every quote that shows it — fills the market did not give."""
 REPLAY_DATA_CLIENT = "replay"
 """The catalog replay data client; every other data client id belongs to an adapter."""
 
@@ -197,6 +210,7 @@ def _merge_costs(
     layers: list[tuple[Origin, CostsOverride | None]],
     *,
     quotes_available: bool,
+    limit_fill: LimitFill = DEFAULT_LIMIT_FILL,
 ) -> tuple[Costs, Origin]:
     values: dict[str, float | str | None] = {
         "commission_bps": DEFAULT_COMMISSION_BPS,
@@ -206,7 +220,7 @@ def _merge_costs(
         "fixed_bps": None,
         "maker_bps": None,
         "maker_per_share": None,
-        "limit_fill": DEFAULT_LIMIT_FILL,
+        "limit_fill": limit_fill,
         "latency_ms": 0.0,
     }
     origin: Origin = "default"
@@ -235,9 +249,14 @@ def resolve_venue_model(
     hypothesis_costs: CostsOverride | None = None,
     max_leverage: float | None = None,
     quotes_available: bool = True,
+    default_limit_fill: LimitFill = DEFAULT_LIMIT_FILL,
 ) -> VenueModel:
     """Inherit a venue's model from the workspace configuration, the broker, the operator's
     override and the hypothesis, in that order of precedence.
+
+    `default_limit_fill` is the rule no layer stating one leaves the model under, which the
+    hypothesis decides (`kanso.hyp.validate.default_limit_fill`); it is a default, so the
+    costs' origin stays where the layers leave it.
 
     `config` is what `[research]` states beyond the shipped defaults; it carries an account
     type and a currency and never a cost, so a broker's declared currency still wins over it
@@ -267,6 +286,7 @@ def resolve_venue_model(
     costs, costs_origin = _merge_costs(
         cost_layers,
         quotes_available=quotes_available,
+        limit_fill=default_limit_fill,
     )
     return VenueModel(
         venue=venue,

@@ -1355,10 +1355,10 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
     states neither `maker_bps` nor `maker_per_share` charges a maker's fill what any fill pays.
     `slippage_ticks` is charged on each fill's recorded increment and capped by its recorded
     limit, as the runner charged it; a fill recorded before either was kept pays none of it.
-    `fixed_bps` is charged where the runner charges a spread — on a fill not struck at the
-    touch — and a fill the venue struck against a quote or a book, whose price carries the
-    spread, pays none of it under any scenario; a wider market on such a name is stated as
-    `slippage_bps`, which every taker's fill pays on its notional.
+    `fixed_bps` and `slippage_bps` are charged where the runner charges them — on a fill not
+    struck at the touch — and a fill struck at the touch, whose price carries the spread, pays
+    neither under any scenario; a taker paying more than the touch on such a fill is stated as
+    `slippage_ticks`, which every taker's fill pays per share.
     """
     from kanso.nautilus.costs import fill_cost, tick_slip
 
@@ -1373,7 +1373,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             fill.qty,
             scenario.get("commission_bps") or 0.0,
             scenario.get("slippage_bps") or 0.0,
-            0.0 if fill.touched else half_spread,
+            half_spread,
             maker_bps,
             scenario.get("commission_per_share") or 0.0,
             maker=fill.maker,
@@ -1383,6 +1383,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             maker_per_share=maker_per_share,
             slip=tick_slip(ticks, fill.tick, fill.px, fill.limit, sell=fill.side == "SELL"),
             multiplier=fill.multiplier,
+            touched=fill.touched,
         )
 
     ends = run.period_ends_ns

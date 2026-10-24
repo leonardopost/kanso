@@ -9,6 +9,7 @@ fill is charged.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 
 import pytest
@@ -22,7 +23,13 @@ from nautilus_trader.model.data import (
     QuoteTick,
     TradeTick,
 )
-from nautilus_trader.model.enums import AggregationSource, AggressorSide, BarAggregation, PriceType
+from nautilus_trader.model.enums import (
+    AggregationSource,
+    AggressorSide,
+    BarAggregation,
+    OrderSide,
+    PriceType,
+)
 from nautilus_trader.model.identifiers import InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
@@ -118,12 +125,54 @@ def test_every_point_folds_to_the_prices_it_carries(drawn: list, quoted: bool) -
     expected = folded(request, [plain for p in stream if (plain := _plain(p)) is not None])
 
     assert _state(marks) == _state(expected)
-    series: dict[str, list[tuple[int, float]]] = {}
+    # every quote is kept, under either spread: a fill's touch is read against it
+    series: dict[str, list[tuple[int, float, float]]] = {}
     for p in stream:
-        if quoted and isinstance(p, QuoteTick):
-            half = quote_half_spread(float(p.bid_price), float(p.ask_price))
-            series.setdefault(p.instrument_id.value, []).append((int(p.ts_init), half))
-    assert marks._series == series
+        if isinstance(p, QuoteTick):
+            quote = (int(p.ts_init), float(p.bid_price), float(p.ask_price))
+            series.setdefault(p.instrument_id.value, []).append(quote)
+    assert {
+        name: list(zip(*(list(column) for column in held), strict=True))
+        for name, held in marks._series.items()
+    } == series
+
+
+@dataclass(frozen=True)
+class _Filled:
+    """The fields of a fill event the marks read."""
+
+    id: str
+    instrument_id: str
+    ts_event: int
+    last_px: float
+    order_side: OrderSide
+
+
+def test_a_fill_is_read_against_the_last_quote_before_it_however_its_quotes_were_folded() -> None:
+    """The whole-window fold (`checked`) takes a window's groups as it is handed them, so a
+    name's quotes can be folded out of time order. A fill is still read against the last quote
+    at or before it, and of two at one instant against the one folded last, as the venue
+    applied it last: 10.01/10.03 here, so a buy at 10.03 is at the touch and one at 10.02, the
+    earlier quote's ask, is inside it."""
+    request = _request(quoted=True)
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    at = midnight_ns(WINDOW[0]) + 10 * 3_600 * 1_000_000_000
+    marks.take(
+        [
+            _point("quote", INSTRUMENT, at + 2_000, 1_005, 2),
+            _point("quote", INSTRUMENT, at + 1_000, 1_000, 2),
+            _point("quote", INSTRUMENT, at, 999, 2),
+            _point("quote", INSTRUMENT, at + 1_000, 1_001, 2),
+        ]
+    )
+    touch = _Filled("touch", INSTRUMENT, at + 1_500, 10.03, OrderSide.BUY)
+    inside = _Filled("inside", INSTRUMENT, at + 1_500, 10.02, OrderSide.BUY)
+    sale = _Filled("sale", INSTRUMENT, at + 1_500, 10.01, OrderSide.SELL)
+
+    marks.price([touch, inside, sale])
+
+    assert (marks.struck(touch), marks.struck(inside), marks.struck(sale)) == (True, False, True)
+    assert marks.half(inside) == pytest.approx(quote_half_spread(10.01, 10.03))
 
 
 @pytest.mark.parametrize("kind", ["quote", "trade", "bar"])

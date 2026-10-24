@@ -25,14 +25,24 @@ document is parsed. Everything else needs the workspace, and that is this module
   something behind would not be one, and the store is written by `kanso data instruments
   resolve` alone;
 * the venues those instruments trade on resolve to a complete cost model, and to one
-  account currency. A spread taken from quotes needs quotes; a fixed spread needs its
-  width; a universe spanning two account currencies would have a leg priced at a rate
+  account currency. A spread taken from quotes needs quotes, and a width (`fixed_bps`) for
+  any instrument of its venue asked for neither quote nor book, since a fill there has no
+  quote to read one from; a fixed spread needs its width; a universe spanning two account
+  currencies would have a leg priced at a rate
   nothing in the workspace records, so it is refused — and so, for the same reason, is an
   instrument that settles in a currency other than its venue's account currency;
 * a venue model whose `limit_fill` is `print_through` or `print_through_whole` fills a
   resting limit on prints and a taker on quotes, on the top-of-book venue, so the hypothesis
   must require `quote` and `trade`, may not require `book`, and may not ask an instrument for
-  `bar` beside `quote`, since a bar walks the engine's bid and ask past the quote in force;
+  `bar` beside `quote`, since a bar walks the engine's bid and ask past the quote in force. A
+  hypothesis that holds quotes and prints at tick resolution, as that rule admits, resolves to
+  `print_through` when no layer states a rule (`default_limit_fill`), and every other to
+  `touch`;
+* at tick resolution, a venue model may not leave `latency_ms` at zero, which lands an order
+  on the very point it was sent from, and on the top-of-book venue may not state a maker
+  schedule under `touch` or `through`, which credit a resting limit with no queue ahead of
+  it; a print-rule model that states no maker schedule is admitted with a warning
+  (`check_tick_costs`, `cost_warnings`);
 * a universe holding a perpetual requires `funding`. A held perpetual pays or is paid its
   funding at every settlement, so a card not handed the realised rates measures a P&L the
   contract never had. What makes an instrument a perpetual is its resolved definition — the
@@ -72,6 +82,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from kanso import ext
@@ -104,7 +115,14 @@ from kanso.schemas import (
     resolve_venue_model,
     single_currency,
 )
-from kanso.schemas.venue import DEFAULT_ACCOUNT, DEFAULT_CURRENCY
+from kanso.schemas.duration import TICK_RESOLUTIONS
+from kanso.schemas.venue import (
+    DEFAULT_ACCOUNT,
+    DEFAULT_CURRENCY,
+    DEFAULT_LIMIT_FILL,
+    TICK_LIMIT_FILL,
+    LimitFill,
+)
 
 PERCENT: Final = 100.0
 
@@ -147,12 +165,25 @@ def read_source(path: Path) -> bytes:
         raise ValidationError(f"{path}: cannot be read: {exc}") from None
 
 
+@dataclass(frozen=True)
+class Admitted:
+    """An admissible hypothesis, and what it is admitted with that an operator should read."""
+
+    hyp: Hypothesis
+    warnings: tuple[str, ...] = ()
+
+
 def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothesis:
     """The hypothesis at `path`, refused unless everything above holds.
 
     `source` is the file's bytes when the caller has already read them, so a caller that
     pins those bytes validates exactly what it pins.
     """
+    return admit(ws, path, source).hyp
+
+
+def admit(ws: Workspace, path: Path, source: bytes | None = None) -> Admitted:
+    """`validate`, with the warnings an admitted file carries (`cost_warnings`)."""
     raw = read_source(path) if source is None else source
     try:
         text = raw.decode("utf-8")
@@ -170,10 +201,12 @@ def validate(ws: Workspace, path: Path, source: bytes | None = None) -> Hypothes
     _check_benchmark(hyp)
     _check_book(hyp, models)
     _check_print_through(hyp, models)
+    _check_spread(hyp, models, instruments)
+    check_tick_costs(hyp, models)
     _check_classification(ws, hyp)
     _check_derived_from(ws, hyp)
     _check_screened(ws, hyp)
-    return hyp
+    return Admitted(hyp, cost_warnings(hyp, models))
 
 
 def _check_derived_from(ws: Workspace, hyp: Hypothesis) -> None:
@@ -286,6 +319,7 @@ def venue_models(
 
     overrides = venue_overrides(ws)
     quotes = QUOTE_TYPE in hyp.data_requirements
+    rule = default_limit_fill(hyp)
     research = ws.config.research
     broker = research.broker
     config = VenueDeclaration(
@@ -302,6 +336,7 @@ def venue_models(
             hypothesis_costs=hyp.costs,
             max_leverage=hyp.risk_limits.max_leverage,
             quotes_available=quotes,
+            default_limit_fill=rule,
         )
         for venue in sorted({_venue_of(held) for held in instruments.values()})
     }
@@ -576,6 +611,145 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
             "left, drop bar from data_requirements and research at resolution: tick, since a "
             "bar size requires bar; or state limit_fill: touch or through",
         )
+
+
+def default_limit_fill(hyp: Hypothesis) -> LimitFill:
+    """The rule a hypothesis's venues resolve to when no layer states one.
+
+    `print_through` for a hypothesis that holds quotes and prints at tick resolution, wherever
+    that rule admits it — `quote` and `trade` required, no `book`, and no instrument asked for
+    `bar` beside `quote` (`_check_print_through`) — and `touch` for every other: bars, a book
+    whose venue keeps a queue of its own, a tape with no prints for a resting order to be
+    filled from. On a tape `touch` credits a resting limit with no queue ahead of it, all that
+    is left of it from any point beyond its price, and the size a quote shows again at every
+    quote that shows it; the print rule credits it only from a print through it, by that
+    print's size, which is the tape's own evidence that the order would have traded. A rule a
+    layer states is the operator's and stands, `touch` included.
+    """
+    if hyp.resolution not in TICK_RESOLUTIONS:
+        return DEFAULT_LIMIT_FILL
+    required = set(hyp.data_requirements)
+    if not {QUOTE_TYPE, TRADE_TYPE} <= required or BOOK_TYPE in required:
+        return DEFAULT_LIMIT_FILL
+    if any({BAR_TYPE, QUOTE_TYPE} <= set(hyp.required_of(name)) for name in hyp.universe):
+        return DEFAULT_LIMIT_FILL
+    return TICK_LIMIT_FILL
+
+
+def check_tick_costs(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> None:
+    """Two venue models a hypothesis at tick resolution cannot be measured under.
+
+    A `latency_ms` of zero, from every layer: the venue lands every order on the very point the
+    strategy was handed when it sent it, before anything later on the tape — a fill no route to
+    a venue gives, worth a lane's whole edge where it was measured (+10.7 bp a session, gone at
+    any real delay). The refusal states no latency: which one, measured on the account and route
+    the strategy trades through, is the operator's to say, and any above zero is admitted.
+
+    A maker schedule — `maker_bps` or `maker_per_share`, from any layer — under `touch` or
+    `through` on the top-of-book venue: those rules credit a resting limit with no queue ahead
+    of it, all that is left of it from any point beyond its price and, under `touch`, the size
+    a quote shows again at every quote that shows it, so the schedule would price as a maker's
+    fills the tape did not give. The print rules credit a resting limit only from a print
+    through it, and a level-two book keeps a queue of its own, so neither is refused.
+
+    Both are structural: each refuses a configuration that cannot describe a market, the way a
+    spread from quotes with no quotes is refused, and neither names a number a hypothesis must
+    clear. Bars are left alone — a bar's walk is the run's own approximation, and there is no
+    rule that fills a resting limit from a tape there.
+    """
+    if hyp.resolution not in TICK_RESOLUTIONS:
+        return
+    instant = sorted(venue for venue, model in models.items() if model.costs.latency_ms <= 0)
+    if instant:
+        raise ValidationError(
+            f"costs.latency_ms: 0 on {', '.join(instant)} at resolution {hyp.resolution} lands "
+            "every order on the point it was sent from, before anything later on the tape, "
+            "which no route to a venue does",
+            remedy="state costs.latency_ms — the round trip measured on the account and route "
+            f"you trade through — in the hypothesis costs or under venues.{instant[0]}.costs "
+            "in portfolio.yaml",
+        )
+    if BOOK_TYPE in hyp.data_requirements:
+        return
+    queue_free = sorted(
+        venue
+        for venue, model in models.items()
+        if model.costs.limit_fill not in PRINT_RULES
+        and (model.costs.maker_bps is not None or model.costs.maker_per_share is not None)
+    )
+    if not queue_free:
+        return
+    costs = models[queue_free[0]].costs
+    key = "maker_bps" if costs.maker_bps is not None else "maker_per_share"
+    raise ValidationError(
+        f"costs.{key}: a maker schedule on {', '.join(queue_free)} under limit_fill: "
+        f"{costs.limit_fill} prices as a maker's the fills that rule credits a resting limit "
+        "with no queue ahead of it — all that is left of it from any point beyond its price, "
+        "and under touch the size a quote shows again at every quote that shows it",
+        remedy="state limit_fill: print_through or print_through_whole, which fills a resting "
+        "limit only on a later print through it and needs quote and trade and no book; or "
+        "remove maker_bps and maker_per_share from the hypothesis costs and from "
+        f"venues.{queue_free[0]}.costs in portfolio.yaml",
+    )
+
+
+def cost_warnings(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> tuple[str, ...]:
+    """What an admitted hypothesis's venue models charge that an operator should read: a print
+    rule with no maker schedule charges a fill that rested on the book as any fill at its price
+    — `slippage_bps` and half the spread on top of the commission, which a resting order filled
+    at its own price inside the quote never paid in the market."""
+    unscheduled = sorted(
+        venue
+        for venue, model in models.items()
+        if model.costs.limit_fill in PRINT_RULES
+        and model.costs.maker_bps is None
+        and model.costs.maker_per_share is None
+    )
+    if not unscheduled:
+        return ()
+    rule = models[unscheduled[0]].costs.limit_fill
+    return (
+        f"costs: no maker_bps or maker_per_share on {', '.join(unscheduled)} under limit_fill: "
+        f"{rule}, so a fill that rested on the book is charged as any fill at its price — "
+        "slippage_bps and half the spread on top of the commission; state the account's maker "
+        "schedule, 0 for none and negative for a rebate",
+    )
+
+
+def _check_spread(
+    hyp: Hypothesis, models: Mapping[str, VenueModel], instruments: Mapping[str, Any]
+) -> None:
+    """A model that reads a fill's half-spread from quotes and states no width, over an
+    instrument asked for neither quote nor book, would charge a fill there no spread at all:
+    struck at a print or a bar's close, its price carries none, and there is no quote before
+    it to read one from. A stated `fixed_bps` is the width such a fill pays. On a venue that
+    matches a level-two book every fill is struck at the book and pays no half-spread, so it
+    needs none. Whether the strategy trades the instrument cannot be known from the file, so
+    a signal read and never traded is held to it too: the width it states is never charged."""
+    if BOOK_TYPE in hyp.data_requirements:
+        return
+    unpriced = {
+        venue
+        for venue, model in models.items()
+        if model.costs.spread == "quotes" and model.costs.fixed_bps is None
+    }
+    named = [
+        name
+        for name in hyp.universe
+        if _venue_of(instruments[name]) in unpriced
+        and not {QUOTE_TYPE, BOOK_TYPE} & set(hyp.required_of(name))
+    ]
+    if not named:
+        return
+    venues = sorted({_venue_of(instruments[name]) for name in named})
+    raise ValidationError(
+        f"costs.spread: quotes on {', '.join(venues)} reads a fill's half-spread from the "
+        f"quote before it, and {', '.join(named)} {'is' if len(named) == 1 else 'are'} asked "
+        "for no quote or book, so a fill there would be charged no spread",
+        remedy="state fixed_bps in the hypothesis costs or under "
+        f"venues.{venues[0]}.costs in portfolio.yaml — a fill with no quote before it pays "
+        "half of it — or ask the instrument for quote under data_by_instrument",
+    )
 
 
 def _capital(ws: Workspace, hyp: Hypothesis) -> tuple[float, str]:
