@@ -22,7 +22,9 @@ What these tests are for, beyond the obvious round trip:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,7 +32,7 @@ from typing import Any
 import pytest
 
 from kanso.data.adapters.massive.client import API_HOST, MassiveClient, Response
-from kanso.data.adapters.massive.entitlement import PROBE_SPAN, settled_end
+from kanso.data.adapters.massive.entitlement import BARS, PROBE_SPAN, QUOTES, TRADES, settled_end
 from kanso.data.adapters.massive.errors import (
     BelowFloorError,
     MalformedRequestError,
@@ -39,6 +41,7 @@ from kanso.data.adapters.massive.errors import (
 )
 from kanso.data.adapters.massive.loaders.bars import (
     AGGREGATE_LIMIT,
+    TAPE_MARGIN,
     TICK_LIMIT,
     MassiveBarsLoader,
     MassiveSpec,
@@ -49,13 +52,14 @@ from kanso.data.adapters.massive.loaders.bars import (
     instant,
     numbers,
     shift,
+    tape_window,
     ticks,
     vendor_ticker,
     vendor_window,
 )
 from kanso.data.adapters.massive.loaders.quotes import MassiveQuotesLoader, quotes_endpoint
 from kanso.data.adapters.massive.loaders.trades import MassiveTradesLoader, trades_endpoint
-from kanso.data.loader import DatasetRef, Loader, utc_day
+from kanso.data.loader import DatasetRef, Loader, to_ns, utc_day
 from kanso.data.manifest import shortfall
 from kanso.data.publication import check_delayed
 from kanso.errors import PreconditionError, ValidationError
@@ -86,8 +90,17 @@ def days(start: date, end: date) -> list[date]:
     return [start + timedelta(days=step) for step in range((end - start).days + 1)]
 
 
+def tape_bounds(params: Mapping[str, str]) -> tuple[int, int] | None:
+    """The tape instants a tick request names, where it names instants rather than days."""
+    low, high = params.get("timestamp.gte", ""), params.get("timestamp.lte", "")
+    return (int(low), int(high)) if low.isdigit() and high.isdigit() else None
+
+
 def asked_window(url: str, params: Mapping[str, str]) -> tuple[date, date]:
-    """The window a request names, wherever this endpoint family puts it."""
+    """The days a request reaches, wherever this endpoint family puts its window."""
+    bounds = tape_bounds(params)
+    if bounds is not None:
+        return utc_day(bounds[0]), utc_day(bounds[1])
     if "timestamp.gte" in params:
         return date.fromisoformat(params["timestamp.gte"]), date.fromisoformat(
             params["timestamp.lte"]
@@ -911,16 +924,29 @@ def one_tick(day: date) -> Sequence[Mapping[str, Any]]:
 
 
 def tick_source(make: Rows = one_tick, *, floor: date = FLOOR, last: date = SETTLED) -> Answer:
-    """A tape that carries whatever `make` says for every day it holds."""
+    """A tape that carries whatever `make` says for every day it holds.
+
+    `make(day)` is the tape published on that day. Asked between two instants, the tape
+    serves the rows whose tape instant falls between them, as the source filters on it;
+    asked for days, as a probe asks, it serves those days whole.
+    """
 
     def answer(url: str, params: Mapping[str, str]) -> Response:
         if "/v3/reference/" in url:
             return served_rows([definition("AAPL")])
+        bounds = tape_bounds(params)
         start, end = asked_window(url, params)
         first, stop = max(start, floor), min(end, last)
         if first > stop:
             return nothing()
-        rows = [row for day in days(first, stop) for row in make(day)]
+        rows = [
+            row
+            for day in days(first, stop)
+            for row in make(day)
+            if bounds is None
+            or not isinstance(row.get("sip_timestamp"), int)
+            or bounds[0] <= row["sip_timestamp"] <= bounds[1]
+        ]
         return served_rows(rows) if rows else nothing()
 
     return answer
@@ -1065,6 +1091,99 @@ def test_a_two_sided_quote_with_no_sizes_is_still_a_quote() -> None:
     point = load_one(loader, ref)[0]
     assert str(point.bid_size) == "0"
     assert str(point.ask_size) == "0"
+
+
+# --- the tape a tick chunk asks for --------------------------------------------
+
+
+def midnight(day: date) -> int:
+    """The first instant of a UTC day, in nanoseconds."""
+    return to_ns(datetime(day.year, day.month, day.day, tzinfo=UTC))
+
+
+MARGIN_NS = int(TAPE_MARGIN.total_seconds()) * NS
+
+
+def test_the_tape_window_runs_from_the_first_midnight_to_the_margin_past_the_last() -> None:
+    assert tape_window((date(2024, 2, 1), date(2024, 2, 3))) == (
+        midnight(date(2024, 2, 1)),
+        midnight(date(2024, 2, 4)) + MARGIN_NS - 1,
+    )
+    assert timedelta(days=1) > TAPE_MARGIN, "a margin of a day would ask the next session whole"
+
+
+def test_an_endpoint_is_asked_between_two_instants_only_where_it_filters_on_one() -> None:
+    """A tick endpoint's window is the tape instant in its parameters; an aggregate's is
+    days in its address, and is refused rather than handed nanoseconds it would misread."""
+    for endpoint in (TRADES, QUOTES):
+        path, params = endpoint.between("AAPL", (1, 2))
+        assert path.endswith("/AAPL")
+        assert (params["timestamp.gte"], params["timestamp.lte"]) == ("1", "2")
+    with pytest.raises(MalformedRequestError):
+        BARS.between("AAPL", (1, 2))
+
+
+@pytest.mark.parametrize("kind", [MassiveTradesLoader, MassiveQuotesLoader])
+def test_a_tick_chunk_asks_its_own_days_and_the_margin_and_nothing_either_side(kind: type) -> None:
+    """Asked a day either side, a chunk of one session walked three sessions of tape."""
+    loader, replay = tick_loader(kind)
+    ref = loader.discover(tick_spec())[0]
+    probes = len(replay.asked)
+
+    load_one(loader, ref)
+
+    (asked,) = replay.asked[probes:]
+    assert tape_bounds(asked.params) == tape_window(ref.span)
+    assert asked.params["timestamp.gte"] == str(midnight(date(2024, 2, 1)))
+    assert "2024-01-31" not in json.dumps(asked.params)
+
+
+def straddler(day: date, *, published_after_midnight_ns: int) -> dict[str, Any]:
+    """A tick the venue made in the last microsecond of `day` and the tape published after
+    the next midnight: kept by the day it happened, published on the day after."""
+    happened = midnight(day + timedelta(days=1)) - 1_000
+    return tick(
+        day,
+        participant_timestamp=happened,
+        sip_timestamp=midnight(day + timedelta(days=1)) + published_after_midnight_ns,
+        sequence_number=99,
+    )
+
+
+@pytest.mark.parametrize("kind", [MassiveTradesLoader, MassiveQuotesLoader])
+def test_a_tick_published_after_midnight_is_kept_once_by_the_day_it_happened(kind: type) -> None:
+    """Across the seam between two one-day chunks: in the first, which asked the margin, and
+    not in the second, which asked it from its own midnight and keeps by reference day."""
+    first, second = date(2024, 2, 1), date(2024, 2, 2)
+    late = straddler(first, published_after_midnight_ns=4_000)
+    loader, _ = tick_loader(kind, on(second, [late, tick(second)]))
+    ref = loader.discover(tick_spec(start=first, end=second))[0]
+
+    chunks = [load_one(loader, replace(ref, span=(day, day))) for day in (first, second)]
+
+    held = [[point.ts_init for point in chunk] for chunk in chunks]
+    assert late["sip_timestamp"] in held[0]
+    assert late["sip_timestamp"] not in held[1]
+    assert [utc_day(point.ts_event) for point in chunks[0]] == [first, first]
+    assert [utc_day(point.ts_event) for point in chunks[1]] == [second]
+
+
+@pytest.mark.parametrize("kind", [MassiveTradesLoader, MassiveQuotesLoader])
+def test_a_tick_published_past_the_margin_is_in_neither_chunk(kind: type) -> None:
+    """The bound the margin draws, which is what a chunk gave up by no longer asking the
+    whole next day: a tick made before a midnight and published more than `TAPE_MARGIN`
+    after it. None was found on the tapes measured; this is what happens to one."""
+    first, second = date(2024, 2, 1), date(2024, 2, 2)
+    late = straddler(first, published_after_midnight_ns=MARGIN_NS)
+    loader, _ = tick_loader(kind, on(second, [late, tick(second)]))
+    ref = loader.discover(tick_spec(start=first, end=second))[0]
+
+    held = [
+        point.ts_init
+        for day in (first, second)
+        for point in load_one(loader, replace(ref, span=(day, day)))
+    ]
+    assert late["sip_timestamp"] not in held
 
 
 def test_a_window_of_only_one_sided_rows_serves_nothing() -> None:
