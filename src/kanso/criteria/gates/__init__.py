@@ -770,14 +770,14 @@ class _DeflatedSharpe:
     """The research Sharpe, deflated by how many trials went into selecting it.
 
     The estimate deflated is the one selection acted on — the research-window metric the
-    keep rule compared. The expected maximum it is measured against is built from the
-    trials' own metrics: their count is how many candidates the maximum was taken over
-    and their spread is the distribution it was taken from, so both must describe the
-    same set or the bar is measured against a search that never happened. That set is
-    `trial_metrics`, which excludes a crash, a card that placed no order and a card scored
-    under another objective — the first two are edits that failed rather than candidates the
-    selection could have chosen, the third a number in other units — and includes one
-    refused as redundant, which is a candidate the selection ranked and declined. The
+    keep rule compared. The expected maximum it is measured against is the maximum of as many
+    draws as the selection was taken over, from the distribution of the trials' own metrics.
+    The spread is read off `trial_metrics`, which excludes a crash, a card that placed no
+    order and a card scored under another objective — the first two are edits that failed
+    rather than candidates the selection could have chosen, the third a number in other
+    units — and includes one refused as redundant, which is a candidate the selection ranked
+    and declined. The count is the larger of that set's and `trials`, every card that ran
+    and traded under any objective (`_searched`). The
     estimate's own error is the objective's, the one its card carried: Mertens' variance of a
     Sharpe for skewed and fat-tailed returns, fold by fold, widened for serial correlation,
     and Memmel's paired one for a Sharpe differenced against a host or a hold. The estimate,
@@ -798,7 +798,8 @@ class _DeflatedSharpe:
         if len(research.returns) < 3:
             return skipped(self.id, "the research return series is too short to give an error")
         scale = sqrt(periods_per_year(research))
-        expected = expected_maximum(variance(metrics) / periods_per_year(research), len(metrics))
+        searched = _searched(ctx, metrics)
+        expected = expected_maximum(variance(metrics) / periods_per_year(research), searched)
         if error <= 0:
             return skipped(self.id, "the research return series does not vary")
         dsr = NormalDist().cdf((estimate / scale - expected) / (error / scale))
@@ -811,7 +812,8 @@ class _DeflatedSharpe:
                 "sharpe": estimate / scale,
                 "standard_error": error / scale,
                 "expected_maximum": expected,
-                "trials": len(metrics),
+                "trials": searched,
+                "scored_trials": len(metrics),
             },
         )
 
@@ -845,6 +847,22 @@ def _deflatable(
     except PreconditionError as missing:
         return skipped(gate, missing.message[:200])
     return research, metrics, measured
+
+
+def _searched(ctx: GateContext, metrics: Sequence[float]) -> int:
+    """How many candidates the selection a deflation prices was taken over.
+
+    Every card that ran to a result and traded counts, under whichever objective it was
+    scored — the count is of draws and has no units, which only the spread has — so a
+    hypothesis re-pinned to another objective is priced for the search that chose the
+    strategy it carried across, not for the cards scored since. Measured on a lane switched
+    from a per-trade edge to a contribution after three hundred cards: its first certificate
+    was deflated by one trial and so skipped, and two cards later by the expected maximum of
+    two draws rather than of three hundred, seven to thirteen basis points a day of selection
+    left unpriced (`docs/backlog.md` row 173). `trials` is what certification counts, and 1
+    where nothing did, so the set's own count is the floor.
+    """
+    return max(ctx.trials, len(metrics))
 
 
 def expected_maximum(trial_variance: float, n_trials: int) -> float:
@@ -917,7 +935,8 @@ def _deflated_mean(
     if error <= 0:
         return skipped(gate, "the research estimate's error is zero, so nothing deflates it")
     spread = robust_variance(metrics)
-    expected = expected_maximum(spread, len(metrics))
+    searched = _searched(ctx, metrics)
+    expected = expected_maximum(spread, searched)
     probability = NormalDist().cdf((estimate - expected) / error)
     return verdict(
         gate,
@@ -929,7 +948,8 @@ def _deflated_mean(
             "standard_error_bps": error,
             "expected_maximum_bps": expected,
             "trial_spread_bps": sqrt(spread),
-            "trials": len(metrics),
+            "trials": searched,
+            "scored_trials": len(metrics),
             counted: count_of,
         },
     )
@@ -941,9 +961,9 @@ class _DeflatedContribution:
     The contribution's sampling error is the objective's own — the error of a mean of the
     per-period net returns in basis points of the capital over the research window, of the
     paired per-period differences against the host's for the marginal form, widened for
-    serial correlation — and the expected maximum it is measured against is built from the
-    trials' own metrics, in the same units: their count is how many candidates the selection
-    took the maximum over and their spread is the distribution it took it from
+    serial correlation — and the expected maximum it is measured against is that of as many
+    draws as the selection took the maximum over (`_searched`, every card that ran and traded
+    under any objective), from the distribution of the trials' own metrics in the same units
     (`trial_metrics`, the same set `deflated_sharpe` reads), read robustly as 1.4826 times
     their median absolute deviation (`robust_variance`), so a few trials that blew up do not
     widen the search past any candidate the selection weighed. The probability reported is
@@ -969,8 +989,8 @@ class _DeflatedEdge:
     linearised period by period, so trades of one session that move together count as one
     session's worth, widened for serial correlation across periods, and for the marginal form
     the two runs' linearisations differenced period by period — and the bar the expected
-    maximum of the search's trials scored under the same objective, from their count and
-    their robust spread. Until it existed a run scored on a per-trade edge
+    maximum of the search, from the count of its candidates and the robust spread of its
+    trials scored under the same objective. Until it existed a run scored on a per-trade edge
     reached a certificate with nothing pricing the search behind it: both other deflations
     skip it, and the embargo's fraction of a selected maximum is only an implicit, partial
     correction, gone altogether when the research number is at or below zero.
@@ -1084,17 +1104,36 @@ class _EdgePerTrade:
     loses: a contribution moves towards zero as the losing trades are dropped, and a card
     that halves its clips at a worse loss per clip scores better and is kept. As a card gate
     a failing card is not kept whatever it scored, so with it on a lane only a card whose
-    trades pay on average can become the best. A card that closed no trade has no edge — its
-    estimate is zero, in no period — and fails at any `min_bps`, which the range holds at
-    zero or above: a card that did not trade did not show that a trade pays.
+    trades pay on average can become the best — and the toolbox declares it `required_for`
+    both contributions, so every hypothesis scored on one carries it. A card that closed no
+    trade has no edge — its estimate is zero, in no period — and fails at any `min_bps`,
+    which the range holds at zero or above: a card that did not trade did not show that a
+    trade pays.
+
+    Its two parameters mean nothing apart (`together`), and a file naming one of them is
+    refused where it is registered. A pin registered before that was refused judges every
+    card it is asked to and fails it, naming the parameter it was not given: half a rule
+    used to skip, and a skip passes. Named with neither, it judges nothing and says so.
     """
 
     id: ClassVar[str] = "edge_per_trade"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
         floor, k_se = number(ctx, "min_bps"), number(ctx, "k_se")
-        if floor is None or k_se is None:
+        if floor is None and k_se is None:
             return skipped(self.id, "no min_bps and k_se were chosen, so no edge was required")
+        if floor is None or k_se is None:
+            chosen, missing = ("k_se", "min_bps") if floor is None else ("min_bps", "k_se")
+            return verdict(
+                self.id,
+                False,
+                {
+                    "refused": f"{chosen} was chosen and {missing} was not, and the two mean "
+                    "nothing apart",
+                    "min_bps": floor,
+                    "k_se": k_se,
+                },
+            )
         edge, se, periods = edge_per_trade_of(ctx.run)
         searched = search_margin(ctx.trials)
         normal = max(k_se, searched)

@@ -44,6 +44,7 @@ from kanso.criteria.library import (
     pending_required,
     plan_complaints,
     plannable,
+    required_card_gates,
     resolve_bound,
     validate_plan,
 )
@@ -86,6 +87,7 @@ __all__ = [
     "gates",
     "objectives",
     "periods_per_year",
+    "required_card_gates",
     "resolve_bound",
     "sharpe",
     "standard_error",

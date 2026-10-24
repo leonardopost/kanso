@@ -4,7 +4,7 @@ applies:
   objective_mode: absolute
   horizon: {max: 1d}
 priority: 10
-meaningful_when: "A sub-daily holding period gives few return periods and many trades, so the edge per trade is the estimate with a sample behind it."
+meaningful_when: "Edge per trade under a day, where trades outnumber return periods. Rewards trading less: dropping half the trades at a better edge is a keep even when the book earns less a day."
 params: {min_delta: float, k_se: float}
 ranges: {min_delta: [0.0, .inf], k_se: [0.5, 3.0]}
 impl: kanso.criteria.objectives.net_edge_bps

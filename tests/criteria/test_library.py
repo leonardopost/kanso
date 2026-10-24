@@ -446,6 +446,48 @@ def test_every_objective_is_deflated_by_exactly_one_gate() -> None:
     assert lib.deflation_gate("no_such_objective") is None
 
 
+def test_a_contribution_is_guarded_against_trading_less() -> None:
+    """Every objective that counts a period in cash as zero moves toward zero as losing
+    trades are dropped, so the gate that refuses a card whose trades lose is part of what
+    scoring on one means, and the toolbox says so rather than a classifier choosing it."""
+    from kanso.criteria.gates import CONTRIBUTION_FAMILY
+
+    items = catalogue()
+    guarded = {
+        objective for item in items.values() if item.required_for for objective in item.required_for
+    }
+    assert guarded == CONTRIBUTION_FAMILY
+    assert all(items[objective].kind == "objective" for objective in guarded)
+    for objective in CONTRIBUTION_FAMILY:
+        assert lib.required_card_gates(objective) == ("edge_per_trade",)
+    assert lib.required_card_gates("net_edge_bps") == ()
+    assert items["edge_per_trade"].stage == "card"
+    assert items["edge_per_trade"].together
+
+
+@pytest.mark.parametrize(
+    ("params", "missing"),
+    [({}, ["min_bps", "k_se"]), ({"min_bps": 0.0}, ["k_se"]), ({"k_se": 1.0}, ["min_bps"])],
+)
+def test_a_gate_whose_parameters_mean_nothing_apart_is_given_all_of_them(
+    params: dict[str, float], missing: list[str]
+) -> None:
+    """Row 189: `edge_per_trade` given one threshold skipped every card it judged."""
+    problems = lib.check_params(catalogue()["edge_per_trade"], params, make_hyp(), 4)
+
+    assert [problem.split(":")[0] for problem in problems] == missing
+    assert all("judges nothing without every one of min_bps, k_se" in p for p in problems)
+    assert (
+        lib.check_params(
+            catalogue()["edge_per_trade"], {"min_bps": 0.0, "k_se": 1.0}, make_hyp(), 4
+        )
+        == []
+    )
+    assert lib.check_params(catalogue()["max_hold"], {"days": 5}, make_hyp(), 4) == [], (
+        "a gate whose parameters each mean something alone is not held to both"
+    )
+
+
 def test_each_deflation_gate_deflates_the_family_its_implementation_judges() -> None:
     """The yaml's claim and the code's family are one list written twice; they agree."""
     from kanso.criteria import gates as implemented

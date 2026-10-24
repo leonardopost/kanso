@@ -71,6 +71,30 @@ def test_a_wider_or_noisier_search_deflates_a_contribution_further() -> None:
     assert loose.evidence["probability"] < tight.evidence["probability"]
 
 
+def test_the_search_is_counted_across_objectives_and_spread_in_one() -> None:
+    """Row 173: a hypothesis re-pinned from a per-trade edge to a contribution carries the
+    strategy three hundred cards chose, and its deflation used to price two. The count of
+    draws is every card that ran and traded, under any objective; the spread is still read
+    off the cards in this objective's units alone."""
+    scored = (2.0, 2.4)
+    alone = deflated_contribution.evaluate(contribution_context(trial_metrics=scored))
+    carried = deflated_contribution.evaluate(contribution_context(trial_metrics=scored, trials=300))
+
+    assert alone.evidence["trials"] == alone.evidence["scored_trials"] == 2
+    assert carried.evidence["trials"] == 300 and carried.evidence["scored_trials"] == 2
+    assert carried.evidence["trial_spread_bps"] == alone.evidence["trial_spread_bps"]
+    spread = robust_variance(scored)
+    assert carried.evidence["expected_maximum_bps"] == pytest.approx(expected_maximum(spread, 300))
+    assert carried.evidence["probability"] < alone.evidence["probability"]
+
+
+def test_a_count_below_the_scored_set_is_never_used() -> None:
+    """`trials` is 1 wherever nothing counted, so the scored set's own count is the floor."""
+    result = deflated_contribution.evaluate(contribution_context(trials=1))
+
+    assert result.evidence["trials"] == 4
+
+
 def test_a_few_ruinous_trials_do_not_widen_the_search() -> None:
     """The spread the expected maximum is built from is the candidates', not the outliers'."""
     steady = (2.0, 2.4, 2.2, 2.3, 2.1, 2.5)

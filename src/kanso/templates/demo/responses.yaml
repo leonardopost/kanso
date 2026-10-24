@@ -14,7 +14,7 @@
 # which the demo has shown what it can and you want a real model in models.yaml. (A script that must keep
 # proposing writes `{{call}}` in its diff; the mock puts the ordinal of the call there.)
 classify:
-  - {construct: {id: sleeve}, objective_params: {min_delta: 0.0, k_se: 1.0}, constraints: [{id: strategy_integrity, params: []}, {id: min_trades, params: [{name: min, value: 30}]}, {id: max_drawdown, params: []}], rationale: "A complete signal-to-trade thesis with nothing deployed to attach to: a sleeve."}
+  - {construct: {id: sleeve}, objective: net_edge_bps, objective_params: {min_delta: 0.0, k_se: 1.0}, constraints: [{id: strategy_integrity, params: []}, {id: min_trades, params: [{name: min, value: 30}]}, {id: max_drawdown, params: []}], rationale: "A complete signal-to-trade thesis with nothing deployed to attach to: a sleeve."}
 certify_plan:
   - gates:
       - {id: embargoed_window, stage: cert, params: [{name: min_fraction, value: 0.5}], rationale: "required; the only out-of-sample evidence"}
