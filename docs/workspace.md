@@ -1403,8 +1403,8 @@ register as the router reads it and then makes one minimal call to every configu
 The cap is what one answer may spend, thinking included. A `propose` call for a turn of
 `[research] cards_per_turn` proposals asks for that many answers in one, and is sent with
 that many times the route's `max_output`: the shipped 4096 tokens is sized for one diff,
-and eight diffs of a strategy several hundred lines long and the thinking beside them do
-not fit in it. An answer cut off by its cap is not JSON, so it takes the ladder as a wrong
+and eight diffs of a strategy several hundred lines long, with the thinking beside them,
+can need several times it. An answer cut off by its cap is not JSON, so it takes the ladder as a wrong
 answer and, three times cut off, fails the step. A model whose own output limit is under
 the multiplied cap refuses the call; a smaller `cards_per_turn` or `max_output` is the
 remedy.

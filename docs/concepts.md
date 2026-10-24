@@ -447,8 +447,9 @@ line and carries it under `--json` as `digest`; `research show --json` carries t
 of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc`, appended so
 that a reader taking the first nine columns by position reads what it always read, an absent
 number an empty cell. A card of a turn that ran several carries the digest one card of the
-same bytes carries; 0.18.0 and 0.19.0 recorded such cards with none. A crash, a card refused
-before or during its backtest, and a card recorded before 0.17 carry none. In the sample above the keep closed 3.84 trades a session,
+same bytes carries; 0.18.0 and 0.19.0 recorded such cards with none. A crash, a card
+refused before or during its backtest, and a card recorded before 0.17 carry none. In the
+sample above the keep closed 3.84 trades a session,
 three in four of them winners, held for a median of 16 minutes and netting 10.08 ± 1.05 bp of
 the position — 15.08 gross less 5.00 of cost — and the discard after it traded more, 4.46 a
 session, for 5.38 net: its number fell because each trade earned less, not because it traded
@@ -782,17 +783,19 @@ unless the repair crashed too. One model call is one spend entry, sent with
 spend (`docs/workspace.md`, `models.yaml`). The window is read once
 and written to the children in lockstep — the next chunk is read once every child still
 running has been written the last — and the lane drops a chunk once every child has taken
-it, so it holds the newest chunk and none before, as it does for one card; on 0.18.0 it kept
-every chunk for the turn, about 44 GB of a twenty-name, sixty-session tick window. The
+it, so it holds the newest chunk and none before, as it does for one card; on 0.18.0 and
+0.19.0 it kept every chunk for the turn, about 44 GB of a twenty-name, sixty-session tick
+window. The
 lane's memory is divided by `cards_per_turn`, never below three times what the run's
 baseline needed: a width whose part of the share falls under that is refused before the
 turn is proposed, naming the widest turn the share funds and the `[env] mem_per_lane_gb`
 the width needs. Each child runs on `cards_per_turn` times the run's card budget, because
 the children share the lane's cores and the budget was struck from a baseline that had
-them to itself. On 0.18.0 every child had one card's budget, so on a host whose lanes
-already fill its cores each child of a turn of eight had about an eighth of the core its
-baseline had, ran about eight times its wall against a budget of three, and every one was
-killed. A child killed for its share or its clock is a crash of that slot alone.
+them to itself. On 0.18.0 and 0.19.0 every child had one card's budget, so on a host whose
+lanes already fill its cores each child of a turn of eight had about an eighth of the core
+its baseline had and would run about eight times its baseline's wall against a budget of
+three: every one of them killed. A child killed for its share or its clock is a crash of
+that slot alone.
 
 A crash is the one card whose idea was never judged, so the turn after it is a **repair**.
 The proposer is given the traceback and the change that produced it, as a diff over the
