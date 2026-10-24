@@ -6,7 +6,9 @@ from datetime import UTC, date, datetime, timedelta
 
 from hypothesis import strategies as st
 
+from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
 from kanso.replay.record import Session
+from kanso.research.records import Measurement
 from kanso.schemas import (
     TAGS,
     Applies,
@@ -357,6 +359,117 @@ def cards(draw: st.DrawFn) -> Card:
         venue_model=draw(venue_models()),
         created_at=draw(TIMESTAMPS),
         digest=None if status == "crash" else draw(st.none() | digests()),
+        measured_sha=None if status == "crash" else draw(st.none() | SHAS),
+    )
+
+
+INSTANTS = st.integers(0, 2**62)
+"""An instant in nanoseconds since the epoch, as a run stamps one."""
+
+
+@st.composite
+def fills(draw: st.DrawFn) -> Fill:
+    return Fill(
+        ts_ns=draw(INSTANTS),
+        instrument_id=draw(st.sampled_from(["DEMO.XNAS", "BTC-USDT-SWAP.OKX", "ES.XCME"])),
+        side=draw(st.sampled_from(["BUY", "SELL"])),
+        qty=draw(FINITE),
+        px=draw(FINITE),
+        cost=draw(FINITE),
+        maker=draw(st.booleans()),
+        multiplier=draw(POSITIVE),
+        tick=draw(NON_NEGATIVE),
+        limit=draw(st.none() | FINITE),
+        touched=draw(st.booleans()),
+    )
+
+
+@st.composite
+def card_runs(draw: st.DrawFn) -> CardRun:
+    """A measured run as a card or a stage keeps one: three parallel series over strictly
+    increasing period ends, trades carrying the fills that made them, what was held, the
+    funding paid, and the book series present or absent together."""
+    start = draw(st.dates(min_value=date(2000, 1, 1), max_value=date(2030, 1, 1)))
+    ends = tuple(sorted(draw(st.sets(INSTANTS, max_size=6))))
+    series = st.lists(FINITE, min_size=len(ends), max_size=len(ends)).map(tuple)
+    booked = draw(st.booleans())
+    trades = st.builds(
+        Trade,
+        opened_ns=INSTANTS,
+        closed_ns=INSTANTS,
+        instrument_id=st.just("DEMO.XNAS"),
+        qty=FINITE,
+        avg_open=FINITE,
+        avg_close=FINITE,
+        pnl_net=FINITE,
+        cost=FINITE,
+        fills=st.lists(fills(), max_size=3).map(tuple),
+        multiplier=POSITIVE,
+        funding=FINITE,
+    )
+    return CardRun(
+        window=(start, start + timedelta(days=draw(st.integers(0, 400)))),
+        period=draw(durations()),
+        period_ends_ns=ends,
+        returns=draw(series),
+        equity=draw(series),
+        trades=tuple(draw(st.lists(trades, max_size=3))),
+        fills=tuple(draw(st.lists(fills(), max_size=4))),
+        capital=draw(POSITIVE),
+        currency=draw(CURRENCIES),
+        venue_model=draw(venue_models()).model_dump(mode="json"),
+        held=tuple(
+            draw(
+                st.lists(
+                    st.builds(
+                        Held,
+                        ts_ns=INSTANTS,
+                        instrument_id=st.just("DEMO.XNAS"),
+                        qty=FINITE,
+                        notional=FINITE,
+                    ),
+                    max_size=3,
+                )
+            )
+        ),
+        cushion=draw(series) if booked else (),
+        carry=draw(series) if booked else (),
+        worst_ratio=tuple(
+            draw(st.lists(st.none() | FINITE, min_size=len(ends), max_size=len(ends)))
+        )
+        if booked
+        else (),
+        funding=tuple(
+            draw(
+                st.lists(
+                    st.builds(
+                        FundingPayment,
+                        ts_ns=INSTANTS,
+                        instrument_id=st.just("BTC-USDT-SWAP.OKX"),
+                        qty=FINITE,
+                        rate=FINITE,
+                        paid=FINITE,
+                    ),
+                    max_size=3,
+                )
+            )
+        ),
+    )
+
+
+@st.composite
+def measurements(draw: st.DrawFn) -> Measurement:
+    """What a card was scored from: an objective, its folds, the run, and a host and a
+    benchmark run each present or not."""
+    return Measurement(
+        objective=ObjectiveRef(
+            id=draw(CATALOGUE_IDS),
+            params=ObjectiveParams(min_delta=draw(NON_NEGATIVE), k_se=draw(POSITIVE)),
+        ),
+        folds=draw(st.integers(1, 12)),
+        run=draw(card_runs()),
+        host=draw(st.none() | card_runs()),
+        benchmark=draw(st.none() | card_runs()),
     )
 
 

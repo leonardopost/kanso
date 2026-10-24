@@ -257,7 +257,7 @@ def test_a_scenario_charges_fixed_bps_only_where_the_runner_charges_a_spread() -
 
 
 def test_a_recorded_fill_without_the_field_reads_as_not_touched() -> None:
-    from kanso.portfolio.records import _decode_fill, _encode_fill
+    from kanso.criteria.codec import _decode_fill, _encode_fill
 
     fill = Fill(1, "A.X", "SELL", 5.0, 20.0, 0.1, maker=True, touched=True)
     assert _decode_fill(_encode_fill(fill)) == fill

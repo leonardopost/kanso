@@ -30,6 +30,7 @@ from .conftest import (
     SIZED_HOST,
     classify,
     document,
+    measured_as_scored,
     register,
     write_hypothesis,
 )
@@ -184,6 +185,14 @@ def test_a_filter_that_refuses_every_entry_loses_what_the_host_earned(
     assert blocked.metric < 0.0
     assert blocked.n_trades == 0
     assert (ws.root / run.dir / "strategy.py").read_bytes() == ALLOWING
+    # The card keeps the host-alone run it was differenced against beside its own: the
+    # objective on the two is the card's number exactly, and the loss is the host's trades.
+    measured = measured_as_scored(store, blocked)
+    assert measured.objective.id == "marginal_wf_sharpe"
+    assert measured.host is not None and measured.benchmark is None
+    assert measured.run.trades == () and len(measured.host.trades) > 0
+    neutral = measured_as_scored(store, records.cards_of(store, hyp_id)[0])
+    assert neutral.host == measured.host, "every card of the run is differenced against one host"
 
 
 def test_the_host_run_is_computed_once_per_run_and_dropped_when_it_ends(

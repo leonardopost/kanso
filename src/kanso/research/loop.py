@@ -29,7 +29,9 @@ Only then does the engine run, on research-window data alone, in a subprocess wi
 path to a catalog.
 
 **A discard costs nothing but the trial.** Keep or not, the card is recorded and its
-bytes are a blob; a keep that moves the hypothesis's best rewrites
+bytes are a blob, and so — for a card that ran to a result, a redundant one and the
+baseline included — is what its metric was computed from (`records.Measurement`), stored
+before the card row that names it; a keep that moves the hypothesis's best rewrites
 `hypotheses/<id>/strategy.py`, so the file is always the champion, and anything else
 restores the lane copy from the best blob, or from the run's base before the first keep.
 `results.tsv` is rendered from the records afterwards, so no restore can lose history.
@@ -85,7 +87,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 from kanso import ext
 from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
-from kanso.criteria import CardRun, GateContext, criteria_version, gates, objectives
+from kanso.criteria import CardRun, GateContext, criteria_version, gates
 from kanso.criteria.context import verdict
 from kanso.criteria.digest import digest as digest_of
 from kanso.criteria.gates import strategy_integrity
@@ -769,12 +771,20 @@ def _measure(
     card_run: CardRun,
     host_run: CardRun | None,
     benchmark_run: CardRun | None = None,
-) -> tuple[float, float]:
-    """The objective over the run's folds, and the error of that mean."""
+) -> records.Measurement:
+    """What a card is scored from: the objective, the folds and the runs it reads.
+
+    Its `compute` is the objective over the run's folds and the error of that mean, which is
+    the card's metric; the card keeps it whole (`records.record_measurement`), so the number
+    and what it was computed from are one object and cannot be stored apart.
+    """
     ref = setup.hyp.objective
     if ref is None:  # pragma: no cover - a classified hypothesis always carries one
-        return 0.0, 0.0
-    return objectives()[ref.id].compute(card_run, setup.folds, host_run, benchmark_run)
+        raise PreconditionError(
+            f"{setup.hyp.id} names no objective, so a card of it is scored on nothing",
+            remedy=f"run `kanso classify {setup.hyp.id}`",
+        )
+    return records.Measurement(ref, setup.folds, card_run, host_run, benchmark_run)
 
 
 def _grew_by(store: StateStore, run: RunRecord, source: bytes) -> int:
@@ -822,6 +832,7 @@ def _record(
     tags: Sequence[Tag] = (),
     restore_all: bool = False,
     digest: CardDigest | None = None,
+    measured_sha: str | None = None,
 ) -> Card:
     """Write the card, then move `best` or restore the lane copy, then render the log.
 
@@ -847,6 +858,7 @@ def _record(
         venue_model=setup.venue_model,
         created_at=records.now(),
         digest=digest,
+        measured_sha=measured_sha,
     )
     records.record_card(store, run, made)
     if status == "keep":
@@ -948,7 +960,9 @@ def _judge(
         benchmark_run=benchmark_run,
         trials=records.candidates(store, run.hyp_id) + 1,
     )
-    metric, se = _measure(setup, result.run, host_run, benchmark_run)
+    measured = _measure(setup, result.run, host_run, benchmark_run)
+    metric, se = measured.compute()
+    measured_sha = records.record_measurement(store, measured)
     passed = integrity.passed and all(gate.passed for gate in constraints)
     kept = passed and _keeps(setup, store, run, source, metric, se)
     held = records.signature(result.run)
@@ -988,6 +1002,7 @@ def _judge(
         directory=directory,
         tags=tags,
         digest=digest_of(result.run, result.intents),
+        measured_sha=measured_sha,
     )
     if like is not None:
         _same_book(store, run, made.strategy_sha, desc, metric, floor, like)
@@ -1509,7 +1524,8 @@ def run_batch(
     else:
         host_run = None
         benchmark_run = None
-    # desc, status, metric, se, trades, wall, peak, gates, crash, source, sha, tags, like
+    # desc, status, metric, se, trades, wall, peak, gates, crash, source, sha, tags, like,
+    # and the sha of what the card was measured from
     decided: list[tuple[Any, ...]] = []
     for index, (desc, source, tags, digest_sha, integrity) in enumerate(prepared):
         if not integrity.passed:
@@ -1527,6 +1543,7 @@ def run_batch(
                     source,
                     digest_sha,
                     tags,
+                    None,
                     None,
                 )
             )
@@ -1548,6 +1565,7 @@ def run_batch(
                     digest_sha,
                     tags,
                     None,
+                    None,
                 )
             )
             continue
@@ -1567,6 +1585,7 @@ def run_batch(
                     digest_sha,
                     tags,
                     None,
+                    None,
                 )
             )
             continue
@@ -1580,7 +1599,9 @@ def run_batch(
             benchmark_run=benchmark_run,
             trials=margin,
         )
-        metric, se = _measure(setup, result.run, host_run, benchmark_run)
+        measured = _measure(setup, result.run, host_run, benchmark_run)
+        metric, se = measured.compute()
+        measured_sha = records.record_measurement(store, measured)
         passed = all(gate.passed for gate in constraints)
         kept = passed and _keeps(setup, store, frozen, source, metric, se)
         held = records.signature(result.run)
@@ -1615,6 +1636,7 @@ def run_batch(
                 digest_sha,
                 tags,
                 like,
+                measured_sha,
             )
         )
     best_at: int | None = None
@@ -1642,6 +1664,7 @@ def run_batch(
             digest_sha,
             tags,
             like,
+            measured_sha,
         ) = item
         made.append(
             _record(
@@ -1663,6 +1686,7 @@ def run_batch(
                 crash_tail=crash_tail,
                 directory=directory,
                 tags=tags,
+                measured_sha=measured_sha,
             )
         )
         if status == "keep":

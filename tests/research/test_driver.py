@@ -27,7 +27,7 @@ from kanso.schemas import CardDigest
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
-from .conftest import DOCUMENT, classify, document
+from .conftest import DOCUMENT, classify, document, measured_as_scored
 from .mocked import (  # noqa: F401
     ALIGNED,
     CYCLE,
@@ -1201,6 +1201,12 @@ def test_a_batch_keeps_the_best_slot_and_counts_every_card(
     assert outcome.missed == 0
     assert records.n_trials(store, prepared_hyp) == 4
     assert statuses(store, prepared_hyp) == ["keep", "keep", "crash", "discard"]
+    # Every slot that ran keeps what it was scored from, the slot the turn kept and the one
+    # it did not alike; the crash keeps nothing.
+    baseline, kept, crashed, discarded = records.cards_of(store, prepared_hyp)
+    for ran in (baseline, kept, discarded):
+        measured_as_scored(store, ran)
+    assert crashed.measured_sha is None
     assert spend(store, lane="op").calls == 1
     assert records.active(store, prepared_hyp) is not None
 

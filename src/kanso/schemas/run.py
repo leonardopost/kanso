@@ -21,6 +21,12 @@ half of the clips were dropped and one that rose because every clip earned more 
 same, and a contribution that fell because the book traded less reads like one whose trades
 got worse — and the proposer, the operator and `results.tsv` were each shown that number and
 nothing else.
+
+A card that ran also keeps what its metric was computed from: `measured_sha` names the blob
+holding its objective and folds, the run it measured and the host and benchmark runs the
+objective read beside it (`kanso.research.records.Measurement`). The number is one reading
+of that run, and the run is what any other reading needs — a prefix of the window, one week,
+one fold — so it is kept rather than reconstructed by running the bytes again.
 """
 
 from __future__ import annotations
@@ -262,6 +268,12 @@ class Card(KansoModel):
     digest: CardDigest | None = None
     """What the card's trades did; `None` for a card that never ran to a result — a crash,
     one refused before or during its backtest — and for one recorded before cards kept it."""
+    measured_sha: Sha256 | None = None
+    """The blob holding what the card's metric was computed from — its objective and folds,
+    its run, and the host and benchmark runs the objective read — from which the objective
+    returns `metric` and `metric_se` exactly; `None` for a card that never ran to a result —
+    a crash, one refused before or during its backtest — and for one recorded before cards
+    kept it."""
 
     @property
     def sha7(self) -> str:
@@ -295,6 +307,8 @@ class Card(KansoModel):
                 raise ValueError("metric: a crashed card measured nothing and reports 0")
             if self.digest is not None:
                 raise ValueError("digest: a crashed card measured nothing and digests nothing")
+            if self.measured_sha is not None:
+                raise ValueError("measured_sha: a crashed card measured nothing and keeps nothing")
         elif self.crash_tail is not None:
             raise ValueError(f"crash_tail: only a crashed card carries one, not a {self.status}")
         return self

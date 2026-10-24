@@ -21,16 +21,19 @@ decision.
 A run that stalls with a keep nothing has certified certifies it before it returns, so
 `run` reports the certificate that stall produced and points at it.
 
-`show` prints what is in state: a card's stored `strategy.py`, or the unified diff between
-two of them. A sha is written as any unique prefix of one that belongs to this hypothesis;
-a prefix matching none of its cards, or several, is a validation failure, because guessing
-which one was meant is how the wrong subject gets certified.
+`show` prints what is in state: a card's stored `strategy.py`, the unified diff between
+two of them, or — under `--measured` — what the newest card of those bytes was scored from:
+its objective and folds, and the run it measured, period by period. A sha is written as any
+unique prefix of one that belongs to this hypothesis; a prefix matching none of its cards,
+or several, is a validation failure, because guessing which one was meant is how the wrong
+subject gets certified.
 """
 
 from __future__ import annotations
 
 import difflib
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import typer
@@ -42,7 +45,7 @@ from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import PreconditionError, ValidationError
 from kanso.research import daemon, records
 from kanso.research.lanes import DEFAULT_LANE
-from kanso.schemas import CardDigest, GateResult
+from kanso.schemas import Card, CardDigest, GateResult
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -152,10 +155,17 @@ def show_command(
     diff: Annotated[
         str | None, typer.Option("--diff", metavar="S2", help="Diff `--sha` against this one.")
     ] = None,
+    measured: Annotated[
+        bool,
+        typer.Option("--measured", help="Print what the card's metric was computed from."),
+    ] = False,
     as_json: JsonOption = False,
 ) -> None:
-    """Print a card's stored `strategy.py`, or the diff between two of them."""
-    emit(as_json or global_json(ctx), lambda: _show(open_workspace(ctx), hyp_id, sha, diff))
+    """Print a card's stored `strategy.py`, the diff between two, or what one measured."""
+    emit(
+        as_json or global_json(ctx),
+        lambda: _show(open_workspace(ctx), hyp_id, sha, diff, measured=measured),
+    )
 
 
 # -- command bodies ---------------------------------------------------------------
@@ -461,12 +471,19 @@ def _end(ws: Workspace, hyp_id: str) -> Report:
     return Report(data=data, lines=lines)
 
 
-def _show(ws: Workspace, hyp_id: str, sha: str | None, diff: str | None) -> Report:
+def _show(
+    ws: Workspace, hyp_id: str, sha: str | None, diff: str | None, *, measured: bool = False
+) -> Report:
+    if measured and diff is not None:
+        raise ValidationError(
+            "--measured prints what one card was measured from and --diff compares two "
+            "cards' sources, so the two are not asked together",
+            remedy=f"kanso research show {hyp_id} --sha S --measured",
+        )
     with store(ws) as opened:
         known = _shas(opened, hyp_id)
         subject = _resolve(opened, hyp_id, sha, known)
         if diff is None:
-            source = opened.get_blob(subject).decode("utf-8", errors="replace")
             # The newest card that evaluated these bytes, its digest included; a best a
             # store holds no card of reads as none rather than refusing the source.
             card = next(
@@ -477,6 +494,9 @@ def _show(ws: Workspace, hyp_id: str, sha: str | None, diff: str | None) -> Repo
                 ),
                 None,
             )
+            if measured:
+                return _measurement(opened, hyp_id, subject, card)
+            source = opened.get_blob(subject).decode("utf-8", errors="replace")
             data: dict[str, Any] = {
                 "id": hyp_id,
                 "sha": subject,
@@ -497,6 +517,61 @@ def _show(ws: Workspace, hyp_id: str, sha: str | None, diff: str | None) -> Repo
     )
     data = {"id": hyp_id, "sha": subject, "diff_of": other, "diff": rendered}
     return Report(data=data, lines=tuple(rendered.splitlines()))
+
+
+def _measurement(opened: StateStore, hyp_id: str, subject: str, card: Card | None) -> Report:
+    """What the newest card of these bytes was scored from: the objective and its folds, the
+    trades, and the run's return and equity at each period end — a UTC date, and the time
+    beside it where two ends share one.
+
+    Refused when that card kept nothing, which is every card that did not run to a result
+    and every card recorded before cards kept one; its card says which.
+    """
+    found = None if card is None else records.measurement_of(opened, card)
+    if card is None or found is None:
+        raise PreconditionError(
+            f"the newest card of {hyp_id} that evaluated {subject[:7]} kept no measurement: "
+            "a card keeps one when its backtest ran to a result, and a crash, a card refused "
+            "before or during its backtest and a card recorded before cards kept one have none",
+            remedy=f"kanso research show {hyp_id} --sha {subject[:7]} --json",
+        )
+    run = found.run
+    data: dict[str, Any] = {
+        "id": hyp_id,
+        "sha": subject,
+        "card": card.model_dump(mode="json", by_alias=True),
+        "measurement": found.payload(),
+    }
+    against = [
+        name
+        for name, other in (("host", found.host), ("benchmark", found.benchmark))
+        if other is not None
+    ]
+    instants = [datetime.fromtimestamp(ts // 1_000_000_000, tz=UTC) for ts in run.period_ends_ns]
+    dated = len({instant.date() for instant in instants}) == len(instants)
+    stamp = "%Y-%m-%d" if dated else "%Y-%m-%d %H:%M:%S"
+    lines = [
+        field("card", f"{card.sha7} · {card.status} · {card.desc}"),
+        field(
+            "measured",
+            f"{found.objective.id} over {found.folds} fold(s)"
+            + (f" · against the {' and the '.join(against)} run" if against else ""),
+        ),
+        field(
+            "metric",
+            f"{card.metric:.6f} ± {card.metric_se:.6f} · {len(run.trades)} trade(s) · "
+            f"{len(run.fills)} fill(s)",
+        ),
+        field(
+            "periods",
+            f"{len(instants)} of {run.period} · capital {run.capital:.2f} {run.currency} · UTC",
+        ),
+        *(
+            indent(f"{instant.strftime(stamp)}  {change:>+12.2f}  {equity:>14.2f}")
+            for instant, change, equity in zip(instants, run.returns, run.equity, strict=True)
+        ),
+    ]
+    return Report(data=data, lines=tuple(lines))
 
 
 def _evidence(result: GateResult) -> str:

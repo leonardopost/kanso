@@ -37,7 +37,9 @@ from kanso.hyp import add as register
 from kanso.hyp import set_status
 from kanso.models import Answer, Call
 from kanso.models import router as router_module
-from kanso.schemas import Detected, Envelope, ModelSpec, Plan
+from kanso.research import records
+from kanso.research.records import Measurement
+from kanso.schemas import Card, Detected, Envelope, ModelSpec, Plan
 from kanso.state import StateStore
 from kanso.workspace import Workspace, find, init
 
@@ -446,6 +448,18 @@ def classify(ws: Workspace, store: StateStore, doc: dict[str, Any], strategy: by
 def registered(ws: Workspace, store: StateStore) -> str:
     """The demo hypothesis, classified, with a flat baseline strategy."""
     return classify(ws, store, DOCUMENT)
+
+
+def measured_as_scored(store: StateStore, card: Card) -> Measurement:
+    """The card's stored measurement, asserted to score exactly what the card recorded.
+
+    Equality, not closeness: the measurement is the arguments the loop scored the card with,
+    so the objective on them is the same arithmetic on the same floats.
+    """
+    found = records.measurement_of(store, card)
+    assert found is not None, f"card {card.sha7} ({card.status}) kept no measurement"
+    assert found.compute() == (card.metric, card.metric_se)
+    return found
 
 
 @pytest.fixture

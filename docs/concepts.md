@@ -453,6 +453,42 @@ the position — 15.08 gross less 5.00 of cost — and the discard after it trad
 session, for 5.38 net: its number fell because each trade earned less, not because it traded
 less. The demo sends market orders only, so `fill_ratio` is empty.
 
+**A card that ran keeps what its number was computed from.** The metric is one reading of
+the run the card child measured — its return and equity at each period end, every closed
+trade with the fills that made it, every fill with its cost — and that run used to be scored
+and dropped, so a question about how a number came to be, whether the first weeks of the
+window already said what the whole window did or whether one week carried it, could be
+asked of no card ever run. A card that ran to a result — a redundant card and a baseline
+included — keeps its **measurement**: the objective and its folds, the run, and the
+host-alone run or the benchmark run the objective read beside it, stored as one blob of
+canonical JSON compressed with zlib, its runs in the form a stage's realised windows are kept
+in, and named by the card's `measured_sha`. It is the arguments the card was scored with, so
+the objective on it returns the card's metric and error exactly
+(`kanso.research.records.Measurement`, whose `compute` is that call and whose `between` cuts
+the run, its host and its benchmark to any span of the window for a reading the loop never
+took). The same bytes measured twice under the same pins measure the same run, so the second
+card names the first one's blob. A crash, a card refused before or during its backtest and a
+card recorded before cards kept one have none. `research show --measured` prints it, here on
+the demo's keep (the 257 period lines between the first two and the last two are elided):
+
+```
+$ kanso research show demo_mr --measured
+card       f729a53 · keep · fade a 2-sigma deviation from a 60-bar rolling mean
+measured   net_edge_bps over 4 fold(s)
+metric     9.986730 ± 1.065174 · 1003 trade(s) · 2006 fill(s)
+periods    261 of 1d · capital 100000.00 USD · UTC
+           2024-01-02        +55.81       100055.81
+           2024-01-03        -31.91       100023.90
+           2024-12-30         -0.05       109976.70
+           2024-12-31        +86.48       110063.18
+```
+
+and `--json` carries the whole of it. That measurement is 981,029 bytes of JSON stored as
+77,765; a synthetic run the size of a tick lane's largest baseline — 98 daily periods, 6,000
+trades of two fills each and the 12,000 fills — is 5,704,639 bytes stored as 704,599, encoded
+and compressed in 0.16 to 0.23 s. Nothing deletes a measurement (`docs/workspace.md`,
+`state.db`).
+
 **A card runs in a child process with no path to any catalog.** The parent reads the
 research window — and the warmup sessions before it, when the hypothesis declares them —
 out of the catalog and hands the points to the child, which starts in a new
