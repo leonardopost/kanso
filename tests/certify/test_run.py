@@ -335,6 +335,7 @@ A_WEEK = document(
         "forward": {"start": date(2024, 3, 1)},
     },
     objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    required_constraints=[{"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 0.0}}],
 )
 """The demo sleeve certified over one week, on its return on the capital."""
 
@@ -1138,6 +1139,117 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
     trials = records.trial_metrics(store, HYP_ID, "wf_sharpe_net")
     assert deflated.evidence["trials"] == len(trials) == 2
     assert records.n_trials(store, HYP_ID) == made.n_trials == 4
+
+
+# --- a search carried across a re-pin to another objective ---------------------
+
+SWITCHED = document(
+    objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    required_constraints=[{"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 0.0}}],
+)
+"""The demo sleeve re-pinned from its Sharpe to its return on the capital."""
+
+PRICED: dict[str, Any] = {
+    "id": "deflated_contribution",
+    "stage": "cert",
+    "params": {"min_probability": 0.9},
+    "rationale": "required behind two trials: the search correction for a contribution",
+}
+
+
+def searched_then_switched(ws: Workspace, store: StateStore, *, after: int) -> str:
+    """Three cards scored on the Sharpe, then `after` scored on the contribution, the last
+    of them the best: the strategy the Sharpe's search chose, carried across the re-pin."""
+    classify(ws, store, SWITCHED, REVERTING)
+    for seq, metric in enumerate((0.4, 0.9, 1.3), start=1):
+        a_card(ws, store, blob_from(str(seq)), seq=seq, metric=metric, best=False)
+    best = ""
+    for seq in range(4, 4 + after):
+        best = a_card(
+            ws,
+            store,
+            REVERTING if seq == 3 + after else FLAT,
+            document=SWITCHED,
+            seq=seq,
+            metric=0.5 + seq / 10,
+            best=seq == 3 + after,
+        )
+    write_plan(ws, gates=[*CERT_GATES, PRICED])
+    return best
+
+
+def test_the_carried_strategy_is_not_certified_before_two_cards_score_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Row 173: the re-pin cleared the best, the carried bytes became the next run's baseline
+    and its best, and the first certificate deflated it by one trial — which skipped, and a
+    skip passes — while it was stamped with the four cards behind it."""
+    searched_then_switched(ws, store, after=1)
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert refused.value.message == (
+        "demo_mr has 4 cards that ran and traded behind it and 1 of them scored under "
+        "wf_contribution_bps, so deflated_contribution cannot read the spread of the search "
+        "that selected this card: it prices the search from two cards in its units"
+    )
+    assert refused.value.remedy == (
+        "research it further with `kanso research begin demo_mr` until two cards are scored "
+        "under wf_contribution_bps"
+    )
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+
+
+def test_the_carried_strategy_is_priced_for_every_card_behind_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The spread is the contribution's own, from its two cards; the count of draws the
+    maximum is taken over is all five, the three the Sharpe's search spent among them."""
+    searched_then_switched(ws, store, after=2)
+
+    made = certify(ws, store, HYP_ID)
+
+    (deflated,) = [gate for gate in made.gates if gate.id == "deflated_contribution"]
+    assert deflated.skipped is None
+    assert deflated.evidence["trials"] == records.candidates(store, HYP_ID) == 5
+    assert deflated.evidence["scored_trials"] == 2
+    assert made.n_trials == 5
+
+
+def test_a_card_scored_under_the_objective_before_the_re_pin_is_not_certified_by_name(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`cert run --sha` of a pre-switch card: the plan was made for the contribution, so it
+    carries the contribution's correction, which skips on a Sharpe, and not the Sharpe's."""
+    searched_then_switched(ws, store, after=2)
+    before = a_card(ws, store, blob_from("9"), seq=9, metric=2.0, best=False)
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert refused.value.message == (
+        f"{before[:7]} was scored under wf_sharpe_net, and the plan pinned for demo_mr "
+        "carries no deflated_sharpe with its threshold, the search correction for it, so the "
+        "search that selected it would go unpriced"
+    )
+    assert refused.value.remedy == (
+        "certify a card scored under wf_contribution_bps, as the best is: `kanso cert run demo_mr`"
+    )
+
+
+def test_a_card_of_another_objective_is_certified_when_the_plan_carries_its_correction(
+    ws: Workspace, store: StateStore
+) -> None:
+    searched_then_switched(ws, store, after=2)
+    before = a_card(ws, store, REVERTING, seq=9, metric=2.0, best=False)
+    write_plan(ws, gates=[*CERT_GATES, PRICED, SEARCHED])
+
+    made = certify(ws, store, HYP_ID, sha=before[:12])
+
+    (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
+    assert deflated.skipped is None
+    assert deflated.evidence["trials"] == 6 and deflated.evidence["scored_trials"] == 4
 
 
 # --- a construct attached to a host -------------------------------------------

@@ -14,11 +14,14 @@ one run are ordered and countable without a scan.
 `n_trials` counts every card of every run of the hypothesis — baselines and crashes
 included — because it numbers the cards and stamps the certificate, and no card may be
 dropped from a count that is part of a filename. `trial_metrics` is the narrower set the
-deflation gates consume: the cards that ran to a result and traded, scored under the
-objective being deflated. A crash and a card that placed no order are edits that failed,
-not candidates the selection could have chosen, so counting them widens the search on
-paper without widening it in fact; a card scored under another objective is a number in
-other units, so counting it measures the spread of a search that never happened. A
+deflation gates read their spread from: the cards that ran to a result and traded, scored
+under the objective being deflated. A crash and a card that placed no order are edits that
+failed, not candidates the selection could have chosen, so counting them widens the search
+on paper without widening it in fact; a card scored under another objective is a number in
+other units, so a spread taken across it measures a search that never happened. How many
+draws the maximum was taken over has no units, so that count is `candidates`, the same
+cards under every objective: a strategy carried across a re-pin was chosen by the cards
+before it. A
 redundant card is in both, because it is the other way round — it ran, it traded, and the
 selection ranked its number and declined it. That another candidate held the same book
 makes it a correlated trial, not a non-trial, and dropping it was measured costing
@@ -133,6 +136,7 @@ __all__ = [
     "n_trials",
     "next_tag",
     "now",
+    "objective_of",
     "prune",
     "read_measurement",
     "record_card",
@@ -417,7 +421,11 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
     per-trade edge to a contribution has a search in basis points per trade behind it and one
     in basis points per period, and a spread taken across both is the spread of neither:
     measured on an operator's workspace in October 2026, mixing the two moved one expected
-    maximum from 0.055 to 1.82. The objective is read from the hypothesis file each card's run
+    maximum from 0.055 to 1.82. Those cards still count toward how many draws the maximum is
+    taken over (`candidates`), which is a count and carries no units, so the strategy carried
+    across the re-pin is priced for the search that chose it; and a certification behind two
+    such cards with fewer than two of these is refused (`kanso.certify.run.unpriced`), since
+    its spread cannot be read. The objective is read from the hypothesis file each card's run
     pinned, as a plain mapping, so a pin written under an older schema is still read. Nothing
     else about the pins narrows the set: a re-pin under the same objective, a newer snapshot or
     a kanso upgrade is the same search continuing, and a set that reset at each of them would
@@ -444,7 +452,7 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
     for row in rows:
         pin = str(row["hypothesis_sha"])
         if pin not in scored:
-            scored[pin] = _objective_of(store, pin)
+            scored[pin] = objective_of(store, pin)
     return [
         float(row["metric"]) for row in rows if scored[str(row["hypothesis_sha"])] == objective_id
     ]
@@ -455,10 +463,10 @@ def candidates(store: StateStore, hyp_id: str) -> int:
     result and traded, under any objective.
 
     The cards `trial_metrics` reads, before it narrows them to one objective: that set holds
-    a spread, which must be in one objective's units, while this is a count of draws of a
-    number that has none — an edge measured in its own errors, which is what
-    `edge_per_trade` holds a card to. A re-pin to another objective continues the search
-    for a card whose trades pay, so the cards before it still count.
+    a spread, which must be in one objective's units, while this is a count of draws, which
+    has none — of an edge measured in its own errors, which is what `edge_per_trade` holds a
+    card to, and of the candidates a deflation's expected maximum is taken over. A re-pin to
+    another objective continues the search, so the cards before it still count.
     """
     ids = family(store, hyp_id)
     row = store.connection.execute(
@@ -469,7 +477,7 @@ def candidates(store: StateStore, hyp_id: str) -> int:
     return int(row[0])
 
 
-def _objective_of(store: StateStore, pin: str) -> str | None:
+def objective_of(store: StateStore, pin: str) -> str | None:
     """The objective a pinned hypothesis file names, or `None` when it names none."""
     found = yaml.safe_load(store.get_blob(pin).decode("utf-8"))
     objective = found.get("objective") if isinstance(found, dict) else None

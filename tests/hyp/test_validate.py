@@ -1096,6 +1096,116 @@ def test_a_required_constraint_parameter_outside_its_range_is_refused(ws: Worksp
     assert "required_constraints.min_trades.min" in failure.message
 
 
+CONTRIBUTION = {
+    **SLEEVE_CLASSIFICATION,
+    "objective": {"id": "wf_contribution_bps", "params": {"min_delta": 0.5, "k_se": 1.0}},
+}
+"""A sub-daily sleeve its operator scores on the return per period of the capital."""
+
+GUARD = {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}
+
+
+def test_a_draft_may_state_its_objective_alone(ws: Workspace) -> None:
+    """The operator names the return target; `kanso classify` decides the rest around it."""
+    held = accepted(ws, document(objective=CONTRIBUTION["objective"]))
+
+    assert held.objective is not None and held.objective.id == "wf_contribution_bps"
+    assert held.construct is None and held.constraints is None
+
+
+@pytest.mark.parametrize(
+    ("objective", "problem"),
+    [
+        (
+            {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}},
+            "objective.id: 'wf_sharpe_net' does not apply to this hypothesis in either "
+            "objective mode; the applicable objectives are marginal_net_edge_bps, "
+            "marginal_wf_contribution_bps, net_edge_bps, wf_contribution_bps",
+        ),
+        (
+            {"id": "min_trades", "params": {"min_delta": 0.0, "k_se": 1.0}},
+            "objective.id: 'min_trades' is not an objective in the toolbox",
+        ),
+        (
+            {"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 9.0}},
+            "objective.params.k_se: 9.0 is outside the range",
+        ),
+    ],
+    ids=["inapplicable", "a-gate", "out-of-range"],
+)
+def test_an_objective_a_draft_states_is_held_to_the_toolbox(
+    ws: Workspace, objective: dict[str, Any], problem: str
+) -> None:
+    assert problem in refused(ws, document(objective=objective)).message
+
+
+def test_a_draft_stating_a_construct_without_an_objective_is_still_half_classified(
+    ws: Workspace,
+) -> None:
+    failure = refused(ws, document(construct=SLEEVE_CLASSIFICATION["construct"]))
+
+    assert "objective: missing" in failure.message
+
+
+def test_a_contribution_without_edge_per_trade_is_refused(ws: Workspace) -> None:
+    """A contribution moves toward zero as losing trades are dropped, so a lane scored on one
+    without the gate keeps a card that trades less at a worse loss per trade."""
+    failure = refused(ws, document(**CONTRIBUTION))
+
+    assert failure.message == (
+        "constraints: edge_per_trade is required of a hypothesis scored on "
+        "wf_contribution_bps, which rewards trading less once every trade loses"
+    )
+    assert failure.remedy is not None
+    assert "{id: edge_per_trade, params: {min_bps: <0.0..50.0>, k_se: <0.0..3.0>}}" in (
+        failure.remedy
+    )
+
+
+@pytest.mark.parametrize("where", ["required_constraints", "constraints"])
+def test_a_contribution_carrying_edge_per_trade_in_either_list_is_admitted(
+    ws: Workspace, where: str
+) -> None:
+    constraints = [*CONTRIBUTION["constraints"], GUARD] if where == "constraints" else None
+    doc = document(**CONTRIBUTION)
+    if constraints is None:
+        doc["required_constraints"] = [GUARD]
+    else:
+        doc["constraints"] = constraints
+
+    held = accepted(ws, doc)
+
+    assert {ref.id: ref.params for ref in held.card_gates}["edge_per_trade"] == GUARD["params"]
+
+
+@pytest.mark.parametrize("where", ["required_constraints", "constraints"])
+@pytest.mark.parametrize(
+    ("given", "missing"), [({"min_bps": 0.0}, "k_se"), ({"k_se": 1.0}, "min_bps")]
+)
+def test_edge_per_trade_with_one_threshold_is_refused_wherever_it_is_named(
+    ws: Workspace, where: str, given: dict[str, float], missing: str
+) -> None:
+    """Row 189: half the rule used to register and then skip on every card, which passes."""
+    half = {"id": "edge_per_trade", "params": given}
+    doc = document(**SLEEVE_CLASSIFICATION)
+    if where == "constraints":
+        doc["constraints"] = [*SLEEVE_CLASSIFICATION["constraints"], half]
+    else:
+        doc["required_constraints"] = [half]
+
+    failure = refused(ws, doc)
+
+    assert f"{where}.edge_per_trade.{missing}: is not set" in failure.message
+
+
+def test_edge_per_trade_with_one_threshold_is_refused_on_a_draft(ws: Workspace) -> None:
+    failure = refused(
+        ws, document(required_constraints=[{"id": "edge_per_trade", "params": {"k_se": 1.0}}])
+    )
+
+    assert "required_constraints.edge_per_trade.min_bps: is not set" in failure.message
+
+
 def test_a_gate_required_twice_is_refused_because_the_two_would_disagree(
     ws: Workspace,
 ) -> None:

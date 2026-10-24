@@ -189,6 +189,7 @@ workspace with nothing deployed is how a skipped gate reaches the rendering."""
 
 CLASSIFICATION: dict[str, Any] = {
     "construct": {"id": "sleeve"},
+    "objective": "net_edge_bps",
     "objective_params": {"min_delta": 0.0, "k_se": 0.5},
     "constraints": [
         {"id": "strategy_integrity", "params": pairs()},

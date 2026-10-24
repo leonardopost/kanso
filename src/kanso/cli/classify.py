@@ -10,6 +10,11 @@ run by this version, the objective and its keep rule, the constraints every card
 judged by, and whether a strategy stub was rendered. A stub is rendered only when the
 hypothesis's `strategy.py` is still one kanso wrote, so the line is a fact about the file
 rather than a promise about it.
+
+An objective the file already named is reported either way: kept, because the construct
+chosen is measured in its mode, or replaced — the `replaced` line names it and says why, and
+`--json` carries the same under `stated_objective`. An objective is the scalar every card is
+kept by, so one that changed is not left for a reader to find in a diff.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from typing import Annotated, Any
 import typer
 
 from kanso.classify import catalogue
-from kanso.classify.classify import classify
+from kanso.classify.classify import StatedObjective, classify
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.hyp import STRATEGY_FILE, hypothesis_dir
@@ -47,7 +52,8 @@ def _classify(ws: Workspace, hyp_id: str) -> Report:
     with store(ws) as opened:
         # Classification is always the operator's own act, so its spend is the
         # interactive lane's: no daemon lane ever classifies.
-        hyp = classify(ws, opened, hyp_id, lane=DEFAULT_LANE)
+        classified = classify(ws, opened, hyp_id, lane=DEFAULT_LANE)
+    hyp, stated = classified.hyp, classified.stated
     # Classification refuses an id the catalogue does not hold, so this always resolves.
     runnable = catalogue(ws).get(_construct(hyp)).runnable
     stub = hypothesis_dir(ws, hyp_id) / STRATEGY_FILE
@@ -57,15 +63,18 @@ def _classify(ws: Workspace, hyp_id: str) -> Report:
         "construct": None if hyp.construct is None else hyp.construct.model_dump(mode="json"),
         "runnable": runnable,
         "objective": None if hyp.objective is None else hyp.objective.model_dump(mode="json"),
+        "stated_objective": None if stated is None else _stated(stated),
         "constraints": [item.model_dump(mode="json") for item in hyp.constraints or []],
         "strategy": str(stub),
     }
     lines = [
         field("classified", hyp.id),
         field("construct", _construct_line(hyp, runnable)),
-        field("objective", _objective_line(hyp)),
-        field("gates", ", ".join(item.id for item in hyp.constraints or []) or "none"),
+        field("objective", _objective_line(hyp, stated)),
     ]
+    if stated is not None and not stated.kept:
+        lines.append(field("replaced", f"{stated.id or 'the stated objective'}: {stated.reason}"))
+    lines.append(field("gates", ", ".join(item.id for item in hyp.constraints or []) or "none"))
     if hyp.construct is not None and hyp.construct.rationale:
         lines.append(indent(hyp.construct.rationale))
     lines.append(
@@ -88,8 +97,14 @@ def _construct_line(hyp: Hypothesis, runnable: bool) -> str:
     return f"{_construct(hyp)}{host}{'' if runnable else ' (not runnable in this build)'}"
 
 
-def _objective_line(hyp: Hypothesis) -> str:
+def _objective_line(hyp: Hypothesis, stated: StatedObjective | None) -> str:
     if hyp.objective is None:  # pragma: no cover - a classified hypothesis carries one
         return "unclassified"
     params = hyp.objective.params
-    return f"{hyp.objective.id} · min_delta {params.min_delta} · k_se {params.k_se}"
+    kept = " · stated in the file, kept" if stated is not None and stated.kept else ""
+    return f"{hyp.objective.id} · min_delta {params.min_delta} · k_se {params.k_se}{kept}"
+
+
+def _stated(stated: StatedObjective) -> dict[str, Any]:
+    """What became of the objective the file named, as `--json` carries it."""
+    return {"id": stated.id, "kept": stated.kept, "reason": stated.reason}
