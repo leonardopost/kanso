@@ -431,6 +431,94 @@ def test_the_budget_is_spent_per_idea_and_the_next_crash_has_its_own(
     assert attempts == [None, *range(1, driver.REPAIRS + 1)] * 2
 
 
+def test_a_card_killed_for_its_memory_owes_no_repair(
+    ws: Workspace,
+    store: StateStore,
+    prepared_hyp: str,
+    recorded: Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A kill is the runner's verdict on what a card held, not a fault a traceback names, so
+    the turn after it is a fresh proposal, shown the kill's `resources` verdict and no
+    traceback. Before this a kill was owed two repairs like any crash, each a model call and
+    a child killed again under the same limit."""
+    monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
+    monkeypatch.setattr(research_loop, "mem_cap", lambda *args, **kwargs: 1e-6)
+    scripted(ws, propose=[proposal("revert"), proposal("weak"), proposal("aaa")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.crashes == 3
+    calls = recorded.of("propose")
+    assert [json.loads(call.user).get("repair") for call in calls] == [None, None, None]
+    assert all("crash_tail" not in json.loads(call.user) for call in calls)
+    shown = json.loads(calls[1].user)["recent_cards"][-1]
+    assert shown["status"] == "crash"
+    assert shown["failed_gates"][0]["id"] == research_loop.RESOURCES
+    assert shown["failed_gates"][0]["evidence"]["killed"] == "memory"
+
+
+def test_a_slot_killed_for_its_clock_owes_no_repair_and_the_next_turn_is_a_batch(
+    ws: Workspace,
+    store: StateStore,
+    prepared_hyp: str,
+    recorded: Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from kanso.nautilus import backtest
+
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("weak"), proposal("revert")]},
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+    real = backtest.run_subprocesses
+
+    def second_out_of_time(requests: Any, *args: Any, **kwargs: Any) -> Any:
+        ran = real(requests, *args, **kwargs)
+        killed = replace(
+            ran[-1],
+            run=backtest._empty(requests[-1]),
+            intents=(),
+            crashed=True,
+            reason=backtest.BUDGET,
+        )
+        return [*ran[:-1], killed] if len(ran) == 2 else ran
+
+    monkeypatch.setattr(research_loop.backtest, "run_subprocesses", second_out_of_time)
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert statuses(store, prepared_hyp)[:3] == ["keep", "discard", "crash"]
+    first, second = recorded.of("propose")
+    assert "proposals" in json.dumps(second.schema), "the next turn is a batch again"
+    assert "repair" not in json.loads(second.user)
+    event = [e for e in store.events(kind="batched", subject=prepared_hyp)][0]
+    assert event.detail["crash_sha"] is None, "no slot of the turn owes a repair"
+
+
+def test_a_width_the_lane_cannot_fund_is_refused_before_a_model_is_asked(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    from .conftest import ENVELOPE, write_envelope
+
+    ws = tuned(ws, cards_per_turn=8)
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 0.5})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    scripted(ws, propose=[{"proposals": [proposal("revert")]}])
+
+    with pytest.raises(PreconditionError, match="cards a turn") as refused:
+        driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert "`[research] cards_per_turn = " in str(refused.value.remedy)
+    assert recorded.of("propose") == []
+
+
 def _fact_keys() -> set[str]:
     """Every key `_dynamic` can put in the user turn, read out of its own source.
 

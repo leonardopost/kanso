@@ -2330,9 +2330,13 @@ The figure is also what a card of that lane may hold: the loop kills a card chil
 resident memory passes the lane's share, and the declaration is the first way that threshold
 can fall under 4 GB. `[research] cards_per_turn` divides that share by the number of cards
 one turn runs at once — `mem_per_card_gb` in this file, printed by `kanso env detect` —
-and the default of one leaves the share where it was. Eight is the most. It is never lowered below three times the run's *own* measured baseline
+and the default of one leaves the share where it was. Eight is the most. No card's share,
+one at a time or several, is lower than three times the run's *own* measured baseline
 peak, so the heavy hypothesis whose recorded peak you are declaring your way out of keeps
-the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
+the room its own cards need, and a `cards_per_turn` whose part of the share would fall
+under that is refused before the turn is proposed, with the widest turn the share funds
+and the `mem_per_lane_gb` the asked width needs as the remedy: on a 2.5 GB share and a
+0.4 GB baseline peak, two cards a turn are funded and seven are refused, naming 8.40 GB. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
 the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
 six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
 rather than the declaration.

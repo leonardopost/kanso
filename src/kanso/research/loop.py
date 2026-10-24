@@ -18,9 +18,18 @@ moves the hypothesis's best only when a keep beats it.
 **The baseline calibrates the run.** It runs the unmodified `strategy.py` under
 `[research] baseline_budget_s` with memory uncapped, and what it costs becomes what a
 card is allowed: three times its wall time (never under a minute) and, for memory, the
-lane's own share floored at three times what the baseline actually needed. A baseline
-that times out or raises leaves no run record at all — a hypothesis whose starting point
-cannot run has nothing to research.
+lane's own share floored at three times what the baseline actually needed. A turn that runs
+several cards at once allows each the same: its clock is the card budget times the cards
+the turn runs, because they share the lane's cores and the baseline had them to itself, and
+its memory is the share divided across them, never under that floor — a width whose part
+of the share would fall under it is refused before the turn is proposed (`mem_cap`). A
+baseline that times out or raises leaves no run record at all — a hypothesis whose
+starting point cannot run has nothing to research.
+
+**A kill is not a fault in the code.** A card the runner killed for its memory or its
+clock measured nothing and is a crash, but it carries a failed `resources` verdict naming
+the limit and what the card reached, and the driver owes it no repair: a repair is the
+same idea with its traceback's fault fixed, and a kill has no traceback to fix.
 
 **The order of the card sequence is the embargo.** The static half of
 `strategy_integrity` is evaluated *before* the backtest, so a `strategy.py` that reaches
@@ -75,6 +84,7 @@ child reported and none of what producing it cost.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -143,6 +153,7 @@ __all__ = [
     "MIN_CARD_BUDGET_S",
     "REDUNDANT",
     "RESEARCHABLE",
+    "RESOURCES",
     "SAME_BOOK",
     "RedundantError",
     "Setup",
@@ -162,6 +173,12 @@ MIN_CARD_BUDGET_S: Final = 60.0
 
 HEADROOM: Final = 3.0
 """What a card is allowed over what the baseline needed, in time and in memory alike."""
+
+RESOURCES: Final = "resources"
+"""The verdict a card killed for its memory or its clock carries, failed, beside the
+integrity verdict: what killed it (`memory` or `budget`), the limit and what the card
+reached, and how many cards its turn ran at once. Not a gate of the criteria library: a
+card is judged by none of those once it is killed, and this says why."""
 
 RESEARCHABLE: Final = frozenset({"classified", "researching", "candidate", "certified", "failed"})
 """The statuses a run may begin from: every one but a draft, which has no construct yet.
@@ -661,11 +678,63 @@ def mem_cap(ws: Workspace, run: RunRecord, *, slots: int = 1) -> float:
     string of kills. The lane's share is `[env] mem_per_lane_gb` where one is declared,
     which is the only way this threshold falls under the plan's own 4 GB floor
     (`docs/workspace.md`, `envelope.yaml`).
+
+    No card is held to less than the floor, one at a time or several, so a width whose
+    part of the share falls under it is refused rather than run, with the widest turn the
+    share funds and the share the width needs as the remedy. A child of a dense tick
+    window holds about 0.4 GB (`backtest.CHUNK_POINTS`), and before this 0.18.0 divided a
+    2.5 GB share across seven cards to 0.36 GB each, under what any of them needs.
     """
     floor = HEADROOM * run.baseline_peak_mem_gb
     envelope = read_envelope(ws)
     share = floor if envelope is None else max(envelope.plan.mem_per_lane_gb, floor)
-    return share / max(1, slots)
+    width = max(1, slots)
+    if round(share / width, 6) < round(floor, 6):
+        funded = max(1, int(round(share / floor, 6)))
+        needed = math.ceil(round(width * floor * 100, 6)) / 100
+        raise PreconditionError(
+            f"memory: {run.hyp_id}'s lane share of {share:.2f} GB across {width} cards a turn "
+            f"is {share / width:.2f} GB a card, under the {floor:.2f} GB no card of this run is "
+            f"held to less than — {HEADROOM:g} times the {run.baseline_peak_mem_gb:.2f} GB its "
+            "baseline needed — so a card doing what the baseline did could be killed for it",
+            remedy=f"set `[research] cards_per_turn = {funded}` in kanso.toml, or declare "
+            f"`[env] mem_per_lane_gb = {needed:.2f}` and run `kanso env detect`",
+        )
+    return share / width
+
+
+def _killed(
+    result: backtest.RunResult, request: backtest.RunRequest, slots: int = 1
+) -> list[GateResult]:
+    """The failed `RESOURCES` verdict of a card the runner killed for its memory or its
+    clock, or nothing for any other card."""
+    if result.reason == backtest.MEMORY:
+        return [
+            verdict(
+                RESOURCES,
+                False,
+                {
+                    "killed": backtest.MEMORY,
+                    "cap_gb": round(request.mem_cap_gb or 0.0, 3),
+                    "peak_gb": round(result.peak_mem_gb, 3),
+                    "slots": slots,
+                },
+            )
+        ]
+    if result.reason == backtest.BUDGET:
+        return [
+            verdict(
+                RESOURCES,
+                False,
+                {
+                    "killed": backtest.BUDGET,
+                    "budget_s": round(request.budget_s or 0.0, 1),
+                    "wall_s": round(result.wall_s, 1),
+                    "slots": slots,
+                },
+            )
+        ]
+    return []
 
 
 # --- judging one card --------------------------------------------------------
@@ -899,6 +968,7 @@ def _judge(
     tags: Sequence[Tag] = (),
     baseline: bool = False,
     benchmark_run: CardRun | None = None,
+    request: backtest.RunRequest | None = None,
 ) -> Card:
     """Steps 3 to 5: the constraints, the keep rule, the redundancy check and the record.
 
@@ -948,7 +1018,7 @@ def _judge(
             wall_s=result.wall_s,
             peak_mem_gb=result.peak_mem_gb,
             n_trials=n_trials,
-            gate_results=[integrity],
+            gate_results=[integrity, *([] if request is None else _killed(result, request))],
             crash_tail=result.traceback_tail or result.reason,
             directory=directory,
             tags=tags,
@@ -1425,18 +1495,14 @@ def card(
             directory=directory,
             cache=_HOST_RUNS.setdefault(run.run_id, {}),
         )
-        result = backtest.run_subprocess(
-            _request(
-                setup,
-                source,
-                run.snapshot_id,
-                budget_s=run.card_budget_s,
-                mem_cap_gb=mem_cap(ws, run),
-            ),
-            setup.catalog,
-            directory,
-            setup.extensions,
+        request = _request(
+            setup,
+            source,
+            run.snapshot_id,
+            budget_s=run.card_budget_s,
+            mem_cap_gb=mem_cap(ws, run),
         )
+        result = backtest.run_subprocess(request, setup.catalog, directory, setup.extensions)
     still()  # the card's last poll may have come before the end did
     return _judge(
         ws,
@@ -1452,6 +1518,7 @@ def card(
         directory=directory,
         tags=tags,
         benchmark_run=benchmark_run,
+        request=request,
     )
 
 
@@ -1466,8 +1533,14 @@ def run_batch(
     """Evaluate every proposal of one turn against the best the turn started from.
 
     The backtests that integrity lets through run together, from one read of the window,
-    each under `slots`' share of the lane's memory. Gates and the keep rule see that
-    pre-turn best and a trial count that already includes every proposal of the turn.
+    each under `slots`' share of the lane's memory (`mem_cap`, which refuses a width the
+    share cannot fund) and `slots` times the run's card budget: the children share the
+    lane's cores, and the baseline the budget was struck from had them to itself. On 0.18.0
+    every slot had one card's budget, so on a host whose lanes already fill its cores each
+    child of a turn of `w` had about a `w`-th of its baseline's core and ran about `w` times
+    its wall: four sat at the three-times kill line and eight were all killed. Gates and the
+    keep rule see that pre-turn best and a trial count that already includes every proposal
+    of the turn.
     The highest metric that clears the floor is the one keep; a tie keeps the earlier
     slot. Every proposal is recorded, in slot order, and a redundant one does not refuse
     the rest of the turn.
@@ -1478,6 +1551,7 @@ def run_batch(
     frozen = run
     margin = records.candidates(store, hyp_id) + len(proposals)
     cap = mem_cap(ws, run, slots=slots)
+    budget = frozen.card_budget_s * max(1, slots)
     prepared: list[tuple[str, bytes, Sequence[Tag], str, GateResult]] = []
     running: list[tuple[int, backtest.RunRequest]] = []
     for desc, source, tags in proposals:
@@ -1493,12 +1567,13 @@ def run_batch(
                         setup,
                         source,
                         frozen.snapshot_id,
-                        budget_s=frozen.card_budget_s,
+                        budget_s=budget,
                         mem_cap_gb=cap,
                     ),
                 )
             )
     results: dict[int, backtest.RunResult] = {}
+    asked: dict[int, backtest.RunRequest] = {}
     if running:
         still = partial(ongoing, store, frozen)
         with backtest.wanted(still):
@@ -1522,8 +1597,9 @@ def run_batch(
                 setup.extensions,
             )
         still()
-        for (index, _request_made), result in zip(running, ran, strict=True):
+        for (index, request_made), result in zip(running, ran, strict=True):
             results[index] = result
+            asked[index] = request_made
     else:
         host_run = None
         benchmark_run = None
@@ -1582,7 +1658,7 @@ def run_batch(
                     len(result.run.trades),
                     result.wall_s,
                     result.peak_mem_gb,
-                    [integrity],
+                    [integrity, *_killed(result, asked[index], slots)],
                     result.traceback_tail or result.reason,
                     source,
                     digest_sha,

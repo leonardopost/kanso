@@ -28,7 +28,7 @@ explore_after_stalls = 5  # stalls on the same best, since the last exploration,
 folds = 4                 # contiguous folds the metric is a mean of; metric_se is read off the per-period series
 max_lines_per_keep = 40   # complexity rule: a keep growing strategy.py by more lines must clear max(min_delta, 2 × k_se × metric_se)
 baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s = max(60, 3 × baseline_wall_s)
-cards_per_turn = 1        # proposals evaluated at once in one run; 1 is one card a turn. Above 1 the lane's memory is divided across that many children. At most 8
+cards_per_turn = 1        # proposals evaluated at once in one run; 1 is one card a turn. Above 1 the lane's memory is divided across that many children, each on that many times card_budget_s; a width whose share falls under 3 × the baseline peak is refused. At most 8
 
 [screen]
 draws = 9999              # sign-flip draws of a screen's null; a precision rule like `folds`, it bounds the measurement and chooses nothing

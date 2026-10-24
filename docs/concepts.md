@@ -771,8 +771,20 @@ and the phase count the turn: no keep in it is one miss. Every card is judged ag
 best the turn started from, and the keep is the highest metric that clears that floor; a
 tie keeps the earlier slot. Two slots that produce the same bytes are one card. A crash is
 repaired on the next turn alone, as one diff, and the turn after that is a batch again
-unless the repair crashed too. One model call is one spend entry. The lane's memory is
-divided by `cards_per_turn`, and a child killed for its share is a crash of that slot.
+unless the repair crashed too. One model call is one spend entry. The window is read once
+and written to the children in lockstep — the next chunk is read once every child still
+running has been written the last — and the lane drops a chunk once every child has taken
+it, so it holds the newest chunk and none before, as it does for one card; on 0.18.0 it kept
+every chunk for the turn, about 44 GB of a twenty-name, sixty-session tick window. The
+lane's memory is divided by `cards_per_turn`, never below three times what the run's
+baseline needed: a width whose part of the share falls under that is refused before the
+turn is proposed, naming the widest turn the share funds and the `[env] mem_per_lane_gb`
+the width needs. Each child runs on `cards_per_turn` times the run's card budget, because
+the children share the lane's cores and the budget was struck from a baseline that had
+them to itself. On 0.18.0 every child had one card's budget, so on a host whose lanes
+already fill its cores each child of a turn of eight had about an eighth of the core its
+baseline had, ran about eight times its wall against a budget of three, and every one was
+killed. A child killed for its share or its clock is a crash of that slot alone.
 
 A crash is the one card whose idea was never judged, so the turn after it is a **repair**.
 The proposer is given the traceback and the change that produced it, as a diff over the
@@ -781,7 +793,12 @@ same idea with the fault fixed rather than for a new experiment. Two repairs, th
 idea is dropped and the next turn asks for something else. Measured in a live workspace
 before this existed: five consecutive crashes on one hypothesis were five state-handling
 slips on ideas out of that hypothesis's own declared families, each costing a whole
-proposal and returning nothing, and not one of the five was ever judged.
+proposal and returning nothing, and not one of the five was ever judged. A card the
+runner killed for its memory or its clock measured nothing either, and is a crash, but no
+fault in its code killed it: it carries a failed `resources` verdict naming the limit, what
+the card reached and how many cards its turn ran at once, the proposer is shown that and
+no traceback, and no repair is owed for it — a repair is the same idea with the fault
+fixed, and a kill names none. It ends a streak of crashes as any other card does.
 
 A stall is where the memory is read one more time. `[research] reseed_after_stalls`
 consecutive stalls on the same best — counted since the last reseed — say the best is a

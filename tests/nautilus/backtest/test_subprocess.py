@@ -262,6 +262,50 @@ def test_several_children_read_one_window_and_a_memory_kill_spares_the_rest(
     assert not (lane / ".card").exists()
 
 
+def test_a_fanned_window_is_held_a_chunk_at_a_time_however_many_chunks_it_has(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The feed is lockstep — a chunk is read once every running child has been written the
+    last — so the parent drops a chunk once every running child has taken it and holds the
+    newest alone, as the one-card path does. Measured before this: the fan kept every chunk's
+    pickle for the whole turn, about 88 bytes a quote and 78 a print, so the lane holding a
+    twenty-name, sixty-session tick window held about 44 GB of it."""
+    from kanso.nautilus import backtest as runner
+
+    alive: list[int] = []
+    most = {"chunks": 0, "bytes": 0}
+    made = {"chunks": 0, "largest": 0}
+
+    class Chunk(bytes):
+        def __del__(self) -> None:
+            alive.remove(len(self))
+
+    pickled = runner._pickled
+
+    def counted(record: object) -> bytes:
+        data = pickled(record)
+        if not (isinstance(record, dict) and "groups" in record):
+            return data
+        made["chunks"] += 1
+        made["largest"] = max(made["largest"], len(data))
+        alive.append(len(data))
+        most["chunks"] = max(most["chunks"], len(alive))
+        most["bytes"] = max(most["bytes"], sum(alive))
+        return Chunk(data)
+
+    monkeypatch.setattr(runner, "_pickled", counted)
+    alone = run_subprocess(request_for(), store, lane)
+    made["chunks"] = made["largest"] = most["chunks"] = most["bytes"] = 0
+    together = run_subprocesses([request_for(), request_for(), request_for()], store, lane)
+
+    assert [item.crashed for item in together] == [False, False, False]
+    assert all(item.run.trades == alone.run.trades for item in together)
+    assert made["chunks"] >= 30, "a window of many chunks"
+    assert most["chunks"] <= 2, f"the parent held {most['chunks']} chunks at once"
+    assert most["bytes"] <= 2 * made["largest"]
+    assert alive == [], "nothing of the window outlives the turn"
+
+
 def test_an_empty_batch_runs_nothing() -> None:
     assert run_subprocesses([], Path("."), Path(".")) == []
 
